@@ -1,0 +1,30 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - revive
+    - gocyclo
+    - gofumpt
+    - goimports
+    - ineffassign
+    - unparam
+    - prealloc
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  goimports:
+    local-prefixes: github.com/golimpio/plumb
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - unparam

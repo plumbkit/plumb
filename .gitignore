@@ -1,0 +1,48 @@
+# Binaries
+/plumb
+/dist/
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Module download cache
+vendor/
+
+# Environment / secrets
+.env
+.env.*
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test coverage
+coverage.out
+coverage.html
+
+# golangci-lint cache
+.golangci-cache/
+
+# Claude Code
+.claude/
+
+# AI assistant context files
+CHATGPT.md
+GEMINI.md
+CLAUDE.md
+AGENTS.md
+
+# macOS
+.DS_Store
+**/.DS_Store
+.plumb
