@@ -61,6 +61,40 @@ func invalidateCache(c *cache.Cache, uri string) {
 // and the second writer would silently overwrite the first.
 var pathLocks sync.Map // map[string]*sync.Mutex
 
+// readMtimes records the most recent mtime seen by read_file for each path.
+// In strict mode, edit_file requires the file to have been read and the mtime
+// to match — preventing edits to files the agent hasn't actually read first.
+//
+// Keyed by filepath.Clean(path). Cross-session interference is possible: this
+// is process-global, not per-session, which means session A's read after
+// session B's read overrides B's entry. Acceptable for an opt-in safety mode;
+// per-session tracking is a future refinement.
+var readMtimes sync.Map // map[string]time.Time
+
+// recordRead remembers the mtime observed by read_file. Called after a
+// successful read so subsequent edit_file calls can validate freshness.
+func recordRead(path string, mtime time.Time) {
+	readMtimes.Store(filepath.Clean(path), mtime)
+}
+
+// strictModeEnabled reports whether PLUMB_STRICT_EDITS is set to a truthy
+// value. When enabled, edit_file requires every target to have been read
+// via read_file first and the file's mtime to match the recorded value.
+func strictModeEnabled() bool {
+	v := os.Getenv("PLUMB_STRICT_EDITS")
+	return v == "1" || v == "true" || v == "yes"
+}
+
+// recordedReadMtime returns the mtime read_file last saw for path, or
+// time.Time{} (zero) if the path has not been read.
+func recordedReadMtime(path string) time.Time {
+	v, ok := readMtimes.Load(filepath.Clean(path))
+	if !ok {
+		return time.Time{}
+	}
+	return v.(time.Time)
+}
+
 // lockPath returns a release function that unlocks the path. The path is
 // canonicalised via filepath.Clean so file:// URIs and absolute paths share
 // the same lock.

@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (5/9)
+- **Strict-mode mtime auto-tracking** — set `PLUMB_STRICT_EDITS=1` to require every `edit_file` target to have been read in this daemon's lifetime AND for the file's current mtime to match what was observed at read time. Catches the "agent edits without reading first" footgun and silent-overwrite scenarios when an external process modifies the file. Read mtimes are recorded in a process-global map; cross-session interference is possible but acceptable for an opt-in safety mode. Off by default.
+
 ### Added (4/9)
 - **Watched-files unit tests for both adapters** — gopls and pyright now have explicit test coverage for `DidChangeWatchedFiles` wire transmission with `FileChanged` / `FileCreated` events. Catches regressions if the adapter wiring breaks. (A real-process integration smoke test against running pyright is not part of this release because pyright availability isn't guaranteed in all environments; the unit-level test confirms the LSP wire format is correct.)
 

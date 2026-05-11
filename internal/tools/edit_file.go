@@ -153,6 +153,31 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 	}
 
+	// Strict mode: every edit requires a prior read with matching mtime.
+	// Opt-in via PLUMB_STRICT_EDITS=1. expected_mtime above is the more
+	// precise signal when an agent threads it through; strict mode catches
+	// the case where the agent forgot.
+	if strictModeEnabled() {
+		recorded := recordedReadMtime(path)
+		if recorded.IsZero() {
+			return "", &editLogicErr{fmt.Errorf(
+				"edit_file: strict mode: %q has not been read in this daemon session — call read_file first",
+				path)}
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
+		}
+		if !info.ModTime().Equal(recorded) {
+			return "", &editLogicErr{fmt.Errorf(
+				"edit_file: strict mode: %q has changed since you read it\n"+
+					"  recorded mtime: %s\n"+
+					"  current mtime:  %s\n"+
+					"  Re-read the file and try again.",
+				path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano))}
+		}
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, err := t.tryEdit(ctx, path, a.Edits)

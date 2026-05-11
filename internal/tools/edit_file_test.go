@@ -9,6 +9,44 @@ import (
 	"testing"
 )
 
+func TestEditFile_StrictMode_RequiresRead(t *testing.T) {
+	t.Setenv("PLUMB_STRICT_EDITS", "1")
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "has not been read") {
+		t.Fatalf("expected strict-mode read-required error, got: %v", err)
+	}
+}
+
+func TestEditFile_StrictMode_AfterRead(t *testing.T) {
+	t.Setenv("PLUMB_STRICT_EDITS", "1")
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	// Read the file via the tool, then edit succeeds.
+	_, _ = NewReadFile().Execute(context.Background(), mustJSON(map[string]any{"path": path}))
+	out, err := callEditFile(t, map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+	})
+	if err != nil {
+		t.Fatalf("expected success after read, got: %v", err)
+	}
+	if !strings.Contains(out, "applied 1") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func mustJSON(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
+}
+
 func callEditFile(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)

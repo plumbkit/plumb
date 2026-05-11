@@ -90,6 +90,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		return "", fmt.Errorf("read_file: %q is a directory — use list_files to browse directories", fpath)
 	}
 	mtime := info.ModTime()
+	recordRead(fpath, mtime)
 
 	f, err := os.Open(fpath)
 	if err != nil {
