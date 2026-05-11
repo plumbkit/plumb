@@ -108,6 +108,18 @@ var defaults = Config{
 	},
 }
 
+// Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
+// that want to compare what's in the resolved config against the baseline.
+func Defaults() Config {
+	return defaults
+}
+
+// GlobalConfigPath returns the path where the global config file lives.
+// Useful for diagnostics that want to report where settings come from.
+func GlobalConfigPath() string {
+	return configPath()
+}
+
 func configPath() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {

@@ -2,6 +2,9 @@
 
 ## 0.5.4 — 2026-05-11
 
+### Added
+- **`plumb config show` subcommand** — prints the resolved configuration with source provenance ("from env (PLUMB_X=…)", "from project config", "from global config", "default") for each settable field, plus the paths of the global and project config files with existence flags. Pass `--workspace <dir>` to merge a specific project's config. Use for "why is strict mode on?" diagnostics.
+
 ### Changed (refactor)
 - **`WriteDeps` struct replaces the multi-arg write-tool constructors.** `write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply` now all take a single `WriteDeps{Client, Cache, Diag, Limiter, Strict, Reads}` instead of 4–6 positional parameters. Stops the constructor sprawl that was making each new cross-cutting concern an N-place change. Test setups can pass `WriteDeps{}` (everything nil-safe).
 - **Per-session `ReadTracker` replaces the process-global `readMtimes` map.** Strict mode is now correctly isolated between MCP sessions: session A reading a file no longer satisfies session B's strict-mode check. `NewReadFile` takes a `*ReadTracker`; the daemon creates one per connection.
