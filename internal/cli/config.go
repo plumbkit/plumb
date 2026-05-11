@@ -38,10 +38,34 @@ each value came from. Pass --workspace to include a project-local
 	RunE: runConfigShow,
 }
 
+var configGeminiCmd = &cobra.Command{
+	Use:   "gemini",
+	Short: "Show Gemini CLI integration status",
+	RunE:  runConfigGemini,
+}
+
 func init() {
 	configShowCmd.Flags().StringVar(&configShowWorkspace, "workspace", "",
 		"Workspace directory to merge .plumb/config.toml from (defaults to current dir)")
-	configCmd.AddCommand(configPrintCmd, configShowCmd)
+	configCmd.AddCommand(configPrintCmd, configShowCmd, configGeminiCmd)
+}
+
+func runConfigGemini(_ *cobra.Command, _ []string) error {
+	path, err := GeminiConfigPath()
+	if err != nil {
+		return fmt.Errorf("locating Gemini CLI config: %w", err)
+	}
+
+	fmt.Printf("# Gemini CLI MCP configuration\n\n")
+	fmt.Printf("Config path: %s\n", existsLabel(path))
+
+	if _, err := os.Stat(path); err == nil {
+		fmt.Println("\nPlumb can be registered in Gemini CLI using `plumb setup gemini`.")
+	} else {
+		fmt.Println("\nGemini CLI config not found. Ensure Gemini CLI is installed and has been run at least once.")
+	}
+
+	return nil
 }
 
 func runConfigShow(_ *cobra.Command, _ []string) error {
@@ -64,10 +88,12 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	globalPath := config.GlobalConfigPath()
 	projectPath := config.ProjectConfigPath(ws)
+	geminiPath, _ := GeminiConfigPath()
 
 	fmt.Printf("# plumb resolved configuration\n\n")
 	fmt.Printf("# global config:   %s\n", existsLabel(globalPath))
 	fmt.Printf("# project config:  %s\n", existsLabel(projectPath))
+	fmt.Printf("# gemini config:   %s\n", existsLabel(geminiPath))
 	fmt.Printf("# workspace:       %s\n\n", ws)
 
 	fmt.Printf("[edits]\n")

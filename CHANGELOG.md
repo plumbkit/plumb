@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.8 — 2026-05-11
+
+### Documentation
+- **`docs/todo.md` rewritten** so each outstanding item is self-sufficient — another session can pick it up cold without re-deriving the problem. Every entry now carries Priority, Effort, Why-it-matters, Definition-of-done, Where-to-start (with file paths and function names), and Watch-out-for sections. The "next two hours" recommended sequence is included verbatim at the top: pyright smoke test → Claude Desktop e2e → stats migrator + Recent Edits paths → expected_sha.
+- Captures all 11 items from the 0.5.6 honest review under Production-blocking + Real gaps + Subtle things; additional "100 ms concurrent-write skew constant" subtle entry added so it's not lost.
+- Workflow rule formalised: when you complete a TODO, delete the section from `docs/todo.md`, add a `CHANGELOG.md` entry, commit both changes together. If you can't finish, add a "Status:" note so the next person doesn't restart.
+
 ## 0.5.7 — 2026-05-11
 
 ### Documentation

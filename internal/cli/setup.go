@@ -36,10 +36,17 @@ directory instead, scoping plumb to that project only.`,
 	RunE: runSetupClaudeCode,
 }
 
+var setupGeminiCmd = &cobra.Command{
+	Use:   "gemini",
+	Short: "Register plumb as an MCP server in Gemini CLI's config",
+	RunE:  runSetupGemini,
+}
+
 func init() {
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	setupCmd.AddCommand(setupClaudeCodeCmd)
+	setupCmd.AddCommand(setupGeminiCmd)
 }
 
 func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
@@ -70,6 +77,37 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 		fmt.Printf("Preserved existing MCP servers: %v\n", preserved)
 	}
 	fmt.Println("Restart Claude Desktop to apply the change.")
+	return nil
+}
+
+func runSetupGemini(_ *cobra.Command, _ []string) error {
+	cfgPath, err := GeminiConfigPath()
+	if err != nil {
+		return fmt.Errorf("locating Gemini CLI config: %w", err)
+	}
+
+	plumbBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolving plumb binary path: %w", err)
+	}
+
+	added, preserved, err := setupClaudeDesktopInto(cfgPath, plumbBin)
+	if err != nil {
+		return err
+	}
+
+	if !added {
+		fmt.Println("plumb is already registered in Gemini CLI — no changes made.")
+		fmt.Printf("Config: %s\n", cfgPath)
+		return nil
+	}
+
+	fmt.Printf("Registered plumb in %s\n", cfgPath)
+	fmt.Printf("Binary: %s\n", plumbBin)
+	if len(preserved) > 0 {
+		fmt.Printf("Preserved existing MCP servers: %v\n", preserved)
+	}
+	fmt.Println("Restart Gemini CLI to apply the change.")
 	return nil
 }
 
