@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -131,13 +132,24 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	totalReplacements := 0
 
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		// Sniff first so we don't buffer huge binary files just to discard them.
+		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
-		if looksLikeBinary(bytes.NewReader(data)) {
+		head := make([]byte, binarySniffBytes)
+		n, _ := io.ReadFull(f, head)
+		head = head[:n]
+		if bytes.IndexByte(head, 0) >= 0 {
+			f.Close()
 			continue
 		}
+		rest, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			continue
+		}
+		data := append(head, rest...)
 
 		var newData []byte
 		var count int

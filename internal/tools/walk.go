@@ -6,9 +6,7 @@ package tools
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -187,15 +185,9 @@ func (st ignoreStack) isIgnored(absPath string, isDir bool) bool {
 
 // ── binary detection ─────────────────────────────────────────────────────────
 
+// binarySniffBytes is the prefix size used to detect binary files via a null
+// byte, matching the heuristic ripgrep and git use.
 const binarySniffBytes = 8000
-
-// looksLikeBinary returns true when the first binarySniffBytes of r contain a
-// null byte, which is the heuristic ripgrep and git use for binary detection.
-func looksLikeBinary(r io.Reader) bool {
-	buf := make([]byte, binarySniffBytes)
-	n, _ := io.ReadFull(r, buf)
-	return bytes.IndexByte(buf[:n], 0) >= 0
-}
 
 // ── hidden file detection ────────────────────────────────────────────────────
 

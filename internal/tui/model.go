@@ -61,11 +61,13 @@ type Model struct {
 	// Triggered by enter on Tool Statistics or Recent rows.
 	showPopup            bool               // popup is active
 	popupTool            string             // tool whose history is shown
-	popupCalls           []stats.RecentCall // workspace-wide calls for popupTool
+	popupCalls           []stats.RecentCall // workspace-wide calls for popupTool (no input_json/output_text)
 	popupCallCursor      int                // cursor in the popup call list (left col)
 	popupRightFocus      bool               // true = right (detail) col is focused for scrolling
 	popupDetailScroll    int                // scroll offset into the detail column
+	popupLeftScroll      int                // scroll offset into the timestamp (left) column
 	popupLeftWidth       int                // width of the popup left (timestamp) column
+	popupDetail          popupDetailCache   // lazily-fetched detail for the selected call
 
 	// Table layout hints populated by rightLines() so mouse clicks can be
 	// mapped to the correct row index without re-running the full render.
@@ -74,6 +76,16 @@ type Model struct {
 }
 
 // NewModel returns the initial model, loading sessions immediately.
+// popupDetailCache holds the lazily-fetched input_json and output_text for
+// the currently-selected popup call. Invalidated whenever popupCallCursor moves.
+type popupDetailCache struct {
+	sessionID string // which call this detail belongs to
+	calledAt  int64  // UnixMilli — combined with sessionID as the cache key
+	inputJSON  string
+	outputText string
+	loaded    bool
+}
+
 func NewModel() Model {
 	m := Model{leftWidth: defaultLeftWidth, statsDBs: make(map[string]*stats.DB)}
 	m.refresh()
@@ -234,6 +246,7 @@ func (m *Model) refreshPopupCalls() {
 	prev := selectedCallKey(m.popupCalls, m.popupCallCursor)
 	m.popupCalls, _ = db.CallsForTool(m.popupTool, ws, 200)
 	m.popupCallCursor = locateCall(m.popupCalls, prev, m.popupCallCursor)
+	m.popupDetail = popupDetailCache{} // invalidate on any refresh
 }
 
 // openPopup opens the call history popup for the given tool and optionally
@@ -244,6 +257,7 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 	m.popupCallCursor = 0
 	m.popupRightFocus = false
 	m.popupDetailScroll = 0
+	m.popupLeftScroll = 0
 	if m.popupLeftWidth == 0 {
 		m.popupLeftWidth = minPopupLeftWidth
 	}
@@ -256,6 +270,72 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 			}
 		}
 	}
+}
+
+// ensurePopupCursorVisible adjusts popupLeftScroll so that popupCallCursor
+// is always within the visible viewport. Called after every left-panel cursor
+// move. bodyHeight is m.height-5 in popup mode.
+func (m *Model) ensurePopupCursorVisible() {
+	// +1 because popupLeftLines() starts with one blank line at index 0.
+	cursorLine := m.popupCallCursor + 1
+	totalLines := len(m.popupCalls) + 1 // +1 for the blank header line
+	bodyHeight := m.height - 5
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	// Scroll down: cursor is below the visible window.
+	if cursorLine >= m.popupLeftScroll+bodyHeight {
+		m.popupLeftScroll = cursorLine - bodyHeight + 1
+	}
+	// Scroll up: cursor is above the visible window.
+	if cursorLine < m.popupLeftScroll {
+		m.popupLeftScroll = cursorLine
+	}
+	// Hard clamp: never scroll so far that the list disappears.
+	maxScroll := totalLines - 1
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.popupLeftScroll > maxScroll {
+		m.popupLeftScroll = maxScroll
+	}
+	if m.popupLeftScroll < 0 {
+		m.popupLeftScroll = 0
+	}
+}
+
+// currentDetail returns the input_json and output_text for the selected popup
+// call, fetching from the DB only when the selection changes. This keeps the
+// list query cheap (no large text columns) while the detail fetch is a single
+// indexed point-lookup: WHERE session_id=? AND called_at=?.
+func (m *Model) currentDetail() (inputJSON, outputText string) {
+	if len(m.popupCalls) == 0 {
+		return
+	}
+	c := m.popupCalls[m.popupCallCursor]
+	key := c.CalledAt.UnixMilli()
+	if m.popupDetail.loaded &&
+		m.popupDetail.sessionID == c.SessionID &&
+		m.popupDetail.calledAt == key {
+		return m.popupDetail.inputJSON, m.popupDetail.outputText
+	}
+	// Cache miss — fetch the heavy columns for just this one row.
+	if len(m.sessions) == 0 {
+		return
+	}
+	db := m.dbFor(m.sessions[m.cursor].Folder)
+	if db == nil {
+		return
+	}
+	inputJSON, outputText = db.CallDetail(c.SessionID, c.CalledAt)
+	m.popupDetail = popupDetailCache{
+		sessionID:  c.SessionID,
+		calledAt:   key,
+		inputJSON:  inputJSON,
+		outputText: outputText,
+		loaded:     true,
+	}
+	return
 }
 
 func (m Model) Init() tea.Cmd {
@@ -294,12 +374,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Left panel: click on a timestamp row selects that call.
 			if msg.X >= 1 && msg.X <= m.leftWidth {
 				// popupLeftLines starts with one blank line at index 0;
-				// call rows start at index 1.
-				callIdx := bodyRow - 1
+				// call rows start at index 1. Account for left scroll offset.
+				callIdx := bodyRow - 1 + m.popupLeftScroll
 				if callIdx >= 0 && callIdx < len(m.popupCalls) {
 					m.popupCallCursor = callIdx
 					m.popupRightFocus = false
 					m.popupDetailScroll = 0
+					m.popupDetail = popupDetailCache{}
+					m.ensurePopupCursorVisible()
 				}
 			}
 			// Right panel: click anywhere switches focus to detail panel.
@@ -346,11 +428,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.popupCallCursor < len(m.popupCalls)-1 {
 						m.popupCallCursor++
 						m.popupDetailScroll = 0
+						m.popupDetail = popupDetailCache{}
+						m.ensurePopupCursorVisible()
 					}
 				} else if msg.Button == tea.MouseWheelUp {
 					if m.popupCallCursor > 0 {
 						m.popupCallCursor--
 						m.popupDetailScroll = 0
+						m.popupDetail = popupDetailCache{}
+						m.ensurePopupCursorVisible()
 					}
 				}
 			}
@@ -376,6 +462,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showPopup = false
 				m.popupCalls = nil
 				m.popupDetailScroll = 0
+				m.popupLeftScroll = 0
 				m.popupRightFocus = false
 			case "tab":
 				m.popupRightFocus = !m.popupRightFocus
@@ -389,6 +476,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.popupCallCursor > 0 {
 						m.popupCallCursor--
 						m.popupDetailScroll = 0
+						m.popupDetail = popupDetailCache{}
+						m.ensurePopupCursorVisible()
 					}
 				}
 			case "down", "j":
@@ -398,12 +487,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.popupCallCursor < len(m.popupCalls)-1 {
 						m.popupCallCursor++
 						m.popupDetailScroll = 0
+						m.popupDetail = popupDetailCache{}
+						m.ensurePopupCursorVisible()
 					}
 				}
 			case "c":
 				// Copy args+output to clipboard via pbcopy/xclip.
 				if len(m.popupCalls) > 0 {
-					return m, copyToClipboard(m.popupCalls[m.popupCallCursor])
+					inputJSON, outputText := m.currentDetail()
+					return m, copyToClipboard(m.popupCalls[m.popupCallCursor], inputJSON, outputText)
 				}
 			case "[":
 				m.popupLeftWidth -= 2
@@ -415,6 +507,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				maxPLeft := m.width/2
 				if m.popupLeftWidth > maxPLeft {
 					m.popupLeftWidth = maxPLeft
+				}
+			case "pgdown":
+				pageSize := m.height - 6
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				if m.popupRightFocus {
+					m.popupDetailScroll += pageSize
+				} else {
+					m.popupCallCursor += pageSize
+					if m.popupCallCursor >= len(m.popupCalls) {
+						m.popupCallCursor = len(m.popupCalls) - 1
+					}
+					m.popupDetailScroll = 0
+					m.popupDetail = popupDetailCache{}
+					m.ensurePopupCursorVisible()
+				}
+			case "pgup":
+				pageSize := m.height - 6
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				if m.popupRightFocus {
+					m.popupDetailScroll -= pageSize
+					if m.popupDetailScroll < 0 {
+						m.popupDetailScroll = 0
+					}
+				} else {
+					m.popupCallCursor -= pageSize
+					if m.popupCallCursor < 0 {
+						m.popupCallCursor = 0
+					}
+					m.popupDetailScroll = 0
+					m.popupDetail = popupDetailCache{}
+					m.ensurePopupCursorVisible()
 				}
 			}
 			break
@@ -522,6 +649,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.leftWidth > maxLeft {
 				m.leftWidth = maxLeft
 			}
+		case "pgdown":
+			pageSize := m.height - 6
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			switch m.focusPanel {
+			case focusToolStats:
+				m.toolStatsCursor += pageSize
+				if m.toolStatsCursor >= len(m.toolStats) {
+					m.toolStatsCursor = len(m.toolStats) - 1
+				}
+			case focusStats:
+				m.statsCursor += pageSize
+				if m.statsCursor >= len(m.recentCalls) {
+					m.statsCursor = len(m.recentCalls) - 1
+				}
+			default:
+				m.cursor += pageSize
+				if m.cursor >= len(m.sessions) {
+					m.cursor = len(m.sessions) - 1
+				}
+				m.refreshStats()
+			}
+		case "pgup":
+			pageSize := m.height - 6
+			if pageSize < 1 {
+				pageSize = 1
+			}
+			switch m.focusPanel {
+			case focusToolStats:
+				m.toolStatsCursor -= pageSize
+				if m.toolStatsCursor < 0 {
+					m.toolStatsCursor = 0
+				}
+			case focusStats:
+				m.statsCursor -= pageSize
+				if m.statsCursor < 0 {
+					m.statsCursor = 0
+				}
+			default:
+				m.cursor -= pageSize
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+				m.refreshStats()
+			}
 		}
 	}
 	return m, nil
@@ -562,9 +735,9 @@ func (m Model) render() string {
 	title := TitleStyle.Render(titleText)
 	var hint string
 	if m.showPopup {
-		hint = HintStyle.Render("↑↓/jk calls · tab scroll detail · esc close · q quit")
+		hint = HintStyle.Render("↑↓/jk calls · pgdn/pgup page · tab scroll detail · esc close · q quit")
 	} else {
-		hint = HintStyle.Render("↑↓/jk navigate · tab/shift+tab focus · enter popup · [/] resize · q quit")
+		hint = HintStyle.Render("↑↓/jk navigate · pgdn/pgup page · tab/shift+tab focus · enter popup · [/] resize · q quit")
 	}
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(hint)
 	if gap < 1 {
@@ -607,20 +780,38 @@ func (m Model) render() string {
 
 		bgLeft := m.dimLines(m.leftLines(), m.leftWidth)
 
-		popupLeft := m.popupLeftLines()
-		allRight := m.popupRightAll(pRW - 2) // -2: 1 for scrollbar col, 1 for gap
-		total := len(allRight)
-		start := m.popupDetailScroll
-		if start > total {
-			start = total
+		// Left (timestamp) panel — all lines, windowed by popupLeftScroll.
+		// The scrollbar replaces the left │ border char, keeping ┆ untouched.
+		allLeft := m.popupLeftLines()
+		totalLeft := len(allLeft)
+		maxLeftScroll := totalLeft - 1
+		if maxLeftScroll < 0 {
+			maxLeftScroll = 0
 		}
-		popupRight := allRight[start:]
-		scrollbar = scrollbarCol(total, bodyHeight, start)
+		if m.popupLeftScroll > maxLeftScroll {
+			m.popupLeftScroll = maxLeftScroll
+		}
+		visibleLeft := allLeft[m.popupLeftScroll:]
+		leftScrollbar := scrollbarCol(totalLeft, bodyHeight, m.popupLeftScroll)
+
+		// Right (detail) panel.
+		allRight := m.popupRightAll(pRW - 2) // -2: 1 for scrollbar col, 1 for gap
+		totalRight := len(allRight)
+		maxDetailScroll := totalRight - bodyHeight
+		if maxDetailScroll < 0 {
+			maxDetailScroll = 0
+		}
+		if m.popupDetailScroll > maxDetailScroll {
+			m.popupDetailScroll = maxDetailScroll
+		}
+		popupRight := allRight[m.popupDetailScroll:]
+		scrollbar = scrollbarCol(totalRight, bodyHeight, m.popupDetailScroll)
 
 		for i := range bodyHeight {
+			// Left cell: full pLW width, no extra scrollbar column.
 			var lCell string
-			if i < len(popupLeft) && popupLeft[i] != "" {
-				lCell = lipgloss.NewStyle().Width(pLW).Render(popupLeft[i])
+			if i < len(visibleLeft) && visibleLeft[i] != "" {
+				lCell = lipgloss.NewStyle().Width(pLW).Render(visibleLeft[i])
 			} else if i < len(bgLeft) {
 				lCell = lipgloss.NewStyle().Width(pLW).Render(bgLeft[i])
 			} else {
@@ -633,13 +824,21 @@ func (m Model) render() string {
 			}
 			rCell := lipgloss.NewStyle().Width(pRW).Render(rStr)
 
+			// The left │ border doubles as the left scrollbar.
+			var leftBorder string
+			if leftScrollbar != nil && i < len(leftScrollbar) {
+				leftBorder = leftScrollbar[i]
+			} else {
+				leftBorder = SepStyle.Render("│")
+			}
+
 			var rightBorder string
 			if scrollbar != nil && i < len(scrollbar) {
 				rightBorder = scrollbar[i]
 			} else {
 				rightBorder = SepStyle.Render("│")
 			}
-			sb.WriteString(SepStyle.Render("│") + lCell + SepStyle.Render("┆") + rCell + rightBorder + "\n")
+			sb.WriteString(leftBorder + lCell + SepStyle.Render("┆") + rCell + rightBorder + "\n")
 		}
 	} else {
 		leftLines = m.leftLines()
@@ -878,8 +1077,16 @@ func (m Model) popupLeftLines() []string {
 		if selected {
 			lines = append(lines, SelectedStyle.Render(row))
 		} else if m.popupRightFocus {
-			// Left panel is in background — all rows use the disabled colour.
+			// Left panel is in background — all rows use the faded colour.
 			lines = append(lines, TimestampFadedStyle.Render(row))
+		} else if !c.Success {
+			// Error row: render base row in active colour but highlight the ✗ in warn colour.
+			// Rebuild the row with the ✗ coloured separately.
+			plainRow := fmt.Sprintf("%s%s ", prefix, sessChar)
+			errPart := WarnStyle.Render("✗")
+			rest := fmt.Sprintf(" %s %s", ts, dur)
+			full := TimestampActiveStyle.Render(plainRow) + errPart + TimestampActiveStyle.Render(rest)
+			lines = append(lines, full)
 		} else {
 			lines = append(lines, TimestampActiveStyle.Render(row))
 		}
@@ -970,22 +1177,24 @@ func (m Model) popupRightAll(rightWidth int) []string {
 		boxSection("Error", errLines)
 	}
 
-	if c.InputJSON != "" {
+	inputJSON, outputText := m.currentDetail()
+
+	if inputJSON != "" {
 		var argsLines []string
 		var prettyBuf bytes.Buffer
-		if err := json.Indent(&prettyBuf, []byte(c.InputJSON), "", "  "); err == nil {
+		if err := json.Indent(&prettyBuf, []byte(inputJSON), "", "  "); err == nil {
 			for _, l := range strings.Split(strings.TrimRight(prettyBuf.String(), "\n"), "\n") {
 				argsLines = append(argsLines, DetailStyle.Render(l))
 			}
 		} else {
-			argsLines = append(argsLines, DetailStyle.Render(c.InputJSON))
+			argsLines = append(argsLines, DetailStyle.Render(inputJSON))
 		}
 		boxSection("Args", argsLines)
 	}
 
-	if c.OutputText != "" && c.Success {
+	if outputText != "" && c.Success {
 		var outLines []string
-		for _, ol := range strings.Split(strings.TrimRight(c.OutputText, "\n"), "\n") {
+		for _, ol := range strings.Split(strings.TrimRight(outputText, "\n"), "\n") {
 			outLines = append(outLines, DetailStyle.Render(ol))
 		}
 		boxSection("Output", outLines)
@@ -1019,7 +1228,7 @@ func scrollbarCol(total, visible, offset int) []string {
 	col := make([]string, visible)
 	for i := range visible {
 		if i >= thumbStart && i < thumbStart+thumbSize {
-			col[i] = ScrollThumbStyle.Render("█")
+			col[i] = ScrollThumbStyle.Render("┃")
 		} else {
 			col[i] = ScrollTrackStyle.Render("│")
 		}
@@ -1208,9 +1417,12 @@ func (m *Model) rightLines(rightWidth int) []string {
 		lines = append(lines, tsHeader, sepLine)
 		m.statsTableBodyRow = len(lines)
 
+		// Tools table rows.
+		// Every row: "  " (2) + marker (2: "> " or "○ ") + tool(col1W-2) + sep3 + numeric cols.
+		// The 2-char marker lives inside col1W, so numeric columns stay at the same offset as the header.
 		for i, ts := range m.toolStats {
 			selected := m.focusPanel == focusToolStats && i == m.toolStatsCursor
-			plainTool := padRight(toolIcon(ts.Tool)+" "+truncate(ts.Tool, col1W-2), col1W)
+			toolName := padRight(truncate(ts.Tool, col1W-2), col1W-2)
 			if selected {
 				plainCalls := padLeft(fmt.Sprintf("%d", ts.Calls), col2W)
 				plainAvg := padLeft(fmt.Sprintf("%.0fms", ts.AvgMs), col3W)
@@ -1218,8 +1430,8 @@ func (m *Model) rightLines(rightWidth int) []string {
 				if ts.Errors > 0 {
 					plainErr = padLeft(fmt.Sprintf("%d", ts.Errors), col4W)
 				}
-				row := plainTool + sep3 + plainCalls + sep3 + plainAvg + sep3 + plainErr + sep3
-				lines = append(lines, SelectedStyle.Width(rowWidth).Render("> "+row))
+				row := "> " + toolName + sep3 + plainCalls + sep3 + plainAvg + sep3 + plainErr + sep3
+				lines = append(lines, SelectedStyle.Width(rowWidth).Render("  "+row))
 			} else {
 				col2Cell := padLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), col2W)
 				col3Cell := padLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), col3W)
@@ -1227,7 +1439,7 @@ func (m *Model) rightLines(rightWidth int) []string {
 				if ts.Errors > 0 {
 					col4Cell = padLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), col4W)
 				}
-				row := plainTool + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell + sep3
+				row := "○ " + toolName + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell + sep3
 				lines = append(lines, "  "+row)
 			}
 		}
@@ -1253,11 +1465,9 @@ func (m *Model) rightLines(rightWidth int) []string {
 
 		for i, c := range m.recentCalls {
 			selected := m.focusPanel == focusStats && i == m.statsCursor
-			statusChar := "✓"
-			if !c.Success {
-				statusChar = "✗"
-			}
-			plainTool := padRight(statusChar+" "+toolIcon(c.Tool)+" "+truncate(c.Tool, col1W-4), col1W)
+			// Recent rows: "  " (2) + marker (2: "> " or "✓ "/"✗ ") + tool(col1W-2) + sep3 + numeric cols.
+			// Identical prefix geometry to the Tools table — numeric columns stay aligned across both.
+			toolName := padRight(truncate(c.Tool, col1W-2), col1W-2)
 			if selected {
 				plainDur := padLeft(fmt.Sprintf("%dms", c.DurationMs), col2W)
 				plainWhen := padLeft(humanAgeTUI(c.CalledAt), col3W)
@@ -1265,21 +1475,20 @@ func (m *Model) rightLines(rightWidth int) []string {
 				if !c.Success {
 					plainErr = padLeft("✗", col4W)
 				}
-				row := plainTool + sep3 + plainDur + sep3 + plainWhen + sep3 + plainErr + sep3
-				lines = append(lines, SelectedStyle.Width(rowWidth).Render("> "+row))
+				row := "> " + toolName + sep3 + plainDur + sep3 + plainWhen + sep3 + plainErr + sep3
+				lines = append(lines, SelectedStyle.Width(rowWidth).Render("  "+row))
 			} else {
-				status := OkStyle.Render("✓")
+				marker := OkStyle.Render("✓") + " "
 				if !c.Success {
-					status = WarnStyle.Render("✗")
+					marker = WarnStyle.Render("✗") + " "
 				}
-				toolCell := padRight(status+" "+toolIcon(c.Tool)+" "+truncate(c.Tool, col1W-4), col1W)
 				col2Cell := padLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), col2W)
 				col3Cell := padLeft(MutedStyle.Render(humanAgeTUI(c.CalledAt)), col3W)
 				col4Cell := padLeft("", col4W)
 				if !c.Success {
 					col4Cell = padLeft(WarnStyle.Render("✗"), col4W)
 				}
-				row := toolCell + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell + sep3
+				row := marker + toolName + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell + sep3
 				lines = append(lines, "  "+row)
 			}
 		}
@@ -1318,33 +1527,6 @@ func truncate(s string, n int) string {
 		return "…"
 	}
 	return string(r[:n-1]) + "…"
-}
-
-// toolIcon returns a single unicode icon representing the category of tool.
-func toolIcon(tool string) string {
-	switch tool {
-	case "write_file", "edit_file", "delete_file", "rename_file", "transaction_apply",
-		"find_replace", "insert_before_symbol", "insert_after_symbol",
-		"replace_symbol_body", "safe_delete_symbol", "rename_symbol":
-		return "✎" // write / mutate
-	case "read_file", "read_multiple_files", "list_files", "list_directory",
-		"find_files", "search_in_files", "file_diff":
-		return "▤" // read / browse
-	case "find_symbol", "get_definition", "explain_symbol", "list_symbols",
-		"workspace_symbols", "find_references", "call_hierarchy", "type_hierarchy":
-		return "⊕" // LSP / symbol
-	case "write_memory", "read_memory", "delete_memory", "list_memories",
-		"search_memories", "relevant_memories":
-		return "◎" // memory
-	case "git":
-		return "◇" // git
-	case "diagnostics":
-		return "◈" // diagnostics
-	case "session_start":
-		return "⟳" // session
-	default:
-		return "▪" // generic
-	}
 }
 
 // extractCallPath pulls a human-readable file path from a write-tool call's
@@ -1480,24 +1662,26 @@ func daemonRunning() bool {
 	return err == nil
 }
 
-// copyToClipboard returns a Cmd that copies the call's args and output to
-// the system clipboard using pbcopy (macOS) or xclip/xsel (Linux).
-func copyToClipboard(c stats.RecentCall) tea.Cmd {
+// copyToClipboard returns a Cmd that copies the selected call's args and output
+// to the system clipboard using pbcopy (macOS) or xclip/xsel (Linux).
+// inputJSON and outputText are passed in rather than read from the RecentCall
+// struct (which no longer carries those columns after the lazy-fetch refactor).
+func copyToClipboard(c stats.RecentCall, inputJSON, outputText string) tea.Cmd {
 	return func() tea.Msg {
 		var buf strings.Builder
-		if c.InputJSON != "" {
+		if inputJSON != "" {
 			buf.WriteString("=== Args ===\n")
 			var prettyBuf bytes.Buffer
-			if err := json.Indent(&prettyBuf, []byte(c.InputJSON), "", "  "); err == nil {
+			if err := json.Indent(&prettyBuf, []byte(inputJSON), "", "  "); err == nil {
 				buf.WriteString(prettyBuf.String())
 			} else {
-				buf.WriteString(c.InputJSON)
+				buf.WriteString(inputJSON)
 			}
 			buf.WriteString("\n")
 		}
-		if c.OutputText != "" {
+		if outputText != "" {
 			buf.WriteString("=== Output ===\n")
-			buf.WriteString(c.OutputText)
+			buf.WriteString(outputText)
 			buf.WriteString("\n")
 		}
 		text := buf.String()

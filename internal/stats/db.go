@@ -274,6 +274,7 @@ func (f Filter) where() (string, []any) {
 }
 
 // Summary returns per-tool stats matching filter. Empty filter = all rows.
+// p95 and TokensSaved are computed in a single additional query each (not per-tool).
 func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 	if d == nil {
 		return nil, nil
@@ -310,8 +311,11 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	// Compute p95 per tool in one query, then join in Go.
+	p95map := d.p95All(filter)
 	for i := range out {
-		out[i].P95Ms = d.p95(filter, out[i].Tool)
+		out[i].P95Ms = p95map[out[i].Tool]
 		out[i].TokensSaved = d.tokensSavedFor(filter, out[i].Tool)
 	}
 	return out, nil
@@ -346,32 +350,47 @@ func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
 	return total
 }
 
-func (d *DB) p95(filter Filter, tool string) int64 {
+// p95All fetches duration_ms for all rows matching filter in a single query
+// and computes the p95 per tool in Go. One round-trip regardless of how many
+// distinct tools exist — replaces the old per-tool p95() loop.
+func (d *DB) p95All(filter Filter) map[string]int64 {
 	where, args := filter.where()
-	var q string
-	if where == "" {
-		q = `SELECT duration_ms FROM tool_calls WHERE tool=? ORDER BY duration_ms`
-		args = []any{tool}
-	} else {
-		q = `SELECT duration_ms FROM tool_calls` + where + ` AND tool=? ORDER BY duration_ms`
-		args = append(args, tool)
-	}
+	q := `SELECT tool, duration_ms FROM tool_calls` + where + ` ORDER BY tool, duration_ms`
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
-		return 0
+		return nil
 	}
 	defer rows.Close()
-	var durations []int64
+
+	// Accumulate durations per tool (already sorted by tool then duration_ms).
+	type toolDurs struct {
+		tool string
+		durs []int64
+	}
+	var groups []toolDurs
+	var cur *toolDurs
 	for rows.Next() {
+		var tool string
 		var ms int64
-		if err := rows.Scan(&ms); err == nil {
-			durations = append(durations, ms)
+		if err := rows.Scan(&tool, &ms); err != nil {
+			continue
 		}
+		if cur == nil || cur.tool != tool {
+			groups = append(groups, toolDurs{tool: tool})
+			cur = &groups[len(groups)-1]
+		}
+		cur.durs = append(cur.durs, ms)
 	}
-	if len(durations) == 0 {
-		return 0
+
+	out := make(map[string]int64, len(groups))
+	for _, g := range groups {
+		if len(g.durs) == 0 {
+			continue
+		}
+		idx := int(float64(len(g.durs)-1) * 0.95)
+		out[g.tool] = g.durs[idx]
 	}
-	return durations[int(float64(len(durations)-1)*0.95)]
+	return out
 }
 
 // RecentCall is a single recent invocation.
@@ -424,17 +443,59 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	return out, rows.Err()
 }
 
-// CallsForTool returns all recorded calls for a specific tool, workspace-wide,
+// CallsForTool returns recorded calls for a specific tool, workspace-wide,
 // ordered newest-first. limit caps the result set (0 = no cap).
+// input_json and output_text (potentially 64 KiB each) are intentionally
+// excluded from this list query — they are fetched on demand via CallDetail.
 func (d *DB) CallsForTool(tool, workspace string, limit int) ([]RecentCall, error) {
 	if d == nil {
 		return nil, nil
 	}
-	f := Filter{Workspace: workspace, Tool: tool}
 	if limit <= 0 {
 		limit = 500
 	}
-	return d.Recent(limit, f)
+	f := Filter{Workspace: workspace, Tool: tool}
+	where, args := f.where()
+	q := `SELECT tool, session_id, workspace, called_at, duration_ms, success,
+	             error_msg, input_bytes, output_bytes
+	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("stats: calls for tool: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RecentCall
+	for rows.Next() {
+		var c RecentCall
+		var calledMs int64
+		var success int
+		if err := rows.Scan(
+			&c.Tool, &c.SessionID, &c.Workspace, &calledMs, &c.DurationMs, &success,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
+		); err != nil {
+			continue
+		}
+		c.CalledAt = time.UnixMilli(calledMs)
+		c.Success = success == 1
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// CallDetail fetches the full input_json and output_text for a single call
+// identified by (session_id, called_at). Returns empty strings if not found.
+func (d *DB) CallDetail(sessionID string, calledAt time.Time) (inputJSON, outputText string) {
+	if d == nil {
+		return
+	}
+	_ = d.db.QueryRow(
+		`SELECT input_json, output_text FROM tool_calls WHERE session_id=? AND called_at=? LIMIT 1`,
+		sessionID, calledAt.UnixMilli(),
+	).Scan(&inputJSON, &outputText)
+	return
 }
 
 // TotalCalls returns the total number of recorded calls matching filter.
