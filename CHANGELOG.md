@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.5.1 — 2026-05-11 (in progress)
+## 0.5.1 — 2026-05-11
+
+### Added (9/9)
+- **`transaction_apply` tool — atomic multi-file edits** — applies str_replace edits across up to 50 files as a single transaction. Phase 1 validates every operation in memory; if any old_str is missing/ambiguous or any expected_mtime mismatches, NO files are written. Phase 2 writes each file via safeWrite under per-path locks acquired in lexical order (deadlock-safe); if a write fails partway, already-written files are rolled back to their pre-transaction content. Phase 3 fires `didChangeWatchedFiles` and invalidates the symbol cache per file. Each operation consumes one rate-limit slot. Use for refactors that must land as a unit (cross-file string rename, coordinated config + caller updates).
 
 ### Added (8/9)
 - **TUI "Recent Edits" panel** — distinct section in the right panel showing the last 5 write-tool calls (`write_file`, `edit_file`, `delete_file`, `rename_file`) for the selected session. Surfaces "what did Claude touch?" without scanning the full recent-calls list.

@@ -242,6 +242,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewEditFile(sessionProxy, sessionCache, sessionInv, writeLimiter))
 	srv.Register(tools.NewDeleteFile(sessionProxy, sessionCache, writeLimiter))
 	srv.Register(tools.NewRenameFile(sessionProxy, sessionCache, writeLimiter))
+	srv.Register(tools.NewTransactionApply(sessionProxy, sessionCache, sessionInv, writeLimiter))
 	srv.Register(tools.NewSearchInFiles())
 	srv.Register(tools.NewFindFiles())
 	srv.Register(tools.NewGit())
