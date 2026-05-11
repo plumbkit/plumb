@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.2 — 2026-05-11
+
+### Added
+- **`include_doc_comment` flag on symbol edits** — `insert_before_symbol`, `replace_symbol_body`, and `safe_delete_symbol` now accept an optional `include_doc_comment` boolean. When true, the operation extends to cover any contiguous comment lines (`//`, `#`, `/*`, `*`) directly above the symbol declaration. Lets you replace a function together with its doc comment, delete a function without orphaning its comment, or insert a new declaration above an existing doc comment instead of between the comment and its symbol. Default is false (backwards-compatible).
+- **Stats `RecentCall` now surfaces `ErrorMsg`, `InputBytes`, `OutputBytes`** — the columns were already stored on every call but the read path discarded them. `plumb stats` recent-calls table now prints failed-call error messages on a continuation line below the row, and the TUI uses the same data for inline error expansion.
+- **TUI keyboard navigation of recent calls** — press `tab` to move focus to the right panel's recent-calls list; `j/k`/`↑↓` then scrolls within it. The selected row is marked with `▸`, and for failed calls the error message expands inline below the row (wrapped to panel width). `tab` again returns focus to the sessions list. Footer hint updated.
+
+### Changed
+- **`find_symbol` is now single-file only** — the `uri` parameter is required. Previously, calling without `uri` ran a workspace-wide search that was a byte-identical duplicate of `workspace_symbols` (same LSP call, same cache key, same output format). After the split, `find_symbol` and `workspace_symbols` have clearly distinct purposes: file-scoped (case-insensitive substring against the document symbol tree) vs. workspace-scoped (LSP `workspace/symbol`, fuzziness depends on the language server).
+
+### Fixed
+- **TUI "No calls recorded yet" stuck on a session that does have calls** — `dbFor()` was caching the `nil` returned by `OpenReadOnly` when the per-project `<workspace>/.plumb/stats.db` didn't yet exist. Once cached, subsequent polls returned that nil even after the daemon created the file. The cache now only stores non-nil handles, so the TUI picks up writes as soon as they begin.
+
 ## 0.3.1 — 2026-05-11
 
 ### Changed (architecture)

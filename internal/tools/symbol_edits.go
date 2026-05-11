@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/golimpio/plumb/internal/lsp"
@@ -23,10 +24,58 @@ const symbolEditCommonSchema = `
 `
 
 type symbolEditArgs struct {
-	URI      string `json:"uri"`
-	NamePath string `json:"name_path"`
-	Content  string `json:"content"`
-	DryRun   *bool  `json:"dry_run,omitempty"`
+	URI               string `json:"uri"`
+	NamePath          string `json:"name_path"`
+	Content           string `json:"content"`
+	DryRun            *bool  `json:"dry_run,omitempty"`
+	IncludeDocComment bool   `json:"include_doc_comment,omitempty"`
+}
+
+// docCommentSchemaFragment is the JSON schema snippet for the include_doc_comment
+// flag, shared by the three tools that respect it. Always prefixed with a comma
+// — call sites already terminate the previous property without a trailing comma.
+const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"If true, extend the operation to cover any contiguous comment lines (//, #, /*, *) directly above the symbol declaration. Lets you replace/delete a function together with its doc comment, or insert a new block above an existing doc comment instead of between the comment and its symbol."}`
+
+// docCommentStart walks upward from symStart to find the first line of any
+// contiguous comment block flush against the symbol. Returns symStart if no
+// such block exists or the file can't be read.
+//
+// A "comment line" is any line whose first non-whitespace characters match
+// //, #, /*, or *. This covers Go/Rust/C/Java/JS line comments, Python/shell
+// hash comments, and the lines of a JSDoc/JavaDoc /** ... */ block. Blank
+// lines terminate the scan — the block must be flush against the declaration.
+func docCommentStart(path string, symStart protocol.Position) protocol.Position {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return symStart
+	}
+	lines := strings.Split(string(data), "\n")
+	if int(symStart.Line) > len(lines) {
+		return symStart
+	}
+	first := int(symStart.Line)
+	for i := int(symStart.Line) - 1; i >= 0; i-- {
+		trimmed := strings.TrimLeft(lines[i], " \t")
+		if !isCommentLine(trimmed) {
+			break
+		}
+		first = i
+	}
+	if first == int(symStart.Line) {
+		return symStart
+	}
+	return protocol.Position{Line: uint32(first), Character: 0}
+}
+
+func isCommentLine(trimmed string) bool {
+	switch {
+	case strings.HasPrefix(trimmed, "//"),
+		strings.HasPrefix(trimmed, "#"),
+		strings.HasPrefix(trimmed, "/*"),
+		strings.HasPrefix(trimmed, "*"):
+		return true
+	}
+	return false
 }
 
 // resolveSymbol fetches the DocumentSymbol tree for uri and locates namePath.
@@ -54,8 +103,8 @@ func applySingleEdit(uri string, edit protocol.TextEdit, dryRun bool, summary st
 		sb.WriteString("DRY RUN — file not modified.\n\n")
 		fmt.Fprintf(&sb, "Would %s symbol %q in %s\n", summary, sym.Name, path)
 		fmt.Fprintf(&sb, "  Range: line %d char %d → line %d char %d\n",
-			sym.Range.Start.Line, sym.Range.Start.Character,
-			sym.Range.End.Line, sym.Range.End.Character)
+			edit.Range.Start.Line, edit.Range.Start.Character,
+			edit.Range.End.Line, edit.Range.End.Character)
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 		return sb.String(), nil
 	}
@@ -86,12 +135,15 @@ func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
 func (*InsertBeforeSymbol) Description() string {
 	return `Insert text immediately before a symbol's declaration.
 
-Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.`
+Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.
+
+Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.`
 }
 
 func (*InsertBeforeSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
 		`,"content":{"type":"string","description":"Text to insert before the symbol."}` +
+		docCommentSchemaFragment +
 		`},"required":["uri","name_path","content"]}`)
 }
 
@@ -111,8 +163,12 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if err != nil {
 		return "", err
 	}
+	start := sym.Range.Start
+	if a.IncludeDocComment {
+		start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
+	}
 	edit := protocol.TextEdit{
-		Range:   protocol.Range{Start: sym.Range.Start, End: sym.Range.Start},
+		Range:   protocol.Range{Start: start, End: start},
 		NewText: a.Content,
 	}
 	return applySingleEdit(a.URI, edit, dryRun, "insert before", sym)
@@ -178,12 +234,15 @@ func (*ReplaceSymbolBody) Description() string {
 
 The replacement spans the symbol's full Range as reported by the LSP — for a function, this is from 'func' keyword through the closing '}'. Provide the complete new declaration (signature + body) in 'content'.
 
+Set include_doc_comment=true to also cover any contiguous doc comment above the symbol — gopls and most LSP servers report the symbol range starting at the declaration keyword, so without this flag the old doc comment is left orphaned. With it on, your 'content' must include the new doc comment too (or the symbol will have none).
+
 Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both.`
 }
 
 func (*ReplaceSymbolBody) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
 		`,"content":{"type":"string","description":"The full replacement declaration."}` +
+		docCommentSchemaFragment +
 		`},"required":["uri","name_path","content"]}`)
 }
 
@@ -203,8 +262,12 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
+	rng := sym.Range
+	if a.IncludeDocComment {
+		rng.Start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
+	}
 	edit := protocol.TextEdit{
-		Range:   sym.Range,
+		Range:   rng,
 		NewText: a.Content,
 	}
 	return applySingleEdit(a.URI, edit, dryRun, "replace", sym)
@@ -223,11 +286,14 @@ func (*SafeDeleteSymbol) Name() string { return "safe_delete_symbol" }
 func (*SafeDeleteSymbol) Description() string {
 	return `Delete a symbol's declaration only if it has no remaining references.
 
-Calls LSP textDocument/references first. If any reference outside the declaration itself is found, the deletion is rejected with the list of referencing locations so the caller can decide what to do. This prevents accidental deletion of code that's still in use.`
+Calls LSP textDocument/references first. If any reference outside the declaration itself is found, the deletion is rejected with the list of referencing locations so the caller can decide what to do. This prevents accidental deletion of code that's still in use.
+
+Set include_doc_comment=true to also delete any contiguous doc comment above the symbol — otherwise the comment is left orphaned, pointing at whatever ends up next in the file.`
 }
 
 func (*SafeDeleteSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
+		docCommentSchemaFragment +
 		`},"required":["uri","name_path"]}`)
 }
 
@@ -278,7 +344,11 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		return sb.String(), nil
 	}
 
-	edit := protocol.TextEdit{Range: sym.Range, NewText: ""}
+	rng := sym.Range
+	if a.IncludeDocComment {
+		rng.Start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
+	}
+	edit := protocol.TextEdit{Range: rng, NewText: ""}
 	return applySingleEdit(a.URI, edit, dryRun, "delete", sym)
 }
 

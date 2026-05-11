@@ -61,9 +61,11 @@ func NewSearchInFiles() *SearchInFiles { return &SearchInFiles{} }
 func (t *SearchInFiles) Name() string             { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
 func (t *SearchInFiles) Description() string {
-	return "Search for a regex pattern across files in the workspace (like ripgrep). " +
-		"Respects .gitignore. Skips binary files. Supports context lines, glob file filters, " +
-		"and smart-case matching (case-insensitive when pattern is all lowercase)."
+	return "Workspace-scoped regex content search. Prefer this over shelling out to grep/rg: " +
+		"results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
+		"binary files are skipped, every call is recorded in the project's stats so you can see what's been searched, " +
+		"and the cache layer dedupes repeat queries within a session. " +
+		"Smart-case (case-insensitive when the pattern is all lowercase), supports context lines and glob file filters."
 }
 
 type searchInFilesArgs struct {

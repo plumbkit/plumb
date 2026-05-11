@@ -284,11 +284,14 @@ func (d *DB) p95(filter Filter, tool string) int64 {
 
 // RecentCall is a single recent invocation.
 type RecentCall struct {
-	Tool       string
-	Workspace  string
-	CalledAt   time.Time
-	DurationMs int64
-	Success    bool
+	Tool        string
+	Workspace   string
+	CalledAt    time.Time
+	DurationMs  int64
+	Success     bool
+	ErrorMsg    string
+	InputBytes  int
+	OutputBytes int
 }
 
 // Recent returns the n most recent calls matching filter.
@@ -297,8 +300,9 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		return nil, nil
 	}
 	where, args := filter.where()
-	q := `SELECT tool, workspace, called_at, duration_ms, success FROM tool_calls` + where +
-		" ORDER BY called_at DESC LIMIT ?"
+	q := `SELECT tool, workspace, called_at, duration_ms, success,
+	             error_msg, input_bytes, output_bytes
+	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
 
 	rows, err := d.db.Query(q, args...)
@@ -312,7 +316,10 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		var c RecentCall
 		var calledMs int64
 		var success int
-		if err := rows.Scan(&c.Tool, &c.Workspace, &calledMs, &c.DurationMs, &success); err != nil {
+		if err := rows.Scan(
+			&c.Tool, &c.Workspace, &calledMs, &c.DurationMs, &success,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
+		); err != nil {
 			continue
 		}
 		c.CalledAt = time.UnixMilli(calledMs)

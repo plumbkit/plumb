@@ -112,10 +112,24 @@ func runStats(_ *cobra.Command, _ []string) error {
 			c.DurationMs,
 			ok,
 		)
+		if !c.Success && c.ErrorMsg != "" {
+			fmt.Fprintf(wr, "  ↳ %s\n", truncateErr(c.ErrorMsg, 200))
+		}
 	}
 	_ = wr.Flush()
 
 	return nil
+}
+
+// truncateErr collapses newlines and trims long error messages so the
+// stats table's continuation line stays readable.
+func truncateErr(s string, max int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 // humanAge formats a past time as a human-readable age string.

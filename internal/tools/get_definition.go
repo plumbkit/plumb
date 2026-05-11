@@ -48,7 +48,9 @@ func NewGetDefinition(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *
 func (t *GetDefinition) Name() string             { return "get_definition" }
 func (t *GetDefinition) InputSchema() json.RawMessage { return getDefinitionSchema }
 func (t *GetDefinition) Description() string {
-	return "Jump to the definition of the symbol at the given position in a document. Returns one or more source locations (file URI and line number)."
+	return "Returns the SOURCE LOCATION (file path + line number) of where a symbol is defined. " +
+		"Use when you need to navigate to the implementation of a symbol you're looking at. " +
+		"For documentation, type signature, or doc comments at the same position, use explain_symbol instead."
 }
 
 type getDefinitionArgs struct {

@@ -185,7 +185,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	}
 
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
-	srv.Register(tools.NewFindSymbol(sessionProxy, sessionCache, ttl, wsFn))
+	srv.Register(tools.NewFindSymbol(sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewWorkspaceSymbols(sessionProxy, sessionCache, ttl, wsFn))
 	srv.Register(tools.NewGetDefinition(sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewExplainSymbol(sessionProxy, sessionCache, ttl))

@@ -56,9 +56,10 @@ func NewGit() *Git { return &Git{} }
 func (t *Git) Name() string             { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
-	return "Run read-only git commands against a repository. " +
-		"Supports: diff (any flags/refs/paths), log (any format/range), show, blame, status, branch, tag, shortlog, stash list/show. " +
-		"Pass git flags and arguments directly via args, e.g. args:[\"-U5\",\"HEAD~1\",\"--\",\"main.go\"] for diff."
+	return "Safe read-only git surface — only inspection subcommands are accepted; destructive operations (commit, push, reset, rebase, checkout, etc.) are rejected, so this is safe to call without confirmation. " +
+		"Allowed: diff (any flags/refs/paths), log (any format/range), show, blame, status, branch, tag, shortlog, stash list/show. " +
+		"Pass git flags and arguments directly via args, e.g. args:[\"-U5\",\"HEAD~1\",\"--\",\"main.go\"] for diff. " +
+		"Essential for clients without shell access (Claude Desktop, Cursor MCP); for hosts that have a shell, this still records the call in stats."
 }
 
 type gitToolArgs struct {

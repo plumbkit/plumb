@@ -62,9 +62,11 @@ func NewFindFiles() *FindFiles { return &FindFiles{} }
 func (t *FindFiles) Name() string             { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
 func (t *FindFiles) Description() string {
-	return "Find files or directories by name pattern (like fd). " +
-		"Respects .gitignore. Supports glob and regex patterns, extension filters, " +
-		"type filters (file/dir), and depth limits."
+	return "Workspace-scoped file/directory finder. Prefer this over shelling out to find/fd: " +
+		"results are confined to the active project (no .git/, node_modules/, build output, or anything else .gitignore excludes), " +
+		"every call is recorded in the project's stats, and the pattern semantics are consistent across hosts. " +
+		"Supports glob and regex patterns, extension filters, type filters (file/dir), and depth limits. " +
+		"Essential for clients without filesystem access of their own (Claude Desktop, Cursor MCP, etc.)."
 }
 
 type findFilesArgs struct {

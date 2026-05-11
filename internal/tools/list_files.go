@@ -53,9 +53,12 @@ func NewListFiles() *ListFiles { return &ListFiles{} }
 func (t *ListFiles) Name() string             { return "list_files" }
 func (t *ListFiles) InputSchema() json.RawMessage { return listFilesSchema }
 func (t *ListFiles) Description() string {
-	return "List files in a directory tree. Filter by glob pattern (e.g. \"*.go\"), " +
-		"control recursion depth, and optionally include hidden files. " +
-		"Returns paths relative to the specified root."
+	return "Workspace-aware directory listing. Returns paths relative to the specified root, " +
+		"with glob filtering (e.g. \"*.go\"), depth control, and optional hidden-file inclusion. " +
+		"Prefer over plain ls/find: every call is recorded in the project's stats and the glob semantics " +
+		"are consistent across hosts. " +
+		"Essential for clients without filesystem access of their own (Claude Desktop, Cursor MCP, etc.). " +
+		"For locating files by name pattern across the whole tree, find_files is more efficient."
 }
 
 type listFilesArgs struct {

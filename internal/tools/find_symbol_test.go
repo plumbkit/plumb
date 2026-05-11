@@ -12,50 +12,6 @@ import (
 	"github.com/golimpio/plumb/internal/tools"
 )
 
-func TestFindSymbol_WorkspaceSearch(t *testing.T) {
-	mock := &mockLSP{
-		wsSymbols: []protocol.SymbolInformation{
-			{Name: "Greeter", Kind: protocol.SKClass,
-				Location: protocol.Location{URI: "file:///p/main.go",
-					Range: protocol.Range{Start: protocol.Position{Line: 9}}}},
-			{Name: "greet", Kind: protocol.SKMethod,
-				Location: protocol.Location{URI: "file:///p/main.go",
-					Range: protocol.Range{Start: protocol.Position{Line: 14}}}},
-		},
-	}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute, nil)
-	args, _ := json.Marshal(map[string]any{"query": "Greet"})
-
-	result, err := tool.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result, "Greeter") {
-		t.Errorf("expected Greeter in result:\n%s", result)
-	}
-	if !strings.Contains(result, "Class") {
-		t.Errorf("expected Class in result:\n%s", result)
-	}
-	// Line 9 (0-based) → line 10 (1-based)
-	if !strings.Contains(result, ":10") {
-		t.Errorf("expected :10 in result:\n%s", result)
-	}
-}
-
-func TestFindSymbol_WorkspaceSearch_Empty(t *testing.T) {
-	mock := &mockLSP{wsSymbols: nil}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute, nil)
-	args, _ := json.Marshal(map[string]any{"query": "Xyz"})
-
-	result, err := tool.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(result, "No symbols") {
-		t.Errorf("expected no-symbols message, got: %s", result)
-	}
-}
-
 func TestFindSymbol_DocumentSearch(t *testing.T) {
 	mock := &mockLSP{
 		docSymbols: []protocol.DocumentSymbol{
@@ -67,7 +23,7 @@ func TestFindSymbol_DocumentSearch(t *testing.T) {
 				}},
 		},
 	}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute, nil)
+	tool := tools.NewFindSymbol(mock, nil, time.Minute)
 	args, _ := json.Marshal(map[string]any{"query": "greet", "uri": "file:///p/main.go"})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -89,7 +45,7 @@ func TestFindSymbol_DocumentSearch_NoMatch(t *testing.T) {
 			{Name: "Greeter", Kind: protocol.SKClass},
 		},
 	}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute, nil)
+	tool := tools.NewFindSymbol(mock, nil, time.Minute)
 	args, _ := json.Marshal(map[string]any{"query": "Xyz", "uri": "file:///p/main.go"})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -103,8 +59,8 @@ func TestFindSymbol_DocumentSearch_NoMatch(t *testing.T) {
 
 func TestFindSymbol_LSPError(t *testing.T) {
 	mock := &mockLSP{err: errors.New("lsp unavailable")}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute, nil)
-	args, _ := json.Marshal(map[string]any{"query": "Greeter"})
+	tool := tools.NewFindSymbol(mock, nil, time.Minute)
+	args, _ := json.Marshal(map[string]any{"query": "Greeter", "uri": "file:///p/main.go"})
 
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
@@ -113,16 +69,28 @@ func TestFindSymbol_LSPError(t *testing.T) {
 }
 
 func TestFindSymbol_EmptyQuery(t *testing.T) {
-	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute, nil)
-	args, _ := json.Marshal(map[string]any{"query": ""})
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute)
+	args, _ := json.Marshal(map[string]any{"query": "", "uri": "file:///p/main.go"})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
 		t.Fatal("expected error for empty query")
 	}
 }
 
+func TestFindSymbol_MissingURI(t *testing.T) {
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute)
+	args, _ := json.Marshal(map[string]any{"query": "Greeter"})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error when uri is missing")
+	}
+	if !strings.Contains(err.Error(), "uri is required") {
+		t.Errorf("expected uri-required error, got: %v", err)
+	}
+}
+
 func TestFindSymbol_Interface(t *testing.T) {
-	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute, nil)
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute)
 	if tool.Name() != "find_symbol" {
 		t.Errorf("unexpected name: %s", tool.Name())
 	}
@@ -132,5 +100,16 @@ func TestFindSymbol_Interface(t *testing.T) {
 	var schema map[string]any
 	if err := json.Unmarshal(tool.InputSchema(), &schema); err != nil {
 		t.Errorf("inputSchema is not valid JSON: %v", err)
+	}
+	// uri must now be in the required list.
+	required, _ := schema["required"].([]any)
+	hasURI := false
+	for _, r := range required {
+		if r == "uri" {
+			hasURI = true
+		}
+	}
+	if !hasURI {
+		t.Errorf("schema must mark uri as required, got: %v", required)
 	}
 }

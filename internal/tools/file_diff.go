@@ -44,8 +44,9 @@ func NewFileDiff() *FileDiff { return &FileDiff{} }
 func (t *FileDiff) Name() string             { return "file_diff" }
 func (t *FileDiff) InputSchema() json.RawMessage { return fileDiffSchema }
 func (t *FileDiff) Description() string {
-	return "Produce a unified diff between two files. Works on any files — no git repository required. " +
-		"Use context_lines to control how much surrounding code is shown, and ignore_whitespace to skip formatting-only changes."
+	return "Returns a unified diff between two arbitrary files. Works outside git — for tracked files use the git tool's diff subcommand instead, which understands refs and the index. " +
+		"Use context_lines to control surrounding context and ignore_whitespace to skip formatting-only changes. " +
+		"Essential for clients without shell access (Claude Desktop, Cursor MCP)."
 }
 
 type fileDiffArgs struct {

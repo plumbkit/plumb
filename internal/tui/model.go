@@ -26,6 +26,14 @@ const (
 // pollMsg is sent by the periodic refresh tick.
 type pollMsg struct{}
 
+// panelFocus identifies which panel consumes navigation keys.
+type panelFocus int
+
+const (
+	focusSessions panelFocus = iota // j/k moves the session cursor (default)
+	focusStats                      // j/k moves the recent-calls cursor
+)
+
 // Model is the root Bubble Tea model for the sessions dashboard.
 // Concurrency: single goroutine (Bubble Tea runtime).
 type Model struct {
@@ -34,8 +42,10 @@ type Model struct {
 	statsDBs    map[string]*stats.DB // cached per-workspace DBs (read-only)
 	toolStats   []stats.ToolStat   // stats for currently selected session
 	recentCalls []stats.RecentCall
-	cursor      int
-	leftWidth   int // width of left panel content column (excludes border chars)
+	cursor      int        // index into m.sessions
+	statsCursor int        // index into m.recentCalls when focusPanel == focusStats
+	focusPanel  panelFocus // which panel j/k controls
+	leftWidth   int        // width of left panel content column (excludes border chars)
 	width       int
 	height      int
 	ready       bool
@@ -81,15 +91,25 @@ func (m *Model) refresh() {
 
 // dbFor returns the read-only stats DB for a workspace, opening it lazily.
 // Returns nil if no DB exists yet (no calls recorded for that workspace).
+//
+// We only cache non-nil handles. If the DB file doesn't exist yet — for
+// example, the TUI was opened before the first tool call created
+// <workspace>/.plumb/stats.db — caching nil would freeze the panel at
+// "No calls recorded yet" forever, because the daemon creates the file
+// after we've already stored a nil. Re-attempting Open each poll while
+// nil is cheap (one os.Stat) and lets the TUI pick up writes once they
+// start.
 func (m *Model) dbFor(workspace string) *stats.DB {
 	if workspace == "" {
 		return nil
 	}
-	if db, ok := m.statsDBs[workspace]; ok {
+	if db, ok := m.statsDBs[workspace]; ok && db != nil {
 		return db
 	}
 	db, _ := stats.OpenReadOnly(stats.DBPathFor(workspace))
-	m.statsDBs[workspace] = db
+	if db != nil {
+		m.statsDBs[workspace] = db
+	}
 	return db
 }
 
@@ -109,6 +129,9 @@ func (m *Model) refreshStats() {
 	filter := stats.Filter{SessionID: s.ID}
 	m.toolStats, _ = db.Summary(filter)
 	m.recentCalls, _ = db.Recent(8, filter)
+	if m.statsCursor >= len(m.recentCalls) {
+		m.statsCursor = 0
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -137,6 +160,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sessionIdx := contentRow - 1
 				if sessionIdx >= 0 && sessionIdx < len(m.sessions) {
 					m.cursor = sessionIdx
+					m.focusPanel = focusSessions
 					m.refreshStats()
 				}
 			}
@@ -157,13 +181,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "tab":
+			// Toggle focus between the sessions list (left) and the
+			// recent-calls list (right). Only meaningful when the right
+			// panel actually has rows to navigate.
+			if m.focusPanel == focusSessions && len(m.recentCalls) > 0 {
+				m.focusPanel = focusStats
+			} else {
+				m.focusPanel = focusSessions
+			}
 		case "up", "k":
-			if m.cursor > 0 {
+			if m.focusPanel == focusStats {
+				if m.statsCursor > 0 {
+					m.statsCursor--
+				}
+			} else if m.cursor > 0 {
 				m.cursor--
 				m.refreshStats()
 			}
 		case "down", "j":
-			if m.cursor < len(m.sessions)-1 {
+			if m.focusPanel == focusStats {
+				if m.statsCursor < len(m.recentCalls)-1 {
+					m.statsCursor++
+				}
+			} else if m.cursor < len(m.sessions)-1 {
 				m.cursor++
 				m.refreshStats()
 			}
@@ -218,7 +259,7 @@ func (m Model) render() string {
 		titleText += " " + Version
 	}
 	title := TitleStyle.Render(titleText)
-	hint := HintStyle.Render("↑↓/jk navigate · a all sessions · [/] resize · q quit")
+	hint := HintStyle.Render("↑↓/jk navigate · tab focus panel · a all sessions · [/] resize · q quit")
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(hint)
 	if gap < 1 {
 		gap = 1
@@ -430,23 +471,74 @@ func (m Model) rightLines(rightWidth int) []string {
 
 	// ─── Recent calls ─────────────────────────────────────────────────────
 	if len(m.recentCalls) > 0 {
-		lines = append(lines, "", "  "+SepStyle.Render("── Recent ──"))
-		for _, c := range m.recentCalls {
+		header := "── Recent ──"
+		if m.focusPanel == focusStats {
+			header += "  " + MutedStyle.Render("(tab to leave · j/k navigate)")
+		} else {
+			header += "  " + MutedStyle.Render("(tab to focus)")
+		}
+		lines = append(lines, "", "  "+SepStyle.Render(header))
+		for i, c := range m.recentCalls {
 			ok := OkStyle.Render("✓")
 			if !c.Success {
 				ok = WarnStyle.Render("✗")
 			}
 			age := humanAgeTUI(c.CalledAt)
-			line := fmt.Sprintf("  %s  %-22s %s %s",
+			prefix := "  "
+			selected := m.focusPanel == focusStats && i == m.statsCursor
+			if selected {
+				prefix = "▸ "
+			}
+			line := fmt.Sprintf("%s%s  %-22s %s %s",
+				prefix,
 				ok,
 				c.Tool,
 				MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)),
 				MutedStyle.Render(age),
 			)
+			if selected {
+				line = SelectedStyle.Render(line)
+			}
 			lines = append(lines, line)
+
+			// Inline-expand the error message for the selected failed row.
+			// Wrapped to the remaining right-panel width so it doesn't push
+			// past the panel boundary.
+			if selected && !c.Success && c.ErrorMsg != "" {
+				for _, w := range wrapText(c.ErrorMsg, rightWidth-6) {
+					lines = append(lines, "      "+WarnStyle.Render(w))
+				}
+			}
 		}
 	}
 
+	return lines
+}
+
+// wrapText breaks s into lines no wider than width, splitting on spaces.
+// Words longer than width are kept whole (the line will overflow rather
+// than mid-word break). Newlines in s are converted to spaces first so a
+// multi-line error renders as one wrapped paragraph.
+func wrapText(s string, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+	s = strings.ReplaceAll(s, "\n", " ")
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	cur := words[0]
+	for _, w := range words[1:] {
+		if len(cur)+1+len(w) > width {
+			lines = append(lines, cur)
+			cur = w
+		} else {
+			cur += " " + w
+		}
+	}
+	lines = append(lines, cur)
 	return lines
 }
 

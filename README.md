@@ -1,12 +1,23 @@
 # plumb
 
-Real IDE intelligence for AI assistants — go-to-definition, find-references, rename, diagnostics, and more, powered by the same language servers your editor uses.
+**Real IDE intelligence for AI assistants** — go-to-definition, find-references, rename, diagnostics, and semantic edits, powered by the same language servers your editor uses.
 
-Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities to LLMs. Instead of dumping raw source files into context, plumb lets AI assistants query codebases through structured semantic tools — finding symbols, jumping to definitions, listing references, running git queries, and more — saving tokens and improving accuracy.
+Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges LLMs to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into an AI assistant's context window, plumb exposes structured semantic tools so the assistant can query a codebase the way an IDE would — finding symbols, jumping to definitions, listing references, applying scope-aware refactors — saving tokens and improving accuracy.
+
+## Why plumb
+
+LLM coding assistants typically reason about codebases by reading files into the context window. That approach is token-heavy, lossy at scale, and blind to symbol semantics — the assistant can't tell a method override from an unrelated identifier with the same name, can't safely rename a symbol across a project, and can't ask "where is this defined?" without re-reading every plausible file.
+
+Plumb gives the assistant the same primitives your editor already has:
+
+- **Semantic symbol search** scoped to a file or the whole workspace — case-sensitive, scope-aware, results filtered to the active project (no stdlib/dependency noise).
+- **LSP-backed refactors** — `rename_symbol`, `replace_symbol_body`, `insert_before/after_symbol`, `safe_delete_symbol` — that respect scope, types, and references. `safe_delete_symbol` refuses to delete a symbol with remaining references rather than silently breaking the build.
+- **Real diagnostics** — actual compiler/linter output from gopls or pyright, not LLM-guessed error patterns.
+- **Per-workspace memory** — durable, file-backed notes that travel with the project (`<workspace>/.plumb/memories/`), exposed as MCP resources for clients that surface them.
 
 **Supported languages:** Go (via [gopls](https://pkg.go.dev/golang.org/x/tools/gopls)) and Python (via [pyright](https://github.com/microsoft/pyright)).
 
-The server is consumed by MCP clients such as Claude Desktop and Claude Code. It ships with 27 tools across LSP queries, semantic refactoring, filesystem search/edit, git, and a per-workspace memory system. A shared-daemon architecture keeps gopls/pyright warm across conversations, and multi-workspace routing lets a single MCP session query and edit symbols in any number of projects without pre-declaring an "active" one.
+**Architecture:** a shared background daemon keeps language servers warm across conversations, so the assistant doesn't pay re-indexing latency every time you open a new chat. Multi-workspace routing lets a single MCP session query and edit symbols across any number of projects — no "active workspace" to set up front. Per-project SQLite tool-call statistics let you see what the assistant actually does in each codebase.
 
 ## Quick start
 
@@ -39,6 +50,8 @@ plumb init                # blank context.md
 plumb init --discover     # auto-detect build system, entry points, test layout
 
 # Monitor live sessions (TUI dashboard)
+# ↑↓/jk navigate sessions; tab focuses the recent-calls panel
+# (j/k then scrolls; selecting a failed call expands its error inline)
 plumb          # or: plumb status
 
 # View tool call statistics
@@ -93,8 +106,8 @@ Plumb determines the workspace root in this order:
 
 | Tool | Description |
 |---|---|
-| `find_symbol` | Search for symbols by name across the workspace or within a single document |
-| `workspace_symbols` | Search for symbols by name or substring across the entire workspace |
+| `find_symbol` | Search for symbols by name within a single document (case-insensitive substring on names) |
+| `workspace_symbols` | Search for symbols by name across the entire workspace (LSP `workspace/symbol`; fuzziness depends on the language server) |
 | `get_definition` | Jump to the definition of the symbol at a given position |
 | `explain_symbol` | Hover documentation and type information for a symbol |
 | `list_symbols` | Complete symbol outline of a file — every function, type, method, field, and constant with line ranges |
@@ -124,6 +137,8 @@ Plumb determines the workspace root in this order:
 | `safe_delete_symbol` | Delete a symbol only if it has no remaining references |
 
 All edit tools default to `dry_run=true` — you see a preview before anything is written.
+
+`insert_before_symbol`, `replace_symbol_body`, and `safe_delete_symbol` accept an optional `include_doc_comment` flag. LSP servers report a symbol's range starting at the declaration keyword, *excluding* the doc comment above it. With `include_doc_comment=true`, the operation extends to cover any contiguous comment lines (`//`, `#`, `/*`, `*`) directly above the symbol — so you can replace a function together with its doc comment, delete it without orphaning the comment, or insert a new declaration above an existing doc comment instead of between the comment and its symbol.
 
 ### Memory tools (per-workspace persistent notes)
 

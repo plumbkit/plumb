@@ -17,39 +17,38 @@ var findSymbolSchema = json.RawMessage(`{
   "properties": {
     "query": {
       "type": "string",
-      "description": "Symbol name or substring to search for"
+      "description": "Symbol name or substring to search for (case-insensitive)"
     },
     "uri": {
       "type": "string",
-      "description": "Limit search to this document (file:// URI). Omit for workspace-wide search."
+      "description": "Document to search within (file:// URI). Required."
     }
   },
-  "required": ["query"]
+  "required": ["query", "uri"]
 }`)
 
-// FindSymbol searches for symbols by name across the workspace or within a document.
+// FindSymbol searches for symbols by name within a single document. For
+// workspace-wide search, use workspace_symbols.
 type FindSymbol struct {
 	client lsp.LSPClient
 	cache  *cache.Cache
 	ttl    time.Duration
-	ws     WorkspaceFn // used to filter dependency-cache hits from workspace queries
 }
 
 // NewFindSymbol creates a FindSymbol tool. Pass a nil cache to disable caching.
-// ws may be nil to skip workspace-scoping (useful in tests).
-func NewFindSymbol(client lsp.LSPClient, c *cache.Cache, ttl time.Duration, ws WorkspaceFn) *FindSymbol {
-	return &FindSymbol{client: client, cache: c, ttl: ttl, ws: ws}
+func NewFindSymbol(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *FindSymbol {
+	return &FindSymbol{client: client, cache: c, ttl: ttl}
 }
 
 func (t *FindSymbol) Name() string             { return "find_symbol" }
 func (t *FindSymbol) InputSchema() json.RawMessage { return findSymbolSchema }
 func (t *FindSymbol) Description() string {
-	return "Search for symbols (functions, types, variables, classes) by name across the workspace or within a single document. Returns names, kinds, and source locations."
+	return "Search for symbols (functions, types, variables, classes) by name within a single document. Returns names, kinds, and line numbers. Matching is case-insensitive substring against the symbol name. For workspace-wide search, use workspace_symbols instead."
 }
 
 type findSymbolArgs struct {
 	Query string `json:"query"`
-	URI   string `json:"uri,omitempty"`
+	URI   string `json:"uri"`
 }
 
 func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -60,49 +59,10 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 	if a.Query == "" {
 		return "", fmt.Errorf("find_symbol: query must not be empty")
 	}
-	if a.URI != "" {
-		return t.inDocument(ctx, a.URI, a.Query)
+	if a.URI == "" {
+		return "", fmt.Errorf("find_symbol: uri is required (use workspace_symbols for workspace-wide search)")
 	}
-	return t.inWorkspace(ctx, a.Query)
-}
-
-func (t *FindSymbol) inWorkspace(ctx context.Context, query string) (string, error) {
-	key := "wsSymbols:" + query
-	if t.cache != nil {
-		if v, ok := t.cache.Get(key); ok {
-			return v.(string), nil
-		}
-	}
-
-	syms, err := t.client.WorkspaceSymbols(ctx, protocol.WorkspaceSymbolParams{Query: query})
-	if err != nil {
-		return "", fmt.Errorf("find_symbol: %w", err)
-	}
-	if t.ws != nil {
-		ws := t.ws()
-		filtered := syms[:0]
-		for _, s := range syms {
-			if isInWorkspace(s.Location.URI, ws) {
-				filtered = append(filtered, s)
-			}
-		}
-		syms = filtered
-	}
-	var result string
-	if len(syms) == 0 {
-		result = fmt.Sprintf("No symbols found matching %q.", query)
-	} else {
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "Found %d symbol(s) matching %q:\n\n", len(syms), query)
-		for _, s := range syms {
-			fmt.Fprintf(&sb, "- %s (%s) at %s:%d\n",
-				s.Name, symbolKindName(s.Kind),
-				s.Location.URI, s.Location.Range.Start.Line+1)
-		}
-		result = sb.String()
-	}
-	t.cacheSet(key, result)
-	return result, nil
+	return t.inDocument(ctx, a.URI, a.Query)
 }
 
 func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string, error) {
@@ -139,12 +99,6 @@ func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string,
 			s.Name, symbolKindName(s.Kind), s.Range.Start.Line+1)
 	}
 	return sb.String(), nil
-}
-
-func (t *FindSymbol) cacheSet(key, value string) {
-	if t.cache != nil {
-		t.cache.Set(key, value, t.ttl)
-	}
 }
 
 // flatFilterSymbols walks the symbol tree and returns all nodes whose name

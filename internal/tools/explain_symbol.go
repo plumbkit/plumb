@@ -48,7 +48,9 @@ func NewExplainSymbol(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *
 func (t *ExplainSymbol) Name() string             { return "explain_symbol" }
 func (t *ExplainSymbol) InputSchema() json.RawMessage { return explainSymbolSchema }
 func (t *ExplainSymbol) Description() string {
-	return "Get documentation and type information for the symbol at the given position in a document (hover information from the language server)."
+	return "Returns DOCUMENTATION and type information (LSP hover content: function signature, doc comment, often in Markdown) for the symbol at the given position. " +
+		"Use when you need to understand what a symbol is without navigating to its source. " +
+		"For the file location of where the symbol is defined, use get_definition instead."
 }
 
 type explainSymbolArgs struct {
