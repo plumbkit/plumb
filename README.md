@@ -1,8 +1,8 @@
 # plumb
 
-**Real IDE intelligence for AI assistants** — go-to-definition, find-references, rename, diagnostics, file editing, and semantic refactors, powered by the same language servers your editor uses.
+**Real IDE intelligence for AI assistants** — go-to-definition, find-references, rename, diagnostics, atomic file editing, and semantic refactors, powered by the same language servers your editor uses.
 
-Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes structured tools so the assistant can query and edit a codebase the way an IDE would — finding symbols, jumping to definitions, applying scope-aware renames, reading and writing files, and getting real compiler diagnostics. This saves tokens, improves accuracy, and keeps the language server's view consistent with every change.
+Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes 33 structured tools so the assistant can query and edit a codebase the way an IDE would — finding symbols, jumping to definitions, applying scope-aware renames, reading and writing files atomically, and getting real compiler diagnostics back inline with every write. This saves tokens, improves accuracy, and keeps the language server's view consistent with every change.
 
 ## Why plumb
 
@@ -12,10 +12,10 @@ Plumb gives the assistant the same primitives your editor already has:
 
 - **Semantic symbol search** scoped to a file or the whole workspace, filtered to your code (no stdlib or dependency noise).
 - **LSP-backed refactors** — `rename_symbol`, `replace_symbol_body`, `insert_before/after_symbol`, `safe_delete_symbol` — that understand scope, types, and references.
-- **Real diagnostics** — actual compiler and linter output from gopls or pyright, not guessed error patterns.
-- **Safe file I/O** — `read_file`, `write_file`, `edit_file` with atomic writes, concurrent-write detection, and automatic LSP notification after every change.
+- **Real diagnostics inline with every write** — actual compiler output from gopls or pyright is appended to `write_file` and `edit_file` responses, so the assistant learns it broke the build in the same turn.
+- **Concurrency-safe file I/O** — atomic writes, per-path locks across all write tools, symlink-aware, CRLF-tolerant, optimistic-concurrency mtime checks, multi-file transactions with rollback.
 - **Per-workspace memory** — durable markdown notes that travel with the project, exposed as MCP resources in Claude Desktop's sidebar.
-- **Session bootstrap** — `session_start` orients the assistant in one round-trip: workspace path, project context, saved memories, recent tool usage, and active diagnostics.
+- **Session bootstrap** — `session_start` orients the assistant in one round-trip: workspace path, language, git branch, recent commits, recently-modified files, memories, top-5 tool usage, active diagnostics.
 
 **Supported languages:** Go (via [gopls](https://pkg.go.dev/golang.org/x/tools/gopls)) and Python (via [pyright](https://github.com/microsoft/pyright)).
 
@@ -37,6 +37,7 @@ Benefits:
 - One gopls process per workspace, shared across all conversations about that project.
 - Gopls stays warm between sessions — no re-indexing when you open a new chat.
 - A single MCP connection can query and edit symbols across any number of projects.
+- LSP capability negotiation is correct — `workspace/didChangeWatchedFiles` is registered and consumed, so symbol indexes stay live after every plumb-initiated write.
 
 ## Quick start
 
@@ -75,6 +76,10 @@ plumb          # or: plumb status
 plumb stats
 plumb stats --workspace ~/Projects/myapp
 
+# Inspect resolved configuration (defaults + global + project + env)
+plumb config show
+plumb config show --workspace ~/Projects/myapp
+
 # List active sessions
 plumb sessions
 plumb sessions --all    # include sessions still resolving a workspace
@@ -83,7 +88,7 @@ plumb sessions --all    # include sessions still resolving a workspace
 plumb diag              # workspace-wide
 plumb diag path/to/file.go
 
-# Stop the daemon
+# Stop the daemon (e.g. to pick up a newly-built binary)
 plumb stop
 ```
 
@@ -91,17 +96,17 @@ plumb stop
 
 Plumb determines the workspace root using this precedence:
 
-1. **`.plumb/` directory** — running `plumb init` in your project root creates this marker. It takes priority over nested `go.mod` files (e.g. in `testdata/`). Recommended.
+1. **`.plumb/` directory** — running `plumb init` in your project root creates this marker. It takes priority over nested project markers (e.g. in `testdata/`). Recommended.
 2. **MCP `roots/list`** — used if the client reports a root (Claude Desktop does this).
-3. **`go.mod` walk** — the nearest `go.mod` above the first file URI seen by the daemon.
+3. **Cwd walk** — walks up from `os.Getwd()` looking for a project marker (`go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, etc.).
 
-## Available tools
+## Available tools (33)
 
 ### Session
 
 | Tool | Description |
 |---|---|
-| `session_start` | Bootstrap tool — call first in every session. Returns workspace info, project context, memories, recent tool usage, and active diagnostics in one call. Designed for Claude Desktop where no filesystem access is available without tool calls. |
+| `session_start` | Bootstrap tool — call first in every session. Returns workspace info, language, git branch, recent commits, recently-modified files, memories, top-5 tool usage, and active diagnostics in one call. Cold-start fallback chain: explicit → daemon-resolved → `roots/list` → cwd walk. |
 
 ### LSP tools — require a running language server
 
@@ -117,24 +122,30 @@ Plumb determines the workspace root using this precedence:
 | `type_hierarchy` | Supertypes and subtypes for an interface or struct |
 | `diagnostics` | Errors, warnings, and hints from the language server |
 
-### File I/O
+### Filesystem reads
 
 | Tool | Description |
 |---|---|
-| `read_file` | Read a file by path or `file://` URI. Supports line ranges for large files. Binary files are detected and rejected. Output capped at 200 KiB. |
-| `read_multiple_files` | Read up to 20 files in a single call. Errors for individual files are reported inline. |
-| `write_file` | Create or overwrite a file atomically. Content is staged in the system temp directory and renamed into place — never a partial write. Notifies the LSP server after writing. |
-| `edit_file` | Apply one or more str_replace edits to an existing file. Each `old_str` must appear exactly once — absent or ambiguous strings are rejected, preventing silent corruption. Retries automatically if a concurrent write is detected (up to 3 times). |
-| `list_directory` | List immediate directory contents with `[FILE]`/`[DIR]` type prefixes, sizes, and modification times. |
-| `list_files` | Recursively walk a directory tree with glob filtering and depth control |
-| `search_in_files` | Ripgrep-style content search — regex, smart-case, context lines, glob filter |
-| `find_files` | fd-style file finder — glob or regex, extension filter, type filter, depth limit |
-| `file_diff` | Unified diff between any two files — no git required |
-| `find_replace` | Text/regex search-and-replace across files (dry-run by default) |
+| `read_file` | Read a file by path or `file://` URI. Streams line ranges with `bufio.Scanner` (no whole-file load for slicing). Output header carries the file's mtime in RFC3339Nano — copy into `edit_file.expected_mtime` for optimistic-concurrency guarantees. 200 KiB cap; binary detection. |
+| `read_multiple_files` | Up to 20 files; parallel (cap 8); per-file errors inline. |
+| `list_directory` | Immediate children with `[FILE]`/`[DIR]` prefixes, sizes, mtimes. Glob `pattern` filter. Sort by name/size/modified. |
+| `list_files` | Recursively walk a directory tree with glob filtering and depth control. |
+| `find_files` | fd-style file finder — glob or regex, extension filter, type filter, depth limit. |
+| `search_in_files` | ripgrep-style content search — regex, smart-case, context lines, glob filter. |
+
+### Filesystem writes
+
+All write tools share these properties: per-path locks across the daemon (concurrent writes to the same path serialise); atomic `tmpdir → rename` (with EXDEV fallback); symlink-aware (writes through links rather than replacing them); LSP-notified via `workspace/didChangeWatchedFiles`; symbol-cache invalidated by URI; rate-limited per session; post-write diagnostics appended to the response.
+
+| Tool | Description |
+|---|---|
+| `write_file` | Create or overwrite a file atomically. Content staged in `os.TempDir()` and renamed into place — never a partial write. Preserves existing permissions. Sends `FileCreated`/`FileChanged` per situation. Appends fresh diagnostics if gopls/pyright republishes within 300ms. |
+| `edit_file` | Apply str_replace edits to an existing file. Each `old_str` must appear exactly once (uniqueness lock — rejects ambiguous matches). CRLF/LF differences tolerated automatically. All edits applied in memory first, then a single atomic write. Optional `expected_mtime` for optimistic concurrency. Retries up to 3 times on detected concurrent writes. Response includes line-range summary and post-write diagnostics. |
+| `delete_file` | Atomic delete with `FileDeleted` notification. Refuses directories. |
+| `rename_file` | Atomic move/rename. Distinct from `rename_symbol` (LSP-semantic identifier rename). Two-path locks acquired in lexical order (deadlock-safe). |
+| `transaction_apply` | Apply str_replace edits across multiple files atomically. Up to 50 operations. Phase 1 validates everything in memory — if any old_str is missing/ambiguous or expected_mtime mismatches, no writes happen. Phase 2 writes each file under locks; on partial failure, already-written files are rolled back to their pre-transaction content. Phase 3 fires `didChangeWatchedFiles` and invalidates the symbol cache per file. Use for cross-file refactors that must land as one unit. |
 
 ### LSP semantic edits
-
-All edit tools default to `dry_run=true` — you see a preview before anything is written.
 
 | Tool | Description |
 |---|---|
@@ -144,11 +155,11 @@ All edit tools default to `dry_run=true` — you see a preview before anything i
 | `insert_after_symbol` | Insert text immediately after a symbol's declaration |
 | `safe_delete_symbol` | Delete a symbol only if it has no remaining references |
 
-`insert_before_symbol`, `replace_symbol_body`, and `safe_delete_symbol` accept an optional `include_doc_comment` flag. When true, the operation extends to cover any contiguous comment lines directly above the symbol declaration — so you can replace a function together with its doc comment, delete it without orphaning the comment, or insert above an existing doc comment rather than between the comment and its symbol.
+`insert_before_symbol`, `replace_symbol_body`, and `safe_delete_symbol` accept an optional `include_doc_comment` flag — when true, the operation covers any contiguous comment lines directly above the declaration.
 
 ### Memory
 
-Memories are markdown notes stored at `<workspace>/.plumb/memories/<name>.md`. They persist project-specific context — conventions, architectural decisions, gotchas — across conversations. Each memory may carry YAML frontmatter with a `description` (shown in listings) and a `paths:` field (for auto-attaching relevant memories to specific files).
+Memories are markdown notes stored at `<workspace>/.plumb/memories/<name>.md`. They persist project-specific context — conventions, architectural decisions, gotchas — across conversations. Each memory may carry YAML frontmatter with a `description` and a `paths:` field for auto-attaching to specific files.
 
 Memories are also exposed as MCP **resources** (`plumb-memory://` URI scheme) so Claude Desktop's resources panel can browse them natively. The project `context.md` is exposed as `plumb://workspace/context`.
 
@@ -166,6 +177,8 @@ Memories are also exposed as MCP **resources** (`plumb-memory://` URI scheme) so
 | Tool | Description |
 |---|---|
 | `git` | Read-only git subcommands: diff, log, show, blame, status, branch, tag, shortlog, stash |
+| `file_diff` | Unified diff between any two files — no git required |
+| `find_replace` | Text/regex search-and-replace across files (dry-run by default) |
 
 ### Info
 
@@ -185,9 +198,33 @@ Plumb exposes three named workflows that Claude Desktop surfaces as menu items:
 
 All prompts accept an optional `workspace` argument. `recent-changes` also accepts `since` (e.g. `'1 week ago'` or a commit SHA).
 
+## Configuration
+
+Plumb resolves configuration in four layers, lowest precedence to highest:
+
+1. **Defaults** compiled into the binary.
+2. **Global config:** `$XDG_CONFIG_HOME/plumb/config.toml` (falls back to `~/.config/plumb/config.toml`).
+3. **Project config:** `<workspace>/.plumb/config.toml`. Loaded once per connection when the workspace resolves; only fields the project file sets are overridden.
+4. **Environment variables.** Highest precedence — useful for one-off overrides.
+
+### `[edits]` — write-tool safety knobs
+
+```toml
+[edits]
+strict = true                  # require read_file before edit_file (default false)
+rate_limit_per_minute = 30     # 0 disables; default 120
+```
+
+| Field | Env var | Effect |
+|---|---|---|
+| `strict` | `PLUMB_STRICT_EDITS=1` | Every `edit_file` target must have been read in this session AND the on-disk mtime must match what was observed at read time. |
+| `rate_limit_per_minute` | `PLUMB_WRITE_RATE_LIMIT=N` | Sliding-window cap on writes per session. `0` disables. |
+
+Run `plumb config show` (optionally with `--workspace <dir>`) to see the resolved config with provenance — each field's value plus which layer supplied it.
+
 ## Project context
 
-Running `plumb init` creates `.plumb/context.md` — a markdown file you can fill with project-specific context: what the project does, architecture decisions, conventions, and known gotchas. The `session_start` tool loads the first 80 lines of this file automatically. Claude Desktop also shows it in the resources sidebar as "Project context".
+Running `plumb init` creates `.plumb/context.md` — a markdown file you can fill with project-specific context: what the project does, architecture decisions, conventions, and known gotchas. The `session_start` tool loads the first 200 lines of this file automatically. Claude Desktop also shows it in the resources sidebar as "Project context".
 
 ```markdown
 ## Overview
@@ -205,10 +242,10 @@ gopls initialisation is lazy — workspace resolves on first tool call.
 
 ## Monitoring
 
-The `plumb` command (alias: `plumb status`) opens a live TUI dashboard showing active sessions, tool call statistics, and recent calls per session.
+The `plumb` command (alias: `plumb status`) opens a live TUI dashboard showing active sessions, tool call statistics, recent edits, and recent calls per session.
 
 ```
-plumb 0.4.1
+plumb 0.5.4
 ╭─ Sessions (1) ──────────────┬─ Session + Stats ──────────────────────────
 │                             ┆
 │▸ go: ~/Projects/myapp       ┆  ID          abc123-def456
@@ -216,36 +253,49 @@ plumb 0.4.1
 │                             ┆  Folder      ~/Projects/myapp
 │                             ┆  Adapter     gopls
 │                             ┆  PID         12345
-│                             ┆  Daemon      0.4.1
+│                             ┆  Daemon      0.5.4
 │                             ┆  Started     2026-05-11 14:00:00
 │                             ┆  Client      claude-ai 0.1.0
 │                             ┆
 │                             ┆  ── Tool Statistics ──
-│                             ┆  write_file           4 calls   8ms avg
 │                             ┆  edit_file            6 calls  12ms avg
+│                             ┆  write_file           4 calls   8ms avg
 │                             ┆  search_in_files      9 calls  16ms avg
 │                             ┆  workspace_symbols    3 calls  38ms avg
 │                             ┆  diagnostics          2 calls   0ms avg
+│                             ┆
+│                             ┆  ── Recent Edits ──
+│                             ┆  ✓  edit_file       12ms  4s ago
+│                             ┆  ✓  write_file       8ms  9s ago
+│                             ┆  ✓  edit_file       11ms 22s ago
 ╰─────────────────────────────┴────────────────────────────────────────────
 ```
 
-Navigation: `↑↓`/`jk` moves sessions, `tab` focuses the recent-calls panel (then `j`/`k` to scroll, selecting a failed call expands its error inline), `a` shows hidden sessions, `[`/`]` resizes the left panel, `q` quits.
+Navigation: `↑↓`/`jk` moves sessions, `tab` focuses the recent-calls panel (then `j`/`k` to scroll; selecting a failed call expands its error inline), `a` shows hidden sessions, `[`/`]` resizes the left panel, `q` quits.
 
-## File write safety
+## File-write safety model
 
-All file writes in plumb use the same layered safety model:
+Every write through plumb (`write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply`) goes through the same layered safety:
 
-1. **Atomic rename** — content is staged in `os.TempDir()` and renamed into place. `os.Rename` is a single POSIX syscall — the target is never partially written. If the temp directory and target are on different filesystems (EXDEV), plumb falls back to a `.plumb.tmp` sibling in the same directory automatically. No permanent backup files are left in your project tree.
+1. **Per-path lock.** A process-global lock keyed by `filepath.Clean(path)` serialises all concurrent writes to the same file from any session. Two parallel agents cannot interleave reads and writes on the same file.
 
-2. **Uniqueness lock** (`edit_file`) — each `old_str` must appear exactly once. This is the concurrency safety lock: if the file was modified between when the assistant read it and when it issues the edit, the old string will be absent or match different context, and the edit is rejected cleanly. No silent corruption is possible.
+2. **Atomic rename.** Content is staged in `os.TempDir()` and renamed into place. `os.Rename` is a single POSIX syscall — the target is never partially written. EXDEV cross-device rename falls back to a `.plumb.tmp` sibling automatically. No backup files left in the project tree.
 
-3. **Concurrent-write retry** (`edit_file`) — after the rename, plumb re-stats the file. If the mtime is significantly newer than the write time, a third party wrote the file during the operation. The edit is automatically re-read and re-applied up to 3 times before failing with a diagnostic message.
+3. **Symlink-aware.** If the target is a symlink, plumb resolves it before writing — the write goes through the link, not replacing it with a regular file.
 
-4. **LSP notification** — after every successful write, plumb sends `didOpen`/`didChange`/`didClose` to the language server so diagnostics and symbol lookups reflect the new content without requiring an editor to open the file.
+4. **Uniqueness lock + CRLF tolerance** (`edit_file`). Each `old_str` must match exactly once. Line endings are normalised against the file before matching, so an LF `old_str` matches a CRLF file. If the file changed between read and edit and `old_str` becomes ambiguous, the edit is rejected — no silent corruption.
+
+5. **Optimistic concurrency** (`edit_file`, `transaction_apply`). Pass `expected_mtime` from a prior `read_file`; the operation is rejected if the file's current mtime differs. Pre-rename mtime re-check inside the write loop closes the inner TOCTOU window.
+
+6. **Strict mode** (opt-in via `[edits].strict = true`). Every edit requires a prior `read_file` in the same MCP session AND a matching mtime. Tracked per-session via `ReadTracker` — no cross-session leakage.
+
+7. **Concurrent-write retry** (`edit_file`). After the rename, the file's mtime is re-checked. A significant jump triggers a re-read and retry (up to 3 attempts).
+
+8. **LSP notification + cache invalidation.** Every successful write fires `workspace/didChangeWatchedFiles` to the language server and evicts cache entries by URI. Diagnostics for the touched file are polled for up to 300ms and any fresh ones are appended to the response.
 
 ## Statistics
 
-Tool call statistics are stored in a per-project SQLite database at `<workspace>/.plumb/stats.db`. The TUI and `plumb stats` read from it concurrently with the daemon writing, using WAL journal mode.
+Tool-call statistics are stored in a per-project SQLite database at `<workspace>/.plumb/stats.db` (schema version 1 since 0.5.3, stamped in `PRAGMA user_version`). The TUI and `plumb stats` read concurrently with the daemon writing, using WAL journal mode.
 
 ```sh
 plumb stats                         # current directory's project
@@ -260,11 +310,14 @@ plumb stats --session <session-id>  # one session only
 | macOS | `~/Library/Caches/plumb/daemon.log` |
 | Linux | `~/.cache/plumb/daemon.log` |
 
+A version mismatch between a running daemon and a freshly-built `plumb serve` triggers a stderr warning on next connect: `plumb: warning: connected daemon is 0.4.1 but this binary is 0.5.4 — run \`plumb stop\` to refresh.` Always restart the daemon after rebuilding.
+
 ## Build from source
 
 ```sh
 make build      # produces ./plumb, version stamped from git tag or VERSION file
-make test-race  # full test suite with race detector
+make test       # full test suite
+make test-race  # with race detector
 make lint       # golangci-lint
 ```
 
@@ -275,17 +328,17 @@ Requires Go 1.22+. `gopls` must be on `$PATH` for integration tests.
 The version is injected at build time. To bump during development, edit the `VERSION` file:
 
 ```sh
-echo "0.4.1" > VERSION
+echo "0.5.5" > VERSION
 make build
 ```
 
 For a release, tag the commit — the tag takes precedence:
 
 ```sh
-git tag v0.4.1
+git tag v0.5.4
 make build
 ```
 
 ## Contributing
 
-See `AGENTS.md` for architecture details, code style rules, and the checklist for adding new tools or LSP adapters.
+See [`AGENTS.md`](AGENTS.md) for architecture details, code style rules, and the checklist for adding new tools or LSP adapters. AGENTS.md is the canonical brief for AI agents working in the codebase and is kept current with every release.

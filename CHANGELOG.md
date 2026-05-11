@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.5 — 2026-05-11
+
+### Documentation
+- **AGENTS.md fully refreshed** for the 0.5.x line. Now reflects: 33 tools (was 28); `WriteDeps` pattern for adding write tools; per-project `[edits]` config layer; capability negotiation via `client/registerCapability`; per-session `ReadTracker`; per-path locks; rate limit + strict mode env/config layers; `plumb config show`; daemon version-mismatch warning; cold-start workspace chain; quick-reference patterns for agents.
+- **README.md rewritten** for the 0.5.x line. New tool tables; expanded file-write safety section covering all eight layers (per-path lock, atomic rename, symlink-aware, uniqueness + CRLF, expected_mtime, strict mode, retry, LSP notify); `[edits]` config block; `plumb config show`; updated TUI screenshot showing the Recent Edits panel.
+- **docs/mcp-tools.md** updated: corrected the introduction (was describing the obsolete `didOpen`/`didChange`/`didClose` write notification, now `workspace/didChangeWatchedFiles`); rewrote `write_file` and `edit_file` sections to cover all current safety layers; added sections for `delete_file`, `rename_file`, `transaction_apply`; refreshed `read_file` with the mtime-header contract; documented `read_multiple_files` parallelism and `list_directory` glob filter; updated `session_start` with the four-step cold-start chain and the 200-line context.md cap. Note added pointing readers to AGENTS.md for the full tool list.
+
 ## 0.5.4 — 2026-05-11
 
 ### Added

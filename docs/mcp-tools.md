@@ -6,7 +6,9 @@ Tools are implemented in `internal/tools/` and registered in `internal/cli/daemo
 
 LSP tools cache their results in the session-scoped `cache.Cache`; entries are invalidated automatically when the language server reports that a file has changed (`textDocument/publishDiagnostics`).
 
-Filesystem tools (read, write, edit, list, search) do not require a running language server but do notify gopls via `didOpen`/`didChange`/`didClose` after any write so the LSP's in-memory view stays consistent.
+Filesystem tools (read, write, edit, list, search) do not require a running language server. Write tools (`write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply`) notify the LSP via `workspace/didChangeWatchedFiles` after every successful write so symbol indexes and diagnostics stay current. This is the LSP-correct primitive for external file changes — distinct from the open-document lifecycle, which is for editor-managed buffers.
+
+The full tool surface (including LSP-edit tools, memory tools, and VCS tools not detailed below) is enumerated in [`AGENTS.md`](../AGENTS.md). This document focuses on the tools whose schemas have non-trivial parameters.
 
 ---
 
@@ -411,17 +413,32 @@ the language server supervisor will restart the process if it has crashed.
 
 ### `read_file`
 
-Read the text content of any file.
+Read the text contents of a file.
 
 **Source**: `internal/tools/read_file.go`
 
 | Field | Required | Description |
 |---|---|---|
 | `path` | yes | Absolute path or `file://` URI |
-| `start_line` | no | First line to return (1-based, inclusive) |
-| `end_line` | no | Last line to return (1-based, inclusive) |
+| `start_line` | no | 1-based line to start reading from (inclusive) |
+| `end_line` | no | 1-based line to stop reading at (inclusive) |
 
-Binary files are detected and rejected. Output is capped at 200 KiB; use `start_line`/`end_line` for large files.
+**Output format:**
+
+```
+# plumb-read mtime=2026-05-11T13:46:38.895137000+10:00
+
+<file contents or selected line range>
+```
+
+The mtime header is the file's modification time at read time, in RFC3339Nano. Copy it verbatim into `edit_file`'s `expected_mtime` parameter to assert the file hasn't changed between read and edit.
+
+**Notes:**
+
+- Binary files (null byte in first 8 KiB) are rejected.
+- When a line range is supplied, the read is streamed via `bufio.Scanner` and stops at `end_line` — large files are not loaded entirely.
+- Output is capped at 200 KiB. Use line ranges on larger files.
+- Records the mtime in the session's `ReadTracker` so `edit_file` strict mode can verify the agent read the file before editing it.
 
 ---
 
@@ -435,7 +452,7 @@ Read up to 20 files in a single call.
 |---|---|---|
 | `paths` | yes | Array of up to 20 absolute paths or `file://` URIs |
 
-Errors for individual files are reported inline — one unreadable file does not abort the others.
+Reads run in parallel (capped at 8 concurrent). Errors for individual files are reported inline — one unreadable file does not abort the others. Each file's output includes the same `# plumb-read mtime=...` header as single `read_file`.
 
 ---
 
@@ -451,11 +468,15 @@ Create or overwrite a file atomically.
 | `content` | yes | Full content to write |
 | `create_dirs` | no | Create parent directories if absent. Default `true` |
 
-**Safety model:**
-- Content is staged in a temp file in `os.TempDir()` (no project-tree noise) then renamed into place via `os.Rename` — atomic on POSIX.
-- If the system temp dir and target are on different filesystems (EXDEV), falls back to a `.plumb.tmp` sibling in the same directory automatically.
-- Existing file permissions are preserved. New files get `0644`.
-- After a successful write, gopls receives `didOpen`/`didChange`/`didClose` so diagnostics and symbol lookups reflect the new content immediately.
+**Safety model** (shared with all write tools):
+- **Per-path lock** serialises concurrent writes to the same file from any session.
+- **Atomic rename** — content staged in `os.TempDir()` then `os.Rename`. EXDEV cross-device falls back to a `.plumb.tmp` sibling automatically.
+- **Symlink-aware** — if `path` is a symlink, the link is resolved and the write goes through to the underlying target (the symlink is not replaced with a regular file).
+- **Permissions preserved** — existing file mode is copied; new files get `0644`.
+- **LSP notification** — `workspace/didChangeWatchedFiles` sent with `FileCreated` (new file) or `FileChanged` (overwrite).
+- **Cache invalidation** — symbol cache entries for the URI are evicted immediately.
+- **Post-write diagnostics** — the URI's diagnostics are polled for up to 300ms after the write; any change is appended to the response.
+- **Rate-limited** — counts against the per-session write limit (default 120/min).
 
 ---
 
@@ -469,14 +490,74 @@ Apply one or more str_replace edits to an existing file.
 |---|---|---|
 | `path` | yes | Absolute path or `file://` URI |
 | `edits` | yes | Array of `{old_str, new_str}` objects, applied sequentially |
+| `expected_mtime` | no | RFC3339Nano mtime previously emitted by `read_file`'s header. If present, the edit is rejected when the file's current mtime differs — opt-in optimistic concurrency. |
 
-Each `old_str` must appear **exactly once** in the file at the time the edit is evaluated. Absent or ambiguous strings are rejected with a clear error — no silent corruption is possible even if the file was modified concurrently.
+Each `old_str` must appear **exactly once** in the file at the time the edit is evaluated. Absent or ambiguous strings are rejected with a clear error.
 
-**Safety model:**
-1. **Uniqueness lock**: the exact-once requirement detects concurrent modifications. If `old_str` is missing, the file changed since you read it.
-2. **In-memory application**: all edits are applied in memory before any write. If any edit fails, the file is not touched.
-3. **Atomic write**: the final content is staged in `os.TempDir()` and renamed into place. Cross-device rename falls back to a `.plumb.tmp` sibling automatically.
-4. **Concurrent-write retry**: after the rename, plumb re-stats the file. If the mtime is significantly newer than the write time, a third party wrote the file during the operation. The edit is re-applied automatically — up to 3 times — then fails with a full diagnostic message.
+**Safety model** (in addition to the shared model above):
+1. **Per-path lock** serialises against any concurrent `write_file` / `edit_file` / `delete_file` / `rename_file` / `transaction_apply` targeting the same path.
+2. **Uniqueness lock** — the exact-once requirement detects concurrent modifications that changed the surrounding context.
+3. **CRLF tolerance** — line endings in `old_str` are normalised against the file before matching. An LF `old_str` matches a CRLF file.
+4. **expected_mtime gate** — when supplied, the file's current mtime must equal the provided value, else the edit is rejected immediately.
+5. **Strict mode** (opt-in via `[edits].strict = true` or `PLUMB_STRICT_EDITS=1`) — the file must have been read via `read_file` in this MCP session AND its current mtime must match what `read_file` observed. Per-session via `ReadTracker`.
+6. **In-memory application** — all edits applied in memory before any write. File untouched on validation failure.
+7. **Pre-rename mtime check** — between the read and the rename, plumb re-stats the file. A change surfaces as a retryable error.
+8. **Atomic write + concurrent-write retry** — after the rename, plumb re-stats. A jump in mtime triggers re-read and retry (up to 3 attempts).
+9. **Line-change summary in response** — output includes the new mtime and a compact `lines changed: L12-15, L45` summary.
+
+---
+
+### `delete_file`
+
+Delete a single file. Refuses directories — use shell tools for recursive removal.
+
+**Source**: `internal/tools/delete_file.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `path` | yes | Absolute path or `file://` URI |
+
+Sends `FileDeleted` via `workspace/didChangeWatchedFiles`. Symbol cache invalidated. Per-path lock acquired. Rate-limited.
+
+---
+
+### `rename_file`
+
+Move or rename a single file. Distinct from `rename_symbol` (LSP-semantic identifier rename) — this is the filesystem-level operation.
+
+**Source**: `internal/tools/rename_file.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `from` | yes | Source absolute path or `file://` URI |
+| `to` | yes | Destination absolute path or `file://` URI; parent directories created automatically |
+| `overwrite` | no | Allow overwriting an existing destination. Default `false` |
+
+Two-path locking: both source and destination paths are locked in lexical order, deadlock-safe even if two `rename_file` calls swap two files. Sends `FileDeleted` (source) + `FileCreated` (destination) via `workspace/didChangeWatchedFiles`. Symbol cache invalidated for both URIs.
+
+---
+
+### `transaction_apply`
+
+Apply str_replace edits across multiple files atomically.
+
+**Source**: `internal/tools/transaction.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `operations` | yes | Array of `{path, edits, expected_mtime?}` (max 50). Each operation's `edits` array uses the same schema as `edit_file`. |
+
+**Three-phase commit:**
+
+1. **Phase 1 — validation.** Acquire per-path locks for every target in lexical order (deadlock-safe). For each path: stat, read, validate every edit in memory, check `expected_mtime`. If any operation fails validation, NO writes happen.
+2. **Phase 2 — write.** Write each prepared content via `safeWrite`. If any write fails partway through the list, already-written files are rolled back to their pre-transaction content via best-effort restoration writes.
+3. **Phase 3 — notify.** Per file: fire `FileChanged` via `didChangeWatchedFiles`, invalidate symbol cache for the URI.
+
+Each operation consumes one rate-limit slot — a 10-file transaction counts as 10 writes against the session's per-minute budget.
+
+Use for refactors that must land as one unit: cross-file string rename of a public API, coordinated config + caller updates, etc.
+
+---
 
 ---
 
@@ -489,6 +570,7 @@ List the immediate contents of a directory.
 | Field | Required | Description |
 |---|---|---|
 | `path` | yes | Absolute path or `file://` URI of the directory |
+| `pattern` | no | Glob filter applied to entry names (e.g. `*.go`) |
 | `include_hidden` | no | Include names starting with `.`. Default `false` |
 | `sort_by` | no | `name` (default), `size`, or `modified` |
 
@@ -546,9 +628,26 @@ Bootstrap tool — call this first in every session.
 
 **Source**: `internal/tools/session_start.go`
 
-Returns in one round-trip: workspace path and detected language, the first 80 lines of `.plumb/context.md`, all memory names and descriptions, the top-5 most-used tools from session history, and active LSP errors and warnings. Designed for Claude Desktop where no filesystem access is available without tool calls. Idempotent.
+Returns in one round-trip:
+
+- Workspace path + detected language
+- Current git branch and 3 most recent commits
+- First 200 lines of `.plumb/context.md`
+- All memory names + descriptions
+- 5 most recently-modified files (workspace-relative; skips `.git`/`node_modules`/`vendor`/etc.)
+- Top-5 most-used tools from this workspace's stats history
+- Active LSP errors and warnings
+
+Designed for Claude Desktop where no filesystem access is available without tool calls. Idempotent.
+
+**Cold-start fallback chain** when the daemon hasn't resolved a workspace yet:
+
+1. Explicit `workspace` argument
+2. Daemon's already-resolved workspace
+3. `roots/list` query to the MCP client
+4. Walk up from `os.Getwd()` looking for a project marker (`go.mod`, `package.json`, `Cargo.toml`, etc.)
 
 | Field | Required | Description |
 |---|---|---|
-| `workspace` | no | Absolute workspace path. Defaults to the daemon's resolved workspace |
+| `workspace` | no | Absolute workspace path. Defaults to the daemon-resolved workspace; falls back to roots/list, then cwd walk |
 
