@@ -1,13 +1,27 @@
 # plumb
 
-Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities to LLMs. Instead of dumping raw source files into context, plumb lets LLMs query codebases through structured semantic tools — finding symbols, jumping to definitions, listing references, running git queries, and more — saving tokens and improving accuracy.
+Real IDE intelligence for AI assistants — go-to-definition, find-references, rename, diagnostics, and more, powered by the same language servers your editor uses.
+
+Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities to LLMs. Instead of dumping raw source files into context, plumb lets AI assistants query codebases through structured semantic tools — finding symbols, jumping to definitions, listing references, running git queries, and more — saving tokens and improving accuracy.
+
+**Supported languages:** Go (via [gopls](https://pkg.go.dev/golang.org/x/tools/gopls)) and Python (via [pyright](https://github.com/microsoft/pyright)).
 
 The server is consumed by MCP clients such as Claude Desktop and Claude Code. It ships with 27 tools across LSP queries, semantic refactoring, filesystem search/edit, git, and a per-workspace memory system. A shared-daemon architecture keeps gopls/pyright warm across conversations, and multi-workspace routing lets a single MCP session query and edit symbols in any number of projects without pre-declaring an "active" one.
 
 ## Quick start
 
+**Prerequisites:** the language server(s) you need must be on `$PATH`:
+
 ```sh
-# Install
+# Go
+go install golang.org/x/tools/gopls@latest
+
+# Python
+npm install -g pyright
+```
+
+```sh
+# Install plumb
 go install github.com/golimpio/plumb/cmd/plumb@latest
 
 # Wire up Claude Desktop
@@ -33,10 +47,11 @@ plumb stats --workspace ~/Projects/myapp
 
 # List all active sessions (non-interactive)
 plumb sessions
+plumb sessions --all      # include sessions still resolving a workspace
 
-# Run gopls diagnostics from the CLI (debugging tool)
-plumb diagnostics             # workspace-wide
-plumb diagnostics path/to/file.go
+# Run diagnostics from the CLI (debugging tool)
+plumb diag                        # workspace-wide — walks every file
+plumb diag path/to/file.go        # single file
 
 # Stop the background daemon
 plumb stop
@@ -78,13 +93,13 @@ Plumb determines the workspace root in this order:
 
 | Tool | Description |
 |---|---|
-| `find_symbol` | Search for a symbol by name across the workspace |
-| `workspace_symbols` | Fuzzy-search symbols across the entire workspace |
-| `get_definition` | Jump to the definition of a symbol |
-| `explain_symbol` | Hover documentation for a symbol |
-| `list_symbols` | All symbols in a file with line ranges and hierarchy |
-| `find_references` | All usages of a symbol, with source lines |
-| `call_hierarchy` | Incoming or outgoing call graph for a function |
+| `find_symbol` | Search for symbols by name across the workspace or within a single document |
+| `workspace_symbols` | Search for symbols by name or substring across the entire workspace |
+| `get_definition` | Jump to the definition of the symbol at a given position |
+| `explain_symbol` | Hover documentation and type information for a symbol |
+| `list_symbols` | Complete symbol outline of a file — every function, type, method, field, and constant with line ranges |
+| `find_references` | All usages of a symbol across the workspace, with source lines included |
+| `call_hierarchy` | Who calls a function (incoming) and what it calls (outgoing) |
 | `type_hierarchy` | Supertypes and subtypes for an interface or struct |
 | `diagnostics` | Errors, warnings, and hints from the language server |
 
@@ -92,21 +107,23 @@ Plumb determines the workspace root in this order:
 
 | Tool | Description |
 |---|---|
-| `list_files` | Walk a directory tree with glob filtering |
-| `search_in_files` | Ripgrep-style content search — smart-case, regex, context lines |
-| `find_files` | fd-style file finder — glob or regex, extension filter, max depth |
-| `file_diff` | Unified diff between two files |
+| `list_files` | Walk a directory tree with glob filtering and depth control |
+| `search_in_files` | Ripgrep-style content search — regex, smart-case, context lines, glob filter |
+| `find_files` | fd-style file finder — glob or regex, extension filter, type filter, depth limit |
+| `file_diff` | Unified diff between any two files — no git required |
 | `find_replace` | Text/regex search-and-replace across files (dry-run by default) |
 
 ### Edit tools (LSP-semantic refactoring)
 
 | Tool | Description |
 |---|---|
-| `rename_symbol` | Workspace-wide rename via LSP (scope- and type-aware) |
-| `replace_symbol_body` | Replace a symbol's full declaration |
+| `rename_symbol` | Workspace-wide rename via LSP — scope- and type-aware, won't touch unrelated identifiers |
+| `replace_symbol_body` | Replace a symbol's entire declaration with new content |
 | `insert_before_symbol` | Insert text immediately before a symbol's declaration |
 | `insert_after_symbol` | Insert text immediately after a symbol's declaration |
 | `safe_delete_symbol` | Delete a symbol only if it has no remaining references |
+
+All edit tools default to `dry_run=true` — you see a preview before anything is written.
 
 ### Memory tools (per-workspace persistent notes)
 
@@ -114,10 +131,10 @@ Plumb determines the workspace root in this order:
 |---|---|
 | `list_memories` | List memories saved at `<workspace>/.plumb/memories/` |
 | `read_memory` | Read a memory by name |
-| `write_memory` | Write or overwrite a memory (with optional frontmatter) |
+| `write_memory` | Write or overwrite a memory (supports optional YAML frontmatter) |
 | `delete_memory` | Delete a memory by name |
-| `search_memories` | Grep across all memories (smart-case, regex) |
-| `relevant_memories` | Return memories whose `paths:` frontmatter globs match a file |
+| `search_memories` | Grep across all memories — smart-case, regex |
+| `relevant_memories` | Return memories whose `paths:` frontmatter globs match a given file |
 
 Memories are also exposed as MCP **resources** under the `plumb-memory://` URI scheme, so Claude Desktop's resources panel browses them natively.
 
@@ -125,7 +142,7 @@ Memories are also exposed as MCP **resources** under the `plumb-memory://` URI s
 
 | Tool | Description |
 |---|---|
-| `git` | Read-only git subcommands (diff, log, blame, status, show, stash, …) |
+| `git` | Read-only git subcommands: diff, log, show, blame, status, branch, tag, shortlog, stash |
 
 ### Info tools
 
@@ -143,7 +160,15 @@ make lint       # golangci-lint
 
 Requires Go 1.26+. gopls must be on `$PATH` for the Go adapter integration tests.
 
-## Versioning
+## Daemon logs
+
+Daemon output is written to:
+- **macOS:** `~/Library/Caches/plumb/daemon.log`
+- **Linux:** `~/.cache/plumb/daemon.log`
+
+## Development
+
+### Versioning
 
 The version is injected at build time. During development, bump the `VERSION` file:
 
@@ -152,13 +177,9 @@ echo "0.1.5" > VERSION
 make build          # plumb version → 0.1.5
 ```
 
-For a release, tag the commit and the tag takes precedence over `VERSION`:
+For a release, tag the commit — the tag takes precedence over `VERSION`:
 
 ```sh
 git tag v1.0.0
 make build          # plumb version → v1.0.0
 ```
-
-## Daemon logs
-
-Daemon output is written to `~/Library/Caches/plumb/daemon.log` (macOS) or `~/.cache/plumb/daemon.log` (Linux).
