@@ -8,6 +8,8 @@ import (
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
+
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var logLevelFlag string
@@ -20,11 +22,15 @@ var rootCmd = &cobra.Command{
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		return setupLogging(logLevelFlag)
 	},
+	RunE: func(_ *cobra.Command, _ []string) error {
+		tui.Version = Version
+		return tui.Run()
+	},
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "log level (debug, info, warn, error)")
-	rootCmd.AddCommand(serveCmd, statusCmd, setupCmd, versionCmd, configCmd)
+	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, statusCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd)
 }
 
 // Execute runs the root command and returns any error.
@@ -50,16 +56,11 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	RunE: func(_ *cobra.Command, _ []string) error {
-		info, ok := debug.ReadBuildInfo()
-		if !ok {
-			fmt.Println("plumb (version unknown)")
-			return nil
+		goVersion := "unknown"
+		if info, ok := debug.ReadBuildInfo(); ok {
+			goVersion = info.GoVersion
 		}
-		version := info.Main.Version
-		if version == "" || version == "(devel)" {
-			version = "dev"
-		}
-		fmt.Printf("plumb %s (%s)\n", version, info.GoVersion)
+		fmt.Printf("plumb %s (%s)\n", Version, goVersion)
 		return nil
 	},
 }

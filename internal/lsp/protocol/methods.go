@@ -18,4 +18,14 @@ const (
 	MethodPrepareRename       = "textDocument/prepareRename"
 	MethodRename              = "textDocument/rename"
 	MethodPublishDiagnostics  = "textDocument/publishDiagnostics"
+
+	// Call hierarchy
+	MethodPrepareCallHierarchy    = "textDocument/prepareCallHierarchy"
+	MethodCallHierarchyIncoming   = "callHierarchy/incomingCalls"
+	MethodCallHierarchyOutgoing   = "callHierarchy/outgoingCalls"
+
+	// Type hierarchy
+	MethodPrepareTypeHierarchy = "textDocument/prepareTypeHierarchy"
+	MethodTypeHierarchySuper   = "typeHierarchy/supertypes"
+	MethodTypeHierarchySub     = "typeHierarchy/subtypes"
 )

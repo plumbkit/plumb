@@ -69,6 +69,28 @@ type LSPClient interface {
 	// Rename performs a workspace-wide rename.
 	Rename(ctx context.Context, params protocol.RenameParams) (*protocol.WorkspaceEdit, error)
 
+	// ── Call hierarchy ───────────────────────────────────────────────────────
+
+	// PrepareCallHierarchy resolves the call-hierarchy item at pos.
+	PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error)
+
+	// IncomingCalls returns the callers of item.
+	IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error)
+
+	// OutgoingCalls returns the callees of item.
+	OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error)
+
+	// ── Type hierarchy ───────────────────────────────────────────────────────
+
+	// PrepareTypeHierarchy resolves the type-hierarchy item at pos.
+	PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error)
+
+	// Supertypes returns the supertypes of item.
+	Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error)
+
+	// Subtypes returns the subtypes of item.
+	Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error)
+
 	// ── Capabilities ────────────────────────────────────────────────────────
 
 	// Capabilities returns the negotiated server capabilities.
@@ -79,5 +101,5 @@ type LSPClient interface {
 
 	// Subscribe registers handler to receive all server-initiated notifications.
 	// The returned function unsubscribes the handler.
-	Subscribe(handler NotificationHandler) (unsubscribe func())
+	Subscribe(handler func(string, json.RawMessage)) func()
 }

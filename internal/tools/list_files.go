@@ -1,0 +1,154 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+var listFilesSchema = json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "root": {
+      "type": "string",
+      "description": "Directory to list. Defaults to the current working directory."
+    },
+    "pattern": {
+      "type": "string",
+      "description": "Glob pattern to filter filenames, e.g. \"*.go\" or \"*_test.go\". Omit to list all files."
+    },
+    "max_depth": {
+      "type": "integer",
+      "description": "Maximum directory depth to recurse (default 8). Set to 1 for top-level only."
+    },
+    "include_hidden": {
+      "type": "boolean",
+      "description": "Include hidden files and directories (those starting with \".\"). Default false."
+    }
+  }
+}`)
+
+// always-excluded directory names regardless of settings.
+var excludedDirs = map[string]bool{
+	".git":           true,
+	"vendor":         true,
+	"node_modules":   true,
+	"__pycache__":    true,
+	".pytest_cache":  true,
+	"dist":           false, // only excluded when hidden
+	"build":          false,
+}
+
+// ListFiles walks a directory tree and returns matching file paths.
+//
+// Concurrency: Execute is safe for concurrent use.
+type ListFiles struct{}
+
+func NewListFiles() *ListFiles { return &ListFiles{} }
+
+func (t *ListFiles) Name() string             { return "list_files" }
+func (t *ListFiles) InputSchema() json.RawMessage { return listFilesSchema }
+func (t *ListFiles) Description() string {
+	return "List files in a directory tree. Filter by glob pattern (e.g. \"*.go\"), " +
+		"control recursion depth, and optionally include hidden files. " +
+		"Returns paths relative to the specified root."
+}
+
+type listFilesArgs struct {
+	Root          string `json:"root"`
+	Pattern       string `json:"pattern"`
+	MaxDepth      *int   `json:"max_depth"`
+	IncludeHidden bool   `json:"include_hidden"`
+}
+
+func (t *ListFiles) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+	var a listFilesArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return "", fmt.Errorf("list_files: invalid arguments: %w", err)
+	}
+
+	root := a.Root
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("list_files: getting working directory: %w", err)
+		}
+	}
+	root = filepath.Clean(root)
+
+	maxDepth := 8
+	if a.MaxDepth != nil {
+		maxDepth = *a.MaxDepth
+	}
+
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+
+		name := d.Name()
+		rel, _ := filepath.Rel(root, path)
+		depth := strings.Count(rel, string(filepath.Separator))
+
+		if d.IsDir() {
+			if path == root {
+				return nil
+			}
+			if !a.IncludeHidden && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			if excludedDirs[name] {
+				return filepath.SkipDir
+			}
+			if depth+1 >= maxDepth {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !a.IncludeHidden && strings.HasPrefix(name, ".") {
+			return nil
+		}
+
+		if a.Pattern != "" {
+			matched, err := filepath.Match(a.Pattern, name)
+			if err != nil {
+				return fmt.Errorf("invalid pattern %q: %w", a.Pattern, err)
+			}
+			if !matched {
+				return nil
+			}
+		}
+
+		paths = append(paths, rel)
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("list_files: walking %s: %w", root, err)
+	}
+
+	if len(paths) == 0 {
+		msg := fmt.Sprintf("No files found under %s", root)
+		if a.Pattern != "" {
+			msg += fmt.Sprintf(" matching %q", a.Pattern)
+		}
+		return msg + ".", nil
+	}
+
+	var sb strings.Builder
+	label := fmt.Sprintf("%d file(s)", len(paths))
+	if a.Pattern != "" {
+		label = fmt.Sprintf("%d file(s) matching %q", len(paths), a.Pattern)
+	}
+	fmt.Fprintf(&sb, "%s under %s\n\n", label, root)
+	for _, p := range paths {
+		sb.WriteString(p + "\n")
+	}
+	return sb.String(), nil
+}

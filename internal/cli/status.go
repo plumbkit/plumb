@@ -2,13 +2,15 @@ package cli
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show connected LSPs, cache stats, and recent MCP calls (TUI)",
+	Short: "Open the sessions dashboard (TUI)",
 	RunE: func(_ *cobra.Command, _ []string) error {
-		// TODO(Step 8): launch Bubble Tea v2 status TUI.
-		return nil
+		tui.Version = Version
+		return tui.Run()
 	},
 }

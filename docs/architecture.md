@@ -1,19 +1,311 @@
 # Architecture
 
-> Full diagram and explanation to be written in Step 9.
+Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language
+Server Protocol) capabilities to LLMs.  Instead of dumping raw source files
+into an LLM's context, clients call structured tools (`find_symbol`,
+`get_definition`, `explain_symbol`) and receive focused, language-aware
+answers from a real language server running under the hood.
 
 ## Layers
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Presentation   internal/tui   internal/cli             │
-├─────────────────────────────────────────────────────────┤
-│  Application    internal/tools   internal/cache         │
-├─────────────────────────────────────────────────────────┤
-│  Domain         internal/domain   internal/workspace    │
-├─────────────────────────────────────────────────────────┤
-│  Transport      internal/mcp   internal/lsp             │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Presentation   internal/tui      internal/cli               │
+├──────────────────────────────────────────────────────────────┤
+│  Application    internal/tools    internal/cache             │
+├──────────────────────────────────────────────────────────────┤
+│  Domain         internal/domain   internal/workspace         │
+├──────────────────────────────────────────────────────────────┤
+│  Transport      internal/mcp      internal/lsp               │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-Lower layers must not import higher layers.
+**Rule: lower layers must never import higher layers.**  The transport layer
+knows nothing about tools or the CLI; tools know nothing about the TUI.
+
+### Package map
+
+| Package | Role |
+|---|---|
+| `cmd/plumb` | Entry point — calls `cli.Execute()` |
+| `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `status`, `setup`, `sessions`, `stats`, `init`, `config`, `version` |
+| `internal/tui` | Bubble Tea v2 live dashboard (sessions + tool stats + recent calls) |
+| `internal/tools` | MCP tool implementations (15 tools — see `docs/mcp-tools.md`) |
+| `internal/cache` | Sharded TTL cache + LSP invalidator |
+| `internal/session` | Per-connection session registry with client identity tracking |
+| `internal/stats` | SQLite-backed tool call statistics (WAL mode, per-tool summary, P95) |
+| `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
+| `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
+| `internal/lsp` | `LSPClient` interface, process supervisor |
+| `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio; mock for testing |
+| `internal/lsp/protocol` | LSP types and method-name constants |
+| `internal/lsp/adapters/gopls` | Validated Go adapter (integration-tested) |
+| `internal/lsp/adapters/pyright` | Experimental Python adapter (unit-tested) |
+| `internal/config` | TOML config, XDG path resolution |
+| `internal/domain` | Pure types — no I/O (reserved for future shared domain types) |
+| `internal/workspace` | Language detection, adapter routing (reserved for future routing logic) |
+
+## Data flow: MCP tool call
+
+```
+Claude Desktop
+     │  newline-delimited JSON-RPC 2.0 (stdin/stdout)
+     ▼
+internal/mcp.Server
+     │  dispatches to Tool.Execute()
+     ▼
+internal/tools.FindSymbol / GetDefinition / ExplainSymbol
+     │  checks cache; on miss calls LSPClient
+     ▼
+internal/cli.clientProxy  (delegates to live adapter)
+     │
+     ▼
+internal/lsp/adapters/gopls.Adapter  (or pyright.Adapter)
+     │  JSON-RPC 2.0 with Content-Length framing (stdin/stdout of LSP process)
+     ▼
+gopls / pyright-langserver  (subprocess)
+```
+
+Cache invalidation runs in the opposite direction: when gopls sends a
+`textDocument/publishDiagnostics` notification, `cache.Invalidator.Handle`
+is invoked (via `adapter.Subscribe`) and evicts all cache entries whose key
+contains the changed file's URI.
+
+## Daemon architecture
+
+`plumb serve` is a thin stdio proxy. The real server is `plumb daemon`, a
+long-lived background process that owns the gopls subprocesses:
+
+```
+Claude Desktop / Claude Code
+  └── plumb serve  (per conversation — dials Unix socket, proxies bytes)
+        └── ~/Library/Caches/plumb/plumb.sock        (macOS)
+        └── ~/.cache/plumb/plumb.sock                (Linux, via os.UserCacheDir)
+              └── plumb daemon  (one process, shared across all conversations)
+                    ├── workspacePool  (one gopls per workspace root)
+                    │     ├── poolEntry{proxy, inv, cache} for /projects/foo
+                    │     └── poolEntry{proxy, inv, cache} for /projects/bar
+                    └── handleConn(conn, pool, statsDB)  (per-connection MCP session)
+```
+
+Key design properties:
+
+- **Single source of truth for runtime files** — socket, PID file, and log
+  file all live under `os.UserCacheDir()/plumb/` so paths stay stable across
+  GUI-app and terminal launches (macOS `$TMPDIR` is unreliable across these).
+- **One gopls per workspace root** — multiple MCP connections to the same
+  project share gopls, its cache, and its diagnostic stream. Gopls stays warm
+  between conversations.
+- **Per-connection sessions** — `handleConn` registers a `session.Info`
+  immediately on connection (with `Folder=""` until workspace resolves). The
+  session is then patched as workspace and client identity become known.
+  This means `plumb sessions` and the TUI show new conversations *instantly*,
+  not after the first LSP tool call.
+- **Stop strategy** — `plumb stop` searches for the daemon in three stages:
+  PID file → `lsof` on the socket → `pgrep -f "plumb daemon"`. The pgrep
+  fallback covers binary upgrades that change the socket/PID path.
+
+## Persistence layout
+
+| Path | Owner | Purpose |
+|---|---|---|
+| `~/.config/plumb/config.toml` | user | LSP commands, cache TTL, log level |
+| `~/.local/share/plumb/sessions/<id>.json` | daemon | Active session metadata (one file per MCP connection) |
+| `<workspace>/.plumb/stats.db` | daemon (writer) / TUI + `plumb stats` (readers) | Per-project tool call statistics, SQLite WAL |
+| `~/.local/share/plumb/stats.db` | legacy | Old global stats from < 0.3.1; safe to delete |
+| `~/Library/Caches/plumb/plumb.sock` | daemon | Unix socket for MCP proxy connections |
+| `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
+| `~/Library/Caches/plumb/daemon.log` | daemon | slog text output |
+| `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
+| `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
+
+XDG: `XDG_DATA_HOME` (sessions, stats) and `XDG_CONFIG_HOME` (config) are
+respected when set. Cache paths use `os.UserCacheDir()` directly because they
+are runtime, not data — see Daemon architecture above for why.
+
+### Statistics database (`stats.db`)
+
+Single SQLite file containing one table:
+
+```sql
+CREATE TABLE tool_calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT    NOT NULL DEFAULT '',  -- session.Info.ID
+    workspace    TEXT    NOT NULL DEFAULT '',  -- absolute project path
+    tool         TEXT    NOT NULL,              -- e.g. "find_symbol"
+    called_at    INTEGER NOT NULL,              -- Unix milliseconds
+    duration_ms  INTEGER NOT NULL DEFAULT 0,    -- wall-clock execution time
+    input_bytes  INTEGER NOT NULL DEFAULT 0,    -- raw JSON arg length
+    output_bytes INTEGER NOT NULL DEFAULT 0,    -- text response length
+    success      INTEGER NOT NULL DEFAULT 1,    -- 1 = ok, 0 = error
+    error_msg    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_tc_tool      ON tool_calls(tool);
+CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
+CREATE INDEX idx_tc_workspace ON tool_calls(workspace);
+CREATE INDEX idx_tc_session   ON tool_calls(session_id);
+```
+
+Concurrency model:
+
+- **WAL journal mode** (`?_journal_mode=WAL`) is enabled at open time. This
+  is essential because the daemon (writer) and the TUI / `plumb stats`
+  (readers) run in separate OS processes — WAL allows concurrent readers
+  while a single writer proceeds, without blocking either side.
+- **Single writer** — the daemon process holds one connection
+  (`SetMaxOpenConns(1)`) protected by an internal `sync.Mutex` around the
+  insert path. There is no UPDATE or DELETE traffic.
+- **Read-only readers** — the TUI opens the same file with `?mode=ro`. If
+  the file does not yet exist (no calls recorded), the read open returns
+  `(nil, nil)` and the caller renders "No statistics yet."
+- **Best-effort writes** — `Record` swallows errors silently. Stats must
+  never break a tool call.
+
+Every successful or failed `tools/call` triggers `srv.OnAfterTool`, which the
+daemon connects to `statsDB.Record(stats.Call{...})` capturing tool name,
+session, workspace, timing, and I/O sizes.
+
+Schema migrations: none yet. New columns must be added with `ALTER TABLE …
+ADD COLUMN … DEFAULT …` so old rows remain valid; index changes are
+idempotent (`CREATE INDEX IF NOT EXISTS`).
+
+### Session registry (`sessions/<id>.json`)
+
+Each `handleConn` invocation writes one JSON file on connect and removes it
+on disconnect (`defer session.Unregister(sessID)`). Fields:
+
+```go
+type Info struct {
+    ID            string    // 12-hex-time + 8-hex-random
+    PID           int       // daemon's PID, used for liveness check
+    Language      string    // "go" today; one per connection
+    Folder        string    // "" until workspace resolves; absolute path otherwise
+    Adapter       string    // "gopls"
+    StartedAt     time.Time
+    ClientName    string    // from MCP `initialize.clientInfo.name`
+    ClientVersion string    // from MCP `initialize.clientInfo.version`
+}
+```
+
+`session.List()` filters out files whose PID is no longer running (it removes
+them on the way out), so the on-disk view self-heals after daemon crashes.
+
+`session.Patch(id, fn)` is the read-modify-write API used to update fields as
+they become known: client identity arrives during `initialize`; folder
+arrives later, when `OnInit` or `OnBeforeTool` resolves the workspace.
+
+### Memory store (`<workspace>/.plumb/memories/<name>.md`)
+
+Per-workspace markdown notes for persistent project context. Names are
+constrained to `[A-Za-z0-9_-]+` to prevent path traversal. Files may carry
+optional YAML-style frontmatter:
+
+```markdown
+---
+name: auth-architecture
+description: How the auth middleware composes with rate limiting
+---
+
+The auth middleware sits in front of …
+```
+
+The `description` field is surfaced by `list_memories` so the LLM can decide
+whether to load the full body. Writes are atomic (`<file>.tmp` + rename).
+Memory tools use a `WorkspaceFn` accessor to default to the connection's
+resolved workspace when the caller doesn't pass `workspace` explicitly,
+making cross-project memory access possible.
+
+## Startup sequence (`plumb serve`)
+
+1. `config.Load()` — reads `~/.config/plumb/config.toml`, applies env overrides.
+2. `cache.New(ttl)` — creates the sharded in-memory cache.
+3. `lsp.NewSupervisor(…)` — creates the process supervisor.
+4. `sup.Start(ctx)` — spawns the LSP subprocess; `OnStart` callback calls
+   `Initialize` + `Initialized` on the adapter, wires the cache invalidator,
+   and sets `clientProxy.cur` to the live adapter.
+5. `mcp.New(…)` + `srv.Register(…)` — builds the MCP server and registers the
+   three tools (explicit registration, not via `init()`).
+6. `srv.Serve(ctx, os.Stdin, os.Stdout)` — serves the MCP protocol loop until
+   stdin is closed or the process receives SIGINT/SIGTERM.
+7. On shutdown: `Shutdown` + `Exit` are sent to the LSP, `Supervisor.Stop()`
+   tears down the process, `cache.Close()` stops the cleanup goroutine.
+
+## Concurrency model
+
+| Component | Contract |
+|---|---|
+| `mcp.Server.Serve` | One goroutine per in-flight request; responses serialised by a `sync.Mutex`. |
+| `cache.Cache` | Sharded map; each shard has its own `sync.RWMutex`. Stats counters use `atomic.Int64`. |
+| `cache.Invalidator` | Called from the adapter's notification goroutine; thread-safe via the cache's own locking. |
+| `lsp/jsonrpc.Conn` | Write serialised by `sync.Mutex`; pending calls tracked in a `sync.Map`; read loop on a dedicated goroutine. |
+| `cli.clientProxy` | `sync.RWMutex` around the current adapter pointer; updated by `OnStart` on each process restart. |
+| `lsp.Supervisor` | Supervision loop on one goroutine; exported methods protected by `sync.RWMutex`. |
+| `adapters/*.Adapter` | Capabilities stored under `sync.RWMutex`; subscribers stored under `sync.RWMutex`; notification dispatch copies the handler slice before releasing the lock. |
+
+## Transport protocols
+
+### MCP (client ↔ plumb)
+
+Newline-delimited JSON-RPC 2.0 over stdio.  Each message is one UTF-8 line.
+No Content-Length header.  Protocol version: `2024-11-05`.
+
+Handled methods: `initialize`, `ping`, `tools/list`, `tools/call`.
+Notifications (no `id` field) are accepted and silently discarded.
+
+### LSP (plumb ↔ language server)
+
+JSON-RPC 2.0 with LSP content framing over the subprocess's stdin/stdout:
+
+```
+Content-Length: <N>\r\n
+\r\n
+<N bytes of UTF-8 JSON>
+```
+
+`internal/lsp/jsonrpc.Conn` implements the framing and demultiplexes
+responses by request ID using a `sync.Map` of pending channels.
+
+## Configuration
+
+Config file: `$XDG_CONFIG_HOME/plumb/config.toml`
+(defaults to `~/.config/plumb/config.toml`).
+
+Environment overrides: `PLUMB_LOG_LEVEL`, `PLUMB_LOG_FILE`.
+
+CLI flag: `--log-level` (overrides both file and env).
+
+See `plumb config print` for the active resolved configuration.
+
+## Cache key convention
+
+Tools prefix cache keys with the document URI so that `cache.InvalidateByPath`
+can evict all results for a changed file in one scan:
+
+```
+file:///project/main.go:docSymbols
+file:///project/main.go:hover:10:5
+file:///project/main.go:def:10:5
+wsSymbols:Greeter
+```
+
+`cache.Invalidator` calls `cache.InvalidateByPath(uri)` which does a
+`strings.Contains` scan over all shard entries.  This is O(total entries) but
+only triggered on `textDocument/publishDiagnostics` notifications.
+
+## Error handling
+
+- LSP errors propagate as `fmt.Errorf("…: %w", err)` up through the tool and
+  are returned to the MCP client as `isError: true` result payloads (not
+  JSON-RPC error objects), per the MCP spec.
+- JSON-RPC protocol errors (unknown method, bad params) are returned as
+  JSON-RPC `error` objects.
+- Supervisor restart errors are logged with `slog` and the supervisor retries
+  with exponential backoff (base 500 ms, max 30 s).
+
+## Adding features
+
+- **New MCP tool**: see `docs/adding-an-lsp.md` for the pattern; for tools
+  see the checklist in `AGENTS.md` → "How to add an MCP tool".
+- **New LSP adapter**: see `docs/adding-an-lsp.md`.
+- **New config field**: add to `config.Config`, update `defaults`, add
+  validation in `validate()`, document in this file and in `AGENTS.md`.

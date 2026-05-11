@@ -1,11 +1,11 @@
 package jsonrpc
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,11 +27,7 @@ func TestConn_Call_roundtrip(t *testing.T) {
 
 	// Fake server: read one request, send a response.
 	go func() {
-		buf := make([]byte, 4096)
-		n, _ := cr.Read(buf)
-		// Extract id from the raw message.
-		var req wireMessage
-		_ = json.Unmarshal(buf[strings.Index(string(buf[:n]), "{"):n], &req)
+		req, _ := readMessage(bufio.NewReader(cr))
 		resp := wireMessage{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -85,39 +81,15 @@ func TestConn_ConcurrentCalls(t *testing.T) {
 	const n = 10
 	// Fake server: read n requests, answer them in reverse order.
 	go func() {
+		br := bufio.NewReader(cr)
 		reqs := make([]wireMessage, n)
-		buf := make([]byte, 65536)
-		total := 0
-		for total < n {
-			read, err := cr.Read(buf[0:])
+		for i := range n {
+			msg, err := readMessage(br)
 			if err != nil {
 				return
 			}
-			// Simple heuristic: count messages by Content-Length headers.
-			chunk := string(buf[:read])
-			idx := 0
-			for {
-				pos := strings.Index(chunk[idx:], "Content-Length: ")
-				if pos < 0 {
-					break
-				}
-				pos += idx
-				end := strings.Index(chunk[pos:], "\r\n\r\n")
-				if end < 0 {
-					break
-				}
-				end += pos + 4
-				var msg wireMessage
-				jsonStart := end
-				if err := json.Unmarshal([]byte(chunk[jsonStart:]), &msg); err == nil && msg.ID != nil {
-					reqs[total] = msg
-					total++
-					break
-				}
-				break
-			}
+			reqs[i] = msg
 		}
-		// Answer in reverse order.
 		for i := n - 1; i >= 0; i-- {
 			resp := wireMessage{
 				JSONRPC: "2.0",
@@ -145,8 +117,10 @@ func TestConn_ConcurrentCalls(t *testing.T) {
 // TestConn_ContextCancel verifies a cancelled context unblocks Call.
 func TestConn_ContextCancel(t *testing.T) {
 	pr, pw := io.Pipe()
-	_, cw := io.Pipe()
+	cr, cw := io.Pipe()
 	defer pw.Close()
+	defer cr.Close()
+	go io.Copy(io.Discard, cr) // drain requests; never sends a response
 
 	conn := NewConn(pr, cw)
 	defer conn.Close()

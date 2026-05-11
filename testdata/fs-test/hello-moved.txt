@@ -1,0 +1,3 @@
+Hello from filesystem MCP!
+This file was edited by edit_file.
+Line three.

@@ -195,6 +195,64 @@ func (a *Adapter) Rename(ctx context.Context, params protocol.RenameParams) (*pr
 	return &result, nil
 }
 
+// ── Call hierarchy ────────────────────────────────────────────────────────────
+
+// PrepareCallHierarchy resolves the call-hierarchy item at pos.
+func (a *Adapter) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+	var result []protocol.CallHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodPrepareCallHierarchy, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls prepareCallHierarchy: %w", err)
+	}
+	return result, nil
+}
+
+// IncomingCalls returns the callers of item.
+func (a *Adapter) IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
+	var result []protocol.CallHierarchyIncomingCall
+	if err := a.conn.Call(ctx, protocol.MethodCallHierarchyIncoming, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls callHierarchy/incomingCalls: %w", err)
+	}
+	return result, nil
+}
+
+// OutgoingCalls returns the callees of item.
+func (a *Adapter) OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
+	var result []protocol.CallHierarchyOutgoingCall
+	if err := a.conn.Call(ctx, protocol.MethodCallHierarchyOutgoing, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls callHierarchy/outgoingCalls: %w", err)
+	}
+	return result, nil
+}
+
+// ── Type hierarchy ────────────────────────────────────────────────────────────
+
+// PrepareTypeHierarchy resolves the type-hierarchy item at pos.
+func (a *Adapter) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
+	var result []protocol.TypeHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodPrepareTypeHierarchy, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls prepareTypeHierarchy: %w", err)
+	}
+	return result, nil
+}
+
+// Supertypes returns the supertypes of item.
+func (a *Adapter) Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
+	var result []protocol.TypeHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodTypeHierarchySuper, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls typeHierarchy/supertypes: %w", err)
+	}
+	return result, nil
+}
+
+// Subtypes returns the subtypes of item.
+func (a *Adapter) Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
+	var result []protocol.TypeHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodTypeHierarchySub, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls typeHierarchy/subtypes: %w", err)
+	}
+	return result, nil
+}
+
 // ── Capabilities / subscriptions ─────────────────────────────────────────────
 
 // Capabilities returns the negotiated server capabilities, or nil before Initialize.

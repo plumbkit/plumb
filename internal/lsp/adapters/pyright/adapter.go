@@ -196,6 +196,58 @@ func (a *Adapter) Rename(ctx context.Context, params protocol.RenameParams) (*pr
 	return &result, nil
 }
 
+// ── Call hierarchy ────────────────────────────────────────────────────────────
+
+func (a *Adapter) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+	var result []protocol.CallHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodPrepareCallHierarchy, params, &result); err != nil {
+		return nil, fmt.Errorf("pyright prepareCallHierarchy: %w", err)
+	}
+	return result, nil
+}
+
+func (a *Adapter) IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
+	var result []protocol.CallHierarchyIncomingCall
+	if err := a.conn.Call(ctx, protocol.MethodCallHierarchyIncoming, params, &result); err != nil {
+		return nil, fmt.Errorf("pyright callHierarchy/incomingCalls: %w", err)
+	}
+	return result, nil
+}
+
+func (a *Adapter) OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
+	var result []protocol.CallHierarchyOutgoingCall
+	if err := a.conn.Call(ctx, protocol.MethodCallHierarchyOutgoing, params, &result); err != nil {
+		return nil, fmt.Errorf("pyright callHierarchy/outgoingCalls: %w", err)
+	}
+	return result, nil
+}
+
+// ── Type hierarchy ────────────────────────────────────────────────────────────
+
+func (a *Adapter) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
+	var result []protocol.TypeHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodPrepareTypeHierarchy, params, &result); err != nil {
+		return nil, fmt.Errorf("pyright prepareTypeHierarchy: %w", err)
+	}
+	return result, nil
+}
+
+func (a *Adapter) Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
+	var result []protocol.TypeHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodTypeHierarchySuper, params, &result); err != nil {
+		return nil, fmt.Errorf("pyright typeHierarchy/supertypes: %w", err)
+	}
+	return result, nil
+}
+
+func (a *Adapter) Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
+	var result []protocol.TypeHierarchyItem
+	if err := a.conn.Call(ctx, protocol.MethodTypeHierarchySub, params, &result); err != nil {
+		return nil, fmt.Errorf("pyright typeHierarchy/subtypes: %w", err)
+	}
+	return result, nil
+}
+
 // ── Capabilities / subscriptions ─────────────────────────────────────────────
 
 // Capabilities returns the negotiated server capabilities, or nil before Initialize.

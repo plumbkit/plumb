@@ -1,0 +1,509 @@
+package tui
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/golimpio/plumb/internal/session"
+	"github.com/golimpio/plumb/internal/stats"
+)
+
+// Version is set by the cli package before calling Run so it appears in the header.
+var Version string
+
+const (
+	defaultLeftWidth = 26
+	minLeftWidth     = 16
+	pollInterval     = 2 * time.Second
+)
+
+// pollMsg is sent by the periodic refresh tick.
+type pollMsg struct{}
+
+// Model is the root Bubble Tea model for the sessions dashboard.
+// Concurrency: single goroutine (Bubble Tea runtime).
+type Model struct {
+	sessions    []session.Info
+	hiddenCount int                // sessions filtered out for lacking a workspace
+	statsDBs    map[string]*stats.DB // cached per-workspace DBs (read-only)
+	toolStats   []stats.ToolStat   // stats for currently selected session
+	recentCalls []stats.RecentCall
+	cursor      int
+	leftWidth   int // width of left panel content column (excludes border chars)
+	width       int
+	height      int
+	ready       bool
+	loadErr     string
+	showHidden  bool // toggle to display unresolved sessions
+}
+
+// NewModel returns the initial model, loading sessions immediately.
+func NewModel() Model {
+	m := Model{leftWidth: defaultLeftWidth, statsDBs: make(map[string]*stats.DB)}
+	m.refresh()
+	return m
+}
+
+func (m *Model) refresh() {
+	all, err := session.List()
+	if err != nil {
+		m.loadErr = err.Error()
+		return
+	}
+	m.loadErr = ""
+
+	// Filter out sessions that haven't resolved a workspace yet — they're
+	// noise (e.g. dormant Claude Desktop connections). The TUI shows only
+	// what's actively being worked on.
+	var visible []session.Info
+	hidden := 0
+	for _, s := range all {
+		if s.Folder == "" && !m.showHidden {
+			hidden++
+			continue
+		}
+		visible = append(visible, s)
+	}
+	m.sessions = visible
+	m.hiddenCount = hidden
+
+	if m.cursor >= len(m.sessions) && m.cursor > 0 {
+		m.cursor = len(m.sessions) - 1
+	}
+	m.refreshStats()
+}
+
+// dbFor returns the read-only stats DB for a workspace, opening it lazily.
+// Returns nil if no DB exists yet (no calls recorded for that workspace).
+func (m *Model) dbFor(workspace string) *stats.DB {
+	if workspace == "" {
+		return nil
+	}
+	if db, ok := m.statsDBs[workspace]; ok {
+		return db
+	}
+	db, _ := stats.OpenReadOnly(stats.DBPathFor(workspace))
+	m.statsDBs[workspace] = db
+	return db
+}
+
+func (m *Model) refreshStats() {
+	if len(m.sessions) == 0 {
+		m.toolStats = nil
+		m.recentCalls = nil
+		return
+	}
+	s := m.sessions[m.cursor]
+	db := m.dbFor(s.Folder)
+	if db == nil {
+		m.toolStats = nil
+		m.recentCalls = nil
+		return
+	}
+	filter := stats.Filter{SessionID: s.ID}
+	m.toolStats, _ = db.Summary(filter)
+	m.recentCalls, _ = db.Recent(8, filter)
+}
+
+func (m Model) Init() tea.Cmd {
+	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case pollMsg:
+		m.refresh()
+		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ready = true
+
+	case tea.MouseClickMsg:
+		// Rows: 0=header, 1=frame-top, 2..height-3=content, height-2=frame-bottom, height-1=footer
+		contentRow := msg.Y - 2
+		bodyHeight := m.height - 4
+		if contentRow >= 0 && contentRow < bodyHeight {
+			// Cols: 0=│, 1..leftWidth=left-panel, leftWidth+1=┆, leftWidth+2..=right-panel
+			if msg.X >= 1 && msg.X <= m.leftWidth {
+				// leftLines: index 0=blank, index 1+=sessions
+				sessionIdx := contentRow - 1
+				if sessionIdx >= 0 && sessionIdx < len(m.sessions) {
+					m.cursor = sessionIdx
+					m.refreshStats()
+				}
+			}
+		}
+
+	case tea.MouseWheelMsg:
+		if msg.Button == tea.MouseWheelDown {
+			if m.cursor < len(m.sessions)-1 {
+				m.cursor++
+			}
+		} else if msg.Button == tea.MouseWheelUp {
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		}
+
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+				m.refreshStats()
+			}
+		case "down", "j":
+			if m.cursor < len(m.sessions)-1 {
+				m.cursor++
+				m.refreshStats()
+			}
+		case "a":
+			m.showHidden = !m.showHidden
+			m.refresh()
+		case "[":
+			m.leftWidth -= 2
+			if m.leftWidth < minLeftWidth {
+				m.leftWidth = minLeftWidth
+			}
+		case "]":
+			m.leftWidth += 2
+			maxLeft := m.width - 23
+			if maxLeft < minLeftWidth {
+				maxLeft = minLeftWidth
+			}
+			if m.leftWidth > maxLeft {
+				m.leftWidth = maxLeft
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) View() tea.View {
+	content := "Loading…"
+	if m.ready {
+		content = m.render()
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+func (m Model) render() string {
+	rightWidth := m.width - m.leftWidth - 3 // left-│ + ┆ + right-│
+	if rightWidth < 10 {
+		rightWidth = 10
+	}
+	bodyHeight := m.height - 4 // header + frame-top + frame-bottom + footer
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+
+	var sb strings.Builder
+
+	// Header
+	titleText := "plumb"
+	if Version != "" {
+		titleText += " " + Version
+	}
+	title := TitleStyle.Render(titleText)
+	hint := HintStyle.Render("↑↓/jk navigate · a all sessions · [/] resize · q quit")
+	gap := m.width - lipgloss.Width(title) - lipgloss.Width(hint)
+	if gap < 1 {
+		gap = 1
+	}
+	sb.WriteString(title + strings.Repeat(" ", gap) + hint + "\n")
+
+	// Frame
+	sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
+
+	leftLines := m.leftLines()
+	rightLines := m.rightLines(rightWidth)
+	for i := range bodyHeight {
+		l, r := "", ""
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		leftCell := lipgloss.NewStyle().Width(m.leftWidth).Render(l)
+		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(r)
+		sb.WriteString(SepStyle.Render("│") + leftCell + SepStyle.Render("┆") + rightCell + SepStyle.Render("│") + "\n")
+	}
+
+	sb.WriteString(m.renderBottomBorder(rightWidth) + "\n")
+
+	// Footer — sum across the visible sessions' per-project DBs.
+	var totalCalls, savedTok int64
+	for _, s := range m.sessions {
+		db := m.dbFor(s.Folder)
+		if db == nil {
+			continue
+		}
+		totalCalls += db.TotalCalls(stats.Filter{})
+		savedTok += db.TotalTokensSaved(stats.Filter{})
+	}
+	footer := fmt.Sprintf("%d session(s)  ·  %d tool calls  ·  ~%s tokens saved",
+		len(m.sessions), totalCalls, stats.FormatSavings(int(savedTok)))
+	if m.hiddenCount > 0 {
+		footer += fmt.Sprintf("  ·  %d hidden (press 'a' to show)", m.hiddenCount)
+	}
+	if m.loadErr != "" {
+		footer += "  ·  " + m.loadErr
+	}
+	sb.WriteString(MutedStyle.Render(footer))
+
+	return sb.String()
+}
+
+// renderTopBorder builds: ╭─ Sessions (N) ─────────────┬─ Detail ──────────────╮
+func (m Model) renderTopBorder(rightWidth int) string {
+	leftTitle := fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
+	leftTitleVis := len(leftTitle) // all ASCII
+	// left section = 1 opening dash + title + fill, total = m.leftWidth
+	leftFill := m.leftWidth - 1 - leftTitleVis
+	if leftFill < 0 {
+		avail := m.leftWidth - 2
+		if avail > 0 {
+			leftTitle = leftTitle[:avail] + " "
+		} else {
+			leftTitle = ""
+		}
+		leftTitleVis = len(leftTitle)
+		leftFill = m.leftWidth - 1 - leftTitleVis
+		if leftFill < 0 {
+			leftFill = 0
+		}
+	}
+
+	rightTitle := " Session + Stats "
+	rightTitleVis := len(rightTitle)
+	// right section = 1 opening dash + title + fill, total = rightWidth
+	rightFill := rightWidth - 1 - rightTitleVis
+	if rightFill < 0 {
+		rightTitle = ""
+		rightFill = rightWidth - 1
+		if rightFill < 0 {
+			rightFill = 0
+		}
+	}
+
+	return SepStyle.Render("╭─") +
+		PanelHeaderStyle.Render(leftTitle) +
+		SepStyle.Render(strings.Repeat("─", leftFill)+"┬─") +
+		PanelHeaderStyle.Render(rightTitle) +
+		SepStyle.Render(strings.Repeat("─", rightFill)+"╮")
+}
+
+// renderBottomBorder builds: ╰──────────────────────────┴────────────────────────╯
+func (m Model) renderBottomBorder(rightWidth int) string {
+	return SepStyle.Render(
+		"╰" + strings.Repeat("─", m.leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "╯",
+	)
+}
+
+// leftLines returns content rows for the left panel.
+// Index 0 is blank padding; index 1+ are session items (or empty-state text).
+func (m Model) leftLines() []string {
+	lines := []string{""}
+
+	if len(m.sessions) == 0 {
+		if daemonRunning() {
+			lines = append(lines,
+				MutedStyle.Render("  Daemon running."),
+				MutedStyle.Render("  Call a tool to begin."),
+			)
+		} else {
+			lines = append(lines,
+				MutedStyle.Render("  No active sessions."),
+				MutedStyle.Render("  Open Claude Desktop."),
+			)
+		}
+		return lines
+	}
+
+	for i, s := range m.sessions {
+		prefix := "  "
+		style := ItemStyle
+		if i == m.cursor {
+			prefix = "▸ "
+			style = SelectedStyle
+		}
+		langPrefix := s.Language + ": "
+		maxFolder := m.leftWidth - 3 - len([]rune(langPrefix))
+		if maxFolder < 0 {
+			maxFolder = 0
+		}
+		folder := s.Folder
+		if folder == "" {
+			folder = "(resolving…)"
+		} else {
+			folder = contractPath(folder, maxFolder)
+		}
+		lines = append(lines, style.Render(prefix+langPrefix+folder))
+	}
+	return lines
+}
+
+// rightLines returns content rows for the right panel.
+// Index 0 is blank padding; index 1+ are detail rows.
+// rightWidth is used to contract long paths so they fit without wrapping.
+func (m Model) rightLines(rightWidth int) []string {
+	lines := []string{""}
+
+	if len(m.sessions) == 0 {
+		lines = append(lines, "  "+MutedStyle.Render("Select a session to view details."))
+		return lines
+	}
+
+	const keyColWidth = 14
+	maxVal := rightWidth - keyColWidth
+	if maxVal < 8 {
+		maxVal = 8
+	}
+
+	s := m.sessions[m.cursor]
+
+	// ─── Session detail ───────────────────────────────────────────────────
+	folder := s.Folder
+	if folder == "" {
+		folder = MutedStyle.Render("(resolving workspace…)")
+	} else {
+		folder = contractPath(folder, maxVal)
+	}
+	lines = append(lines,
+		detailRow("ID", s.ID),
+		detailRow("Language", s.Language),
+		detailRow("Folder", folder),
+		detailRow("Adapter", s.Adapter),
+		detailRow("PID", fmt.Sprintf("%d", s.PID)),
+		detailRow("Started", s.StartedAt.Format("2006-01-02 15:04:05")),
+	)
+
+	client := s.ClientName
+	if s.ClientVersion != "" {
+		client += " " + s.ClientVersion
+	}
+	if client == "" {
+		client = MutedStyle.Render("unknown")
+	}
+	lines = append(lines, detailRow("Client", client))
+
+	// ─── Tool stats ───────────────────────────────────────────────────────
+	lines = append(lines, "", "  "+SepStyle.Render("── Tool Statistics ──"))
+
+	if len(m.toolStats) == 0 {
+		lines = append(lines, "  "+MutedStyle.Render("No calls recorded yet."))
+		return lines
+	}
+
+	// Show top 5 tools
+	show := m.toolStats
+	if len(show) > 5 {
+		show = show[:5]
+	}
+	for _, ts := range show {
+		errBadge := ""
+		if ts.Errors > 0 {
+			errBadge = " " + WarnStyle.Render(fmt.Sprintf("[%d err]", ts.Errors))
+		}
+		line := fmt.Sprintf("  %-20s %s calls  %s avg%s",
+			ts.Tool,
+			OkStyle.Render(fmt.Sprintf("%d", ts.Calls)),
+			MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)),
+			errBadge,
+		)
+		lines = append(lines, line)
+	}
+
+	// ─── Recent calls ─────────────────────────────────────────────────────
+	if len(m.recentCalls) > 0 {
+		lines = append(lines, "", "  "+SepStyle.Render("── Recent ──"))
+		for _, c := range m.recentCalls {
+			ok := OkStyle.Render("✓")
+			if !c.Success {
+				ok = WarnStyle.Render("✗")
+			}
+			age := humanAgeTUI(c.CalledAt)
+			line := fmt.Sprintf("  %s  %-22s %s %s",
+				ok,
+				c.Tool,
+				MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)),
+				MutedStyle.Render(age),
+			)
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+func detailRow(key, val string) string {
+	return "  " + KeyStyle.Render(key) + ValStyle.Render(val)
+}
+
+// contractPath shortens a file path for display:
+//  1. Replaces the home directory prefix with ~.
+//  2. If still longer than max runes, truncates from the LEFT (keeping the
+//     tail of the path) so the meaningful end remains visible:
+//     /Users/gilberto/Projects/plumb/testdata → …/plumb/testdata
+func contractPath(p string, max int) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		p = "~" + p[len(home):]
+	}
+	runes := []rune(p)
+	if len(runes) <= max {
+		return p
+	}
+	if max <= 1 {
+		return "…"
+	}
+	return "…" + string(runes[len(runes)-(max-1):])
+}
+
+func humanAgeTUI(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return t.Format("Jan 2")
+	}
+}
+
+// daemonRunning reports whether the plumb daemon socket exists. The socket path
+// mirrors cli.daemonSocketPath — duplicated here to avoid an import cycle.
+// Must stay in sync with cli.plumbRuntimeDir.
+func daemonRunning() bool {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	socketPath := filepath.Join(base, "plumb", "plumb.sock")
+	_, err = os.Stat(socketPath)
+	return err == nil
+}
+
+// Run starts the Bubble Tea sessions dashboard.
+func Run() error {
+	RebuildStyles()
+	p := tea.NewProgram(NewModel())
+	_, err := p.Run()
+	return err
+}

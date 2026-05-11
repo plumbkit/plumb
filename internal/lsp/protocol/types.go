@@ -415,3 +415,71 @@ type RenameParams struct {
 	Position     Position               `json:"position"`
 	NewName      string                 `json:"newName"`
 }
+
+// ── Call hierarchy ────────────────────────────────────────────────────────────
+
+// CallHierarchyItem represents a call-hierarchy node (function/method).
+type CallHierarchyItem struct {
+	Name           string   `json:"name"`
+	Kind           SymbolKind `json:"kind"`
+	URI            string   `json:"uri"`
+	Range          Range    `json:"range"`
+	SelectionRange Range    `json:"selectionRange"`
+	Detail         string   `json:"detail,omitempty"`
+}
+
+// PrepareCallHierarchyParams is the payload for textDocument/prepareCallHierarchy.
+type PrepareCallHierarchyParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// CallHierarchyIncomingCallsParams is the payload for callHierarchy/incomingCalls.
+type CallHierarchyIncomingCallsParams struct {
+	Item CallHierarchyItem `json:"item"`
+}
+
+// CallHierarchyIncomingCall is one caller in the incoming-call graph.
+type CallHierarchyIncomingCall struct {
+	From       CallHierarchyItem `json:"from"`
+	FromRanges []Range           `json:"fromRanges"`
+}
+
+// CallHierarchyOutgoingCallsParams is the payload for callHierarchy/outgoingCalls.
+type CallHierarchyOutgoingCallsParams struct {
+	Item CallHierarchyItem `json:"item"`
+}
+
+// CallHierarchyOutgoingCall is one callee in the outgoing-call graph.
+type CallHierarchyOutgoingCall struct {
+	To         CallHierarchyItem `json:"to"`
+	FromRanges []Range           `json:"fromRanges"`
+}
+
+// ── Type hierarchy ────────────────────────────────────────────────────────────
+
+// TypeHierarchyItem represents a type-hierarchy node (class/interface/struct).
+type TypeHierarchyItem struct {
+	Name           string   `json:"name"`
+	Kind           SymbolKind `json:"kind"`
+	URI            string   `json:"uri"`
+	Range          Range    `json:"range"`
+	SelectionRange Range    `json:"selectionRange"`
+	Detail         string   `json:"detail,omitempty"`
+}
+
+// PrepareTypeHierarchyParams is the payload for textDocument/prepareTypeHierarchy.
+type PrepareTypeHierarchyParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// TypeHierarchySupertypesParams is the payload for typeHierarchy/supertypes.
+type TypeHierarchySupertypesParams struct {
+	Item TypeHierarchyItem `json:"item"`
+}
+
+// TypeHierarchySubtypesParams is the payload for typeHierarchy/subtypes.
+type TypeHierarchySubtypesParams struct {
+	Item TypeHierarchyItem `json:"item"`
+}
