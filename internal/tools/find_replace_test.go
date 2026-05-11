@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setupReplaceTree(t *testing.T) string {
@@ -145,7 +146,7 @@ func TestFindReplace_InvalidRegex(t *testing.T) {
 func TestFindReplace_ManyFiles_ParallelCorrectness(t *testing.T) {
 	dir := t.TempDir()
 	const n = 200
-	for i := 0; i < n; i++ {
+	for i := range n {
 		path := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
 		if err := os.WriteFile(path, []byte("alpha alpha alpha\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -170,7 +171,7 @@ func TestFindReplace_ManyFiles_ParallelCorrectness(t *testing.T) {
 		t.Errorf("expected header %q in output:\n%s", expectedHeader, out)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		path := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
 		data, _ := os.ReadFile(path)
 		if string(data) != "BETA BETA BETA\n" {
@@ -186,7 +187,7 @@ func TestFindReplace_MaxFilesIsExact(t *testing.T) {
 	dir := t.TempDir()
 	const total = 60
 	const maxN = 10
-	for i := 0; i < total; i++ {
+	for i := range total {
 		path := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
 		if err := os.WriteFile(path, []byte("xx\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -207,7 +208,7 @@ func TestFindReplace_MaxFilesIsExact(t *testing.T) {
 	}
 
 	written := 0
-	for i := 0; i < total; i++ {
+	for i := range total {
 		data, _ := os.ReadFile(filepath.Join(dir, fmt.Sprintf("f%03d.txt", i)))
 		switch string(data) {
 		case "yy\n":
@@ -269,6 +270,82 @@ func TestFindReplace_BinaryFilesSkipped(t *testing.T) {
 	if !bytes.Equal(binGot, binData) {
 		t.Error("binary file was modified or truncated")
 	}
+}
+
+// TestFindReplace_LargeTreeFinishesQuickly is the end-to-end timeout
+// reproduction. It builds a tree with enough volume that the pre-fix
+// (sequential, full-read, no size cap) implementation would crawl, and
+// asserts the parallel+sniff-first implementation finishes within a generous
+// wall-clock budget. Skipped under -short for slow CI hardware.
+//
+// Tree shape: 300 text files (~50 KiB each) under a glob-pruneable subtree,
+// plus one 20 MiB plain-text "log" file in a sibling subtree that the glob
+// pruner must skip. If pruning regresses the sibling gets scanned and the
+// wall clock blows out.
+func TestFindReplace_LargeTreeFinishesQuickly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping large-tree test in -short mode")
+	}
+
+	dir := t.TempDir()
+	mustMkdir := func(p string) {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(dir, "wanted"))
+	mustMkdir(filepath.Join(dir, "noise"))
+
+	const nFiles = 300
+	body := bytes.Repeat([]byte("NEEDLE alpha beta gamma delta epsilon zeta eta\n"), 1100) // ~50 KiB
+	for i := range nFiles {
+		path := filepath.Join(dir, "wanted", fmt.Sprintf("f%03d.txt", i))
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Sibling subtree the dir pruner must skip. A 20 MiB plain-text file
+	// containing NEEDLE — if pruning fails, the scan will hit this and slow
+	// the test significantly.
+	bigBody := bytes.Repeat([]byte("NEEDLE noise filler\n"), 1024*1024)
+	if err := os.WriteFile(filepath.Join(dir, "noise", "huge.log"), bigBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewFindReplace()
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "NEEDLE",
+		"replacement": "HAY",
+		"glob":        "wanted/**/*.txt",
+		"dry_run":     false,
+		"max_files":   nFiles + 10,
+	})
+
+	// 10 s budget is ~25x what the test takes on a laptop; large enough to
+	// avoid flakes on slow CI but small enough to flag a real regression.
+	const budget = 10 * time.Second
+	start := time.Now()
+	out, err := tool.Execute(context.Background(), args)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if elapsed > budget {
+		t.Errorf("Execute took %s, want < %s — likely a regression in parallelism, sniff-first, or glob pruning", elapsed, budget)
+	}
+	expectedSummary := fmt.Sprintf("%d file(s)", nFiles)
+	if !strings.Contains(out, expectedSummary) {
+		t.Errorf("expected %q in summary:\n%s", expectedSummary, out)
+	}
+
+	// Sibling subtree must remain untouched.
+	got, _ := os.ReadFile(filepath.Join(dir, "noise", "huge.log"))
+	if !bytes.Equal(got, bigBody) {
+		t.Error("sibling huge.log was modified — glob pruning failed")
+	}
+	t.Logf("processed %d files in %s", nFiles, elapsed)
 }
 
 // TestFindReplace_GlobPrunesSiblingDirs verifies that a glob with a literal
@@ -469,7 +546,7 @@ func TestFindReplace_OutputSortedByPath(t *testing.T) {
 // context stops further file processing rather than draining the entire tree.
 func TestFindReplace_ContextCancellation(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		path := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
 		if err := os.WriteFile(path, []byte("kw\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -493,7 +570,7 @@ func TestFindReplace_ContextCancellation(t *testing.T) {
 	}
 
 	written := 0
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		data, _ := os.ReadFile(filepath.Join(dir, fmt.Sprintf("f%03d.txt", i)))
 		if string(data) == "KW\n" {
 			written++

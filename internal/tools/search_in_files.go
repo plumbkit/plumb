@@ -11,7 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
@@ -168,11 +171,8 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	type fileMatch struct {
 		relPath string
 		lines   []string // formatted "LINE: content" entries
+		hits    int      // raw hit count, used for max_results truncation
 	}
-
-	var results []fileMatch
-	totalLines := 0
-	truncated := false
 
 	opts := walkOptions{
 		root:          root,
@@ -181,6 +181,12 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 
 	globPrefix := globLiteralPrefix(a.Glob)
+
+	// Phase 1: collect candidate file paths via a single-threaded walk. The
+	// walk is cheap; the per-file scan is the bottleneck and gets fanned out
+	// to a worker pool below.
+	type pathPair struct{ abs, rel string }
+	var paths []pathPair
 
 	walkErr := walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
 		if err := ctx.Err(); err != nil {
@@ -193,9 +199,6 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 					return fs.SkipDir
 				}
 			}
-			return nil
-		}
-		if truncated {
 			return nil
 		}
 
@@ -212,77 +215,129 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 			}
 		}
 
-		// Size guard: skip outsized text files (logs, dumps, lockfiles without
-		// nulls) before opening. Walking past these is the dominant pathology
-		// that pushes a search past the MCP timeout.
+		// Size guard: skip outsized text files before opening. Walking past
+		// these is the dominant pathology that pushes search past the MCP
+		// timeout.
 		if fi, err := d.Info(); err == nil && fi.Size() > a.MaxFileBytes {
 			return nil
 		}
 
-		// Open and binary-check.
-		f, err := os.Open(path)
+		rel, _ := filepath.Rel(root, path)
+		paths = append(paths, pathPair{abs: path, rel: filepath.ToSlash(rel)})
+		return nil
+	})
+
+	// Phase 2: scan candidate files in parallel.
+	scan := func(p pathPair) *fileMatch {
+		f, err := os.Open(p.abs)
 		if err != nil {
 			return nil
 		}
 		defer f.Close()
 
-		// Read all content; detect binary on the first chunk.
-		var buf bytes.Buffer
+		// Sniff first 8 KB for a null byte; bail before reading the rest.
 		sniff := make([]byte, binarySniffBytes)
 		n, _ := f.Read(sniff)
 		if bytes.IndexByte(sniff[:n], 0) >= 0 {
-			return nil // binary file
+			return nil
 		}
+		var buf bytes.Buffer
 		buf.Write(sniff[:n])
-		_, _ = buf.ReadFrom(f)
-		content := buf.Bytes()
-
-		// Scan lines and collect matches.
-		lines := splitLines(content)
-		type hit struct{ lineNo int }
-		var hits []hit
-		for i, line := range lines {
-			if re.Match(line) {
-				hits = append(hits, hit{i})
-			}
-		}
-		if len(hits) == 0 {
+		if _, err := buf.ReadFrom(f); err != nil {
 			return nil
 		}
 
-		rel, _ := filepath.Rel(root, path)
+		lines := splitLines(buf.Bytes())
+		var hitLines []int
+		for i, line := range lines {
+			if re.Match(line) {
+				hitLines = append(hitLines, i)
+			}
+		}
+		if len(hitLines) == 0 {
+			return nil
+		}
 
-		// Format matches with optional context, merging overlapping windows.
+		// Format hits with optional context, merging overlapping windows.
 		var formatted []string
 		shown := make(map[int]bool)
-		for _, h := range hits {
-			lo := max(0, h.lineNo-a.ContextLines)
-			hi := min(len(lines)-1, h.lineNo+a.ContextLines)
+		for _, h := range hitLines {
+			lo := max(0, h-a.ContextLines)
+			hi := min(len(lines)-1, h+a.ContextLines)
 			for i := lo; i <= hi; i++ {
 				if shown[i] {
 					continue
 				}
 				shown[i] = true
 				prefix := "  "
-				if i == h.lineNo {
+				if i == h {
 					prefix = "> " // mark the actual match line
 				}
 				formatted = append(formatted,
 					fmt.Sprintf("  %d:%s%s", i+1, prefix, strings.TrimRight(string(lines[i]), "\r")))
 			}
-			totalLines++
-			if totalLines >= a.MaxResults {
-				truncated = true
-				break
+		}
+		return &fileMatch{relPath: p.rel, lines: formatted, hits: len(hitLines)}
+	}
+
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	workers := max(1, min(runtime.NumCPU(), len(paths)))
+
+	pathsCh := make(chan pathPair)
+	resultsCh := make(chan *fileMatch, workers)
+
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for p := range pathsCh {
+				if wctx.Err() != nil {
+					continue
+				}
+				if r := scan(p); r != nil {
+					select {
+					case resultsCh <- r:
+					case <-wctx.Done():
+						return
+					}
+				}
+			}
+		})
+	}
+
+	go func() {
+		defer close(pathsCh)
+		for _, p := range paths {
+			select {
+			case <-wctx.Done():
+				return
+			case pathsCh <- p:
 			}
 		}
+	}()
 
-		results = append(results, fileMatch{
-			relPath: filepath.ToSlash(rel),
-			lines:   formatted,
-		})
-		return nil
-	})
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	var results []*fileMatch
+	totalLines := 0
+	truncated := false
+	for r := range resultsCh {
+		if truncated {
+			continue // drain remaining sends so workers can exit
+		}
+		results = append(results, r)
+		totalLines += r.hits
+		if totalLines >= a.MaxResults {
+			truncated = true
+			cancel()
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool { return results[i].relPath < results[j].relPath })
 
 	timedOut := errors.Is(walkErr, context.DeadlineExceeded)
 	cancelled := errors.Is(walkErr, context.Canceled)
@@ -308,12 +363,12 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		sb.WriteByte('\n')
 	}
 
-	summary := fmt.Sprintf("%d file(s) matched", len(results))
+	summary := fmt.Sprintf("%d file(s) matched, %d hits", len(results), totalLines)
 	switch {
 	case timedOut:
 		summary += fmt.Sprintf(" (partial — search timed out after %s; narrow with path/glob)", searchDefaultDeadline)
 	case truncated:
-		summary += fmt.Sprintf(" (truncated at %d lines — narrow with glob or a tighter pattern)", a.MaxResults)
+		summary += fmt.Sprintf(" (truncated past %d hits — narrow with glob or a tighter pattern)", a.MaxResults)
 	}
 	sb.WriteString(summary)
 	return sb.String(), nil
@@ -357,16 +412,3 @@ func doubleStarMatchFile(glob, path string) (bool, error) {
 	return doubleStarMatch(glob, path), nil
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

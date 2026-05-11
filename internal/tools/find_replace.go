@@ -198,13 +198,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	workers := runtime.NumCPU()
-	if workers > len(files) {
-		workers = len(files)
-	}
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(1, min(runtime.NumCPU(), len(files)))
 
 	paths := make(chan string)
 	results := make(chan fileChange, workers)
@@ -212,10 +206,8 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	maxFiles := int32(a.MaxFiles)
 
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for path := range paths {
 				if wctx.Err() != nil {
 					continue // drain remaining sends so the dispatcher unblocks
@@ -243,7 +235,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 				case <-wctx.Done():
 				}
 			}
-		}()
+		})
 	}
 
 	go func() {

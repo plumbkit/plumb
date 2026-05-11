@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,6 +194,39 @@ func TestSearchInFiles_MaxFileBytesSkipsLargeFiles(t *testing.T) {
 	}
 	if strings.Contains(out, "big.txt") {
 		t.Errorf("big.txt should have been skipped (exceeds max_file_bytes):\n%s", out)
+	}
+}
+
+// TestSearchInFiles_ManyFiles_ParallelCorrectness writes many matching files
+// and verifies the parallel scan returns every file's content and the output
+// is sorted by relative path.
+func TestSearchInFiles_ManyFiles_ParallelCorrectness(t *testing.T) {
+	dir := t.TempDir()
+	const n = 200
+	for i := range n {
+		path := filepath.Join(dir, fmt.Sprintf("f%03d.go", i))
+		if err := os.WriteFile(path, []byte("package main\n// MARKER\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := NewSearchInFiles()
+	args, _ := json.Marshal(map[string]any{
+		"pattern":     "MARKER",
+		"path":        dir,
+		"max_results": n + 10, // allow all hits without truncation
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, fmt.Sprintf("%d file(s) matched, %d hits", n, n)) {
+		t.Fatalf("expected %d files / %d hits summary:\n%s", n, n, out)
+	}
+	// Output should be sorted by path: f000.go before f001.go before ... .
+	idx0 := strings.Index(out, "f000.go")
+	idx199 := strings.Index(out, "f199.go")
+	if idx0 < 0 || idx199 < 0 || idx0 >= idx199 {
+		t.Errorf("output not sorted by path (f000 at %d, f199 at %d)", idx0, idx199)
 	}
 }
 

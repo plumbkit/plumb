@@ -207,6 +207,13 @@ Plumb resolves configuration in four layers, lowest precedence to highest:
 3. **Project config:** `<workspace>/.plumb/config.toml`. Loaded once per connection when the workspace resolves; only fields the project file sets are overridden.
 4. **Environment variables.** Highest precedence — useful for one-off overrides.
 
+### Top-level
+
+```toml
+log_level = "info"             # one of: debug, info, warn, error. Default "info".
+log_file  = ""                 # path; empty = OS log dir (~/Library/Logs/plumb/daemon.log on macOS)
+```
+
 ### `[edits]` — write-tool safety knobs
 
 ```toml
@@ -219,6 +226,48 @@ rate_limit_per_minute = 30     # 0 disables; default 120
 |---|---|---|
 | `strict` | `PLUMB_STRICT_EDITS=1` | Every `edit_file` target must have been read in this session AND the on-disk mtime must match what was observed at read time. |
 | `rate_limit_per_minute` | `PLUMB_WRITE_RATE_LIMIT=N` | Sliding-window cap on writes per session. `0` disables. |
+
+### `[cache]` — in-memory tool-result cache
+
+```toml
+[cache]
+ttl       = "5m"               # human-readable duration; default 5m
+max_size  = 1000               # max entries; default 1000
+```
+
+Caches repeat queries (same tool + same args) within a session for the duration of `ttl`. Set `ttl = "0s"` to disable.
+
+### `[walk]` — filesystem-walk safety
+
+```toml
+[walk]
+refuse_home_roots = true       # default true on macOS, no-op elsewhere
+```
+
+On macOS, walking `$HOME` or one of its TCC-protected subdirectories (Desktop, Documents, Downloads, Pictures, Music, Movies, Public, iCloud Drive) triggers a consent prompt attributed to the plumb binary. With `refuse_home_roots = true`, plumb refuses walks rooted *exactly* at one of those directories so a misconfigured client (e.g. one that returns `$HOME` from `roots/list`) doesn't trip the prompt. Subpaths like `~/Documents/MyProject` are still walked normally.
+
+### `[lsp.<lang>]` — per-language LSP server
+
+```toml
+[lsp.go]
+command      = "gopls"
+args         = []
+root_markers = ["go.mod"]
+enabled      = true
+
+[lsp.python]
+command      = "pyright-langserver"
+args         = ["--stdio"]
+root_markers = ["pyproject.toml", "setup.py", "pyrightconfig.json"]
+enabled      = false
+
+[lsp.rust]
+command      = "rust-analyzer"
+root_markers = ["Cargo.toml"]
+enabled      = true
+```
+
+Each entry overrides the compiled default for that language. `enabled = false` skips spawning the adapter even if its root marker is found. `env` may be set to a string→string table to inject environment variables for the spawned server.
 
 Run `plumb config show` (optionally with `--workspace <dir>`) to see the resolved config with provenance — each field's value plus which layer supplied it.
 

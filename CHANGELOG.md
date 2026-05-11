@@ -18,6 +18,10 @@
 
 ### Changed
 - **`VERSION` bumped to 0.5.25** so `make build` produces binaries that self-report the correct version.
+- **`search_in_files` is now parallel** (`runtime.NumCPU()` workers). Phase 1 of the walk collects candidate paths (with glob, size, and ignore filtering still inline); phase 2 fans out per-file open + sniff + scan + format across workers. Output is sorted by path so the report is deterministic regardless of worker scheduling. Truncation semantics changed slightly: `max_results` is enforced at the *file boundary*, so the actual hit count may exceed `max_results` by one file's worth — the summary line now reports both file count and total hits (e.g. `12 file(s) matched, 247 hits`) and the truncation suffix reads `(truncated past N hits — narrow with glob or a tighter pattern)`. Tests in `search_in_files_test.go` cover the parallel path across 200 files.
+- **Modernization in files touched this session.** Removed user-defined `min`/`max` helpers in `search_in_files.go` (Go 1.21+ has builtins). Converted `for i := 0; i < N; i++` to `for i := range N` in new test code (Go 1.22+). Converted `wg.Add(1) + go func(){ defer wg.Done(); ... }()` to `wg.Go(func(){...})` in `find_replace.go` and `search_in_files.go` (Go 1.25+). The CI is on 1.26.2 so all of these are supported.
+- **End-to-end timeout regression test.** `TestFindReplace_LargeTreeFinishesQuickly` builds a tree with 300×50 KiB matching files plus a 20 MiB sibling decoy that the glob pruner must skip, then asserts the whole operation completes within a 10 s wall-clock budget. Observed on a laptop: ~60 ms (~167× headroom). Skipped under `-short` for slow CI hardware.
+- **Documentation gap closed in README.md.** The `Configuration` section previously only documented `[edits]`. It now covers the top-level `log_level` / `log_file`, the `[cache]` section (`ttl`, `max_size`), the `[walk]` section (`refuse_home_roots` and its macOS TCC rationale), and the `[lsp.<lang>]` per-language blocks (`command`, `args`, `root_markers`, `enabled`, `env`). `plumb config show` still surfaces resolved values with provenance.
 
 ## 0.5.24 — 2026-05-12
 
