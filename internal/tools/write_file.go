@@ -46,13 +46,14 @@ var writeFileSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type WriteFile struct {
-	client lsp.LSPClient       // may be nil; LSP notify skipped when nil
-	cache  *cache.Cache        // may be nil; cache invalidation skipped when nil
-	diag   postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
+	client  lsp.LSPClient       // may be nil; LSP notify skipped when nil
+	cache   *cache.Cache        // may be nil; cache invalidation skipped when nil
+	diag    postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
+	limiter *RateLimiter        // may be nil; rate limiting skipped when nil
 }
 
-func NewWriteFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource) *WriteFile {
-	return &WriteFile{client: client, cache: c, diag: diag}
+func NewWriteFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter) *WriteFile {
+	return &WriteFile{client: client, cache: c, diag: diag, limiter: lim}
 }
 
 func (*WriteFile) Name() string               { return "write_file" }
@@ -73,6 +74,9 @@ type writeFileArgs struct {
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	if !t.limiter.Allow() {
+		return "", rateLimitError("write_file", t.limiter)
+	}
 	var a writeFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("write_file: invalid arguments: %w", err)

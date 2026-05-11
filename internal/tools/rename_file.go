@@ -43,12 +43,13 @@ var renameFileSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use. Both source and destination
 // paths are locked to serialise with any concurrent write_file/edit_file.
 type RenameFile struct {
-	client lsp.LSPClient
-	cache  *cache.Cache
+	client  lsp.LSPClient
+	cache   *cache.Cache
+	limiter *RateLimiter
 }
 
-func NewRenameFile(client lsp.LSPClient, c *cache.Cache) *RenameFile {
-	return &RenameFile{client: client, cache: c}
+func NewRenameFile(client lsp.LSPClient, c *cache.Cache, lim *RateLimiter) *RenameFile {
+	return &RenameFile{client: client, cache: c, limiter: lim}
 }
 
 func (*RenameFile) Name() string                 { return "rename_file" }
@@ -68,6 +69,9 @@ type renameFileArgs struct {
 }
 
 func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	if !t.limiter.Allow() {
+		return "", rateLimitError("rename_file", t.limiter)
+	}
 	var a renameFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("rename_file: invalid arguments: %w", err)

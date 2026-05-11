@@ -82,13 +82,14 @@ const maxEditRetries = 3
 //
 // Concurrency: Execute is safe for concurrent use.
 type EditFile struct {
-	client lsp.LSPClient       // may be nil; LSP notify skipped when nil
-	cache  *cache.Cache        // may be nil; cache invalidation skipped when nil
-	diag   postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
+	client  lsp.LSPClient       // may be nil; LSP notify skipped when nil
+	cache   *cache.Cache        // may be nil; cache invalidation skipped when nil
+	diag    postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
+	limiter *RateLimiter        // may be nil; rate limiting skipped when nil
 }
 
-func NewEditFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource) *EditFile {
-	return &EditFile{client: client, cache: c, diag: diag}
+func NewEditFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter) *EditFile {
+	return &EditFile{client: client, cache: c, diag: diag, limiter: lim}
 }
 
 func (*EditFile) Name() string                 { return "edit_file" }
@@ -116,6 +117,9 @@ type editFileArgs struct {
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	if !t.limiter.Allow() {
+		return "", rateLimitError("edit_file", t.limiter)
+	}
 	var a editFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("edit_file: invalid arguments: %w", err)

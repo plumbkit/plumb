@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (7/9)
+- **Per-session write rate limit** — `RateLimiter` (sliding window) gates `write_file` / `edit_file` / `delete_file` / `rename_file`. Default 120 writes per minute per session; configurable via `PLUMB_WRITE_RATE_LIMIT` (0 disables). Protects against runaway-loop scenarios in autonomous agents; transparent under normal use. New constructor parameter on the four write tools; the daemon installs one limiter per connection.
+
 ### Added (6/9)
 - **Post-write diagnostics in `write_file` and `edit_file` output** — after a successful write, the tools snapshot the current diagnostics for the URI, then poll for up to 300ms looking for a change. Any new errors/warnings (up to 3 of each) are appended to the response so the agent learns immediately whether it broke the build, without a follow-up `diagnostics` call. Skipped when the diagnostics source is nil (test setups).
 

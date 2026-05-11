@@ -30,12 +30,13 @@ var deleteFileSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type DeleteFile struct {
-	client lsp.LSPClient // may be nil; LSP notify skipped when nil
-	cache  *cache.Cache  // may be nil; cache invalidation skipped when nil
+	client  lsp.LSPClient // may be nil; LSP notify skipped when nil
+	cache   *cache.Cache  // may be nil; cache invalidation skipped when nil
+	limiter *RateLimiter  // may be nil; rate limiting skipped when nil
 }
 
-func NewDeleteFile(client lsp.LSPClient, c *cache.Cache) *DeleteFile {
-	return &DeleteFile{client: client, cache: c}
+func NewDeleteFile(client lsp.LSPClient, c *cache.Cache, lim *RateLimiter) *DeleteFile {
+	return &DeleteFile{client: client, cache: c, limiter: lim}
 }
 
 func (*DeleteFile) Name() string                 { return "delete_file" }
@@ -52,6 +53,9 @@ type deleteFileArgs struct {
 }
 
 func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	if !t.limiter.Allow() {
+		return "", rateLimitError("delete_file", t.limiter)
+	}
 	var a deleteFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("delete_file: invalid arguments: %w", err)
