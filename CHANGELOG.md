@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.2 — 2026-05-11
+
+### Added
+- **Per-project config overrides** — `<workspace>/.plumb/config.toml` is now loaded on top of the global `~/.config/plumb/config.toml` (XDG-respectful) once the daemon resolves a workspace. Only the fields the project file sets are overridden; the rest inherit from global. New `[edits]` section controls write-tool safety:
+  ```toml
+  [edits]
+  strict = true                    # require read_file before edit_file
+  rate_limit_per_minute = 30       # 0 disables; default 120
+  ```
+  Precedence: defaults → global config → project config → env vars (`PLUMB_STRICT_EDITS`, `PLUMB_WRITE_RATE_LIMIT`). Env vars remain the highest layer for emergency overrides without editing files.
+
+### Changed
+- `strict_mode` and the rate limit no longer require an environment variable. They read from the resolved config; env still works as the highest-precedence override.
+- `RateLimiter` gained `SetLimit(int)` so the daemon can adjust the running limit when project config loads after session start.
+
 ## 0.5.1 — 2026-05-11
 
 ### Added (9/9)

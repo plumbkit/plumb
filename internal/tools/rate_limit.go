@@ -31,11 +31,14 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 // operation is recorded against the window. If false, the caller should
 // refuse the operation; nothing is recorded.
 func (r *RateLimiter) Allow() bool {
-	if r == nil || r.limit <= 0 {
+	if r == nil {
 		return true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.limit <= 0 {
+		return true
+	}
 	now := time.Now()
 	cutoff := now.Add(-r.window)
 	// Evict timestamps older than the window.
@@ -51,6 +54,18 @@ func (r *RateLimiter) Allow() bool {
 	}
 	r.stamps = append(r.stamps, now)
 	return true
+}
+
+// SetLimit updates the limit (operations per current window). Setting limit
+// to 0 disables limiting. Called by the daemon when a project-local config
+// resolves and the rate limit changes from the global default.
+func (r *RateLimiter) SetLimit(limit int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.limit = limit
+	r.mu.Unlock()
 }
 
 // Snapshot returns the current count and the window duration. Used by tests

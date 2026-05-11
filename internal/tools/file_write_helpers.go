@@ -165,9 +165,14 @@ func recordRead(path string, mtime time.Time) {
 	readMtimes.Store(filepath.Clean(path), mtime)
 }
 
-// strictModeEnabled reports whether PLUMB_STRICT_EDITS is set to a truthy
-// value. When enabled, edit_file requires every target to have been read
-// via read_file first and the file's mtime to match the recorded value.
+// StrictModeFn returns the current strict-mode setting. The daemon
+// installs a closure that reads from the resolved per-workspace config
+// (with global + env-var override fallbacks); tests pass nil for "off".
+type StrictModeFn func() bool
+
+// strictModeEnabled is the legacy env-only check, retained as a fallback
+// when no StrictModeFn is wired (test setups, dev). The production path
+// flows through StrictModeFn on EditFile / TransactionApply.
 func strictModeEnabled() bool {
 	v := os.Getenv("PLUMB_STRICT_EDITS")
 	return v == "1" || v == "true" || v == "yes"

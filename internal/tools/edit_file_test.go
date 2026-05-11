@@ -41,7 +41,6 @@ func TestEditFile_StrictMode_AfterRead(t *testing.T) {
 		t.Fatalf("unexpected output: %q", out)
 	}
 }
-
 func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
@@ -50,7 +49,7 @@ func mustJSON(v any) json.RawMessage {
 func callEditFile(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	return NewEditFile(nil, nil, nil, nil).Execute(context.Background(), raw)
+	return NewEditFile(nil, nil, nil, nil, nil).Execute(context.Background(), raw)
 }
 
 func TestEditFile_BasicReplace(t *testing.T) {

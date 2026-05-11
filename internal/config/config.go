@@ -1,5 +1,16 @@
 // Package config loads and validates plumb's TOML configuration.
-// Precedence: compiled defaults → config file → environment variables → CLI flags.
+//
+// Precedence (lowest → highest):
+//
+//  1. Compiled defaults
+//  2. Global config (~/.config/plumb/config.toml, honouring XDG_CONFIG_HOME)
+//  3. Project-local config (<workspace>/.plumb/config.toml), loaded via LoadProject
+//     once the connection's workspace is resolved
+//  4. Environment variables
+//  5. CLI flags
+//
+// Each layer overwrites only the fields it sets — project-local config does
+// not have to repeat global settings to keep them.
 package config
 
 import (
@@ -7,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -45,12 +57,28 @@ type CacheConfig struct {
 	MaxSize int      `toml:"max_size"`
 }
 
+// EditsConfig controls safety behaviour for write/edit tools. Both fields
+// can be set globally (~/.config/plumb/config.toml) and overridden per
+// project (<workspace>/.plumb/config.toml). Environment variables
+// (PLUMB_STRICT_EDITS, PLUMB_WRITE_RATE_LIMIT) override both.
+type EditsConfig struct {
+	// Strict: when true, edit_file requires every target to have been read
+	// via read_file in this daemon's lifetime AND for the file's current
+	// mtime to match what read_file observed. Defaults to false.
+	Strict bool `toml:"strict"`
+	// RateLimitPerMinute caps how many write operations (write_file,
+	// edit_file, delete_file, rename_file, transaction_apply per-op) a
+	// session may issue per minute. 0 disables limiting. Defaults to 120.
+	RateLimitPerMinute int `toml:"rate_limit_per_minute"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
 	LogLevel string               `toml:"log_level"`
 	LogFile  string               `toml:"log_file"`
 	Cache    CacheConfig          `toml:"cache"`
+	Edits    EditsConfig          `toml:"edits"`
 	LSP      map[string]LSPConfig `toml:"lsp"`
 }
 
@@ -59,6 +87,10 @@ var defaults = Config{
 	Cache: CacheConfig{
 		TTL:     Duration{5 * time.Minute},
 		MaxSize: 1000,
+	},
+	Edits: EditsConfig{
+		Strict:             false,
+		RateLimitPerMinute: 120,
 	},
 	LSP: map[string]LSPConfig{
 		"go": {
@@ -121,6 +153,54 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PLUMB_LOG_FILE"); v != "" {
 		cfg.LogFile = v
 	}
+	if v := os.Getenv("PLUMB_STRICT_EDITS"); v != "" {
+		cfg.Edits.Strict = v == "1" || v == "true" || v == "yes"
+	}
+	if v := os.Getenv("PLUMB_WRITE_RATE_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.Edits.RateLimitPerMinute = n
+		}
+	}
+}
+
+// ProjectConfigPath returns the conventional location of a workspace's
+// plumb-local config: <workspace>/.plumb/config.toml.
+func ProjectConfigPath(workspace string) string {
+	if workspace == "" {
+		return ""
+	}
+	return filepath.Join(workspace, ".plumb", "config.toml")
+}
+
+// LoadProject reads <workspace>/.plumb/config.toml and merges it onto base.
+// Missing file is not an error; base is returned unchanged. Environment
+// variable overrides are re-applied so they remain the highest-priority
+// layer. Validation is performed after the merge.
+//
+// Call this once per connection, after the workspace has been resolved.
+// The result is what tools should consult for per-project settings (strict
+// mode, rate limit).
+func LoadProject(base Config, workspace string) (Config, error) {
+	merged := base
+	path := ProjectConfigPath(workspace)
+	if path != "" {
+		data, err := os.ReadFile(path)
+		switch {
+		case err == nil:
+			if err := toml.Unmarshal(data, &merged); err != nil {
+				return base, fmt.Errorf("parsing project config %s: %w", path, err)
+			}
+		case os.IsNotExist(err):
+			// no project config — fall through, env still applied
+		default:
+			return base, fmt.Errorf("reading project config %s: %w", path, err)
+		}
+	}
+	applyEnv(&merged)
+	if err := validate(merged); err != nil {
+		return base, fmt.Errorf("invalid project config: %w", err)
+	}
+	return merged, nil
 }
 
 func validate(cfg Config) error {
@@ -131,6 +211,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Cache.MaxSize < 0 {
 		return fmt.Errorf("cache.max_size must be non-negative")
+	}
+	if cfg.Edits.RateLimitPerMinute < 0 {
+		return fmt.Errorf("edits.rate_limit_per_minute must be non-negative (0 disables)")
 	}
 	for name, lsp := range cfg.LSP {
 		if lsp.Enabled && lsp.Command == "" {

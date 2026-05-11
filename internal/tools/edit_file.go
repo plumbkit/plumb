@@ -86,10 +86,21 @@ type EditFile struct {
 	cache   *cache.Cache        // may be nil; cache invalidation skipped when nil
 	diag    postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
 	limiter *RateLimiter        // may be nil; rate limiting skipped when nil
+	strict  StrictModeFn        // may be nil; falls back to PLUMB_STRICT_EDITS env var
 }
 
-func NewEditFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter) *EditFile {
-	return &EditFile{client: client, cache: c, diag: diag, limiter: lim}
+func NewEditFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter, strict StrictModeFn) *EditFile {
+	return &EditFile{client: client, cache: c, diag: diag, limiter: lim, strict: strict}
+}
+
+// isStrict reports whether strict mode applies to this call. Prefers the
+// configured StrictModeFn (per-workspace + env merged by daemon); falls
+// back to env-only check for test setups.
+func (t *EditFile) isStrict() bool {
+	if t.strict != nil {
+		return t.strict()
+	}
+	return strictModeEnabled()
 }
 
 func (*EditFile) Name() string                 { return "edit_file" }
@@ -159,10 +170,10 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	// Strict mode: every edit requires a prior read with matching mtime.
-	// Opt-in via PLUMB_STRICT_EDITS=1. expected_mtime above is the more
-	// precise signal when an agent threads it through; strict mode catches
-	// the case where the agent forgot.
-	if strictModeEnabled() {
+	// Opt-in via config [edits] strict = true, or PLUMB_STRICT_EDITS=1.
+	// expected_mtime above is the more precise signal when an agent threads
+	// it through; strict mode catches the case where the agent forgot.
+	if t.isStrict() {
 		recorded := recordedReadMtime(path)
 		if recorded.IsZero() {
 			return "", &editLogicErr{fmt.Errorf(

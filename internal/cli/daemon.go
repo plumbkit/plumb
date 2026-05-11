@@ -237,9 +237,45 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewListDirectory())
 	srv.Register(tools.NewReadFile())
 	srv.Register(tools.NewReadMultipleFiles())
-	writeLimiter := tools.NewDefaultRateLimiter()
+	// Initial limit from the global config; updated to per-project values
+	// inside applyProjectConfig once the workspace resolves.
+	writeLimiter := tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute)
+	// editsCfg is updated by applyProjectConfig when project-local config
+	// loads. All write tools consult it via a closure so changes take effect
+	// on the next call.
+	var editsMu sync.RWMutex
+	editsCfg := cfg.Edits
+	strictFn := func() bool {
+		editsMu.RLock()
+		defer editsMu.RUnlock()
+		return editsCfg.Strict
+	}
+	// applyProjectConfig is invoked after the workspace resolves; it loads
+	// <workspace>/.plumb/config.toml, merges it onto the global config, and
+	// applies relevant settings to the live session (rate limit, strict
+	// mode). Safe to call multiple times if roots change.
+	applyProjectConfig := func(workspace string) {
+		if workspace == "" {
+			return
+		}
+		projectCfg, err := config.LoadProject(cfg, workspace)
+		if err != nil {
+			slog.Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
+			return
+		}
+		editsMu.Lock()
+		editsCfg = projectCfg.Edits
+		editsMu.Unlock()
+		writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
+		if projectCfg.Edits.Strict != cfg.Edits.Strict || projectCfg.Edits.RateLimitPerMinute != cfg.Edits.RateLimitPerMinute {
+			slog.Info("daemon: project config applied",
+				"workspace", workspace,
+				"strict", projectCfg.Edits.Strict,
+				"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute)
+		}
+	}
 	srv.Register(tools.NewWriteFile(sessionProxy, sessionCache, sessionInv, writeLimiter))
-	srv.Register(tools.NewEditFile(sessionProxy, sessionCache, sessionInv, writeLimiter))
+	srv.Register(tools.NewEditFile(sessionProxy, sessionCache, sessionInv, writeLimiter, strictFn))
 	srv.Register(tools.NewDeleteFile(sessionProxy, sessionCache, writeLimiter))
 	srv.Register(tools.NewRenameFile(sessionProxy, sessionCache, writeLimiter))
 	srv.Register(tools.NewTransactionApply(sessionProxy, sessionCache, sessionInv, writeLimiter))
@@ -321,6 +357,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		requestMu.Unlock()
 		rootURI := rootFromRoots(initCtx, request)
 		startGopls(initCtx, rootURI)
+		applyProjectConfig(wsFn())
 	}
 
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
@@ -330,6 +367,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		slog.Info("daemon: roots changed — re-fetching workspace root")
 		rootURI := rootFromRoots(initCtx, request)
 		startGopls(initCtx, rootURI)
+		applyProjectConfig(wsFn())
 	}
 
 	srv.OnBeforeTool = func(toolCtx context.Context, _ string, args json.RawMessage) {
@@ -373,6 +411,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			return
 		}
 		startGopls(toolCtx, "file://"+root)
+		applyProjectConfig(wsFn())
 	}
 
 	_ = srv.Serve(ctx, conn, conn)
