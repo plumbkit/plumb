@@ -73,6 +73,18 @@ func DBPathFor(workspace string) string {
 	return filepath.Join(workspace, ".plumb", "stats.db")
 }
 
+// SchemaVersion is the current on-disk stats schema version. Persisted in
+// PRAGMA user_version on every Open. Future migrations should compare the
+// on-disk value, apply ALTER TABLE statements, then bump.
+//
+// History:
+//
+//	0 — pre-versioned (everything up to 0.5.2)
+//	1 — first explicitly versioned schema (0.5.3+) — no column changes,
+//	    just the introduction of user_version itself so migrations are
+//	    bookkeepable going forward.
+const SchemaVersion = 1
+
 // Open opens (or creates) the stats database at path.
 func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -87,7 +99,27 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("stats: schema: %w", err)
 	}
+	// Stamp the schema version. PRAGMA user_version writes a single int into
+	// the SQLite file header — survives across reopens. Cheap on every Open
+	// because SQLite ignores PRAGMA writes that don't change the value.
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("stats: stamping user_version: %w", err)
+	}
 	return &DB{db: db}, nil
+}
+
+// CurrentSchemaVersion reads PRAGMA user_version from the open db. Returns
+// 0 for pre-0.5.3 databases that were never stamped. Used by migrations.
+func (d *DB) CurrentSchemaVersion() (int, error) {
+	if d == nil {
+		return 0, nil
+	}
+	var v int
+	if err := d.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		return 0, err
+	}
+	return v, nil
 }
 
 // OpenReadOnly opens an existing stats database for reading only.

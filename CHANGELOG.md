@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.3 — 2026-05-11
+
+### Fixed
+- **Session adapter no longer hardcoded to `"gopls"`** — sessions now register with empty Language/Adapter and have both filled in by `startGopls` once the project's language is detected. Python workspaces correctly show `adapter: pyright` from now on; the TUI shows `(resolving workspace…)` until the language is known.
+- Dead-code cleanup in `daemon.go`: removed unused `findGoModRoot`, `findProjectRoot`, `goModRootForDir` (all superseded by `pool.Detect`).
+- Style modernizations: `errors.AsType[T]` instead of `errors.As`+addressing, `fmt.Appendf` instead of `[]byte(fmt.Sprintf(...))`, `wg.Go(fn)` instead of `wg.Add(1)`+goroutine+`wg.Done`. All compiled out identically; cleaner reading.
+
+### Added
+- **`stats.db` schema versioning** — `PRAGMA user_version` is stamped to `1` on every Open. Future schema changes will compare-then-migrate. `DB.CurrentSchemaVersion()` reads the on-disk value (0 for pre-0.5.3 databases).
+
 ## 0.5.2 — 2026-05-11
 
 ### Added

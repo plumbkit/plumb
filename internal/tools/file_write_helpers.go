@@ -311,10 +311,8 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 
 // isCrossDevice reports whether err is a cross-device rename failure (EXDEV).
 func isCrossDevice(err error) bool {
-	var le *os.LinkError
-	if errors.As(err, &le) {
-		var errno syscall.Errno
-		if errors.As(le.Err, &errno) {
+	if le, ok := errors.AsType[*os.LinkError](err); ok {
+		if errno, ok := errors.AsType[syscall.Errno](le.Err); ok {
 			return errno == syscall.EXDEV
 		}
 	}

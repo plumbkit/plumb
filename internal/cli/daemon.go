@@ -65,7 +65,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer ln.Close()
 
 	pidPath := daemonPIDPath()
-	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(pidPath, fmt.Appendf(nil, "%d", os.Getpid()), 0o644); err != nil {
 		slog.Warn("daemon: could not write PID file", "path", pidPath, "err", err)
 	}
 	defer os.Remove(pidPath)
@@ -106,11 +106,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 				continue
 			}
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			handleConn(ctx, conn, pool, cfg, statsStore)
-		}()
+		})
 	}
 }
 
@@ -121,10 +119,11 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 
 	// Register the session immediately so it appears in `plumb sessions` and the
 	// TUI as soon as the client connects — before the workspace is resolved.
+	// Language/adapter are filled in later by startGopls once the workspace
+	// is detected (Go vs Python). Empty here so the TUI shows "(resolving...)"
+	// rather than mis-claiming "gopls" for what might turn out to be a Python project.
 	sessID, _ := session.Register(session.Info{
 		DaemonVersion: Version,
-		Language:      "go",
-		Adapter:       "gopls",
 	})
 	defer session.Unregister(sessID)
 
@@ -170,15 +169,21 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 
 		// Update the session file with the now-resolved workspace.
 		cn, cv := clientName, clientVersion
+		adapter := "gopls"
+		if language == "python" {
+			adapter = "pyright"
+		}
 		session.Patch(sessID, func(info *session.Info) {
 			info.Folder = folder
+			info.Language = language
+			info.Adapter = adapter
 			if cn != "" {
 				info.ClientName = cn
 				info.ClientVersion = cv
 			}
 		})
 
-		slog.Info("daemon: session attached to gopls", "root", folder)
+		slog.Info("daemon: session attached", "root", folder, "language", language, "adapter", adapter)
 	}
 
 	ttl := cfg.Cache.TTL.Duration
@@ -507,47 +512,6 @@ func rootFromRoots(ctx context.Context, request mcp.RequestFn) string {
 	root := resp.Roots[0].URI
 	slog.Info("workspace root from MCP client", "rootURI", root)
 	return root
-}
-
-// findGoModRoot walks up from the directory containing fileURI (a file:// URI)
-// and returns the project root using findProjectRoot.
-func findGoModRoot(fileURI string) (string, error) {
-	path := strings.TrimPrefix(fileURI, "file://")
-	return findProjectRoot(filepath.Dir(path))
-}
-
-// findProjectRoot finds the workspace root for dir using two strategies in order:
-//  1. Walk up looking for a .plumb directory — explicit project marker that takes
-//     priority over nested go.mod files (e.g. in testdata or vendor).
-//  2. Fall back to the nearest go.mod.
-func findProjectRoot(dir string) (string, error) {
-	d := dir
-	for {
-		if _, err := os.Stat(filepath.Join(d, ".plumb")); err == nil {
-			// .plumb found; validate that a go.mod exists here or above.
-			return goModRootForDir(d)
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
-	}
-	return goModRootForDir(dir)
-}
-
-// goModRootForDir walks up from dir itself until it finds a go.mod.
-func goModRootForDir(dir string) (string, error) {
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no go.mod found in or above %s", dir)
-		}
-		dir = parent
-	}
 }
 
 // workspaceFromArgs returns the resolved workspace root for a tool call's raw
