@@ -7,6 +7,7 @@ package tools
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"io/fs"
 	"os"
@@ -218,16 +219,24 @@ type walkFn func(path string, d fs.DirEntry, depth int) error
 
 // walk traverses root respecting gitignore rules, hidden-file policy, and
 // depth limit. It visits directories before their contents (pre-order) so the
-// callback can return fs.SkipDir to prune.
-func walk(opts walkOptions, fn walkFn) error {
+// callback can return fs.SkipDir to prune. The walk aborts as soon as ctx is
+// cancelled; pass context.Background() for callers that don't need cancellation.
+func walk(ctx context.Context, opts walkOptions, fn walkFn) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var st ignoreStack
 	if opts.respectIgnore {
 		st = st.load(opts.root)
 	}
-	return walkDir(opts.root, opts.root, 0, st, opts, fn)
+	return walkDir(ctx, opts.root, opts.root, 0, st, opts, fn)
 }
 
-func walkDir(root, dir string, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
+func walkDir(ctx context.Context, root, dir string, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil // unreadable directory — skip silently
@@ -239,6 +248,9 @@ func walkDir(root, dir string, depth int, st ignoreStack, opts walkOptions, fn w
 	}
 
 	for _, d := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		name := d.Name()
 		absPath := filepath.Join(dir, name)
 
@@ -258,7 +270,7 @@ func walkDir(root, dir string, depth int, st ignoreStack, opts walkOptions, fn w
 			if err := fn(absPath, d, relDepth); err == fs.SkipDir {
 				continue
 			}
-			if err := walkDir(root, absPath, depth+1, st, opts, fn); err != nil {
+			if err := walkDir(ctx, root, absPath, depth+1, st, opts, fn); err != nil {
 				return err
 			}
 		} else {

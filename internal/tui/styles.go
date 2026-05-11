@@ -3,60 +3,119 @@ package tui
 
 import "charm.land/lipgloss/v2"
 
-// Component styles. Rebuilt by RebuildStyles() — callers must invoke it before
-// rendering so styles are consistent after any future theme change.
+// Component styles. All colours come exclusively from ActiveTheme — no hex
+// literals or terminal-palette indices appear here. Call RebuildStyles()
+// after changing ActiveTheme and before rendering.
 var (
-	TitleStyle       lipgloss.Style
-	PanelHeaderStyle lipgloss.Style
-	SepStyle         lipgloss.Style
-	KeyStyle         lipgloss.Style
-	ValStyle         lipgloss.Style
-	ItemStyle        lipgloss.Style
-	SelectedStyle    lipgloss.Style
-	MutedStyle       lipgloss.Style
-	HintStyle        lipgloss.Style
-	OkStyle          lipgloss.Style
-	WarnStyle        lipgloss.Style
+	TitleStyle           lipgloss.Style
+	PanelHeaderStyle     lipgloss.Style
+	PanelHeaderDimStyle  lipgloss.Style
+	SepStyle             lipgloss.Style
+	SepDimStyle          lipgloss.Style
+	KeyStyle             lipgloss.Style
+	ValStyle             lipgloss.Style
+	ItemStyle            lipgloss.Style
+	SelectedStyle        lipgloss.Style
+	DimStyle             lipgloss.Style
+	MutedStyle           lipgloss.Style
+	TimestampActiveStyle lipgloss.Style
+	TimestampDimStyle    lipgloss.Style // cursor row when right panel focused (readable)
+	TimestampUnfocusedStyle lipgloss.Style // non-cursor rows when right panel focused
+	DetailStyle          lipgloss.Style
+	HintStyle            lipgloss.Style
+	StatusStyle          lipgloss.Style
+	OkStyle              lipgloss.Style
+	WarnStyle            lipgloss.Style
+	ScrollThumbStyle     lipgloss.Style
+	ScrollTrackStyle     lipgloss.Style
 )
 
 func init() { RebuildStyles() }
 
-// RebuildStyles rebuilds all package-level styles. Call this after any theme change.
+// RebuildStyles rebuilds all package-level styles from ActiveTheme.
+// Must be called after changing ActiveTheme and before rendering.
 func RebuildStyles() {
+	t := ActiveTheme
+
 	TitleStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("12")) // bright blue
+		Foreground(t.Accent)
 
 	PanelHeaderStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("7")) // light gray
+		Foreground(t.PanelTitle)
+
+	// Dimmed panel title — used for the unfocused side of the popup border.
+	PanelHeaderDimStyle = lipgloss.NewStyle().
+		Foreground(t.TextDim)
 
 	SepStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("8")) // dim gray
+		Foreground(t.Border)
 
+	// SepDimStyle: border characters for the background panel when the popup
+	// is overlaid on top. Uses TextDim so they recede without disappearing.
+	SepDimStyle = lipgloss.NewStyle().
+		Foreground(t.TextDim)
+
+	// KeyStyle has a fixed width so detail-row values align consistently.
 	KeyStyle = lipgloss.NewStyle().
 		Width(12).
-		Foreground(lipgloss.Color("6")) // cyan
+		Foreground(t.Key)
 
 	ValStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")) // bright white
+		Foreground(t.TextPrimary)
 
 	ItemStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("7")) // light gray
+		Foreground(t.ItemText)
 
+	// SelectedStyle: bold accent foreground only.
+	// No background is ever set — the terminal's own background is respected.
 	SelectedStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("12")) // bright blue
+		Foreground(t.Accent)
 
+	// DimStyle: applied to every character in the background panel when the
+	// popup overlay is active, making the underlying content recede.
+	DimStyle = lipgloss.NewStyle().
+		Foreground(t.TextDim)
+
+	// MutedStyle: low-priority secondary text (timestamps, durations, etc.).
 	MutedStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("8")) // dim gray
+		Foreground(t.TextMuted)
 
+	// TimestampActiveStyle: timestamps in the focused popup-left panel.
+	TimestampActiveStyle = lipgloss.NewStyle().
+		Foreground(t.TextPrimary)
+
+	// TimestampDimStyle: cursor row in the left panel when right panel holds focus.
+	// Readable — this is still the foreground panel, just not the focused one.
+	TimestampDimStyle = lipgloss.NewStyle().
+		Foreground(t.TextUnfocused)
+
+	// TimestampUnfocusedStyle: non-cursor rows when right panel holds focus.
+	TimestampUnfocusedStyle = lipgloss.NewStyle().
+		Foreground(t.TextUnfocused)
+
+	// DetailStyle: values in the call-detail right panel.
+	DetailStyle = lipgloss.NewStyle().
+		Foreground(t.TextSecondary)
+
+	// HintStyle: column headers and the global key-hint bar.
 	HintStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("8")) // dim gray
+		Foreground(t.TextHint)
+
+	StatusStyle = lipgloss.NewStyle().
+		Foreground(t.TextHint)
 
 	OkStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("2")) // green
+		Foreground(t.Success)
 
 	WarnStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("3")) // yellow
+		Foreground(t.Warning)
+
+	ScrollThumbStyle = lipgloss.NewStyle().
+		Foreground(t.ScrollThumb)
+
+	ScrollTrackStyle = lipgloss.NewStyle().
+		Foreground(t.ScrollTrack)
 }

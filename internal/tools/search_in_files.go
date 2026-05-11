@@ -5,14 +5,28 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 )
+
+// searchDefaultDeadline caps any single search_in_files call when the parent
+// context has no deadline. Prevents a runaway walk (e.g. workspace resolved to
+// $HOME, or a giant text file dragging on) from hanging the daemon past the
+// MCP client's own timeout — which would otherwise leave a wedged goroutine
+// behind that the user can't cancel.
+const searchDefaultDeadline = 30 * time.Second
+
+// searchMaxLineBytes raises bufio.Scanner's per-line cap (default 64 KB) so
+// minified or generated single-line files don't silently truncate. Lines
+// longer than this are still skipped, but we won't drop the rest of the file.
+const searchMaxLineBytes = 1 << 20 // 1 MiB
 
 var searchInFilesSchema = json.RawMessage(`{
   "type": "object",
@@ -78,13 +92,22 @@ type searchInFilesArgs struct {
 	IncludeHidden bool   `json:"include_hidden"`
 }
 
-func (t *SearchInFiles) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a searchInFilesArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("search_in_files: invalid arguments: %w", err)
 	}
 	if a.Pattern == "" {
 		return "", fmt.Errorf("search_in_files: pattern must not be empty")
+	}
+
+	// If the caller hasn't bounded the call, apply a default wall-clock budget
+	// so a pathological walk (huge tree, large files, $HOME as cwd) can never
+	// outlive the MCP client's own timeout and leave the daemon wedged.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, searchDefaultDeadline)
+		defer cancel()
 	}
 
 	// Resolve search root.
@@ -141,7 +164,10 @@ func (t *SearchInFiles) Execute(_ context.Context, raw json.RawMessage) (string,
 		respectIgnore: true,
 	}
 
-	_ = walk(opts, func(path string, d fs.DirEntry, _ int) error {
+	walkErr := walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if d.IsDir() {
 			return nil
 		}
@@ -227,7 +253,16 @@ func (t *SearchInFiles) Execute(_ context.Context, raw json.RawMessage) (string,
 		return nil
 	})
 
+	timedOut := errors.Is(walkErr, context.DeadlineExceeded)
+	cancelled := errors.Is(walkErr, context.Canceled)
+
 	if len(results) == 0 {
+		if timedOut {
+			return fmt.Sprintf("Search for %q timed out before any matches were found (budget %s — narrow with path/glob, or set a tighter pattern).", a.Pattern, searchDefaultDeadline), nil
+		}
+		if cancelled {
+			return "", walkErr
+		}
 		return fmt.Sprintf("No matches for %q.", a.Pattern), nil
 	}
 
@@ -243,7 +278,10 @@ func (t *SearchInFiles) Execute(_ context.Context, raw json.RawMessage) (string,
 	}
 
 	summary := fmt.Sprintf("%d file(s) matched", len(results))
-	if truncated {
+	switch {
+	case timedOut:
+		summary += fmt.Sprintf(" (partial — search timed out after %s; narrow with path/glob)", searchDefaultDeadline)
+	case truncated:
 		summary += fmt.Sprintf(" (truncated at %d lines — narrow with glob or a tighter pattern)", a.MaxResults)
 	}
 	sb.WriteString(summary)
@@ -264,6 +302,9 @@ func allLower(s string) bool {
 func splitLines(b []byte) [][]byte {
 	var lines [][]byte
 	sc := bufio.NewScanner(bytes.NewReader(b))
+	// Raise the per-line cap from bufio's 64 KB default so generated/minified
+	// single-line files don't get silently chopped mid-scan.
+	sc.Buffer(make([]byte, 64*1024), searchMaxLineBytes)
 	for sc.Scan() {
 		cp := make([]byte, len(sc.Bytes()))
 		copy(cp, sc.Bytes())

@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.5.23 — 2026-05-12
+
+### Fixed
+- **`search_in_files` could hang the daemon for minutes** — `Execute` accepted `context.Context` but bound it to `_`, so client timeouts and cancellations had no effect. A single bad call (e.g. workspace resolved to `$HOME`, no `.gitignore` to prune, or a multi-megabyte single-line text file slurped into RAM and scanned) could outlive Claude Desktop's own 4-minute MCP timeout, leaving the daemon wedged on a goroutine the user couldn't reach. `Execute` now binds `ctx`, applies a 30s wall-clock budget when the caller has no deadline of its own, checks `ctx.Err()` per file in the walk callback, and surfaces a clear "search timed out (partial — narrow with path/glob)" summary instead of failing silently. `find_files` and `find_replace` had the same `_ context.Context` bug and got the same fix (cancellation plumbing, without a default deadline). `walk` and `walkDir` now take `context.Context` as their first arg and check cancellation on entry and on every directory iteration, so even a giant tree aborts within one entry.
+- **`splitLines` silently truncated long-line files** — used the default `bufio.Scanner` 64 KB token cap, so any file with a line longer than 64 KB (generated/minified content) had the rest of the file silently skipped. Now sized to 1 MiB via `sc.Buffer(...)`.
+- **TUI Call Detail "Args" panel reshuffled every render tick** — the popup iterated the unmarshalled `map[string]any` directly, and Go intentionally randomises map iteration order. Same call, same timestamp, but rows like `path`/`start_line`/`end_line` reordered on every poll, which looked like a refresh bug. Keys are now collected, `sort.Strings`-ed, and iterated in stable order.
+
+## 0.5.22 — 2026-05-11
+
+### Changed
+- **Statistics and Recent panels redesigned** — sections renamed from "Tool Statistics"/"Recent Edits"/"Recent" to "Statistics" and "Recent". Section titles now highlight with `SelectedStyle` when that panel has focus instead of showing an inline hint text. Columns use 3-space gaps for better readability. **Recent** gains an `Errors` column showing the error message (truncated) for failed calls. Inline error expansion row removed. A blank line separates each section title from its table header.
+
+## 0.5.21 — 2026-05-11
+
+### Fixed
+- **`json.Indent` buffer type** — `formatJSON` used `strings.Builder` as the destination for `json.Indent`, but the stdlib signature requires `*bytes.Buffer`. Fixed the buffer type and added the `bytes` import.
+
+## 0.5.20 — 2026-05-11
+
+### Fixed
+- **Table alignment** — header, separator, and data rows now all use a consistent 2-char indent. The cursor `▸` replaces the 2-space prefix on the selected row, keeping columns pixel-perfect. The Recent table's extra 4-space indent (introduced in 0.5.19) is corrected to 2 spaces. The tool column in Recent now correctly includes `status + icon + name` as one fixed-width cell, so `Tool` in the header aligns with `✓ ▤ read_file` in data rows.
+
+## 0.5.19 — 2026-05-11
+
+### Changed
+- **Tool Statistics and Recent rendered as tables** — both sections now use aligned fixed-width columns with a header row and `─` separator instead of free-form `fmt.Sprintf` strings.
+  - **Tool Statistics**: columns `Tool · Calls · Avg · Errors`. Each tool row prefixed with a category icon: `✎` write/mutate, `▤` read/browse, `⊕` LSP/symbol, `◎` memory, `◇` git, `◈` diagnostics, `⟳` session, `▪` other.
+  - **Recent Edits**: columns `Tool · Path · Dur · When`.
+  - **Recent**: columns `Tool · Dur · When`. Same category icons alongside the `✓`/`✗` status.
+  - Added `padRight`, `padLeft`, `truncate`, `toolIcon` helpers in `model.go`.
+
+## 0.5.18 — 2026-05-11
+
+### Fixed
+- **Panic recovery in `OnInit` and `OnRootsChanged` goroutines** — `mcp/server.go` launches `OnInit` and `OnRootsChanged` as bare goroutines (`go s.OnInit(…)`). Any panic inside them (e.g. during workspace resolution via `roots/list`) crashed the daemon process silently — no log, no stack trace. Replaced with `go safeRun("OnInit", …)` which catches panics, logs them as `ERROR mcp: goroutine panic — daemon kept alive` with a full stack trace, and lets the daemon survive. Combined with the `handleConn` recovery from 0.5.17, every goroutine path that can crash the daemon is now protected.
+
+## 0.5.17 — 2026-05-11
+
+### Fixed
+- **Daemon panic recovery** — the `wg.Go(handleConn)` goroutine now has a top-level `defer recover()`. Any unhandled panic inside an MCP connection (nil deref, LSP error, etc.) is caught, logged as `ERROR daemon: connection goroutine panic` with a full stack trace, and the daemon process stays alive to serve other connections. Previously a single bad connection would kill the whole daemon silently.
+- **Daemon log moved to OS log directory** — log output now goes to `~/Library/Logs/plumb/daemon.log` on macOS and `$XDG_STATE_HOME/plumb/daemon.log` (fallback `~/.local/state/plumb/daemon.log`) on Linux. Previously it went to `~/Library/Caches/plumb/` which is a cache directory, not a log directory. The log path is printed in the startup `daemon: ready` line.
+
+## 0.5.16 — 2026-05-11
+
+### Added
+- **Popup detail scrollbar** — the right panel of the call-detail popup now shows a vertical scrollbar (`╎` track / `┃` thumb) when the content overflows the visible height. The thumb position reflects the current scroll offset. No scrollbar is drawn when content fits without scrolling. Implemented via `scrollbarCol()` in `model.go`; the right panel content width is reduced by 1 to make room for the bar column.
+
+## 0.5.15 — 2026-05-11
+
+### Fixed
+- **TUI shift+tab** — added reverse panel-focus cycling (Recent → Tool Stats → Sessions) to complement the existing forward Tab cycle. Hint text updated to show `tab/shift+tab`.
+
+## 0.5.14 — 2026-05-11
+
+### Changed
+- **TUI hint/status colour** — replaced Nord4 `#D8DEE9` (too close to white) with `#7B8EA6`, a mid-tone blue-gray in the Nord tonal family. Sits clearly between the invisible dim-gray (terminal colour 8) and the harsh brightness of the Snowstorm whites. Readable at a glance, unmistakably muted.
+- **Pending sessions now always visible in TUI** — sessions that haven't resolved their workspace yet (e.g. the live Claude connection at startup before `roots/list` completes) are no longer hidden behind the 'a' key. They appear immediately with a `⟳ resolving…` label in the left panel and update in-place once the workspace is determined. The 'a' key and `hiddenCount` banner (`N hidden (press 'a' to show)`) have been removed.
+
+## 0.5.13 — 2026-05-11
+
+### Changed
+- **TUI status bar and hint text colour** — both the bottom status bar (`N session(s) · N tool calls · …`) and the top-right shortcut hint were using terminal colour `8` (dim gray), making them almost invisible on Nord-themed terminals. Both now use **Nord4 `#D8DEE9`** (darkest Snowstorm shade) — readable off-white that stays clearly distinct from the bright `#ECEFF4` of labels and panel content. The in-panel navigation hints (`(j/k navigate · enter popup · tab next)`) were updated from `MutedStyle` to `HintStyle` for the same reason. `MutedStyle` (colour `8`) is retained for genuinely secondary in-panel details (timestamps, sizes, separators). Added `StatusStyle` alongside `HintStyle` in `styles.go` for semantic clarity.
+
+## 0.5.12 — 2026-05-11
+
+### Added
+- **Stats DB schema migrations (v1 → v3)** — `internal/stats/db.go` now has a real `migrate()` function that walks a `[]migration` slice and applies `ALTER TABLE` statements forward from the on-disk `PRAGMA user_version` to the current `SchemaVersion` (3). Any daemon upgrade that adds columns is now safe: older databases are migrated in-place on first `Open`, not silently overwritten.
+- **`input_json` and `output_text` columns** in `tool_calls` (schema v2 and v3). The daemon's `OnAfterTool` callback captures the raw JSON args and the tool response text and stores them (capped at 64 KiB each). `RecentCall` exposes both fields; `Recent()` returns them.
+- **`Filter.Tool` and `CallsForTool()`** — stats queries can now be scoped to a single tool name, enabling the popup to show all calls for a given tool across the workspace.
+- **Full-screen call-detail popup** in the TUI — press `enter` on any Tool Statistics row or any Recent call to open a two-column overlay: left panel lists all calls for that tool (●/○ session indicators, timestamp, duration, ▸ cursor), right panel shows full detail (Args JSON pretty-printed, Output text, scrollable via `tab`). Navigate with `j`/`k`; close with `esc`.
+- **Tool Statistics panel** is now fully navigable with `j`/`k` and shows all tools (not capped at 5). `Tab` cycles Sessions → Tool Stats → Recent → Sessions.
+- **Recent Edits paths** — the Recent panel now extracts and shows the target file path from `input_json` for write-class tools (`write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply`).
+
+### Fixed
+- **Workspace not resolving from `list_files`** — the `root` JSON field was not read by `OnBeforeTool`/`workspaceFromArgs`. Added `Root string \`json:"root"\`` to both decode structs.
+- **Workspace not resolving from `session_start`** — the `workspace` JSON field was similarly missing. Added `Workspace string \`json:"workspace"\`` to both decode structs.
+- **Directory path passed to `Detect` walked to wrong parent** — `filepath.Dir("/path/to/workspace")` → `/path/to`, missing the project root marker. Fixed with an `isDir` check: if the seed path is itself a directory, use it directly as `startDir`; only call `filepath.Dir` for file paths.
+- **`plumb stop` only killed one daemon instance** — `findDaemonPID()` returned on first match. Replaced with `findAllDaemonPIDs()` that collects all PIDs from PID file + `lsof` + `pgrep`, deduplicates via a `seen` map, and kills all of them with per-daemon "stopped" output.
+
+### Documentation
+- **`docs/todo.md`** — removed the now-complete "Stats DB migrator + `input_json` column" section; updated "The next two hours" sequence; bumped last-reviewed version to 0.5.12.
+
+## 0.5.11 — 2026-05-11
+
+### Added
+- **Gemini CLI support** — added `plumb setup gemini` to register plumb as an MCP server in Gemini's configuration (`~/.gemini/antigravity/mcp_config.json`). New `plumb config gemini` shows integration status, and `plumb config show` now includes the Gemini config path in its provenance report.
+- **Empty-config tolerance** — the setup logic now gracefully handles existing but empty (0-byte) configuration files (common after a fresh tool install) instead of failing with a JSON parse error.
+
+### Documentation
+- **AGENTS.md (and GEMINI.md symlink) updated** to include Gemini CLI as a primary supported assistant alongside Claude. Version bumped to 0.5.11.
+
 ## 0.5.10 — 2026-05-11
 
 ### Documentation

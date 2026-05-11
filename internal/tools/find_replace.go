@@ -45,7 +45,7 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 	}`)
 }
 
-func (t *findReplaceTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Path          string `json:"path"`
 		Pattern       string `json:"pattern"`
@@ -99,7 +99,10 @@ func (t *findReplaceTool) Execute(_ context.Context, args json.RawMessage) (stri
 	var files []string
 	if info.IsDir() {
 		opts := walkOptions{root: a.Path, respectIgnore: true}
-		_ = walk(opts, func(path string, d fs.DirEntry, _ int) error {
+		_ = walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if d.IsDir() {
 				return nil
 			}

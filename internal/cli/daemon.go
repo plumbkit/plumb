@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -78,7 +80,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	}
 	defer os.Remove(versionPath)
 
-	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid())
+	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid(), "log", daemonLogPath())
 
 	tools.Version = Version
 
@@ -107,6 +109,13 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			}
 		}
 		wg.Go(func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("daemon: connection goroutine panic — daemon kept alive",
+						"err", r,
+						"stack", string(debug.Stack()))
+				}
+			}()
 			handleConn(ctx, conn, pool, cfg, statsStore)
 		})
 	}
@@ -256,6 +265,15 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		defer editsMu.RUnlock()
 		return editsCfg.Strict
 	}
+	// walkCfg mirrors editsCfg's pattern: updated on project-config reload,
+	// read by session_start before every directory walk.
+	var walkMu sync.RWMutex
+	walkCfg := cfg.Walk
+	refuseHomeRootsFn := func() bool {
+		walkMu.RLock()
+		defer walkMu.RUnlock()
+		return walkCfg.RefuseHomeRoots
+	}
 	// applyProjectConfig is invoked after the workspace resolves; it loads
 	// <workspace>/.plumb/config.toml, merges it onto the global config, and
 	// applies relevant settings to the live session (rate limit, strict
@@ -272,12 +290,16 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		editsMu.Lock()
 		editsCfg = projectCfg.Edits
 		editsMu.Unlock()
+		walkMu.Lock()
+		walkCfg = projectCfg.Walk
+		walkMu.Unlock()
 		writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
-		if projectCfg.Edits.Strict != cfg.Edits.Strict || projectCfg.Edits.RateLimitPerMinute != cfg.Edits.RateLimitPerMinute {
+		if projectCfg.Edits.Strict != cfg.Edits.Strict || projectCfg.Edits.RateLimitPerMinute != cfg.Edits.RateLimitPerMinute || projectCfg.Walk.RefuseHomeRoots != cfg.Walk.RefuseHomeRoots {
 			slog.Info("daemon: project config applied",
 				"workspace", workspace,
 				"strict", projectCfg.Edits.Strict,
-				"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute)
+				"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
+				"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots)
 		}
 	}
 	writeDeps := tools.WriteDeps{
@@ -299,7 +321,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace())
 	srv.Register(tools.NewVersion())
-	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn))
+	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn, refuseHomeRootsFn))
 
 	// Edit tools — LSP-semantic refactoring + body replacement / inserts.
 	srv.Register(tools.NewRenameSymbol(sessionProxy))
@@ -335,7 +357,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		session.SetClient(sessID, name, version)
 	}
 
-	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output string, dur time.Duration, isError bool) {
+	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 		// Per-project DB lives at <workspace>/.plumb/stats.db. Calls
 		// without a discoverable workspace are dropped — they can't be
 		// attributed to any project's history.
@@ -348,10 +370,6 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		if root == "" {
 			return
 		}
-		errMsg := ""
-		if isError {
-			errMsg = output
-		}
 		statsStore.Record(root, stats.Call{
 			SessionID:   sessID,
 			Workspace:   root,
@@ -362,6 +380,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			OutputBytes: len(output),
 			Success:     !isError,
 			ErrorMsg:    errMsg,
+			InputJSON:   string(args),
+			OutputText:  output,
 		})
 	}
 
@@ -392,13 +412,14 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			return
 		}
 		var a struct {
-			URI  string `json:"uri"`
-			Path string `json:"path"`
-			Root string `json:"root"` // list_files uses "root" instead of "path"
+			URI       string `json:"uri"`
+			Path      string `json:"path"`
+			Root      string `json:"root"`      // list_files uses "root" instead of "path"
+			Workspace string `json:"workspace"` // session_start passes workspace
 		}
 		_ = json.Unmarshal(args, &a)
 
-		// Seed the workspace lookup from URI (LSP tools) or Path/Root (filesystem tools).
+		// Seed the workspace lookup from URI (LSP tools), Path/Root/Workspace (filesystem tools).
 		var seed string
 		switch {
 		case a.URI != "":
@@ -407,6 +428,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			seed = "file://" + a.Path
 		case a.Root != "":
 			seed = "file://" + a.Root
+		case a.Workspace != "":
+			seed = "file://" + a.Workspace
 		default:
 			return
 		}
@@ -486,13 +509,29 @@ func startDaemonProcess() error {
 	return cmd.Start()
 }
 
-// daemonLogPath returns the path where daemon logs are written.
+// daemonLogPath returns the OS-appropriate path for daemon log output.
+//   - macOS : ~/Library/Logs/plumb/daemon.log
+//   - Linux : $XDG_STATE_HOME/plumb/daemon.log  (fallback: ~/.local/state/plumb/daemon.log)
+//   - other : $TMPDIR/plumb/daemon.log
 func daemonLogPath() string {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		cacheDir = os.TempDir()
+	switch runtime.GOOS {
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			break
+		}
+		return filepath.Join(home, "Library", "Logs", "plumb", "daemon.log")
+	case "linux":
+		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+			return filepath.Join(xdg, "plumb", "daemon.log")
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			break
+		}
+		return filepath.Join(home, ".local", "state", "plumb", "daemon.log")
 	}
-	return filepath.Join(cacheDir, "plumb", "daemon.log")
+	return filepath.Join(os.TempDir(), "plumb", "daemon.log")
 }
 
 // rootFromRoots calls roots/list on the MCP client and returns the first root
@@ -528,8 +567,10 @@ func rootFromRoots(ctx context.Context, request mcp.RequestFn) string {
 // present or the path doesn't sit under a discoverable project root.
 func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 	var a struct {
-		URI  string `json:"uri"`
-		Path string `json:"path"`
+		URI       string `json:"uri"`
+		Path      string `json:"path"`
+		Root      string `json:"root"`
+		Workspace string `json:"workspace"`
 	}
 	if json.Unmarshal(args, &a) != nil {
 		return ""
@@ -540,10 +581,20 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 		seed = strings.TrimPrefix(a.URI, "file://")
 	case a.Path != "":
 		seed = a.Path
+	case a.Root != "":
+		seed = a.Root
+	case a.Workspace != "":
+		seed = a.Workspace
 	default:
 		return ""
 	}
-	root, _, err := pool.Detect(filepath.Dir(seed))
+	// If seed is already a directory, use it directly — filepath.Dir would
+	// strip the last component and miss the project root marker.
+	startDir := seed
+	if info, err := os.Stat(seed); err != nil || !info.IsDir() {
+		startDir = filepath.Dir(seed)
+	}
+	root, _, err := pool.Detect(startDir)
 	if err != nil {
 		return ""
 	}

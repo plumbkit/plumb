@@ -57,6 +57,22 @@ type CacheConfig struct {
 	MaxSize int      `toml:"max_size"`
 }
 
+// WalkConfig controls filesystem traversal safety. On macOS, walking $HOME
+// or one of its protected subdirectories (Desktop, Documents, Downloads,
+// Pictures, Music, Movies, Public, iCloud Drive) triggers a TCC consent
+// prompt attributed to the plumb binary. RefuseHomeRoots blocks those walks
+// at the root level so callers handing plumb an unexpected root (e.g. an
+// MCP client returning $HOME from roots/list) don't surface spurious prompts.
+//
+// Subpaths inside a protected directory are NOT refused — a real project
+// at ~/Documents/MyProject is still walked. Only walks rooted exactly at a
+// protected directory are refused.
+//
+// This setting is a no-op on non-Darwin platforms.
+type WalkConfig struct {
+	RefuseHomeRoots bool `toml:"refuse_home_roots"`
+}
+
 // EditsConfig controls safety behaviour for write/edit tools. Both fields
 // can be set globally (~/.config/plumb/config.toml) and overridden per
 // project (<workspace>/.plumb/config.toml). Environment variables
@@ -79,6 +95,7 @@ type Config struct {
 	LogFile  string               `toml:"log_file"`
 	Cache    CacheConfig          `toml:"cache"`
 	Edits    EditsConfig          `toml:"edits"`
+	Walk     WalkConfig           `toml:"walk"`
 	LSP      map[string]LSPConfig `toml:"lsp"`
 }
 
@@ -91,6 +108,9 @@ var defaults = Config{
 	Edits: EditsConfig{
 		Strict:             false,
 		RateLimitPerMinute: 120,
+	},
+	Walk: WalkConfig{
+		RefuseHomeRoots: true,
 	},
 	LSP: map[string]LSPConfig{
 		"go": {
@@ -172,6 +192,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.Edits.RateLimitPerMinute = n
 		}
+	}
+	if v := os.Getenv("PLUMB_REFUSE_HOME_ROOTS"); v != "" {
+		cfg.Walk.RefuseHomeRoots = v == "1" || v == "true" || v == "yes"
 	}
 }
 

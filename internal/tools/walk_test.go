@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -147,7 +148,7 @@ func TestWalk_RespectsGitignore(t *testing.T) {
 
 	var visited []string
 	opts := walkOptions{root: dir, respectIgnore: true}
-	if err := walk(opts, func(path string, d fs.DirEntry, _ int) error {
+	if err := walk(context.Background(), opts, func(path string, d fs.DirEntry, _ int) error {
 		if !d.IsDir() {
 			rel, _ := filepath.Rel(dir, path)
 			visited = append(visited, filepath.ToSlash(rel))
@@ -190,13 +191,13 @@ func TestWalk_HiddenFiles(t *testing.T) {
 	must(os.WriteFile(filepath.Join(dir, "visible"), []byte("x"), 0o644))
 
 	var noHidden, withHidden []string
-	_ = walk(walkOptions{root: dir}, func(path string, d fs.DirEntry, _ int) error {
+	_ = walk(context.Background(), walkOptions{root: dir}, func(path string, d fs.DirEntry, _ int) error {
 		if !d.IsDir() {
 			noHidden = append(noHidden, filepath.Base(path))
 		}
 		return nil
 	})
-	_ = walk(walkOptions{root: dir, includeHidden: true}, func(path string, d fs.DirEntry, _ int) error {
+	_ = walk(context.Background(), walkOptions{root: dir, includeHidden: true}, func(path string, d fs.DirEntry, _ int) error {
 		if !d.IsDir() {
 			withHidden = append(withHidden, filepath.Base(path))
 		}
@@ -234,7 +235,7 @@ func TestWalk_MaxDepth(t *testing.T) {
 	must(os.WriteFile(filepath.Join(dir, "a", "b", "c", "c.go"), []byte("x"), 0o644))
 
 	var visited []string
-	_ = walk(walkOptions{root: dir, maxDepth: 1}, func(path string, d fs.DirEntry, _ int) error {
+	_ = walk(context.Background(), walkOptions{root: dir, maxDepth: 1}, func(path string, d fs.DirEntry, _ int) error {
 		if !d.IsDir() {
 			rel, _ := filepath.Rel(dir, path)
 			visited = append(visited, filepath.ToSlash(rel))

@@ -80,7 +80,7 @@ type findFilesArgs struct {
 	UseRegex      bool   `json:"use_regex"`
 }
 
-func (t *FindFiles) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a findFilesArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("find_files: invalid arguments: %w", err)
@@ -134,7 +134,10 @@ func (t *FindFiles) Execute(_ context.Context, raw json.RawMessage) (string, err
 		respectIgnore: true,
 	}
 
-	_ = walk(opts, func(path string, d fs.DirEntry, _ int) error {
+	_ = walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if truncated {
 			return nil
 		}

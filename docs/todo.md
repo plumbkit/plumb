@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.9** (2026-05-11).
+Last reviewed against: **0.5.12** (2026-05-11).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -29,11 +29,9 @@ If you have ~2 hours of work to invest, do these in this order. They're the item
 
 2. **Claude Desktop end-to-end test** (~30 min, no code) — the whole 0.5.x line was built for Claude Desktop. Connect real Claude Desktop to current binary, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back. See [Testing & verification > Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test).
 
-3. **Stats `input_json` column + Recent Edits paths in TUI** (~45 min) — includes the schema migrator that should already exist. Unblocks any future "what did Claude actually call?" introspection. See [Architecture > Stats DB migrator + `input_json` column](#stats-db-migrator--input_json-column-for-tool-args).
+3. **`expected_sha` parameter on `edit_file`** (~30 min) — the mtime path stays as the cheap default; the SHA path is for callers that care. Doesn't break existing behaviour. See [Architecture > `expected_sha` parameter on `edit_file` and `transaction_apply`](#expected_sha-parameter-on-edit_file-and-transaction_apply).
 
-4. **`expected_sha` parameter on `edit_file`** (~30 min) — the mtime path stays as the cheap default; the SHA path is for callers that care. Doesn't break existing behaviour. See [Architecture > `expected_sha` parameter on `edit_file` and `transaction_apply`](#expected_sha-parameter-on-edit_file-and-transaction_apply).
-
-Total: ~2¼ hours. After these, plumb is *proven* (not just claimed) production-ready against the two LSPs we support and against the client we built for.
+Total: ~1½ hours. After these, plumb is *proven* (not just claimed) production-ready against the two LSPs we support and against the client we built for.
 
 ---
 
@@ -135,67 +133,6 @@ Why this is architecturally important, not just a nice feature:
 - `ruff` is fast (~10ms typical). Don't apply gopls-tier timeouts to ruff and vice versa.
 - Findings can be very noisy in legacy codebases. Without per-file caps (`max_findings_per_file`) the response will balloon.
 - This is the kind of feature that's transformative when it works and infuriating when it doesn't (false positives = agent corrects perfectly good code into worse code). Roll out behind a feature flag.
-
----
-
-### Stats DB migrator + `input_json` column for tool args
-
-**Priority:** medium-high. Closes two gaps at once.
-**Effort:** 45 min.
-
-**Why this matters.** Two related problems share this fix:
-
-1. **Migration infrastructure is half-built.** Since 0.5.3, `stats.db` is stamped with `PRAGMA user_version = 1`. There is **no migrator** — `Open` just writes the constant value. A future schema bump (to 2) would overwrite the on-disk `user_version` without applying any `ALTER TABLE`, silently corrupting older databases.
-2. **Recent Edits panel can't show paths.** The TUI's `filterWriteCalls` returns the tool name, duration, and age — but not *what was edited*. The stats schema doesn't store the call's args, so we can't show "edited foo.go" vs "edited bar.go". The agent gets "write_file 12 ms 4 s ago" with no way to know which file.
-
-The fix is to land both at once: build the migrator now, use it to add `input_json` to `tool_calls`, then surface paths in the TUI.
-
-**Definition of done.**
-
-1. `internal/stats/db.go` exports `migrate(db *sql.DB, from, to int) error` that walks a slice of `{from, to, sql}` records and applies each.
-2. `Open` reads the current `user_version`, applies migrations forward to `SchemaVersion`, then stamps the new version.
-3. `SchemaVersion` bumps to `2`. The new migration records: `{from: 1, to: 2, sql: "ALTER TABLE tool_calls ADD COLUMN input_json TEXT NOT NULL DEFAULT ''"}`.
-4. `stats.Call` struct gains `InputJSON string`. `stats.DB.Record` writes it. `stats.RecentCall` exposes it. `Recent` query reads it.
-5. `internal/cli/daemon.go`'s `OnAfterTool` callback captures `args json.RawMessage` (parameter already there) and passes `string(args)` to `Record`.
-6. `internal/tui/model.go`'s `filterWriteCalls` / rendering parses the JSON, extracts the `path` (or `from`/`to` for `rename_file`), and renders it in the panel:
-   ```
-   ── Recent Edits ──
-     ✓  edit_file       internal/tools/edit_file.go      12ms  4s ago
-     ✓  rename_file     foo.go → bar.go                   8ms  9s ago
-   ```
-7. Tests:
-   - `TestMigrate_AppliesV1ToV2` — write a v1 database, open it, confirm `user_version` is 2 and `input_json` column exists.
-   - `TestMigrate_NoOpAtCurrent` — open a fresh v2 database; no migrations run; `user_version` stays at 2.
-   - `TestRecord_StoresInputJSON` — record a call with args, read it back via `Recent`, confirm `InputJSON` round-trips.
-8. CHANGELOG entry covers both the migrator infrastructure and the new column. `architecture.md` reference to "Schema migrations: none yet" is replaced with a pointer to `migrate()`.
-
-**Where to start.**
-
-1. `internal/stats/db.go`:
-   ```go
-   type migration struct {
-       from, to int
-       sql      string
-   }
-   var migrations = []migration{
-       {from: 1, to: 2, sql: `ALTER TABLE tool_calls ADD COLUMN input_json TEXT NOT NULL DEFAULT ''`},
-   }
-   func migrate(db *sql.DB, from, to int) error { /* walk migrations, exec each */ }
-   ```
-2. In `Open`, after the schema CREATE, read `PRAGMA user_version`, call `migrate(db, current, SchemaVersion)`, then stamp `SchemaVersion`.
-3. Bump `SchemaVersion = 2`.
-4. Add `InputJSON string` to `stats.Call` and `stats.RecentCall`. Update `Record` and `Recent`.
-5. In `internal/cli/daemon.go`, `OnAfterTool` already receives `args json.RawMessage`. Pass `string(args)` into `statsStore.Record(...).InputJSON`.
-6. In `internal/tui/model.go`, the Recent Edits section. Add a tiny `extractPath(tool, inputJSON string) string` helper that:
-   - For `write_file`, `edit_file`, `delete_file`: unmarshal into `{Path string}` and return `Path`.
-   - For `rename_file`: unmarshal into `{From, To string}` and return `"From → To"`.
-   - For `transaction_apply`: unmarshal into `{Operations []struct{Path string}}` and return `fmt.Sprintf("%d files", len(...))`.
-
-**Watch out for:**
-
-- The `input_json` column will be empty (`""`) for all rows that were recorded by pre-migration daemons. The TUI needs to handle that gracefully — if `extractPath` returns `""`, render the existing tool-only format.
-- `input_json` is unindexed. If you ever want to query by path, add an index in a future migration.
-- Capping the stored JSON size at, say, 4 KiB would prevent a pathological tool call with megabytes of args from bloating the DB. Cheap to add now.
 
 ---
 

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/golimpio/plumb/internal/fsguard"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 	"github.com/golimpio/plumb/internal/memory"
 	"github.com/golimpio/plumb/internal/stats"
@@ -52,13 +54,18 @@ type RootsResolver func(ctx context.Context) string
 //  3. roots/list query to the MCP client (Claude Desktop's roots support)
 //  4. walk up from os.Getwd() looking for a project marker
 type SessionStart struct {
-	ws    WorkspaceFn
-	diag  diagnosticsSource // may be nil; diagnostics section skipped when nil
-	roots RootsResolver     // may be nil; roots/list fallback skipped when nil
+	ws        WorkspaceFn
+	diag      diagnosticsSource // may be nil; diagnostics section skipped when nil
+	roots     RootsResolver     // may be nil; roots/list fallback skipped when nil
+	refuseFn  func() bool       // may be nil; treated as false (no refusal)
 }
 
-func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver) *SessionStart {
-	return &SessionStart{ws: ws, diag: diag, roots: roots}
+// NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted
+// before any directory walks under the resolved workspace — it should return
+// the current value of walk.refuse_home_roots so live config changes are
+// honoured. Pass nil to disable the guard.
+func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver, refuseHomeRoots func() bool) *SessionStart {
+	return &SessionStart{ws: ws, diag: diag, roots: roots, refuseFn: refuseHomeRoots}
 }
 
 func (*SessionStart) Name() string { return "session_start" }
@@ -132,7 +139,17 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 
 	// ── 4. Recently-modified files ────────────────────────────────────────
-	if files := recentlyModifiedFiles(ws, 5); len(files) > 0 {
+	// fsguard skips the walk if ws is a macOS-protected root (e.g. $HOME,
+	// $HOME/Documents) — touching one of those would surface a TCC prompt
+	// attributed to plumb. The rest of session_start still works without
+	// this section.
+	refuse := false
+	if t.refuseFn != nil {
+		refuse = t.refuseFn()
+	}
+	if skip, reason := fsguard.RefuseWalk(ws, refuse); skip {
+		slog.Info("session_start: skipping recent-files walk", "workspace", ws, "reason", reason)
+	} else if files := recentlyModifiedFiles(ws, 5); len(files) > 0 {
 		sb.WriteString("## Recently modified files\n\n")
 		for _, f := range files {
 			fmt.Fprintf(&sb, "- %s\n", f)

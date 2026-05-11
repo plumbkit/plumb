@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/golimpio/plumb/internal/config"
 )
 
 var initFlagDiscover bool
@@ -66,8 +68,12 @@ func runInit(_ *cobra.Command, args []string) error {
 	contextBody := contextTemplate
 	var disc *Discovery
 	if initFlagDiscover {
+		cfg, cfgErr := config.Load()
+		if cfgErr != nil {
+			return fmt.Errorf("loading config for discovery: %w", cfgErr)
+		}
 		var err error
-		disc, err = Discover(dir)
+		disc, err = Discover(dir, cfg.Walk.RefuseHomeRoots)
 		if err != nil {
 			return fmt.Errorf("discovery: %w", err)
 		}

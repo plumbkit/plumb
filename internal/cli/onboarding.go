@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/golimpio/plumb/internal/fsguard"
 )
 
 // Discovery scans a project directory and reports what plumb can infer about
@@ -27,7 +29,16 @@ type Discovery struct {
 
 // Discover walks root non-recursively at the top level, then targeted depths
 // for each build system to keep cost bounded. Returns a populated Discovery.
-func Discover(root string) (*Discovery, error) {
+//
+// refuseHomeRoots gates the walk through fsguard: when set and running on
+// macOS, Discover refuses to crawl $HOME or one of its protected subdirs
+// (Desktop, Documents, Downloads, Pictures, Music, Movies, Public, iCloud
+// Drive). The caller is expected to source this from walk.refuse_home_roots
+// in the resolved config.
+func Discover(root string, refuseHomeRoots bool) (*Discovery, error) {
+	if skip, reason := fsguard.RefuseWalk(root, refuseHomeRoots); skip {
+		return nil, fmt.Errorf("refusing to discover %s: %s — use a project subdirectory, or set walk.refuse_home_roots=false", root, reason)
+	}
 	d := &Discovery{Root: root}
 	entries, err := os.ReadDir(root)
 	if err != nil {

@@ -1,9 +1,14 @@
 package tui
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,32 +31,46 @@ const (
 // pollMsg is sent by the periodic refresh tick.
 type pollMsg struct{}
 
-// panelFocus identifies which panel consumes navigation keys.
+// panelFocus identifies which panel / section consumes navigation keys.
 type panelFocus int
 
 const (
-	focusSessions panelFocus = iota // j/k moves the session cursor (default)
-	focusStats                      // j/k moves the recent-calls cursor
+	focusSessions  panelFocus = iota // j/k moves the session cursor (default)
+	focusToolStats                   // j/k moves the Tool Statistics cursor
+	focusStats                       // j/k moves the Recent calls cursor
 )
 
 // Model is the root Bubble Tea model for the sessions dashboard.
 // Concurrency: single goroutine (Bubble Tea runtime).
 type Model struct {
-	sessions       []session.Info
-	hiddenCount    int                  // sessions filtered out for lacking a workspace
-	statsDBs       map[string]*stats.DB // cached per-workspace DBs (read-only)
-	toolStats      []stats.ToolStat     // stats for currently selected session
-	recentCalls    []stats.RecentCall
-	cursor         int        // index into m.sessions
-	statsCursor    int        // index into m.recentCalls when focusPanel == focusStats
-	focusPanel     panelFocus // which panel j/k controls
-	showCallDetail bool       // when true, right panel shows full detail for selected recent call
-	leftWidth      int        // width of left panel content column (excludes border chars)
-	width          int
-	height         int
-	ready          bool
-	loadErr        string
-	showHidden     bool // toggle to display unresolved sessions
+	sessions        []session.Info
+	statsDBs        map[string]*stats.DB // cached per-workspace DBs (read-only)
+	toolStats       []stats.ToolStat     // stats for currently selected session (all tools)
+	recentCalls     []stats.RecentCall
+	cursor          int        // index into m.sessions
+	statsCursor     int        // index into m.recentCalls when focusPanel == focusStats
+	toolStatsCursor int        // index into m.toolStats when focusPanel == focusToolStats
+	focusPanel      panelFocus // which section j/k controls
+	leftWidth       int        // width of left panel content column (excludes border chars)
+	width           int
+	height          int
+	ready           bool
+	loadErr         string
+
+	// Popup overlay — per-tool call history view.
+	// Triggered by enter on Tool Statistics or Recent rows.
+	showPopup            bool               // popup is active
+	popupTool            string             // tool whose history is shown
+	popupCalls           []stats.RecentCall // workspace-wide calls for popupTool
+	popupCallCursor      int                // cursor in the popup call list (left col)
+	popupRightFocus      bool               // true = right (detail) col is focused for scrolling
+	popupDetailScroll    int                // scroll offset into the detail column
+	popupLeftWidth       int                // width of the popup left (timestamp) column
+
+	// Table layout hints populated by rightLines() so mouse clicks can be
+	// mapped to the correct row index without re-running the full render.
+	statsTableBodyRow  int // 0-based body-row index of first stats data row (-1 if absent)
+	recentTableBodyRow int // 0-based body-row index of first recent data row (-1 if absent)
 }
 
 // NewModel returns the initial model, loading sessions immediately.
@@ -69,20 +88,10 @@ func (m *Model) refresh() {
 	}
 	m.loadErr = ""
 
-	// Filter out sessions that haven't resolved a workspace yet — they're
-	// noise (e.g. dormant Claude Desktop connections). The TUI shows only
-	// what's actively being worked on.
-	var visible []session.Info
-	hidden := 0
-	for _, s := range all {
-		if s.Folder == "" && !m.showHidden {
-			hidden++
-			continue
-		}
-		visible = append(visible, s)
-	}
-	m.sessions = visible
-	m.hiddenCount = hidden
+	// Show all active sessions — even those still resolving their workspace
+	// (Folder == ""). Pending sessions appear with a ⟳ indicator in the left
+	// panel so the user can see the connection is alive immediately on startup.
+	m.sessions = all
 
 	if m.cursor >= len(m.sessions) && m.cursor > 0 {
 		m.cursor = len(m.sessions) - 1
@@ -127,11 +136,126 @@ func (m *Model) refreshStats() {
 		m.recentCalls = nil
 		return
 	}
+	// Capture identity of the currently selected call BEFORE the refresh so
+	// we can re-locate it afterwards. db.Recent returns rows ordered DESC by
+	// called_at, so newly-arrived calls prepend and naive index-based
+	// cursors silently point at a different call — the Call Detail panel
+	// then appears to "jump" under the user. (SessionID, CalledAtUnixMilli)
+	// is unique enough: per-session calls are serialised in OnAfterTool.
+	var prevTool string
+	if m.toolStatsCursor < len(m.toolStats) {
+		prevTool = m.toolStats[m.toolStatsCursor].Tool
+	}
+	prevCall := selectedCallKey(m.recentCalls, m.statsCursor)
+
 	filter := stats.Filter{SessionID: s.ID}
 	m.toolStats, _ = db.Summary(filter)
 	m.recentCalls, _ = db.Recent(50, filter)
-	if m.statsCursor >= len(m.recentCalls) {
-		m.statsCursor = 0
+
+	m.statsCursor = locateCall(m.recentCalls, prevCall, m.statsCursor)
+	m.toolStatsCursor = locateTool(m.toolStats, prevTool, m.toolStatsCursor)
+}
+
+// callKey identifies a recorded call across refreshes. Stable as long as the
+// row survives the 50-row Recent() limit.
+type callKey struct {
+	sessionID  string
+	calledAtMs int64
+}
+
+func (k callKey) zero() bool { return k.sessionID == "" && k.calledAtMs == 0 }
+
+func selectedCallKey(calls []stats.RecentCall, idx int) callKey {
+	if idx < 0 || idx >= len(calls) {
+		return callKey{}
+	}
+	return callKey{sessionID: calls[idx].SessionID, calledAtMs: calls[idx].CalledAt.UnixMilli()}
+}
+
+// locateCall returns the new cursor position after a refresh: the index of
+// the previously-selected call if it's still in the list, else a clamped
+// fallback (the previous index, capped at list length).
+func locateCall(calls []stats.RecentCall, key callKey, fallback int) int {
+	if !key.zero() {
+		for i, c := range calls {
+			if c.SessionID == key.sessionID && c.CalledAt.UnixMilli() == key.calledAtMs {
+				return i
+			}
+		}
+	}
+	if fallback >= len(calls) {
+		if len(calls) == 0 {
+			return 0
+		}
+		return len(calls) - 1
+	}
+	if fallback < 0 {
+		return 0
+	}
+	return fallback
+}
+
+// locateTool returns the index of toolName in stats, else a clamped fallback.
+func locateTool(stats []stats.ToolStat, toolName string, fallback int) int {
+	if toolName != "" {
+		for i, t := range stats {
+			if t.Tool == toolName {
+				return i
+			}
+		}
+	}
+	if fallback >= len(stats) {
+		if len(stats) == 0 {
+			return 0
+		}
+		return len(stats) - 1
+	}
+	if fallback < 0 {
+		return 0
+	}
+	return fallback
+}
+
+// refreshPopupCalls loads workspace-wide call history for popupTool.
+// Like refreshStats, preserves the selected call by (session_id, called_at)
+// so newly-recorded calls prepending to the list don't shift the user's
+// selection to a different call.
+func (m *Model) refreshPopupCalls() {
+	if m.popupTool == "" || len(m.sessions) == 0 {
+		m.popupCalls = nil
+		return
+	}
+	ws := m.sessions[m.cursor].Folder
+	db := m.dbFor(ws)
+	if db == nil {
+		m.popupCalls = nil
+		return
+	}
+	prev := selectedCallKey(m.popupCalls, m.popupCallCursor)
+	m.popupCalls, _ = db.CallsForTool(m.popupTool, ws, 200)
+	m.popupCallCursor = locateCall(m.popupCalls, prev, m.popupCallCursor)
+}
+
+// openPopup opens the call history popup for the given tool and optionally
+// pre-positions the cursor to the call with the given timestamp.
+func (m *Model) openPopup(tool string, preselect time.Time) {
+	m.showPopup = true
+	m.popupTool = tool
+	m.popupCallCursor = 0
+	m.popupRightFocus = false
+	m.popupDetailScroll = 0
+	if m.popupLeftWidth == 0 {
+		m.popupLeftWidth = defaultLeftWidth
+	}
+	m.refreshPopupCalls()
+	// Pre-position cursor if a specific call was requested.
+	if !preselect.IsZero() {
+		for i, c := range m.popupCalls {
+			if c.CalledAt.Equal(preselect) {
+				m.popupCallCursor = i
+				break
+			}
+		}
 	}
 }
 
@@ -143,6 +267,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollMsg:
 		m.refresh()
+		if m.showPopup {
+			m.refreshPopupCalls()
+		}
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
 
 	case tea.WindowSizeMsg:
@@ -151,14 +278,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 
 	case tea.MouseClickMsg:
-		// Rows: 0=header, 1=frame-top, 2..height-3=content, height-2=frame-bottom, height-1=footer
-		contentRow := msg.Y - 2
+		// bodyTop: rows above the body content.
+		// Normal:  header(1) + top-border(1) = 2
+		// Popup:   header(1) + main-border(1) + popup-border(1) = 3
+		bodyTop := 2
+		if m.showPopup {
+			bodyTop = 3
+		}
+		bodyRow := msg.Y - bodyTop
 		bodyHeight := m.height - 4
-		if contentRow >= 0 && contentRow < bodyHeight {
-			// Cols: 0=│, 1..leftWidth=left-panel, leftWidth+1=┆, leftWidth+2..=right-panel
+		if m.showPopup {
+			bodyHeight = m.height - 5
+		}
+
+		if m.showPopup {
+			// Left panel: click on a timestamp row selects that call.
 			if msg.X >= 1 && msg.X <= m.leftWidth {
-				// leftLines: index 0=blank, index 1+=sessions
-				sessionIdx := contentRow - 1
+				// popupLeftLines starts with one blank line at index 0;
+				// call rows start at index 1.
+				callIdx := bodyRow - 1
+				if callIdx >= 0 && callIdx < len(m.popupCalls) {
+					m.popupCallCursor = callIdx
+					m.popupRightFocus = false
+					m.popupDetailScroll = 0
+				}
+			}
+			// Right panel: click anywhere switches focus to detail panel.
+			if msg.X > m.leftWidth+2 {
+				m.popupRightFocus = true
+			}
+			break
+		}
+
+		// Normal mode — left panel: click on a session row.
+		if bodyRow >= 0 && bodyRow < bodyHeight {
+			if msg.X >= 1 && msg.X <= m.leftWidth {
+				sessionIdx := bodyRow - 1 // first line is blank
 				if sessionIdx >= 0 && sessionIdx < len(m.sessions) {
 					m.cursor = sessionIdx
 					m.focusPanel = focusSessions
@@ -167,7 +322,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Normal mode — right panel: click in Statistics or Recent tables.
+		if msg.X > m.leftWidth+2 {
+			// Ensure table body row offsets are current before mapping the click.
+			rightWidth := m.width - m.leftWidth - 3
+			if rightWidth < 10 {
+				rightWidth = 10
+			}
+			(&m).rightLines(rightWidth) // populates statsTableBodyRow / recentTableBodyRow
+			(&m).handleRightPanelClick(bodyRow)
+		}
+
 	case tea.MouseWheelMsg:
+		if m.showPopup {
+			// Wheel scrolls whichever panel is active.
+			if m.popupRightFocus {
+				if msg.Button == tea.MouseWheelDown {
+					m.popupDetailScroll++
+				} else if msg.Button == tea.MouseWheelUp && m.popupDetailScroll > 0 {
+					m.popupDetailScroll--
+				}
+			} else {
+				if msg.Button == tea.MouseWheelDown {
+					if m.popupCallCursor < len(m.popupCalls)-1 {
+						m.popupCallCursor++
+						m.popupDetailScroll = 0
+					}
+				} else if msg.Button == tea.MouseWheelUp {
+					if m.popupCallCursor > 0 {
+						m.popupCallCursor--
+						m.popupDetailScroll = 0
+					}
+				}
+			}
+			break
+		}
 		if msg.Button == tea.MouseWheelDown {
 			if m.cursor < len(m.sessions)-1 {
 				m.cursor++
@@ -179,49 +368,146 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyPressMsg:
+		// ── Popup keys (take full priority when popup is open) ────────────
+		if m.showPopup {
+			switch msg.String() {
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "esc":
+				m.showPopup = false
+				m.popupCalls = nil
+				m.popupDetailScroll = 0
+				m.popupRightFocus = false
+			case "tab":
+				m.popupRightFocus = !m.popupRightFocus
+				m.popupDetailScroll = 0
+			case "up", "k":
+				if m.popupRightFocus {
+					if m.popupDetailScroll > 0 {
+						m.popupDetailScroll--
+					}
+				} else {
+					if m.popupCallCursor > 0 {
+						m.popupCallCursor--
+						m.popupDetailScroll = 0
+					}
+				}
+			case "down", "j":
+				if m.popupRightFocus {
+					m.popupDetailScroll++
+				} else {
+					if m.popupCallCursor < len(m.popupCalls)-1 {
+						m.popupCallCursor++
+						m.popupDetailScroll = 0
+					}
+				}
+			case "c":
+				// Copy args+output to clipboard via pbcopy/xclip.
+				if len(m.popupCalls) > 0 {
+					return m, copyToClipboard(m.popupCalls[m.popupCallCursor])
+				}
+			case "[":
+				m.popupLeftWidth -= 2
+				if m.popupLeftWidth < minLeftWidth {
+					m.popupLeftWidth = minLeftWidth
+				}
+			case "]":
+				m.popupLeftWidth += 2
+				maxPLeft := m.width/2
+				if m.popupLeftWidth > maxPLeft {
+					m.popupLeftWidth = maxPLeft
+				}
+			}
+			break
+		}
+
+		// ── Normal keys ───────────────────────────────────────────────────
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "esc":
-			// Close call detail view if open; otherwise do nothing.
-			m.showCallDetail = false
+			// nothing to dismiss in normal mode
 		case "enter":
-			// Open detail view for the selected recent call.
-			if m.focusPanel == focusStats && len(m.recentCalls) > 0 {
-				m.showCallDetail = true
+			switch m.focusPanel {
+			case focusToolStats:
+				if len(m.toolStats) > 0 {
+					m.openPopup(m.toolStats[m.toolStatsCursor].Tool, time.Time{})
+				}
+			case focusStats:
+				if len(m.recentCalls) > 0 {
+					rc := m.recentCalls[m.statsCursor]
+					m.openPopup(rc.Tool, rc.CalledAt)
+				}
 			}
 		case "tab":
-			// Toggle focus between the sessions list (left) and the
-			// recent-calls list (right). Only meaningful when the right
-			// panel actually has rows to navigate.
-			m.showCallDetail = false
-			if m.focusPanel == focusSessions && len(m.recentCalls) > 0 {
-				m.focusPanel = focusStats
-			} else {
+			// Cycle forward: Sessions → ToolStats → Recent → Sessions
+			switch m.focusPanel {
+			case focusSessions:
+				if len(m.toolStats) > 0 {
+					m.focusPanel = focusToolStats
+				} else if len(m.recentCalls) > 0 {
+					m.focusPanel = focusStats
+				}
+			case focusToolStats:
+				if len(m.recentCalls) > 0 {
+					m.focusPanel = focusStats
+				} else {
+					m.focusPanel = focusSessions
+				}
+			case focusStats:
+				m.focusPanel = focusSessions
+			}
+		case "shift+tab":
+			// Cycle backward: Sessions → Recent → ToolStats → Sessions
+			switch m.focusPanel {
+			case focusSessions:
+				if len(m.recentCalls) > 0 {
+					m.focusPanel = focusStats
+				} else if len(m.toolStats) > 0 {
+					m.focusPanel = focusToolStats
+				}
+			case focusStats:
+				if len(m.toolStats) > 0 {
+					m.focusPanel = focusToolStats
+				} else {
+					m.focusPanel = focusSessions
+				}
+			case focusToolStats:
 				m.focusPanel = focusSessions
 			}
 		case "up", "k":
-			if m.focusPanel == focusStats {
+			switch m.focusPanel {
+			case focusToolStats:
+				if m.toolStatsCursor > 0 {
+					m.toolStatsCursor--
+				}
+			case focusStats:
 				if m.statsCursor > 0 {
 					m.statsCursor--
-					m.showCallDetail = false
 				}
-			} else if m.cursor > 0 {
-				m.cursor--
-				m.refreshStats()
+			default:
+				if m.cursor > 0 {
+					m.cursor--
+					m.refreshStats()
+				}
 			}
 		case "down", "j":
-			if m.focusPanel == focusStats {
+			switch m.focusPanel {
+			case focusToolStats:
+				if m.toolStatsCursor < len(m.toolStats)-1 {
+					m.toolStatsCursor++
+				}
+			case focusStats:
 				if m.statsCursor < len(m.recentCalls)-1 {
 					m.statsCursor++
-					m.showCallDetail = false
 				}
-			} else if m.cursor < len(m.sessions)-1 {
-				m.cursor++
-				m.refreshStats()
+			default:
+				if m.cursor < len(m.sessions)-1 {
+					m.cursor++
+					m.refreshStats()
+				}
 			}
 		case "a":
-			m.showHidden = !m.showHidden
 			m.refresh()
 		case "[":
 			m.leftWidth -= 2
@@ -254,46 +540,116 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) render() string {
-	rightWidth := m.width - m.leftWidth - 3 // left-│ + ┆ + right-│
+	rightWidth := m.width - m.leftWidth - 3
 	if rightWidth < 10 {
 		rightWidth = 10
 	}
 	bodyHeight := m.height - 4 // header + frame-top + frame-bottom + footer
+	if m.showPopup {
+		// Popup steals one extra row for its own top border, so body is one shorter.
+		bodyHeight = m.height - 5
+	}
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
 
 	var sb strings.Builder
 
-	// Header
+	// Header line
 	titleText := "plumb"
 	if Version != "" {
 		titleText += " " + Version
 	}
 	title := TitleStyle.Render(titleText)
-	hint := HintStyle.Render("↑↓/jk navigate · tab focus panel · enter detail · esc back · a all · [/] resize · q quit")
+	var hint string
+	if m.showPopup {
+		hint = HintStyle.Render("↑↓/jk calls · tab scroll detail · esc close · q quit")
+	} else {
+		hint = HintStyle.Render("↑↓/jk navigate · tab/shift+tab focus · enter popup · [/] resize · q quit")
+	}
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(hint)
 	if gap < 1 {
 		gap = 1
 	}
 	sb.WriteString(title + strings.Repeat(" ", gap) + hint + "\n")
 
-	// Frame
-	sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
+	// Main border — always on row 2.
+	// In popup mode it is rendered faded (DimStyle) so the popup border on
+	// row 3 reads as "on top" of it.
+	if m.showPopup {
+		sb.WriteString(m.renderTopBorderDim(rightWidth) + "\n")
+		sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
+	} else {
+		sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
+	}
 
-	leftLines := m.leftLines()
-	rightLines := m.rightLines(rightWidth)
-	for i := range bodyHeight {
-		l, r := "", ""
-		if i < len(leftLines) {
-			l = leftLines[i]
+	var leftLines, rightLines []string
+	var scrollbar []string
+
+ 	if m.showPopup {
+		// In popup mode, use popupLeftWidth for the timestamp panel.
+		// Ensure it is initialised.
+		if m.popupLeftWidth == 0 {
+			m.popupLeftWidth = defaultLeftWidth
 		}
-		if i < len(rightLines) {
-			r = rightLines[i]
+		pLW := m.popupLeftWidth
+		pRW := m.width - pLW - 3 // left-│ + ┆ + right-│
+		if pRW < 10 {
+			pRW = 10
 		}
-		leftCell := lipgloss.NewStyle().Width(m.leftWidth).Render(l)
-		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(r)
-		sb.WriteString(SepStyle.Render("│") + leftCell + SepStyle.Render("┆") + rightCell + SepStyle.Render("│") + "\n")
+
+		bgLeft := m.dimLines(m.leftLines(), m.leftWidth)
+
+		popupLeft := m.popupLeftLines()
+		allRight := m.popupRightAll(pRW)
+		total := len(allRight)
+		start := m.popupDetailScroll
+		if start > total {
+			start = total
+		}
+		popupRight := allRight[start:]
+		scrollbar = scrollbarCol(total, bodyHeight, start)
+
+		for i := range bodyHeight {
+			var lCell string
+			if i < len(popupLeft) && popupLeft[i] != "" {
+				lCell = lipgloss.NewStyle().Width(pLW).Render(popupLeft[i])
+			} else if i < len(bgLeft) {
+				lCell = lipgloss.NewStyle().Width(pLW).Render(bgLeft[i])
+			} else {
+				lCell = lipgloss.NewStyle().Width(pLW).Render("")
+			}
+
+			var rStr string
+			if i < len(popupRight) {
+				rStr = popupRight[i]
+			}
+			rCell := lipgloss.NewStyle().Width(pRW).Render(rStr)
+
+			var rightBorder string
+			if scrollbar != nil && i < len(scrollbar) {
+				rightBorder = scrollbar[i]
+			} else {
+				rightBorder = SepStyle.Render("│")
+			}
+			sb.WriteString(SepStyle.Render("│") + lCell + SepStyle.Render("┆") + rCell + rightBorder + "\n")
+		}
+	} else {
+		leftLines = m.leftLines()
+		rightLines = (&m).rightLines(rightWidth)
+
+		for i := range bodyHeight {
+			l, r := "", ""
+			if i < len(leftLines) {
+				l = leftLines[i]
+			}
+			if i < len(rightLines) {
+				r = rightLines[i]
+			}
+			leftCell := lipgloss.NewStyle().Width(m.leftWidth).Render(l)
+			rightCell := lipgloss.NewStyle().Width(rightWidth).Render(r)
+			sb.WriteString(SepStyle.Render("│") + leftCell + SepStyle.Render("┆") + rightCell + SepStyle.Render("│") + "\n")
+		}
 	}
 
 	sb.WriteString(m.renderBottomBorder(rightWidth) + "\n")
@@ -310,40 +666,67 @@ func (m Model) render() string {
 	}
 	footer := fmt.Sprintf("%d session(s)  ·  %d tool calls  ·  ~%s tokens saved",
 		len(m.sessions), totalCalls, stats.FormatSavings(int(savedTok)))
-	if m.hiddenCount > 0 {
-		footer += fmt.Sprintf("  ·  %d hidden (press 'a' to show)", m.hiddenCount)
-	}
+
 	if m.loadErr != "" {
 		footer += "  ·  " + m.loadErr
 	}
-	sb.WriteString(MutedStyle.Render(footer))
+	sb.WriteString(StatusStyle.Render(footer))
 
 	return sb.String()
 }
 
-// renderTopBorder builds: ╭─ Sessions (N) ─────────────┬─ Detail ──────────────╮
+// renderTopBorder builds the top frame line.
+// In popup mode the left/right titles dim based on which panel is focused.
 func (m Model) renderTopBorder(rightWidth int) string {
-	leftTitle := fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
-	leftTitleVis := len(leftTitle) // all ASCII
-	// left section = 1 opening dash + title + fill, total = m.leftWidth
-	leftFill := m.leftWidth - 1 - leftTitleVis
+	var leftTitle, rightTitle string
+	var leftTitleStyle, rightTitleStyle lipgloss.Style
+	if m.showPopup {
+		leftTitle = " Timestamp "
+		rightTitle = " Call Detail "
+		// Dim whichever panel is not focused.
+		if m.popupRightFocus {
+			leftTitleStyle = PanelHeaderDimStyle
+			rightTitleStyle = PanelHeaderStyle
+		} else {
+			leftTitleStyle = PanelHeaderStyle
+			rightTitleStyle = PanelHeaderDimStyle
+		}
+	} else {
+		leftTitle = fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
+		rightTitle = " Session + Stats "
+		// Dim the unfocused panel title in normal mode too.
+		if m.focusPanel == focusSessions {
+			leftTitleStyle = PanelHeaderStyle
+			rightTitleStyle = PanelHeaderDimStyle
+		} else {
+			leftTitleStyle = PanelHeaderDimStyle
+			rightTitleStyle = PanelHeaderStyle
+		}
+	}
+
+	// Use popupLeftWidth for the left panel width in popup mode.
+	actualLeftW := m.leftWidth
+	if m.showPopup && m.popupLeftWidth > 0 {
+		actualLeftW = m.popupLeftWidth
+	}
+
+	leftTitleVis := len(leftTitle)
+	leftFill := actualLeftW - 1 - leftTitleVis
 	if leftFill < 0 {
-		avail := m.leftWidth - 2
+		avail := actualLeftW - 2
 		if avail > 0 {
 			leftTitle = leftTitle[:avail] + " "
 		} else {
 			leftTitle = ""
 		}
 		leftTitleVis = len(leftTitle)
-		leftFill = m.leftWidth - 1 - leftTitleVis
+		leftFill = actualLeftW - 1 - leftTitleVis
 		if leftFill < 0 {
 			leftFill = 0
 		}
 	}
 
-	rightTitle := " Session + Stats "
 	rightTitleVis := len(rightTitle)
-	// right section = 1 opening dash + title + fill, total = rightWidth
 	rightFill := rightWidth - 1 - rightTitleVis
 	if rightFill < 0 {
 		rightTitle = ""
@@ -354,98 +737,374 @@ func (m Model) renderTopBorder(rightWidth int) string {
 	}
 
 	return SepStyle.Render("╭─") +
-		PanelHeaderStyle.Render(leftTitle) +
+		leftTitleStyle.Render(leftTitle) +
 		SepStyle.Render(strings.Repeat("─", leftFill)+"┬─") +
-		PanelHeaderStyle.Render(rightTitle) +
+		rightTitleStyle.Render(rightTitle) +
 		SepStyle.Render(strings.Repeat("─", rightFill)+"╮")
 }
 
-// renderBottomBorder builds: ╰──────────────────────────┴────────────────────────╯
+// renderTopBorderDim renders the main panel top border in DimStyle.
+// Used in popup mode to show the main border faded behind the popup border.
+func (m Model) renderTopBorderDim(rightWidth int) string {
+	leftTitle := fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
+	rightTitle := " Session + Stats "
+
+	leftTitleVis := len(leftTitle)
+	leftFill := m.leftWidth - 1 - leftTitleVis
+	if leftFill < 0 {
+		leftFill = 0
+	}
+	rightFill := rightWidth - 1 - len(rightTitle)
+	if rightFill < 0 {
+		rightFill = 0
+	}
+	return SepDimStyle.Render("╭─") +
+		SepDimStyle.Render(leftTitle) +
+		SepDimStyle.Render(strings.Repeat("─", leftFill)+"┬─") +
+		SepDimStyle.Render(rightTitle) +
+		SepDimStyle.Render(strings.Repeat("─", rightFill)+"╮")
+}
+
 func (m Model) renderBottomBorder(rightWidth int) string {
 	return SepStyle.Render(
 		"╰" + strings.Repeat("─", m.leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "╯",
 	)
 }
 
-// leftLines returns content rows for the left panel.
-// Index 0 is blank padding; index 1+ are session items (or empty-state text).
+// dimLines takes a slice of pre-rendered lines (which may contain ANSI escape
+// codes) and re-renders each at the given width in DimStyle, fading the entire
+// panel for the popup overlay effect.
+func (m Model) dimLines(lines []string, width int) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		// lipgloss.Width strips ANSI; we measure, then pad to the target width.
+		vis := lipgloss.Width(l)
+		plain := lipgloss.NewStyle().Width(width).Render(l)
+		_ = vis
+		out[i] = DimStyle.Render(plain)
+	}
+	return out
+}
+
+// popupLeftLines renders the call list column for the popup overlay.
+func (m Model) popupLeftLines() []string {
+	lines := []string{""}
+
+	if len(m.popupCalls) == 0 {
+		lines = append(lines, "   "+MutedStyle.Render("No calls recorded yet."))
+		return lines
+	}
+
+	var currentSessID string
+	if len(m.sessions) > 0 {
+		currentSessID = m.sessions[m.cursor].ID
+	}
+
+	for i, c := range m.popupCalls {
+		selected := !m.popupRightFocus && i == m.popupCallCursor
+		isCursor := i == m.popupCallCursor
+
+		// 1-char gap on each side: " > " for cursor, "   " for others.
+		prefix := "   "
+		if isCursor {
+			prefix = " > "
+		}
+
+		sessChar := "○"
+		if c.SessionID == currentSessID {
+			sessChar = "●"
+		}
+		okChar := "✓"
+		if !c.Success {
+			okChar = "✗"
+		}
+		ts := c.CalledAt.Format("01-02 15:04:05")
+		dur := fmt.Sprintf("%dms", c.DurationMs)
+		row := fmt.Sprintf("%s%s %s %s %s", prefix, sessChar, okChar, ts, dur)
+		// Truncate to panel width so long durations never wrap.
+		maxW := m.popupLeftWidth - 1
+		if maxW < 10 {
+			maxW = 10
+		}
+		if lipgloss.Width(row) > maxW {
+			row = string([]rune(row)[:maxW-1]) + "…"
+		}
+
+		if selected {
+			lines = append(lines, SelectedStyle.Render(row))
+		} else if isCursor && m.popupRightFocus {
+			// Cursor row when focus is on right panel: keep clearly readable.
+			lines = append(lines, TimestampActiveStyle.Render(row))
+		} else if m.popupRightFocus {
+			// Non-cursor rows when right panel is focused: readable but receded.
+			lines = append(lines, TimestampUnfocusedStyle.Render(row))
+		} else {
+			lines = append(lines, TimestampActiveStyle.Render(row))
+		}
+	}
+	return lines
+}
+
+// popupRightAll returns all call-detail lines for the popup right panel,
+// without applying any scroll offset. The caller windows and scrolls them.
+// rightWidth should already be reduced by 2 to leave room for gap + scrollbar.
+func (m Model) popupRightAll(rightWidth int) []string {
+	lines := []string{""}
+
+	if len(m.popupCalls) == 0 {
+		lines = append(lines, "  "+MutedStyle.Render("No calls to show."))
+		return lines
+	}
+
+	c := m.popupCalls[m.popupCallCursor]
+
+	var currentSessID string
+	if len(m.sessions) > 0 {
+		currentSessID = m.sessions[m.cursor].ID
+	}
+
+	status := OkStyle.Render("✓ success")
+	if !c.Success {
+		status = WarnStyle.Render("✗ failed")
+	}
+
+	sessLabel := MutedStyle.Render("○ historical")
+	if c.SessionID == currentSessID {
+		sessLabel = OkStyle.Render("● current")
+	}
+	shortSessID := c.SessionID
+	if len(shortSessID) > 12 {
+		shortSessID = shortSessID[:12] + "…"
+	}
+
+	// Call Detail section — no redundant header; the panel border already says
+	// "Call Detail". Start directly with the key-value rows.
+	lines = append(lines,
+		detailRow("Tool", DetailStyle.Render(c.Tool)),
+		detailRow("Status", status),
+		detailRow("Called at", DetailStyle.Render(c.CalledAt.Format("2006-01-02 15:04:05"))),
+		detailRow("Session", shortSessID+"  "+sessLabel),
+		detailRow("Duration", DetailStyle.Render(fmt.Sprintf("%d ms", c.DurationMs))),
+		detailRow("Input", DetailStyle.Render(fmt.Sprintf("%d bytes", c.InputBytes))),
+		detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))),
+	)
+
+	// Error section: always shown for failed calls, even when the DB row has
+	// no error_msg recorded. Rows older than the OnAfterTool fix (and rows
+	// from a daemon that hasn't been restarted since the fix) will show a
+	// muted explanation instead of staying silent — otherwise the missing
+	// section reads like a rendering bug.
+	if !c.Success {
+		lines = append(lines, "", "  "+WarnStyle.Render("── Error ──"))
+		if c.ErrorMsg != "" {
+			for _, w := range wrapText(c.ErrorMsg, rightWidth-4) {
+				lines = append(lines, "    "+WarnStyle.Render(w))
+			}
+		} else {
+			lines = append(lines, "    "+MutedStyle.Render("(no error message recorded — pre-fix row, or daemon not restarted)"))
+		}
+	}
+
+	// boxSection renders a named rounded box with content always expanded.
+	boxSection := func(label string, contentLines []string) {
+		inner := rightWidth - 4 // 2 for left margin + 2 for box borders
+		if inner < 8 {
+			inner = 8
+		}
+		// ╭─ Args ───────────────────────────────╮
+		topLabel := " " + label + " "
+		topFill := rightWidth - 2 - 2 - len(topLabel)
+		if topFill < 0 {
+			topFill = 0
+		}
+		topBorder := "  " + SepStyle.Render("╭─"+topLabel+strings.Repeat("─", topFill)+"╮")
+		lines = append(lines, "", topBorder)
+		for _, cl := range contentLines {
+			if lipgloss.Width(cl) > inner {
+				cl = string([]rune(cl)[:inner-1]) + "…"
+			}
+			padded := lipgloss.NewStyle().Width(inner).Render(cl)
+			lines = append(lines, "  "+SepStyle.Render("│")+" "+padded+" "+SepStyle.Render("│"))
+		}
+		lines = append(lines, "  "+SepStyle.Render("╰"+strings.Repeat("─", rightWidth-4)+"╯"))
+	}
+
+	if c.InputJSON != "" {
+		var argsLines []string
+		var argMap map[string]any
+		if err := json.Unmarshal([]byte(c.InputJSON), &argMap); err == nil {
+			keys := make([]string, 0, len(argMap))
+			for k := range argMap {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				v := argMap[k]
+				keyCell := padRight(k, 14)
+				switch vv := v.(type) {
+				case string:
+					argsLines = append(argsLines, HintStyle.Render(keyCell)+DetailStyle.Render(vv))
+				case float64:
+					var s string
+					if vv == float64(int64(vv)) {
+						s = fmt.Sprintf("%d", int64(vv))
+					} else {
+						s = fmt.Sprintf("%g", vv)
+					}
+					argsLines = append(argsLines, HintStyle.Render(keyCell)+DetailStyle.Render(s))
+				case bool:
+					argsLines = append(argsLines, HintStyle.Render(keyCell)+DetailStyle.Render(fmt.Sprintf("%v", vv)))
+				default:
+					argsLines = append(argsLines, HintStyle.Render(strings.TrimRight(keyCell, " ")+":"))
+					var prettyBuf bytes.Buffer
+					if b, e := json.Marshal(v); e == nil {
+						if e2 := json.Indent(&prettyBuf, b, "  ", "  "); e2 == nil {
+							for _, l := range strings.Split(strings.TrimRight(prettyBuf.String(), "\n"), "\n") {
+								argsLines = append(argsLines, DetailStyle.Render(l))
+							}
+						}
+					}
+				}
+			}
+		} else {
+			var prettyBuf bytes.Buffer
+			if e2 := json.Indent(&prettyBuf, []byte(c.InputJSON), "", "  "); e2 == nil {
+				for _, l := range strings.Split(strings.TrimRight(prettyBuf.String(), "\n"), "\n") {
+					argsLines = append(argsLines, DetailStyle.Render(l))
+				}
+			}
+		}
+		boxSection("Args", argsLines)
+	}
+
+	if c.OutputText != "" && c.Success {
+		var outLines []string
+		for _, ol := range strings.Split(strings.TrimRight(c.OutputText, "\n"), "\n") {
+			outLines = append(outLines, DetailStyle.Render(ol))
+		}
+		boxSection("Output", outLines)
+	}
+
+	if m.popupRightFocus {
+		lines = append(lines, "", "  "+MutedStyle.Render("c copy · tab back"))
+	}
+
+	return lines
+}
+
+// scrollbarCol builds a slice of bodyHeight single-character strings
+// representing a vertical scrollbar. Returns nil when content fits.
+// Thumb symbol: ▐ (right half-block). Track symbol: │ (light vertical bar), faded.
+func scrollbarCol(total, visible, offset int) []string {
+	if total <= visible {
+		return nil
+	}
+
+	thumbSize := visible * visible / total
+	if thumbSize < 1 {
+		thumbSize = 1
+	}
+	maxOffset := total - visible
+	if maxOffset < 1 {
+		maxOffset = 1
+	}
+	thumbStart := offset * (visible - thumbSize) / maxOffset
+
+	col := make([]string, visible)
+	for i := range visible {
+		if i >= thumbStart && i < thumbStart+thumbSize {
+			col[i] = ScrollThumbStyle.Render("█")
+		} else {
+			col[i] = ScrollTrackStyle.Render("│")
+		}
+	}
+	return col
+}
+
+// leftLines returns content rows for the left panel in normal (non-popup) mode.
+// Content is dimmed when focus is on the right panel.
 func (m Model) leftLines() []string {
+	// leftFocused is true when the sessions panel holds focus.
+	leftFocused := m.focusPanel == focusSessions
+
 	lines := []string{""}
 
 	if len(m.sessions) == 0 {
-		if daemonRunning() {
-			lines = append(lines,
-				MutedStyle.Render("  Daemon running."),
-				MutedStyle.Render("  Call a tool to begin."),
-			)
+		msg1 := " Daemon running."
+		msg2 := " Call a tool to begin."
+		if !daemonRunning() {
+			msg1 = " No active sessions."
+			msg2 = " Open Claude Desktop."
+		}
+		if leftFocused {
+			lines = append(lines, MutedStyle.Render(msg1), MutedStyle.Render(msg2))
 		} else {
-			lines = append(lines,
-				MutedStyle.Render("  No active sessions."),
-				MutedStyle.Render("  Open Claude Desktop."),
-			)
+			lines = append(lines, DimStyle.Render(msg1), DimStyle.Render(msg2))
 		}
 		return lines
 	}
 
 	for i, s := range m.sessions {
-		prefix := "  "
-		style := ItemStyle
-		if i == m.cursor {
-			prefix = "▸ "
-			style = SelectedStyle
-		}
-		langPrefix := s.Language + ": "
-		maxFolder := m.leftWidth - 3 - len([]rune(langPrefix))
-		if maxFolder < 0 {
-			maxFolder = 0
-		}
-		folder := s.Folder
-		if folder == "" {
-			folder = "(resolving…)"
+		var label string
+		if s.Folder == "" {
+			label = "⟳ resolving…"
 		} else {
-			folder = contractPath(folder, maxFolder)
+			langPrefix := s.Language + ": "
+			// -4 for the " ▸ " / "   " prefix (3 chars) + 1 border
+			maxFolder := m.leftWidth - 4 - len([]rune(langPrefix))
+			if maxFolder < 0 {
+				maxFolder = 0
+			}
+			label = langPrefix + contractPath(s.Folder, maxFolder)
 		}
-		lines = append(lines, style.Render(prefix+langPrefix+folder))
+		if i == m.cursor {
+			if leftFocused {
+				lines = append(lines, SelectedStyle.Render(" > "+label))
+			} else {
+				lines = append(lines, DimStyle.Render(" > "+label))
+			}
+		} else {
+			if leftFocused {
+				lines = append(lines, ItemStyle.Render("   "+label))
+			} else {
+				lines = append(lines, DimStyle.Render("   "+label))
+			}
+		}
 	}
 	return lines
 }
 
-// rightLines returns content rows for the right panel.
-// Index 0 is blank padding; index 1+ are detail rows.
-// rightWidth is used to contract long paths so they fit without wrapping.
-func (m Model) rightLines(rightWidth int) []string {
+// handleRightPanelClick maps a body-row index (0-based, relative to the top
+// content row of the right panel) to a table cursor selection.
+// It uses the pre-computed statsTableBodyRow / recentTableBodyRow offsets set
+// by the most recent rightLines() call.
+func (m *Model) handleRightPanelClick(bodyRow int) {
+	if m.statsTableBodyRow >= 0 && len(m.toolStats) > 0 {
+		idx := bodyRow - m.statsTableBodyRow
+		if idx >= 0 && idx < len(m.toolStats) {
+			m.toolStatsCursor = idx
+			m.focusPanel = focusToolStats
+			return
+		}
+	}
+	if m.recentTableBodyRow >= 0 && len(m.recentCalls) > 0 {
+		idx := bodyRow - m.recentTableBodyRow
+		if idx >= 0 && idx < len(m.recentCalls) {
+			m.statsCursor = idx
+			m.focusPanel = focusStats
+			return
+		}
+	}
+}
+
+// rightLines returns content rows for the right panel in normal (non-popup) mode.
+// It also populates m.statsTableBodyRow and m.recentTableBodyRow so that
+// handleRightPanelClick can map body-row indices to table rows.
+func (m *Model) rightLines(rightWidth int) []string {
 	lines := []string{""}
 
 	if len(m.sessions) == 0 {
 		lines = append(lines, "  "+MutedStyle.Render("Select a session to view details."))
-		return lines
-	}
-
-	// ─── Call detail view (enter to open, esc/j/k to close) ──────────────
-	if m.showCallDetail && m.focusPanel == focusStats && len(m.recentCalls) > 0 {
-		c := m.recentCalls[m.statsCursor]
-		status := OkStyle.Render("✓ success")
-		if !c.Success {
-			status = WarnStyle.Render("✗ failed")
-		}
-		lines = append(lines,
-			"  "+SepStyle.Render("── Call Detail ──"),
-			"",
-			detailRow("Tool", c.Tool),
-			detailRow("Status", status),
-			detailRow("Called at", c.CalledAt.Format("2006-01-02 15:04:05")),
-			detailRow("Duration", fmt.Sprintf("%d ms", c.DurationMs)),
-			detailRow("Input", fmt.Sprintf("%d bytes", c.InputBytes)),
-			detailRow("Output", fmt.Sprintf("%d bytes", c.OutputBytes)),
-			detailRow("Workspace", contractPath(c.Workspace, rightWidth-16)),
-		)
-		if c.ErrorMsg != "" {
-			lines = append(lines, "", "  "+WarnStyle.Render("Error:"))
-			for _, w := range wrapText(c.ErrorMsg, rightWidth-4) {
-				lines = append(lines, "    "+WarnStyle.Render(w))
-			}
-		}
-		lines = append(lines, "", "  "+MutedStyle.Render("esc · back to list"))
 		return lines
 	}
 
@@ -485,96 +1144,233 @@ func (m Model) rightLines(rightWidth int) []string {
 	}
 	lines = append(lines, detailRow("Client", client))
 
-	// ─── Tool stats ───────────────────────────────────────────────────────
-	lines = append(lines, "", "  "+SepStyle.Render("── Tool Statistics ──"))
+	// Shared column layout for both Statistics and Recent tables.
+	// All four columns are at identical pixel offsets in both tables so
+	// they read as a single aligned grid.
+	//
+	//  col1 (Tool)   col2 (Calls/Dur)  col3 (Avg/When)  col4 (Errors)
+	//  left-aligned  right-aligned     right-aligned    left-aligned
+	//
+	const (
+		col2W = 8  // right-aligned: Calls / Dur
+		col3W = 10 // right-aligned: Avg / When
+		col4W = 8  // left-aligned:  Errors (shown only when non-empty)
+	)
+	// 3-space gap between every column.
+	sep3 := "   "
+	// prefix is 2 chars ("  " or "▸ "); col1 fills the rest up to the right edge.
+	// Layout: 2 + col1 + 3 + col2 + 3 + col3 + 3 + col4 = rightWidth
+	col1W := rightWidth - 2 - col2W - col3W - col4W - 9
+	if col1W < 10 {
+		col1W = 10
+	}
+
+	sepLine := "  " + SepStyle.Render(strings.Repeat("─", rightWidth-3))
+	// rowWidth: full width for selected-row rendering.
+	rowWidth := rightWidth - 2
+
+	// ── Statistics table ──────────────────────────────────────────────────
+	lines = append(lines, "")
 
 	if len(m.toolStats) == 0 {
-		lines = append(lines, "  "+MutedStyle.Render("No calls recorded yet."))
-		return lines
-	}
-
-	// Show top 5 tools
-	show := m.toolStats
-	if len(show) > 5 {
-		show = show[:5]
-	}
-	for _, ts := range show {
-		errBadge := ""
-		if ts.Errors > 0 {
-			errBadge = " " + WarnStyle.Render(fmt.Sprintf("[%d err]", ts.Errors))
-		}
-		line := fmt.Sprintf("  %-20s %s calls  %s avg%s",
-			ts.Tool,
-			OkStyle.Render(fmt.Sprintf("%d", ts.Calls)),
-			MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)),
-			errBadge,
-		)
-		lines = append(lines, line)
-	}
-
-	// ─── Recent edits ─────────────────────────────────────────────────────
-	// Distinct panel for write-tool calls so it's obvious "what did Claude
-	// touch this session?" without scanning all tool calls.
-	if edits := filterWriteCalls(m.recentCalls, 5); len(edits) > 0 {
-		lines = append(lines, "", "  "+SepStyle.Render("── Recent Edits ──"))
-		for _, c := range edits {
-			ok := OkStyle.Render("✓")
-			if !c.Success {
-				ok = WarnStyle.Render("✗")
-			}
-			age := humanAgeTUI(c.CalledAt)
-			lines = append(lines, fmt.Sprintf("  %s  %-14s %s %s",
-				ok, c.Tool,
-				MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)),
-				MutedStyle.Render(age),
-			))
-		}
-	}
-
-	// ─── Recent calls ─────────────────────────────────────────────────────
-	if len(m.recentCalls) > 0 {
-		header := "── Recent ──"
-		if m.focusPanel == focusStats {
-			header += "  " + MutedStyle.Render("(tab to leave · j/k navigate)")
+		// No data: just show the label with no header row.
+		if m.focusPanel == focusToolStats {
+			lines = append(lines, "  "+SelectedStyle.Render("Tools"))
 		} else {
-			header += "  " + MutedStyle.Render("(tab to focus)")
+			lines = append(lines, "  "+HintStyle.Render("Tools"))
 		}
-		lines = append(lines, "", "  "+SepStyle.Render(header))
-		for i, c := range m.recentCalls {
-			ok := OkStyle.Render("✓")
-			if !c.Success {
-				ok = WarnStyle.Render("✗")
-			}
-			age := humanAgeTUI(c.CalledAt)
-			prefix := "  "
-			selected := m.focusPanel == focusStats && i == m.statsCursor
-			if selected {
-				prefix = "▸ "
-			}
-			line := fmt.Sprintf("%s%s  %-22s %s %s",
-				prefix,
-				ok,
-				c.Tool,
-				MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)),
-				MutedStyle.Render(age),
-			)
-			if selected {
-				line = SelectedStyle.Render(line)
-			}
-			lines = append(lines, line)
+		lines = append(lines, "  "+MutedStyle.Render("No calls recorded yet."))
+		m.statsTableBodyRow = -1
+	} else {
+		// Section label IS the col-1 header cell — no separate label row.
+		var labelCell string
+		if m.focusPanel == focusToolStats {
+			labelCell = padRight(SelectedStyle.Render("Tools"), col1W)
+		} else {
+			labelCell = padRight(HintStyle.Render("Tools"), col1W)
+		}
+		tsHeader := "  " +
+			labelCell + sep3 +
+			padLeft(HintStyle.Render("Calls"), col2W) + sep3 +
+			padLeft(HintStyle.Render("Avg"), col3W) + sep3 +
+			HintStyle.Render("Errors")
+		lines = append(lines, tsHeader, sepLine)
+		m.statsTableBodyRow = len(lines)
 
-			// Inline-expand the error message for the selected failed row.
-			// Wrapped to the remaining right-panel width so it doesn't push
-			// past the panel boundary.
-			if selected && !c.Success && c.ErrorMsg != "" {
-				for _, w := range wrapText(c.ErrorMsg, rightWidth-6) {
-					lines = append(lines, "      "+WarnStyle.Render(w))
+		for i, ts := range m.toolStats {
+			selected := m.focusPanel == focusToolStats && i == m.toolStatsCursor
+			// Build the plain (un-styled) row text for the selected case so
+			// SelectedStyle colours the whole line uniformly.
+			plainTool := padRight(toolIcon(ts.Tool)+" "+truncate(ts.Tool, col1W-2), col1W)
+			if selected {
+				plainCalls := padLeft(fmt.Sprintf("%d", ts.Calls), col2W)
+				plainAvg := padLeft(fmt.Sprintf("%.0fms", ts.AvgMs), col3W)
+				plainErr := ""
+				if ts.Errors > 0 {
+					plainErr = fmt.Sprintf("%d err", ts.Errors)
 				}
+				row := plainTool + sep3 + plainCalls + sep3 + plainAvg + sep3 + plainErr
+				lines = append(lines, SelectedStyle.Width(rowWidth).Render("> "+row))
+			} else {
+				col2Cell := padLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), col2W)
+				col3Cell := padLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), col3W)
+				col4Cell := ""
+				if ts.Errors > 0 {
+					col4Cell = WarnStyle.Render(fmt.Sprintf("%d err", ts.Errors))
+				}
+				row := plainTool + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell
+				lines = append(lines, "  "+row)
 			}
 		}
+	}
+
+	// ─── Recent calls table ───────────────────────────────────────────────
+	if len(m.recentCalls) > 0 {
+		lines = append(lines, "")
+
+		var rcLabelCell string
+		if m.focusPanel == focusStats {
+			rcLabelCell = padRight(SelectedStyle.Render("Recent Tools"), col1W)
+		} else {
+			rcLabelCell = padRight(HintStyle.Render("Recent Tools"), col1W)
+		}
+		rcHeader := "  " +
+			rcLabelCell + sep3 +
+			padLeft(HintStyle.Render("Dur"), col2W) + sep3 +
+			padLeft(HintStyle.Render("When"), col3W) + sep3 +
+			HintStyle.Render("Errors")
+		lines = append(lines, rcHeader, sepLine)
+		m.recentTableBodyRow = len(lines)
+
+		for i, c := range m.recentCalls {
+			selected := m.focusPanel == focusStats && i == m.statsCursor
+			statusChar := "✓"
+			if !c.Success {
+				statusChar = "✗"
+			}
+			plainTool := padRight(statusChar+" "+toolIcon(c.Tool)+" "+truncate(c.Tool, col1W-4), col1W)
+			if selected {
+				plainDur := padLeft(fmt.Sprintf("%dms", c.DurationMs), col2W)
+				plainWhen := padLeft(humanAgeTUI(c.CalledAt), col3W)
+				plainErr := ""
+				if !c.Success && c.ErrorMsg != "" {
+					plainErr = truncate(c.ErrorMsg, col4W)
+				}
+				row := plainTool + sep3 + plainDur + sep3 + plainWhen + sep3 + plainErr
+				lines = append(lines, SelectedStyle.Width(rowWidth).Render("> "+row))
+			} else {
+				status := OkStyle.Render("✓")
+				if !c.Success {
+					status = WarnStyle.Render("✗")
+				}
+				toolCell := padRight(status+" "+toolIcon(c.Tool)+" "+truncate(c.Tool, col1W-4), col1W)
+				col2Cell := padLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), col2W)
+				col3Cell := padLeft(MutedStyle.Render(humanAgeTUI(c.CalledAt)), col3W)
+				col4Cell := ""
+				if !c.Success && c.ErrorMsg != "" {
+					col4Cell = WarnStyle.Render(truncate(c.ErrorMsg, col4W))
+				}
+				row := toolCell + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell
+				lines = append(lines, "  "+row)
+			}
+		}
+	} else {
+		m.recentTableBodyRow = -1
 	}
 
 	return lines
+}
+
+// padRight pads or truncates s to exactly width visible runes (left-aligned).
+func padRight(s string, width int) string {
+	vis := lipgloss.Width(s)
+	if vis >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-vis)
+}
+
+// padLeft pads s on the left to exactly width visible runes (right-aligned).
+func padLeft(s string, width int) string {
+	vis := lipgloss.Width(s)
+	if vis >= width {
+		return s
+	}
+	return strings.Repeat(" ", width-vis) + s
+}
+
+// truncate clips s to at most n visible runes, appending "…" if clipped.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// toolIcon returns a single unicode icon representing the category of tool.
+func toolIcon(tool string) string {
+	switch tool {
+	case "write_file", "edit_file", "delete_file", "rename_file", "transaction_apply",
+		"find_replace", "insert_before_symbol", "insert_after_symbol",
+		"replace_symbol_body", "safe_delete_symbol", "rename_symbol":
+		return "✎" // write / mutate
+	case "read_file", "read_multiple_files", "list_files", "list_directory",
+		"find_files", "search_in_files", "file_diff":
+		return "▤" // read / browse
+	case "find_symbol", "get_definition", "explain_symbol", "list_symbols",
+		"workspace_symbols", "find_references", "call_hierarchy", "type_hierarchy":
+		return "⊕" // LSP / symbol
+	case "write_memory", "read_memory", "delete_memory", "list_memories",
+		"search_memories", "relevant_memories":
+		return "◎" // memory
+	case "git":
+		return "◇" // git
+	case "diagnostics":
+		return "◈" // diagnostics
+	case "session_start":
+		return "⟳" // session
+	default:
+		return "▪" // generic
+	}
+}
+
+// extractCallPath pulls a human-readable file path from a write-tool call's
+// InputJSON. Returns "" for non-write tools or empty JSON.
+func extractCallPath(tool, inputJSON string) string {
+	if inputJSON == "" {
+		return ""
+	}
+	switch tool {
+	case "write_file", "edit_file", "delete_file":
+		var a struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(inputJSON), &a) == nil && a.Path != "" {
+			return a.Path
+		}
+	case "rename_file":
+		var a struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if json.Unmarshal([]byte(inputJSON), &a) == nil && a.From != "" {
+			return a.From + " → " + a.To
+		}
+	case "transaction_apply":
+		var a struct {
+			Operations []struct {
+				Path string `json:"path"`
+			} `json:"operations"`
+		}
+		if json.Unmarshal([]byte(inputJSON), &a) == nil {
+			return fmt.Sprintf("%d files", len(a.Operations))
+		}
+	}
+	return ""
 }
 
 // writeToolSet is the set of tools that mutate files. Used to surface a
@@ -587,8 +1383,7 @@ var writeToolSet = map[string]struct{}{
 }
 
 // filterWriteCalls returns up to n most recent calls whose tool is in
-// writeToolSet, preserving the input order (newest-first by virtue of the
-// caller already having sorted that way).
+// writeToolSet, preserving the input order (newest-first).
 func filterWriteCalls(all []stats.RecentCall, n int) []stats.RecentCall {
 	out := make([]stats.RecentCall, 0, n)
 	for _, c := range all {
@@ -604,9 +1399,7 @@ func filterWriteCalls(all []stats.RecentCall, n int) []stats.RecentCall {
 }
 
 // wrapText breaks s into lines no wider than width, splitting on spaces.
-// Words longer than width are kept whole (the line will overflow rather
-// than mid-word break). Newlines in s are converted to spaces first so a
-// multi-line error renders as one wrapped paragraph.
+// Words longer than width are kept whole. Newlines in s become spaces.
 func wrapText(s string, width int) []string {
 	if width < 8 {
 		width = 8
@@ -636,9 +1429,7 @@ func detailRow(key, val string) string {
 
 // contractPath shortens a file path for display:
 //  1. Replaces the home directory prefix with ~.
-//  2. If still longer than max runes, truncates from the LEFT (keeping the
-//     tail of the path) so the meaningful end remains visible:
-//     /Users/gilberto/Projects/plumb/testdata → …/plumb/testdata
+//  2. If still longer than max runes, truncates from the LEFT keeping the tail.
 func contractPath(p string, max int) string {
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
 		p = "~" + p[len(home):]
@@ -678,6 +1469,46 @@ func daemonRunning() bool {
 	socketPath := filepath.Join(base, "plumb", "plumb.sock")
 	_, err = os.Stat(socketPath)
 	return err == nil
+}
+
+// copyToClipboard returns a Cmd that copies the call's args and output to
+// the system clipboard using pbcopy (macOS) or xclip/xsel (Linux).
+func copyToClipboard(c stats.RecentCall) tea.Cmd {
+	return func() tea.Msg {
+		var buf strings.Builder
+		if c.InputJSON != "" {
+			buf.WriteString("=== Args ===\n")
+			var prettyBuf bytes.Buffer
+			if err := json.Indent(&prettyBuf, []byte(c.InputJSON), "", "  "); err == nil {
+				buf.WriteString(prettyBuf.String())
+			} else {
+				buf.WriteString(c.InputJSON)
+			}
+			buf.WriteString("\n")
+		}
+		if c.OutputText != "" {
+			buf.WriteString("=== Output ===\n")
+			buf.WriteString(c.OutputText)
+			buf.WriteString("\n")
+		}
+		text := buf.String()
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = exec.Command("pbcopy")
+		case "linux":
+			if _, err := exec.LookPath("xclip"); err == nil {
+				cmd = exec.Command("xclip", "-selection", "clipboard")
+			} else {
+				cmd = exec.Command("xsel", "--clipboard", "--input")
+			}
+		}
+		if cmd != nil {
+			cmd.Stdin = strings.NewReader(text)
+			_ = cmd.Run()
+		}
+		return nil
+	}
 }
 
 // Run starts the Bubble Tea sessions dashboard.

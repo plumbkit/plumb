@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,10 +85,13 @@ type Server struct {
 	// OnBeforeTool is called synchronously before each tools/call execution.
 	OnBeforeTool func(ctx context.Context, name string, args json.RawMessage)
 
-	// OnAfterTool is called synchronously after each tools/call execution with
-	// the tool name, raw arguments, text output, wall duration, and whether
-	// the call resulted in an error.
-	OnAfterTool func(ctx context.Context, name string, args json.RawMessage, output string, duration time.Duration, isError bool)
+	// OnAfterTool is called synchronously after each tools/call execution.
+	// output is the tool's text result (empty when isError is true). errMsg
+	// is the error string (empty when the call succeeded). The two are kept
+	// separate so observers can record them without conflating success and
+	// failure paths — e.g. the stats DB stores errMsg in error_msg and only
+	// stores output in output_text.
+	OnAfterTool func(ctx context.Context, name string, args json.RawMessage, output, errMsg string, duration time.Duration, isError bool)
 
 	// OnClientInfo is called once during the initialize exchange with the
 	// client's self-reported name and version.
@@ -248,7 +252,7 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 				resp, isRequest := s.handle(ctx, data)
 				if !isRequest {
 					if peek.Method == "notifications/roots/listChanged" && s.OnRootsChanged != nil {
-						go s.OnRootsChanged(ctx, requestFn)
+						go safeRun("OnRootsChanged", func() { s.OnRootsChanged(ctx, requestFn) })
 					}
 					return
 				}
@@ -256,12 +260,26 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 
 				if peek.Method == "initialize" && resp.Error == nil && s.OnInit != nil {
 					initOnce.Do(func() {
-						go s.OnInit(ctx, requestFn)
+						go safeRun("OnInit", func() { s.OnInit(ctx, requestFn) })
 					})
 				}
 			}()
 		}
 	}
+}
+
+// safeRun calls f and recovers from any panic, logging it with a stack trace.
+// Use for goroutines that must not crash the daemon (OnInit, OnRootsChanged, …).
+func safeRun(name string, f func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("mcp: goroutine panic — daemon kept alive",
+				"goroutine", name,
+				"err", r,
+				"stack", string(debug.Stack()))
+		}
+	}()
+	f()
 }
 
 // handle parses one message. Returns (response, true) for requests, or
@@ -412,7 +430,16 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	dur := time.Since(start)
 
 	if s.OnAfterTool != nil {
-		s.OnAfterTool(ctx, params.Name, params.Arguments, text, dur, err != nil)
+		errMsg := ""
+		afterText := text
+		if err != nil {
+			errMsg = err.Error()
+			// Tools that return an error usually return "" alongside it; clear
+			// any partial output so observers don't see stale text for failed
+			// calls.
+			afterText = ""
+		}
+		s.OnAfterTool(ctx, params.Name, params.Arguments, afterText, errMsg, dur, err != nil)
 	}
 
 	type content struct {
