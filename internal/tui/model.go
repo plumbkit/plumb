@@ -512,6 +512,25 @@ func (m Model) rightLines(rightWidth int) []string {
 		lines = append(lines, line)
 	}
 
+	// ─── Recent edits ─────────────────────────────────────────────────────
+	// Distinct panel for write-tool calls so it's obvious "what did Claude
+	// touch this session?" without scanning all tool calls.
+	if edits := filterWriteCalls(m.recentCalls, 5); len(edits) > 0 {
+		lines = append(lines, "", "  "+SepStyle.Render("── Recent Edits ──"))
+		for _, c := range edits {
+			ok := OkStyle.Render("✓")
+			if !c.Success {
+				ok = WarnStyle.Render("✗")
+			}
+			age := humanAgeTUI(c.CalledAt)
+			lines = append(lines, fmt.Sprintf("  %s  %-14s %s %s",
+				ok, c.Tool,
+				MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)),
+				MutedStyle.Render(age),
+			))
+		}
+	}
+
 	// ─── Recent calls ─────────────────────────────────────────────────────
 	if len(m.recentCalls) > 0 {
 		header := "── Recent ──"
@@ -556,6 +575,32 @@ func (m Model) rightLines(rightWidth int) []string {
 	}
 
 	return lines
+}
+
+// writeToolSet is the set of tools that mutate files. Used to surface a
+// "Recent Edits" panel distinct from query tool activity.
+var writeToolSet = map[string]struct{}{
+	"write_file":  {},
+	"edit_file":   {},
+	"delete_file": {},
+	"rename_file": {},
+}
+
+// filterWriteCalls returns up to n most recent calls whose tool is in
+// writeToolSet, preserving the input order (newest-first by virtue of the
+// caller already having sorted that way).
+func filterWriteCalls(all []stats.RecentCall, n int) []stats.RecentCall {
+	out := make([]stats.RecentCall, 0, n)
+	for _, c := range all {
+		if _, ok := writeToolSet[c.Tool]; !ok {
+			continue
+		}
+		out = append(out, c)
+		if len(out) >= n {
+			break
+		}
+	}
+	return out
 }
 
 // wrapText breaks s into lines no wider than width, splitting on spaces.

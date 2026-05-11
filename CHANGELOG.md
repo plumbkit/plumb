@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (8/9)
+- **TUI "Recent Edits" panel** — distinct section in the right panel showing the last 5 write-tool calls (`write_file`, `edit_file`, `delete_file`, `rename_file`) for the selected session. Surfaces "what did Claude touch?" without scanning the full recent-calls list.
+
 ### Added (7/9)
 - **Per-session write rate limit** — `RateLimiter` (sliding window) gates `write_file` / `edit_file` / `delete_file` / `rename_file`. Default 120 writes per minute per session; configurable via `PLUMB_WRITE_RATE_LIMIT` (0 disables). Protects against runaway-loop scenarios in autonomous agents; transparent under normal use. New constructor parameter on the four write tools; the daemon installs one limiter per connection.
 
