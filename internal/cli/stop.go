@@ -19,48 +19,76 @@ var stopCmd = &cobra.Command{
 }
 
 func runStop(_ *cobra.Command, _ []string) error {
-	pid := findDaemonPID()
-	if pid == 0 {
+	pids := findAllDaemonPIDs()
+	if len(pids) == 0 {
 		fmt.Println("Daemon is not running.")
 		return nil
 	}
-	return stopByPID(pid)
+	if len(pids) > 1 {
+		fmt.Printf("Found %d daemon process(es) — stopping all.\n", len(pids))
+	}
+	var lastErr error
+	for _, pid := range pids {
+		if err := stopByPID(pid); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
-// findDaemonPID locates the daemon PID using three strategies in order:
+// findAllDaemonPIDs locates every running daemon PID using three strategies,
+// deduplicating across all sources so each process is stopped exactly once:
 //  1. PID file written by the current binary.
 //  2. lsof on the daemon socket (covers binary-path changes).
 //  3. pgrep on the command-line pattern (covers socket-path changes, older
 //     binaries, and any other fallback case).
-func findDaemonPID() int {
-	if pid := readDaemonPID(); pid > 0 && processAlive(pid) {
-		return pid
-	}
-	// Clean up stale PID file if present.
-	_ = os.Remove(daemonPIDPath())
+func findAllDaemonPIDs() []int {
+	seen := make(map[int]bool)
+	var pids []int
 
-	if pid := findPIDViaSocket(daemonSocketPath()); pid > 0 {
-		return pid
-	}
-
-	return findDaemonByArgs()
-}
-
-// findDaemonByArgs uses pgrep to find a "plumb daemon" process regardless of
-// which socket or PID file path it was started with.
-func findDaemonByArgs() int {
-	out, err := exec.Command("pgrep", "-f", "plumb daemon").Output()
-	if err != nil {
-		return 0
-	}
-	self := os.Getpid()
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		pid, err := strconv.Atoi(strings.TrimSpace(line))
-		if err == nil && pid > 0 && pid != self {
-			return pid
+	add := func(pid int) {
+		if pid > 0 && !seen[pid] && processAlive(pid) {
+			seen[pid] = true
+			pids = append(pids, pid)
 		}
 	}
-	return 0
+
+	// 1. PID file.
+	if pid := readDaemonPID(); pid > 0 {
+		add(pid)
+	}
+	// Clean up stale PID file if the recorded process is gone.
+	if filePID := readDaemonPID(); filePID > 0 && !seen[filePID] {
+		_ = os.Remove(daemonPIDPath())
+	}
+
+	// 2. lsof on the socket.
+	add(findPIDViaSocket(daemonSocketPath()))
+
+	// 3. pgrep fallback — returns all matches.
+	for _, pid := range findAllDaemonByArgs() {
+		add(pid)
+	}
+
+	return pids
+}
+
+// findAllDaemonByArgs uses pgrep to find ALL "plumb daemon" processes
+// regardless of which socket or PID file path they were started with.
+func findAllDaemonByArgs() []int {
+	out, err := exec.Command("pgrep", "-f", "plumb daemon").Output()
+	if err != nil {
+		return nil
+	}
+	self := os.Getpid()
+	var pids []int
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err == nil && pid > 0 && pid != self {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 // processAlive returns true if a process with the given PID exists.
@@ -93,7 +121,7 @@ func findPIDViaSocket(socketPath string) int {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && pid > 0 {
 			return pid
 		}
@@ -114,17 +142,17 @@ func stopByPID(pid int) error {
 		return fmt.Errorf("sending SIGTERM to daemon (PID %d): %w", pid, err)
 	}
 
-	fmt.Printf("Stopping daemon (PID %d)", pid)
+	fmt.Printf("Stopping daemon (PID %d) ...", pid)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 		if proc.Signal(syscall.Signal(0)) != nil {
-			fmt.Println(" done.")
+			fmt.Println(" stopped.")
 			return nil
 		}
 		fmt.Print(".")
 	}
 	fmt.Println()
-	fmt.Printf("Warning: daemon (PID %d) did not stop within 5 seconds.\n", pid)
+	fmt.Printf("Warning: daemon (PID %d) did not stop within 5 seconds; it may still be running.\n", pid)
 	return nil
 }

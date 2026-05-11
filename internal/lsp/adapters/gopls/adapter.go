@@ -128,6 +128,15 @@ func (a *Adapter) DidClose(ctx context.Context, params protocol.DidCloseTextDocu
 	return nil
 }
 
+// DidChangeWatchedFiles notifies gopls that one or more files changed on disk.
+// Single-RPC equivalent of forcing the workspace watcher to re-scan.
+func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
+	if err := a.conn.Notify(ctx, protocol.MethodDidChangeWatchedFiles, params); err != nil {
+		return fmt.Errorf("gopls didChangeWatchedFiles: %w", err)
+	}
+	return nil
+}
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 // DocumentSymbols returns all symbols in the document.

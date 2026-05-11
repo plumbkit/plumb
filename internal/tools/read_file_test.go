@@ -1,0 +1,152 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+)
+
+func writeTextFile(t *testing.T, content string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "plumb-read-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	return f.Name()
+}
+
+func callReadFile(t *testing.T, args map[string]any) (string, error) {
+	t.Helper()
+	raw, _ := json.Marshal(args)
+	return NewReadFile().Execute(context.Background(), raw)
+}
+
+func TestReadFile_Basic(t *testing.T) {
+	path := writeTextFile(t, "hello\nworld\n")
+	out, err := callReadFile(t, map[string]any{"path": path})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "hello") || !strings.Contains(out, "world") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestReadFile_FileURI(t *testing.T) {
+	path := writeTextFile(t, "content via URI\n")
+	out, err := callReadFile(t, map[string]any{"path": "file://" + path})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "content via URI") {
+		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestReadFile_LineRange(t *testing.T) {
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	path := writeTextFile(t, content)
+
+	start, end := 2, 4
+	out, err := callReadFile(t, map[string]any{"path": path, "start_line": start, "end_line": end})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "line1") || strings.Contains(out, "line5") {
+		t.Fatalf("expected only lines 2–4, got: %q", out)
+	}
+	if !strings.Contains(out, "line2") || !strings.Contains(out, "line4") {
+		t.Fatalf("expected lines 2–4 inclusive, got: %q", out)
+	}
+}
+
+func TestReadFile_StartLineOnly(t *testing.T) {
+	path := writeTextFile(t, "a\nb\nc\n")
+	start := 2
+	out, err := callReadFile(t, map[string]any{"path": path, "start_line": start})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "a\n") {
+		t.Fatalf("expected only lines from 2 onward, got: %q", out)
+	}
+	if !strings.Contains(out, "b") {
+		t.Fatalf("expected line2+ in output, got: %q", out)
+	}
+}
+
+func TestReadFile_OutOfRangeLines(t *testing.T) {
+	path := writeTextFile(t, "one\ntwo\n")
+	start, end := 10, 20
+	out, err := callReadFile(t, map[string]any{"path": path, "start_line": start, "end_line": end})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "no lines") {
+		t.Fatalf("expected 'no lines' message, got: %q", out)
+	}
+}
+
+func TestReadFile_Directory(t *testing.T) {
+	dir := t.TempDir()
+	_, err := callReadFile(t, map[string]any{"path": dir})
+	if err == nil {
+		t.Fatal("expected error for directory path")
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("expected directory error message, got: %v", err)
+	}
+}
+
+func TestReadFile_MissingFile(t *testing.T) {
+	_, err := callReadFile(t, map[string]any{"path": "/nonexistent/path/file.txt"})
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestReadFile_MissingPath(t *testing.T) {
+	_, err := callReadFile(t, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error when path is empty")
+	}
+}
+
+func TestReadFile_OutputHasMtimeHeader(t *testing.T) {
+	path := writeTextFile(t, "hello\n")
+	out, err := callReadFile(t, map[string]any{"path": path})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(out, "# plumb-read mtime=") {
+		head := out
+		if len(head) > 80 {
+			head = head[:80]
+		}
+		t.Fatalf("expected mtime header, got: %q", head)
+	}
+}
+
+func TestReadFile_BinaryFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "plumb-bin-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write null bytes to make it look binary.
+	_, _ = f.Write(make([]byte, 100))
+	_ = f.Close()
+
+	_, err = callReadFile(t, map[string]any{"path": f.Name()})
+	if err == nil {
+		t.Fatal("expected error for binary file")
+	}
+	if !strings.Contains(err.Error(), "binary") {
+		t.Fatalf("expected binary error message, got: %v", err)
+	}
+}

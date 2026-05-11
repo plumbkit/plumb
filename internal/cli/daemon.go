@@ -70,6 +70,14 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	}
 	defer os.Remove(pidPath)
 
+	// Publish our build version next to the PID so `plumb serve` can detect a
+	// version mismatch (running daemon older than the binary that's launching).
+	versionPath := daemonVersionPath()
+	if err := os.WriteFile(versionPath, []byte(Version), 0o644); err != nil {
+		slog.Warn("daemon: could not write version file", "path", versionPath, "err", err)
+	}
+	defer os.Remove(versionPath)
+
 	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid())
 
 	tools.Version = Version
@@ -114,8 +122,9 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	// Register the session immediately so it appears in `plumb sessions` and the
 	// TUI as soon as the client connects — before the workspace is resolved.
 	sessID, _ := session.Register(session.Info{
-		Language: "go",
-		Adapter:  "gopls",
+		DaemonVersion: Version,
+		Language:      "go",
+		Adapter:       "gopls",
 	})
 	defer session.Unregister(sessID)
 
@@ -195,12 +204,20 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewTypeHierarchy(sessionProxy))
 	srv.Register(tools.NewDiagnostics(sessionInv))
 	srv.Register(tools.NewListFiles())
+	srv.Register(tools.NewListDirectory())
+	srv.Register(tools.NewReadFile())
+	srv.Register(tools.NewReadMultipleFiles())
+	srv.Register(tools.NewWriteFile(sessionProxy))
+	srv.Register(tools.NewEditFile(sessionProxy))
+	srv.Register(tools.NewDeleteFile(sessionProxy))
+	srv.Register(tools.NewRenameFile(sessionProxy))
 	srv.Register(tools.NewSearchInFiles())
 	srv.Register(tools.NewFindFiles())
 	srv.Register(tools.NewGit())
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace())
 	srv.Register(tools.NewVersion())
+	srv.Register(tools.NewSessionStart(wsFn, sessionInv))
 
 	// Edit tools — LSP-semantic refactoring + body replacement / inserts.
 	srv.Register(tools.NewRenameSymbol(sessionProxy))
@@ -220,6 +237,11 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	// Expose memories as MCP resources so Claude Desktop's resources panel
 	// surfaces them as browseable artifacts.
 	srv.Resources = memory.NewResourceProvider(wsFn)
+
+	// Register built-in prompts — surfaced as buttons/menu items in Claude Desktop.
+	srv.RegisterPrompt(mcp.NewOrientPrompt(wsFn))
+	srv.RegisterPrompt(mcp.NewWhatsBrokenPrompt(wsFn))
+	srv.RegisterPrompt(mcp.NewRecentChangesPrompt(wsFn))
 
 	srv.OnClientInfo = func(_ context.Context, name, version string) {
 		stateMu.Lock()
@@ -282,22 +304,32 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		var a struct {
 			URI  string `json:"uri"`
 			Path string `json:"path"`
+			Root string `json:"root"` // list_files uses "root" instead of "path"
 		}
 		_ = json.Unmarshal(args, &a)
 
-		// Seed the workspace lookup from URI (LSP tools) or Path (filesystem tools).
+		// Seed the workspace lookup from URI (LSP tools) or Path/Root (filesystem tools).
 		var seed string
 		switch {
 		case a.URI != "":
 			seed = a.URI
 		case a.Path != "":
 			seed = "file://" + a.Path
+		case a.Root != "":
+			seed = "file://" + a.Root
 		default:
 			return
 		}
 
 		seedPath := strings.TrimPrefix(seed, "file://")
-		root, _, err := pool.Detect(filepath.Dir(seedPath))
+		// If seedPath is already a directory (filesystem tools pass the search
+		// root, not a file), use it directly. filepath.Dir on a directory path
+		// strips the last component and would miss the project root marker.
+		startDir := seedPath
+		if info, err := os.Stat(seedPath); err != nil || !info.IsDir() {
+			startDir = filepath.Dir(seedPath)
+		}
+		root, _, err := pool.Detect(startDir)
 		if err != nil {
 			slog.Warn("daemon: cannot determine workspace root", "seed", seed, "err", err)
 			return
@@ -316,6 +348,12 @@ func daemonSocketPath() string {
 // daemonPIDPath returns the path where the daemon writes its PID.
 func daemonPIDPath() string {
 	return filepath.Join(plumbRuntimeDir(), "plumb.pid")
+}
+
+// daemonVersionPath returns the path where the daemon publishes its build
+// version (read by `plumb serve` to detect a stale daemon).
+func daemonVersionPath() string {
+	return filepath.Join(plumbRuntimeDir(), "plumb.version")
 }
 
 // plumbRuntimeDir returns the directory used for daemon runtime files

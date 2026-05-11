@@ -129,6 +129,14 @@ func (a *Adapter) DidClose(ctx context.Context, params protocol.DidCloseTextDocu
 	return nil
 }
 
+// DidChangeWatchedFiles notifies pyright that one or more files changed on disk.
+func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
+	if err := a.conn.Notify(ctx, protocol.MethodDidChangeWatchedFiles, params); err != nil {
+		return fmt.Errorf("pyright didChangeWatchedFiles: %w", err)
+	}
+	return nil
+}
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 // DocumentSymbols returns all symbols in the document.

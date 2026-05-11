@@ -33,6 +33,9 @@ func (m *mockLSP) DidChange(_ context.Context, _ protocol.DidChangeTextDocumentP
 func (m *mockLSP) DidClose(_ context.Context, _ protocol.DidCloseTextDocumentParams) error {
 	return m.err
 }
+func (m *mockLSP) DidChangeWatchedFiles(_ context.Context, _ protocol.DidChangeWatchedFilesParams) error {
+	return m.err
+}
 func (m *mockLSP) WorkspaceSymbols(_ context.Context, _ protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
 	return m.wsSymbols, m.err
 }

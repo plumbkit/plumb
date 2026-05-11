@@ -25,6 +25,7 @@ import (
 type Info struct {
 	ID            string    `json:"id"`
 	PID           int       `json:"pid"`
+	DaemonVersion string    `json:"daemon_version,omitempty"`
 	Language      string    `json:"language"`
 	Folder        string    `json:"folder"`
 	Adapter       string    `json:"adapter"`

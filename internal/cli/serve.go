@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, error) {
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
 		slog.Info("serve: connected to existing daemon")
+		warnIfDaemonStale()
 		return conn, nil
 	}
 
@@ -64,6 +66,24 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 		}
 	}
 	return nil, fmt.Errorf("daemon did not start within 10 seconds (socket: %s)", socketPath)
+}
+
+// warnIfDaemonStale compares the running daemon's published version against
+// our binary's build version. Mismatch usually means the user rebuilt without
+// restarting the daemon, so new tools/features won't be visible. We warn
+// rather than fail — the old daemon is still functional for the tools it has.
+func warnIfDaemonStale() {
+	data, err := os.ReadFile(daemonVersionPath())
+	if err != nil {
+		return // older daemon predates the version file; can't tell.
+	}
+	running := string(bytes.TrimSpace(data))
+	if running == "" || running == Version {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"plumb: warning: connected daemon is %s but this binary is %s — run `plumb stop` to refresh.\n",
+		running, Version)
 }
 
 // proxyStdio copies stdin → conn and conn → stdout until ctx is cancelled or

@@ -101,6 +101,11 @@ type Server struct {
 	pendingMu  sync.Mutex
 	pending    map[string]chan json.RawMessage
 	reqCounter atomic.Int64
+
+	// prompts registry.
+	promptMu    sync.RWMutex
+	prompts     map[string]Prompt
+	promptOrder []string // insertion order for prompts/list
 }
 
 // New creates a Server with the given identity.
@@ -109,6 +114,7 @@ func New(info ServerInfo) *Server {
 		info:    info,
 		tools:   make(map[string]Tool),
 		pending: make(map[string]chan json.RawMessage),
+		prompts: make(map[string]Prompt),
 	}
 }
 
@@ -295,6 +301,10 @@ func (s *Server) handle(ctx context.Context, raw []byte) (mcpResponse, bool) {
 		return s.handleResourcesList(ctx, req), true
 	case "resources/read":
 		return s.handleResourcesRead(ctx, req), true
+	case "prompts/list":
+		return s.handlePromptsList(req), true
+	case "prompts/get":
+		return s.handlePromptsGet(ctx, req), true
 	default:
 		return errResp(req.ID, codeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method)), true
 	}
@@ -342,6 +352,12 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 	caps := map[string]any{"tools": map[string]any{}}
 	if s.Resources != nil {
 		caps["resources"] = map[string]any{}
+	}
+	s.promptMu.RLock()
+	hasPrompts := len(s.prompts) > 0
+	s.promptMu.RUnlock()
+	if hasPrompts {
+		caps["prompts"] = map[string]any{}
 	}
 	res := result{
 		ProtocolVersion: protocolVersion,

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,6 +30,12 @@ func NewResourceProvider(workspaceFn func() string) *ResourceProvider {
 }
 
 const uriScheme = "plumb-memory://"
+const contextURI = "plumb://workspace/context"
+
+// contextMDPath returns the path to .plumb/context.md for a workspace.
+func contextMDPath(workspace string) string {
+	return filepath.Join(workspace, ".plumb", "context.md")
+}
 
 // uriFor returns the MCP resource URI for a named memory.
 func uriFor(name string) string { return uriScheme + name }
@@ -45,11 +52,23 @@ func (p *ResourceProvider) List(_ context.Context) ([]mcp.ResourceDescriptor, er
 	if ws == "" {
 		return nil, nil
 	}
+
+	var out []mcp.ResourceDescriptor
+
+	// Expose context.md as the first resource if it exists.
+	if _, err := os.Stat(contextMDPath(ws)); err == nil {
+		out = append(out, mcp.ResourceDescriptor{
+			URI:         contextURI,
+			Name:        "Project context",
+			Description: "Project overview, architecture, conventions, and gotchas from .plumb/context.md",
+			MimeType:    "text/markdown",
+		})
+	}
+
 	mems, err := List(ws)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]mcp.ResourceDescriptor, 0, len(mems))
 	for _, m := range mems {
 		desc := m.Description
 		if desc == "" {
@@ -66,6 +85,24 @@ func (p *ResourceProvider) List(_ context.Context) ([]mcp.ResourceDescriptor, er
 }
 
 func (p *ResourceProvider) Read(_ context.Context, uri string) (*mcp.ResourceContent, error) {
+	// context.md resource.
+	if uri == contextURI {
+		ws := p.workspaceFn()
+		if ws == "" {
+			return nil, fmt.Errorf("no workspace resolved; cannot read context")
+		}
+		data, err := os.ReadFile(contextMDPath(ws))
+		if err != nil {
+			return nil, fmt.Errorf("reading context.md: %w", err)
+		}
+		return &mcp.ResourceContent{
+			URI:      uri,
+			MimeType: "text/markdown",
+			Text:     string(data),
+		}, nil
+	}
+
+	// Memory resources.
 	name, ok := nameFromURI(uri)
 	if !ok {
 		return nil, fmt.Errorf("unsupported URI scheme: %s", uri)

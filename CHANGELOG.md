@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.5.0 — 2026-05-11
+
+### Changed (architectural)
+- **LSP notification primitive rewritten** — write tools now use `workspace/didChangeWatchedFiles` (one notification per write) instead of the prior `didOpen`/`didChange`/`didClose` lifecycle dance. The new primitive is the LSP-correct way to tell a server about external file changes: no buffer-ownership claim, no version counter abuse, no language-ID guessing. `langIDForPath` (~60 lines) deleted. Plumb now declares `FileCreated`, `FileChanged`, or `FileDeleted` explicitly per event. Protocol types, gopls + pyright adapter methods, routing-proxy fanout, and test mocks added across the LSP layer.
+
+### Added
+- **`delete_file` tool** — atomic file delete with `FileDeleted` notification.
+- **`rename_file` tool** — atomic move/rename with paired `FileDeleted` + `FileCreated` notifications. Deadlock-safe two-path locking. Distinct from `rename_symbol` (LSP-semantic identifier rename).
+- **Per-path lock** — process-global `sync.Map[path]→Mutex` serialises concurrent `write_file` / `edit_file` / `delete_file` / `rename_file` calls to the same path. Two parallel sessions can no longer interleave reads and writes on the same file.
+- **`expected_mtime` on `edit_file`** — optional RFC3339Nano timestamp (typically copied from `read_file`'s output header). When supplied, the edit is rejected if the file's current mtime differs — optimistic-concurrency guarantee that the agent is editing the same revision it read.
+- **mtime header on `read_file` output** — every response begins with `# plumb-read mtime=<RFC3339Nano>` so the agent can thread it back as `expected_mtime`.
+- **Line-change summary in `edit_file` output** — response now includes the new mtime and a compact `lines changed: L12-15, L45` summary so the agent can verify changes without a follow-up read.
+- **CRLF tolerance in `edit_file`** — line endings in `old_str` are normalised against the file before matching, so an LF `old_str` matches a CRLF file (and vice versa).
+- **Symlink-aware `safeWrite`** — writes to a symlinked path follow the link to the real target instead of replacing the symlink with a regular file.
+- **Pre-rename mtime check in `edit_file`** — if the file changes between our read and our rename, the attempt is surfaced as retryable rather than silently overwriting.
+- **Daemon version-mismatch warning** — the daemon publishes its build version to `<runtime>/plumb.version` on start. `plumb serve` reads it and prints a stderr warning if the connected daemon's version differs from the binary that's launching ("run `plumb stop` to refresh").
+- **`session_start` enhancements** — now includes current git branch, 3 most recent commits, 5 most recently-modified files (workspace-relative, skipping `.git`/`node_modules`/`vendor`/etc.). `context.md` cap raised from 80 → 200 lines. Cold-start fallback walks up from `os.Getwd()` for project markers when the daemon hasn't resolved a workspace.
+- **Glob filter on `list_directory`** — optional `pattern` parameter (e.g. `*.go`) for consistency with `list_files`.
+
+### Fixed
+- **`list_directory` modified times** — the column was collected but never rendered. Now visible alongside name and size.
+- **`read_file` streaming line ranges** — when `start_line`/`end_line` are set, `bufio.Scanner` stops at `end_line` instead of reading the whole file into memory and slicing.
+- **`read_file` binary detection** — refactored to use `io.MultiReader` instead of read-seek-reread (works on pipes/devices that don't support seeking).
+- **`read_multiple_files` parallelism** — now reads up to 8 files concurrently and propagates the parent context. Previously serial and passed `nil` ctx to the inner reader.
+- **`write_file` schema cleanup** — removed the dead-code empty-content double-unmarshal hack; `content` is schema-required and enforced by the MCP layer.
+
+### Known gaps
+- `client/registerCapability` is silently dropped by the jsonrpc `Conn` (no server-request handler). Functionally OK for gopls — it has built-in static watchers for `.go` files and consumes our notifications via that path — but full LSP correctness needs the conn-level request handler plus `dynamicRegistration` declared in client capabilities. Slated for 0.5.1.
+- Symbol cache (`internal/cache`) is invalidated only indirectly via the existing `Invalidator` that listens for `publishDiagnostics`. After a write, the cache stays stale until gopls re-publishes. Direct eviction from the write tools is the right fix; deferred to 0.5.1.
+- Pyright `didChangeWatchedFiles` is wired but untested in this release.
+
+## 0.4.1 — 2026-05-11
+
+### Added
+- **`write_file` tool** — creates or overwrites a file atomically. Content is staged in a temp file in `os.TempDir()` (no project-tree noise) then renamed into place. If the system temp dir and target are on different filesystems (EXDEV), falls back to a `.plumb.tmp` sibling automatically. Preserves existing file permissions. Notifies the LSP server via `didOpen`/`didChange`/`didClose` after writing so diagnostics and symbol lookups reflect the new content immediately.
+- **`edit_file` tool** — applies one or more str_replace edits to an existing file with a four-layer safety model: (1) uniqueness lock — each `old_str` must appear exactly once, rejecting absent or ambiguous matches cleanly; (2) in-memory application — all edits applied before any write, file untouched on any failure; (3) atomic write — staged in `os.TempDir()` + rename, EXDEV-fallback to sibling; (4) concurrent-write retry — after the rename, plumb re-stats the file and retries the edit up to 3 times if a third-party write is detected. LSP notification on success.
+- **`read_multiple_files` tool** — reads up to 20 files in a single call. Per-file errors reported inline.
+- **`list_directory` tool** — immediate directory contents with `[FILE]`/`[DIR]` type prefixes, file sizes, and modification times. Sortable by name, size, or modification time.
+- **`DaemonVersion` in session info** — `session.Info` now carries the daemon's version string. The TUI right panel shows it as a `Daemon` row so sessions from different daemon versions are distinguishable.
+
+### Changed
+- File write safety model revised: temp files go to `os.TempDir()` rather than a sibling `.plumb.tmp`, keeping the project tree clean. EXDEV cross-device rename is handled transparently by falling back to the sibling approach only when needed.
+- `file_write_helpers.go` centralises `safeWrite`, `notifyLSP`, and `langIDForPath`. `safeWrite` returns a `writeResult` carrying timestamps used for concurrent-write detection in `edit_file`.
+
+## 0.4.0 — 2026-05-11
+
+### Added
+- **`read_file` tool** — reads the text contents of any file by absolute path or `file://` URI. Supports `start_line`/`end_line` for slicing large files without loading them entirely. Binary files are detected and rejected. Output is capped at 200 KiB with guidance to use line ranges for larger files. Fixes the hard ceiling Claude Desktop users hit when navigating to a file but being unable to open it.
+- **`session_start` tool** — bootstrap tool designed to be called first in every session. Returns in one round-trip: workspace path and auto-detected language, first 80 lines of `.plumb/context.md`, all memory names and descriptions, top-5 most-used tools from session history, and active LSP errors and warnings. Eliminates the "starts blind" problem on Claude Desktop where no filesystem access is available without tools.
+- **`context.md` as MCP resource** — `.plumb/context.md` is now exposed as `plumb://workspace/context` via the MCP resource system, appearing as the first entry in the resources panel (above memories). Claude Desktop users can attach project context with one click.
+- **MCP Prompts** — three named workflows surfaced as buttons/menu items in Claude Desktop:
+  - **`orient`** — calls `session_start` and delivers a structured 4-point project summary.
+  - **`whats-broken`** — chains `session_start` → `diagnostics` → `read_file` per broken file → triage and suggested fixes.
+  - **`recent-changes`** — chains `session_start` → `git log` → `git diff --stat` → `diagnostics` for a recent-activity summary.
+  All three accept an optional `workspace` argument; `recent-changes` also accepts `since` (e.g. `'1 week ago'`, a commit SHA).
+
+## 0.3.3 — 2026-05-11
+
+### Fixed
+- **`plumb stop` now stops all daemon instances** — previously only one process was killed per invocation; users had to run `plumb stop` multiple times if multiple daemon processes were running. The command now collects all PIDs from all three lookup strategies (PID file, lsof, pgrep) and stops each one. Output is more verbose: prints each PID being stopped and reports upfront when multiple daemons are found.
+- **Workspace not resolving from filesystem tool calls** — `list_files`, `find_files`, and `search_in_files` calls were not triggering workspace resolution, leaving sessions stuck in "pending" state in the TUI. Two causes: (1) `list_files` passes its directory as `root` but `OnBeforeTool` only read `path`; (2) when a tool passes a directory path, `filepath.Dir` was stripping the last component and causing `Detect` to start from the parent, missing the project root marker. Both fixed.
+
 ## 0.3.2 — 2026-05-11
 
 ### Added

@@ -90,6 +90,13 @@ func (p *clientProxy) DidClose(ctx context.Context, params protocol.DidCloseText
 	}
 	return c.DidClose(ctx, params)
 }
+func (p *clientProxy) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
+	c, err := p.getOrErr()
+	if err != nil {
+		return err
+	}
+	return c.DidChangeWatchedFiles(ctx, params)
+}
 func (p *clientProxy) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	c, err := p.getOrErr()
 	if err != nil {

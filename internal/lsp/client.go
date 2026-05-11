@@ -43,6 +43,12 @@ type LSPClient interface {
 	// DidClose notifies the server that a document has been closed.
 	DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error
 
+	// DidChangeWatchedFiles notifies the server that one or more files on disk
+	// changed outside the client's open-document set. This is the correct
+	// primitive for "plumb just wrote this file" — it refreshes the server's
+	// view without claiming buffer ownership.
+	DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error
+
 	// ── Queries ─────────────────────────────────────────────────────────────
 
 	// DocumentSymbols returns all symbols in the given document.

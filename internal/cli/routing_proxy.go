@@ -172,6 +172,29 @@ func (r *routingProxy) DidClose(ctx context.Context, params protocol.DidCloseTex
 	}
 	return c.DidClose(ctx, params)
 }
+
+// DidChangeWatchedFiles groups events by routed workspace so each gopls instance
+// only sees the events for files inside the workspace it manages.
+func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
+	if len(params.Changes) == 0 {
+		return nil
+	}
+	groups := make(map[lsp.LSPClient][]protocol.FileEvent, 1)
+	for _, ev := range params.Changes {
+		c, err := r.route(ctx, ev.URI)
+		if err != nil {
+			return err
+		}
+		groups[c] = append(groups[c], ev)
+	}
+	var firstErr error
+	for c, evs := range groups {
+		if err := c.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{Changes: evs}); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
 func (r *routingProxy) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {

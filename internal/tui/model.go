@@ -37,20 +37,21 @@ const (
 // Model is the root Bubble Tea model for the sessions dashboard.
 // Concurrency: single goroutine (Bubble Tea runtime).
 type Model struct {
-	sessions    []session.Info
-	hiddenCount int                // sessions filtered out for lacking a workspace
-	statsDBs    map[string]*stats.DB // cached per-workspace DBs (read-only)
-	toolStats   []stats.ToolStat   // stats for currently selected session
-	recentCalls []stats.RecentCall
-	cursor      int        // index into m.sessions
-	statsCursor int        // index into m.recentCalls when focusPanel == focusStats
-	focusPanel  panelFocus // which panel j/k controls
-	leftWidth   int        // width of left panel content column (excludes border chars)
-	width       int
-	height      int
-	ready       bool
-	loadErr     string
-	showHidden  bool // toggle to display unresolved sessions
+	sessions       []session.Info
+	hiddenCount    int                  // sessions filtered out for lacking a workspace
+	statsDBs       map[string]*stats.DB // cached per-workspace DBs (read-only)
+	toolStats      []stats.ToolStat     // stats for currently selected session
+	recentCalls    []stats.RecentCall
+	cursor         int        // index into m.sessions
+	statsCursor    int        // index into m.recentCalls when focusPanel == focusStats
+	focusPanel     panelFocus // which panel j/k controls
+	showCallDetail bool       // when true, right panel shows full detail for selected recent call
+	leftWidth      int        // width of left panel content column (excludes border chars)
+	width          int
+	height         int
+	ready          bool
+	loadErr        string
+	showHidden     bool // toggle to display unresolved sessions
 }
 
 // NewModel returns the initial model, loading sessions immediately.
@@ -128,7 +129,7 @@ func (m *Model) refreshStats() {
 	}
 	filter := stats.Filter{SessionID: s.ID}
 	m.toolStats, _ = db.Summary(filter)
-	m.recentCalls, _ = db.Recent(8, filter)
+	m.recentCalls, _ = db.Recent(50, filter)
 	if m.statsCursor >= len(m.recentCalls) {
 		m.statsCursor = 0
 	}
@@ -181,10 +182,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "esc":
+			// Close call detail view if open; otherwise do nothing.
+			m.showCallDetail = false
+		case "enter":
+			// Open detail view for the selected recent call.
+			if m.focusPanel == focusStats && len(m.recentCalls) > 0 {
+				m.showCallDetail = true
+			}
 		case "tab":
 			// Toggle focus between the sessions list (left) and the
 			// recent-calls list (right). Only meaningful when the right
 			// panel actually has rows to navigate.
+			m.showCallDetail = false
 			if m.focusPanel == focusSessions && len(m.recentCalls) > 0 {
 				m.focusPanel = focusStats
 			} else {
@@ -194,6 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focusPanel == focusStats {
 				if m.statsCursor > 0 {
 					m.statsCursor--
+					m.showCallDetail = false
 				}
 			} else if m.cursor > 0 {
 				m.cursor--
@@ -203,6 +214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focusPanel == focusStats {
 				if m.statsCursor < len(m.recentCalls)-1 {
 					m.statsCursor++
+					m.showCallDetail = false
 				}
 			} else if m.cursor < len(m.sessions)-1 {
 				m.cursor++
@@ -259,7 +271,7 @@ func (m Model) render() string {
 		titleText += " " + Version
 	}
 	title := TitleStyle.Render(titleText)
-	hint := HintStyle.Render("↑↓/jk navigate · tab focus panel · a all sessions · [/] resize · q quit")
+	hint := HintStyle.Render("↑↓/jk navigate · tab focus panel · enter detail · esc back · a all · [/] resize · q quit")
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(hint)
 	if gap < 1 {
 		gap = 1
@@ -409,6 +421,34 @@ func (m Model) rightLines(rightWidth int) []string {
 		return lines
 	}
 
+	// ─── Call detail view (enter to open, esc/j/k to close) ──────────────
+	if m.showCallDetail && m.focusPanel == focusStats && len(m.recentCalls) > 0 {
+		c := m.recentCalls[m.statsCursor]
+		status := OkStyle.Render("✓ success")
+		if !c.Success {
+			status = WarnStyle.Render("✗ failed")
+		}
+		lines = append(lines,
+			"  "+SepStyle.Render("── Call Detail ──"),
+			"",
+			detailRow("Tool", c.Tool),
+			detailRow("Status", status),
+			detailRow("Called at", c.CalledAt.Format("2006-01-02 15:04:05")),
+			detailRow("Duration", fmt.Sprintf("%d ms", c.DurationMs)),
+			detailRow("Input", fmt.Sprintf("%d bytes", c.InputBytes)),
+			detailRow("Output", fmt.Sprintf("%d bytes", c.OutputBytes)),
+			detailRow("Workspace", contractPath(c.Workspace, rightWidth-16)),
+		)
+		if c.ErrorMsg != "" {
+			lines = append(lines, "", "  "+WarnStyle.Render("Error:"))
+			for _, w := range wrapText(c.ErrorMsg, rightWidth-4) {
+				lines = append(lines, "    "+WarnStyle.Render(w))
+			}
+		}
+		lines = append(lines, "", "  "+MutedStyle.Render("esc · back to list"))
+		return lines
+	}
+
 	const keyColWidth = 14
 	maxVal := rightWidth - keyColWidth
 	if maxVal < 8 {
@@ -430,8 +470,11 @@ func (m Model) rightLines(rightWidth int) []string {
 		detailRow("Folder", folder),
 		detailRow("Adapter", s.Adapter),
 		detailRow("PID", fmt.Sprintf("%d", s.PID)),
-		detailRow("Started", s.StartedAt.Format("2006-01-02 15:04:05")),
 	)
+	if s.DaemonVersion != "" {
+		lines = append(lines, detailRow("Daemon", s.DaemonVersion))
+	}
+	lines = append(lines, detailRow("Started", s.StartedAt.Format("2006-01-02 15:04:05")))
 
 	client := s.ClientName
 	if s.ClientVersion != "" {

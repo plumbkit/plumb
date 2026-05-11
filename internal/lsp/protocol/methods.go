@@ -10,6 +10,7 @@ const (
 	MethodDidOpen             = "textDocument/didOpen"
 	MethodDidChange           = "textDocument/didChange"
 	MethodDidClose            = "textDocument/didClose"
+	MethodDidChangeWatchedFiles = "workspace/didChangeWatchedFiles"
 	MethodDocumentSymbols     = "textDocument/documentSymbol"
 	MethodWorkspaceSymbols    = "workspace/symbol"
 	MethodDefinition          = "textDocument/definition"

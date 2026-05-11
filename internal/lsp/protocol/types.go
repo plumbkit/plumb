@@ -369,6 +369,32 @@ type DidCloseTextDocumentParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
 
+// FileChangeType enumerates the kinds of filesystem events reported via
+// workspace/didChangeWatchedFiles. Values match the LSP spec.
+type FileChangeType int
+
+const (
+	FileCreated FileChangeType = 1
+	FileChanged FileChangeType = 2
+	FileDeleted FileChangeType = 3
+)
+
+// FileEvent describes one filesystem change.
+type FileEvent struct {
+	URI  string         `json:"uri"`
+	Type FileChangeType `json:"type"`
+}
+
+// DidChangeWatchedFilesParams is the payload for workspace/didChangeWatchedFiles.
+// This is the LSP-correct primitive for telling the server about external
+// (non-client-owned) file changes — use it whenever a tool writes to disk
+// behind the server's back. Prefer this over the didOpen/didChange/didClose
+// dance, which is for editor-managed buffers and forces the server to treat
+// the client as the source of truth.
+type DidChangeWatchedFilesParams struct {
+	Changes []FileEvent `json:"changes"`
+}
+
 // DocumentSymbolParams is the payload for textDocument/documentSymbol.
 type DocumentSymbolParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`

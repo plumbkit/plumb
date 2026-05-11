@@ -1,13 +1,12 @@
 # MCP Tools
 
-Plumb exposes LSP capabilities to LLMs as MCP tools.  Each tool is registered
-with the MCP server at startup and appears in the `tools/list` response that
-Claude Desktop (or any other MCP client) uses to discover available actions.
+Plumb exposes LSP and filesystem capabilities to LLMs as MCP tools. Each tool is registered with the MCP server at startup and appears in the `tools/list` response that Claude Desktop (or any other MCP client) uses to discover available actions.
 
-Tools are implemented in `internal/tools/` and registered in
-`internal/cli/serve.go`.  All three tools cache their results in the
-session-scoped `cache.Cache`; entries are invalidated automatically when the
-language server reports that a file has changed (`textDocument/publishDiagnostics`).
+Tools are implemented in `internal/tools/` and registered in `internal/cli/daemon.go`.
+
+LSP tools cache their results in the session-scoped `cache.Cache`; entries are invalidated automatically when the language server reports that a file has changed (`textDocument/publishDiagnostics`).
+
+Filesystem tools (read, write, edit, list, search) do not require a running language server but do notify gopls via `didOpen`/`didChange`/`didClose` after any write so the LSP's in-memory view stays consistent.
 
 ---
 
@@ -405,3 +404,151 @@ LLM can distinguish tool failures from empty results.
 LSP errors (server not ready, method not supported, timeout) propagate as tool
 errors and are not retried automatically.  The client can retry the same call;
 the language server supervisor will restart the process if it has crashed.
+
+---
+
+## Filesystem tools
+
+### `read_file`
+
+Read the text content of any file.
+
+**Source**: `internal/tools/read_file.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `path` | yes | Absolute path or `file://` URI |
+| `start_line` | no | First line to return (1-based, inclusive) |
+| `end_line` | no | Last line to return (1-based, inclusive) |
+
+Binary files are detected and rejected. Output is capped at 200 KiB; use `start_line`/`end_line` for large files.
+
+---
+
+### `read_multiple_files`
+
+Read up to 20 files in a single call.
+
+**Source**: `internal/tools/read_multiple_files.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `paths` | yes | Array of up to 20 absolute paths or `file://` URIs |
+
+Errors for individual files are reported inline — one unreadable file does not abort the others.
+
+---
+
+### `write_file`
+
+Create or overwrite a file atomically.
+
+**Source**: `internal/tools/write_file.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `path` | yes | Absolute path or `file://` URI |
+| `content` | yes | Full content to write |
+| `create_dirs` | no | Create parent directories if absent. Default `true` |
+
+**Safety model:**
+- Content is staged in a temp file in `os.TempDir()` (no project-tree noise) then renamed into place via `os.Rename` — atomic on POSIX.
+- If the system temp dir and target are on different filesystems (EXDEV), falls back to a `.plumb.tmp` sibling in the same directory automatically.
+- Existing file permissions are preserved. New files get `0644`.
+- After a successful write, gopls receives `didOpen`/`didChange`/`didClose` so diagnostics and symbol lookups reflect the new content immediately.
+
+---
+
+### `edit_file`
+
+Apply one or more str_replace edits to an existing file.
+
+**Source**: `internal/tools/edit_file.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `path` | yes | Absolute path or `file://` URI |
+| `edits` | yes | Array of `{old_str, new_str}` objects, applied sequentially |
+
+Each `old_str` must appear **exactly once** in the file at the time the edit is evaluated. Absent or ambiguous strings are rejected with a clear error — no silent corruption is possible even if the file was modified concurrently.
+
+**Safety model:**
+1. **Uniqueness lock**: the exact-once requirement detects concurrent modifications. If `old_str` is missing, the file changed since you read it.
+2. **In-memory application**: all edits are applied in memory before any write. If any edit fails, the file is not touched.
+3. **Atomic write**: the final content is staged in `os.TempDir()` and renamed into place. Cross-device rename falls back to a `.plumb.tmp` sibling automatically.
+4. **Concurrent-write retry**: after the rename, plumb re-stats the file. If the mtime is significantly newer than the write time, a third party wrote the file during the operation. The edit is re-applied automatically — up to 3 times — then fails with a full diagnostic message.
+
+---
+
+### `list_directory`
+
+List the immediate contents of a directory.
+
+**Source**: `internal/tools/list_directory.go`
+
+| Field | Required | Description |
+|---|---|---|
+| `path` | yes | Absolute path or `file://` URI of the directory |
+| `include_hidden` | no | Include names starting with `.`. Default `false` |
+| `sort_by` | no | `name` (default), `size`, or `modified` |
+
+Returns entries with `[FILE]` or `[DIR]` prefixes, file sizes, and modification times. Non-recursive — use `list_files` or `find_files` for tree traversal.
+
+---
+
+### `list_files`
+
+Recursively walk a directory tree with glob filtering and depth control.
+
+**Source**: `internal/tools/list_files.go`
+
+See tool description for full parameter list.
+
+---
+
+### `search_in_files`
+
+Ripgrep-style content search — regex, smart-case, context lines, glob filter. Respects `.gitignore`.
+
+**Source**: `internal/tools/search_in_files.go`
+
+---
+
+### `find_files`
+
+fd-style file finder — glob or regex, extension filter, type filter, depth limit. Respects `.gitignore`.
+
+**Source**: `internal/tools/find_files.go`
+
+---
+
+### `find_replace`
+
+Text/regex search-and-replace across files. Defaults to `dry_run=true`.
+
+**Source**: `internal/tools/find_replace.go`
+
+---
+
+### `file_diff`
+
+Unified diff between any two files. No git required.
+
+**Source**: `internal/tools/file_diff.go`
+
+---
+
+## Bootstrap and session tools
+
+### `session_start`
+
+Bootstrap tool — call this first in every session.
+
+**Source**: `internal/tools/session_start.go`
+
+Returns in one round-trip: workspace path and detected language, the first 80 lines of `.plumb/context.md`, all memory names and descriptions, the top-5 most-used tools from session history, and active LSP errors and warnings. Designed for Claude Desktop where no filesystem access is available without tool calls. Idempotent.
+
+| Field | Required | Description |
+|---|---|---|
+| `workspace` | no | Absolute workspace path. Defaults to the daemon's resolved workspace |
+

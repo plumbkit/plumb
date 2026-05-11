@@ -36,6 +36,9 @@ func (s *stubClient) DidChange(context.Context, protocol.DidChangeTextDocumentPa
 func (s *stubClient) DidClose(context.Context, protocol.DidCloseTextDocumentParams) error {
 	return nil
 }
+func (s *stubClient) DidChangeWatchedFiles(context.Context, protocol.DidChangeWatchedFilesParams) error {
+	return nil
+}
 func (s *stubClient) DocumentSymbols(context.Context, protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	return nil, nil
 }
