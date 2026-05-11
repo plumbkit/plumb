@@ -263,6 +263,16 @@ func claudeCodeConfigPath() (string, error) {
 	return filepath.Join(home, ".claude.json"), nil
 }
 
+// GeminiConfigPath returns the platform-specific path for Gemini CLI's
+// mcp_config.json. It does not check whether the file exists.
+func GeminiConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".gemini", "antigravity", "mcp_config.json"), nil
+}
+
 // backupFile copies src to src.<timestamp>.bak in the same directory.
 func backupFile(src string) error {
 	data, err := os.ReadFile(src)
@@ -313,6 +323,9 @@ func readOrInitClaudeConfig(path string) (m map[string]any, isNew bool, err erro
 	}
 	if err != nil {
 		return nil, false, err
+	}
+	if len(data) == 0 {
+		return map[string]any{}, false, nil
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, false, fmt.Errorf("parsing %s as JSON: %w — will not overwrite", path, err)

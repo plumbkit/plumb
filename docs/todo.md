@@ -2,177 +2,139 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.7** (2026-05-11).
+Last reviewed against: **0.5.9** (2026-05-11).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
+## Organisation
+
+This file is organised by **topic**, not strictly by priority. Within each topic, items are ordered by priority (highest first). A separate ["The next two hours"](#the-next-two-hours) recommended-priority section at the very top cross-cuts the topics.
+
+Topics:
+
+- [Architecture](#architecture) — deep design changes, new contracts, new infrastructure
+- [Features](#features) — net-new user-facing capabilities
+- [Improvements](#improvements) — refinements to existing behaviour
+- [Testing & verification](#testing--verification) — proving things actually work end-to-end
+- [Bugs & known limitations](#bugs--known-limitations) — existing footguns; behaviour to be aware of
+- [Considered and deferred](#considered-and-deferred) — items decided against or postponed
+
 ---
 
-## The next two hours — recommended priority order
+## The next two hours
 
-If you have ~2 hours of work to invest, do these in this order. They're the items whose absence undermines the most confidence:
+If you have ~2 hours of work to invest, do these in this order. They're the items whose absence undermines the most confidence right now:
 
-1. **Pyright integration smoke test** (~20 min, once `pyright-langserver` is installed) — same shape as the gopls test that landed in 0.5.6. Highest-value confidence boost: confirms pyright is structurally equivalent to gopls, not just unit-test-equivalent. See [Pyright integration smoke test](#pyright-integration-smoke-test) below.
+1. **Pyright integration smoke test** (~20 min, once `pyright-langserver` is installed) — same shape as the gopls test that landed in 0.5.6. Highest-value confidence boost. See [Testing & verification > Pyright integration smoke test](#pyright-integration-smoke-test).
 
-2. **Claude Desktop end-to-end test** (~30 min, no code) — the whole 0.5.x line was built for Claude Desktop. Connect real Claude Desktop to 0.5.7, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back in the response. Most important verification that's not been done. See [Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test) below.
+2. **Claude Desktop end-to-end test** (~30 min, no code) — the whole 0.5.x line was built for Claude Desktop. Connect real Claude Desktop to current binary, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back. See [Testing & verification > Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test).
 
-3. **Stats `input_json` column + Recent Edits paths in TUI** (~45 min) — includes the schema migrator that should already exist. Unblocks any future "what did Claude actually call?" introspection. See [Stats DB migrator + `input_json` column for tool args](#stats-db-migrator--input_json-column-for-tool-args) below.
+3. **Stats `input_json` column + Recent Edits paths in TUI** (~45 min) — includes the schema migrator that should already exist. Unblocks any future "what did Claude actually call?" introspection. See [Architecture > Stats DB migrator + `input_json` column](#stats-db-migrator--input_json-column-for-tool-args).
 
-4. **`expected_sha` parameter on `edit_file`** (~30 min) — the mtime path stays as the cheap default; the SHA path is for callers that care. Doesn't break existing behaviour. See [`expected_sha` parameter on `edit_file` and `transaction_apply`](#expected_sha-parameter-on-edit_file-and-transaction_apply) below.
+4. **`expected_sha` parameter on `edit_file`** (~30 min) — the mtime path stays as the cheap default; the SHA path is for callers that care. Doesn't break existing behaviour. See [Architecture > `expected_sha` parameter on `edit_file` and `transaction_apply`](#expected_sha-parameter-on-edit_file-and-transaction_apply).
 
 Total: ~2¼ hours. After these, plumb is *proven* (not just claimed) production-ready against the two LSPs we support and against the client we built for.
 
 ---
 
-## Production-blocking
+## Architecture
 
-These are the items whose absence prevents plumb from being claimed as proven, not just compiling-and-passing-unit-tests.
+Deep design changes, contract changes, and new infrastructure. These are the items most likely to need design discussion before implementation.
 
-### Claude Desktop end-to-end smoke test
+### Code-quality differential after edits
 
-**Priority:** highest.
-**Effort:** 30 min, no code.
+**Priority:** ⭐ top architectural priority. Discuss before implementing.
+**Effort:** Significant (multi-day, possibly multi-week). Phased delivery makes sense.
+**Status:** Idea captured. Not started.
 
-**Why this matters.** Every 0.5.x feature was built specifically to make Claude Desktop work — the `session_start` cold-start chain, the MCP Prompts, the resource provider, the per-project config. None of it has been confirmed against real Claude Desktop. The unit tests confirm the wire format and the daemon's internal state machine, not the actual user experience.
+**The pitch — what makes plumb genuinely different.**
 
-**Definition of done.** A manual checklist run successfully against real Claude Desktop 0.5.7 or newer, with results captured in a `docs/claude-desktop-smoke.md` (or appended to this file). The checklist:
+Today plumb writes code and tells the agent two things: *what changed* (line-range summary in the response) and *what's broken* (post-write diagnostics from the LSP). That matches what every other "edit a file" tool does.
 
-1. `plumb stop && make build && plumb setup claude-desktop`. Restart Claude Desktop.
-2. Open Claude Desktop. Open a Go project (e.g. this one). Watch `~/Library/Caches/plumb/daemon.log` while the conversation starts.
-3. Did the workspace resolve via `roots/list`? The log should show `daemon: session attached`  with the project root, not "no project root found".
-4. Type `/orient` (or invoke the Orient prompt manually). Claude should respond with a 3–5 sentence summary including the project's language, branch, and any active diagnostics.
-5. Ask Claude to read a small file via `read_file`. The response should begin with `# plumb-read mtime=...`.
-6. Ask Claude to edit that file using `edit_file` with the mtime from step 5. The response should include `applied N edit(s)` and a `lines changed: ...` summary.
-7. Ask Claude to introduce a syntax error via `edit_file`. Within 300 ms the response should include `diagnostics after write:` with at least one error line. *This is the load-bearing test for the post-write-diagnostics feature.*
-8. Open the resources sidebar in Claude Desktop. Confirm `Project context` and any memories are visible.
+The differential — the thing no other MCP tool on the market does — is to **return code-quality findings alongside the edit**. Not just compile errors from gopls; *style and idiomatic-quality* findings from offline analysers, the kind of thing GoLand or `golangci-lint` would tell you. After every edit, plumb runs the relevant analyser(s) for the file's language and appends a "code quality" section to the response:
 
-**Where to start.** No code changes expected — this is a verification exercise. If a step fails, file a TODO entry for the specific failure and address it before re-running.
+```
+applied 1 edit to internal/foo.go (412 bytes)
+mtime: 2026-05-11T15:42:01...
+lines changed: L34-38
 
-**Likely failure modes (so you know what to watch for):**
+diagnostics after write: (none)
 
-- **Step 3 failing** means Claude Desktop's `roots/list` support is broken or absent for your install. In that case `session_start` falls through to the cwd-walk fallback, which probably won't find anything because Desktop launches the daemon from `$HOME`. The fix is in `internal/cli/daemon.go`'s `rootsFn` / `applyProjectConfig`.
-- **Step 7 failing** ("diagnostics after write" never appears) means gopls didn't republish within 300 ms. Either the `postWriteDiagWindow` constant in `internal/tools/file_write_helpers.go` is too short for your machine, or `didChangeWatchedFiles` isn't being consumed. The gopls integration smoke test rules out the latter; if it passes locally with `go test -tags=integration`, the issue is timing — see [Configurable post-write diagnostics window](#configurable-post-write-diagnostics-window) below.
+code quality (golangci-lint, ruff, ...):
+  L37 ineffassign: ineffectual assignment to `x`
+  L42 gocritic:   if-else block can be a switch statement
+  L65 prealloc:   slice `results` is never reallocated; consider make([]T, 0, expectedSize)
+```
 
----
+Why this is architecturally important, not just a nice feature:
 
-### Pyright integration smoke test
+- It elevates plumb from "a better way to edit files" to "a code-review-loop in the inner agent loop". The agent learns *before its next turn* that its edit, while syntactically valid and type-safe, introduced a style regression. It can self-correct without the user noticing.
+- It's a clean composition of existing tools (`golangci-lint`, `ruff`, `eslint`, …) — plumb is just orchestrating them. No new analyser code to write.
+- It scales linguistically: every language plumb supports already has a mature offline analyser. The contract is the same shape per language.
+- It dovetails with `[edits].strict` and rate-limiting: agents that *care* about quality get richer feedback; those that don't can disable.
 
-**Priority:** highest after Claude Desktop.
-**Effort:** 20–30 min.
-**Prerequisite:** `pyright-langserver` on `$PATH` (`npm install -g pyright`).
+**Definition of done — Phase 1 (Go, minimum viable):**
 
-**Why this matters.** `TestIntegration_DidChangeWatchedFiles` in `internal/lsp/adapters/gopls/adapter_test.go` proves the 0.5.x architectural rewrite is load-bearing for gopls. The pyright adapter has identical wiring (same `LSPClient` interface, same `DefaultClientCapabilities` declaration, same `handleServerRequest` for `client/registerCapability`), but **the equivalent integration test does not exist**. Until it does, `AGENTS.md` honestly has to keep pyright marked "Experimental" — a structural asymmetry that's purely about test coverage.
-
-**Definition of done.**
-
-1. A test `TestIntegration_DidChangeWatchedFiles` exists in `internal/lsp/adapters/pyright/adapter_test.go`, gated `//go:build integration`.
-2. It spawns real `pyright-langserver --stdio`, initialises against a temp workspace populated from `testdata/python-fixture/`, writes a syntactically broken `.py` file, sends `DidChangeWatchedFiles{FileCreated}`, and asserts pyright republishes at least one error diagnostic within 5 seconds.
-3. `testdata/python-fixture/` exists with minimum: `pyproject.toml` (or `setup.py`) + `main.py`. If it doesn't exist, create it with one valid Python file.
-4. The test runs green with `go test -tags=integration ./internal/lsp/adapters/pyright/...`.
-5. AGENTS.md's adapter validation status table updates pyright from "Experimental" to "Validated".
-
-**Where to start.**
-
-1. Copy `internal/lsp/adapters/gopls/adapter_test.go`'s `TestIntegration_DidChangeWatchedFiles` verbatim into `internal/lsp/adapters/pyright/adapter_test.go`.
-2. Replace the gopls-specific bits:
-   - `startGopls` → `startPyright` (same shape; spawn `pyright-langserver --stdio` instead of `gopls serve`)
-   - `gopls.New(conn)` → `pyright.New(conn)`
-   - `gopls.DefaultInitParams` → `pyright.DefaultInitParams`
-   - Fixture path: `testdata/go-fixture` → `testdata/python-fixture`
-   - Broken file content: invalid Python (`def broken( {`)
-   - `requireGopls` → `requirePyright` (checks `pyright-langserver` is on PATH; `t.Skip` if not)
-3. Run with `go test -tags=integration ./internal/lsp/adapters/pyright/... -run DidChangeWatchedFiles -v`.
-
-**Likely failure modes (and what they mean):**
-
-- **`pyright-langserver: not found`** → install it (`npm install -g pyright`). Test should `t.Skip` cleanly.
-- **`gopls did not publish error diagnostics within 5s`** equivalent for pyright → either the `client/registerCapability` handler in `internal/lsp/adapters/pyright/adapter.go` isn't responding (unlikely — same code as gopls), or pyright wants its diagnostics in a different format. Increase the timeout to 15s for a slow first-run and re-check.
-- **`testdata/python-fixture/` doesn't exist** → create it. Minimum content: `pyproject.toml` with `[tool.pyright]` empty section, and a `main.py` with `def greet(name: str) -> str: return f"hello, {name}"`.
-
----
-
-### CI matrix that runs integration tests
-
-**Priority:** high.
-**Effort:** 30–60 min (depends on CI provider).
-
-**Why this matters.** The smoke test that proves the architecture works (`TestIntegration_DidChangeWatchedFiles`) is gated `//go:build integration`. If your CI doesn't include this build tag, the load-bearing test never runs in PR checks — only locally, only when someone remembers. A regression that breaks `client/registerCapability` handling would slip through `go test ./...` without complaint and ship to users.
-
-**Definition of done.**
-
-1. CI config (`.github/workflows/*.yml`, `.gitlab-ci.yml`, or whatever you use) has a job that:
-   - Installs `gopls` (and `pyright-langserver` once the pyright smoke test lands).
-   - Runs `go test -tags=integration ./...` with a per-test timeout of 30s.
-   - Fails the PR on any test failure.
-2. The job runs on every PR and on every merge to `main`.
-3. A `make integration-test` target exists for local convenience and matches what CI runs (so "passes locally" → "passes in CI").
-
-**Where to start.**
-
-1. Look at the existing CI config (probably `.github/workflows/test.yml`). The current setup almost certainly runs `make test` which is `go test ./...`.
-2. Add a second job (or expand the existing one) with steps:
-   ```yaml
-   - name: Install gopls
-     run: go install golang.org/x/tools/gopls@latest
-   - name: Integration tests
-     run: go test -tags=integration -timeout=2m ./...
+1. New abstraction: `internal/quality/Analyser` interface:
+   ```go
+   type Finding struct {
+       File     string
+       Line     int    // 1-based
+       Column   int
+       Severity Severity // info | warning | error
+       Code     string   // e.g. "ineffassign"
+       Message  string
+       Source   string   // e.g. "golangci-lint"
+   }
+   type Analyser interface {
+       Name() string
+       Supports(path string) bool // by extension / project markers
+       Analyse(ctx context.Context, files []string) ([]Finding, error)
+   }
    ```
-3. Add `integration-test:` to `Makefile`:
-   ```makefile
-   integration-test:
-       go test -tags=integration -timeout=2m ./...
+2. First analyser: `internal/quality/golangcilint/` — shells out to `golangci-lint run --out-format=json <files>`, parses the JSON, returns Findings. Skips silently if `golangci-lint` isn't on PATH.
+3. New config layer (in `[edits]` or new `[quality]` block):
+   ```toml
+   [quality]
+   enabled = true                      # default false until proven
+   analysers = ["golangci-lint"]       # opt-in list
+   timeout_ms = 2000                   # bound the wait
+   max_findings_per_file = 5           # don't overwhelm responses
    ```
+4. `WriteDeps` gains `Quality Analyser` (may be nil). The daemon constructs an `analysers.Composite` for the resolved workspace's language and passes it.
+5. `write_file` / `edit_file` / `transaction_apply` invoke the analyser after the post-write-diagnostics poll. The analyser runs against the file(s) just written, with the configured timeout. Findings are formatted and appended to the response.
+6. `plumb config show` displays the resolved `[quality]` block with provenance.
+7. Tests:
+   - Unit test the parser with a captured `golangci-lint --out-format=json` output sample.
+   - Integration test (`//go:build integration`): write a file with a known style issue, assert the matching code appears in the response.
+
+**Phase 2 (Python and beyond):**
+
+- `internal/quality/ruff/` for Python (`ruff check --output-format=json`).
+- Adapter selection by detected language (already done by `workspacePool.Detect`).
+- `analysers.Composite` runs multiple analysers in parallel and merges results.
+
+**Phase 3 (advanced):**
+
+- Async / background: don't block the tool response on slow analysers. Return findings via a follow-up notification or store them for the next call.
+- Severity filtering by config.
+- Suppression mechanism: agents can pass `quality_ok: true` to silence the section for cases where they intentionally broke a rule (e.g. unused function on a placeholder).
+- Per-finding "explain why" — `golangci-lint`'s explanation strings plumbed through.
+
+**Where to start — the discussion to have first:**
+
+- Synchronous vs async (Phase 1 says sync; what's the latency budget?).
+- How wide is "code quality"? Strict linters (`govet`, `staticcheck`) only, or include style (`gofumpt`, `golines`)? Recommendation: start strict, add style behind a flag.
+- Does `[quality].enabled = true` by default? Recommendation: false initially, flip to true in 0.6.0 once it's been used in anger.
+- Same severity scale as LSP diagnostics, or distinct? Recommendation: distinct labels (`quality.warn`, `quality.suggestion`) so the agent can tell "I broke the build" apart from "I introduced a style nit".
+- Should `transaction_apply` analyse the union of all files (more useful, slower) or each file individually (faster, less context-aware)?
 
 **Watch out for:**
 
-- gopls install in CI takes time; cache it via the standard Go module cache action.
-- Some CI runners are slow; the gopls smoke test passes in ~1.2s locally but may need 5s in CI. Bump the deadline in the test if it flakes — better than dropping the assertion.
-
----
-
-## Real gaps — meaningful, not blocking
-
-### `expected_sha` parameter on `edit_file` and `transaction_apply`
-
-**Priority:** medium-high.
-**Effort:** 30 min.
-
-**Why this matters.** `expected_mtime` is the optimistic-concurrency primitive we have today. It relies on the filesystem reporting mtime honestly, and it doesn't:
-
-- `touch -d` sets mtime arbitrarily.
-- Restore-from-backup preserves mtime.
-- Same-second writes on coarse-mtime filesystems can yield identical mtime for different content.
-- Some `mmap` write patterns don't update mtime.
-
-For honest use, mtime is fine; for any adversarial or replicated scenario, content hashing is what you'd want. A SHA-256 in the `read_file` output header and an optional `expected_sha` on `edit_file` / `transaction_apply` would make this ironclad without breaking the existing cheap mtime path.
-
-**Definition of done.**
-
-1. `read_file`'s output header is augmented to include `sha256=<hex>` alongside the mtime:
-   ```
-   # plumb-read mtime=2026-05-11T13:46:38.895137000+10:00 sha256=3a7bd3e2360a3...
-   ```
-   Computed over the *full file content* (not the line-sliced excerpt). 200 KiB cap applies to the body, not the hash.
-2. `edit_file` accepts an optional `expected_sha` parameter (RFC: hex-encoded lowercase 64-char string). If provided, the file's current SHA-256 is computed before any edit; mismatch rejects with `editLogicErr`.
-3. `transaction_apply` operations accept `expected_sha` the same way.
-4. Tests:
-   - `read_file` output includes `sha256=`.
-   - `edit_file` rejects when `expected_sha` doesn't match.
-   - `edit_file` succeeds when both `expected_mtime` and `expected_sha` are correct.
-   - `expected_mtime` + `expected_sha` together: both must match.
-5. AGENTS.md and docs/mcp-tools.md updated.
-
-**Where to start.**
-
-1. In `internal/tools/read_file.go`, after the `os.Stat` and before the binary-detection sniff, compute SHA-256 of the file via `crypto/sha256.New()` + `io.Copy`. *Caveat:* the existing code reads the file via `io.MultiReader(bytes.NewReader(sniff), f)` to avoid seeking. For SHA you need the full content — either compute by opening the file a second time, or hash the prefix and the rest via a `io.TeeReader`. The two-open approach is simpler; the cost (one extra `os.Open` + linear read) is acceptable for files at the 200 KiB cap.
-2. In `internal/tools/edit_file.go`, add `ExpectedSha string \`json:"expected_sha"\`` to `editFileArgs`. After the `expected_mtime` block, add a parallel check: read the file, compute SHA, compare.
-3. In `internal/tools/transaction.go`, mirror the same change in `txOperation`.
-4. Update schemas in both `editFileSchema` and `transactionApplySchema`.
-
-**Watch out for:**
-
-- The schemas are inline `json.RawMessage` strings. Match the format of `expected_mtime` for consistency.
-- Don't recompute the SHA inside `tryEdit`'s retry loop — compute once before the loop and pass into the retry. Otherwise three retries means three full-file reads.
+- `golangci-lint` is heavy. First-run on a fresh project can be 30+ seconds. The 2-second `timeout_ms` is a starting point; users with cold caches will hit it. Consider warming the cache on daemon start.
+- `ruff` is fast (~10ms typical). Don't apply gopls-tier timeouts to ruff and vice versa.
+- Findings can be very noisy in legacy codebases. Without per-file caps (`max_findings_per_file`) the response will balloon.
+- This is the kind of feature that's transformative when it works and infuriating when it doesn't (false positives = agent corrects perfectly good code into worse code). Roll out behind a feature flag.
 
 ---
 
@@ -237,44 +199,94 @@ The fix is to land both at once: build the migrator now, use it to add `input_js
 
 ---
 
-### Configurable post-write diagnostics window
+### `expected_sha` parameter on `edit_file` and `transaction_apply`
 
-**Priority:** medium.
-**Effort:** 20 min.
+**Priority:** medium-high.
+**Effort:** 30 min.
 
-**Why this matters.** `postWriteDiagWindow = 300 * time.Millisecond` is a magic constant in `internal/tools/file_write_helpers.go`. The gopls integration smoke test passes in ~1.2 s, but the diagnostic itself arrives within ~300 ms; that's our budget. For:
+**Why this matters.** `expected_mtime` is the optimistic-concurrency primitive we have today. It relies on the filesystem reporting mtime honestly, and it doesn't:
 
-- Cold pyright on a large project: 1–3 s before republishing. Our window is too short; the agent doesn't see the error.
-- Fast warm gopls on small file: <50 ms. Our window is wastefully long; we sleep until the deadline instead of returning quickly.
+- `touch -d` sets mtime arbitrarily.
+- Restore-from-backup preserves mtime.
+- Same-second writes on coarse-mtime filesystems can yield identical mtime for different content.
+- Some `mmap` write patterns don't update mtime.
 
-The right answer is configurable, with the existing four-layer precedence (default → global → project → env).
+For honest use, mtime is fine; for any adversarial or replicated scenario, content hashing is what you'd want. A SHA-256 in the `read_file` output header and an optional `expected_sha` on `edit_file` / `transaction_apply` would make this ironclad without breaking the existing cheap mtime path.
 
 **Definition of done.**
 
-1. `EditsConfig` gains `PostWriteDiagnosticsMs int \`toml:"post_write_diagnostics_ms"\``. Default 300.
-2. `validate` enforces `>= 0` (0 disables polling entirely).
-3. `WriteDeps` gains `PostWriteDiagWindow time.Duration` (zero value = 300 ms for back-compat).
-4. `awaitDiagnosticsRefresh` uses the passed-in duration, not the constant.
-5. Daemon wiring: `applyProjectConfig` updates the window on the live `WriteDeps`. Tools read from `deps.PostWriteDiagWindow`.
-6. AGENTS.md and README.md document the field.
-7. `plumb config show` displays the resolved value.
+1. `read_file`'s output header is augmented to include `sha256=<hex>` alongside the mtime:
+   ```
+   # plumb-read mtime=2026-05-11T13:46:38.895137000+10:00 sha256=3a7bd3e2360a3...
+   ```
+   Computed over the *full file content* (not the line-sliced excerpt). 200 KiB cap applies to the body, not the hash.
+2. `edit_file` accepts an optional `expected_sha` parameter (RFC: hex-encoded lowercase 64-char string). If provided, the file's current SHA-256 is computed before any edit; mismatch rejects with `editLogicErr`.
+3. `transaction_apply` operations accept `expected_sha` the same way.
+4. Tests:
+   - `read_file` output includes `sha256=`.
+   - `edit_file` rejects when `expected_sha` doesn't match.
+   - `edit_file` succeeds when both `expected_mtime` and `expected_sha` are correct.
+   - `expected_mtime` + `expected_sha` together: both must match.
+5. AGENTS.md and docs/mcp-tools.md updated.
 
 **Where to start.**
 
-1. `internal/config/config.go`: add the field to `EditsConfig`, set default in `defaults`.
-2. `internal/tools/write_deps.go`: add `PostWriteDiagWindow time.Duration`.
-3. `internal/tools/file_write_helpers.go`: change `awaitDiagnosticsRefresh` signature to take a duration, fall back to 300ms if zero.
-4. Update `write_file.go` and `edit_file.go` to pass `t.deps.PostWriteDiagWindow`.
-5. `internal/cli/daemon.go`'s `applyProjectConfig`: when the config changes, the closure-captured `editsCfg` already updates. Either expose the window through `editsCfg` and have the tools read via a closure (cleaner) or set it on `writeDeps` once at startup and accept that runtime config changes don't propagate to the window (simpler, probably fine).
+1. In `internal/tools/read_file.go`, after the `os.Stat` and before the binary-detection sniff, compute SHA-256 of the file via `crypto/sha256.New()` + `io.Copy`. *Caveat:* the existing code reads the file via `io.MultiReader(bytes.NewReader(sniff), f)` to avoid seeking. For SHA you need the full content — either compute by opening the file a second time, or hash the prefix and the rest via a `io.TeeReader`. The two-open approach is simpler; the cost (one extra `os.Open` + linear read) is acceptable for files at the 200 KiB cap.
+2. In `internal/tools/edit_file.go`, add `ExpectedSha string \`json:"expected_sha"\`` to `editFileArgs`. After the `expected_mtime` block, add a parallel check: read the file, compute SHA, compare.
+3. In `internal/tools/transaction.go`, mirror the same change in `txOperation`.
+4. Update schemas in both `editFileSchema` and `transactionApplySchema`.
 
-**Watch out for:** the test for `awaitDiagnosticsRefresh` doesn't exist today. Worth adding one: stub `postWriteDiagSource`, call with a 50ms window and `time.Sleep(60ms)`, confirm the function returns. Then bump the window to 200ms and confirm it returns immediately when a diagnostic change fires.
+**Watch out for:**
+
+- The schemas are inline `json.RawMessage` strings. Match the format of `expected_mtime` for consistency.
+- Don't recompute the SHA inside `tryEdit`'s retry loop — compute once before the loop and pass into the retry. Otherwise three retries means three full-file reads.
 
 ---
+
+### Transaction durable rollback log
+
+**Priority:** medium-low.
+**Effort:** 3–4 hours including tests.
+
+**Why this matters.** `transaction_apply`'s rollback is **best-effort**. The current implementation: if a write in phase 2 fails, we iterate over the already-written files and call `safeWrite(path, p.before, p.perm)` to restore. If that restoration itself fails (disk full, permission revoked, fs went read-only between phase-2 writes), we log an error and the file stays in its post-write state.
+
+For an editor-class tool, this is acceptable. For "production data" use cases — anywhere a partial transaction could leave a system in a corrupt state — it isn't.
+
+The fix is a tiny on-disk WAL.
+
+**Definition of done.**
+
+1. New package `internal/tools/txlog` (or similar) with `Begin(workspace, txID) (*Log, error)`, `Record(path, beforeContent, perm)`, `Commit()`, `Rollback()`.
+2. `Begin` creates `.plumb/tx-log/<txID>/`, writes a `manifest.json` listing the planned operations.
+3. `Record` writes each pre-edit content to `.plumb/tx-log/<txID>/<n>-before` before phase 2 starts the corresponding write.
+4. `Commit` removes `.plumb/tx-log/<txID>/`.
+5. `Rollback` reads each `<n>-before` and `safeWrite`s it back to the original path. Best-effort on each; logs the rest.
+6. `transaction_apply` calls `Begin` at the start of phase 2, `Record` for each prepared op, `Commit` on success, `Rollback` on failure.
+7. On daemon startup, `txlog.Scan(workspace)` finds orphaned `.plumb/tx-log/*` directories (= daemon crashed mid-transaction) and completes their rollback.
+8. Tests:
+   - Happy path: transaction commits, tx-log dir is gone.
+   - Mid-transaction failure: tx-log dir survives, contains expected snapshots, rollback restores all files.
+   - Crash simulation: write tx-log + partial files manually, run `txlog.Scan`, confirm restoration.
+   - Concurrent transactions on disjoint paths: each gets its own txID dir; no interference.
+
+**Where to start.** Start with the package interface; build the simpler `Begin/Record/Commit/Rollback` flow first. Add `Scan` only once the basic path works. The startup scan in `daemon.go` is one line: `txlog.Scan(workspace)` immediately after the workspace resolves.
+
+**Watch out for:**
+
+- Cleanup of `.plumb/tx-log/` on success has to be reliable — if it's left behind it'll trigger a phantom rollback on next startup. Use `os.RemoveAll`.
+- Snapshot file size cap: a transaction touching a 100 MiB file would duplicate 100 MiB to the tx-log. Worth either capping per-file or rejecting transactions where any operation exceeds some size.
+- The user can manually inspect `.plumb/tx-log/` to recover from a crash plumb couldn't.
+
+---
+
+## Features
+
+Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.
 
 ### `plumb doctor` — discovery + health-check CLI
 
 **Priority:** medium. Improves first-run experience and ongoing debuggability.
-**Effort:** 2–4 hours depending on scope (it's a "how far do you want to take it?" feature).
+**Effort:** 2–4 hours depending on scope.
 
 **Why this matters.** Users install plumb but don't always know it can be wired into multiple MCP-capable clients (Claude Desktop, Claude Code, Gemini CLI, Cursor, Continue, possibly others). Discovery is one-by-one through docs. A `plumb doctor` (in the spirit of `brew doctor`) would scan the host for known MCP-capable clients, show config status for each, and surface system-level health issues (daemon running, version match, LSP servers on PATH, stats DB writable, etc.).
 
@@ -284,11 +296,11 @@ The right answer is configurable, with the existing four-layer precedence (defau
 
 1. New `plumb doctor` subcommand (`internal/cli/doctor.go`). Output is a traffic-light report:
    ```
-   plumb doctor — 0.5.8
+   plumb doctor — 0.5.9
 
    System
-     ✓ plumb binary       /usr/local/bin/plumb (0.5.8)
-     ✓ daemon running     PID 21370, version 0.5.8 (matches binary)
+     ✓ plumb binary       /usr/local/bin/plumb (0.5.9)
+     ✓ daemon running     PID 21370, version 0.5.9 (matches binary)
      ✓ gopls              /Users/gilberto/go/bin/gopls (v0.16.2)
      ⚠ pyright-langserver not found on PATH (Python projects won't have an LSP backend)
      ✓ stats DB           ~/Projects/plumb/.plumb/stats.db (246 calls, schema v2)
@@ -383,7 +395,7 @@ The right answer is configurable, with the existing four-layer precedence (defau
 
 1. **`dirty_ok: bool` parameter, default `false`.** Each write tool checks `git status --porcelain <path>` for the target. If output is non-empty, refuse with a clear error unless `dirty_ok=true`. Minimal surprise. Doesn't require any persistent state.
 2. **Append a notice to the tool output.** "Note: foo.go had uncommitted changes before this edit. Previous content is recoverable via `git stash` if needed." Non-blocking; informational. Easier for the agent to ignore (might be the right outcome — agents are working on user behalf).
-3. **Snapshot to `.plumb/snapshots/<sha>` before every write.** Heavy. Real undo log. Closest to what an editor does. Pairs naturally with the transaction durable log (below). Worth doing only if option 1 turns out to be too restrictive in practice.
+3. **Snapshot to `.plumb/snapshots/<sha>` before every write.** Heavy. Real undo log. Closest to what an editor does. Pairs naturally with the transaction durable log. Worth doing only if option 1 turns out to be too restrictive in practice.
 
 **Definition of done (assuming option 1):**
 
@@ -406,45 +418,159 @@ The right answer is configurable, with the existing four-layer precedence (defau
 
 ---
 
-### Transaction durable rollback log
+## Improvements
 
-**Priority:** medium-low.
-**Effort:** 3–4 hours including tests.
+Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
 
-**Why this matters.** `transaction_apply`'s rollback is **best-effort**. The current implementation: if a write in phase 2 fails, we iterate over the already-written files and call `safeWrite(path, p.before, p.perm)` to restore. If that restoration itself fails (disk full, permission revoked, fs went read-only between phase-2 writes), we log an error and the file stays in its post-write state.
+### Configurable post-write diagnostics window
 
-For an editor-class tool, this is acceptable. For "production data" use cases — anywhere a partial transaction could leave a system in a corrupt state — it isn't.
+**Priority:** medium.
+**Effort:** 20 min.
 
-The fix is a tiny on-disk WAL.
+**Why this matters.** `postWriteDiagWindow = 300 * time.Millisecond` is a magic constant in `internal/tools/file_write_helpers.go`. The gopls integration smoke test passes in ~1.2 s, but the diagnostic itself arrives within ~300 ms; that's our budget. For:
+
+- Cold pyright on a large project: 1–3 s before republishing. Our window is too short; the agent doesn't see the error.
+- Fast warm gopls on small file: <50 ms. Our window is wastefully long; we sleep until the deadline instead of returning quickly.
+
+The right answer is configurable, with the existing four-layer precedence (default → global → project → env).
 
 **Definition of done.**
 
-1. New package `internal/tools/txlog` (or similar) with `Begin(workspace, txID) (*Log, error)`, `Record(path, beforeContent, perm)`, `Commit()`, `Rollback()`.
-2. `Begin` creates `.plumb/tx-log/<txID>/`, writes a `manifest.json` listing the planned operations.
-3. `Record` writes each pre-edit content to `.plumb/tx-log/<txID>/<n>-before` before phase 2 starts the corresponding write.
-4. `Commit` removes `.plumb/tx-log/<txID>/`.
-5. `Rollback` reads each `<n>-before` and `safeWrite`s it back to the original path. Best-effort on each; logs the rest.
-6. `transaction_apply` calls `Begin` at the start of phase 2, `Record` for each prepared op, `Commit` on success, `Rollback` on failure.
-7. On daemon startup, `txlog.Scan(workspace)` finds orphaned `.plumb/tx-log/*` directories (= daemon crashed mid-transaction) and completes their rollback.
-8. Tests:
-   - Happy path: transaction commits, tx-log dir is gone.
-   - Mid-transaction failure: tx-log dir survives, contains expected snapshots, rollback restores all files.
-   - Crash simulation: write tx-log + partial files manually, run `txlog.Scan`, confirm restoration.
-   - Concurrent transactions on disjoint paths: each gets its own txID dir; no interference.
+1. `EditsConfig` gains `PostWriteDiagnosticsMs int \`toml:"post_write_diagnostics_ms"\``. Default 300.
+2. `validate` enforces `>= 0` (0 disables polling entirely).
+3. `WriteDeps` gains `PostWriteDiagWindow time.Duration` (zero value = 300 ms for back-compat).
+4. `awaitDiagnosticsRefresh` uses the passed-in duration, not the constant.
+5. Daemon wiring: `applyProjectConfig` updates the window on the live `WriteDeps`. Tools read from `deps.PostWriteDiagWindow`.
+6. AGENTS.md and README.md document the field.
+7. `plumb config show` displays the resolved value.
 
-**Where to start.** Start with the package interface; build the simpler `Begin/Record/Commit/Rollback` flow first. Add `Scan` only once the basic path works. The startup scan in `daemon.go` is one line: `txlog.Scan(workspace)` immediately after the workspace resolves.
+**Where to start.**
 
-**Watch out for:**
+1. `internal/config/config.go`: add the field to `EditsConfig`, set default in `defaults`.
+2. `internal/tools/write_deps.go`: add `PostWriteDiagWindow time.Duration`.
+3. `internal/tools/file_write_helpers.go`: change `awaitDiagnosticsRefresh` signature to take a duration, fall back to 300ms if zero.
+4. Update `write_file.go` and `edit_file.go` to pass `t.deps.PostWriteDiagWindow`.
+5. `internal/cli/daemon.go`'s `applyProjectConfig`: when the config changes, the closure-captured `editsCfg` already updates. Either expose the window through `editsCfg` and have the tools read via a closure (cleaner) or set it on `writeDeps` once at startup and accept that runtime config changes don't propagate to the window (simpler, probably fine).
 
-- Cleanup of `.plumb/tx-log/` on success has to be reliable — if it's left behind it'll trigger a phantom rollback on next startup. Use `os.RemoveAll`.
-- Snapshot file size cap: a transaction touching a 100 MiB file would duplicate 100 MiB to the tx-log. Worth either capping per-file or rejecting transactions where any operation exceeds some size.
-- The user can manually inspect `.plumb/tx-log/` to recover from a crash plumb couldn't.
+**Watch out for:** the test for `awaitDiagnosticsRefresh` doesn't exist today. Worth adding one: stub `postWriteDiagSource`, call with a 50ms window and `time.Sleep(60ms)`, confirm the function returns. Then bump the window to 200ms and confirm it returns immediately when a diagnostic change fires.
 
 ---
 
-## Subtle things to be aware of
+## Testing & verification
 
-Footguns. Not bugs; behaviour you'd want to know before depending on the relevant subsystem at scale. Each carries enough context that someone touching the area can decide whether to fix or just respect.
+Proving things actually work end-to-end. The unit suite is green; what's missing is *end-to-end confidence in a real environment*.
+
+### Claude Desktop end-to-end smoke test
+
+**Priority:** highest in this section.
+**Effort:** 30 min, no code.
+
+**Why this matters.** Plumb was rebuilt across 0.5.x specifically to make Claude Desktop work. None of the new mechanism has been verified against real Claude Desktop:
+
+- `session_start`'s `roots/list` fallback (added in 0.5.1 #3) — Claude Desktop's roots support has historically been spotty; verify it actually responds.
+- The cold-start workspace chain — when the daemon launches from `$HOME`, does the cwd walk find anything useful, or does roots/list save us?
+- The MCP Prompts (`orient`, `whats-broken`, `recent-changes`) — do they render correctly as Desktop menu items?
+- Memory resources (`plumb-memory://`, `plumb://workspace/context`) — do they appear in the resources sidebar?
+- Post-write diagnostics in `edit_file` output — does the agent actually see them in its tool response?
+
+**How to test:** wire `plumb setup claude-desktop`, restart Desktop, open a Go project, ask Claude to read + edit a file, watch the daemon log for the relevant calls.
+
+**Definition of done.** A manual checklist run successfully against real Claude Desktop, with results captured in a `docs/claude-desktop-smoke.md` (or appended to this file). The checklist:
+
+1. `plumb stop && make build && plumb setup claude-desktop`. Restart Claude Desktop.
+2. Open Claude Desktop. Open a Go project (e.g. this one). Watch `~/Library/Caches/plumb/daemon.log` while the conversation starts.
+3. Did the workspace resolve via `roots/list`? The log should show `daemon: session attached`  with the project root, not "no project root found".
+4. Type `/orient` (or invoke the Orient prompt manually). Claude should respond with a 3–5 sentence summary including the project's language, branch, and any active diagnostics.
+5. Ask Claude to read a small file via `read_file`. The response should begin with `# plumb-read mtime=...`.
+6. Ask Claude to edit that file using `edit_file` with the mtime from step 5. The response should include `applied N edit(s)` and a `lines changed: ...` summary.
+7. Ask Claude to introduce a syntax error via `edit_file`. Within 300 ms the response should include `diagnostics after write:` with at least one error line. *This is the load-bearing test for the post-write-diagnostics feature.*
+8. Open the resources sidebar in Claude Desktop. Confirm `Project context` and any memories are visible.
+
+**Likely failure modes (so you know what to watch for):**
+
+- **Step 3 failing** means Claude Desktop's `roots/list` support is broken or absent for your install. In that case `session_start` falls through to the cwd-walk fallback, which probably won't find anything because Desktop launches the daemon from `$HOME`. The fix is in `internal/cli/daemon.go`'s `rootsFn` / `applyProjectConfig`.
+- **Step 7 failing** ("diagnostics after write" never appears) means gopls didn't republish within 300 ms. Either the `postWriteDiagWindow` constant in `internal/tools/file_write_helpers.go` is too short for your machine, or `didChangeWatchedFiles` isn't being consumed. The gopls integration smoke test rules out the latter; if it passes locally with `go test -tags=integration`, the issue is timing — see [Configurable post-write diagnostics window](#configurable-post-write-diagnostics-window) above.
+
+---
+
+### Pyright integration smoke test
+
+**Priority:** highest after Claude Desktop.
+**Effort:** 20–30 min.
+**Prerequisite:** `pyright-langserver` on `$PATH` (`npm install -g pyright`).
+
+**Why this matters.** `TestIntegration_DidChangeWatchedFiles` in `internal/lsp/adapters/gopls/adapter_test.go` proves the 0.5.x architectural rewrite is load-bearing for gopls. The pyright adapter has identical wiring (same `LSPClient` interface, same `DefaultClientCapabilities` declaration, same `handleServerRequest` for `client/registerCapability`), but **the equivalent integration test does not exist**. Until it does, `AGENTS.md` honestly has to keep pyright marked "Experimental" — a structural asymmetry that's purely about test coverage.
+
+**Definition of done.**
+
+1. A test `TestIntegration_DidChangeWatchedFiles` exists in `internal/lsp/adapters/pyright/adapter_test.go`, gated `//go:build integration`.
+2. It spawns real `pyright-langserver --stdio`, initialises against a temp workspace populated from `testdata/python-fixture/`, writes a syntactically broken `.py` file, sends `DidChangeWatchedFiles{FileCreated}`, and asserts pyright republishes at least one error diagnostic within 5 seconds.
+3. `testdata/python-fixture/` exists with minimum: `pyproject.toml` (or `setup.py`) + `main.py`. If it doesn't exist, create it with one valid Python file.
+4. The test runs green with `go test -tags=integration ./internal/lsp/adapters/pyright/...`.
+5. AGENTS.md's adapter validation status table updates pyright from "Experimental" to "Validated".
+
+**Where to start.**
+
+1. Copy `internal/lsp/adapters/gopls/adapter_test.go`'s `TestIntegration_DidChangeWatchedFiles` verbatim into `internal/lsp/adapters/pyright/adapter_test.go`.
+2. Replace the gopls-specific bits:
+   - `startGopls` → `startPyright` (same shape; spawn `pyright-langserver --stdio` instead of `gopls serve`)
+   - `gopls.New(conn)` → `pyright.New(conn)`
+   - `gopls.DefaultInitParams` → `pyright.DefaultInitParams`
+   - Fixture path: `testdata/go-fixture` → `testdata/python-fixture`
+   - Broken file content: invalid Python (`def broken( {`)
+   - `requireGopls` → `requirePyright` (checks `pyright-langserver` is on PATH; `t.Skip` if not)
+3. Run with `go test -tags=integration ./internal/lsp/adapters/pyright/... -run DidChangeWatchedFiles -v`.
+
+**Likely failure modes (and what they mean):**
+
+- **`pyright-langserver: not found`** → install it (`npm install -g pyright`). Test should `t.Skip` cleanly.
+- **`gopls did not publish error diagnostics within 5s`** equivalent for pyright → either the `client/registerCapability` handler in `internal/lsp/adapters/pyright/adapter.go` isn't responding (unlikely — same code as gopls), or pyright wants its diagnostics in a different format. Increase the timeout to 15s for a slow first-run and re-check.
+- **`testdata/python-fixture/` doesn't exist** → create it. Minimum content: `pyproject.toml` with `[tool.pyright]` empty section, and a `main.py` with `def greet(name: str) -> str: return f"hello, {name}"`.
+
+---
+
+### CI matrix that runs integration tests
+
+**Priority:** high.
+**Effort:** 30–60 min (depends on CI provider).
+
+**Why this matters.** The smoke test that proves the architecture works (`TestIntegration_DidChangeWatchedFiles`) is gated `//go:build integration`. If your CI doesn't include this build tag, the load-bearing test never runs in PR checks — only locally, only when someone remembers. A regression that breaks `client/registerCapability` handling would slip through `go test ./...` without complaint and ship to users.
+
+**Definition of done.**
+
+1. CI config (`.github/workflows/*.yml`, `.gitlab-ci.yml`, or whatever you use) has a job that:
+   - Installs `gopls` (and `pyright-langserver` once the pyright smoke test lands).
+   - Runs `go test -tags=integration ./...` with a per-test timeout of 30s.
+   - Fails the PR on any test failure.
+2. The job runs on every PR and on every merge to `main`.
+3. A `make integration-test` target exists for local convenience and matches what CI runs (so "passes locally" → "passes in CI").
+
+**Where to start.**
+
+1. Look at the existing CI config (probably `.github/workflows/test.yml`). The current setup almost certainly runs `make test` which is `go test ./...`.
+2. Add a second job (or expand the existing one) with steps:
+   ```yaml
+   - name: Install gopls
+     run: go install golang.org/x/tools/gopls@latest
+   - name: Integration tests
+     run: go test -tags=integration -timeout=2m ./...
+   ```
+3. Add `integration-test:` to `Makefile`:
+   ```makefile
+   integration-test:
+       go test -tags=integration -timeout=2m ./...
+   ```
+
+**Watch out for:**
+
+- gopls install in CI takes time; cache it via the standard Go module cache action.
+- Some CI runners are slow; the gopls smoke test passes in ~1.2s locally but may need 5s in CI. Bump the deadline in the test if it flakes — better than dropping the assertion.
+
+---
+
+## Bugs & known limitations
+
+Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).
 
 ### `pathLocks` is permanent process-global state
 
@@ -549,7 +675,7 @@ Items raised in past reviews and decided against (or deferred deliberately). Lis
 - **Style nits across the codebase** (`for range n` modernisation, `errors.AsType[T]`, `WaitGroup.Go`) — applied opportunistically in files touched in 0.5.x. Not chasing across the rest of the codebase; if you touch a file, modernise it; otherwise leave it.
 - **Bigger TUI features** (filterable panels, search box, write-targets visualisation) — out of scope for 0.5.x. Worth a dedicated 0.6 line.
 - **Native Windows support** — `safeWrite`'s atomic rename relies on POSIX rename-over-existing semantics. Windows handles this differently across Go versions. Not on the roadmap unless someone asks.
-- **Per-agent identity for rate limiting and read tracking** — see Subtle Things entries above. Requires upstream MCP support for a stable client-session header.
+- **Per-agent identity for rate limiting and read tracking** — see Bugs & known limitations entries above. Requires upstream MCP support for a stable client-session header.
 
 ---
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.10 — 2026-05-11
+
+### Documentation
+- **`docs/todo.md` reorganised by topic.** New top-level sections: **Architecture**, **Features**, **Improvements**, **Testing & verification**, **Bugs & known limitations**, **Considered and deferred**. Within each section, items are ordered by priority. The cross-cutting "next two hours" recommended sequence remains at the top of the file. Items themselves are unchanged in content — purely reshuffled for findability.
+- **New top architecture item:** [Code-quality differential after edits](docs/todo.md#code-quality-differential-after-edits). Marked ⭐ top architectural priority. The pitch: after every plumb-initiated edit, run the file's offline code-quality analyser (golangci-lint for Go, ruff for Python, eslint for TS, ...) and append findings to the response — elevates plumb from "a better way to edit files" to "a code-review-loop in the inner agent loop". Phased delivery (Go-only Phase 1 → Python and beyond Phase 2 → async/advanced Phase 3) with full design notes including the proposed `internal/quality/Analyser` interface, new `[quality]` config block, and watch-out-fors (timeout budgets, false positives in legacy code, noise control). To be discussed before implementation begins.
+
 ## 0.5.9 — 2026-05-11
 
 ### Documentation

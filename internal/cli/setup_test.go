@@ -71,6 +71,41 @@ func TestReadOrInitClaudeConfig_ExistingFile(t *testing.T) {
 	}
 }
 
+func TestReadOrInitClaudeConfig_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.json")
+	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, isNew, err := readOrInitClaudeConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error for empty file: %v", err)
+	}
+	if m == nil {
+		t.Fatal("expected non-nil map")
+	}
+	if len(m) != 0 {
+		t.Errorf("expected empty map, got %v", m)
+	}
+	if isNew {
+		t.Error("expected isNew=false for existing empty file")
+	}
+}
+
+func TestGeminiConfigPath_NoError(t *testing.T) {
+	path, err := GeminiConfigPath()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected non-empty path")
+	}
+	if filepath.Base(path) != "mcp_config.json" {
+		t.Errorf("unexpected filename: %s", filepath.Base(path))
+	}
+}
+
 func TestSetupClaudeDesktopInto_FreshConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "claude_desktop_config.json")
