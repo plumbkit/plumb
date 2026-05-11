@@ -161,3 +161,77 @@ func TestSearchInFiles_InvalidRegex(t *testing.T) {
 		t.Error("expected error for invalid regex")
 	}
 }
+
+// TestSearchInFiles_MaxFileBytesSkipsLargeFiles verifies that files larger
+// than max_file_bytes are skipped before opening — their content is never
+// scanned, so matches inside them don't show up.
+func TestSearchInFiles_MaxFileBytesSkipsLargeFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "small.txt"), []byte("needle here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	big := make([]byte, 0, 64*1024)
+	for len(big) < cap(big) {
+		big = append(big, []byte("needle and more text\n")...)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSearchInFiles()
+	args, _ := json.Marshal(map[string]any{
+		"pattern":        "needle",
+		"path":           dir,
+		"max_file_bytes": 1024, // big.txt is ~64 KiB
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "small.txt") {
+		t.Errorf("expected small.txt in output:\n%s", out)
+	}
+	if strings.Contains(out, "big.txt") {
+		t.Errorf("big.txt should have been skipped (exceeds max_file_bytes):\n%s", out)
+	}
+}
+
+// TestSearchInFiles_GlobPrunesSiblingDirs verifies that a glob with a literal
+// directory prefix prunes sibling subtrees so matches inside them never
+// surface.
+func TestSearchInFiles_GlobPrunesSiblingDirs(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdir := func(p string) {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p, content string) {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(dir, "wanted", "deep"))
+	mustMkdir(filepath.Join(dir, "skipme", "deep"))
+	mustWrite(filepath.Join(dir, "wanted", "a.txt"), "MATCH here\n")
+	mustWrite(filepath.Join(dir, "wanted", "deep", "b.txt"), "MATCH here\n")
+	mustWrite(filepath.Join(dir, "skipme", "c.txt"), "MATCH but pruned\n")
+	mustWrite(filepath.Join(dir, "skipme", "deep", "d.txt"), "MATCH but pruned\n")
+
+	tool := NewSearchInFiles()
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "MATCH",
+		"path":    dir,
+		"glob":    "wanted/**/*.txt",
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "wanted/a.txt") || !strings.Contains(out, "wanted/deep/b.txt") {
+		t.Errorf("expected both wanted/ matches:\n%s", out)
+	}
+	if strings.Contains(out, "skipme/") {
+		t.Errorf("skipme/ subtree should have been pruned:\n%s", out)
+	}
+}

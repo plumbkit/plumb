@@ -12,6 +12,12 @@
 
 ### Added
 - **`find_replace` tests:** parallel correctness across 200 files, exact `max_files` cap under parallelism, binary-skip with matches past the sniff window, deterministic output ordering, context cancellation, and `max_file_bytes` skip. Plus unit tests for `globLiteralPrefix` and `dirCompatibleWithPrefix`.
+- **`search_in_files` now has the same guards as `find_replace`:** new `max_file_bytes` argument (default 50 MiB) skips outsized text files (logs, JSON dumps, lockfiles without nulls) before opening; glob literal-prefix directory pruning skips sibling subtrees so a glob like `src/**/*.go` never descends into `tests/`. Same playbook as the `find_replace` work, applied to the more-trafficked search path. Tests in `search_in_files_test.go`.
+- **`find_files` matched updates:** 30 s default wall-clock deadline (matching `search_in_files`) so runaway walks over `$HOME` can't outlive the MCP timeout, and glob literal-prefix directory pruning when the pattern is a path-anchored glob. Tests in `find_files_test.go`.
+- **Shared glob helpers:** `globLiteralPrefix` and `dirCompatibleWithPrefix` moved from `find_replace.go` to `walk.go` so all three walk-and-scan tools share one implementation.
+
+### Changed
+- **`VERSION` bumped to 0.5.25** so `make build` produces binaries that self-report the correct version.
 
 ## 0.5.24 — 2026-05-12
 

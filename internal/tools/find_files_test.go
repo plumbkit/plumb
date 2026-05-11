@@ -140,3 +140,43 @@ func TestFindFiles_NoMatch(t *testing.T) {
 		t.Errorf("expected no-match message, got:\n%s", out)
 	}
 }
+
+// TestFindFiles_GlobPrunesSiblingDirs verifies that a glob with a literal
+// path prefix (e.g. "wanted/**") never returns hits from sibling subtrees,
+// even when files inside those subtrees would have matched the trailing glob
+// portion. The walk should not descend into pruned subtrees at all.
+func TestFindFiles_GlobPrunesSiblingDirs(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdir := func(p string) {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p string) {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(dir, "wanted", "deep"))
+	mustMkdir(filepath.Join(dir, "skipme", "deep"))
+	mustWrite(filepath.Join(dir, "wanted", "a.go"))
+	mustWrite(filepath.Join(dir, "wanted", "deep", "b.go"))
+	mustWrite(filepath.Join(dir, "skipme", "c.go"))
+	mustWrite(filepath.Join(dir, "skipme", "deep", "d.go"))
+
+	tool := NewFindFiles()
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "wanted/**/*.go",
+		"path":    dir,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "wanted/a.go") || !strings.Contains(out, "wanted/deep/b.go") {
+		t.Errorf("expected both wanted/ matches:\n%s", out)
+	}
+	if strings.Contains(out, "skipme/") {
+		t.Errorf("skipme/ subtree should have been pruned:\n%s", out)
+	}
+}

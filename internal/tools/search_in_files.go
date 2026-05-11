@@ -28,6 +28,11 @@ const searchDefaultDeadline = 30 * time.Second
 // longer than this are still skipped, but we won't drop the rest of the file.
 const searchMaxLineBytes = 1 << 20 // 1 MiB
 
+// searchDefaultMaxFileBytes guards against a single multi-hundred-MB text
+// file (a log, a JSON dump, generated SQL) stalling the walk. Files larger
+// than this are skipped before opening. Callers can override via max_file_bytes.
+const searchDefaultMaxFileBytes int64 = 50 * 1024 * 1024
+
 var searchInFilesSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -62,6 +67,11 @@ var searchInFilesSchema = json.RawMessage(`{
     "include_hidden": {
       "type": "boolean",
       "description": "Include hidden files and directories (starting with '.'). Default false."
+    },
+    "max_file_bytes": {
+      "type": "integer",
+      "description": "Skip files larger than this many bytes. Default 52428800 (50 MiB).",
+      "minimum": 1
     }
   },
   "required": ["pattern"]
@@ -77,7 +87,9 @@ func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSche
 func (t *SearchInFiles) Description() string {
 	return "Workspace-scoped regex content search. Prefer this over shelling out to grep/rg: " +
 		"results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
-		"binary files are skipped, every call is recorded in the project's stats so you can see what's been searched, " +
+		"binary files are skipped (null-byte sniff of the first 8 KB), files larger than max_file_bytes (50 MiB default) are skipped before opening, " +
+		"globs with a literal directory prefix (e.g. \"src/**/*.go\") prune sibling directories from the walk, " +
+		"every call is recorded in the project's stats so you can see what's been searched, " +
 		"and the cache layer dedupes repeat queries within a session. " +
 		"Smart-case (case-insensitive when the pattern is all lowercase), supports context lines and glob file filters."
 }
@@ -90,6 +102,7 @@ type searchInFilesArgs struct {
 	ContextLines  int    `json:"context_lines"`
 	MaxResults    int    `json:"max_results"`
 	IncludeHidden bool   `json:"include_hidden"`
+	MaxFileBytes  int64  `json:"max_file_bytes"`
 }
 
 func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -134,6 +147,9 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if a.ContextLines < 0 {
 		a.ContextLines = 0
 	}
+	if a.MaxFileBytes == 0 {
+		a.MaxFileBytes = searchDefaultMaxFileBytes
+	}
 
 	// Compile regex with smart-case.
 	caseSensitive := a.CaseSensitive != nil && *a.CaseSensitive
@@ -164,11 +180,19 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		respectIgnore: true,
 	}
 
+	globPrefix := globLiteralPrefix(a.Glob)
+
 	walkErr := walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if d.IsDir() {
+			if globPrefix != "" && path != root {
+				rel, _ := filepath.Rel(root, path)
+				if !dirCompatibleWithPrefix(filepath.ToSlash(rel), globPrefix) {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
 		if truncated {
@@ -186,6 +210,13 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 					return nil
 				}
 			}
+		}
+
+		// Size guard: skip outsized text files (logs, dumps, lockfiles without
+		// nulls) before opening. Walking past these is the dominant pathology
+		// that pushes a search past the MCP timeout.
+		if fi, err := d.Info(); err == nil && fi.Size() > a.MaxFileBytes {
+			return nil
 		}
 
 		// Open and binary-check.

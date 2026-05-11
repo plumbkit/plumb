@@ -189,6 +189,37 @@ func (st ignoreStack) isIgnored(absPath string, isDir bool) bool {
 // byte, matching the heuristic ripgrep and git use.
 const binarySniffBytes = 8000
 
+// ── glob helpers ─────────────────────────────────────────────────────────────
+
+// globLiteralPrefix returns the longest leading slash-delimited segment of
+// glob that contains no wildcard metacharacters. Used for directory-level
+// pruning: a glob like "src/**/*.go" can never match files outside "src/".
+func globLiteralPrefix(glob string) string {
+	if glob == "" {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(glob), "/")
+	var lit []string
+	for _, p := range parts {
+		if strings.ContainsAny(p, "*?[") {
+			break
+		}
+		lit = append(lit, p)
+	}
+	return strings.Join(lit, "/")
+}
+
+// dirCompatibleWithPrefix returns true iff a directory at relative path rel
+// could contain files whose relative path begins with prefix. That is, rel
+// and prefix have an ancestor-or-equal relationship as slash-delimited paths.
+func dirCompatibleWithPrefix(rel, prefix string) bool {
+	if rel == "" || rel == "." || rel == prefix {
+		return true
+	}
+	return strings.HasPrefix(rel+"/", prefix+"/") ||
+		strings.HasPrefix(prefix+"/", rel+"/")
+}
+
 // ── hidden file detection ────────────────────────────────────────────────────
 
 func isHidden(name string) bool {

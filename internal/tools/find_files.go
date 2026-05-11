@@ -9,7 +9,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// findFilesDefaultDeadline caps a single find_files call when the parent
+// context has no deadline. Matches search_in_files: prevents a runaway walk
+// over a giant tree from outliving the MCP client's own timeout.
+const findFilesDefaultDeadline = 30 * time.Second
 
 var findFilesSchema = json.RawMessage(`{
   "type": "object",
@@ -89,6 +95,15 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "", fmt.Errorf("find_files: pattern must not be empty")
 	}
 
+	// If the caller hasn't bounded the call, apply a wall-clock budget so
+	// pathological walks (huge tree, $HOME as cwd) can't outlive the MCP
+	// timeout and wedge the daemon.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, findFilesDefaultDeadline)
+		defer cancel()
+	}
+
 	// Resolve search root.
 	root := strings.TrimPrefix(a.Path, "file://")
 	if root == "" {
@@ -124,6 +139,14 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	// Determine if pattern contains a slash → match against relative path.
 	patternHasSlash := strings.Contains(a.Pattern, "/")
 
+	// Glob-style patterns with a literal directory prefix let us prune
+	// sibling subtrees from the walk. Only meaningful when the pattern is
+	// path-anchored (contains "/") and isn't a raw regex.
+	var globPrefix string
+	if patternHasSlash && !a.UseRegex {
+		globPrefix = globLiteralPrefix(a.Pattern)
+	}
+
 	var hits []string
 	truncated := false
 
@@ -143,6 +166,14 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		}
 
 		isDir := d.IsDir()
+
+		// Prune incompatible directory subtrees before any other filtering.
+		if isDir && globPrefix != "" && path != root {
+			rel, _ := filepath.Rel(root, path)
+			if !dirCompatibleWithPrefix(filepath.ToSlash(rel), globPrefix) {
+				return fs.SkipDir
+			}
+		}
 
 		// Type filter.
 		switch a.Type {

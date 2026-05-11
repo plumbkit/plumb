@@ -597,6 +597,13 @@ Ripgrep-style content search — regex, smart-case, context lines, glob filter. 
 
 **Source**: `internal/tools/search_in_files.go`
 
+**Performance guards**
+
+- **Binary detection**: null-byte sniff on the first 8 KB; matched binaries are closed without reading the rest.
+- **Size cap**: `max_file_bytes` (default 50 MiB) skips outsized files via `os.Stat` before opening, so logs/dumps/lockfiles can't stall the walk.
+- **Glob directory pruning**: a glob with a literal path prefix (e.g. `src/**/*.go`) returns `fs.SkipDir` for sibling subtrees — the walker never descends into them.
+- **Wall-clock budget**: a single call inherits the caller's context deadline, or falls back to 30 s, so a runaway walk can't outlive the MCP client's own timeout.
+
 ---
 
 ### `find_files`
@@ -604,6 +611,11 @@ Ripgrep-style content search — regex, smart-case, context lines, glob filter. 
 fd-style file finder — glob or regex, extension filter, type filter, depth limit. Respects `.gitignore`.
 
 **Source**: `internal/tools/find_files.go`
+
+**Performance guards**
+
+- **Glob directory pruning**: when a glob pattern (not regex) has a literal path prefix, the walker prunes sibling subtrees before any name matching.
+- **Wall-clock budget**: matches `search_in_files` — caller's deadline or a 30 s fallback.
 
 ---
 
