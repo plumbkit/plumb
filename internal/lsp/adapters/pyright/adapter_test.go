@@ -88,6 +88,44 @@ func TestAdapter_Initialized(t *testing.T) {
 	}
 }
 
+func TestAdapter_DidChangeWatchedFiles(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.Handle(protocol.MethodDidChangeWatchedFiles, func(_ json.RawMessage) (any, error) { return nil, nil })
+
+	if _, err := ad.Initialize(ctx, pyright.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{
+			{URI: "file:///p/main.py", Type: protocol.FileChanged},
+			{URI: "file:///p/new.py", Type: protocol.FileCreated},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	}
+	var found bool
+	for _, c := range mock.Calls() {
+		if c.Method == protocol.MethodDidChangeWatchedFiles {
+			found = true
+			var got protocol.DidChangeWatchedFilesParams
+			if err := json.Unmarshal(c.Params, &got); err != nil {
+				t.Fatalf("unmarshal params: %v", err)
+			}
+			if len(got.Changes) != 2 {
+				t.Fatalf("expected 2 changes, got %d", len(got.Changes))
+			}
+			if got.Changes[0].Type != protocol.FileChanged {
+				t.Errorf("change[0].type = %d, want FileChanged(2)", got.Changes[0].Type)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("didChangeWatchedFiles notification not sent")
+	}
+}
+
 func TestAdapter_DidOpenDidClose(t *testing.T) {
 	ad, mock := newAdapter(t)
 	ctx := context.Background()

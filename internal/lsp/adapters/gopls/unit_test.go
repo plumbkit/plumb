@@ -140,6 +140,33 @@ func TestAdapter_DidOpenDidClose(t *testing.T) {
 	}
 }
 
+func TestAdapter_DidChangeWatchedFiles(t *testing.T) {
+	ad, mock := newMockAdapter(t)
+	ctx := context.Background()
+	mock.Handle(protocol.MethodDidChangeWatchedFiles, func(_ json.RawMessage) (any, error) { return nil, nil })
+
+	if _, err := ad.Initialize(ctx, gopls.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{
+			{URI: "file:///p/foo.go", Type: protocol.FileChanged},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	}
+	var found bool
+	for _, c := range mock.Calls() {
+		if c.Method == protocol.MethodDidChangeWatchedFiles {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("didChangeWatchedFiles notification not sent")
+	}
+}
+
 func TestAdapter_DidChange(t *testing.T) {
 	ad, mock := newMockAdapter(t)
 	ctx := context.Background()

@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (4/9)
+- **Watched-files unit tests for both adapters** — gopls and pyright now have explicit test coverage for `DidChangeWatchedFiles` wire transmission with `FileChanged` / `FileCreated` events. Catches regressions if the adapter wiring breaks. (A real-process integration smoke test against running pyright is not part of this release because pyright availability isn't guaranteed in all environments; the unit-level test confirms the LSP wire format is correct.)
+
 ### Added (3/9)
 - **`session_start` roots/list fallback** — when the daemon hasn't yet resolved a workspace, `session_start` now queries the MCP client via `roots/list` to discover one before falling back to the cwd walk. New `RootsResolver` parameter on `NewSessionStart`; the daemon constructs one that uses the captured `RequestFn` from `OnInit`/`OnRootsChanged`. Properly fixes Claude Desktop cold-start where the daemon launches from `$HOME` and the cwd walk can't find the project.
 
