@@ -30,6 +30,12 @@ var sessionStartSchema = json.RawMessage(`{
 // but keeps the output well under the MCP message size limit.
 const contextMDLines = 200
 
+// RootsResolver asks the MCP client for its workspace roots (via roots/list)
+// and returns the first one as an absolute path, or "" if unavailable. It is
+// used as the third fallback in session_start's workspace resolution chain:
+// explicit argument → daemon-resolved workspace → roots/list → cwd walk.
+type RootsResolver func(ctx context.Context) string
+
 // SessionStart is a bootstrap tool — call it first in every session to get
 // oriented. It returns in one round-trip:
 //   - workspace path, detected language, current git branch
@@ -40,17 +46,19 @@ const contextMDLines = 200
 //   - 3 most recent git commits (subject only)
 //   - active LSP diagnostics (errors and warnings only)
 //
-// Cold-start: when the daemon hasn't resolved a workspace yet (Claude Desktop
-// before any file URI has been seen), session_start walks up from the current
-// working directory looking for a project marker (go.mod, package.json, etc.)
-// so it can still produce useful output on the very first call.
+// Workspace resolution chain (each falls back to the next on empty):
+//  1. explicit `workspace` argument
+//  2. daemon's already-resolved workspace
+//  3. roots/list query to the MCP client (Claude Desktop's roots support)
+//  4. walk up from os.Getwd() looking for a project marker
 type SessionStart struct {
-	ws   WorkspaceFn
-	diag diagnosticsSource // may be nil; diagnostics section skipped when nil
+	ws    WorkspaceFn
+	diag  diagnosticsSource // may be nil; diagnostics section skipped when nil
+	roots RootsResolver     // may be nil; roots/list fallback skipped when nil
 }
 
-func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource) *SessionStart {
-	return &SessionStart{ws: ws, diag: diag}
+func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver) *SessionStart {
+	return &SessionStart{ws: ws, diag: diag, roots: roots}
 }
 
 func (*SessionStart) Name() string { return "session_start" }
@@ -67,14 +75,18 @@ func (*SessionStart) Description() string {
 
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
-func (t *SessionStart) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Workspace string `json:"workspace"`
 	}
 	_ = json.Unmarshal(raw, &a)
 	ws := resolveWorkspace(a.Workspace, t.ws)
+	if ws == "" && t.roots != nil {
+		// Roots/list fallback: ask the MCP client for its workspace roots.
+		ws = t.roots(ctx)
+	}
 	if ws == "" {
-		// Cold-start fallback: walk up from cwd looking for a project marker.
+		// Last-resort fallback: walk up from cwd looking for a project marker.
 		ws = coldStartWorkspace()
 	}
 	if ws == "" {

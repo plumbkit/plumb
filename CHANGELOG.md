@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (3/9)
+- **`session_start` roots/list fallback** — when the daemon hasn't yet resolved a workspace, `session_start` now queries the MCP client via `roots/list` to discover one before falling back to the cwd walk. New `RootsResolver` parameter on `NewSessionStart`; the daemon constructs one that uses the captured `RequestFn` from `OnInit`/`OnRootsChanged`. Properly fixes Claude Desktop cold-start where the daemon launches from `$HOME` and the cwd walk can't find the project.
+
 ### Added (2/9)
 - **Direct cache invalidation on writes** — `write_file`, `edit_file`, `delete_file`, and `rename_file` now evict matching entries from the symbol cache (`cache.InvalidateByPath`) immediately after a successful write. Closes the stale-symbol window without depending on gopls's diagnostic-republish timing. Constructors gained an optional `*cache.Cache` parameter (`nil` is safe for tests).
 

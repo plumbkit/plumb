@@ -193,6 +193,36 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		return acquiredRoot
 	}
 
+	// clientRequest is the latest RequestFn captured from OnInit. Tools
+	// that need to talk to the MCP client (e.g. session_start calling
+	// roots/list when the workspace hasn't been resolved yet) use this.
+	var clientRequest mcp.RequestFn
+	var requestMu sync.RWMutex
+	// rootsFn returns the first workspace root reported by the client via
+	// roots/list, attempting workspace resolution via pool.Detect. Returns
+	// "" if the client doesn't support roots/list or none can be resolved.
+	rootsFn := func(rootsCtx context.Context) string {
+		requestMu.RLock()
+		req := clientRequest
+		requestMu.RUnlock()
+		if req == nil {
+			return ""
+		}
+		uri := rootFromRoots(rootsCtx, req)
+		if uri == "" {
+			return ""
+		}
+		folder := strings.TrimPrefix(uri, "file://")
+		if folder == "" || folder == "/" {
+			return ""
+		}
+		root, _, err := pool.Detect(folder)
+		if err != nil {
+			return folder // best-effort: caller may still find it useful
+		}
+		return root
+	}
+
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	srv.Register(tools.NewFindSymbol(sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewWorkspaceSymbols(sessionProxy, sessionCache, ttl, wsFn))
@@ -217,7 +247,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace())
 	srv.Register(tools.NewVersion())
-	srv.Register(tools.NewSessionStart(wsFn, sessionInv))
+	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn))
 
 	// Edit tools — LSP-semantic refactoring + body replacement / inserts.
 	srv.Register(tools.NewRenameSymbol(sessionProxy))
@@ -284,11 +314,17 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	}
 
 	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn) {
+		requestMu.Lock()
+		clientRequest = request
+		requestMu.Unlock()
 		rootURI := rootFromRoots(initCtx, request)
 		startGopls(initCtx, rootURI)
 	}
 
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
+		requestMu.Lock()
+		clientRequest = request
+		requestMu.Unlock()
 		slog.Info("daemon: roots changed — re-fetching workspace root")
 		rootURI := rootFromRoots(initCtx, request)
 		startGopls(initCtx, rootURI)
