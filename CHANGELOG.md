@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6 — 2026-05-11
+
+### Tests
+- **End-to-end smoke test against real gopls** for `workspace/didChangeWatchedFiles`. The test copies the Go fixture into a temp workspace, initialises gopls, writes a syntactically broken `broken.go` to disk, sends `DidChangeWatchedFiles{FileCreated}`, and asserts gopls publishes error diagnostics within 5 seconds. **Passes in 1.2s** — proves the 0.5.0 architectural rewrite is load-bearing: gopls really does consume our notifications, the capability negotiation work in 0.5.1 #1 lets it register watchers, and the end-to-end loop is closed. Gated `//go:build integration` (requires `gopls` on `$PATH`).
+
+This closes the last big "is this even working?" worry from the 0.5.0 review: the answer is yes, gopls is acting on plumb-initiated file changes.
+
 ## 0.5.5 — 2026-05-11
 
 ### Documentation

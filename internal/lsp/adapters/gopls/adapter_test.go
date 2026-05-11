@@ -4,6 +4,7 @@ package gopls_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,5 +177,108 @@ func TestIntegration_Definition(t *testing.T) {
 	}
 	if len(locs) == 0 {
 		t.Fatal("expected at least one location")
+	}
+}
+
+// TestIntegration_DidChangeWatchedFiles exercises the LSP-correct primitive
+// for telling gopls about external file changes. The flow:
+//
+//  1. Initialize against the fixture workspace.
+//  2. Wait for gopls to publish initial diagnostics (the fixture is clean,
+//     so we expect either empty diagnostics or none at all).
+//  3. Write a syntactically broken file to the workspace using ordinary
+//     os.WriteFile (simulating an external edit, since plumb's write tools
+//     live in the tools package — for this adapter-level test we use the
+//     primitive directly).
+//  4. Send DidChangeWatchedFiles{FileChanged}.
+//  5. Wait up to 5 seconds for publishDiagnostics to fire with at least one
+//     error for the broken file.
+//
+// This is the test that proves the 0.5.x architectural rewrite is
+// load-bearing: capability negotiation + DidChangeWatchedFiles is the
+// machinery that lets plumb keep gopls's view of the workspace fresh
+// after every plumb-initiated write.
+func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
+	ad := startGopls(t)
+	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "go-fixture")
+
+	// Copy the fixture into a temp workspace so we can mutate without dirtying
+	// the real testdata directory.
+	ws := t.TempDir()
+	for _, name := range []string{"go.mod", "main.go"} {
+		src, err := os.ReadFile(filepath.Join(fixtureSrc, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, name), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	brokenPath := filepath.Join(ws, "broken.go")
+	brokenURI := protocol.FileURI(brokenPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Subscribe to publishDiagnostics BEFORE init so we don't miss any.
+	diagCh := make(chan int, 16) // sends the error-count for brokenURI each publish
+	ad.Subscribe(func(method string, raw json.RawMessage) {
+		if method != "textDocument/publishDiagnostics" {
+			return
+		}
+		var p protocol.PublishDiagnosticsParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return
+		}
+		if p.URI != brokenURI {
+			return
+		}
+		errors := 0
+		for _, d := range p.Diagnostics {
+			if d.Severity == protocol.SevError {
+				errors++
+			}
+		}
+		select {
+		case diagCh <- errors:
+		default:
+		}
+	})
+
+	if _, err := ad.Initialize(ctx, gopls.DefaultInitParams(protocol.FileURI(ws))); err != nil {
+		t.Fatal("initialize:", err)
+	}
+	if err := ad.Initialized(ctx); err != nil {
+		t.Fatal("initialized:", err)
+	}
+
+	// Write a syntactically broken Go file into the workspace.
+	broken := []byte("package main\n\nfunc broken( { } // missing param/return\n")
+	if err := os.WriteFile(brokenPath, broken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tell gopls about it via the LSP-correct primitive.
+	if err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{
+			{URI: brokenURI, Type: protocol.FileCreated},
+		},
+	}); err != nil {
+		t.Fatal("DidChangeWatchedFiles:", err)
+	}
+
+	// Wait up to 5s for gopls to publish diagnostics for our broken file.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case errs := <-diagCh:
+			if errs > 0 {
+				return // success: gopls acted on our notification
+			}
+		case <-deadline:
+			t.Fatal("gopls did not publish error diagnostics for broken.go within 5s — " +
+				"DidChangeWatchedFiles may not be reaching the server, or capability " +
+				"negotiation is broken")
+		}
 	}
 }
