@@ -43,14 +43,13 @@ type Theme struct {
 	// unselected rows, table "when" / "dur" column data.
 	TextMuted color.Color
 
-	// TextDim is used to fade the *background* panel content when a popup
-	// overlays it — should be very dark, nearly invisible.
-	TextDim color.Color
+	// TextInactive is for text in a panel that is fully behind a popup overlay
+	// — non-interactive, not the current context. #3E444F.
+	TextInactive color.Color
 
-	// TextUnfocused is for text in an active (foreground) panel that has lost
-	// focus to its sibling — e.g. the Timestamp list when Call Detail is
-	// focused. Must be clearly readable, just less prominent than TextMuted.
-	TextUnfocused color.Color
+	// TextFaded is for text in a panel that is active but has lost focus to
+	// its sibling — still navigable, just not the current focus. #6C768A.
+	TextFaded color.Color
 
 	// TextHint is for column headers and the global key-hint bar. Sits
 	// between TextMuted and TextPrimary: clearly readable but not dominant.
@@ -87,8 +86,8 @@ var Nordico = Theme{
 	TextPrimary:   lipgloss.Color("15"),      // bright white
 	TextSecondary: lipgloss.Color("#C8D8E8"), // light blue-white — Nord4 tint
 	TextMuted:     lipgloss.Color("#AABBCC"), // mid blue-gray — between Nord3 and Nord4
-	TextDim:       lipgloss.Color("#2E3440"), // Nord0 — background panel fade, nearly invisible
-	TextUnfocused: lipgloss.Color("#AABBCC"), // same as TextMuted — readable, clearly not background
+	TextInactive:  lipgloss.Color("#3E444F"), // panel fully behind popup overlay
+	TextFaded:     lipgloss.Color("#6C768A"), // active panel that lost focus to sibling
 	TextHint:      lipgloss.Color("#7B8EA6"), // mid-tone — Nord3/Nord4 midpoint
 	Key:           lipgloss.Color("6"),       // cyan         — Nord8 #88C0D0
 	ItemText:      lipgloss.Color("7"),       // light gray   — Nord4

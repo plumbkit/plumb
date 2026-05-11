@@ -7,27 +7,28 @@ import "charm.land/lipgloss/v2"
 // literals or terminal-palette indices appear here. Call RebuildStyles()
 // after changing ActiveTheme and before rendering.
 var (
-	TitleStyle           lipgloss.Style
-	PanelHeaderStyle     lipgloss.Style
-	PanelHeaderDimStyle  lipgloss.Style
-	SepStyle             lipgloss.Style
-	SepDimStyle          lipgloss.Style
-	KeyStyle             lipgloss.Style
-	ValStyle             lipgloss.Style
-	ItemStyle            lipgloss.Style
-	SelectedStyle        lipgloss.Style
-	DimStyle             lipgloss.Style
-	MutedStyle           lipgloss.Style
-	TimestampActiveStyle lipgloss.Style
-	TimestampDimStyle    lipgloss.Style // cursor row when right panel focused (readable)
-	TimestampUnfocusedStyle lipgloss.Style // non-cursor rows when right panel focused
-	DetailStyle          lipgloss.Style
-	HintStyle            lipgloss.Style
-	StatusStyle          lipgloss.Style
-	OkStyle              lipgloss.Style
-	WarnStyle            lipgloss.Style
-	ScrollThumbStyle     lipgloss.Style
-	ScrollTrackStyle     lipgloss.Style
+	TitleStyle               lipgloss.Style
+	PanelHeaderStyle         lipgloss.Style // active/focused panel title
+	PanelHeaderInactiveStyle lipgloss.Style // panel is behind a popup — #3E444F
+	PanelHeaderFadedStyle    lipgloss.Style // panel active but lost focus to sibling — #6C768A
+	SepStyle                 lipgloss.Style
+	SepInactiveStyle         lipgloss.Style // border chars when panel is behind popup
+	KeyStyle                 lipgloss.Style
+	ValStyle                 lipgloss.Style
+	ItemStyle                lipgloss.Style
+	SelectedStyle            lipgloss.Style
+	InactiveStyle            lipgloss.Style // full panel content behind popup
+	MutedStyle               lipgloss.Style
+	FadedStyle               lipgloss.Style // content in active-but-unfocused panel
+	TimestampActiveStyle     lipgloss.Style
+	TimestampFadedStyle      lipgloss.Style // timestamp rows when sibling panel has focus
+	DetailStyle              lipgloss.Style
+	HintStyle                lipgloss.Style
+	StatusStyle              lipgloss.Style
+	OkStyle                  lipgloss.Style
+	WarnStyle                lipgloss.Style
+	ScrollThumbStyle         lipgloss.Style
+	ScrollTrackStyle         lipgloss.Style
 )
 
 func init() { RebuildStyles() }
@@ -45,17 +46,22 @@ func RebuildStyles() {
 		Bold(true).
 		Foreground(t.PanelTitle)
 
-	// Dimmed panel title — used for the unfocused side of the popup border.
-	PanelHeaderDimStyle = lipgloss.NewStyle().
-		Foreground(t.TextDim)
+	// PanelHeaderInactiveStyle: panel title when the panel is fully behind a
+	// popup overlay — non-interactive. #3E444F.
+	PanelHeaderInactiveStyle = lipgloss.NewStyle().
+		Foreground(t.TextInactive)
+
+	// PanelHeaderFadedStyle: panel title when the panel is active but has
+	// lost focus to its sibling. #6C768A.
+	PanelHeaderFadedStyle = lipgloss.NewStyle().
+		Foreground(t.TextFaded)
 
 	SepStyle = lipgloss.NewStyle().
 		Foreground(t.Border)
 
-	// SepDimStyle: border characters for the background panel when the popup
-	// is overlaid on top. Uses TextDim so they recede without disappearing.
-	SepDimStyle = lipgloss.NewStyle().
-		Foreground(t.TextDim)
+	// SepInactiveStyle: border chars for the panel behind a popup overlay.
+	SepInactiveStyle = lipgloss.NewStyle().
+		Foreground(t.TextInactive)
 
 	// KeyStyle has a fixed width so detail-row values align consistently.
 	KeyStyle = lipgloss.NewStyle().
@@ -74,27 +80,26 @@ func RebuildStyles() {
 		Bold(true).
 		Foreground(t.Accent)
 
-	// DimStyle: applied to every character in the background panel when the
-	// popup overlay is active, making the underlying content recede.
-	DimStyle = lipgloss.NewStyle().
-		Foreground(t.TextDim)
+	// InactiveStyle: every character in the panel that is behind a popup.
+	InactiveStyle = lipgloss.NewStyle().
+		Foreground(t.TextInactive)
 
-	// MutedStyle: low-priority secondary text (timestamps, durations, etc.).
+	// MutedStyle: low-priority secondary text (durations, hints, etc.).
 	MutedStyle = lipgloss.NewStyle().
 		Foreground(t.TextMuted)
 
-	// TimestampActiveStyle: timestamps in the focused popup-left panel.
+	// FadedStyle: content in a panel that is active but lost focus to sibling.
+	// Used for session list items and timestamp rows. #6C768A.
+	FadedStyle = lipgloss.NewStyle().
+		Foreground(t.TextFaded)
+
+	// TimestampActiveStyle: timestamp rows when the left panel has focus.
 	TimestampActiveStyle = lipgloss.NewStyle().
 		Foreground(t.TextPrimary)
 
-	// TimestampDimStyle: cursor row in the left panel when right panel holds focus.
-	// Readable — this is still the foreground panel, just not the focused one.
-	TimestampDimStyle = lipgloss.NewStyle().
-		Foreground(t.TextUnfocused)
-
-	// TimestampUnfocusedStyle: non-cursor rows when right panel holds focus.
-	TimestampUnfocusedStyle = lipgloss.NewStyle().
-		Foreground(t.TextUnfocused)
+	// TimestampFadedStyle: timestamp rows when the right panel has focus. #6C768A.
+	TimestampFadedStyle = lipgloss.NewStyle().
+		Foreground(t.TextFaded)
 
 	// DetailStyle: values in the call-detail right panel.
 	DetailStyle = lipgloss.NewStyle().

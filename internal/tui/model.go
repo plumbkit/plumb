@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +24,7 @@ var Version string
 const (
 	defaultLeftWidth = 26
 	minLeftWidth     = 16
+	minPopupLeftWidth = 30 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	pollInterval     = 2 * time.Second
 )
 
@@ -245,9 +245,8 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 	m.popupRightFocus = false
 	m.popupDetailScroll = 0
 	if m.popupLeftWidth == 0 {
-		m.popupLeftWidth = defaultLeftWidth
+		m.popupLeftWidth = minPopupLeftWidth
 	}
-	m.refreshPopupCalls()
 	// Pre-position cursor if a specific call was requested.
 	if !preselect.IsZero() {
 		for i, c := range m.popupCalls {
@@ -408,8 +407,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "[":
 				m.popupLeftWidth -= 2
-				if m.popupLeftWidth < minLeftWidth {
-					m.popupLeftWidth = minLeftWidth
+				if m.popupLeftWidth < minPopupLeftWidth {
+					m.popupLeftWidth = minPopupLeftWidth
 				}
 			case "]":
 				m.popupLeftWidth += 2
@@ -574,11 +573,20 @@ func (m Model) render() string {
 	sb.WriteString(title + strings.Repeat(" ", gap) + hint + "\n")
 
 	// Main border — always on row 2.
-	// In popup mode it is rendered faded (DimStyle) so the popup border on
-	// row 3 reads as "on top" of it.
 	if m.showPopup {
+		// Popup widths — compute here so both border rows use the same values.
+		if m.popupLeftWidth == 0 {
+			m.popupLeftWidth = minPopupLeftWidth
+		}
+		pLW := m.popupLeftWidth
+		pRW := m.width - pLW - 3
+		if pRW < 10 {
+			pRW = 10
+		}
+		// Dim background border uses main-panel leftWidth & rightWidth.
 		sb.WriteString(m.renderTopBorderDim(rightWidth) + "\n")
-		sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
+		// Popup border uses popup widths.
+		sb.WriteString(m.renderTopBorderPopup(pLW, pRW) + "\n")
 	} else {
 		sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
 	}
@@ -588,9 +596,8 @@ func (m Model) render() string {
 
  	if m.showPopup {
 		// In popup mode, use popupLeftWidth for the timestamp panel.
-		// Ensure it is initialised.
 		if m.popupLeftWidth == 0 {
-			m.popupLeftWidth = defaultLeftWidth
+			m.popupLeftWidth = minPopupLeftWidth
 		}
 		pLW := m.popupLeftWidth
 		pRW := m.width - pLW - 3 // left-│ + ┆ + right-│
@@ -601,7 +608,7 @@ func (m Model) render() string {
 		bgLeft := m.dimLines(m.leftLines(), m.leftWidth)
 
 		popupLeft := m.popupLeftLines()
-		allRight := m.popupRightAll(pRW)
+		allRight := m.popupRightAll(pRW - 2) // -2: 1 for scrollbar col, 1 for gap
 		total := len(allRight)
 		start := m.popupDetailScroll
 		if start > total {
@@ -652,7 +659,11 @@ func (m Model) render() string {
 		}
 	}
 
-	sb.WriteString(m.renderBottomBorder(rightWidth) + "\n")
+	if m.showPopup {
+		sb.WriteString(m.renderBottomBorderPopup(m.popupLeftWidth, m.width-m.popupLeftWidth-3) + "\n")
+	} else {
+		sb.WriteString(m.renderBottomBorder(rightWidth) + "\n")
+	}
 
 	// Footer — sum across the visible sessions' per-project DBs.
 	var totalCalls, savedTok int64
@@ -683,23 +694,23 @@ func (m Model) renderTopBorder(rightWidth int) string {
 	if m.showPopup {
 		leftTitle = " Timestamp "
 		rightTitle = " Call Detail "
-		// Dim whichever panel is not focused.
+		// Faded whichever panel is not focused.
 		if m.popupRightFocus {
-			leftTitleStyle = PanelHeaderDimStyle
+			leftTitleStyle = PanelHeaderFadedStyle  // Timestamp faded: #6C768A
 			rightTitleStyle = PanelHeaderStyle
 		} else {
 			leftTitleStyle = PanelHeaderStyle
-			rightTitleStyle = PanelHeaderDimStyle
+			rightTitleStyle = PanelHeaderFadedStyle // Call Detail faded: #6C768A
 		}
 	} else {
 		leftTitle = fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
 		rightTitle = " Session + Stats "
-		// Dim the unfocused panel title in normal mode too.
+		// Faded the unfocused panel title in normal mode.
 		if m.focusPanel == focusSessions {
 			leftTitleStyle = PanelHeaderStyle
-			rightTitleStyle = PanelHeaderDimStyle
+			rightTitleStyle = PanelHeaderFadedStyle // Session + Stats faded: #6C768A
 		} else {
-			leftTitleStyle = PanelHeaderDimStyle
+			leftTitleStyle = PanelHeaderFadedStyle   // Sessions faded: #6C768A
 			rightTitleStyle = PanelHeaderStyle
 		}
 	}
@@ -758,16 +769,50 @@ func (m Model) renderTopBorderDim(rightWidth int) string {
 	if rightFill < 0 {
 		rightFill = 0
 	}
-	return SepDimStyle.Render("╭─") +
-		SepDimStyle.Render(leftTitle) +
-		SepDimStyle.Render(strings.Repeat("─", leftFill)+"┬─") +
-		SepDimStyle.Render(rightTitle) +
-		SepDimStyle.Render(strings.Repeat("─", rightFill)+"╮")
+	return SepInactiveStyle.Render("╭─") +
+		SepInactiveStyle.Render(leftTitle) +
+		SepInactiveStyle.Render(strings.Repeat("─", leftFill)+"┬─") +
+		SepInactiveStyle.Render(rightTitle) +
+		SepInactiveStyle.Render(strings.Repeat("─", rightFill)+"╮")
 }
 
 func (m Model) renderBottomBorder(rightWidth int) string {
 	return SepStyle.Render(
 		"╰" + strings.Repeat("─", m.leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "╯",
+	)
+}
+
+// renderTopBorderPopup builds the popup's own top border using popup-specific widths.
+func (m Model) renderTopBorderPopup(pLW, pRW int) string {
+	leftTitle := " Timestamp "
+	rightTitle := " Call Detail "
+	var leftTitleStyle, rightTitleStyle lipgloss.Style
+	if m.popupRightFocus {
+		leftTitleStyle = PanelHeaderFadedStyle
+		rightTitleStyle = PanelHeaderStyle
+	} else {
+		leftTitleStyle = PanelHeaderStyle
+		rightTitleStyle = PanelHeaderFadedStyle
+	}
+	leftFill := pLW - 1 - len(leftTitle)
+	if leftFill < 0 {
+		leftFill = 0
+	}
+	rightFill := pRW - 1 - len(rightTitle)
+	if rightFill < 0 {
+		rightFill = 0
+	}
+	return SepStyle.Render("╭─") +
+		leftTitleStyle.Render(leftTitle) +
+		SepStyle.Render(strings.Repeat("─", leftFill)+"┬─") +
+		rightTitleStyle.Render(rightTitle) +
+		SepStyle.Render(strings.Repeat("─", rightFill)+"╮")
+}
+
+// renderBottomBorderPopup builds the bottom border using popup-specific widths.
+func (m Model) renderBottomBorderPopup(pLW, pRW int) string {
+	return SepStyle.Render(
+		"╰" + strings.Repeat("─", pLW) + "┴" + strings.Repeat("─", pRW) + "╯",
 	)
 }
 
@@ -781,7 +826,7 @@ func (m Model) dimLines(lines []string, width int) []string {
 		vis := lipgloss.Width(l)
 		plain := lipgloss.NewStyle().Width(width).Render(l)
 		_ = vis
-		out[i] = DimStyle.Render(plain)
+		out[i] = InactiveStyle.Render(plain)
 	}
 	return out
 }
@@ -832,12 +877,9 @@ func (m Model) popupLeftLines() []string {
 
 		if selected {
 			lines = append(lines, SelectedStyle.Render(row))
-		} else if isCursor && m.popupRightFocus {
-			// Cursor row when focus is on right panel: keep clearly readable.
-			lines = append(lines, TimestampActiveStyle.Render(row))
 		} else if m.popupRightFocus {
-			// Non-cursor rows when right panel is focused: readable but receded.
-			lines = append(lines, TimestampUnfocusedStyle.Render(row))
+			// Left panel is in background — all rows use the disabled colour.
+			lines = append(lines, TimestampFadedStyle.Render(row))
 		} else {
 			lines = append(lines, TimestampActiveStyle.Render(row))
 		}
@@ -889,90 +931,58 @@ func (m Model) popupRightAll(rightWidth int) []string {
 		detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))),
 	)
 
-	// Error section: always shown for failed calls, even when the DB row has
-	// no error_msg recorded. Rows older than the OnAfterTool fix (and rows
-	// from a daemon that hasn't been restarted since the fix) will show a
-	// muted explanation instead of staying silent — otherwise the missing
-	// section reads like a rendering bug.
-	if !c.Success {
-		lines = append(lines, "", "  "+WarnStyle.Render("── Error ──"))
-		if c.ErrorMsg != "" {
-			for _, w := range wrapText(c.ErrorMsg, rightWidth-4) {
-				lines = append(lines, "    "+WarnStyle.Render(w))
-			}
-		} else {
-			lines = append(lines, "    "+MutedStyle.Render("(no error message recorded — pre-fix row, or daemon not restarted)"))
-		}
-	}
-
-	// boxSection renders a named rounded box with content always expanded.
+	// boxSection renders a named rounded box.
+	// Layout: " " + "│" + " " + padded(inner) + " " + "│" = inner+4 visible chars + 1 left margin = inner+5.
+	// The cell width available is rightWidth (already pRW-2, accounting for scrollbar+gap).
+	// We want box right "│" to sit at rightWidth-1, leaving 1 space before panel border:
+	// 1 + 1 + 1 + inner + 1 + 1 = inner+5 = rightWidth, so inner = rightWidth - 5.
+	// Bottom/top horizontal span: "╭─" + topLabel + fill + "╮" must equal inner+4:
+	//   topFill = inner + 2 - len(topLabel)
+	// Bottom dashes: inner + 2.
 	boxSection := func(label string, contentLines []string) {
-		inner := rightWidth - 4 // 2 for left margin + 2 for box borders
+		inner := rightWidth - 5
 		if inner < 8 {
 			inner = 8
 		}
-		// ╭─ Args ───────────────────────────────╮
 		topLabel := " " + label + " "
-		topFill := rightWidth - 2 - 2 - len(topLabel)
+		topFill := inner + 2 - len(topLabel)
 		if topFill < 0 {
 			topFill = 0
 		}
-		topBorder := "  " + SepStyle.Render("╭─"+topLabel+strings.Repeat("─", topFill)+"╮")
+		topBorder := " " + SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", topFill)+"╮")
 		lines = append(lines, "", topBorder)
 		for _, cl := range contentLines {
 			if lipgloss.Width(cl) > inner {
 				cl = string([]rune(cl)[:inner-1]) + "…"
 			}
 			padded := lipgloss.NewStyle().Width(inner).Render(cl)
-			lines = append(lines, "  "+SepStyle.Render("│")+" "+padded+" "+SepStyle.Render("│"))
+			lines = append(lines, " "+SepStyle.Render("│")+" "+padded+" "+SepStyle.Render("│"))
 		}
-		lines = append(lines, "  "+SepStyle.Render("╰"+strings.Repeat("─", rightWidth-4)+"╯"))
+		lines = append(lines, " "+SepStyle.Render("╰"+strings.Repeat("─", inner+2)+"╯"))
+	}
+
+	// Error section as a box.
+	if !c.Success {
+		var errLines []string
+		if c.ErrorMsg != "" {
+			for _, w := range wrapText(c.ErrorMsg, rightWidth-5) {
+				errLines = append(errLines, WarnStyle.Render(w))
+			}
+		} else {
+			errLines = append(errLines, MutedStyle.Render("(no error message recorded)"))
+		}
+		boxSection("Error", errLines)
 	}
 
 	if c.InputJSON != "" {
 		var argsLines []string
-		var argMap map[string]any
-		if err := json.Unmarshal([]byte(c.InputJSON), &argMap); err == nil {
-			keys := make([]string, 0, len(argMap))
-			for k := range argMap {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				v := argMap[k]
-				keyCell := padRight(k, 14)
-				switch vv := v.(type) {
-				case string:
-					argsLines = append(argsLines, HintStyle.Render(keyCell)+DetailStyle.Render(vv))
-				case float64:
-					var s string
-					if vv == float64(int64(vv)) {
-						s = fmt.Sprintf("%d", int64(vv))
-					} else {
-						s = fmt.Sprintf("%g", vv)
-					}
-					argsLines = append(argsLines, HintStyle.Render(keyCell)+DetailStyle.Render(s))
-				case bool:
-					argsLines = append(argsLines, HintStyle.Render(keyCell)+DetailStyle.Render(fmt.Sprintf("%v", vv)))
-				default:
-					argsLines = append(argsLines, HintStyle.Render(strings.TrimRight(keyCell, " ")+":"))
-					var prettyBuf bytes.Buffer
-					if b, e := json.Marshal(v); e == nil {
-						if e2 := json.Indent(&prettyBuf, b, "  ", "  "); e2 == nil {
-							for _, l := range strings.Split(strings.TrimRight(prettyBuf.String(), "\n"), "\n") {
-								argsLines = append(argsLines, DetailStyle.Render(l))
-							}
-						}
-					}
-				}
+		var prettyBuf bytes.Buffer
+		if err := json.Indent(&prettyBuf, []byte(c.InputJSON), "", "  "); err == nil {
+			for _, l := range strings.Split(strings.TrimRight(prettyBuf.String(), "\n"), "\n") {
+				argsLines = append(argsLines, DetailStyle.Render(l))
 			}
 		} else {
-			var prettyBuf bytes.Buffer
-			if e2 := json.Indent(&prettyBuf, []byte(c.InputJSON), "", "  "); e2 == nil {
-				for _, l := range strings.Split(strings.TrimRight(prettyBuf.String(), "\n"), "\n") {
-					argsLines = append(argsLines, DetailStyle.Render(l))
-				}
-			}
+			argsLines = append(argsLines, DetailStyle.Render(c.InputJSON))
 		}
 		boxSection("Args", argsLines)
 	}
@@ -1034,12 +1044,18 @@ func (m Model) leftLines() []string {
 		msg2 := " Call a tool to begin."
 		if !daemonRunning() {
 			msg1 = " No active sessions."
-			msg2 = " Open Claude Desktop."
+			msg2 = ""
 		}
 		if leftFocused {
-			lines = append(lines, MutedStyle.Render(msg1), MutedStyle.Render(msg2))
+			lines = append(lines, MutedStyle.Render(msg1))
+			if msg2 != "" {
+				lines = append(lines, MutedStyle.Render(msg2))
+			}
 		} else {
-			lines = append(lines, DimStyle.Render(msg1), DimStyle.Render(msg2))
+			lines = append(lines, InactiveStyle.Render(msg1))
+			if msg2 != "" {
+				lines = append(lines, InactiveStyle.Render(msg2))
+			}
 		}
 		return lines
 	}
@@ -1061,13 +1077,13 @@ func (m Model) leftLines() []string {
 			if leftFocused {
 				lines = append(lines, SelectedStyle.Render(" > "+label))
 			} else {
-				lines = append(lines, DimStyle.Render(" > "+label))
+				lines = append(lines, FadedStyle.Render(" > "+label))
 			}
 		} else {
 			if leftFocused {
 				lines = append(lines, ItemStyle.Render("   "+label))
 			} else {
-				lines = append(lines, DimStyle.Render("   "+label))
+				lines = append(lines, FadedStyle.Render("   "+label))
 			}
 		}
 	}
@@ -1149,18 +1165,17 @@ func (m *Model) rightLines(rightWidth int) []string {
 	// they read as a single aligned grid.
 	//
 	//  col1 (Tool)   col2 (Calls/Dur)  col3 (Avg/When)  col4 (Errors)
-	//  left-aligned  right-aligned     right-aligned    left-aligned
+	//  left-aligned  right-aligned     right-aligned    right-aligned
 	//
 	const (
 		col2W = 8  // right-aligned: Calls / Dur
 		col3W = 10 // right-aligned: Avg / When
-		col4W = 8  // left-aligned:  Errors (shown only when non-empty)
+		col4W = 6  // right-aligned: Errors count or ✗, with trailing gap before border
 	)
-	// 3-space gap between every column.
+	// 3-space gap between every column, plus 3 trailing spaces after col4.
 	sep3 := "   "
-	// prefix is 2 chars ("  " or "▸ "); col1 fills the rest up to the right edge.
-	// Layout: 2 + col1 + 3 + col2 + 3 + col3 + 3 + col4 = rightWidth
-	col1W := rightWidth - 2 - col2W - col3W - col4W - 9
+	// Layout: 2 + col1 + 3 + col2 + 3 + col3 + 3 + col4 + 3 = rightWidth
+	col1W := rightWidth - 2 - col2W - col3W - col4W - 12
 	if col1W < 10 {
 		col1W = 10
 	}
@@ -1199,26 +1214,24 @@ func (m *Model) rightLines(rightWidth int) []string {
 
 		for i, ts := range m.toolStats {
 			selected := m.focusPanel == focusToolStats && i == m.toolStatsCursor
-			// Build the plain (un-styled) row text for the selected case so
-			// SelectedStyle colours the whole line uniformly.
 			plainTool := padRight(toolIcon(ts.Tool)+" "+truncate(ts.Tool, col1W-2), col1W)
 			if selected {
 				plainCalls := padLeft(fmt.Sprintf("%d", ts.Calls), col2W)
 				plainAvg := padLeft(fmt.Sprintf("%.0fms", ts.AvgMs), col3W)
-				plainErr := ""
+				plainErr := padLeft("", col4W)
 				if ts.Errors > 0 {
-					plainErr = fmt.Sprintf("%d err", ts.Errors)
+					plainErr = padLeft(fmt.Sprintf("%d", ts.Errors), col4W)
 				}
-				row := plainTool + sep3 + plainCalls + sep3 + plainAvg + sep3 + plainErr
+				row := plainTool + sep3 + plainCalls + sep3 + plainAvg + sep3 + plainErr + sep3
 				lines = append(lines, SelectedStyle.Width(rowWidth).Render("> "+row))
 			} else {
 				col2Cell := padLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), col2W)
 				col3Cell := padLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), col3W)
-				col4Cell := ""
+				col4Cell := padLeft("", col4W)
 				if ts.Errors > 0 {
-					col4Cell = WarnStyle.Render(fmt.Sprintf("%d err", ts.Errors))
+					col4Cell = padLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), col4W)
 				}
-				row := plainTool + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell
+				row := plainTool + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell + sep3
 				lines = append(lines, "  "+row)
 			}
 		}
@@ -1252,11 +1265,11 @@ func (m *Model) rightLines(rightWidth int) []string {
 			if selected {
 				plainDur := padLeft(fmt.Sprintf("%dms", c.DurationMs), col2W)
 				plainWhen := padLeft(humanAgeTUI(c.CalledAt), col3W)
-				plainErr := ""
-				if !c.Success && c.ErrorMsg != "" {
-					plainErr = truncate(c.ErrorMsg, col4W)
+				plainErr := padLeft("", col4W)
+				if !c.Success {
+					plainErr = padLeft("✗", col4W)
 				}
-				row := plainTool + sep3 + plainDur + sep3 + plainWhen + sep3 + plainErr
+				row := plainTool + sep3 + plainDur + sep3 + plainWhen + sep3 + plainErr + sep3
 				lines = append(lines, SelectedStyle.Width(rowWidth).Render("> "+row))
 			} else {
 				status := OkStyle.Render("✓")
@@ -1266,11 +1279,11 @@ func (m *Model) rightLines(rightWidth int) []string {
 				toolCell := padRight(status+" "+toolIcon(c.Tool)+" "+truncate(c.Tool, col1W-4), col1W)
 				col2Cell := padLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), col2W)
 				col3Cell := padLeft(MutedStyle.Render(humanAgeTUI(c.CalledAt)), col3W)
-				col4Cell := ""
-				if !c.Success && c.ErrorMsg != "" {
-					col4Cell = WarnStyle.Render(truncate(c.ErrorMsg, col4W))
+				col4Cell := padLeft("", col4W)
+				if !c.Success {
+					col4Cell = padLeft(WarnStyle.Render("✗"), col4W)
 				}
-				row := toolCell + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell
+				row := toolCell + sep3 + col2Cell + sep3 + col3Cell + sep3 + col4Cell + sep3
 				lines = append(lines, "  "+row)
 			}
 		}
