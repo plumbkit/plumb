@@ -12,7 +12,7 @@ import (
 func callWriteFile(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	return NewWriteFile(nil).Execute(context.Background(), raw)
+	return NewWriteFile(nil, nil).Execute(context.Background(), raw)
 }
 
 func TestWriteFile_Create(t *testing.T) {

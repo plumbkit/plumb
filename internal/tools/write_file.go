@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -46,10 +47,11 @@ var writeFileSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type WriteFile struct {
 	client lsp.LSPClient // may be nil; LSP notify skipped when nil
+	cache  *cache.Cache  // may be nil; cache invalidation skipped when nil
 }
 
-func NewWriteFile(client lsp.LSPClient) *WriteFile {
-	return &WriteFile{client: client}
+func NewWriteFile(client lsp.LSPClient, c *cache.Cache) *WriteFile {
+	return &WriteFile{client: client, cache: c}
 }
 
 func (*WriteFile) Name() string               { return "write_file" }
@@ -115,6 +117,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if err := notifyLSP(ctx, t.client, path, changeType); err != nil {
 		slog.Warn("write_file: LSP notification failed", "path", path, "err", err)
 	}
+	invalidateCache(t.cache, "file://"+path)
 
 	verb := "updated"
 	if isNew {

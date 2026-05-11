@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -30,9 +31,12 @@ var deleteFileSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type DeleteFile struct {
 	client lsp.LSPClient // may be nil; LSP notify skipped when nil
+	cache  *cache.Cache  // may be nil; cache invalidation skipped when nil
 }
 
-func NewDeleteFile(client lsp.LSPClient) *DeleteFile { return &DeleteFile{client: client} }
+func NewDeleteFile(client lsp.LSPClient, c *cache.Cache) *DeleteFile {
+	return &DeleteFile{client: client, cache: c}
+}
 
 func (*DeleteFile) Name() string                 { return "delete_file" }
 func (*DeleteFile) InputSchema() json.RawMessage { return deleteFileSchema }
@@ -75,6 +79,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := notifyLSP(ctx, t.client, path, protocol.FileDeleted); err != nil {
 		slog.Warn("delete_file: LSP notification failed", "path", path, "err", err)
 	}
+	invalidateCache(t.cache, "file://"+path)
 
 	return fmt.Sprintf("deleted %s", path), nil
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -43,9 +44,12 @@ var renameFileSchema = json.RawMessage(`{
 // paths are locked to serialise with any concurrent write_file/edit_file.
 type RenameFile struct {
 	client lsp.LSPClient
+	cache  *cache.Cache
 }
 
-func NewRenameFile(client lsp.LSPClient) *RenameFile { return &RenameFile{client: client} }
+func NewRenameFile(client lsp.LSPClient, c *cache.Cache) *RenameFile {
+	return &RenameFile{client: client, cache: c}
+}
 
 func (*RenameFile) Name() string                 { return "rename_file" }
 func (*RenameFile) InputSchema() json.RawMessage { return renameFileSchema }
@@ -116,6 +120,8 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := notifyLSP(ctx, t.client, to, protocol.FileCreated); err != nil {
 		slog.Warn("rename_file: LSP create-notify failed", "path", to, "err", err)
 	}
+	invalidateCache(t.cache, "file://"+from)
+	invalidateCache(t.cache, "file://"+to)
 
 	return fmt.Sprintf("renamed %s → %s", from, to), nil
 }

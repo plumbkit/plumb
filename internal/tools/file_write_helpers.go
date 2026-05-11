@@ -37,9 +37,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
+
+// invalidateCache evicts every cache entry whose key references uri. Safe
+// when c is nil. Called by all write tools immediately after a successful
+// write so the next find_symbol / get_definition / list_symbols sees fresh
+// data without waiting for gopls to re-publish diagnostics (and without
+// relying on the TTL expiring).
+func invalidateCache(c *cache.Cache, uri string) {
+	if c == nil {
+		return
+	}
+	_ = c.InvalidateByPath(uri)
+}
 
 // pathLocks serialises write operations to the same on-disk path across all
 // concurrent tool calls in this process. The map is consulted by lockPath /

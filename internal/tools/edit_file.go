@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -82,10 +83,11 @@ const maxEditRetries = 3
 // Concurrency: Execute is safe for concurrent use.
 type EditFile struct {
 	client lsp.LSPClient // may be nil; LSP notify skipped when nil
+	cache  *cache.Cache  // may be nil; cache invalidation skipped when nil
 }
 
-func NewEditFile(client lsp.LSPClient) *EditFile {
-	return &EditFile{client: client}
+func NewEditFile(client lsp.LSPClient, c *cache.Cache) *EditFile {
+	return &EditFile{client: client, cache: c}
 }
 
 func (*EditFile) Name() string                 { return "edit_file" }
@@ -175,6 +177,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		if err := notifyLSP(ctx, t.client, path, protocol.FileChanged); err != nil {
 			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 		}
+		invalidateCache(t.cache, "file://"+path)
 
 		noun := "edit"
 		if len(a.Edits) > 1 {

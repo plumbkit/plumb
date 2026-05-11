@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (2/9)
+- **Direct cache invalidation on writes** — `write_file`, `edit_file`, `delete_file`, and `rename_file` now evict matching entries from the symbol cache (`cache.InvalidateByPath`) immediately after a successful write. Closes the stale-symbol window without depending on gopls's diagnostic-republish timing. Constructors gained an optional `*cache.Cache` parameter (`nil` is safe for tests).
+
 ### Added (1/9)
 - **LSP server-request handling** — `jsonrpc.Conn` now dispatches server-initiated requests through a registered `RequestHandler`, sending back JSON-RPC responses (or `-32601 method not found` if no handler is registered). Closes the gap where `client/registerCapability` requests from gopls were silently dropped.
 - **`workspace.didChangeWatchedFiles.dynamicRegistration` advertised** — `DefaultClientCapabilities` now declares this capability so gopls actually registers its file-watcher globs and consumes our `workspace/didChangeWatchedFiles` notifications. Makes the 0.5.0 LSP rewrite load-bearing.
