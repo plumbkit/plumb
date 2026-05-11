@@ -21,8 +21,21 @@ type Caller interface {
 	Call(ctx context.Context, method string, params, result any) error
 	Notify(ctx context.Context, method string, params any) error
 	SetNotificationHandler(fn func(method string, params json.RawMessage))
+	SetRequestHandler(fn RequestHandler)
 	Close() error
 }
+
+// RequestHandler is invoked when the server initiates a request. It must
+// return a JSON-RPC result (or error) which is sent back to the server.
+// Return (nil, nil) to send an empty success response.
+type RequestHandler func(ctx context.Context, method string, params json.RawMessage) (result any, err error)
+
+// jsonRPCError is sent in error responses. Code -32601 is method-not-found
+// per the JSON-RPC 2.0 spec.
+const (
+	errCodeMethodNotFound = -32601
+	errCodeInternal       = -32603
+)
 
 // ─── wire types ──────────────────────────────────────────────────────────────
 
@@ -65,6 +78,9 @@ type Conn struct {
 	notifyMu sync.RWMutex
 	onNotify func(method string, params json.RawMessage)
 
+	reqMu     sync.RWMutex
+	onRequest RequestHandler
+
 	done chan struct{}
 	once sync.Once
 }
@@ -86,6 +102,27 @@ func (c *Conn) SetNotificationHandler(fn func(method string, params json.RawMess
 	c.notifyMu.Lock()
 	c.onNotify = fn
 	c.notifyMu.Unlock()
+}
+
+// SetRequestHandler registers fn to be called for every server-initiated
+// request (a message with an ID and a method, expecting a response). The
+// handler's return value is encoded as the response result. Returning an
+// error sends an error response with code -32603 (internal error) unless
+// the error is a *MethodNotFoundError, in which case code -32601 is used.
+//
+// If no handler is set, server requests are responded to with method-not-found.
+func (c *Conn) SetRequestHandler(fn RequestHandler) {
+	c.reqMu.Lock()
+	c.onRequest = fn
+	c.reqMu.Unlock()
+}
+
+// MethodNotFoundError can be returned from a RequestHandler to send the
+// JSON-RPC method-not-found error code (-32601) back to the server.
+type MethodNotFoundError struct{ Method string }
+
+func (e *MethodNotFoundError) Error() string {
+	return fmt.Sprintf("method not found: %s", e.Method)
 }
 
 // Call sends a request and blocks until a response arrives or ctx is cancelled.
@@ -188,6 +225,7 @@ func (c *Conn) readLoop(r *bufio.Reader) {
 
 func (c *Conn) dispatch(msg wireMessage) {
 	if msg.ID != nil {
+		// Either a response to one of our calls, or a server-initiated request.
 		if v, ok := c.pending.Load(*msg.ID); ok {
 			p := v.(*pending)
 			select {
@@ -195,6 +233,12 @@ func (c *Conn) dispatch(msg wireMessage) {
 			case <-p.ctx.Done():
 			case <-c.done:
 			}
+			return
+		}
+		// Server-initiated request — handle in a goroutine so the read loop
+		// can keep draining the wire.
+		if msg.Method != "" {
+			go c.handleServerRequest(msg)
 		}
 		return
 	}
@@ -208,6 +252,72 @@ func (c *Conn) dispatch(msg wireMessage) {
 	if fn != nil {
 		go fn(msg.Method, msg.Params)
 	}
+}
+
+// handleServerRequest dispatches one incoming server request through the
+// registered RequestHandler and sends back a response. Runs in its own
+// goroutine so long-running handlers don't stall the read loop.
+func (c *Conn) handleServerRequest(req wireMessage) {
+	c.reqMu.RLock()
+	fn := c.onRequest
+	c.reqMu.RUnlock()
+
+	var (
+		result any
+		err    error
+	)
+	if fn == nil {
+		err = &MethodNotFoundError{Method: req.Method}
+	} else {
+		result, err = fn(context.Background(), req.Method, req.Params)
+	}
+
+	resp := wireMessage{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+	}
+	if err != nil {
+		code := errCodeInternal
+		var mnf *MethodNotFoundError
+		if errorsAs(err, &mnf) {
+			code = errCodeMethodNotFound
+		}
+		resp.Error = &wireError{Code: code, Message: err.Error()}
+	} else {
+		if result == nil {
+			resp.Result = json.RawMessage("null")
+		} else {
+			encoded, mErr := json.Marshal(result)
+			if mErr != nil {
+				resp.Error = &wireError{Code: errCodeInternal, Message: "encoding result: " + mErr.Error()}
+			} else {
+				resp.Result = encoded
+			}
+		}
+	}
+	if err := c.send(resp); err != nil {
+		// We can't do anything useful here; the connection is dying. The
+		// read loop's EOF handler will close c.done shortly.
+		_ = err
+	}
+}
+
+// errorsAs is a tiny indirection so we can avoid importing "errors" in this
+// hot file just for As. Inlined As semantics.
+func errorsAs[T any](err error, target *T) bool {
+	for e := err; e != nil; {
+		if v, ok := e.(T); ok {
+			*target = v
+			return true
+		}
+		type unwrapper interface{ Unwrap() error }
+		if u, ok := e.(unwrapper); ok {
+			e = u.Unwrap()
+			continue
+		}
+		break
+	}
+	return false
 }
 
 // readMessage reads one LSP-framed JSON-RPC message from r.

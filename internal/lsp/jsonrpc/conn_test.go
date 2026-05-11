@@ -144,6 +144,79 @@ func TestConn_ContextCancel(t *testing.T) {
 	}
 }
 
+// TestConn_ServerRequest_OK verifies that a server-initiated request is
+// dispatched to the registered handler and the result is sent back.
+func TestConn_ServerRequest_OK(t *testing.T) {
+	pr, pw := io.Pipe()
+	cr, cw := io.Pipe()
+
+	conn := NewConn(pr, cw)
+	defer conn.Close()
+
+	conn.SetRequestHandler(func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "client/registerCapability" {
+			return nil, &MethodNotFoundError{Method: method}
+		}
+		return nil, nil
+	})
+
+	respCh := make(chan wireMessage, 1)
+	go func() {
+		msg, err := readMessage(bufio.NewReader(cr))
+		if err == nil {
+			respCh <- msg
+		}
+	}()
+
+	id := int64(7)
+	req := wireMessage{JSONRPC: "2.0", ID: &id, Method: "client/registerCapability", Params: json.RawMessage(`{}`)}
+	_, _ = pw.Write([]byte(frame(req)))
+
+	select {
+	case resp := <-respCh:
+		if resp.ID == nil || *resp.ID != 7 {
+			t.Fatalf("response ID = %v, want 7", resp.ID)
+		}
+		if resp.Error != nil {
+			t.Fatalf("unexpected error response: %v", resp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for response")
+	}
+}
+
+// TestConn_ServerRequest_MethodNotFound verifies an unhandled server request
+// gets a -32601 error response.
+func TestConn_ServerRequest_MethodNotFound(t *testing.T) {
+	pr, pw := io.Pipe()
+	cr, cw := io.Pipe()
+
+	conn := NewConn(pr, cw)
+	defer conn.Close()
+	// No handler registered.
+
+	respCh := make(chan wireMessage, 1)
+	go func() {
+		msg, err := readMessage(bufio.NewReader(cr))
+		if err == nil {
+			respCh <- msg
+		}
+	}()
+
+	id := int64(11)
+	req := wireMessage{JSONRPC: "2.0", ID: &id, Method: "weird/thing"}
+	_, _ = pw.Write([]byte(frame(req)))
+
+	select {
+	case resp := <-respCh:
+		if resp.Error == nil || resp.Error.Code != -32601 {
+			t.Fatalf("expected -32601 error, got %+v", resp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for response")
+	}
+}
+
 // TestMockCaller_HandleOK verifies MockCaller routes responses correctly.
 func TestMockCaller_HandleOK(t *testing.T) {
 	m := NewMockCaller()

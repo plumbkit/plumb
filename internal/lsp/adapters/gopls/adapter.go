@@ -43,7 +43,21 @@ func New(conn jsonrpc.Caller) *Adapter {
 		subs: make(map[int64]func(string, json.RawMessage)),
 	}
 	conn.SetNotificationHandler(a.dispatch)
+	conn.SetRequestHandler(a.handleServerRequest)
 	return a
+}
+
+// handleServerRequest responds to server-initiated requests. gopls uses
+// client/registerCapability after init to register file watchers; we accept
+// (null result) so it actually starts watching. Anything else is replied to
+// with method-not-found so the server can fall back.
+func (a *Adapter) handleServerRequest(_ context.Context, method string, _ json.RawMessage) (any, error) {
+	switch method {
+	case protocol.MethodRegisterCapability, protocol.MethodUnregisterCapability:
+		return nil, nil
+	default:
+		return nil, &jsonrpc.MethodNotFoundError{Method: method}
+	}
 }
 
 // DefaultInitParams returns InitializeParams suitable for gopls.

@@ -269,6 +269,13 @@ func (c *ServerCapabilities) PrepareRenameEnabled() bool {
 // ─── Client capabilities ──────────────────────────────────────────────────────
 
 // DefaultClientCapabilities returns the capabilities Plumb advertises.
+//
+// workspace.didChangeWatchedFiles.dynamicRegistration is true: this tells
+// the server it may use client/registerCapability to register the file
+// globs it wants to watch (gopls registers patterns like **/*.go, **/go.mod
+// once this is declared). The adapter's request handler responds OK to
+// these registrations — we don't track them, but accepting is essential so
+// gopls actually consumes our workspace/didChangeWatchedFiles notifications.
 func DefaultClientCapabilities() ClientCapabilities {
 	return ClientCapabilities{
 		TextDocument: TextDocumentClientCapabilities{
@@ -276,7 +283,8 @@ func DefaultClientCapabilities() ClientCapabilities {
 			DocumentSymbol:  &DocumentSymbolClientCapabilities{HierarchicalDocumentSymbolSupport: true},
 		},
 		Workspace: WorkspaceClientCapabilities{
-			Symbol: &WorkspaceSymbolClientCapabilities{},
+			Symbol:                 &WorkspaceSymbolClientCapabilities{},
+			DidChangeWatchedFiles:  &DidChangeWatchedFilesClientCapabilities{DynamicRegistration: true},
 		},
 	}
 }
@@ -305,11 +313,20 @@ type DocumentSymbolClientCapabilities struct {
 
 // WorkspaceClientCapabilities describes workspace-level client capabilities.
 type WorkspaceClientCapabilities struct {
-	Symbol *WorkspaceSymbolClientCapabilities `json:"symbol,omitempty"`
+	Symbol                *WorkspaceSymbolClientCapabilities         `json:"symbol,omitempty"`
+	DidChangeWatchedFiles *DidChangeWatchedFilesClientCapabilities   `json:"didChangeWatchedFiles,omitempty"`
 }
 
 // WorkspaceSymbolClientCapabilities describes workspace symbol client capabilities.
 type WorkspaceSymbolClientCapabilities struct{}
+
+// DidChangeWatchedFilesClientCapabilities lets the client declare it can
+// receive (and the server can dynamically register) watched-file events.
+// Required for gopls to register file watchers via client/registerCapability.
+type DidChangeWatchedFilesClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+	// RelativePatternSupport: omitted — gopls falls back to absolute globs.
+}
 
 // ─── Initialize ───────────────────────────────────────────────────────────────
 

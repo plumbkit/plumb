@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 — 2026-05-11 (in progress)
+
+### Added (1/9)
+- **LSP server-request handling** — `jsonrpc.Conn` now dispatches server-initiated requests through a registered `RequestHandler`, sending back JSON-RPC responses (or `-32601 method not found` if no handler is registered). Closes the gap where `client/registerCapability` requests from gopls were silently dropped.
+- **`workspace.didChangeWatchedFiles.dynamicRegistration` advertised** — `DefaultClientCapabilities` now declares this capability so gopls actually registers its file-watcher globs and consumes our `workspace/didChangeWatchedFiles` notifications. Makes the 0.5.0 LSP rewrite load-bearing.
+- **gopls + pyright accept `client/registerCapability`** — both adapters register a default request handler that responds OK to `client/registerCapability` / `client/unregisterCapability` and method-not-found to anything else. Unregistered methods are answered politely so the server can decide what to do.
+
 ## 0.5.0 — 2026-05-11
 
 ### Changed (architectural)

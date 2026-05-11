@@ -44,7 +44,20 @@ func New(conn jsonrpc.Caller) *Adapter {
 		subs: make(map[int64]func(string, json.RawMessage)),
 	}
 	conn.SetNotificationHandler(a.dispatch)
+	conn.SetRequestHandler(a.handleServerRequest)
 	return a
+}
+
+// handleServerRequest responds to server-initiated requests. Pyright may use
+// client/registerCapability to register watchers; accepting is essential for
+// it to consume our workspace/didChangeWatchedFiles notifications.
+func (a *Adapter) handleServerRequest(_ context.Context, method string, _ json.RawMessage) (any, error) {
+	switch method {
+	case protocol.MethodRegisterCapability, protocol.MethodUnregisterCapability:
+		return nil, nil
+	default:
+		return nil, &jsonrpc.MethodNotFoundError{Method: method}
+	}
 }
 
 // DefaultInitParams returns InitializeParams suitable for pyright.

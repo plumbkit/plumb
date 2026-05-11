@@ -11,6 +11,8 @@ const (
 	MethodDidChange           = "textDocument/didChange"
 	MethodDidClose            = "textDocument/didClose"
 	MethodDidChangeWatchedFiles = "workspace/didChangeWatchedFiles"
+	MethodRegisterCapability   = "client/registerCapability"
+	MethodUnregisterCapability = "client/unregisterCapability"
 	MethodDocumentSymbols     = "textDocument/documentSymbol"
 	MethodWorkspaceSymbols    = "workspace/symbol"
 	MethodDefinition          = "textDocument/definition"

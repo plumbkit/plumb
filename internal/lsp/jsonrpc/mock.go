@@ -105,6 +105,11 @@ func (m *MockCaller) SetNotificationHandler(fn func(method string, params json.R
 	m.mu.Unlock()
 }
 
+// SetRequestHandler is a no-op on the mock today. Tests that need to simulate
+// server-initiated requests can register their own logic via a future hook;
+// the interface method exists so MockCaller satisfies jsonrpc.Caller.
+func (m *MockCaller) SetRequestHandler(_ RequestHandler) {}
+
 // Push simulates a server-initiated notification.
 func (m *MockCaller) Push(method string, params any) error {
 	m.mu.Lock()
