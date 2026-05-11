@@ -240,7 +240,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewDiagnostics(sessionInv))
 	srv.Register(tools.NewListFiles())
 	srv.Register(tools.NewListDirectory())
-	srv.Register(tools.NewReadFile())
+	readTracker := tools.NewReadTracker()
+	srv.Register(tools.NewReadFile(readTracker))
 	srv.Register(tools.NewReadMultipleFiles())
 	// Initial limit from the global config; updated to per-project values
 	// inside applyProjectConfig once the workspace resolves.
@@ -279,11 +280,19 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 				"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute)
 		}
 	}
-	srv.Register(tools.NewWriteFile(sessionProxy, sessionCache, sessionInv, writeLimiter))
-	srv.Register(tools.NewEditFile(sessionProxy, sessionCache, sessionInv, writeLimiter, strictFn))
-	srv.Register(tools.NewDeleteFile(sessionProxy, sessionCache, writeLimiter))
-	srv.Register(tools.NewRenameFile(sessionProxy, sessionCache, writeLimiter))
-	srv.Register(tools.NewTransactionApply(sessionProxy, sessionCache, sessionInv, writeLimiter))
+	writeDeps := tools.WriteDeps{
+		Client:  sessionProxy,
+		Cache:   sessionCache,
+		Diag:    sessionInv,
+		Limiter: writeLimiter,
+		Strict:  strictFn,
+		Reads:   readTracker,
+	}
+	srv.Register(tools.NewWriteFile(writeDeps))
+	srv.Register(tools.NewEditFile(writeDeps))
+	srv.Register(tools.NewDeleteFile(writeDeps))
+	srv.Register(tools.NewRenameFile(writeDeps))
+	srv.Register(tools.NewTransactionApply(writeDeps))
 	srv.Register(tools.NewSearchInFiles())
 	srv.Register(tools.NewFindFiles())
 	srv.Register(tools.NewGit())

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
@@ -70,15 +68,10 @@ var transactionApplySchema = json.RawMessage(`{
 // all locks for its duration — keep transactions small.
 //
 // Limits: up to 50 operations per call. Rate limit applies once per operation.
-type TransactionApply struct {
-	client  lsp.LSPClient
-	cache   *cache.Cache
-	diag    postWriteDiagSource
-	limiter *RateLimiter
-}
+type TransactionApply struct{ deps WriteDeps }
 
-func NewTransactionApply(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter) *TransactionApply {
-	return &TransactionApply{client: client, cache: c, diag: diag, limiter: lim}
+func NewTransactionApply(deps WriteDeps) *TransactionApply {
+	return &TransactionApply{deps: deps}
 }
 
 func (*TransactionApply) Name() string                 { return "transaction_apply" }
@@ -128,8 +121,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 
 	// Rate-limit: one slot per operation.
 	for i := range a.Operations {
-		if !t.limiter.Allow() {
-			return "", rateLimitError(fmt.Sprintf("transaction_apply (op %d/%d)", i+1, len(a.Operations)), t.limiter)
+		if !t.deps.Limiter.Allow() {
+			return "", rateLimitError(fmt.Sprintf("transaction_apply (op %d/%d)", i+1, len(a.Operations)), t.deps.Limiter)
 		}
 	}
 
@@ -235,10 +228,10 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	for _, p := range written {
 		uri := "file://" + p.path
 		uris = append(uris, uri)
-		if err := notifyLSP(ctx, t.client, p.path, protocol.FileChanged); err != nil {
+		if err := notifyLSP(ctx, t.deps.Client, p.path, protocol.FileChanged); err != nil {
 			slog.Warn("transaction_apply: LSP notification failed", "path", p.path, "err", err)
 		}
-		invalidateCache(t.cache, uri)
+		invalidateCache(t.deps.Cache, uri)
 	}
 
 	var sb strings.Builder

@@ -28,17 +28,40 @@ func TestEditFile_StrictMode_AfterRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f.go")
 	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
 
-	// Read the file via the tool, then edit succeeds.
-	_, _ = NewReadFile().Execute(context.Background(), mustJSON(map[string]any{"path": path}))
-	out, err := callEditFile(t, map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
-	})
+	// Read and edit share one tracker; strict mode picks up the recorded mtime.
+	tracker := NewReadTracker()
+	_, _ = NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"path": path}))
+	out, err := NewEditFile(WriteDeps{Reads: tracker, Strict: func() bool { return true }}).
+		Execute(context.Background(), mustJSON(map[string]any{
+			"path":  path,
+			"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+		}))
 	if err != nil {
 		t.Fatalf("expected success after read, got: %v", err)
 	}
 	if !strings.Contains(out, "applied 1") {
 		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestEditFile_StrictMode_TrackerIsolation(t *testing.T) {
+	// Two trackers (simulating two sessions). A read in tracker1 must not
+	// satisfy strict mode for an edit using tracker2 — proves per-session
+	// isolation that the 0.5.2 process-global map lacked.
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	sessionA := NewReadTracker()
+	sessionB := NewReadTracker()
+	_, _ = NewReadFile(sessionA).Execute(context.Background(), mustJSON(map[string]any{"path": path}))
+
+	_, err := NewEditFile(WriteDeps{Reads: sessionB, Strict: func() bool { return true }}).
+		Execute(context.Background(), mustJSON(map[string]any{
+			"path":  path,
+			"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+		}))
+	if err == nil || !strings.Contains(err.Error(), "has not been read") {
+		t.Fatalf("session B's edit should have been rejected (session A read), got: %v", err)
 	}
 }
 func mustJSON(v any) json.RawMessage {
@@ -49,7 +72,7 @@ func mustJSON(v any) json.RawMessage {
 func callEditFile(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	return NewEditFile(nil, nil, nil, nil, nil).Execute(context.Background(), raw)
+	return NewEditFile(WriteDeps{Reads: NewReadTracker()}).Execute(context.Background(), raw)
 }
 
 func TestEditFile_BasicReplace(t *testing.T) {

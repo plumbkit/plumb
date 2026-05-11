@@ -149,43 +149,17 @@ func formatPostWriteDiagnostics(d []protocol.Diagnostic) string {
 // and the second writer would silently overwrite the first.
 var pathLocks sync.Map // map[string]*sync.Mutex
 
-// readMtimes records the most recent mtime seen by read_file for each path.
-// In strict mode, edit_file requires the file to have been read and the mtime
-// to match — preventing edits to files the agent hasn't actually read first.
-//
-// Keyed by filepath.Clean(path). Cross-session interference is possible: this
-// is process-global, not per-session, which means session A's read after
-// session B's read overrides B's entry. Acceptable for an opt-in safety mode;
-// per-session tracking is a future refinement.
-var readMtimes sync.Map // map[string]time.Time
-
-// recordRead remembers the mtime observed by read_file. Called after a
-// successful read so subsequent edit_file calls can validate freshness.
-func recordRead(path string, mtime time.Time) {
-	readMtimes.Store(filepath.Clean(path), mtime)
-}
-
 // StrictModeFn returns the current strict-mode setting. The daemon
 // installs a closure that reads from the resolved per-workspace config
 // (with global + env-var override fallbacks); tests pass nil for "off".
 type StrictModeFn func() bool
 
-// strictModeEnabled is the legacy env-only check, retained as a fallback
-// when no StrictModeFn is wired (test setups, dev). The production path
-// flows through StrictModeFn on EditFile / TransactionApply.
+// strictModeEnabled is the env-only fallback, used when no StrictModeFn is
+// wired on the tool (test setups, headless dev). Production flows route
+// through the tool's configured StrictModeFn closure.
 func strictModeEnabled() bool {
 	v := os.Getenv("PLUMB_STRICT_EDITS")
 	return v == "1" || v == "true" || v == "yes"
-}
-
-// recordedReadMtime returns the mtime read_file last saw for path, or
-// time.Time{} (zero) if the path has not been read.
-func recordedReadMtime(path string) time.Time {
-	v, ok := readMtimes.Load(filepath.Clean(path))
-	if !ok {
-		return time.Time{}
-	}
-	return v.(time.Time)
 }
 
 // lockPath returns a release function that unlocks the path. The path is

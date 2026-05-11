@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
@@ -42,15 +40,9 @@ var renameFileSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use. Both source and destination
 // paths are locked to serialise with any concurrent write_file/edit_file.
-type RenameFile struct {
-	client  lsp.LSPClient
-	cache   *cache.Cache
-	limiter *RateLimiter
-}
+type RenameFile struct{ deps WriteDeps }
 
-func NewRenameFile(client lsp.LSPClient, c *cache.Cache, lim *RateLimiter) *RenameFile {
-	return &RenameFile{client: client, cache: c, limiter: lim}
-}
+func NewRenameFile(deps WriteDeps) *RenameFile { return &RenameFile{deps: deps} }
 
 func (*RenameFile) Name() string                 { return "rename_file" }
 func (*RenameFile) InputSchema() json.RawMessage { return renameFileSchema }
@@ -69,8 +61,8 @@ type renameFileArgs struct {
 }
 
 func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.limiter.Allow() {
-		return "", rateLimitError("rename_file", t.limiter)
+	if !t.deps.Limiter.Allow() {
+		return "", rateLimitError("rename_file", t.deps.Limiter)
 	}
 	var a renameFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -118,14 +110,14 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
 
-	if err := notifyLSP(ctx, t.client, from, protocol.FileDeleted); err != nil {
+	if err := notifyLSP(ctx, t.deps.Client, from, protocol.FileDeleted); err != nil {
 		slog.Warn("rename_file: LSP delete-notify failed", "path", from, "err", err)
 	}
-	if err := notifyLSP(ctx, t.client, to, protocol.FileCreated); err != nil {
+	if err := notifyLSP(ctx, t.deps.Client, to, protocol.FileCreated); err != nil {
 		slog.Warn("rename_file: LSP create-notify failed", "path", to, "err", err)
 	}
-	invalidateCache(t.cache, "file://"+from)
-	invalidateCache(t.cache, "file://"+to)
+	invalidateCache(t.deps.Cache, "file://"+from)
+	invalidateCache(t.deps.Cache, "file://"+to)
 
 	return fmt.Sprintf("renamed %s → %s", from, to), nil
 }

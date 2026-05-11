@@ -24,7 +24,7 @@ func writeTextFile(t *testing.T, content string) string {
 func callReadFile(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	return NewReadFile().Execute(context.Background(), raw)
+	return NewReadFile(nil).Execute(context.Background(), raw)
 }
 
 func TestReadFile_Basic(t *testing.T) {

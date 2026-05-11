@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
@@ -81,24 +79,16 @@ const maxEditRetries = 3
 // before matching, so an old_str with LF can match a file with CRLF.
 //
 // Concurrency: Execute is safe for concurrent use.
-type EditFile struct {
-	client  lsp.LSPClient       // may be nil; LSP notify skipped when nil
-	cache   *cache.Cache        // may be nil; cache invalidation skipped when nil
-	diag    postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
-	limiter *RateLimiter        // may be nil; rate limiting skipped when nil
-	strict  StrictModeFn        // may be nil; falls back to PLUMB_STRICT_EDITS env var
-}
+type EditFile struct{ deps WriteDeps }
 
-func NewEditFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter, strict StrictModeFn) *EditFile {
-	return &EditFile{client: client, cache: c, diag: diag, limiter: lim, strict: strict}
-}
+func NewEditFile(deps WriteDeps) *EditFile { return &EditFile{deps: deps} }
 
 // isStrict reports whether strict mode applies to this call. Prefers the
 // configured StrictModeFn (per-workspace + env merged by daemon); falls
-// back to env-only check for test setups.
+// back to env-only check when no closure is wired.
 func (t *EditFile) isStrict() bool {
-	if t.strict != nil {
-		return t.strict()
+	if t.deps.Strict != nil {
+		return t.deps.Strict()
 	}
 	return strictModeEnabled()
 }
@@ -128,8 +118,8 @@ type editFileArgs struct {
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.limiter.Allow() {
-		return "", rateLimitError("edit_file", t.limiter)
+	if !t.deps.Limiter.Allow() {
+		return "", rateLimitError("edit_file", t.deps.Limiter)
 	}
 	var a editFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -174,7 +164,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	// expected_mtime above is the more precise signal when an agent threads
 	// it through; strict mode catches the case where the agent forgot.
 	if t.isStrict() {
-		recorded := recordedReadMtime(path)
+		recorded := t.deps.Reads.Mtime(path)
 		if recorded.IsZero() {
 			return "", &editLogicErr{fmt.Errorf(
 				"edit_file: strict mode: %q has not been read in this daemon session — call read_file first",
@@ -196,8 +186,8 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 
 	uri := "file://" + path
 	var preDiags []protocol.Diagnostic
-	if t.diag != nil {
-		preDiags = t.diag.Diagnostics(uri)
+	if t.deps.Diag != nil {
+		preDiags = t.deps.Diag.Diagnostics(uri)
 	}
 
 	var lastErr error
@@ -221,10 +211,10 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			continue
 		}
 
-		if err := notifyLSP(ctx, t.client, path, protocol.FileChanged); err != nil {
+		if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 		}
-		invalidateCache(t.cache, uri)
+		invalidateCache(t.deps.Cache, uri)
 
 		noun := "edit"
 		if len(a.Edits) > 1 {
@@ -243,8 +233,8 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			sb.WriteString("\n")
 			sb.WriteString(summary)
 		}
-		if t.diag != nil {
-			fresh := awaitDiagnosticsRefresh(t.diag, uri, preDiags)
+		if t.deps.Diag != nil {
+			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags)
 			sb.WriteString(formatPostWriteDiagnostics(fresh))
 		}
 		return sb.String(), nil

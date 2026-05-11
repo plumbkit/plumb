@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
@@ -46,15 +44,10 @@ var writeFileSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type WriteFile struct {
-	client  lsp.LSPClient       // may be nil; LSP notify skipped when nil
-	cache   *cache.Cache        // may be nil; cache invalidation skipped when nil
-	diag    postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
-	limiter *RateLimiter        // may be nil; rate limiting skipped when nil
+	deps WriteDeps
 }
 
-func NewWriteFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource, lim *RateLimiter) *WriteFile {
-	return &WriteFile{client: client, cache: c, diag: diag, limiter: lim}
-}
+func NewWriteFile(deps WriteDeps) *WriteFile { return &WriteFile{deps: deps} }
 
 func (*WriteFile) Name() string               { return "write_file" }
 func (*WriteFile) InputSchema() json.RawMessage { return writeFileSchema }
@@ -74,8 +67,8 @@ type writeFileArgs struct {
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.limiter.Allow() {
-		return "", rateLimitError("write_file", t.limiter)
+	if !t.deps.Limiter.Allow() {
+		return "", rateLimitError("write_file", t.deps.Limiter)
 	}
 	var a writeFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -113,8 +106,8 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 
 	uri := "file://" + path
 	var preDiags []protocol.Diagnostic
-	if t.diag != nil {
-		preDiags = t.diag.Diagnostics(uri)
+	if t.deps.Diag != nil {
+		preDiags = t.deps.Diag.Diagnostics(uri)
 	}
 
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
@@ -125,18 +118,18 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if isNew {
 		changeType = protocol.FileCreated
 	}
-	if err := notifyLSP(ctx, t.client, path, changeType); err != nil {
+	if err := notifyLSP(ctx, t.deps.Client, path, changeType); err != nil {
 		slog.Warn("write_file: LSP notification failed", "path", path, "err", err)
 	}
-	invalidateCache(t.cache, uri)
+	invalidateCache(t.deps.Cache, uri)
 
 	verb := "updated"
 	if isNew {
 		verb = "created"
 	}
 	out := fmt.Sprintf("%s %s (%d bytes)", verb, path, len(a.Content))
-	if t.diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.diag, uri, preDiags)
+	if t.deps.Diag != nil {
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags)
 		out += formatPostWriteDiagnostics(fresh)
 	}
 	return out, nil

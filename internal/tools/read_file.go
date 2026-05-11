@@ -47,10 +47,16 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 // the file has not changed between read and edit. The header is followed by
 // a blank line, then the content (or selected line range).
 //
+// If a non-nil ReadTracker is supplied, every successful read records the
+// observed mtime so edit_file's strict mode can verify the agent did read
+// the file before editing it.
+//
 // Concurrency: Execute is safe for concurrent use.
-type ReadFile struct{}
+type ReadFile struct {
+	tracker *ReadTracker // may be nil; strict-mode tracking disabled when nil
+}
 
-func NewReadFile() *ReadFile { return &ReadFile{} }
+func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
 
 func (t *ReadFile) Name() string               { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
@@ -90,7 +96,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		return "", fmt.Errorf("read_file: %q is a directory — use list_files to browse directories", fpath)
 	}
 	mtime := info.ModTime()
-	recordRead(fpath, mtime)
+	t.tracker.Record(fpath, mtime)
 
 	f, err := os.Open(fpath)
 	if err != nil {

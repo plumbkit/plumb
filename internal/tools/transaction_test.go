@@ -12,7 +12,7 @@ import (
 func callTransaction(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
-	return NewTransactionApply(nil, nil, nil, nil).Execute(context.Background(), raw)
+	return NewTransactionApply(WriteDeps{}).Execute(context.Background(), raw)
 }
 
 func TestTransaction_TwoFilesSucceed(t *testing.T) {

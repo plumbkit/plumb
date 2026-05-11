@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
@@ -29,15 +27,9 @@ var deleteFileSchema = json.RawMessage(`{
 // indexes drop the file's contents immediately.
 //
 // Concurrency: Execute is safe for concurrent use.
-type DeleteFile struct {
-	client  lsp.LSPClient // may be nil; LSP notify skipped when nil
-	cache   *cache.Cache  // may be nil; cache invalidation skipped when nil
-	limiter *RateLimiter  // may be nil; rate limiting skipped when nil
-}
+type DeleteFile struct{ deps WriteDeps }
 
-func NewDeleteFile(client lsp.LSPClient, c *cache.Cache, lim *RateLimiter) *DeleteFile {
-	return &DeleteFile{client: client, cache: c, limiter: lim}
-}
+func NewDeleteFile(deps WriteDeps) *DeleteFile { return &DeleteFile{deps: deps} }
 
 func (*DeleteFile) Name() string                 { return "delete_file" }
 func (*DeleteFile) InputSchema() json.RawMessage { return deleteFileSchema }
@@ -53,8 +45,8 @@ type deleteFileArgs struct {
 }
 
 func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	if !t.limiter.Allow() {
-		return "", rateLimitError("delete_file", t.limiter)
+	if !t.deps.Limiter.Allow() {
+		return "", rateLimitError("delete_file", t.deps.Limiter)
 	}
 	var a deleteFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -80,10 +72,10 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("delete_file: %w", err)
 	}
 
-	if err := notifyLSP(ctx, t.client, path, protocol.FileDeleted); err != nil {
+	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileDeleted); err != nil {
 		slog.Warn("delete_file: LSP notification failed", "path", path, "err", err)
 	}
-	invalidateCache(t.cache, "file://"+path)
+	invalidateCache(t.deps.Cache, "file://"+path)
 
 	return fmt.Sprintf("deleted %s", path), nil
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 — 2026-05-11
+
+### Changed (refactor)
+- **`WriteDeps` struct replaces the multi-arg write-tool constructors.** `write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply` now all take a single `WriteDeps{Client, Cache, Diag, Limiter, Strict, Reads}` instead of 4–6 positional parameters. Stops the constructor sprawl that was making each new cross-cutting concern an N-place change. Test setups can pass `WriteDeps{}` (everything nil-safe).
+- **Per-session `ReadTracker` replaces the process-global `readMtimes` map.** Strict mode is now correctly isolated between MCP sessions: session A reading a file no longer satisfies session B's strict-mode check. `NewReadFile` takes a `*ReadTracker`; the daemon creates one per connection.
+
+### Fixed
+- Cross-session strict-mode interference (known gap in 0.5.1/0.5.2 release notes) is closed.
+
 ## 0.5.3 — 2026-05-11
 
 ### Fixed
