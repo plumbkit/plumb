@@ -10,7 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 type findReplaceTool struct{}
@@ -128,72 +132,126 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		path  string
 		count int
 	}
-	var changes []fileChange
-	totalReplacements := 0
 
-	for _, path := range files {
+	scan := func(path string) (int, []byte) {
 		// Sniff first so we don't buffer huge binary files just to discard them.
 		f, err := os.Open(path)
 		if err != nil {
-			continue
+			return 0, nil
 		}
 		head := make([]byte, binarySniffBytes)
 		n, _ := io.ReadFull(f, head)
 		head = head[:n]
 		if bytes.IndexByte(head, 0) >= 0 {
 			f.Close()
-			continue
+			return 0, nil
 		}
 		rest, err := io.ReadAll(f)
 		f.Close()
 		if err != nil {
-			continue
+			return 0, nil
 		}
 		data := append(head, rest...)
 
-		var newData []byte
-		var count int
-
 		switch {
 		case a.UseRegex:
-			count = len(re.FindAll(data, -1))
-			if count > 0 {
-				newData = re.ReplaceAll(data, []byte(a.Replacement))
+			count := len(re.FindAll(data, -1))
+			if count == 0 {
+				return 0, nil
 			}
+			return count, re.ReplaceAll(data, []byte(a.Replacement))
 		case !caseSensitive:
-			count = len(re.FindAll(data, -1))
-			if count > 0 {
-				newData = re.ReplaceAllLiteral(data, []byte(a.Replacement))
+			count := len(re.FindAll(data, -1))
+			if count == 0 {
+				return 0, nil
 			}
+			return count, re.ReplaceAllLiteral(data, []byte(a.Replacement))
 		default:
-			count = strings.Count(string(data), a.Pattern)
-			if count > 0 {
-				newData = []byte(strings.ReplaceAll(string(data), a.Pattern, a.Replacement))
+			count := strings.Count(string(data), a.Pattern)
+			if count == 0 {
+				return 0, nil
 			}
-		}
-
-		if count == 0 {
-			continue
-		}
-
-		if !dryRun {
-			tmp := path + ".tmp"
-			if err := os.WriteFile(tmp, newData, 0o644); err != nil {
-				continue
-			}
-			if err := os.Rename(tmp, path); err != nil {
-				os.Remove(tmp)
-				continue
-			}
-		}
-
-		changes = append(changes, fileChange{path: path, count: count})
-		totalReplacements += count
-
-		if len(changes) >= a.MaxFiles {
-			break
+			return count, []byte(strings.ReplaceAll(string(data), a.Pattern, a.Replacement))
 		}
 	}
+
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	workers := runtime.NumCPU()
+	if workers > len(files) {
+		workers = len(files)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	paths := make(chan string)
+	results := make(chan fileChange, workers)
+	var claimed atomic.Int32
+	maxFiles := int32(a.MaxFiles)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range paths {
+				if wctx.Err() != nil {
+					continue // drain remaining sends so the dispatcher unblocks
+				}
+				count, newData := scan(path)
+				if count == 0 {
+					continue
+				}
+				if claimed.Add(1) > maxFiles {
+					cancel()
+					continue
+				}
+				if !dryRun {
+					tmp := path + ".tmp"
+					if err := os.WriteFile(tmp, newData, 0o644); err != nil {
+						continue
+					}
+					if err := os.Rename(tmp, path); err != nil {
+						os.Remove(tmp)
+						continue
+					}
+				}
+				select {
+				case results <- fileChange{path: path, count: count}:
+				case <-wctx.Done():
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(paths)
+		for _, p := range files {
+			select {
+			case <-wctx.Done():
+				return
+			case paths <- p:
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var changes []fileChange
+	totalReplacements := 0
+	for r := range results {
+		changes = append(changes, r)
+		totalReplacements += r.count
+	}
+
+	sort.Slice(changes, func(i, j int) bool {
+		return changes[i].path < changes[j].path
+	})
 
 	var sb strings.Builder
 	if dryRun {

@@ -261,6 +261,8 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 	if m.popupLeftWidth == 0 {
 		m.popupLeftWidth = minPopupLeftWidth
 	}
+	// Load calls immediately — don’t wait for the next 2-second poll tick.
+	m.refreshPopupCalls()
 	// Pre-position cursor if a specific call was requested.
 	if !preselect.IsZero() {
 		for i, c := range m.popupCalls {
@@ -269,6 +271,7 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 				break
 			}
 		}
+		m.ensurePopupCursorVisible()
 	}
 }
 
@@ -778,8 +781,6 @@ func (m Model) render() string {
 			pRW = 10
 		}
 
-		bgLeft := m.dimLines(m.leftLines(), m.leftWidth)
-
 		// Left (timestamp) panel — all lines, windowed by popupLeftScroll.
 		// The scrollbar replaces the left │ border char, keeping ┆ untouched.
 		allLeft := m.popupLeftLines()
@@ -808,12 +809,12 @@ func (m Model) render() string {
 		scrollbar = scrollbarCol(totalRight, bodyHeight, m.popupDetailScroll)
 
 		for i := range bodyHeight {
-			// Left cell: full pLW width, no extra scrollbar column.
+			// Left cell: popup content if available, blank otherwise.
+			// Never fall through to bgLeft — that bleeds the dimmed main-panel
+			// sessions list through when popupCalls is empty.
 			var lCell string
 			if i < len(visibleLeft) && visibleLeft[i] != "" {
 				lCell = lipgloss.NewStyle().Width(pLW).Render(visibleLeft[i])
-			} else if i < len(bgLeft) {
-				lCell = lipgloss.NewStyle().Width(pLW).Render(bgLeft[i])
 			} else {
 				lCell = lipgloss.NewStyle().Width(pLW).Render("")
 			}
