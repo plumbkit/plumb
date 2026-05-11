@@ -271,6 +271,107 @@ The right answer is configurable, with the existing four-layer precedence (defau
 
 ---
 
+### `plumb doctor` — discovery + health-check CLI
+
+**Priority:** medium. Improves first-run experience and ongoing debuggability.
+**Effort:** 2–4 hours depending on scope (it's a "how far do you want to take it?" feature).
+
+**Why this matters.** Users install plumb but don't always know it can be wired into multiple MCP-capable clients (Claude Desktop, Claude Code, Gemini CLI, Cursor, Continue, possibly others). Discovery is one-by-one through docs. A `plumb doctor` (in the spirit of `brew doctor`) would scan the host for known MCP-capable clients, show config status for each, and surface system-level health issues (daemon running, version match, LSP servers on PATH, stats DB writable, etc.).
+
+**Scope:** detection and reporting only. Does **not** auto-configure — the user runs `plumb setup <client>` for the ones they want. The point is *visibility*: "here's everything you could be using plumb with, and where things stand right now."
+
+**Definition of done.**
+
+1. New `plumb doctor` subcommand (`internal/cli/doctor.go`). Output is a traffic-light report:
+   ```
+   plumb doctor — 0.5.8
+
+   System
+     ✓ plumb binary       /usr/local/bin/plumb (0.5.8)
+     ✓ daemon running     PID 21370, version 0.5.8 (matches binary)
+     ✓ gopls              /Users/gilberto/go/bin/gopls (v0.16.2)
+     ⚠ pyright-langserver not found on PATH (Python projects won't have an LSP backend)
+     ✓ stats DB           ~/Projects/plumb/.plumb/stats.db (246 calls, schema v2)
+
+   Configuration
+     ✓ global config      ~/.config/plumb/config.toml (exists)
+     ⚠ project config     ~/Projects/plumb/.plumb/config.toml (not found — using global)
+
+   MCP clients
+     ✓ Claude Desktop     ~/Library/Application Support/Claude/claude_desktop_config.json (plumb registered)
+     ✓ Claude Code        ~/.claude.json (plumb registered)
+     ✗ Gemini CLI         ~/.gemini/settings.json (exists, plumb NOT registered — run `plumb setup gemini`)
+     ⚠ Cursor             ~/.cursor/mcp.json (not found — install Cursor or skip)
+     ⚠ Continue           ~/.continue/config.json (not found — install Continue or skip)
+
+   Status: 1 problem (Gemini CLI), 3 informational warnings.
+   ```
+
+2. The check set:
+   - **System**: plumb binary path + version; daemon process running + version-match (compare to `~/Library/Caches/plumb/plumb.version`); `gopls` on `$PATH`; `pyright-langserver` on `$PATH`; current workspace's `.plumb/stats.db` exists + readable + at expected schema version.
+   - **Configuration**: global config existence; project config existence (if `--workspace` or cwd is inside a project); `[edits].strict` and rate-limit values; warn if env-var overrides are active.
+   - **MCP clients**: walk a known list of client config paths; for each, parse the JSON, check whether `plumb` appears in the `mcpServers` (or equivalent) block; check whether the command path matches our binary.
+
+3. Exit code: `0` if everything is ✓, `1` if any ✗. ⚠ (warnings) don't fail.
+
+4. `plumb doctor --json` for machine-readable output.
+
+5. Tests: each detector is unit-testable by injecting fake filesystem paths and binaries. The composition function that prints the report can be tested by feeding it a synthetic detector-result set.
+
+**Where to start.**
+
+1. Look at `internal/cli/setup.go` for the existing client-config writers — they already know how to locate Claude Desktop / Claude Code / Gemini CLI config paths. Reuse those path-resolution helpers (`claudeDesktopConfigPath`, `GeminiConfigPath`, etc.). Each `setup-*` command already knows its target; doctor just needs the read-side equivalents.
+2. Create `internal/cli/doctor.go` with one function per check:
+   ```go
+   type checkResult struct {
+       Name    string
+       Status  status // ok | warn | fail
+       Detail  string
+       Hint    string // what to do about it
+   }
+   func checkPlumbBinary() checkResult { ... }
+   func checkDaemon() checkResult { ... }
+   func checkGopls() checkResult { ... }
+   func checkPyright() checkResult { ... }
+   func checkStatsDB(ws string) checkResult { ... }
+   func checkGlobalConfig() checkResult { ... }
+   func checkProjectConfig(ws string) checkResult { ... }
+   func checkClaudeDesktop() checkResult { ... }
+   func checkClaudeCode() checkResult { ... }
+   func checkGemini() checkResult { ... }
+   func checkCursor() checkResult { ... }
+   func checkContinue() checkResult { ... }
+   ```
+3. The `runDoctor` function calls all of them, groups by section, prints with appropriate colour, sets exit code.
+4. Register in `rootCmd.AddCommand(...)` in `root.go`.
+
+**Known MCP client config locations** (research these per-OS; macOS paths shown):
+
+| Client | Config path | Detection rule |
+|---|---|---|
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | parse JSON, check `mcpServers.plumb` |
+| Claude Code (user) | `~/.claude.json` | parse JSON, check `mcpServers.plumb` |
+| Claude Code (project) | `<workspace>/.mcp.json` | parse JSON, check `mcpServers.plumb` |
+| Gemini CLI | `~/.gemini/settings.json` | (research; the user added Gemini support in 0.5.x — see `internal/cli/setup.go` and `internal/cli/config.go`'s `GeminiConfigPath`) |
+| Cursor | `~/.cursor/mcp.json` (or similar — verify with Cursor docs) | parse JSON, check for plumb entry |
+| Continue | `~/.continue/config.json` | parse JSON, check `mcpServers` |
+| Cline / Cody | research per-tool | likely JSON config in `~/.config/<tool>/` |
+
+**Watch out for:**
+
+- Each client uses slightly different JSON shape for MCP server registration. Don't assume one schema fits all. Use the existing `setup-*` writers as the source of truth for "what plumb's entry looks like in this client's config".
+- Detection should be *gentle*: a missing config file means the user hasn't installed the client, not that plumb is broken. Use ⚠ (warning), not ✗ (failure), for those.
+- The "command path matches our binary" check is the one that catches stale installs (e.g. plumb was installed via `go install`, then via Homebrew; the config points at the old `go install` path). Get this right and you'll save a lot of "why isn't plumb working?" debugging.
+- Don't shell out to each client to "test" the integration — purely static analysis. Keep it fast.
+
+**Future extensions (don't do them now, but worth noting):**
+
+- `plumb doctor --fix`: opt-in auto-fix for the simplest issues (register plumb in a detected-but-unconfigured client).
+- `plumb doctor --client <name>`: deep-dive on one client (full config dump, validation against the client's known schema).
+- Integration into `plumb` (the TUI) — show a small "doctor: 1 issue" badge at the bottom if any ✗ is present.
+
+---
+
 ### "Working tree is dirty" guard before plumb-initiated writes
 
 **Priority:** medium.

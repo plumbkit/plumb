@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.9 — 2026-05-11
+
+### Documentation
+- **`plumb doctor` design captured in `docs/todo.md`** — a `brew doctor`-style discovery + health-check CLI that scans the host for MCP-capable clients (Claude Desktop, Claude Code, Gemini CLI, Cursor, Continue, …), shows config status for each, and surfaces system-level health (daemon running, gopls/pyright on PATH, version match, stats schema). Detection-only — does NOT auto-configure. Full design including check set, output format, file pointers for the implementation, known MCP client config locations table, and watch-out-for notes.
+
 ## 0.5.8 — 2026-05-11
 
 ### Documentation
