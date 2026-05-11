@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.7 — 2026-05-11
+
+### Documentation
+- **New `docs/todo.md`** — canonical index of outstanding work, real gaps, and "subtle things to be aware of" footguns. Carries everything from the 0.5.6 honest review that isn't yet addressed (Claude Desktop e2e, pyright integration test, CI integration matrix, `expected_sha`, stats migrator + `input_json`, configurable post-write window, dirty-tree guard, transaction durable rollback). Grouped by priority (production-blocking → real gaps → subtle things → considered/deferred).
+- AGENTS.md gains a short "Known limitations and pending work" section pointing at `docs/todo.md`, with the rule: complete-an-item → delete-its-section → add-CHANGELOG-entry in one commit.
+
 ## 0.5.6 — 2026-05-11
 
 ### Tests
