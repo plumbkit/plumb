@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.24 — 2026-05-12
+
+### Fixed
+- **TUI Call Detail popup box-width math was off-by-one** — `boxSection` in `internal/tui/model.go` computed `inner := rightWidth - 5` and `topFill := inner + 2 - len(topLabel)`, but the actual row geometry (`" │ " + padded(inner) + " │ "` = `inner+5` visible chars, fitting into `pRW-1 = rightWidth+1`) requires `inner = rightWidth - 4` and `topFill = inner + 1 - len(topLabel)`. The previous math left an extra column of right-margin slack and offset the top label, so the right border of the box didn't line up with the bottom border or with adjacent rows. Geometry comment updated to match the corrected derivation.
+
+### Changed
+- **`edit_file`'s "old_str not found" error now diagnoses the failure cause.** Previously the message said *"the file may have been modified, or the string is incorrect"* — a guess that forced the agent into a recovery loop of retrying with cosmetic snippet variations. The daemon already records every `read_file` mtime per session via `ReadTracker`, so it can tell the agent which it is: if the recorded mtime differs from the current mtime, the error says *"file has been modified since you read it"* and prints both mtimes; if the mtimes match, it says *"file unchanged since your read; the snippet is incorrect"* and asks the agent to verify character-by-character. Collapses what was often a three-tool-call recovery into one.
+- **`edit_file` errors echo the post-normalisation form of `old_str` when CRLF normalisation transformed the input.** `matchLineEndings` can rewrite an LF snippet to CRLF (or vice versa) before searching; until now the error printed only the as-sent form, so any failure that involved line-ending normalisation looked like a phantom miss. The error now includes a `searched (after newline normalisation):` line whenever the searched form differs from what the agent sent. The ambiguous-match (`count > 1`) branch gets the same treatment.
+- **`read_file` header now includes `indent=tabs|spaces|mixed|none`.** Many clients (Claude Desktop, Claude Code's code-block rendering) visually expand tabs to spaces, so the agent has no reliable way to tell whether the underlying file uses tabs or spaces for indentation — and a wrong guess produces a silent `edit_file` mismatch. The new field is computed in one pass over the returned body and lets agents author `old_str` with the right leading whitespace. Example: `# plumb-read mtime=2026-05-12T... indent=tabs`.
+
 ## 0.5.23 — 2026-05-12
 
 ### Fixed

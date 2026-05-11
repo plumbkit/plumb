@@ -133,6 +133,37 @@ func TestReadFile_OutputHasMtimeHeader(t *testing.T) {
 	}
 }
 
+func TestReadFile_HeaderIncludesIndentStyle(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"tabs", "func f() {\n\tx := 1\n\treturn x\n}\n", "indent=tabs"},
+		{"spaces", "def f():\n    x = 1\n    return x\n", "indent=spaces"},
+		{"mixed", "block:\n\ttab line\n  space line\n", "indent=mixed"},
+		{"none", "single line, no indent\n", "indent=none"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := writeTextFile(t, c.content)
+			out, err := callReadFile(t, map[string]any{"path": path})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// Header is the first line; it should contain both the mtime
+			// and the expected indent= field.
+			head := strings.SplitN(out, "\n", 2)[0]
+			if !strings.HasPrefix(head, "# plumb-read mtime=") {
+				t.Fatalf("missing mtime in header: %q", head)
+			}
+			if !strings.Contains(head, c.want) {
+				t.Fatalf("header missing %q: got %q", c.want, head)
+			}
+		})
+	}
+}
+
 func TestReadFile_BinaryFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "plumb-bin-*")
 	if err != nil {

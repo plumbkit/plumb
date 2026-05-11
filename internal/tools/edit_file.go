@@ -287,30 +287,15 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 		count := strings.Count(content, oldStr)
 		switch count {
 		case 0:
-			snippet := edit.OldStr
-			if len(snippet) > 60 {
-				snippet = snippet[:60] + "…"
+			return writeResult{}, "", "", &editLogicErr{
+				t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime),
 			}
-			return writeResult{}, "", "", &editLogicErr{fmt.Errorf(
-				"edit_file: edit[%d]: old_str not found in %q\n"+
-					"  old_str: %q\n"+
-					"  The file may have been modified since you last read it, or the string is incorrect.\n"+
-					"  Use read_file to check the current content.",
-				i, path, snippet,
-			)}
 		case 1:
 			content = strings.Replace(content, oldStr, newStr, 1)
 		default:
-			snippet := edit.OldStr
-			if len(snippet) > 60 {
-				snippet = snippet[:60] + "…"
+			return writeResult{}, "", "", &editLogicErr{
+				ambiguousError(i, count, path, edit.OldStr, oldStr),
 			}
-			return writeResult{}, "", "", &editLogicErr{fmt.Errorf(
-				"edit_file: edit[%d]: old_str appears %d times in %q — must be unique\n"+
-					"  old_str: %q\n"+
-					"  Add more surrounding context to old_str to make it unambiguous.",
-				i, count, path, snippet,
-			)}
 		}
 	}
 
@@ -334,6 +319,79 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 	}
 
 	return res, original, content, nil
+}
+
+// notFoundError builds the "old_str not found" error. It tiers its message on
+// what the daemon knows about the agent's prior read of this path: when a
+// read_file mtime is recorded and differs from the current mtime, the file
+// definitely changed since the agent read it (re-read needed); when the
+// recorded mtime equals the current mtime, the file is unchanged and the
+// snippet itself is wrong (snippet needs verification); when no read is
+// recorded, we fall back to the generic message.
+//
+// If matchLineEndings transformed old_str, both the sent and the searched
+// forms are surfaced so the agent can see what plumb actually looked for.
+func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtime time.Time) error {
+	recorded := t.deps.Reads.Mtime(path)
+
+	sentSnippet := truncateSnippet(sent)
+	searchedSnippet := truncateSnippet(searched)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "edit_file: edit[%d]: old_str not found in %q", i, path)
+
+	switch {
+	case !recorded.IsZero() && !recorded.Equal(preReadMtime):
+		fmt.Fprintf(&b, " — file has been modified since you read it")
+	case !recorded.IsZero():
+		fmt.Fprintf(&b, " — file unchanged since your read; the snippet is incorrect")
+	}
+
+	fmt.Fprintf(&b, "\n  old_str: %q", sentSnippet)
+	if searched != sent {
+		fmt.Fprintf(&b, "\n  searched (after newline normalisation): %q", searchedSnippet)
+	}
+
+	switch {
+	case !recorded.IsZero() && !recorded.Equal(preReadMtime):
+		fmt.Fprintf(&b, "\n  your read mtime: %s", recorded.Format(time.RFC3339Nano))
+		fmt.Fprintf(&b, "\n  current mtime:  %s", preReadMtime.Format(time.RFC3339Nano))
+		b.WriteString("\n  Re-read the file with read_file, then retry with the updated content.")
+	case !recorded.IsZero():
+		fmt.Fprintf(&b, "\n  This file has not been modified since your read at %s.", recorded.Format(time.RFC3339Nano))
+		b.WriteString("\n  Verify the snippet character-by-character — whitespace, line endings, and stray punctuation are the usual culprits.")
+	default:
+		b.WriteString("\n  The file may have been modified since you last read it, or the string is incorrect.")
+		b.WriteString("\n  Use read_file to check the current content.")
+	}
+	return errors.New(b.String())
+}
+
+// ambiguousError builds the "old_str appears N times" error. Re-reading
+// doesn't help when the snippet is non-unique, so we don't consult
+// ReadTracker here — we only surface the post-normalisation form when it
+// differs from what the agent sent.
+func ambiguousError(i, count int, path, sent, searched string) error {
+	sentSnippet := truncateSnippet(sent)
+	searchedSnippet := truncateSnippet(searched)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "edit_file: edit[%d]: old_str appears %d times in %q — must be unique", i, count, path)
+	fmt.Fprintf(&b, "\n  old_str: %q", sentSnippet)
+	if searched != sent {
+		fmt.Fprintf(&b, "\n  searched (after newline normalisation): %q", searchedSnippet)
+	}
+	b.WriteString("\n  Add more surrounding context to old_str to make it unambiguous.")
+	return errors.New(b.String())
+}
+
+// truncateSnippet caps s at 60 characters with an ellipsis. Used to keep
+// edit-error messages compact for callers that surface them in chat.
+func truncateSnippet(s string) string {
+	if len(s) <= 60 {
+		return s
+	}
+	return s[:60] + "…"
 }
 
 // matchLineEndings normalises s so its newline style matches that of ref.

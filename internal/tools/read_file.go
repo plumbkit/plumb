@@ -130,12 +130,44 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# plumb-read mtime=%s\n\n", mtime.Format(time.RFC3339Nano))
+	fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n\n", mtime.Format(time.RFC3339Nano), classifyIndent(content))
 	sb.WriteString(content)
 	if truncated {
 		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")
 	}
 	return sb.String(), nil
+}
+
+// classifyIndent inspects the leading whitespace of each non-empty line in
+// content and returns one of "tabs", "spaces", "mixed", or "none". The
+// classification is over the body actually returned (so a line-ranged read
+// reflects the slice the agent received). It exists so clients that render
+// tabs as visual spaces don't leave the agent guessing what character to
+// use when authoring old_str.
+func classifyIndent(content string) string {
+	sawTab, sawSpace := false, false
+	for line := range strings.SplitSeq(content, "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		switch line[0] {
+		case '\t':
+			sawTab = true
+		case ' ':
+			sawSpace = true
+		}
+		if sawTab && sawSpace {
+			return "mixed"
+		}
+	}
+	switch {
+	case sawTab:
+		return "tabs"
+	case sawSpace:
+		return "spaces"
+	default:
+		return "none"
+	}
 }
 
 // readContentMaybeRanged reads either the whole stream or just the requested

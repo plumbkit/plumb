@@ -426,12 +426,14 @@ Read the text contents of a file.
 **Output format:**
 
 ```
-# plumb-read mtime=2026-05-11T13:46:38.895137000+10:00
+# plumb-read mtime=2026-05-11T13:46:38.895137000+10:00 indent=tabs
 
 <file contents or selected line range>
 ```
 
 The mtime header is the file's modification time at read time, in RFC3339Nano. Copy it verbatim into `edit_file`'s `expected_mtime` parameter to assert the file hasn't changed between read and edit.
+
+The `indent=` field reports the leading whitespace style of the returned body: `tabs`, `spaces`, `mixed`, or `none`. Many clients render tab characters as visual spaces in code blocks; when `indent=tabs`, ensure leading whitespace in `old_str` uses real tab characters (`\t`) rather than the spaces you see on screen, or the `edit_file` match will silently fail.
 
 **Notes:**
 
@@ -439,6 +441,7 @@ The mtime header is the file's modification time at read time, in RFC3339Nano. C
 - When a line range is supplied, the read is streamed via `bufio.Scanner` and stops at `end_line` — large files are not loaded entirely.
 - Output is capped at 200 KiB. Use line ranges on larger files.
 - Records the mtime in the session's `ReadTracker` so `edit_file` strict mode can verify the agent read the file before editing it.
+- The `indent=` classification is over the returned body, not the full file — a line-ranged read reflects only the slice you received.
 
 ---
 

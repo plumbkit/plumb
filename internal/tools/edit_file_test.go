@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEditFile_StrictMode_RequiresRead(t *testing.T) {
@@ -132,6 +133,100 @@ func TestEditFile_RejectsAbsentString(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("expected 'not found' in error, got: %v", err)
+	}
+}
+
+// When the file mtime has advanced past the agent's recorded read, the error
+// should say so explicitly and print both mtimes — so the agent re-reads
+// instead of retrying with cosmetic snippet variations.
+func TestEditFile_NotFound_NamesMtimeDriftWhenFileChanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	tracker := NewReadTracker()
+	if _, err := NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	// Modify the file out-of-band and bump mtime forward.
+	if err := os.WriteFile(path, []byte("different content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := NewEditFile(WriteDeps{Reads: tracker}).Execute(context.Background(), mustJSON(map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+	}))
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"modified since you read", "your read mtime:", "current mtime:"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error missing %q\nfull error: %s", want, msg)
+		}
+	}
+}
+
+// When the file has not changed since the agent's read but the snippet still
+// doesn't match, the error should attribute the failure to the snippet (so
+// the agent doesn't waste a tool call re-reading content it already has).
+func TestEditFile_NotFound_BlamesSnippetWhenFileUnchanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	tracker := NewReadTracker()
+	if _, err := NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	_, err := NewEditFile(WriteDeps{Reads: tracker}).Execute(context.Background(), mustJSON(map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "goodbye", "new_str": "world"}},
+	}))
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "unchanged since your read") {
+		t.Errorf("expected 'unchanged since your read' in error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "snippet is incorrect") {
+		t.Errorf("expected snippet-is-incorrect framing in error, got: %s", msg)
+	}
+}
+
+// When matchLineEndings transforms old_str (here: file is CRLF, agent sent
+// LF), the error should include both the as-sent and the as-searched forms
+// so the agent can see the normalisation that happened.
+func TestEditFile_NotFound_ShowsBothSentAndSearchedSnippets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("alpha\r\nbeta\r\n"), 0o644)
+
+	// Send an LF snippet that won't match for content reasons. matchLineEndings
+	// will normalise LF → CRLF in old_str; the searched form differs from
+	// the sent form, so the error should surface both.
+	_, err := callEditFile(t, map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "gamma\nbeta", "new_str": "delta"}},
+	})
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "old_str:") {
+		t.Errorf("expected as-sent old_str in error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "searched (after newline normalisation):") {
+		t.Errorf("expected searched form in error, got: %s", msg)
+	}
+	// %q renders \r\n explicitly; that's the proof the normalisation ran.
+	if !strings.Contains(msg, `\r\n`) {
+		t.Errorf("expected \\r\\n in searched form, got: %s", msg)
 	}
 }
 

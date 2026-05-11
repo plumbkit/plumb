@@ -931,21 +931,17 @@ func (m Model) popupRightAll(rightWidth int) []string {
 		detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))),
 	)
 
-	// boxSection renders a named rounded box.
-	// Layout: " " + "│" + " " + padded(inner) + " " + "│" = inner+4 visible chars + 1 left margin = inner+5.
-	// The cell width available is rightWidth (already pRW-2, accounting for scrollbar+gap).
-	// We want box right "│" to sit at rightWidth-1, leaving 1 space before panel border:
-	// 1 + 1 + 1 + inner + 1 + 1 = inner+5 = rightWidth, so inner = rightWidth - 5.
-	// Bottom/top horizontal span: "╭─" + topLabel + fill + "╮" must equal inner+4:
-	//   topFill = inner + 2 - len(topLabel)
-	// Bottom dashes: inner + 2.
 	boxSection := func(label string, contentLines []string) {
-		inner := rightWidth - 5
+		// rightWidth = pRW-2. Cell rendered at pRW. Scrollbar=1, gap=1.
+		// Row: " "|" "+padded(inner)+" "|" " = 1+1+1+inner+1+1 = inner+5
+		// Must fit in pRW-1: inner+5 = pRW-1 = rightWidth+1, so inner = rightWidth-4.
+		// Top/bottom span = inner+2. topFill = inner+2-len(topLabel).
+		inner := rightWidth - 4
 		if inner < 8 {
 			inner = 8
 		}
 		topLabel := " " + label + " "
-		topFill := inner + 2 - len(topLabel)
+		topFill := inner + 1 - len(topLabel)
 		if topFill < 0 {
 			topFill = 0
 		}
