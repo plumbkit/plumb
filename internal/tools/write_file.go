@@ -46,12 +46,13 @@ var writeFileSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type WriteFile struct {
-	client lsp.LSPClient // may be nil; LSP notify skipped when nil
-	cache  *cache.Cache  // may be nil; cache invalidation skipped when nil
+	client lsp.LSPClient       // may be nil; LSP notify skipped when nil
+	cache  *cache.Cache        // may be nil; cache invalidation skipped when nil
+	diag   postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
 }
 
-func NewWriteFile(client lsp.LSPClient, c *cache.Cache) *WriteFile {
-	return &WriteFile{client: client, cache: c}
+func NewWriteFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource) *WriteFile {
+	return &WriteFile{client: client, cache: c, diag: diag}
 }
 
 func (*WriteFile) Name() string               { return "write_file" }
@@ -106,6 +107,12 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	_, statErr := os.Stat(path)
 	isNew := os.IsNotExist(statErr)
 
+	uri := "file://" + path
+	var preDiags []protocol.Diagnostic
+	if t.diag != nil {
+		preDiags = t.diag.Diagnostics(uri)
+	}
+
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
 	}
@@ -117,12 +124,17 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if err := notifyLSP(ctx, t.client, path, changeType); err != nil {
 		slog.Warn("write_file: LSP notification failed", "path", path, "err", err)
 	}
-	invalidateCache(t.cache, "file://"+path)
+	invalidateCache(t.cache, uri)
 
 	verb := "updated"
 	if isNew {
 		verb = "created"
 	}
-	return fmt.Sprintf("%s %s (%d bytes)", verb, path, len(a.Content)), nil
+	out := fmt.Sprintf("%s %s (%d bytes)", verb, path, len(a.Content))
+	if t.diag != nil {
+		fresh := awaitDiagnosticsRefresh(t.diag, uri, preDiags)
+		out += formatPostWriteDiagnostics(fresh)
+	}
+	return out, nil
 }
 

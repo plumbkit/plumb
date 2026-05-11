@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -52,6 +53,93 @@ func invalidateCache(c *cache.Cache, uri string) {
 		return
 	}
 	_ = c.InvalidateByPath(uri)
+}
+
+// postWriteDiagWindow is how long write/edit tools wait for the LSP server
+// to re-publish diagnostics for the URI they just wrote. Short enough that
+// fast servers (gopls on a small package) usually deliver within the window,
+// long enough that the agent doesn't have to round-trip again to find out
+// it broke the build. Empirically ~150-250ms for gopls on incremental edits.
+const postWriteDiagWindow = 300 * time.Millisecond
+
+// awaitDiagnosticsRefresh waits up to postWriteDiagWindow for the diagnostics
+// for uri to change from the supplied baseline. Returns the post-write
+// diagnostics slice (which may equal the baseline if the server didn't
+// republish in time). nil-safe on the diagnosticsSource argument.
+func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, baseline []protocol.Diagnostic) []protocol.Diagnostic {
+	if diag == nil {
+		return nil
+	}
+	deadline := time.Now().Add(postWriteDiagWindow)
+	for {
+		current := diag.Diagnostics(uri)
+		if !diagnosticsEqual(current, baseline) {
+			return current
+		}
+		if time.Now().After(deadline) {
+			return current
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// postWriteDiagSource is the narrow interface write/edit tools need to
+// observe post-write diagnostic changes. Satisfied by *cache.Invalidator
+// and the daemon's invProxy / routingInvProxy.
+type postWriteDiagSource interface {
+	Diagnostics(uri string) []protocol.Diagnostic
+}
+
+// diagnosticsEqual returns true if a and b have the same number of entries
+// in the same order with equal Severity, Message, and Range.Start.Line.
+// Used to detect "did anything change" not "are these the same diagnostic
+// objects."
+func diagnosticsEqual(a, b []protocol.Diagnostic) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Severity != b[i].Severity || a[i].Message != b[i].Message ||
+			a[i].Range.Start.Line != b[i].Range.Start.Line {
+			return false
+		}
+	}
+	return true
+}
+
+// formatPostWriteDiagnostics renders up to N error/warning diagnostics as a
+// compact suffix appended to write/edit_file output. Returns "" if none.
+func formatPostWriteDiagnostics(d []protocol.Diagnostic) string {
+	if len(d) == 0 {
+		return ""
+	}
+	var errs, warns []protocol.Diagnostic
+	for _, x := range d {
+		switch x.Severity {
+		case protocol.SevError:
+			errs = append(errs, x)
+		case protocol.SevWarning:
+			warns = append(warns, x)
+		}
+	}
+	if len(errs) == 0 && len(warns) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\ndiagnostics after write:")
+	render := func(label string, diags []protocol.Diagnostic) {
+		const maxPerCategory = 3
+		for i, x := range diags {
+			if i >= maxPerCategory {
+				fmt.Fprintf(&sb, "\n  %s: …(+%d more)", label, len(diags)-maxPerCategory)
+				return
+			}
+			fmt.Fprintf(&sb, "\n  %s L%d: %s", label, x.Range.Start.Line+1, x.Message)
+		}
+	}
+	render("error", errs)
+	render("warn", warns)
+	return sb.String()
 }
 
 // pathLocks serialises write operations to the same on-disk path across all

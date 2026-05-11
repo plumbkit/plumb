@@ -2,6 +2,9 @@
 
 ## 0.5.1 — 2026-05-11 (in progress)
 
+### Added (6/9)
+- **Post-write diagnostics in `write_file` and `edit_file` output** — after a successful write, the tools snapshot the current diagnostics for the URI, then poll for up to 300ms looking for a change. Any new errors/warnings (up to 3 of each) are appended to the response so the agent learns immediately whether it broke the build, without a follow-up `diagnostics` call. Skipped when the diagnostics source is nil (test setups).
+
 ### Added (5/9)
 - **Strict-mode mtime auto-tracking** — set `PLUMB_STRICT_EDITS=1` to require every `edit_file` target to have been read in this daemon's lifetime AND for the file's current mtime to match what was observed at read time. Catches the "agent edits without reading first" footgun and silent-overwrite scenarios when an external process modifies the file. Read mtimes are recorded in a process-global map; cross-session interference is possible but acceptable for an opt-in safety mode. Off by default.
 

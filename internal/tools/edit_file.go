@@ -82,12 +82,13 @@ const maxEditRetries = 3
 //
 // Concurrency: Execute is safe for concurrent use.
 type EditFile struct {
-	client lsp.LSPClient // may be nil; LSP notify skipped when nil
-	cache  *cache.Cache  // may be nil; cache invalidation skipped when nil
+	client lsp.LSPClient       // may be nil; LSP notify skipped when nil
+	cache  *cache.Cache        // may be nil; cache invalidation skipped when nil
+	diag   postWriteDiagSource // may be nil; post-write diagnostics skipped when nil
 }
 
-func NewEditFile(client lsp.LSPClient, c *cache.Cache) *EditFile {
-	return &EditFile{client: client, cache: c}
+func NewEditFile(client lsp.LSPClient, c *cache.Cache, diag postWriteDiagSource) *EditFile {
+	return &EditFile{client: client, cache: c, diag: diag}
 }
 
 func (*EditFile) Name() string                 { return "edit_file" }
@@ -178,6 +179,12 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		}
 	}
 
+	uri := "file://" + path
+	var preDiags []protocol.Diagnostic
+	if t.diag != nil {
+		preDiags = t.diag.Diagnostics(uri)
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, err := t.tryEdit(ctx, path, a.Edits)
@@ -202,7 +209,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		if err := notifyLSP(ctx, t.client, path, protocol.FileChanged); err != nil {
 			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 		}
-		invalidateCache(t.cache, "file://"+path)
+		invalidateCache(t.cache, uri)
 
 		noun := "edit"
 		if len(a.Edits) > 1 {
@@ -220,6 +227,10 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		if summary != "" {
 			sb.WriteString("\n")
 			sb.WriteString(summary)
+		}
+		if t.diag != nil {
+			fresh := awaitDiagnosticsRefresh(t.diag, uri, preDiags)
+			sb.WriteString(formatPostWriteDiagnostics(fresh))
 		}
 		return sb.String(), nil
 	}
