@@ -613,6 +613,25 @@ Text/regex search-and-replace across files. Defaults to `dry_run=true`.
 
 **Source**: `internal/tools/find_replace.go`
 
+| Field | Required | Description |
+|---|---|---|
+| `path` | yes | Directory to walk, or a single file |
+| `pattern` | yes | Search pattern. Plain text by default; regex when `use_regex=true` |
+| `replacement` | yes | Replacement text. With regex, supports `$1`, `$2` backreferences |
+| `use_regex` | no | Treat `pattern` as a regex. Default `false` |
+| `glob` | no | File filter, e.g. `*.go`, `**/*.md`. A literal directory prefix (e.g. `src/**/*.go`) prunes sibling directories from the walk |
+| `case_sensitive` | no | Default: smart-case (case-insensitive iff pattern is all lowercase) |
+| `dry_run` | no | Default `true` — preview only; set `false` to write |
+| `max_files` | no | Cap on files modified. Default `100`; enforced exactly even under parallel scheduling |
+| `max_file_bytes` | no | Skip files larger than this. Default `52428800` (50 MiB). Guards against scanning huge logs/dumps that would blow past MCP timeouts |
+
+**Behaviour**
+
+- **Binary detection**: opens each candidate file and sniffs the first 8 KB for a null byte; if found, the file is closed without further reading. Huge binary blobs are never buffered.
+- **Parallel**: per-file work runs across `runtime.NumCPU()` workers. Output is sorted by path for stable reporting.
+- **gitignore**: honoured via the shared walker.
+- **Atomic writes**: each replacement is written to `<path>.tmp` then `os.Rename`'d into place.
+
 ---
 
 ### `file_diff`

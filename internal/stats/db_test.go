@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -81,5 +82,67 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 	}
 	if !got[0].Success {
 		t.Errorf("Success = false, want true")
+	}
+}
+
+// TestOpen_IdempotentOnUnstampedAllColumnsDB reproduces the failure mode of
+// the buggy build that defined input_json/output_text in the baseline CREATE
+// TABLE statement: a database with all v3 columns but user_version still 0.
+// Reopening it must succeed (migrations no-op for columns that already exist)
+// and stamp user_version to the current SchemaVersion.
+func TestOpen_IdempotentOnUnstampedAllColumnsDB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stats.db")
+
+	// Manually create a DB in the broken state: all v3 columns, user_version=0.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("manual open: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE tool_calls (
+		    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		    session_id   TEXT    NOT NULL DEFAULT '',
+		    workspace    TEXT    NOT NULL DEFAULT '',
+		    tool         TEXT    NOT NULL,
+		    called_at    INTEGER NOT NULL,
+		    duration_ms  INTEGER NOT NULL DEFAULT 0,
+		    input_bytes  INTEGER NOT NULL DEFAULT 0,
+		    output_bytes INTEGER NOT NULL DEFAULT 0,
+		    success      INTEGER NOT NULL DEFAULT 1,
+		    error_msg    TEXT    NOT NULL DEFAULT '',
+		    input_json   TEXT    NOT NULL DEFAULT '',
+		    output_text  TEXT    NOT NULL DEFAULT ''
+		);
+	`)
+	if err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on unstamped-all-columns DB failed: %v", err)
+	}
+	defer db.Close()
+
+	v, err := db.CurrentSchemaVersion()
+	if err != nil {
+		t.Fatalf("CurrentSchemaVersion: %v", err)
+	}
+	if v != SchemaVersion {
+		t.Errorf("user_version after recovery = %d, want %d", v, SchemaVersion)
+	}
+
+	// Confirm it works for real I/O.
+	db.Record(Call{Tool: "x", CalledAt: time.Now(), Success: true})
+	got, err := db.Recent(10, Filter{})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("Recent rows = %d, want 1", len(got))
 	}
 }

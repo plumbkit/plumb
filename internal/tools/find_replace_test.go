@@ -271,6 +271,155 @@ func TestFindReplace_BinaryFilesSkipped(t *testing.T) {
 	}
 }
 
+// TestFindReplace_GlobPrunesSiblingDirs verifies that a glob with a literal
+// path prefix (e.g., "wanted/**/*.txt") prunes sibling directory subtrees so
+// the walker doesn't descend into them at all.
+func TestFindReplace_GlobPrunesSiblingDirs(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdir := func(p string) {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p, content string) {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(dir, "wanted", "deep"))
+	mustMkdir(filepath.Join(dir, "skipme", "deep"))
+	mustWrite(filepath.Join(dir, "wanted", "a.txt"), "TODO\n")
+	mustWrite(filepath.Join(dir, "wanted", "deep", "b.txt"), "TODO\n")
+	mustWrite(filepath.Join(dir, "skipme", "c.txt"), "TODO\n")
+	mustWrite(filepath.Join(dir, "skipme", "deep", "d.txt"), "TODO\n")
+
+	tool := NewFindReplace()
+	dryRun := false
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "TODO",
+		"replacement": "DONE",
+		"glob":        "wanted/**/*.txt",
+		"dry_run":     dryRun,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "2 file(s)") {
+		t.Errorf("expected 2 files changed (wanted/ subtree only):\n%s", out)
+	}
+
+	// wanted/ files: rewritten.
+	for _, p := range []string{
+		filepath.Join(dir, "wanted", "a.txt"),
+		filepath.Join(dir, "wanted", "deep", "b.txt"),
+	} {
+		got, _ := os.ReadFile(p)
+		if string(got) != "DONE\n" {
+			t.Errorf("%s = %q, want DONE", p, string(got))
+		}
+	}
+	// skipme/ files: untouched.
+	for _, p := range []string{
+		filepath.Join(dir, "skipme", "c.txt"),
+		filepath.Join(dir, "skipme", "deep", "d.txt"),
+	} {
+		got, _ := os.ReadFile(p)
+		if string(got) != "TODO\n" {
+			t.Errorf("%s was modified (should be pruned): %q", p, string(got))
+		}
+	}
+}
+
+func TestGlobLiteralPrefix(t *testing.T) {
+	cases := []struct {
+		glob string
+		want string
+	}{
+		{"", ""},
+		{"*.go", ""},
+		{"**/*.go", ""},
+		{"src/*.go", "src"},
+		{"src/**/*.go", "src"},
+		{"pkg/v1/file.go", "pkg/v1/file.go"},
+		{"a/b/c/?ile.go", "a/b/c"},
+		{"a/b[1-9]/x", "a"},
+	}
+	for _, tc := range cases {
+		got := globLiteralPrefix(tc.glob)
+		if got != tc.want {
+			t.Errorf("globLiteralPrefix(%q) = %q, want %q", tc.glob, got, tc.want)
+		}
+	}
+}
+
+func TestDirCompatibleWithPrefix(t *testing.T) {
+	cases := []struct {
+		rel, prefix string
+		want        bool
+	}{
+		{"", "src", true},
+		{".", "src", true},
+		{"src", "src", true},
+		{"src", "src/sub", true},
+		{"src/sub", "src", true},
+		{"src/sub/deep", "src", true},
+		{"tests", "src", false},
+		{"srcfoo", "src", false}, // not a real prefix segment
+		{"src/other", "src/sub", false},
+	}
+	for _, tc := range cases {
+		got := dirCompatibleWithPrefix(tc.rel, tc.prefix)
+		if got != tc.want {
+			t.Errorf("dirCompatibleWithPrefix(%q, %q) = %v, want %v",
+				tc.rel, tc.prefix, got, tc.want)
+		}
+	}
+}
+
+// TestFindReplace_MaxFileBytesSkipsLargeFiles verifies that files larger than
+// max_file_bytes are skipped without scanning. The "needle" inside the large
+// file must not be touched.
+func TestFindReplace_MaxFileBytesSkipsLargeFiles(t *testing.T) {
+	dir := t.TempDir()
+	small := filepath.Join(dir, "small.txt")
+	big := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(small, []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 64 KiB of "needle " plus padding.
+	bigData := bytes.Repeat([]byte("needle "), 10000)
+	if err := os.WriteFile(big, bigData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewFindReplace()
+	dryRun := false
+	args, _ := json.Marshal(map[string]any{
+		"path":           dir,
+		"pattern":        "needle",
+		"replacement":    "HAY",
+		"dry_run":        dryRun,
+		"max_file_bytes": 1024, // big.txt is ~70 KiB; small.txt is 7 B
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "1 file(s), 1 replacement(s) changed") {
+		t.Errorf("expected exactly 1 file changed (small only):\n%s", out)
+	}
+	got, _ := os.ReadFile(small)
+	if string(got) != "HAY\n" {
+		t.Errorf("small file not modified: %q", string(got))
+	}
+	bigGot, _ := os.ReadFile(big)
+	if !bytes.Equal(bigGot, bigData) {
+		t.Error("big file was modified despite exceeding max_file_bytes")
+	}
+}
+
 // TestFindReplace_OutputSortedByPath checks that the result list is stable
 // (sorted by path) regardless of worker scheduling order.
 func TestFindReplace_OutputSortedByPath(t *testing.T) {

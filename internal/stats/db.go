@@ -20,6 +20,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// schema is the v1 baseline. Newer columns are added by migrations so that
+// fresh databases and old databases follow the same code path. Do not edit
+// this to reflect later schema states — add a migration instead.
 const schema = `
 CREATE TABLE IF NOT EXISTS tool_calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,9 +34,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     input_bytes  INTEGER NOT NULL DEFAULT 0,
     output_bytes INTEGER NOT NULL DEFAULT 0,
     success      INTEGER NOT NULL DEFAULT 1,
-    error_msg    TEXT    NOT NULL DEFAULT '',
-    input_json   TEXT    NOT NULL DEFAULT '',
-    output_text  TEXT    NOT NULL DEFAULT ''
+    error_msg    TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -41,32 +42,70 @@ CREATE INDEX IF NOT EXISTS idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX IF NOT EXISTS idx_tc_session   ON tool_calls(session_id);
 `
 
-// migration describes a single forward schema step.
+// migration describes a single forward schema step. For ADD COLUMN migrations,
+// addColumn names the column being added so we can skip the step if it
+// already exists (recovering from databases stamped by older buggy builds
+// that created the column up-front).
 type migration struct {
-	from, to int
-	sql      string
+	from, to  int
+	addColumn string
+	sql       string
 }
 
 // migrations is the ordered list of schema upgrades. Each entry carries the
 // version it upgrades *from* and the version it produces. Apply in order.
 var migrations = []migration{
-	{from: 1, to: 2, sql: `ALTER TABLE tool_calls ADD COLUMN input_json  TEXT NOT NULL DEFAULT ''`},
-	{from: 2, to: 3, sql: `ALTER TABLE tool_calls ADD COLUMN output_text TEXT NOT NULL DEFAULT ''`},
+	{from: 1, to: 2, addColumn: "input_json", sql: `ALTER TABLE tool_calls ADD COLUMN input_json  TEXT NOT NULL DEFAULT ''`},
+	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text TEXT NOT NULL DEFAULT ''`},
 }
 
 // migrate applies all pending forward migrations from currentVersion up to
-// targetVersion. Errors are fatal — a half-applied migration is worse than a
-// refused open.
+// targetVersion. ADD COLUMN steps are skipped when the column already exists,
+// which keeps the path idempotent in two cases: (a) an unstamped database
+// created by a build that defined the column in the baseline schema; (b)
+// re-running migrate after a partial earlier run.
 func migrate(db *sql.DB, currentVersion, targetVersion int) error {
 	for _, m := range migrations {
 		if m.from < currentVersion || m.to > targetVersion {
 			continue
+		}
+		if m.addColumn != "" {
+			has, err := hasColumn(db, "tool_calls", m.addColumn)
+			if err != nil {
+				return fmt.Errorf("stats: migration v%d→v%d: check column: %w", m.from, m.to, err)
+			}
+			if has {
+				continue
+			}
 		}
 		if _, err := db.Exec(m.sql); err != nil {
 			return fmt.Errorf("stats: migration v%d→v%d: %w", m.from, m.to, err)
 		}
 	}
 	return nil
+}
+
+// hasColumn reports whether table has a column named col, via PRAGMA
+// table_info. Used to make ADD COLUMN migrations idempotent.
+func hasColumn(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // DB is a thread-safe statistics store backed by SQLite.

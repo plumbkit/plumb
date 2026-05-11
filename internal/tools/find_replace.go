@@ -28,7 +28,7 @@ func (*findReplaceTool) Description() string {
 
 Defaults to dry_run=true so you can preview the diff before committing. Set dry_run=false to write changes.
 
-Skips binary files. Honours .gitignore. Use 'glob' to limit which files to touch (e.g. "*.go", "**/*.md").
+Skips binary files (detected via null-byte sniff of the first 8 KB). Skips files larger than max_file_bytes (50 MiB default). Honours .gitignore. Use 'glob' to limit which files to touch (e.g. "*.go", "**/*.md"); a glob with a literal directory prefix (e.g. "src/**/*.go") prunes sibling directories from the walk entirely. Files are processed in parallel; output is sorted by path.
 
 PREFER LSP semantic tools (rename_symbol, etc.) when refactoring identifiers — they understand scope and types. Use find_replace for plain-text edits like updating doc strings, license headers, hostnames, version strings, or non-code files.`
 }
@@ -44,11 +44,14 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 			"glob":{"type":"string","description":"File glob filter, e.g. '*.go' or '**/*.md'. Empty = all non-binary files."},
 			"case_sensitive":{"type":"boolean","description":"Default: smart-case (case-insensitive iff pattern is all lowercase)."},
 			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write files."},
-			"max_files":{"type":"integer","default":100,"description":"Cap on number of files modified."}
+			"max_files":{"type":"integer","default":100,"description":"Cap on number of files modified."},
+			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip files larger than this many bytes. Default 50 MiB."}
 		},
 		"required":["path","pattern","replacement"]
 	}`)
 }
+
+const defaultMaxFileBytes int64 = 50 * 1024 * 1024
 
 func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
@@ -60,6 +63,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
 		DryRun        *bool  `json:"dry_run,omitempty"`
 		MaxFiles      int    `json:"max_files"`
+		MaxFileBytes  int64  `json:"max_file_bytes"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -78,6 +82,9 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	}
 	if a.MaxFiles == 0 {
 		a.MaxFiles = 100
+	}
+	if a.MaxFileBytes == 0 {
+		a.MaxFileBytes = defaultMaxFileBytes
 	}
 
 	// Build the matcher up front so we fail fast on bad regex.
@@ -101,6 +108,8 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("stat %s: %w", a.Path, err)
 	}
 
+	globPrefix := globLiteralPrefix(a.Glob)
+
 	var files []string
 	if info.IsDir() {
 		opts := walkOptions{root: a.Path, respectIgnore: true}
@@ -109,6 +118,12 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 				return err
 			}
 			if d.IsDir() {
+				if globPrefix != "" && path != a.Path {
+					rel, _ := filepath.Rel(a.Path, path)
+					if !dirCompatibleWithPrefix(filepath.ToSlash(rel), globPrefix) {
+						return fs.SkipDir
+					}
+				}
 				return nil
 			}
 			if a.Glob != "" {
@@ -134,6 +149,11 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	}
 
 	scan := func(path string) (int, []byte) {
+		// Size guard before reading: huge files (logs, dumps, generated code)
+		// can stall a 4 min MCP timeout even if they're plain text.
+		if fi, err := os.Stat(path); err != nil || fi.Size() > a.MaxFileBytes {
+			return 0, nil
+		}
 		// Sniff first so we don't buffer huge binary files just to discard them.
 		f, err := os.Open(path)
 		if err != nil {
@@ -277,4 +297,33 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	}
 
 	return sb.String(), nil
+}
+
+// globLiteralPrefix returns the longest leading slash-delimited segment of
+// glob that contains no wildcard metacharacters. Used for directory-level
+// pruning: a glob like "src/**/*.go" can never match files outside "src/".
+func globLiteralPrefix(glob string) string {
+	if glob == "" {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(glob), "/")
+	var lit []string
+	for _, p := range parts {
+		if strings.ContainsAny(p, "*?[") {
+			break
+		}
+		lit = append(lit, p)
+	}
+	return strings.Join(lit, "/")
+}
+
+// dirCompatibleWithPrefix returns true iff a directory at relative path rel
+// could contain files whose relative path begins with prefix. That is, rel
+// and prefix have an ancestor-or-equal relationship as slash-delimited paths.
+func dirCompatibleWithPrefix(rel, prefix string) bool {
+	if rel == "" || rel == "." || rel == prefix {
+		return true
+	}
+	return strings.HasPrefix(rel+"/", prefix+"/") ||
+		strings.HasPrefix(prefix+"/", rel+"/")
 }

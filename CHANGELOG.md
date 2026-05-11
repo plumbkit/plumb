@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.25 — 2026-05-12
+
+### Fixed
+- **`find_replace` could exceed the 4-minute MCP timeout on otherwise normal trees.** Three root causes, three fixes in `internal/tools/find_replace.go`:
+  1. **Loaded entire files before checking if they were binary.** The old loop called `os.ReadFile(path)` then `looksLikeBinary(bytes.NewReader(data))` — so a 500 MB sqlite db or compiled artifact that wasn't `.gitignore`'d got fully buffered into memory only to be discarded. The scan now does the sniff up front: open the file, `io.ReadFull` the first 8 KB, bail on null byte, only then `io.ReadAll` the rest. `looksLikeBinary` was the only caller and is removed from `walk.go` (the `binarySniffBytes` constant stays).
+  2. **No file-size cap.** Huge plain-text files (JSON dumps, generated SQL, lockfiles without null bytes) were scanned in full. New `max_file_bytes` arg, default 50 MiB, skips files past the cap via `os.Stat` before opening.
+  3. **Sequential file loop.** Replaced with a `runtime.NumCPU()`-sized worker pool: paths fan out on an unbuffered channel, results return on a buffered channel, an atomic counter enforces `max_files` exactly (workers that lose the race bail before writing — so the cap is never exceeded even under contention), and `ctx.Cancel()` shuts the pipeline down cleanly. Output is sorted by path so the report is deterministic regardless of worker scheduling.
+- **`find_replace` glob with a literal directory prefix now prunes sibling subtrees.** A glob like `src/**/*.go` can never match files outside `src/`, but the walker still descended into every directory. Added `globLiteralPrefix` and `dirCompatibleWithPrefix` helpers; the walk callback returns `fs.SkipDir` for directories that fall outside the prefix. Test coverage in `find_replace_test.go` includes a `wanted/` + `skipme/` tree to assert pruning.
+- **Stats DB migration v1→v2 failed on every freshly-created database.** The baseline `CREATE TABLE` in `internal/stats/db.go` included `input_json` and `output_text` columns (the v3 state), and then the migration loop tried to `ALTER TABLE ADD COLUMN input_json` — duplicate column error. Two fixes: (a) the baseline schema is reverted to v1 (only the original columns); migrations bring it forward to v3. (b) Each migration is now idempotent — `hasColumn` is consulted before `ADD COLUMN`, so databases corrupted by the old buggy build (all columns present but `user_version=0`) recover cleanly on next open. Regression test `TestOpen_IdempotentOnUnstampedAllColumnsDB` seeds the broken state and asserts `Open` succeeds and stamps `user_version=3`.
+
+### Added
+- **`find_replace` tests:** parallel correctness across 200 files, exact `max_files` cap under parallelism, binary-skip with matches past the sniff window, deterministic output ordering, context cancellation, and `max_file_bytes` skip. Plus unit tests for `globLiteralPrefix` and `dirCompatibleWithPrefix`.
+
 ## 0.5.24 — 2026-05-12
 
 ### Fixed
