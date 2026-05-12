@@ -32,6 +32,15 @@ func init() {
 	statsCmd.Flags().IntVar(&statsFlagLimit, "limit", 20, "number of recent calls to show")
 }
 
+const logo = `    ____  __               __  
+   / __ \/ /_  ______ ___ / /_ 
+  / /_/ / / / / / __ ` + "`" + `__ \/ __ \
+ / ____/ / /_/ / / / / / / /_/ /
+/_/   /_/\__,_/_/ /_/ /_/_.___/ 
+          
+      ᴘ ʟ ᴜ ᴍ ʙ   s ᴛ ᴀ ᴛ s
+`
+
 func runStats(_ *cobra.Command, _ []string) error {
 	ws := statsFlagWorkspace
 	if ws == "" {
@@ -65,12 +74,17 @@ func runStats(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
+	tui.RebuildStyles()
+
+	// Print Logo
+	logoStyle := lipgloss.NewStyle().Foreground(tui.ActiveTheme.Accent)
+	fmt.Println(logoStyle.Render(logo))
+
 	saved := db.TotalTokensSaved(filter)
-	fmt.Printf("plumb stats — %s\n", contractSessionPath(ws))
+	fmt.Printf("— %s\n", contractSessionPath(ws))
 	fmt.Printf("  %d total calls  ·  ~%s tokens saved (estimate)\n\n",
 		total, stats.FormatSavings(int(saved)))
 
-	tui.RebuildStyles()
 
 	// Tool summary table
 	summary, err := db.Summary(filter)
