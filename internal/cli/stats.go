@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/stats"
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var (
@@ -66,6 +68,8 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Printf("  %d total calls  ·  ~%s tokens saved (estimate)\n\n",
 		total, stats.FormatSavings(int(saved)))
 
+	tui.RebuildStyles()
+
 	// Tool summary table
 	summary, err := db.Summary(filter)
 	if err != nil {
@@ -73,21 +77,43 @@ func runStats(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Println("Tool Call Summary")
-	fmt.Println(strings.Repeat("─", 78))
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TOOL\tCALLS\tAVG ms\tP95 ms\tINPUT\tOUTPUT\tERRORS\tSAVED")
+	t1 := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderRow(false).
+		BorderColumn(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderTop(true).
+		BorderBottom(false).
+		BorderStyle(tui.SepStyle).
+		Headers("TOOL", "CALLS", "AVG ms", "P95 ms", "INPUT", "OUTPUT", "ERRORS", "SAVED").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().PaddingRight(2)
+			if row == table.HeaderRow {
+				return s.Inherit(tui.HintStyle)
+			}
+			return s
+		})
+
 	for _, s := range summary {
 		savedStr := "—"
 		if s.TokensSaved > 0 {
 			savedStr = "~" + stats.FormatSavings(int(s.TokensSaved)) + " tok"
 		}
-		fmt.Fprintf(w, "%s\t%d\t%.0f\t%d\t%.1f KB\t%.1f KB\t%d\t%s\n",
-			s.Tool, s.Calls, s.AvgMs, s.P95Ms,
-			s.TotalInputKB, s.TotalOutputKB, s.Errors, savedStr,
+		
+		t1.Row(
+			s.Tool,
+			fmt.Sprintf("%d", s.Calls),
+			fmt.Sprintf("%.0f", s.AvgMs),
+			fmt.Sprintf("%d", s.P95Ms),
+			fmt.Sprintf("%.1f KB", s.TotalInputKB),
+			fmt.Sprintf("%.1f KB", s.TotalOutputKB),
+			fmt.Sprintf("%d", s.Errors),
+			savedStr,
 		)
 	}
-	_ = w.Flush()
+	fmt.Println(t1.Render())
 
 	// Recent calls
 	recent, err := db.Recent(statsFlagLimit, filter)
@@ -96,40 +122,63 @@ func runStats(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
-	fmt.Println(strings.Repeat("─", 78))
 
-	wr := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(wr, "WHEN\tTOOL\tWORKSPACE\tms\tOK")
+	t2 := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderRow(false).
+		BorderColumn(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderTop(true).
+		BorderBottom(false).
+		BorderStyle(tui.SepStyle).
+		Headers("WHEN", "TOOL", "WORKSPACE", "ms", "OK").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().PaddingRight(2)
+			if row == table.HeaderRow {
+				return s.Inherit(tui.HintStyle)
+			}
+			return s
+		})
+
 	for _, c := range recent {
-		ok := "✓"
+		ok := tui.OkStyle.Render("✓")
 		if !c.Success {
-			ok = "✗"
+			ok = tui.WarnStyle.Render("✗")
 		}
-		fmt.Fprintf(wr, "%s\t%s\t%s\t%d\t%s\n",
+		
+		// If there's an error message, we append it to the Tool column using
+		// newlines and indentation. The lipgloss table component supports
+		// multiline cells out of the box.
+		toolCell := c.Tool
+		if !c.Success && c.ErrorMsg != "" {
+			var errBuf strings.Builder
+			errBuf.WriteString(c.Tool)
+			for i, line := range strings.Split(c.ErrorMsg, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				prefix := "  "
+				if i == 0 {
+					prefix = "↳ "
+				}
+				errBuf.WriteString("\n" + tui.WarnStyle.Render(prefix+line))
+			}
+			toolCell = errBuf.String()
+		}
+
+		t2.Row(
 			humanAge(c.CalledAt),
-			c.Tool,
+			toolCell,
 			contractSessionPath(c.Workspace),
-			c.DurationMs,
+			fmt.Sprintf("%d", c.DurationMs),
 			ok,
 		)
-		if !c.Success && c.ErrorMsg != "" {
-			fmt.Fprintf(wr, "  ↳ %s\n", truncateErr(c.ErrorMsg, 200))
-		}
 	}
-	_ = wr.Flush()
+	fmt.Println(t2.Render())
 
 	return nil
-}
-
-// truncateErr collapses newlines and trims long error messages so the
-// stats table's continuation line stays readable.
-func truncateErr(s string, max int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.TrimSpace(s)
-	if len(s) > max {
-		return s[:max] + "…"
-	}
-	return s
 }
 
 // humanAge formats a past time as a human-readable age string.

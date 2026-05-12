@@ -101,7 +101,7 @@ func TestGeminiConfigPath_NoError(t *testing.T) {
 	if path == "" {
 		t.Fatal("expected non-empty path")
 	}
-	if filepath.Base(path) != "mcp_config.json" {
+	if filepath.Base(path) != "settings.json" {
 		t.Errorf("unexpected filename: %s", filepath.Base(path))
 	}
 }

@@ -264,13 +264,13 @@ func claudeCodeConfigPath() (string, error) {
 }
 
 // GeminiConfigPath returns the platform-specific path for Gemini CLI's
-// mcp_config.json. It does not check whether the file exists.
+// settings.json. It does not check whether the file exists.
 func GeminiConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".gemini", "antigravity", "mcp_config.json"), nil
+	return filepath.Join(home, ".gemini", "settings.json"), nil
 }
 
 // backupFile copies src to src.<timestamp>.bak in the same directory.

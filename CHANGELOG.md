@@ -2,7 +2,11 @@
 
 ## 0.5.25 — 2026-05-12
 
+### Changed
+- **`plumb stats` CLI tables refactored** — replaced `text/tabwriter` and manual string formatting with `charm.land/lipgloss/v2/table`. The output now perfectly aligns columns, handles multi-line error traces inside cells natively, and applies the TUI theme colors for success (✓) and warning (✗) indicators.
+
 ### Fixed
+- **Gemini CLI configuration path corrected.** `plumb setup gemini` now writes to `~/.gemini/settings.json` (the standard location) instead of the incorrect `~/.gemini/antigravity/mcp_config.json`.
 - **`find_replace` could exceed the 4-minute MCP timeout on otherwise normal trees.** Three root causes, three fixes in `internal/tools/find_replace.go`:
   1. **Loaded entire files before checking if they were binary.** The old loop called `os.ReadFile(path)` then `looksLikeBinary(bytes.NewReader(data))` — so a 500 MB sqlite db or compiled artifact that wasn't `.gitignore`'d got fully buffered into memory only to be discarded. The scan now does the sniff up front: open the file, `io.ReadFull` the first 8 KB, bail on null byte, only then `io.ReadAll` the rest. `looksLikeBinary` was the only caller and is removed from `walk.go` (the `binarySniffBytes` constant stays).
   2. **No file-size cap.** Huge plain-text files (JSON dumps, generated SQL, lockfiles without null bytes) were scanned in full. New `max_file_bytes` arg, default 50 MiB, skips files past the cap via `os.Stat` before opening.
