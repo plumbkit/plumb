@@ -109,15 +109,28 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	// 2. MCP Integration Status
 	fmt.Printf("\nMCP Integration Status\n")
-	mcpTable := tableBase()
+	
+	mcpTable := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(tui.SepStyle).
+		BorderRow(true).
+		BorderColumn(true).
+		Headers("Client", "Exists", "Registered", "Path").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				return s.Inherit(tui.HintStyle)
+			}
+			return s
+		})
 	
 	claudeDesktopPath, _ := claudeDesktopConfigPath()
 	claudeCodePath, _ := claudeCodeConfigPath()
 	geminiPath, _ := GeminiConfigPath()
 
-	mcpTable.Row("Claude Desktop", statusCell(claudeDesktopPath), claudeDesktopPath)
-	mcpTable.Row("Claude Code", statusCell(claudeCodePath), claudeCodePath)
-	mcpTable.Row("Gemini CLI", statusCell(geminiPath), geminiPath)
+	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), claudeDesktopPath)
+	mcpTable.Row("Claude Code", existsIcon(claudeCodePath), registeredIcon(claudeCodePath), claudeCodePath)
+	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), geminiPath)
 	fmt.Println(mcpTable.Render())
 
 	// 3. Plumb Configuration
@@ -191,6 +204,16 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
+func existsIcon(path string) string {
+	if path == "" {
+		return tui.MutedStyle.Render("-")
+	}
+	if _, err := os.Stat(path); err == nil {
+		return tui.OkStyle.Render("✓")
+	}
+	return tui.WarnStyle.Render("✗")
+}
+
 func statusCell(path string) string {
 	if path == "" {
 		return tui.MutedStyle.Render("- Not set")
@@ -199,6 +222,23 @@ func statusCell(path string) string {
 		return tui.OkStyle.Render("✓ Exists")
 	}
 	return tui.WarnStyle.Render("✗ Not found")
+}
+
+func registeredIcon(path string) string {
+	if path == "" {
+		return tui.MutedStyle.Render("-")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tui.WarnStyle.Render("✗")
+	}
+	
+	// A simple string search is robust enough for checking registration status
+	// across the slightly different JSON schemas of Claude and Gemini.
+	if strings.Contains(string(data), "\"plumb\"") {
+		return tui.OkStyle.Render("✓")
+	}
+	return tui.WarnStyle.Render("✗")
 }
 
 // sourceFor returns a short label naming the layer that supplied the
