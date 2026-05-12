@@ -123,37 +123,58 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
 
-	t2 := table.New().
-		Border(lipgloss.NormalBorder()).
-		BorderRow(false).
-		BorderColumn(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderTop(true).
-		BorderBottom(false).
-		BorderStyle(tui.SepStyle).
-		Headers("WHEN", "TOOL", "WORKSPACE", "ms", "OK").
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().PaddingRight(2)
-			if row == table.HeaderRow {
-				return s.Inherit(tui.HintStyle)
-			}
-			return s
-		})
+	// We use manual column widths for the Recent Calls table.
+	// If we use lipgloss/table, a long error message in a cell forces the
+	// column to be extremely wide, breaking the layout on narrow terminals.
+	wWhen := 8 // "WHEN"
+	wTool := 4 // "TOOL"
+	wWork := 9 // "WORKSPACE"
+	for _, c := range recent {
+		if l := len(humanAge(c.CalledAt)); l > wWhen {
+			wWhen = l
+		}
+		if l := len(c.Tool); l > wTool {
+			wTool = l
+		}
+		if l := len(contractSessionPath(c.Workspace)); l > wWork {
+			wWork = l
+		}
+	}
+
+	// Add the 2-space padding
+	wWhen += 2
+	wTool += 2
+	wWork += 2
+
+	// Render the top border matching the lipgloss table style
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", wWhen+wTool+wWork+9))) // 9 = "ms" (2) + "OK" (2) + spacing
+
+	// Print header
+	fmt.Printf("%s%s%s%-3s  %s\n",
+		padRight(tui.HintStyle.Render("WHEN"), wWhen),
+		padRight(tui.HintStyle.Render("TOOL"), wTool),
+		padRight(tui.HintStyle.Render("WORKSPACE"), wWork),
+		tui.HintStyle.Render("ms"),
+		tui.HintStyle.Render("OK"),
+	)
 
 	for _, c := range recent {
 		ok := tui.OkStyle.Render("✓")
 		if !c.Success {
 			ok = tui.WarnStyle.Render("✗")
 		}
+
+		fmt.Printf("%s%s%s%-3d  %s\n",
+			padRight(humanAge(c.CalledAt), wWhen),
+			padRight(c.Tool, wTool),
+			padRight(contractSessionPath(c.Workspace), wWork),
+			c.DurationMs,
+			ok,
+		)
 		
-		// If there's an error message, we append it to the Tool column using
-		// newlines and indentation. The lipgloss table component supports
-		// multiline cells out of the box.
-		toolCell := c.Tool
 		if !c.Success && c.ErrorMsg != "" {
-			var errBuf strings.Builder
-			errBuf.WriteString(c.Tool)
+			// Print structured error lines indented under the TOOL column.
+			// This breaks out of the column structure so it can wrap naturally.
 			for i, line := range strings.Split(c.ErrorMsg, "\n") {
 				line = strings.TrimSpace(line)
 				if line == "" {
@@ -163,22 +184,21 @@ func runStats(_ *cobra.Command, _ []string) error {
 				if i == 0 {
 					prefix = "↳ "
 				}
-				errBuf.WriteString("\n" + tui.WarnStyle.Render(prefix+line))
+				fmt.Printf("%*s%s\n", wWhen, "", tui.WarnStyle.Render(prefix+line))
 			}
-			toolCell = errBuf.String()
 		}
-
-		t2.Row(
-			humanAge(c.CalledAt),
-			toolCell,
-			contractSessionPath(c.Workspace),
-			fmt.Sprintf("%d", c.DurationMs),
-			ok,
-		)
 	}
-	fmt.Println(t2.Render())
 
 	return nil
+}
+
+// padRight pads a string with spaces up to a given visual width (ignoring ANSI codes).
+func padRight(s string, width int) string {
+	vis := lipgloss.Width(s)
+	if vis >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-vis)
 }
 
 // humanAge formats a past time as a human-readable age string.
