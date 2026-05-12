@@ -97,14 +97,14 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	// 1. Workspace Context
 	fmt.Printf("\nWorkspace Context\n")
-	ctxTable := tableBase()
+	ctxTable := tableBase().Headers("Context", "Exists", "Path")
 	
 	globalPath := config.GlobalConfigPath()
 	projectPath := config.ProjectConfigPath(ws)
 
-	ctxTable.Row("global config", statusCell(globalPath), globalPath)
-	ctxTable.Row("project config", statusCell(projectPath), projectPath)
-	ctxTable.Row("workspace", tui.OkStyle.Render("✓ Exists"), ws)
+	ctxTable.Row("global config", existsIcon(globalPath), contractConfigPath(globalPath))
+	ctxTable.Row("project config", existsIcon(projectPath), contractConfigPath(projectPath))
+	ctxTable.Row("workspace", tui.OkStyle.Render("✓"), contractConfigPath(ws))
 	fmt.Println(ctxTable.Render())
 
 	// 2. MCP Integration Status
@@ -128,9 +128,9 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	claudeCodePath, _ := claudeCodeConfigPath()
 	geminiPath, _ := GeminiConfigPath()
 
-	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), claudeDesktopPath)
-	mcpTable.Row("Claude Code", existsIcon(claudeCodePath), registeredIcon(claudeCodePath), claudeCodePath)
-	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), geminiPath)
+	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), contractConfigPath(claudeDesktopPath))
+	mcpTable.Row("Claude Code", existsIcon(claudeCodePath), registeredIcon(claudeCodePath), contractConfigPath(claudeCodePath))
+	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), contractConfigPath(geminiPath))
 	fmt.Println(mcpTable.Render())
 
 	// 3. Plumb Configuration
@@ -214,16 +214,6 @@ func existsIcon(path string) string {
 	return tui.WarnStyle.Render("✗")
 }
 
-func statusCell(path string) string {
-	if path == "" {
-		return tui.MutedStyle.Render("- Not set")
-	}
-	if _, err := os.Stat(path); err == nil {
-		return tui.OkStyle.Render("✓ Exists")
-	}
-	return tui.WarnStyle.Render("✗ Not found")
-}
-
 func registeredIcon(path string) string {
 	if path == "" {
 		return tui.MutedStyle.Render("-")
@@ -239,6 +229,17 @@ func registeredIcon(path string) string {
 		return tui.OkStyle.Render("✓")
 	}
 	return tui.WarnStyle.Render("✗")
+}
+
+func contractConfigPath(p string) string {
+	if p == "" {
+		return tui.MutedStyle.Render("(none)")
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && strings.HasPrefix(p, home) {
+		p = "~" + p[len(home):]
+	}
+	return p
 }
 
 // sourceFor returns a short label naming the layer that supplied the
