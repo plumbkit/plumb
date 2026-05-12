@@ -89,7 +89,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 		BorderTop(true).
 		BorderBottom(false).
 		BorderStyle(tui.SepStyle).
-		Headers("TOOL", "CALLS", "AVG ms", "P95 ms", "INPUT", "OUTPUT", "ERRORS", "SAVED").
+		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors", "Saved").
 		StyleFunc(func(row, col int) lipgloss.Style {
 			s := lipgloss.NewStyle().PaddingRight(2)
 			if row == table.HeaderRow {
@@ -145,14 +145,15 @@ func runStats(_ *cobra.Command, _ []string) error {
 	wWork += 2
 
 	// Print header
-	headerWidth := wWhen + wTool + wWork + 9
+	// 11 = "ms" (3 chars, %-3s) + 2 spaces padding + "Status" (6 chars)
+	headerWidth := wWhen + wTool + wWork + 11
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", headerWidth)))
 	fmt.Printf("%s%s%s%-3s  %s\n",
 		padRight(tui.HintStyle.Render("When"), wWhen),
 		padRight(tui.HintStyle.Render("Tool"), wTool),
 		padRight(tui.HintStyle.Render("Workspace"), wWork),
 		tui.HintStyle.Render("ms"),
-		tui.HintStyle.Render("OK"),
+		tui.HintStyle.Render("Status"),
 	)
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", headerWidth)))
 
@@ -172,6 +173,8 @@ func runStats(_ *cobra.Command, _ []string) error {
 			ok = tui.WarnStyle.Render("✗")
 		}
 
+		// %-3d (3 chars) + "  " (2 spaces) = 5.
+		// The ok character aligns perfectly with the 'S' in "Status".
 		rowStr := fmt.Sprintf("%s%s%s%-3d  %s",
 			padRight(humanAge(c.CalledAt), wWhen),
 			padRight(c.Tool, wTool),

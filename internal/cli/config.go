@@ -112,9 +112,11 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	mcpTable := tableBase()
 	
 	claudeDesktopPath, _ := claudeDesktopConfigPath()
+	claudeCodePath, _ := claudeCodeConfigPath()
 	geminiPath, _ := GeminiConfigPath()
 
 	mcpTable.Row("Claude Desktop", statusCell(claudeDesktopPath), claudeDesktopPath)
+	mcpTable.Row("Claude Code", statusCell(claudeCodePath), claudeCodePath)
 	mcpTable.Row("Gemini CLI", statusCell(geminiPath), geminiPath)
 	fmt.Println(mcpTable.Render())
 
