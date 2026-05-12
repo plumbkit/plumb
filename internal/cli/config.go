@@ -1,12 +1,17 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
+	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var configCmd = &cobra.Command{
@@ -22,7 +27,21 @@ var configPrintCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
-		return config.Print(cfg, os.Stdout)
+		
+		var buf bytes.Buffer
+		if err := config.Print(cfg, &buf); err != nil {
+			return err
+		}
+
+		// Use chroma to highlight TOML if stdout is a terminal, else just print it
+		if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
+			if err := quick.Highlight(os.Stdout, buf.String(), "toml", "terminal256", "nord"); err != nil {
+				fmt.Print(buf.String()) // fallback
+			}
+		} else {
+			fmt.Print(buf.String())
+		}
+		return nil
 	},
 }
 
@@ -38,34 +57,10 @@ each value came from. Pass --workspace to include a project-local
 	RunE: runConfigShow,
 }
 
-var configGeminiCmd = &cobra.Command{
-	Use:   "gemini",
-	Short: "Show Gemini CLI integration status",
-	RunE:  runConfigGemini,
-}
-
 func init() {
 	configShowCmd.Flags().StringVar(&configShowWorkspace, "workspace", "",
 		"Workspace directory to merge .plumb/config.toml from (defaults to current dir)")
-	configCmd.AddCommand(configPrintCmd, configShowCmd, configGeminiCmd)
-}
-
-func runConfigGemini(_ *cobra.Command, _ []string) error {
-	path, err := GeminiConfigPath()
-	if err != nil {
-		return fmt.Errorf("locating Gemini CLI config: %w", err)
-	}
-
-	fmt.Printf("# Gemini CLI MCP configuration\n\n")
-	fmt.Printf("Config path: %s\n", existsLabel(path))
-
-	if _, err := os.Stat(path); err == nil {
-		fmt.Println("\nPlumb can be registered in Gemini CLI using `plumb setup gemini`.")
-	} else {
-		fmt.Println("\nGemini CLI config not found. Ensure Gemini CLI is installed and has been run at least once.")
-	}
-
-	return nil
+	configCmd.AddCommand(configPrintCmd, configShowCmd)
 }
 
 func runConfigShow(_ *cobra.Command, _ []string) error {
@@ -86,60 +81,85 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading project config: %w", perr)
 	}
 
-	globalPath := config.GlobalConfigPath()
-	projectPath := config.ProjectConfigPath(ws)
-	geminiPath, _ := GeminiConfigPath()
+	tui.RebuildStyles()
 
-	fmt.Printf("# plumb resolved configuration\n\n")
-	fmt.Printf("# global config:   %s\n", existsLabel(globalPath))
-	fmt.Printf("# project config:  %s\n", existsLabel(projectPath))
-	fmt.Printf("# gemini config:   %s\n", existsLabel(geminiPath))
-	fmt.Printf("# workspace:       %s\n\n", ws)
+	fmt.Printf("\nPlumb Configuration\n\n")
 
-	fmt.Printf("[edits]\n")
-	fmt.Printf("strict                 = %v   # %s\n",
-		projectCfg.Edits.Strict, sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict))
-	fmt.Printf("rate_limit_per_minute  = %d   # %s\n",
-		projectCfg.Edits.RateLimitPerMinute,
-		sourceFor("rate_limit_per_minute",
-			defaultsCfg.Edits.RateLimitPerMinute,
-			globalCfg.Edits.RateLimitPerMinute,
-			projectCfg.Edits.RateLimitPerMinute))
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(tui.SepStyle).
+		BorderRow(false).
+		BorderColumn(true).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().Padding(0, 1)
+			if col == 0 {
+				return s.Inherit(tui.KeyStyle)
+			}
+			if col == 1 {
+				return s.Inherit(tui.ValStyle)
+			}
+			return s.Inherit(tui.MutedStyle)
+		})
 
-	fmt.Printf("\n[cache]\n")
-	fmt.Printf("ttl       = %s\n", projectCfg.Cache.TTL.Duration)
-	fmt.Printf("max_size  = %d\n", projectCfg.Cache.MaxSize)
-
-	fmt.Printf("\nlog_level = %q\n", projectCfg.LogLevel)
+	t.Row("edits", "strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict))
+	t.Row("", "rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute))
+	t.Row("cache", "ttl", projectCfg.Cache.TTL.Duration.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL))
+	t.Row("", "max_size", fmt.Sprintf("%d", projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize))
+	t.Row("core", "log_level", projectCfg.LogLevel, sourceFor("log_level", defaultsCfg.LogLevel, globalCfg.LogLevel, projectCfg.LogLevel))
 	if projectCfg.LogFile != "" {
-		fmt.Printf("log_file  = %q\n", projectCfg.LogFile)
+		t.Row("", "log_file", projectCfg.LogFile, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile))
 	}
 
-	fmt.Printf("\n# Use `plumb config print` for the full TOML dump.\n")
+	fmt.Println(t.Render())
+
+	fmt.Printf("\nMCP Integration Status\n\n")
+
+	mcpTable := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(tui.SepStyle).
+		BorderRow(false).
+		BorderColumn(true).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().Padding(0, 1)
+			if col == 0 {
+				return s.Inherit(tui.KeyStyle)
+			}
+			return s
+		})
+
+	claudeDesktopPath, _ := claudeDesktopConfigPath()
+	geminiPath, _ := GeminiConfigPath()
+
+	mcpTable.Row("Claude Desktop", integrationStatus(claudeDesktopPath))
+	mcpTable.Row("Gemini CLI", integrationStatus(geminiPath))
+	
+	fmt.Println(mcpTable.Render())
+	fmt.Println()
+
 	return nil
 }
 
-func existsLabel(path string) string {
+func integrationStatus(path string) string {
 	if path == "" {
-		return "(none)"
+		return tui.MutedStyle.Render("Not configured")
 	}
 	if _, err := os.Stat(path); err == nil {
-		return path + "  (exists)"
+		return tui.OkStyle.Render("✓ Registered") + tui.MutedStyle.Render(fmt.Sprintf(" (%s)", path))
 	}
-	return path + "  (not found)"
+	return tui.MutedStyle.Render("Not found")
 }
 
 // sourceFor returns a short label naming the layer that supplied the
 // current value. Comparison is order-sensitive: env > project > global > default.
 func sourceFor(field string, def, global, final any) string {
 	if v := envForField(field); v != "" {
-		return fmt.Sprintf("from env (%s=%s)", envVarForField(field), v)
+		return fmt.Sprintf("env (%s=%s)", envVarForField(field), v)
 	}
 	switch {
 	case fmt.Sprintf("%v", final) != fmt.Sprintf("%v", global):
-		return "from project config"
+		return "project config"
 	case fmt.Sprintf("%v", global) != fmt.Sprintf("%v", def):
-		return "from global config"
+		return "global config"
 	default:
 		return "default"
 	}
