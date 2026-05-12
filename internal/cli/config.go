@@ -82,78 +82,78 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading project config: %w", perr)
 	}
 
+	tui.RebuildStyles()
+
+	tableBase := func() *table.Table {
+		return table.New().
+			Border(lipgloss.RoundedBorder()).
+			BorderStyle(tui.SepStyle).
+			BorderRow(true).
+			BorderColumn(true).
+			StyleFunc(func(row, col int) lipgloss.Style {
+				return lipgloss.NewStyle().Padding(0, 1)
+			})
+	}
+
+	// 1. Workspace Context
+	fmt.Printf("\nWorkspace Context\n")
+	ctxTable := tableBase()
+	
 	globalPath := config.GlobalConfigPath()
 	projectPath := config.ProjectConfigPath(ws)
 
-	tui.RebuildStyles()
+	ctxTable.Row("global config", statusCell(globalPath), globalPath)
+	ctxTable.Row("project config", statusCell(projectPath), projectPath)
+	ctxTable.Row("workspace", tui.OkStyle.Render("✓ Exists"), ws)
+	fmt.Println(ctxTable.Render())
 
-	fmt.Printf("\nWorkspace Context\n\n")
+	// 2. MCP Integration Status
+	fmt.Printf("\nMCP Integration Status\n")
+	mcpTable := tableBase()
+	
+	claudeDesktopPath, _ := claudeDesktopConfigPath()
+	geminiPath, _ := GeminiConfigPath()
 
-	// Print paths block without borders
-	printPath := func(label, path string, exists bool) {
-		mark := tui.OkStyle.Render("✓")
-		if !exists {
-			mark = tui.WarnStyle.Render("✗")
+	mcpTable.Row("Claude Desktop", statusCell(claudeDesktopPath), claudeDesktopPath)
+	mcpTable.Row("Gemini CLI", statusCell(geminiPath), geminiPath)
+	fmt.Println(mcpTable.Render())
+
+	// 3. Plumb Configuration
+	fmt.Printf("\nPlumb Configuration\n")
+	cfgTable := tableBase()
+
+	addSection := func(name string, items [][]string) {
+		var keys, vals, provs strings.Builder
+		for i, item := range items {
+			if i > 0 {
+				keys.WriteString("\n")
+				vals.WriteString("\n")
+				provs.WriteString("\n")
+			}
+			keys.WriteString(item[0])
+			vals.WriteString(tui.ValStyle.Render(item[1]))
+			provs.WriteString(tui.MutedStyle.Render(item[2]))
 		}
-		if path == "" {
-			path = tui.MutedStyle.Render("(none)")
-		}
-		
-		// Pad the raw string first, then color it
-		paddedLabel := fmt.Sprintf("%-15s", label)
-		labelCol := lipgloss.NewStyle().Foreground(tui.ActiveTheme.Key).Render(paddedLabel)
-		
-		fmt.Printf("%s %s  %s\n", labelCol, mark, path)
+		cfgTable.Row(tui.KeyStyle.Render(name), keys.String(), vals.String(), provs.String())
 	}
 
-	_, gErr := os.Stat(globalPath)
-	printPath("global config", globalPath, gErr == nil)
-	
-	_, pErr := os.Stat(projectPath)
-	printPath("project config", projectPath, pErr == nil)
-	
-	// The workspace always exists if we got this far
-	printPath("workspace", ws, true)
-
-	fmt.Printf("\nPlumb Configuration\n\n")
-
-	// Build the config table manually to get perfect section dividers
-	type Section struct {
-		Name  string
-		Items [][]string // [key, val, prov]
-	}
-
-	var sections []Section
-
-	sections = append(sections, Section{
-		Name: "core",
-		Items: [][]string{
-			{"log_level", projectCfg.LogLevel, sourceFor("log_level", defaultsCfg.LogLevel, globalCfg.LogLevel, projectCfg.LogLevel)},
-			{"log_file", projectCfg.LogFile, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile)},
-		},
+	addSection("core", [][]string{
+		{"log_level", projectCfg.LogLevel, sourceFor("log_level", defaultsCfg.LogLevel, globalCfg.LogLevel, projectCfg.LogLevel)},
+		{"log_file", projectCfg.LogFile, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile)},
 	})
 
-	sections = append(sections, Section{
-		Name: "cache",
-		Items: [][]string{
-			{"ttl", projectCfg.Cache.TTL.Duration.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL)},
-			{"max_size", fmt.Sprintf("%d", projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
-		},
+	addSection("cache", [][]string{
+		{"ttl", projectCfg.Cache.TTL.Duration.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL)},
+		{"max_size", fmt.Sprintf("%d", projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
 	})
 
-	sections = append(sections, Section{
-		Name: "edits",
-		Items: [][]string{
-			{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
-			{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
-		},
+	addSection("edits", [][]string{
+		{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
+		{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
 	})
 
-	sections = append(sections, Section{
-		Name: "walk",
-		Items: [][]string{
-			{"refuse_home_roots", fmt.Sprintf("%v", projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
-		},
+	addSection("walk", [][]string{
+		{"refuse_home_roots", fmt.Sprintf("%v", projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
 	})
 
 	// Collect and sort LSP adapters
@@ -161,7 +161,6 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	for lang := range projectCfg.LSP {
 		lspLangs = append(lspLangs, lang)
 	}
-	// Sort manually for determinism (or we can just append them, map iteration is random)
 	for i := 0; i < len(lspLangs)-1; i++ {
 		for j := i + 1; j < len(lspLangs); j++ {
 			if lspLangs[i] > lspLangs[j] {
@@ -175,122 +174,29 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		globCfg := globalCfg.LSP[lang]
 		defCfg := defaultsCfg.LSP[lang]
 
-		argsStr := fmt.Sprintf("%v", cfg.Args)
-		if len(cfg.Args) == 0 {
-			argsStr = "[]"
-		}
-		
-		markersStr := fmt.Sprintf("%v", cfg.RootMarkers)
-		if len(cfg.RootMarkers) == 0 {
-			markersStr = "[]"
-		}
-		
-		envStr := fmt.Sprintf("%v", cfg.Env)
-		if len(cfg.Env) == 0 {
-			envStr = "{}"
-		}
-
-		sections = append(sections, Section{
-			Name: "lsp." + lang,
-			Items: [][]string{
-				{"enabled", fmt.Sprintf("%v", cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
-				{"command", cfg.Command, sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command)},
-				{"args", argsStr, sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args)},
-				{"root_markers", markersStr, sourceFor("root_markers", defCfg.RootMarkers, globCfg.RootMarkers, cfg.RootMarkers)},
-				{"env", envStr, sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env)},
-			},
+		addSection("lsp."+lang, [][]string{
+			{"enabled", fmt.Sprintf("%v", cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
+			{"command", cfg.Command, sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command)},
+			{"args", fmt.Sprintf("%v", cfg.Args), sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args)},
+			{"root_markers", fmt.Sprintf("%v", cfg.RootMarkers), sourceFor("root_markers", defCfg.RootMarkers, globCfg.RootMarkers, cfg.RootMarkers)},
+			{"env", fmt.Sprintf("%v", cfg.Env), sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env)},
 		})
 	}
 
-	w0, w1, w2, w3 := 12, 24, 20, 16 // Min widths
-	for _, sec := range sections {
-		if lipgloss.Width(sec.Name) > w0 {
-			w0 = lipgloss.Width(sec.Name)
-		}
-		for _, row := range sec.Items {
-			if lipgloss.Width(row[0]) > w1 {
-				w1 = lipgloss.Width(row[0])
-			}
-			if lipgloss.Width(row[1]) > w2 {
-				w2 = lipgloss.Width(row[1])
-			}
-			if lipgloss.Width(row[2]) > w3 {
-				w3 = lipgloss.Width(row[2])
-			}
-		}
-	}
-
-	// Helpers to draw table parts
-	drawTop := func() {
-		fmt.Println(tui.SepStyle.Render(fmt.Sprintf("╭%s┬%s┬%s┬%s╮", strings.Repeat("─", w0+2), strings.Repeat("─", w1+2), strings.Repeat("─", w2+2), strings.Repeat("─", w3+2))))
-	}
-	drawMid := func() {
-		fmt.Println(tui.SepStyle.Render(fmt.Sprintf("├%s┼%s┼%s┼%s┤", strings.Repeat("─", w0+2), strings.Repeat("─", w1+2), strings.Repeat("─", w2+2), strings.Repeat("─", w3+2))))
-	}
-	drawBot := func() {
-		fmt.Println(tui.SepStyle.Render(fmt.Sprintf("╰%s┴%s┴%s┴%s╯", strings.Repeat("─", w0+2), strings.Repeat("─", w1+2), strings.Repeat("─", w2+2), strings.Repeat("─", w3+2))))
-	}
-
-	drawTop()
-	for sIdx, sec := range sections {
-		if sIdx > 0 {
-			drawMid()
-		}
-		for rIdx, row := range sec.Items {
-			secName := ""
-			if rIdx == 0 {
-				secName = sec.Name
-			}
-			fmt.Printf("%s %-*s %s %-*s %s %-*s %s %-*s %s\n",
-				tui.SepStyle.Render("│"),
-				w0, tui.KeyStyle.Render(secName),
-				tui.SepStyle.Render("│"),
-				w1, row[0],
-				tui.SepStyle.Render("│"),
-				w2, tui.ValStyle.Render(row[1]),
-				tui.SepStyle.Render("│"),
-				w3, tui.MutedStyle.Render(row[2]),
-				tui.SepStyle.Render("│"),
-			)
-		}
-	}
-	drawBot()
-
-	fmt.Printf("\nMCP Integration Status\n\n")
-
-	mcpTable := table.New().
-		Border(lipgloss.RoundedBorder()).
-		BorderStyle(tui.SepStyle).
-		BorderRow(false).
-		BorderColumn(true).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().Padding(0, 1)
-			if col == 0 {
-				return s.Inherit(tui.KeyStyle)
-			}
-			return s
-		})
-
-	claudeDesktopPath, _ := claudeDesktopConfigPath()
-	geminiPath, _ := GeminiConfigPath()
-
-	mcpTable.Row("Claude Desktop", integrationStatus(claudeDesktopPath))
-	mcpTable.Row("Gemini CLI", integrationStatus(geminiPath))
-	
-	fmt.Println(mcpTable.Render())
+	fmt.Println(cfgTable.Render())
 	fmt.Println()
 
 	return nil
 }
 
-func integrationStatus(path string) string {
+func statusCell(path string) string {
 	if path == "" {
-		return tui.MutedStyle.Render("Not configured")
+		return tui.MutedStyle.Render("- Not set")
 	}
 	if _, err := os.Stat(path); err == nil {
-		return tui.OkStyle.Render("✓ Registered") + tui.MutedStyle.Render(fmt.Sprintf(" (%s)", path))
+		return tui.OkStyle.Render("✓ Exists")
 	}
-	return tui.WarnStyle.Render("✗ Not found") + tui.MutedStyle.Render(fmt.Sprintf(" (%s)", path))
+	return tui.WarnStyle.Render("✗ Not found")
 }
 
 // sourceFor returns a short label naming the layer that supplied the

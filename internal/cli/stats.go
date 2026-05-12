@@ -145,15 +145,16 @@ func runStats(_ *cobra.Command, _ []string) error {
 	wWork += 2
 
 	// Print header
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", wWhen+wTool+wWork+9))) // Top border
+	headerWidth := wWhen + wTool + wWork + 9
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", headerWidth)))
 	fmt.Printf("%s%s%s%-3s  %s\n",
-		padRight(tui.HintStyle.Render("WHEN"), wWhen),
-		padRight(tui.HintStyle.Render("TOOL"), wTool),
-		padRight(tui.HintStyle.Render("WORKSPACE"), wWork),
+		padRight(tui.HintStyle.Render("When"), wWhen),
+		padRight(tui.HintStyle.Render("Tool"), wTool),
+		padRight(tui.HintStyle.Render("Workspace"), wWork),
 		tui.HintStyle.Render("ms"),
 		tui.HintStyle.Render("OK"),
 	)
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", wWhen+wTool+wWork+9))) // Bottom border
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", headerWidth)))
 
 	// Calculate terminal width for error wrapping
 	termWidth := 80
