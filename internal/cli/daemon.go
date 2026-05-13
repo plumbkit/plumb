@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -38,6 +39,20 @@ var daemonCmd = &cobra.Command{
 func runDaemon(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Acquire the daemon-lifetime lock before doing anything else. If another
+	// daemon already holds it, exit immediately rather than stealing the socket
+	// path from it (which is what `os.Remove(socketPath); net.Listen(...)`
+	// below would otherwise do, leaving two daemons running on the same path).
+	lock, err := acquireDaemonLock()
+	if err != nil {
+		if errors.Is(err, errDaemonAlreadyRunning) {
+			slog.Info("daemon: another plumb daemon is already running — exiting")
+			return nil
+		}
+		return err
+	}
+	defer lock.Close()
 
 	cfg, err := config.Load()
 	if err != nil {

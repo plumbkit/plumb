@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.26 — 2026-05-13
+
+### Fixed
+- **Daemon singleton guarantee enforced via `flock(2)`.** Two `plumb serve` processes racing from a cold start (Claude Desktop / Claude Code launching multiple conversations simultaneously) could each observe "no daemon", each call `startDaemonProcess`, and end up with **two** daemons running on the same socket path. The second daemon ran `os.Remove(socketPath); net.Listen(...)` and quietly stole the path from the first, while the first kept serving its already-connected clients on the now-orphaned listener fd. Symptom: two `daemon: ready` messages in `daemon.log` 100–200 ms apart, sessions split across both processes, the TUI showing partial state (sessions registered against one daemon, stats written by the other). Fixed with two advisory file locks:
+  - `~/Library/Caches/plumb/plumb.spawn.lock` — held briefly by `plumb serve` around the dial-or-spawn block. Concurrent serves now serialise on this lock; the first to acquire it spawns the daemon, the rest re-dial after release and connect to the existing one. Implemented as a non-blocking `flock` retry loop so `ctx.Done()` (Ctrl-C, parent exit) is honoured promptly.
+  - `~/Library/Caches/plumb/plumb.daemon.lock` — held by `plumb daemon` for the lifetime of the process. Acquired non-blocking before the socket is opened; a second daemon (manual `plumb daemon` invocation, missed serve-side lock, whatever) sees `EWOULDBLOCK` and exits with `"another plumb daemon is already running"` instead of stealing the socket. Released automatically by the kernel on process exit (clean SIGTERM or crash) — the lock lives on the open file description, not the file itself, so there is no stale-lock cleanup problem. The `plumb.daemon.lock` file persists on disk as a zero-byte rendezvous point.
+  - `internal/cli/lock.go` is the new home for both helpers. `daemon.go` and `serve.go` get tiny additions; the rest of the codebase is untouched. Test coverage in `internal/cli/lock_test.go`: parallel stress (20 goroutines, max concurrent holders == 1), serialised-waiters timing assertion, context-cancellation deadline, and a crash-recovery test that closes the fd directly to simulate process death.
+
 ## 0.5.25 — 2026-05-12
 
 ### Changed

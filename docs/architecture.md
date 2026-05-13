@@ -93,6 +93,14 @@ Key design properties:
 - **Single source of truth for runtime files** — socket, PID file, and log
   file all live under `os.UserCacheDir()/plumb/` so paths stay stable across
   GUI-app and terminal launches (macOS `$TMPDIR` is unreliable across these).
+- **Singleton enforced by `flock(2)`** — two advisory locks (`plumb.spawn.lock`
+  held briefly by `plumb serve` around its dial-or-spawn block, and
+  `plumb.daemon.lock` held by `plumb daemon` for its lifetime) guarantee at
+  most one daemon process ever binds the socket. Without them, two `plumb
+  serve` processes racing from a cold start could each spawn a daemon and the
+  second would `os.Remove(socketPath); net.Listen(...)`, quietly stealing the
+  path from the first. Lock release is automatic via fd close on process
+  exit (clean or crash) — see `internal/cli/lock.go`.
 - **One gopls per workspace root** — multiple MCP connections to the same
   project share gopls, its cache, and its diagnostic stream. Gopls stays warm
   between conversations.
@@ -115,6 +123,8 @@ Key design properties:
 | `~/.local/share/plumb/stats.db` | legacy | Old global stats from < 0.3.1; safe to delete |
 | `~/Library/Caches/plumb/plumb.sock` | daemon | Unix socket for MCP proxy connections |
 | `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
+| `~/Library/Caches/plumb/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
+| `~/Library/Caches/plumb/plumb.daemon.lock` | daemon | Advisory `flock` held for the daemon's lifetime; rejects duplicate daemons |
 | `~/Library/Caches/plumb/daemon.log` | daemon | slog text output |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |

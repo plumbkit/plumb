@@ -41,9 +41,27 @@ func runServe(cmd *cobra.Command, _ []string) error {
 // connectOrStartDaemon dials the daemon socket. If it is not yet running,
 // the daemon subprocess is started and we wait up to 10 seconds for its socket
 // to appear before retrying the dial.
+//
+// Concurrent serves are serialised through plumb.spawn.lock so that only one
+// of them ever calls startDaemonProcess. Without that lock, two serves racing
+// from a cold start each observe "no daemon" and each spawn one.
 func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, error) {
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
 		slog.Info("serve: connected to existing daemon")
+		warnIfDaemonStale()
+		return conn, nil
+	}
+
+	spawn, err := acquireSpawnLock(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("waiting to spawn daemon: %w", err)
+	}
+	defer spawn.Close()
+
+	// Re-check now that we hold the lock — another serve may have spawned
+	// the daemon while we were waiting.
+	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
+		slog.Info("serve: daemon was started by another serve while we waited for the spawn lock")
 		warnIfDaemonStale()
 		return conn, nil
 	}
