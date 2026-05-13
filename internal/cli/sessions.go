@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"text/tabwriter"
 
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/session"
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var sessionsFlagAll bool
@@ -50,32 +52,42 @@ func runSessions(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tLANGUAGE\tFOLDER\tADAPTER\tPID\tSTARTED")
-	fmt.Fprintln(w, strings.Repeat("-", 8)+"\t"+
-		strings.Repeat("-", 8)+"\t"+
-		strings.Repeat("-", 6)+"\t"+
-		strings.Repeat("-", 7)+"\t"+
-		strings.Repeat("-", 3)+"\t"+
-		strings.Repeat("-", 7))
+	tui.RebuildStyles()
+
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderRow(false).
+		BorderColumn(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderTop(true).
+		BorderBottom(false).
+		BorderStyle(tui.SepStyle).
+		Headers("id", "language", "folder", "adapter", "pid", "started").
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().PaddingRight(2)
+			if row == table.HeaderRow {
+				return s.Inherit(tui.HintStyle)
+			}
+			return s
+		})
 
 	for _, s := range sessions {
 		folder := contractSessionPath(s.Folder)
 		if folder == "" {
 			folder = "(resolving…)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
+		t.Row(
 			s.ID,
 			s.Language,
 			folder,
 			s.Adapter,
-			s.PID,
+			fmt.Sprintf("%d", s.PID),
 			s.StartedAt.Format("2006-01-02 15:04:05"),
 		)
 	}
-	if err := w.Flush(); err != nil {
-		return err
-	}
+	fmt.Println(t.Render())
+
 	if hidden > 0 {
 		fmt.Printf("\n(%d session(s) hidden — pending workspace; use --all to show)\n", hidden)
 	}

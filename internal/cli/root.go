@@ -29,6 +29,12 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		PrintLogo("ʜ ᴇ ʟ ᴘ")
+		// Use the default help template but with our logo prepended.
+		// Since we're in the help func, we can just print and then use standard logic.
+		fmt.Println(cmd.UsageString())
+	})
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "log level (debug, info, warn, error)")
 	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd)
 }

@@ -97,9 +97,9 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	}
 
 	// 1. Workspace Context
-	fmt.Printf("\nWorkspace Context\n")
+	fmt.Printf("Workspace Context\n")
 	ctxTable := tableBase().Headers("Context", "Exists", "Path")
-	
+
 	globalPath := config.GlobalConfigPath()
 	projectPath := config.ProjectConfigPath(ws)
 

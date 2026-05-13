@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/session"
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var diagnosticsCmd = &cobra.Command{
@@ -71,25 +73,6 @@ func runDiagnostics(_ *cobra.Command, args []string) error {
 	return runDiagOnWorkspace(cli, cwd)
 }
 
-// header prints the session/workspace banner so the caller knows which
-// daemon session produced the output.
-func printDiagHeader(workspace string) {
-	sessions, _ := session.List()
-	var match *session.Info
-	for i := range sessions {
-		if sessions[i].ClientName == "plumb-cli-diagnostics" {
-			match = &sessions[i]
-		}
-	}
-	if match != nil {
-		fmt.Printf("plumb diag — session %s · workspace %s\n",
-			match.ID, contractSessionPath(workspace))
-	} else {
-		fmt.Printf("plumb diag — workspace %s\n", contractSessionPath(workspace))
-	}
-	fmt.Println(strings.Repeat("─", 70))
-}
-
 func runDiagOnFile(cli *mcpCliClient, abs string) error {
 	uri := "file://" + abs
 	// Warm-up the workspace via a path-bearing call so the daemon attaches gopls.
@@ -99,7 +82,7 @@ func runDiagOnFile(cli *mcpCliClient, abs string) error {
 	if err != nil {
 		return fmt.Errorf("diagnostics: %w", err)
 	}
-	fmt.Println(out)
+	fmt.Println(styleDiagnostics(out))
 	return nil
 }
 
@@ -161,19 +144,92 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 		}
 	}
 
-	fmt.Printf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked\n\n",
+	summary := fmt.Sprintf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked",
 		len(goFiles), totalClean, totalIssues, totalUntracked)
+	fmt.Println(tui.ItemStyle.Render(summary))
+	fmt.Println()
+
 	for _, p := range perFile {
-		fmt.Println(p)
+		fmt.Println(styleDiagnostics(p))
 	}
 	if totalIssues == 0 && totalUntracked == 0 {
-		fmt.Println("All files clean.")
+		fmt.Println(tui.OkStyle.Render("✓ All files clean."))
 	}
 	if totalUntracked > 0 {
 		fmt.Println()
-		fmt.Println("Note: 'not tracked' files have not been opened by gopls. Run a tool that touches each (or open in your editor) to force analysis.")
+		fmt.Println(tui.MutedStyle.Render("Note: 'not tracked' files have not been opened by gopls. Run a tool that touches each (or open in your editor) to force analysis."))
 	}
 	return nil
+}
+
+func styleDiagnostics(raw string) string {
+	lines := strings.Split(raw, "\n")
+	var out []string
+	for _, line := range lines {
+		if strings.Contains(line, "issue(s) across") {
+			// Skip the total summary line from the tool, we print our own or group by file.
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		
+		// If it's a file path
+		if strings.HasSuffix(trimmed, ".go") {
+			out = append(out, "", tui.HintStyle.Bold(true).Render(trimmed))
+			continue
+		}
+
+		// If it's a diagnostic line: "  ERROR  99:13  message"
+		if strings.HasPrefix(line, "  ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 3 {
+				sev := parts[0]
+				pos := parts[1]
+				msg := strings.Join(parts[2:], " ")
+				
+				var style lipgloss.Style
+				switch sev {
+				case "ERROR":
+					style = tui.WarnStyle
+				case "WARN":
+					style = tui.SelectedStyle // Using amber/yellow
+				default:
+					style = tui.MutedStyle
+				}
+				
+				out = append(out, fmt.Sprintf("  %s %s  %s", 
+					style.Width(8).Render(sev), 
+					tui.MutedStyle.Render(pos), 
+					msg))
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// header prints the session/workspace banner so the caller knows which
+// daemon session produced the output.
+func printDiagHeader(workspace string) {
+	tui.RebuildStyles()
+	sessions, _ := session.List()
+	var match *session.Info
+	for i := range sessions {
+		if sessions[i].ClientName == "plumb-cli-diagnostics" {
+			match = &sessions[i]
+		}
+	}
+	
+	context := fmt.Sprintf("workspace %s", contractSessionPath(workspace))
+	if match != nil {
+		context = fmt.Sprintf("session %s · %s", match.ID, context)
+	}
+	
+	fmt.Println(tui.MutedStyle.Render("— " + context))
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", 70)))
 }
 
 // removed unused encoding/json import — keep for future use.
