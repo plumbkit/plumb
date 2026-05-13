@@ -69,13 +69,21 @@ func runStats(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 
 	// Print Logo
-	PrintLogo("s ᴛ ᴀ ᴛ s")
+	PrintLogo()
 
 	saved := db.TotalTokensSaved(filter)
-	fmt.Printf("— %s\n", contractSessionPath(ws))
-	fmt.Printf("  %d total calls  ·  ~%s tokens saved (estimate)\n\n",
-		total, stats.FormatSavings(int(saved)))
-
+	
+	// Structured Context Block
+	ctxBox := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(tui.ActiveTheme.Accent).
+		PaddingLeft(1).
+		Render(fmt.Sprintf("%s\n%s",
+			contractSessionPath(ws),
+			tui.MutedStyle.Render(fmt.Sprintf("%d total calls · ~%s tokens saved", total, stats.FormatSavings(int(saved)))),
+		))
+	fmt.Println(ctxBox)
+	fmt.Println()
 
 	// Tool summary table
 	summary, err := db.Summary(filter)

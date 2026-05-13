@@ -37,7 +37,7 @@ so you can correlate with 'plumb sessions'.`,
 }
 
 func runDiagnostics(_ *cobra.Command, args []string) error {
-	PrintLogo("ᴅ ɪ ᴀ ɢ ɴ ᴏ s ᴛ ɪ ᴄ s")
+	PrintLogo()
 
 	socket := daemonSocketPath()
 	conn, err := net.DialTimeout("unix", socket, 2*time.Second)

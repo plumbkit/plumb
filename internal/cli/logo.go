@@ -12,14 +12,10 @@ const logoText = `╭──╮ ╷          ╷
 ╵    ╵ ││ ╵ ╵ ╵ ╰──╯
 ─────╮ ╰╯ ╭─────────`
 
-// PrintLogo renders the industrial "piping" logo with an optional subtitle.
-// Subtitle is left-aligned and styled with tui.ItemStyle.
-func PrintLogo(subtitle string) {
+// PrintLogo renders the industrial "piping" logo.
+func PrintLogo() {
 	tui.RebuildStyles()
 	logoStyle := lipgloss.NewStyle().Foreground(tui.ActiveTheme.Accent)
 	fmt.Println(logoStyle.Render(logoText))
-	if subtitle != "" {
-		fmt.Println(tui.ItemStyle.Render(subtitle))
-	}
 	fmt.Println()
 }

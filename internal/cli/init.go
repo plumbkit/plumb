@@ -47,7 +47,7 @@ Keep it concise — it is loaded automatically on every session.
 `
 
 func runInit(_ *cobra.Command, args []string) error {
-	PrintLogo("ɪ ɴ ɪ ᴛ")
+	PrintLogo()
 
 	dir, err := os.Getwd()
 	if err != nil {

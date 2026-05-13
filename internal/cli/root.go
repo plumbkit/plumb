@@ -30,7 +30,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		PrintLogo("ʜ ᴇ ʟ ᴘ")
+		PrintLogo()
 		// Use the default help template but with our logo prepended.
 		// Since we're in the help func, we can just print and then use standard logic.
 		fmt.Println(cmd.UsageString())
@@ -62,7 +62,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	RunE: func(_ *cobra.Command, _ []string) error {
-		PrintLogo("ᴠ ᴇ ʀ s ɪ ᴏ ɴ")
+		PrintLogo()
 
 		goVersion := "unknown"
 		if info, ok := debug.ReadBuildInfo(); ok {
