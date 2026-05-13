@@ -73,18 +73,36 @@ func newWorkspacePool(cfg config.Config) *workspacePool {
 	}
 }
 
-// Detect walks up from start looking for the first configured language's
-// root markers. A `.plumb/` directory takes priority — its containing
-// directory wins regardless of which language marker is present there or
-// above.
+// LanguageNone is the sentinel language returned by Detect for workspaces
+// that are explicitly marked (via .plumb/) but have no enabled LSP language.
+// Filesystem tools, stats attribution, and project config all still work for
+// these workspaces; LSP tools fail with "LSP server not yet ready".
+const LanguageNone = "none"
+
+// Detect walks up from start looking for a workspace root, with three
+// fallbacks tried in order at each directory:
+//
+//  1. A `.plumb/` marker. If an LSP language is also detectable from this
+//     directory or any ancestor, return (root, language). Otherwise return
+//     (root, "none") — the user marked this directory as a workspace, so we
+//     respect that even without LSP support.
+//  2. A configured language's root marker (`go.mod`, `pyproject.toml`, ...).
+//     Returns (root, language).
+//
+// If neither is found, walk up to the parent. If we walk past the filesystem
+// root, return an error.
 func (p *workspacePool) Detect(start string) (root, language string, err error) {
 	d := start
 	for {
-		// Highest priority: explicit .plumb marker.
+		// Highest priority: explicit .plumb marker. Honour it even when no
+		// LSP language matches — the user has declared this directory a
+		// plumb workspace, and stats / project config should follow that
+		// declaration regardless of whether gopls or pyright can attach.
 		if _, err := os.Stat(filepath.Join(d, ".plumb")); err == nil {
 			if lang := p.detectLanguageAt(d); lang != "" {
 				return d, lang, nil
 			}
+			return d, LanguageNone, nil
 		}
 		// Otherwise: first language whose root marker exists.
 		for _, l := range p.langs {

@@ -1271,7 +1271,12 @@ func (m Model) leftLines() []string {
 		if s.Folder == "" {
 			label = "⟳ resolving…"
 		} else {
-			langPrefix := s.Language + ": "
+			// Drop the language prefix for no-LSP workspaces — "none: /path"
+			// reads like an error; the folder alone is clearer.
+			langPrefix := ""
+			if s.Language != "" && s.Language != "none" {
+				langPrefix = s.Language + ": "
+			}
 			// -4 for the " ▸ " / "   " prefix (3 chars) + 1 border
 			maxFolder := m.leftWidth - 4 - len([]rune(langPrefix))
 			if maxFolder < 0 {
@@ -1345,11 +1350,15 @@ func (m *Model) rightLines(rightWidth int) []string {
 	} else {
 		folder = contractPath(folder, maxVal)
 	}
+	adapter := s.Adapter
+	if adapter == "" {
+		adapter = "—"
+	}
 	lines = append(lines,
 		detailRow("ID", s.ID),
 		detailRow("Language", s.Language),
 		detailRow("Folder", folder),
-		detailRow("Adapter", s.Adapter),
+		detailRow("Adapter", adapter),
 		detailRow("PID", fmt.Sprintf("%d", s.PID)),
 	)
 	if s.DaemonVersion != "" {

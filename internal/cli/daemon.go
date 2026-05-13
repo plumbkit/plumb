@@ -143,9 +143,10 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 
 	// Register the session immediately so it appears in `plumb sessions` and the
 	// TUI as soon as the client connects — before the workspace is resolved.
-	// Language/adapter are filled in later by startGopls once the workspace
-	// is detected (Go vs Python). Empty here so the TUI shows "(resolving...)"
-	// rather than mis-claiming "gopls" for what might turn out to be a Python project.
+	// Language/adapter are filled in later by attachWorkspace once the workspace
+	// is detected (Go, Python, or "none" for an LSP-less .plumb/ workspace).
+	// Empty here so the TUI shows "(resolving...)" rather than mis-claiming
+	// "gopls" for what might turn out to be a Python or no-LSP project.
 	sessID, _ := session.Register(session.Info{
 		DaemonVersion: Version,
 	})
@@ -161,7 +162,14 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	var clientName, clientVersion string
 	var stateMu sync.Mutex
 
-	startGopls := func(startCtx context.Context, rootURI string) {
+	// attachWorkspace resolves the workspace root from rootURI, registers it
+	// against the session, and (when the project has an enabled LSP language)
+	// acquires the shared language server. For LanguageNone workspaces — a
+	// `.plumb/` marker without a Go/Python root — the LSP step is skipped but
+	// everything else (session.Folder, stats attribution, project config)
+	// still applies. The previous name `startGopls` undersold this: it has
+	// handled pyright since 0.5.x and now handles no-LSP workspaces too.
+	attachWorkspace := func(startCtx context.Context, rootURI string) {
 		folder := strings.TrimPrefix(rootURI, "file://")
 		if folder == "" || folder == "/" {
 			return
@@ -182,21 +190,26 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			return // already resolved for this session
 		}
 
-		e, err := pool.acquireLang(startCtx, folder, language)
-		if err != nil {
-			slog.Error("daemon: acquire LS", "root", folder, "language", language, "err", err)
-			return
+		adapter := ""
+		if language != LanguageNone {
+			e, err := pool.acquireLang(startCtx, folder, language)
+			if err != nil {
+				slog.Error("daemon: acquire LS", "root", folder, "language", language, "err", err)
+				return
+			}
+			sessionProxy.setPrimary(folder, e.proxy)
+			sessionInv.setPrimary(folder, e.inv)
+			switch language {
+			case "go":
+				adapter = "gopls"
+			case "python":
+				adapter = "pyright"
+			}
 		}
-		sessionProxy.setPrimary(folder, e.proxy)
-		sessionInv.setPrimary(folder, e.inv)
 		acquiredRoot = folder
 
 		// Update the session file with the now-resolved workspace.
 		cn, cv := clientName, clientVersion
-		adapter := "gopls"
-		if language == "python" {
-			adapter = "pyright"
-		}
 		session.Patch(sessID, func(info *session.Info) {
 			info.Folder = folder
 			info.Language = language
@@ -405,7 +418,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		clientRequest = request
 		requestMu.Unlock()
 		rootURI := rootFromRoots(initCtx, request)
-		startGopls(initCtx, rootURI)
+		attachWorkspace(initCtx, rootURI)
 		applyProjectConfig(wsFn())
 	}
 
@@ -415,7 +428,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		requestMu.Unlock()
 		slog.Info("daemon: roots changed — re-fetching workspace root")
 		rootURI := rootFromRoots(initCtx, request)
-		startGopls(initCtx, rootURI)
+		attachWorkspace(initCtx, rootURI)
 		applyProjectConfig(wsFn())
 	}
 
@@ -462,7 +475,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			slog.Warn("daemon: cannot determine workspace root", "seed", seed, "err", err)
 			return
 		}
-		startGopls(toolCtx, "file://"+root)
+		attachWorkspace(toolCtx, "file://"+root)
 		applyProjectConfig(wsFn())
 	}
 
