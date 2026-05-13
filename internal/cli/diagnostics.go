@@ -127,7 +127,8 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	totalClean := 0
 	var perFile []string
 
-	for _, f := range goFiles {
+	for i, f := range goFiles {
+		fmt.Printf("\r%s Scanning %d/%d files...", tui.HintStyle.Render("⟳"), i+1, len(goFiles))
 		uri := "file://" + f
 		out, err := cli.CallTool("diagnostics", map[string]any{"uri": uri})
 		if err != nil {
@@ -143,6 +144,7 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 			perFile = append(perFile, out)
 		}
 	}
+	fmt.Printf("\r\033[K") // clear the progress line
 
 	summary := fmt.Sprintf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked",
 		len(goFiles), totalClean, totalIssues, totalUntracked)
@@ -177,7 +179,8 @@ func styleDiagnostics(raw string) string {
 		
 		// If it's a file path
 		if strings.HasSuffix(trimmed, ".go") {
-			out = append(out, "", tui.HintStyle.Bold(true).Render(trimmed))
+			contracted := contractSessionPath(trimmed)
+			out = append(out, "", tui.HintStyle.Bold(true).Render(contracted))
 			continue
 		}
 
@@ -223,13 +226,19 @@ func printDiagHeader(workspace string) {
 		}
 	}
 	
-	context := fmt.Sprintf("workspace %s", contractSessionPath(workspace))
+	ctxStr := contractSessionPath(workspace)
 	if match != nil {
-		context = fmt.Sprintf("session %s · %s", match.ID, context)
+		ctxStr += fmt.Sprintf("\nsession %s", match.ID)
 	}
-	
-	fmt.Println(tui.MutedStyle.Render("— " + context))
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", 70)))
+
+	ctxBox := lipgloss.NewStyle().
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
+		PaddingLeft(1).
+		Render(tui.MutedStyle.Render(ctxStr))
+
+	fmt.Println(ctxBox)
+	fmt.Println()
 }
 
 // removed unused encoding/json import — keep for future use.
