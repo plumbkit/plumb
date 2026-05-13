@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -31,10 +32,56 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		PrintLogo()
-		// Use the default help template but with our logo prepended.
-		// Since we're in the help func, we can just print and then use standard logic.
-		fmt.Println(cmd.UsageString())
+		tui.RebuildStyles()
+
+		// Print Usage
+		if cmd.UseLine() != "" {
+			fmt.Println(tui.ItemStyle.Render("Usage:"))
+			fmt.Println("  " + cmd.UseLine())
+			if cmd.HasAvailableSubCommands() {
+				fmt.Println("  " + cmd.CommandPath() + " [command]")
+			}
+			fmt.Println()
+		}
+
+		// Print Aliases
+		if len(cmd.Aliases) > 0 {
+			fmt.Println(tui.ItemStyle.Render("Aliases:"))
+			fmt.Println("  " + cmd.NameAndAliases())
+			fmt.Println()
+		}
+
+		// Print Available Commands
+		if cmd.HasAvailableSubCommands() {
+			fmt.Println(tui.ItemStyle.Render("Available Commands:"))
+			for _, c := range cmd.Commands() {
+				if c.IsAvailableCommand() {
+					name := fmt.Sprintf("  %-12s", c.Name())
+					fmt.Printf("%s %s\n", tui.HintStyle.Bold(true).Render(name), tui.MutedStyle.Render(c.Short))
+				}
+			}
+			fmt.Println()
+		}
+
+		// Print Flags
+		if cmd.HasAvailableLocalFlags() {
+			fmt.Println(tui.ItemStyle.Render("Flags:"))
+			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.LocalFlags().FlagUsages(), "\n")))
+			fmt.Println()
+		}
+		
+		if cmd.HasAvailableInheritedFlags() {
+			fmt.Println(tui.ItemStyle.Render("Global Flags:"))
+			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.InheritedFlags().FlagUsages(), "\n")))
+			fmt.Println()
+		}
+
+		// Print Footer
+		if cmd.HasAvailableSubCommands() {
+			fmt.Println(tui.MutedStyle.Render(fmt.Sprintf("Use \"%s [command] --help\" for more information about a command.", cmd.CommandPath())))
+		}
 	})
+
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "log level (debug, info, warn, error)")
 	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd)
 }
