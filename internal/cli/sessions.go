@@ -55,7 +55,7 @@ func runSessions(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 
 	t := table.New().
-		Border(lipgloss.NormalBorder()).
+		Border(DottedBorder).
 		BorderRow(false).
 		BorderColumn(false).
 		BorderLeft(false).

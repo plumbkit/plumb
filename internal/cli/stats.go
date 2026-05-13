@@ -75,8 +75,8 @@ func runStats(_ *cobra.Command, _ []string) error {
 	
 	// Structured Context Block
 	ctxBox := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(tui.ActiveTheme.Accent).
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
 		PaddingLeft(1).
 		Render(fmt.Sprintf("%s\n%s",
 			contractSessionPath(ws),
@@ -94,7 +94,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Println("Tool Call Summary")
 
 	t1 := table.New().
-		Border(lipgloss.NormalBorder()).
+		Border(DottedBorder).
 		BorderRow(false).
 		BorderColumn(false).
 		BorderLeft(false).
@@ -160,7 +160,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	// Print header
 	// 11 = "ms" (3 chars, %-3s) + 2 spaces padding + "Status" (6 chars)
 	headerWidth := wWhen + wTool + wWork + 11
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", headerWidth)))
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
 	fmt.Printf("%s%s%s%-3s  %s\n",
 		padRight(tui.HintStyle.Render("When"), wWhen),
 		padRight(tui.HintStyle.Render("Tool"), wTool),
@@ -168,7 +168,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 		tui.HintStyle.Render("ms"),
 		tui.HintStyle.Render("Status"),
 	)
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", headerWidth)))
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
 
 	// Calculate terminal width for error wrapping
 	termWidth := 80

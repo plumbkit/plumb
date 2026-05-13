@@ -229,7 +229,7 @@ func printDiagHeader(workspace string) {
 	}
 	
 	fmt.Println(tui.MutedStyle.Render("— " + context))
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("─", 70)))
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", 70)))
 }
 
 // removed unused encoding/json import — keep for future use.
