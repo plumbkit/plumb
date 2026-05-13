@@ -25,7 +25,7 @@ import (
 //
 // The pool supports multiple languages (Go via gopls, Python via pyright).
 // Detect() resolves a path → (root, language) tuple from configured root
-// markers; acquire() starts the right adapter for that language.
+// markers; acquireLang() starts the right adapter for that language.
 //
 // Concurrency: all methods are safe for concurrent use.
 type workspacePool struct {
@@ -141,15 +141,9 @@ func (p *workspacePool) detectLanguageAt(dir string) string {
 	}
 }
 
-// acquire returns (or starts) the shared workspace state for root. The
-// language argument selects the adapter; if it doesn't match a configured
-// language, an error is returned.
-func (p *workspacePool) acquire(ctx context.Context, root string) (*poolEntry, error) {
-	return p.acquireLang(ctx, root, "")
-}
-
-// acquireLang is like acquire but lets the caller specify language directly,
-// skipping detection. Pass "" to detect from root markers.
+// acquireLang returns (or starts) the shared workspace state for root.
+// Pass "" for language to detect from root markers; otherwise the named
+// adapter is used directly.
 func (p *workspacePool) acquireLang(ctx context.Context, root, language string) (*poolEntry, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

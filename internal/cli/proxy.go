@@ -216,12 +216,6 @@ type invProxy struct {
 	cur *cache.Invalidator
 }
 
-func (p *invProxy) set(inv *cache.Invalidator) {
-	p.mu.Lock()
-	p.cur = inv
-	p.mu.Unlock()
-}
-
 func (p *invProxy) Diagnostics(uri string) []protocol.Diagnostic {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

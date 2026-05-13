@@ -73,8 +73,8 @@ func TestApplyWorkspaceEdit_MultipleFiles(t *testing.T) {
 
 	we := &protocol.WorkspaceEdit{
 		Changes: map[string][]protocol.TextEdit{
-			"file://" + a: {{Range: protocol.Range{Start: protocol.Position{0, 0}, End: protocol.Position{0, 3}}, NewText: "AAA"}},
-			"file://" + b: {{Range: protocol.Range{Start: protocol.Position{0, 0}, End: protocol.Position{0, 3}}, NewText: "BBB"}},
+			"file://" + a: {{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}, NewText: "AAA"}},
+			"file://" + b: {{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}, NewText: "BBB"}},
 		},
 	}
 	mod, err := applyWorkspaceEdit(we)

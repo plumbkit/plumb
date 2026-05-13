@@ -1016,21 +1016,6 @@ func (m Model) renderBottomBorderPopup(pLW, pRW int) string {
 	)
 }
 
-// dimLines takes a slice of pre-rendered lines (which may contain ANSI escape
-// codes) and re-renders each at the given width in DimStyle, fading the entire
-// panel for the popup overlay effect.
-func (m Model) dimLines(lines []string, width int) []string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		// lipgloss.Width strips ANSI; we measure, then pad to the target width.
-		vis := lipgloss.Width(l)
-		plain := lipgloss.NewStyle().Width(width).Render(l)
-		_ = vis
-		out[i] = InactiveStyle.Render(plain)
-	}
-	return out
-}
-
 // popupLeftLines renders the call list column for the popup overlay.
 func (m Model) popupLeftLines() []string {
 	lines := []string{""}
@@ -1537,66 +1522,6 @@ func truncate(s string, n int) string {
 		return "…"
 	}
 	return string(r[:n-1]) + "…"
-}
-
-// extractCallPath pulls a human-readable file path from a write-tool call's
-// InputJSON. Returns "" for non-write tools or empty JSON.
-func extractCallPath(tool, inputJSON string) string {
-	if inputJSON == "" {
-		return ""
-	}
-	switch tool {
-	case "write_file", "edit_file", "delete_file":
-		var a struct {
-			Path string `json:"path"`
-		}
-		if json.Unmarshal([]byte(inputJSON), &a) == nil && a.Path != "" {
-			return a.Path
-		}
-	case "rename_file":
-		var a struct {
-			From string `json:"from"`
-			To   string `json:"to"`
-		}
-		if json.Unmarshal([]byte(inputJSON), &a) == nil && a.From != "" {
-			return a.From + " → " + a.To
-		}
-	case "transaction_apply":
-		var a struct {
-			Operations []struct {
-				Path string `json:"path"`
-			} `json:"operations"`
-		}
-		if json.Unmarshal([]byte(inputJSON), &a) == nil {
-			return fmt.Sprintf("%d files", len(a.Operations))
-		}
-	}
-	return ""
-}
-
-// writeToolSet is the set of tools that mutate files. Used to surface a
-// "Recent Edits" panel distinct from query tool activity.
-var writeToolSet = map[string]struct{}{
-	"write_file":  {},
-	"edit_file":   {},
-	"delete_file": {},
-	"rename_file": {},
-}
-
-// filterWriteCalls returns up to n most recent calls whose tool is in
-// writeToolSet, preserving the input order (newest-first).
-func filterWriteCalls(all []stats.RecentCall, n int) []stats.RecentCall {
-	out := make([]stats.RecentCall, 0, n)
-	for _, c := range all {
-		if _, ok := writeToolSet[c.Tool]; !ok {
-			continue
-		}
-		out = append(out, c)
-		if len(out) >= n {
-			break
-		}
-	}
-	return out
 }
 
 // wrapText breaks s into lines no wider than width, splitting on spaces.
