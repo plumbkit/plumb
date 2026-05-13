@@ -216,9 +216,23 @@ The fix is a tiny on-disk WAL.
 
 ---
 
-## Features
+### Features
 
 Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.
+
+### Token Usage Optimization — Automatic Diffing & Truncation
+
+**Priority:** high.
+**Effort:** Significant (multi-step).
+
+**Why this matters.** Agents often re-read files to verify changes or dump too much data into the context (logs, grep results). Plumb can solve this at the tool level.
+
+**Definition of done:**
+1. **Automatic Diffing:** `edit_file` and `write_file` return a unified diff of the change in the response. This gives the agent immediate confirmation of the change without requiring a fresh `read_file` turn.
+2. **Smart Truncation:** Large tool outputs (especially `search_in_files` and `git log`) are automatically capped (e.g., at 100 lines). The response includes a summary ("Showing 100 of 450 matches") and instructions on how to page or narrow the search.
+3. **Implicit Verification Mode:** A configuration option to suppress full output and return only high-signal metadata for repetitive tasks.
+
+---
 
 ### `plumb doctor` — discovery + health-check CLI
 
