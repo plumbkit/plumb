@@ -16,7 +16,7 @@ import (
 
 var diagnosticsCmd = &cobra.Command{
 	Use:     "diagnostics [file]",
-	Aliases: []string{"diag"},
+	Aliases: []string{"diag", "diags"},
 	Short:   "Print LSP diagnostics for the workspace (debugging tool)",
 	Long: `Connect to the running plumb daemon and run gopls diagnostics, printing
 the result to stdout.
@@ -35,6 +35,8 @@ so you can correlate with 'plumb sessions'.`,
 }
 
 func runDiagnostics(_ *cobra.Command, args []string) error {
+	PrintLogo("ᴅ ɪ ᴀ ɢ ɴ ᴏ s ᴛ ɪ ᴄ s")
+
 	socket := daemonSocketPath()
 	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
 	if err != nil {

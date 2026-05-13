@@ -24,6 +24,8 @@ func init() {
 }
 
 func runSessions(_ *cobra.Command, _ []string) error {
+	PrintLogo("s ᴇ s s ɪ ᴏ ɴ s")
+
 	all, err := session.List()
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)

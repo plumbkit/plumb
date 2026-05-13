@@ -50,6 +50,7 @@ func init() {
 }
 
 func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
+	PrintLogo("s ᴇ ᴛ ᴜ ᴘ")
 	cfgPath, err := claudeDesktopConfigPath()
 	if err != nil {
 		return fmt.Errorf("locating Claude Desktop config: %w", err)
@@ -81,6 +82,7 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 }
 
 func runSetupGemini(_ *cobra.Command, _ []string) error {
+	PrintLogo("s ᴇ ᴛ ᴜ ᴘ")
 	cfgPath, err := GeminiConfigPath()
 	if err != nil {
 		return fmt.Errorf("locating Gemini CLI config: %w", err)
@@ -163,6 +165,7 @@ func setupClaudeDesktopInto(cfgPath, plumbBin string) (added bool, preserved []s
 }
 
 func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
+	PrintLogo("s ᴇ ᴛ ᴜ ᴘ")
 	var cfgPath string
 	var scope string
 	if setupClaudeCodeProjectFlag {

@@ -30,7 +30,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "log level (debug, info, warn, error)")
-	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, statusCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd)
+	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd)
 }
 
 // Execute runs the root command and returns any error.
@@ -56,6 +56,8 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	RunE: func(_ *cobra.Command, _ []string) error {
+		PrintLogo("ᴠ ᴇ ʀ s ɪ ᴏ ɴ")
+
 		goVersion := "unknown"
 		if info, ok := debug.ReadBuildInfo(); ok {
 			goVersion = info.GoVersion

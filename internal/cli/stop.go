@@ -19,6 +19,7 @@ var stopCmd = &cobra.Command{
 }
 
 func runStop(_ *cobra.Command, _ []string) error {
+	PrintLogo("s ᴛ ᴏ ᴘ")
 	pids := findAllDaemonPIDs()
 	if len(pids) == 0 {
 		fmt.Println("Daemon is not running.")

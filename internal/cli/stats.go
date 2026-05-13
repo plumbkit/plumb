@@ -22,24 +22,16 @@ var (
 )
 
 var statsCmd = &cobra.Command{
-	Use:   "stats",
-	Short: "Show tool call statistics",
-	RunE:  runStats,
+	Use:     "stats",
+	Aliases: []string{"status"},
+	Short:   "Show tool call statistics",
+	RunE:    runStats,
 }
 
 func init() {
 	statsCmd.Flags().StringVar(&statsFlagWorkspace, "workspace", "", "workspace path to inspect (defaults to current directory)")
 	statsCmd.Flags().IntVar(&statsFlagLimit, "limit", 20, "number of recent calls to show")
 }
-
-const logo = `    ____  __               __  
-   / __ \/ /_  ______ ___ / /_ 
-  / /_/ / / / / / __ ` + "`" + `__ \/ __ \
- / ____/ / /_/ / / / / / / /_/ /
-/_/   /_/\__,_/_/ /_/ /_/_.___/ 
-          
-      ᴘ ʟ ᴜ ᴍ ʙ   s ᴛ ᴀ ᴛ s
-`
 
 func runStats(_ *cobra.Command, _ []string) error {
 	ws := statsFlagWorkspace
@@ -77,8 +69,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 
 	// Print Logo
-	logoStyle := lipgloss.NewStyle().Foreground(tui.ActiveTheme.Accent)
-	fmt.Println(logoStyle.Render(logo))
+	PrintLogo("s ᴛ ᴀ ᴛ s")
 
 	saved := db.TotalTokensSaved(filter)
 	fmt.Printf("— %s\n", contractSessionPath(ws))

@@ -83,6 +83,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
+	PrintLogo("ᴄ ᴏ ɴ ғ ɪ ɢ")
 
 	tableBase := func() *table.Table {
 		return table.New().
