@@ -156,10 +156,23 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	}
 	if totalIssues == 0 && totalUntracked == 0 {
 		fmt.Println(tui.OkStyle.Render("✓ All files clean."))
-	}
-	if totalUntracked > 0 {
+	} else if totalIssues == 0 {
+		// Only print a blank line if there were no issues printed above
+		// (if there were issues, the last issue printed handles its own spacing).
+	} else {
 		fmt.Println()
-		fmt.Println(tui.MutedStyle.Render("Note: 'not tracked' files have not been opened by gopls. Run a tool that touches each (or open in your editor) to force analysis."))
+	}
+
+	if totalUntracked > 0 {
+		noteStr := fmt.Sprintf("%s Note: 'not tracked' files have not been opened by gopls.\n   Run a tool that touches each (or open in your editor) to force analysis.", tui.HintStyle.Render("▤"))
+		
+		noteBox := lipgloss.NewStyle().
+			Border(ContextBorder, false, false, false, true).
+			BorderForeground(tui.SepStyle.GetForeground()).
+			PaddingLeft(1).
+			Render(tui.MutedStyle.Render(noteStr))
+			
+		fmt.Println(noteBox)
 	}
 	return nil
 }
