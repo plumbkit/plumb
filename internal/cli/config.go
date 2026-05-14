@@ -138,6 +138,13 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	fmt.Printf("\nPlumb Configuration\n")
 	cfgTable := tableBase()
 
+	formatVal := func(val string) string {
+		if val == "" {
+			return tui.MutedStyle.Render("(none)")
+		}
+		return tui.ValStyle.Render(val)
+	}
+
 	addSection := func(name string, items [][]string) {
 		var keys, vals, provs strings.Builder
 		for i, item := range items {
@@ -147,7 +154,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 				provs.WriteString("\n")
 			}
 			keys.WriteString(item[0])
-			vals.WriteString(tui.ValStyle.Render(item[1]))
+			vals.WriteString(formatVal(item[1]))
 			provs.WriteString(tui.MutedStyle.Render(item[2]))
 		}
 		cfgTable.Row(tui.KeyStyle.Render(name), keys.String(), vals.String(), provs.String())
