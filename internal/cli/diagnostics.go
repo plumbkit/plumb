@@ -149,17 +149,26 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	summary := fmt.Sprintf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked",
 		len(goFiles), totalClean, totalIssues, totalUntracked)
 	fmt.Println(tui.ItemStyle.Render(summary))
-	fmt.Println()
-
-	for _, p := range perFile {
-		fmt.Println(styleDiagnostics(p))
+	
+	if totalIssues > 0 {
+		fmt.Println()
+		for _, p := range perFile {
+			fmt.Println(styleDiagnostics(p))
+		}
 	}
+
 	if totalIssues == 0 && totalUntracked == 0 {
+		fmt.Println()
 		fmt.Println(tui.OkStyle.Render("✓ All files clean."))
-	} else if totalIssues == 0 {
-		// Only print a blank line if there were no issues printed above
-		// (if there were issues, the last issue printed handles its own spacing).
-	} else {
+	} else if totalIssues > 0 {
+		// The last issue printed handles its own trailing blank line,
+		// but we add one here if we're about to print the note to ensure separation
+		if totalUntracked > 0 {
+			fmt.Println()
+		}
+	} else if totalUntracked > 0 {
+		// No issues, but we have untracked files.
+		// We want 1 blank line between the summary and the note.
 		fmt.Println()
 	}
 
