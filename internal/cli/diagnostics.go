@@ -164,13 +164,16 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	}
 
 	if totalUntracked > 0 {
-		noteStr := fmt.Sprintf("%s Note: 'not tracked' files have not been opened by gopls.\n   Run a tool that touches each (or open in your editor) to force analysis.", tui.HintStyle.Render("▤"))
+		noteStr := fmt.Sprintf("%s 'not tracked' files have not been opened by gopls.\n%s",
+			tui.ItemStyle.Render("Note:"),
+			tui.MutedStyle.Render("↳ Run a tool that touches each (or open in your editor) to force analysis."),
+		)
 		
 		noteBox := lipgloss.NewStyle().
 			Border(ContextBorder, false, false, false, true).
 			BorderForeground(tui.SepStyle.GetForeground()).
 			PaddingLeft(1).
-			Render(tui.MutedStyle.Render(noteStr))
+			Render(noteStr)
 			
 		fmt.Println(noteBox)
 	}
