@@ -61,7 +61,15 @@ func runInit(_ *cobra.Command, args []string) error {
 
 	plumbDir := filepath.Join(dir, ".plumb")
 	if _, err := os.Stat(plumbDir); err == nil {
-		fmt.Printf(".plumb already exists at %s\n", plumbDir)
+		tui.RebuildStyles()
+		ctxStr := fmt.Sprintf(".plumb already exists at:\n↳ %s", plumbDir)
+		ctxBox := lipgloss.NewStyle().
+			Border(ContextBorder, false, false, false, true).
+			BorderForeground(tui.SepStyle.GetForeground()).
+			PaddingLeft(1).
+			Render(tui.MutedStyle.Render(ctxStr))
+		fmt.Println(ctxBox)
+		fmt.Println()
 		return nil
 	}
 
