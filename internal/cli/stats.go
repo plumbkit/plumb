@@ -80,7 +80,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 		PaddingLeft(1).
 		Render(fmt.Sprintf("%s\n%s",
 			contractSessionPath(ws),
-			tui.MutedStyle.Render(fmt.Sprintf("%d total calls · ~%s tokens saved", total, stats.FormatSavings(int(saved)))),
+			tui.MutedStyle.Render(fmt.Sprintf("↳ %d total calls · ~%s tokens saved", total, stats.FormatSavings(int(saved)))),
 		))
 	fmt.Println(ctxBox)
 	fmt.Println()
