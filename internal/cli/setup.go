@@ -9,7 +9,10 @@ import (
 	"sort"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
+	
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var setupCmd = &cobra.Command{
@@ -72,12 +75,19 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	fmt.Printf("Registered plumb in %s\n", cfgPath)
-	fmt.Printf("Binary: %s\n", plumbBin)
+	ctxStr := fmt.Sprintf("Registered in %s\nBinary: %s", cfgPath, plumbBin)
 	if len(preserved) > 0 {
-		fmt.Printf("Preserved existing MCP servers: %v\n", preserved)
+		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
 	}
-	fmt.Println("Restart Claude Desktop to apply the change.")
+
+	tui.RebuildStyles()
+	ctxBox := lipgloss.NewStyle().
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
+		PaddingLeft(1).
+		Render(tui.MutedStyle.Render(ctxStr))
+	fmt.Println(ctxBox)
+	fmt.Println("\nRestart Claude Desktop to apply the change.")
 	return nil
 }
 
@@ -104,12 +114,19 @@ func runSetupGemini(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	fmt.Printf("Registered plumb in %s\n", cfgPath)
-	fmt.Printf("Binary: %s\n", plumbBin)
+	ctxStr := fmt.Sprintf("Registered in %s\nBinary: %s", cfgPath, plumbBin)
 	if len(preserved) > 0 {
-		fmt.Printf("Preserved existing MCP servers: %v\n", preserved)
+		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
 	}
-	fmt.Println("Restart Gemini CLI to apply the change.")
+
+	tui.RebuildStyles()
+	ctxBox := lipgloss.NewStyle().
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
+		PaddingLeft(1).
+		Render(tui.MutedStyle.Render(ctxStr))
+	fmt.Println(ctxBox)
+	fmt.Println("\nRestart Gemini CLI to apply the change.")
 	return nil
 }
 
@@ -200,13 +217,19 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	fmt.Printf("Registered plumb in Claude Code (%s config)\n", scope)
-	fmt.Printf("Config:  %s\n", cfgPath)
-	fmt.Printf("Binary:  %s\n", plumbBin)
+	ctxStr := fmt.Sprintf("Registered in Claude Code (%s config)\nConfig: %s\nBinary: %s", scope, cfgPath, plumbBin)
 	if len(preserved) > 0 {
-		fmt.Printf("Preserved existing MCP servers: %v\n", preserved)
+		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
 	}
-	fmt.Println("Reload Claude Code (or open a new session) to apply the change.")
+
+	tui.RebuildStyles()
+	ctxBox := lipgloss.NewStyle().
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
+		PaddingLeft(1).
+		Render(tui.MutedStyle.Render(ctxStr))
+	fmt.Println(ctxBox)
+	fmt.Println("\nReload Claude Code (or open a new session) to apply the change.")
 	return nil
 }
 

@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/tui"
 )
 
 var initFlagDiscover bool
@@ -87,28 +89,33 @@ func runInit(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("writing context.md: %w", err)
 	}
 
-	fmt.Printf("Initialised .plumb at %s\n", plumbDir)
+	ctxStr := fmt.Sprintf("Initialised .plumb at %s", plumbDir)
 	if disc != nil {
-		fmt.Println()
-		fmt.Println("Discovered:")
+		ctxStr += "\n\nDiscovered:"
 		if len(disc.Languages) > 0 {
-			fmt.Printf("  Languages:    %s\n", strings.Join(disc.Languages, ", "))
+			ctxStr += fmt.Sprintf("\n  Languages:    %s", strings.Join(disc.Languages, ", "))
 		}
 		if len(disc.BuildSystems) > 0 {
-			fmt.Printf("  Build:        %s\n", strings.Join(disc.BuildSystems, ", "))
+			ctxStr += fmt.Sprintf("\n  Build:        %s", strings.Join(disc.BuildSystems, ", "))
 		}
 		if len(disc.EntryPoints) > 0 {
-			fmt.Printf("  Entry points: %d\n", len(disc.EntryPoints))
+			ctxStr += fmt.Sprintf("\n  Entry points: %d", len(disc.EntryPoints))
 		}
 		if len(disc.TestDirs) > 0 {
-			fmt.Printf("  Test layout:  %s\n", strings.Join(disc.TestDirs, ", "))
+			ctxStr += fmt.Sprintf("\n  Test layout:  %s", strings.Join(disc.TestDirs, ", "))
 		}
-		fmt.Println()
-		fmt.Println("Seeded .plumb/context.md from discovery — review and edit it.")
+		ctxStr += "\n\nSeeded .plumb/context.md from discovery — review and edit it."
 	} else {
-		fmt.Println("Edit .plumb/context.md to describe your project — plumb loads it on every session.")
-		fmt.Println("Tip: run `plumb init --discover` to auto-fill context.md from your project structure.")
+		ctxStr += "\nEdit .plumb/context.md to describe your project — plumb loads it on every session.\nTip: run `plumb init --discover` to auto-fill context.md from your project structure."
 	}
-	fmt.Println("Add .plumb to your .gitignore if you prefer to keep it local, or commit it to share with your team.")
+
+	tui.RebuildStyles()
+	ctxBox := lipgloss.NewStyle().
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
+		PaddingLeft(1).
+		Render(tui.MutedStyle.Render(ctxStr))
+	fmt.Println(ctxBox)
+	fmt.Println("\nAdd .plumb to your .gitignore if you prefer to keep it local, or commit it to share with your team.")
 	return nil
 }
