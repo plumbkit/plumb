@@ -87,7 +87,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	tableBase := func() *table.Table {
 		return table.New().
-			Border(lipgloss.RoundedBorder()).
+			Border(DottedBorder).
 			BorderStyle(tui.SepStyle).
 			BorderRow(true).
 			BorderColumn(true).
@@ -112,7 +112,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	fmt.Printf("\nMCP Integration Status\n")
 	
 	mcpTable := table.New().
-		Border(lipgloss.RoundedBorder()).
+		Border(DottedBorder).
 		BorderStyle(tui.SepStyle).
 		BorderRow(true).
 		BorderColumn(true).
