@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -492,28 +493,30 @@ func (m Model) View() tea.View {
 
 func (m Model) render() string {
 	rightWidth := m.width - m.leftWidth - 3
-	if rightWidth < 10 {
-		rightWidth = 10
-	}
+	if rightWidth < 10 { rightWidth = 10 }
 	bodyHeight := m.height - 6
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
+	if bodyHeight < 1 { bodyHeight = 1 }
 
 	var sb strings.Builder
+	isOverlay := m.showPopup || m.showHelp
+	
+	sepStyle := SepStyle
+	statusStyle := StatusStyle
+	if isOverlay {
+		sepStyle = SepInactiveStyle
+		statusStyle = InactiveStyle
+	}
 
-	// Header: 4-line Logo (All gray to match borders)
+	// Header: 4-line Logo
 	logoLines := strings.Split(LogoText, "\n")
 	for i := 0; i < 3; i++ {
-		sb.WriteString(SepStyle.Render(padLeft(logoLines[i], m.width)) + "\n")
+		sb.WriteString(sepStyle.Render(padLeft(logoLines[i], m.width)) + "\n")
 	}
-	sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
+	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
 
 	// Body content
 	leftLines := m.leftLines()
 	rightLines := (&m).rightLines(rightWidth)
-	
-	isOverlay := m.showPopup || m.showHelp
 	
 	for i := range bodyHeight {
 		l, r := "", ""
@@ -524,16 +527,16 @@ func (m Model) render() string {
 		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(r)
 		
 		if isOverlay {
-			leftCell = InactiveStyle.Render(leftCell)
-			rightCell = InactiveStyle.Render(rightCell)
-			line := SepInactiveStyle.Render("│") + leftCell + SepInactiveStyle.Render("┆") + rightCell + SepInactiveStyle.Render("│")
+			lDim := InactiveStyle.Render(stripANSI(leftCell))
+			rDim := InactiveStyle.Render(stripANSI(rightCell))
+			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
 			sb.WriteString(line + "\n")
 		} else {
 			sb.WriteString(SepStyle.Render("│") + leftCell + SepStyle.Render("┆") + rightCell + SepStyle.Render("│") + "\n")
 		}
 	}
 
-	sb.WriteString(m.renderBottomBorder(rightWidth) + "\n")
+	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
 
 	// Footer
 	var totalCalls, savedTok int64
@@ -550,7 +553,7 @@ func (m Model) render() string {
 	rightFooter := "q quit  ·  h help "
 	footerGap := m.width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooter)
 	if footerGap < 1 { footerGap = 1 }
-	sb.WriteString(StatusStyle.Render(leftFooter + strings.Repeat(" ", footerGap) + rightFooter))
+	sb.WriteString(statusStyle.Render(leftFooter + strings.Repeat(" ", footerGap) + rightFooter))
 
 	final := sb.String()
 	if m.showPopup {
@@ -562,36 +565,45 @@ func (m Model) render() string {
 	return final
 }
 
-func (m Model) renderTopBorder(rightWidth int) string {
+func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
 	var leftTitle, rightTitle string
 	var leftStyle, rightStyle lipgloss.Style
+	sepStyle := SepStyle
+	
+	if dimmed {
+		sepStyle = SepInactiveStyle
+		leftStyle = PanelHeaderInactiveStyle
+		rightStyle = PanelHeaderInactiveStyle
+	} else {
+		if m.focusPanel == focusSessions {
+			leftStyle, rightStyle = PanelHeaderStyle, PanelHeaderFadedStyle
+		} else {
+			leftStyle, rightStyle = PanelHeaderFadedStyle, PanelHeaderStyle
+		}
+	}
+
 	leftTitle = fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
 	rightTitle = " Session + Stats "
-	if m.focusPanel == focusSessions {
-		leftStyle, rightStyle = PanelHeaderStyle, PanelHeaderFadedStyle
-	} else {
-		leftStyle, rightStyle = PanelHeaderFadedStyle, PanelHeaderStyle
-	}
 
-	leftPart := SepStyle.Render("╭─") + leftStyle.Render(leftTitle)
+	leftPart := sepStyle.Render("╭─") + leftStyle.Render(leftTitle)
 	leftFill := m.leftWidth - 1 - len(leftTitle)
-	if leftFill < 0 {
-		leftFill = 0
-	}
-	midPart := SepStyle.Render(strings.Repeat("─", leftFill)+"┬─") + rightStyle.Render(rightTitle)
-
+	if leftFill < 0 { leftFill = 0 }
+	midPart := sepStyle.Render(strings.Repeat("─", leftFill)+"┬─") + rightStyle.Render(rightTitle)
+	
 	logoBottom := strings.Split(LogoText, "\n")[3]
 	currentW := lipgloss.Width(leftPart) + lipgloss.Width(midPart)
 	fillerW := m.width - currentW - LogoWidth
-	if fillerW < 0 {
-		fillerW = 0
-	}
-
-	return leftPart + midPart + SepStyle.Render(strings.Repeat("─", fillerW)) + SepStyle.Render(logoBottom)
+	if fillerW < 0 { fillerW = 0 }
+	
+	return leftPart + midPart + sepStyle.Render(strings.Repeat("─", fillerW)) + sepStyle.Render(logoBottom)
 }
 
-func (m Model) renderBottomBorder(rightWidth int) string {
-	return SepStyle.Render("╰" + strings.Repeat("─", m.leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "╯")
+func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
+	sepStyle := SepStyle
+	if dimmed {
+		sepStyle = SepInactiveStyle
+	}
+	return sepStyle.Render("╰" + strings.Repeat("─", m.leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "╯")
 }
 
 func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
@@ -635,21 +647,37 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 
 func (m Model) renderHelp(bg string) string {
 	helpLines := []string{
-		" ↑/↓ or j/k      Navigate sessions/calls",
-		" pgup/pgdown     Page through lists",
-		" tab/shift+tab   Switch panel focus",
-		" enter           Open tool call detail",
-		" [/]             Resize columns",
-		" q or esc        Quit / Close popup",
+		" ↑/↓ or j/k     Navigate sessions/calls",
+		" pgup/pgdown    Page through lists",
+		" tab/shift+tab  Switch panel focus",
+		" enter          Open tool call detail",
+		" [/]            Resize columns",
+		" q              Quit",
+		" esc            Close help",
 	}
-	innerW := 40
-	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(" Help & Navigation ") + SepStyle.Render(strings.Repeat("─", innerW-17)+"╮")
-	var body []string
+	
+	boxW := 44
+	innerW := boxW - 2
+	topLabel := " Help & Navigation "
+	
+	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", innerW-len(topLabel)-1)+"╮")
+	
+	var bodyLines []string
+	// Empty row top
+	bodyLines = append(bodyLines, SepStyle.Render("│") + strings.Repeat(" ", innerW) + SepStyle.Render("│"))
+	
 	for _, l := range helpLines {
-		body = append(body, SepStyle.Render("│")+" "+padRight(l, innerW)+" "+SepStyle.Render("│"))
+		content := "  " + padRight(l, innerW-4) + "  "
+		bodyLines = append(bodyLines, SepStyle.Render("│") + content + SepStyle.Render("│"))
 	}
-	bottom := SepStyle.Render("╰" + strings.Repeat("─", innerW+2) + "╯")
-	return spliceOverlay(bg, top+"\n"+strings.Join(body, "\n")+"\n"+bottom, m.width, m.height)
+	
+	// Empty row bottom
+	bodyLines = append(bodyLines, SepStyle.Render("│") + strings.Repeat(" ", innerW) + SepStyle.Render("│"))
+	
+	bottom := SepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯")
+	
+	popup := top + "\n" + strings.Join(bodyLines, "\n") + "\n" + bottom
+	return spliceOverlay(bg, popup, m.width, m.height)
 }
 
 func (m Model) renderTopBorderPopup(pLW, pRW int) string {
@@ -974,21 +1002,40 @@ func copyToClipboard(c stats.RecentCall, ij, ot string) tea.Cmd {
 }
 
 func spliceOverlay(bg, overlay string, w, h int) string {
-	ov := lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, overlay)
 	bgLines := strings.Split(bg, "\n")
-	ovLines := strings.Split(ov, "\n")
-	var out []string
-	for i := 0; i < h; i++ {
-		bl, ol := "", ""
-		if i < len(bgLines) { bl = bgLines[i] }
-		if i < len(ovLines) { ol = ovLines[i] }
-		if strings.TrimSpace(ol) == "" {
-			out = append(out, bl)
-		} else {
-			out = append(out, ol)
-		}
+	ovLines := strings.Split(overlay, "\n")
+	ovH := len(ovLines)
+	ovW := 0
+	for _, l := range ovLines {
+		if lw := lipgloss.Width(l); lw > ovW { ovW = lw }
 	}
-	return strings.Join(out, "\n")
+	sy, sx := (h-ovH)/2, (w-ovW)/2
+	for i := 0; i < ovH; i++ {
+		y := sy + i
+		if y < 0 || y >= len(bgLines) { continue }
+		bl, ol := bgLines[y], ovLines[i]
+		blW := lipgloss.Width(bl)
+		if sx >= blW { continue }
+		// Crude but effective splice: strip ANSI from background to calculate positions,
+		// then re-assemble. For better modal logic, we treat the background as 
+		// "already dimmed" text.
+		rawBG := lipgloss.StripFontStyles(bl)
+		prefix := ""
+		if sx > 0 {
+			if sx < len(rawBG) { prefix = rawBG[:sx] } else { prefix = rawBG }
+		}
+		suffix := ""
+		if sx+ovW < len(rawBG) { suffix = rawBG[sx+ovW:] }
+		
+		bgLines[y] = InactiveStyle.Render(prefix) + ol + InactiveStyle.Render(suffix)
+	}
+	return strings.Join(bgLines, "\n")
+}
+
+var ansiRegex = regexp.MustCompile("[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]")
+
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
 }
 
 func Run() error {
