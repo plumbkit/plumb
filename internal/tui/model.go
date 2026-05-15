@@ -492,13 +492,17 @@ func (m Model) View() tea.View {
 
 func (m Model) render() string {
 	rightWidth := m.width - m.leftWidth - 3
-	if rightWidth < 10 { rightWidth = 10 }
+	if rightWidth < 10 {
+		rightWidth = 10
+	}
 	bodyHeight := m.height - 6
-	if bodyHeight < 1 { bodyHeight = 1 }
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
 
 	var sb strings.Builder
 
-	// Header: 4-line Logo (using SepStyle to match border color)
+	// Header: 4-line Logo (All gray to match borders)
 	logoLines := strings.Split(LogoText, "\n")
 	for i := 0; i < 3; i++ {
 		sb.WriteString(SepStyle.Render(padLeft(logoLines[i], m.width)) + "\n")
@@ -571,20 +575,18 @@ func (m Model) renderTopBorder(rightWidth int) string {
 
 	leftPart := SepStyle.Render("╭─") + leftStyle.Render(leftTitle)
 	leftFill := m.leftWidth - 1 - len(leftTitle)
-	if leftFill < 0 { leftFill = 0 }
+	if leftFill < 0 {
+		leftFill = 0
+	}
 	midPart := SepStyle.Render(strings.Repeat("─", leftFill)+"┬─") + rightStyle.Render(rightTitle)
-	
-	logoBottom := strings.Split(LogoText, "\n")[3]
-	// Replace the very last character of the logo with the corner character
-	// to properly close the panel border.
-	logoBottomRunes := []rune(logoBottom)
-	logoBottomRunes[len(logoBottomRunes)-1] = '╮'
-	logoBottom = string(logoBottomRunes)
 
+	logoBottom := strings.Split(LogoText, "\n")[3]
 	currentW := lipgloss.Width(leftPart) + lipgloss.Width(midPart)
 	fillerW := m.width - currentW - LogoWidth
-	if fillerW < 0 { fillerW = 0 }
-	
+	if fillerW < 0 {
+		fillerW = 0
+	}
+
 	return leftPart + midPart + SepStyle.Render(strings.Repeat("─", fillerW)) + SepStyle.Render(logoBottom)
 }
 

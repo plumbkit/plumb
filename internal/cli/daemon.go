@@ -439,30 +439,10 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		if hasPrimary {
 			return
 		}
-		var a struct {
-			URI       string `json:"uri"`
-			Path      string `json:"path"`
-			Root      string `json:"root"`      // list_files uses "root" instead of "path"
-			Workspace string `json:"workspace"` // session_start passes workspace
-		}
-		_ = json.Unmarshal(args, &a)
-
-		// Seed the workspace lookup from URI (LSP tools), Path/Root/Workspace (filesystem tools).
-		var seed string
-		switch {
-		case a.URI != "":
-			seed = a.URI
-		case a.Path != "":
-			seed = "file://" + a.Path
-		case a.Root != "":
-			seed = "file://" + a.Root
-		case a.Workspace != "":
-			seed = "file://" + a.Workspace
-		default:
+		seedPath := seedPathFromArgs(args)
+		if seedPath == "" {
 			return
 		}
-
-		seedPath := strings.TrimPrefix(seed, "file://")
 		// If seedPath is already a directory (filesystem tools pass the search
 		// root, not a file), use it directly. filepath.Dir on a directory path
 		// strips the last component and would miss the project root marker.
@@ -472,7 +452,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		}
 		root, _, err := pool.Detect(startDir)
 		if err != nil {
-			slog.Warn("daemon: cannot determine workspace root", "seed", seed, "err", err)
+			slog.Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
 		attachWorkspace(toolCtx, "file://"+root)
@@ -591,29 +571,11 @@ func rootFromRoots(ctx context.Context, request mcp.RequestFn) string {
 }
 
 // workspaceFromArgs returns the resolved workspace root for a tool call's raw
-// JSON arguments, inspecting `uri` then `path`. Returns "" if neither is
-// present or the path doesn't sit under a discoverable project root.
+// JSON arguments. Returns "" if no path-bearing field is present or the path
+// doesn't sit under a discoverable project root.
 func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
-	var a struct {
-		URI       string `json:"uri"`
-		Path      string `json:"path"`
-		Root      string `json:"root"`
-		Workspace string `json:"workspace"`
-	}
-	if json.Unmarshal(args, &a) != nil {
-		return ""
-	}
-	var seed string
-	switch {
-	case a.URI != "":
-		seed = strings.TrimPrefix(a.URI, "file://")
-	case a.Path != "":
-		seed = a.Path
-	case a.Root != "":
-		seed = a.Root
-	case a.Workspace != "":
-		seed = a.Workspace
-	default:
+	seed := seedPathFromArgs(args)
+	if seed == "" {
 		return ""
 	}
 	// If seed is already a directory, use it directly — filepath.Dir would
@@ -627,4 +589,47 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 		return ""
 	}
 	return root
+}
+
+// seedPathFromArgs extracts a single filesystem path from a tool call's raw
+// JSON arguments. Probes the argument shapes plumb's tools use:
+//
+//	{"uri": "file:///..."}                      — LSP tools
+//	{"path": "/..."}                            — most filesystem tools
+//	{"root": "/..."}                            — list_files
+//	{"workspace": "/..."}                       — session_start
+//	{"paths": ["/...", ...]}                    — read_multiple_files
+//	{"operations": [{"path": "/..."}, ...]}     — transaction_apply
+//
+// Returns "" if no shape matches. Any leading file:// is stripped so the
+// caller gets a plain filesystem path.
+func seedPathFromArgs(args json.RawMessage) string {
+	var a struct {
+		URI        string   `json:"uri"`
+		Path       string   `json:"path"`
+		Root       string   `json:"root"`
+		Workspace  string   `json:"workspace"`
+		Paths      []string `json:"paths"`
+		Operations []struct {
+			Path string `json:"path"`
+		} `json:"operations"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return ""
+	}
+	switch {
+	case a.URI != "":
+		return strings.TrimPrefix(a.URI, "file://")
+	case a.Path != "":
+		return a.Path
+	case a.Root != "":
+		return a.Root
+	case a.Workspace != "":
+		return a.Workspace
+	case len(a.Paths) > 0:
+		return a.Paths[0]
+	case len(a.Operations) > 0:
+		return a.Operations[0].Path
+	}
+	return ""
 }
