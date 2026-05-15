@@ -498,10 +498,10 @@ func (m Model) render() string {
 
 	var sb strings.Builder
 
-	// Header: 4-line Logo
+	// Header: 4-line Logo (using SepStyle to match border color)
 	logoLines := strings.Split(LogoText, "\n")
 	for i := 0; i < 3; i++ {
-		sb.WriteString(TitleStyle.Render(padLeft(logoLines[i], m.width)) + "\n")
+		sb.WriteString(SepStyle.Render(padLeft(logoLines[i], m.width)) + "\n")
 	}
 	sb.WriteString(m.renderTopBorder(rightWidth) + "\n")
 
@@ -575,11 +575,17 @@ func (m Model) renderTopBorder(rightWidth int) string {
 	midPart := SepStyle.Render(strings.Repeat("─", leftFill)+"┬─") + rightStyle.Render(rightTitle)
 	
 	logoBottom := strings.Split(LogoText, "\n")[3]
+	// Replace the very last character of the logo with the corner character
+	// to properly close the panel border.
+	logoBottomRunes := []rune(logoBottom)
+	logoBottomRunes[len(logoBottomRunes)-1] = '╮'
+	logoBottom = string(logoBottomRunes)
+
 	currentW := lipgloss.Width(leftPart) + lipgloss.Width(midPart)
 	fillerW := m.width - currentW - LogoWidth
 	if fillerW < 0 { fillerW = 0 }
 	
-	return leftPart + midPart + SepStyle.Render(strings.Repeat("─", fillerW)) + TitleStyle.Render(logoBottom)
+	return leftPart + midPart + SepStyle.Render(strings.Repeat("─", fillerW)) + SepStyle.Render(logoBottom)
 }
 
 func (m Model) renderBottomBorder(rightWidth int) string {

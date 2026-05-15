@@ -35,6 +35,22 @@ Total: ~1½ hours. After these, plumb is *proven* (not just claimed) production-
 
 ---
 
+Claude failed to find existing tools in Plumb...Here's the feedback:
+Why I missed the plumb grep tool
+When I called tool_search with "plumb find replace parameters" I was already looking for the specific tool I'd partially loaded. Earlier when I needed to search file contents I used plumb:search_in_files — which I found fine. The miss was specifically on find_replace because I called it with wrong parameters the first time, then used tool_search to look up the schema rather than discovering the tool fresh.
+The deeper issue: tool_search searches tool descriptions, not tool names directly. When I searched "grep" or "find replace" early in that session I got no result because the find_replace description says "Search and replace text across files" — grep-like discovery only works if I search "search replace files" rather than "grep".
+How to improve plumb's discoverability:
+The find_replace description could add a single line at the top:
+
+"Grep-equivalent: find text across files in a directory tree, with optional replacement."
+
+Or the description keywords could include grep, search files, content search. Right now the description leads with "Search and replace" which implies you already know you want to replace — a pure search use case (like finding all files with a reference) doesn't obviously map to it.
+A separate search_in_files that does read-only grep (no replacement) would also make the distinction clearer — you have plumb:search_in_files but it only searches filenames/symbols via the LSP index, not raw file contents. The gap between "search file contents" and "find_replace with dry_run=true" is the blind spot.
+
+The TODO here is about what can we do to make this bullet proof.
+
+---
+
 ## Architecture
 
 Deep design changes, contract changes, and new infrastructure. These are the items most likely to need design discussion before implementation.

@@ -160,9 +160,14 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		cfgTable.Row(tui.KeyStyle.Render(name), keys.String(), vals.String(), provs.String())
 	}
 
+	logFileDisplay := projectCfg.LogFile
+	if logFileDisplay == "" {
+		logFileDisplay = contractConfigPath(daemonLogPath())
+	}
+
 	addSection("core", [][]string{
 		{"log_level", projectCfg.LogLevel, sourceFor("log_level", defaultsCfg.LogLevel, globalCfg.LogLevel, projectCfg.LogLevel)},
-		{"log_file", projectCfg.LogFile, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile)},
+		{"log_file", logFileDisplay, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile)},
 	})
 
 	addSection("cache", [][]string{
