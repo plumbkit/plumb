@@ -1019,13 +1019,13 @@ func spliceOverlay(bg, overlay string, w, h int) string {
 		// Crude but effective splice: strip ANSI from background to calculate positions,
 		// then re-assemble. For better modal logic, we treat the background as 
 		// "already dimmed" text.
-		rawBG := lipgloss.StripFontStyles(bl)
+		rawBG := []rune(stripANSI(bl))
 		prefix := ""
 		if sx > 0 {
-			if sx < len(rawBG) { prefix = rawBG[:sx] } else { prefix = rawBG }
+			if sx < len(rawBG) { prefix = string(rawBG[:sx]) } else { prefix = string(rawBG) }
 		}
 		suffix := ""
-		if sx+ovW < len(rawBG) { suffix = rawBG[sx+ovW:] }
+		if sx+ovW < len(rawBG) { suffix = string(rawBG[sx+ovW:]) }
 		
 		bgLines[y] = InactiveStyle.Render(prefix) + ol + InactiveStyle.Render(suffix)
 	}
