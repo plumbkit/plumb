@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -528,8 +527,8 @@ func (m Model) render() string {
 		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(r)
 		
 		if isOverlay {
-			lDim := InactiveStyle.Render(stripANSI(leftCell))
-			rDim := InactiveStyle.Render(stripANSI(rightCell))
+			lDim := InactiveStyle.Render(ansi.Strip(leftCell))
+			rDim := InactiveStyle.Render(ansi.Strip(rightCell))
 			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
 			sb.WriteString(line + "\n")
 		} else {
@@ -648,20 +647,26 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 
 func (m Model) renderHelp(bg string) string {
 	helpLines := []string{
-		" ↑/↓ or j/k     Navigate sessions/calls",
-		" pgup/pgdown    Page through lists",
-		" tab/shift+tab  Switch panel focus",
-		" enter          Open tool call detail",
-		" [/]            Resize columns",
-		" q              Quit",
-		" esc            Close help",
+		" ↑/↓ or j/k      Navigate sessions/calls",
+		" pgup/pgdown     Page through lists",
+		" tab/shift+tab   Switch panel focus",
+		" enter           Open tool call detail",
+		" [/]             Resize columns",
+		" q               Quit",
+		" esc             Close popup",
 	}
 	
-	boxW := 44
+	boxW := 52
 	innerW := boxW - 2
 	topLabel := " Help & Navigation "
 	
-	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", innerW-len(topLabel)-1)+"╮")
+	// Calculate dashes for the top border correctly
+	labelW := lipgloss.Width(topLabel)
+	leftDashes := 1
+	rightDashes := innerW - labelW - leftDashes
+	if rightDashes < 0 { rightDashes = 0 }
+	
+	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", rightDashes)+"╮")
 	
 	var bodyLines []string
 	// Empty row top
@@ -1008,40 +1013,31 @@ func spliceOverlay(bg, overlay string, w, h int) string {
 	ovH := len(ovLines)
 	ovW := 0
 	for _, l := range ovLines {
-		if lw := lipgloss.Width(l); lw > ovW { ovW = lw }
+		if lw := lipgloss.Width(l); lw > ovW {
+			ovW = lw
+		}
 	}
 	sy, sx := (h-ovH)/2, (w-ovW)/2
 	for i := 0; i < ovH; i++ {
 		y := sy + i
-		if y < 0 || y >= len(bgLines) { continue }
-		bl, ol := bgLines[y], ovLines[i]
+		if y < 0 || y >= len(bgLines) {
+			continue
+		}
+		bl := bgLines[y]
+		ol := ovLines[i]
+
+		// Ensure overlay line is full width
 		currOW := lipgloss.Width(ol)
 		if currOW < ovW {
-			ol += strings.Repeat(" ", ovW - currOW)
+			ol += strings.Repeat(" ", ovW-currOW)
 		}
-		rawBG := []rune(ansi.Strip(bl))
-		prefix := ""
-		if sx > 0 {
-			if sx < len(rawBG) {
-				prefix = string(rawBG[:sx])
-			} else {
-				prefix = string(rawBG)
-			}
-		}
-		suffix := ""
-		if sx+ovW < len(rawBG) {
-			suffix = string(rawBG[sx+ovW:])
-		}
-		
-		bgLines[y] = InactiveStyle.Render(prefix) + ol + InactiveStyle.Render(suffix)
+
+		prefix := ansi.Truncate(bl, sx, "")
+		suffix := ansi.TruncateLeft(bl, sx+ovW, "")
+
+		bgLines[y] = InactiveStyle.Render(ansi.Strip(prefix)) + ol + InactiveStyle.Render(ansi.Strip(suffix))
 	}
 	return strings.Join(bgLines, "\n")
-}
-
-var ansiRegex = regexp.MustCompile("[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]")
-
-func stripANSI(s string) string {
-	return ansiRegex.ReplaceAllString(s, "")
 }
 
 func Run() error {
