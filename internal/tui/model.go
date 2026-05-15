@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
@@ -1014,18 +1015,23 @@ func spliceOverlay(bg, overlay string, w, h int) string {
 		y := sy + i
 		if y < 0 || y >= len(bgLines) { continue }
 		bl, ol := bgLines[y], ovLines[i]
-		blW := lipgloss.Width(bl)
-		if sx >= blW { continue }
-		// Crude but effective splice: strip ANSI from background to calculate positions,
-		// then re-assemble. For better modal logic, we treat the background as 
-		// "already dimmed" text.
-		rawBG := []rune(stripANSI(bl))
+		currOW := lipgloss.Width(ol)
+		if currOW < ovW {
+			ol += strings.Repeat(" ", ovW - currOW)
+		}
+		rawBG := []rune(ansi.Strip(bl))
 		prefix := ""
 		if sx > 0 {
-			if sx < len(rawBG) { prefix = string(rawBG[:sx]) } else { prefix = string(rawBG) }
+			if sx < len(rawBG) {
+				prefix = string(rawBG[:sx])
+			} else {
+				prefix = string(rawBG)
+			}
 		}
 		suffix := ""
-		if sx+ovW < len(rawBG) { suffix = string(rawBG[sx+ovW:]) }
+		if sx+ovW < len(rawBG) {
+			suffix = string(rawBG[sx+ovW:])
+		}
 		
 		bgLines[y] = InactiveStyle.Render(prefix) + ol + InactiveStyle.Render(suffix)
 	}
