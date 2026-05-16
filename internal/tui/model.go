@@ -509,8 +509,16 @@ func (m Model) render() string {
 
 	// Header: 4-line Logo
 	logoLines := strings.Split(LogoText, "\n")
+	
+	// Ensure logo starts at exactly right edge
+	logoW := lipgloss.Width(logoLines[0])
+	tabSpaceW := m.width - logoW
+
+	tabs := m.renderTabs(tabSpaceW, isOverlay)
+
 	for i := 0; i < 3; i++ {
-		sb.WriteString(sepStyle.Render(padLeft(logoLines[i], m.width)) + "\n")
+		// Draw the tabs on the left, then the logo piece on the right
+		sb.WriteString(tabs[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
 	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
 
@@ -921,6 +929,57 @@ func padRight(s string, w int) string {
 	v := lipgloss.Width(s)
 	if v >= w { return s }
 	return s + strings.Repeat(" ", w-v)
+}
+
+func (m Model) renderTabs(width int, dimmed bool) []string {
+	tabNames := []string{"⌂ HOME", "◈ SESSIONS", "≡ LOGS"}
+	tabWidth := 16 // "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" is 16 blocks wide
+	gapWidth := 3
+
+	topLine := ""
+	midLine := ""
+	botLine := ""
+
+	for i, name := range tabNames {
+		isActive := i == 1 // Hardcode 'Sessions' as active for prototyping
+		
+		var midStyle, edgeStyle lipgloss.Style
+		if dimmed {
+			midStyle = TabInactiveStyle.Copy().Background(ActiveTheme.Border)
+			edgeStyle = TabInactiveEdgeStyle.Copy().Foreground(ActiveTheme.Border)
+		} else if isActive {
+			midStyle = TabActiveStyle.Copy().Width(tabWidth)
+			edgeStyle = TabActiveEdgeStyle
+		} else {
+			midStyle = TabInactiveStyle.Copy().Width(tabWidth)
+			edgeStyle = TabInactiveEdgeStyle
+		}
+
+		topLine += edgeStyle.Render(strings.Repeat("▄", tabWidth))
+		midLine += midStyle.Render(name)
+		botLine += edgeStyle.Render(strings.Repeat("▀", tabWidth))
+
+		if i < len(tabNames)-1 {
+			topLine += strings.Repeat(" ", gapWidth)
+			midLine += strings.Repeat(" ", gapWidth)
+			botLine += strings.Repeat(" ", gapWidth)
+		}
+	}
+
+	// Pad the rest of the layout width so it aligns perfectly with the logo
+	// We also offset the entire tab bar by 1 column on the left
+	leftOffset := " "
+	
+	padLeftSize := width - lipgloss.Width(topLine) - 1 // Subtract 1 for the offset
+	if padLeftSize < 0 { padLeftSize = 0 }
+	
+	padStr := strings.Repeat(" ", padLeftSize)
+
+	return []string{
+		leftOffset + topLine + padStr,
+		leftOffset + midLine + padStr,
+		leftOffset + botLine + padStr,
+	}
 }
 
 func padLeft(s string, w int) string {

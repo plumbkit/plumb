@@ -24,7 +24,12 @@ var (
 	TimestampFadedStyle      lipgloss.Style // timestamp rows when sibling panel has focus
 	DetailStyle              lipgloss.Style
 	HintStyle                lipgloss.Style
+	TabActiveStyle           lipgloss.Style
+	TabInactiveStyle         lipgloss.Style
+	TabActiveEdgeStyle       lipgloss.Style
+	TabInactiveEdgeStyle     lipgloss.Style
 	StatusStyle              lipgloss.Style
+
 	OkStyle                  lipgloss.Style
 	WarnStyle                lipgloss.Style
 	ScrollThumbStyle         lipgloss.Style
@@ -108,6 +113,19 @@ func RebuildStyles() {
 	// HintStyle: column headers and the global key-hint bar.
 	HintStyle = lipgloss.NewStyle().
 		Foreground(t.TextHint)
+
+	TabActiveStyle = lipgloss.NewStyle().
+		Background(ActiveTheme.Accent).
+		Foreground(lipgloss.Color("0")). // Force dark/black text for contrast
+		Align(lipgloss.Center)
+
+	TabInactiveStyle = lipgloss.NewStyle().
+		Background(ActiveTheme.Border).
+		Foreground(ActiveTheme.TextPrimary).
+		Align(lipgloss.Center)
+
+	TabActiveEdgeStyle = lipgloss.NewStyle().Foreground(ActiveTheme.Accent)
+	TabInactiveEdgeStyle = lipgloss.NewStyle().Foreground(ActiveTheme.Border)
 
 	StatusStyle = lipgloss.NewStyle().
 		Foreground(t.TextHint)
