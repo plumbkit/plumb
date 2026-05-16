@@ -248,10 +248,11 @@ func capString(s string) string {
 	return s
 }
 
-// Record inserts a call. Errors are silently dropped (stats are best-effort).
-func (d *DB) Record(c Call) {
+// Record inserts a call. Stats are best-effort, but the caller gets the
+// insert error so the daemon can log storage failures.
+func (d *DB) Record(c Call) error {
 	if d == nil {
-		return
+		return nil
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -259,7 +260,7 @@ func (d *DB) Record(c Call) {
 	if !c.Success {
 		success = 0
 	}
-	_, _ = d.db.Exec(
+	if _, err := d.db.Exec(
 		`INSERT INTO tool_calls
 		 (session_id, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -268,7 +269,10 @@ func (d *DB) Record(c Call) {
 		c.InputBytes, c.OutputBytes,
 		success, c.ErrorMsg,
 		capString(c.InputJSON), capString(c.OutputText),
-	)
+	); err != nil {
+		return fmt.Errorf("stats: insert call: %w", err)
+	}
+	return nil
 }
 
 // ToolStat summarises calls for one tool.

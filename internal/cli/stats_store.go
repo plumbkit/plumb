@@ -43,7 +43,13 @@ func (s *statsStore) Record(workspace string, call stats.Call) {
 		s.dbs[workspace] = db
 	}
 	s.mu.Unlock()
-	db.Record(call)
+	if err := db.Record(call); err != nil {
+		slog.Warn("stats: cannot record tool call",
+			"workspace", workspace,
+			"session", call.SessionID,
+			"tool", call.Tool,
+			"err", err)
+	}
 }
 
 // Close shuts all open DBs. Intended to be called once at daemon shutdown.

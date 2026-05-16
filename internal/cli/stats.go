@@ -54,7 +54,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	}
 	defer db.Close()
 
-	filter := stats.Filter{}
+	filter := stats.Filter{Workspace: ws}
 
 	total := db.TotalCalls(filter)
 	if total == 0 {
@@ -72,7 +72,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	PrintLogo()
 
 	saved := db.TotalTokensSaved(filter)
-	
+
 	// Structured Context Block
 	ctxBox := lipgloss.NewStyle().
 		Border(ContextBorder, false, false, false, true).
@@ -217,11 +217,11 @@ func runStats(_ *cobra.Command, _ []string) error {
 				if line == "" {
 					continue
 				}
-				
+
 				// Apply wordwrap to long lines
 				wrapped := wordwrap.String(line, errMaxWidth)
 				wrappedLines := strings.Split(wrapped, "\n")
-				
+
 				for j, wl := range wrappedLines {
 					prefix := "  "
 					// Only use the arrow for the very first line of the entire error message
@@ -260,4 +260,3 @@ func humanAge(t time.Time) string {
 		return t.Format("2006-01-02")
 	}
 }
-

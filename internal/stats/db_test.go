@@ -16,7 +16,7 @@ func TestRecent_RoundTripsErrorAndByteFields(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	db.Record(Call{
+	if err := db.Record(Call{
 		SessionID:   "sess-1",
 		Workspace:   "/tmp/ws",
 		Tool:        "find_symbol",
@@ -26,7 +26,9 @@ func TestRecent_RoundTripsErrorAndByteFields(t *testing.T) {
 		OutputBytes: 4096,
 		Success:     false,
 		ErrorMsg:    "uri is required",
-	})
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
 
 	got, err := db.Recent(10, Filter{})
 	if err != nil {
@@ -64,14 +66,16 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 	}
 	defer db.Close()
 
-	db.Record(Call{
+	if err := db.Record(Call{
 		SessionID:  "sess-1",
 		Workspace:  "/tmp/ws",
 		Tool:       "list_symbols",
 		CalledAt:   time.Now(),
 		DurationMs: 5,
 		Success:    true,
-	})
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
 
 	got, _ := db.Recent(10, Filter{})
 	if len(got) != 1 {
@@ -137,7 +141,9 @@ func TestOpen_IdempotentOnUnstampedAllColumnsDB(t *testing.T) {
 	}
 
 	// Confirm it works for real I/O.
-	db.Record(Call{Tool: "x", CalledAt: time.Now(), Success: true})
+	if err := db.Record(Call{Tool: "x", CalledAt: time.Now(), Success: true}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
 	got, err := db.Recent(10, Filter{})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
