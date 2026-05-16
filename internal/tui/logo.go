@@ -1,8 +1,8 @@
 package tui
 
-const LogoWidth = 24
+const LogoWidth = 20
 
-const LogoText = `  ╭──╮ ╷          ╷     
-  ├──╯ │ ╷  ╭─┬─╮ ├──╮  
-  ╵    ╵ ││ ╵ ╵ ╵ ╰──╯  
-───────╮ ╰╯ ╭──────────╮`
+const LogoText = `  ╭─╮ ╷        ╷    
+  ┣━┛ ┃ ╷  ┏┳┓ ┣━┓  
+  ╵   ╵ ┃┃ ╵╵╵ ╰─╯  
+──────╮ ╰╯ ╭───────╮`

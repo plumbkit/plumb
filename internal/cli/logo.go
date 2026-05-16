@@ -7,10 +7,10 @@ import (
 	"github.com/golimpio/plumb/internal/tui"
 )
 
-const logoText = `╭──╮ ╷          ╷
-├──╯ │ ╷  ╭─┬─╮ ├──╮
-╵    ╵ ││ ╵ ╵ ╵ ╰──╯
-─────╮ ╰╯ ╭─────────`
+const logoText = `╭─╮ ╷        ╷
+┣━┛ ┃ ╷  ┏┳┓ ┣━┓
+╵   ╵ ┃┃ ╵╵╵ ╰─╯
+────╮ ╰╯ ╭───────`
 
 // PrintLogo renders the industrial "piping" logo.
 func PrintLogo() {
