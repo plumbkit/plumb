@@ -64,6 +64,9 @@ plumb setup claude-code
 # Wire up Claude Code — project-level (writes .mcp.json in cwd)
 plumb setup claude-code --project
 
+# Wire up Codex
+plumb setup codex
+
 # Initialise a .plumb workspace in your project root (recommended)
 cd /path/to/your/project
 plumb init              # creates .plumb/context.md

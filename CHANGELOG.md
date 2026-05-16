@@ -2,6 +2,9 @@
 
 ## 0.5.26 — 2026-05-13
 
+### Added
+- **Codex setup support.** `plumb setup codex` now registers plumb as a stdio MCP server in Codex's TOML config, preserving existing `mcp_servers` entries, backing up existing config files before modification, and honouring `CODEX_HOME` when resolving the config location. `plumb config show` now includes Codex in the MCP integration table.
+
 ### Fixed
 - **Daemon singleton guarantee enforced via `flock(2)`.** Two `plumb serve` processes racing from a cold start (Claude Desktop / Claude Code launching multiple conversations simultaneously) could each observe "no daemon", each call `startDaemonProcess`, and end up with **two** daemons running on the same socket path. The second daemon ran `os.Remove(socketPath); net.Listen(...)` and quietly stole the path from the first, while the first kept serving its already-connected clients on the now-orphaned listener fd. Symptom: two `daemon: ready` messages in `daemon.log` 100–200 ms apart, sessions split across both processes, the TUI showing partial state (sessions registered against one daemon, stats written by the other). Fixed with two advisory file locks:
   - `~/Library/Caches/plumb/plumb.spawn.lock` — held briefly by `plumb serve` around the dial-or-spawn block. Concurrent serves now serialise on this lock; the first to acquire it spawns the daemon, the rest re-dial after release and connect to the existing one. Implemented as a non-blocking `flock` retry loop so `ctx.Done()` (Ctrl-C, parent exit) is honoured promptly.

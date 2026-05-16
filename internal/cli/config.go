@@ -28,7 +28,7 @@ var configPrintCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
 		}
-		
+
 		var buf bytes.Buffer
 		if err := config.Print(cfg, &buf); err != nil {
 			return err
@@ -110,7 +110,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	// 2. MCP Integration Status
 	fmt.Printf("\nMCP Integration Status\n")
-	
+
 	mcpTable := table.New().
 		Border(DottedBorder).
 		BorderStyle(tui.SepStyle).
@@ -124,14 +124,16 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 			}
 			return s
 		})
-	
+
 	claudeDesktopPath, _ := claudeDesktopConfigPath()
 	claudeCodePath, _ := claudeCodeConfigPath()
 	geminiPath, _ := GeminiConfigPath()
+	codexPath, _ := CodexConfigPath()
 
 	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), contractConfigPath(claudeDesktopPath))
 	mcpTable.Row("Claude Code", existsIcon(claudeCodePath), registeredIcon(claudeCodePath), contractConfigPath(claudeCodePath))
 	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), contractConfigPath(geminiPath))
+	mcpTable.Row("Codex", existsIcon(codexPath), registeredIcon(codexPath), contractConfigPath(codexPath))
 	fmt.Println(mcpTable.Render())
 
 	// 3. Plumb Configuration
@@ -235,10 +237,10 @@ func registeredIcon(path string) string {
 	if err != nil {
 		return tui.WarnStyle.Render("✗")
 	}
-	
+
 	// A simple string search is robust enough for checking registration status
-	// across the slightly different JSON schemas of Claude and Gemini.
-	if strings.Contains(string(data), "\"plumb\"") {
+	// across the JSON schemas and Codex's TOML schema.
+	if strings.Contains(string(data), "plumb") {
 		return tui.OkStyle.Render("✓")
 	}
 	return tui.WarnStyle.Render("✗")

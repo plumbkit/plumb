@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
-	
+
 	"github.com/golimpio/plumb/internal/tui"
 )
 
@@ -45,11 +46,18 @@ var setupGeminiCmd = &cobra.Command{
 	RunE:  runSetupGemini,
 }
 
+var setupCodexCmd = &cobra.Command{
+	Use:   "codex",
+	Short: "Register plumb as an MCP server in Codex's config",
+	RunE:  runSetupCodex,
+}
+
 func init() {
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	setupCmd.AddCommand(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupGeminiCmd)
+	setupCmd.AddCommand(setupCodexCmd)
 }
 
 func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
@@ -127,6 +135,45 @@ func runSetupGemini(_ *cobra.Command, _ []string) error {
 		Render(tui.MutedStyle.Render(ctxStr))
 	fmt.Println(ctxBox)
 	fmt.Println("\nRestart Gemini CLI to apply the change.")
+	return nil
+}
+
+func runSetupCodex(_ *cobra.Command, _ []string) error {
+	PrintLogo()
+	cfgPath, err := CodexConfigPath()
+	if err != nil {
+		return fmt.Errorf("locating Codex config: %w", err)
+	}
+
+	plumbBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolving plumb binary path: %w", err)
+	}
+
+	added, preserved, err := setupCodexInto(cfgPath, plumbBin)
+	if err != nil {
+		return err
+	}
+
+	if !added {
+		fmt.Println("plumb is already registered in Codex — no changes made.")
+		fmt.Printf("Config: %s\n", cfgPath)
+		return nil
+	}
+
+	ctxStr := fmt.Sprintf("Registered in Codex\nConfig: %s\nBinary: %s", cfgPath, plumbBin)
+	if len(preserved) > 0 {
+		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
+	}
+
+	tui.RebuildStyles()
+	ctxBox := lipgloss.NewStyle().
+		Border(ContextBorder, false, false, false, true).
+		BorderForeground(tui.SepStyle.GetForeground()).
+		PaddingLeft(1).
+		Render(tui.MutedStyle.Render(ctxStr))
+	fmt.Println(ctxBox)
+	fmt.Println("\nRestart Codex to apply the change.")
 	return nil
 }
 
@@ -280,6 +327,51 @@ func setupClaudeCodeInto(cfgPath, plumbBin string) (added bool, preserved []stri
 	return true, preserved, nil
 }
 
+// setupCodexInto merges the plumb entry into Codex's TOML config.
+func setupCodexInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
+	cfg, isNew, err := readOrInitCodexConfig(cfgPath)
+	if err != nil {
+		return false, nil, fmt.Errorf("reading %s: %w", cfgPath, err)
+	}
+
+	if cfg["mcp_servers"] == nil {
+		cfg["mcp_servers"] = map[string]any{}
+	}
+	servers, ok := cfg["mcp_servers"].(map[string]any)
+	if !ok {
+		return false, nil, fmt.Errorf("mcp_servers in %s is not an object — cannot safely modify it", cfgPath)
+	}
+
+	for name := range servers {
+		if name != "plumb" {
+			preserved = append(preserved, name)
+		}
+	}
+	sort.Strings(preserved)
+
+	if existing, exists := servers["plumb"].(map[string]any); exists {
+		if existing["command"] == plumbBin && stringSliceEqual(existing["args"], []string{"serve"}) {
+			return false, preserved, nil
+		}
+	}
+
+	if !isNew {
+		if err := backupFile(cfgPath); err != nil {
+			return false, nil, fmt.Errorf("backing up %s: %w", cfgPath, err)
+		}
+	}
+
+	servers["plumb"] = map[string]any{
+		"command": plumbBin,
+		"args":    []string{"serve"},
+	}
+
+	if err := writeTOML(cfgPath, cfg); err != nil {
+		return false, nil, fmt.Errorf("writing %s: %w", cfgPath, err)
+	}
+	return true, preserved, nil
+}
+
 // claudeCodeConfigPath returns the user-level Claude Code config path.
 func claudeCodeConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -297,6 +389,19 @@ func GeminiConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".gemini", "settings.json"), nil
+}
+
+// CodexConfigPath returns the Codex config.toml path. CODEX_HOME overrides the
+// default home-relative config directory.
+func CodexConfigPath() (string, error) {
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		return filepath.Join(codexHome, "config.toml"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".codex", "config.toml"), nil
 }
 
 // backupFile copies src to src.<timestamp>.bak in the same directory.
@@ -359,6 +464,28 @@ func readOrInitClaudeConfig(path string) (m map[string]any, isNew bool, err erro
 	return m, false, nil
 }
 
+// readOrInitCodexConfig reads cfgPath as TOML into a generic map.
+// isNew is true when the file did not exist.
+func readOrInitCodexConfig(path string) (m map[string]any, isNew bool, err error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, false, fmt.Errorf("creating directory: %w", err)
+		}
+		return map[string]any{}, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) == 0 {
+		return map[string]any{}, false, nil
+	}
+	if err := toml.Unmarshal(data, &m); err != nil {
+		return nil, false, fmt.Errorf("parsing %s as TOML: %w — will not overwrite", path, err)
+	}
+	return m, false, nil
+}
+
 // writeJSON writes m to path as indented JSON, creating the file if needed.
 // It writes to a temp file in the same directory and renames atomically.
 func writeJSON(path string, m map[string]any) error {
@@ -384,4 +511,46 @@ func writeJSON(path string, m map[string]any) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// writeTOML writes m to path as TOML, creating the file if needed.
+// It writes to a temp file in the same directory and renames atomically.
+func writeTOML(path string, m map[string]any) error {
+	data, err := toml.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".plumb_setup_*.toml")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func stringSliceEqual(got any, want []string) bool {
+	gotSlice, ok := got.([]any)
+	if !ok {
+		return false
+	}
+	if len(gotSlice) != len(want) {
+		return false
+	}
+	for i, gotItem := range gotSlice {
+		if gotItem != want[i] {
+			return false
+		}
+	}
+	return true
 }

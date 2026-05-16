@@ -106,6 +106,38 @@ func TestGeminiConfigPath_NoError(t *testing.T) {
 	}
 }
 
+func TestCodexConfigPath_UsesCodexHome(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+
+	path, err := CodexConfigPath()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := filepath.Join(dir, "config.toml")
+	if path != want {
+		t.Fatalf("path: got %q, want %q", path, want)
+	}
+}
+
+func TestCodexConfigPath_NoError(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
+
+	path, err := CodexConfigPath()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected non-empty path")
+	}
+	if filepath.Base(path) != "config.toml" {
+		t.Errorf("unexpected filename: %s", filepath.Base(path))
+	}
+	if filepath.Base(filepath.Dir(path)) != ".codex" {
+		t.Errorf("unexpected config directory: %s", filepath.Dir(path))
+	}
+}
+
 func TestSetupClaudeDesktopInto_FreshConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "claude_desktop_config.json")
@@ -141,6 +173,131 @@ func TestSetupClaudeDesktopInto_FreshConfig(t *testing.T) {
 	want := []any{"serve"}
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args: got %v, want %v", args, want)
+	}
+}
+
+func TestSetupCodexInto_FreshConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	added, preserved, err := setupCodexInto(path, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatalf("setupCodexInto: %v", err)
+	}
+	if !added {
+		t.Error("expected added=true for fresh config")
+	}
+	if len(preserved) != 0 {
+		t.Errorf("expected no preserved servers, got %v", preserved)
+	}
+
+	result, _, err := readOrInitCodexConfig(path)
+	if err != nil {
+		t.Fatalf("reading result: %v", err)
+	}
+
+	servers := result["mcp_servers"].(map[string]any)
+	plumb := servers["plumb"].(map[string]any)
+
+	if plumb["command"] != "/usr/local/bin/plumb" {
+		t.Errorf("command: got %v", plumb["command"])
+	}
+	if !stringSliceEqual(plumb["args"], []string{"serve"}) {
+		t.Errorf("args: got %v, want [serve]", plumb["args"])
+	}
+}
+
+func TestSetupCodexInto_MergesNonDestructively(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	existing := `[mcp_servers.other]
+command = "other-bin"
+args = []
+`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	added, preserved, err := setupCodexInto(path, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatalf("setupCodexInto: %v", err)
+	}
+	if !added {
+		t.Error("expected added=true")
+	}
+	if len(preserved) != 1 || preserved[0] != "other" {
+		t.Errorf("expected preserved=[other], got %v", preserved)
+	}
+
+	result, _, err := readOrInitCodexConfig(path)
+	if err != nil {
+		t.Fatalf("readOrInitCodexConfig after write: %v", err)
+	}
+	merged := result["mcp_servers"].(map[string]any)
+	if merged["other"] == nil {
+		t.Error("pre-existing 'other' server was removed")
+	}
+	if merged["plumb"] == nil {
+		t.Error("plumb server not found after merge")
+	}
+
+	entries, _ := os.ReadDir(dir)
+	var backups []string
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".bak" {
+			backups = append(backups, e.Name())
+		}
+	}
+	if len(backups) == 0 {
+		t.Error("expected a .bak backup file to be created before modifying existing config")
+	}
+}
+
+func TestSetupCodexInto_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	added, _, err := setupCodexInto(path, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatalf("run 0: %v", err)
+	}
+	if !added {
+		t.Error("expected added=true on first run")
+	}
+
+	for i := 1; i < 3; i++ {
+		added, _, err := setupCodexInto(path, "/usr/local/bin/plumb")
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if added {
+			t.Errorf("run %d: expected added=false (already registered)", i)
+		}
+	}
+
+	result, _, err := readOrInitCodexConfig(path)
+	if err != nil {
+		t.Fatalf("reading result: %v", err)
+	}
+	servers := result["mcp_servers"].(map[string]any)
+	if len(servers) != 1 {
+		t.Errorf("expected exactly 1 server after 3 runs, got %d", len(servers))
+	}
+}
+
+func TestSetupCodexInto_InvalidMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	bad := `mcp_servers = "not-an-object"`
+	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := setupCodexInto(path, "/usr/local/bin/plumb")
+	if err == nil {
+		t.Fatal("expected error for invalid mcp_servers type, got nil")
 	}
 }
 
