@@ -273,6 +273,20 @@ When implementing this, you might consider migrating to a third-party JSON loggi
 
 ---
 
+### Session tagging — `purpose` metadata on `session_start`
+
+**Priority:** low.
+**Effort:** 1–2 hours.
+
+`session_start` could accept an optional `purpose` string (e.g. `"intune-project-deployment"`) that tags every subsequent tool call in that session. The TUI and stats DB could then display coherent timelines per task, making it easier to audit what the agent did across multi-turn conversations without trawling Claude Desktop history.
+
+**Definition of done:**
+1. `session_start` accepts `purpose string` (optional).
+2. The purpose is stored in the session info file and in the stats DB alongside each tool call.
+3. TUI session list row shows the purpose string (truncated if long).
+
+---
+
 ## Improvements
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
@@ -411,6 +425,34 @@ The right answer is configurable, with the existing four-layer precedence (defau
 5. `internal/cli/daemon.go`'s `applyProjectConfig`: when the config changes, the closure-captured `editsCfg` already updates. Either expose the window through `editsCfg` and have the tools read via a closure (cleaner) or set it on `writeDeps` once at startup and accept that runtime config changes don't propagate to the window (simpler, probably fine).
 
 **Watch out for:** the test for `awaitDiagnosticsRefresh` doesn't exist today. Worth adding one: stub `postWriteDiagSource`, call with a 50ms window and `time.Sleep(60ms)`, confirm the function returns. Then bump the window to 200ms and confirm it returns immediately when a diagnostic change fires.
+
+---
+
+### `search_in_files` exclude-glob patterns
+
+**Priority:** low-medium.
+**Effort:** 1–2 hours.
+
+Agents investigating an issue in a directory with known irrelevant subtrees (e.g. a vendored client folder, generated code, or test fixtures) currently see false leads when `search_in_files` matches inside those subtrees. An `exclude` parameter (string array of glob patterns) would let the agent filter them out, mirroring ripgrep's `--glob='!pattern'` flag.
+
+**Definition of done:**
+1. `search_in_files` gains an `exclude []string` parameter; each entry is passed to ripgrep as `--glob='!<pattern>'`.
+2. Schema and `docs/mcp-tools.md` updated.
+3. Tests: search with an exclude that suppresses a hit; without exclude the hit appears.
+
+---
+
+### Daemon log format: structured JSON for TUI log viewer
+
+**Priority:** prerequisite for TUI: Live Log Viewer (see above); low until that work starts.
+**Effort:** 30 min.
+
+A logging ecosystem review confirmed `log/slog` is the right choice for plumb — no third-party framework (Zap, Zerolog, Logrus) is warranted. The one actionable change before the TUI log viewer can be built: the daemon's handler needs to switch from `slog.NewTextHandler` to `slog.NewJSONHandler` (or make the format config-driven) so the TUI can parse structured fields without regex.
+
+**Definition of done:**
+1. `config.toml` gains `log_format = "text" | "json"` (default `"text"` for back-compat).
+2. `internal/cli/root.go`'s `setupLogging` selects the handler based on the resolved config value.
+3. `plumb config show` displays the resolved `log_format` with provenance.
 
 ---
 
@@ -638,7 +680,8 @@ Items raised in past reviews and decided against (or deferred deliberately). Lis
   **Search box** — free-text search across the call history in the popup. Right now you navigate the timestamp list with j/k/pgdn/pgup and there's no way to jump to a specific call except scrolling. A search box would let you type a date, tool name, or fragment of args and jump directly to matching calls.
 
   **Write-targets visualisation** — the most unique to plumb. Tools that mutate files (`edit_file`, `write_file`, `delete_file`, `rename_file`) touch specific paths. A write-targets view would show *which files* the agent has been editing — a per-file activity summary rather than a per-tool summary (e.g. `model.go — 14 edits`, `db.go — 3 edits`). It answers "what has the agent actually been touching in my project?" rather than "which tools did it use?".
-- **Native Windows support** — `safeWrite`'s atomic rename relies on POSIX rename-over-existing semantics. Windows handles this differently across Go versions. Not on the roadmap unless someone asks.
+- **Native Windows support** — `safeWrite`'s atomic rename relies on POSIX rename-over-existing semantics. Windows handles this differently across Go versions. Full Windows support would also require: (a) resolving `%LocalAppData%` and other Windows environment variables in path parameters, and (b) `find_files`/`search_in_files` awareness of Windows-specific naming discrepancies (e.g. product brand names vs underlying technology names in install paths). Not on the roadmap unless someone asks.
+- **`run_command` / shell execution tool** — requested for running scripts (PowerShell validation, unit tests) directly against the workspace without a user round-trip. Deferred: exposing arbitrary shell execution from the daemon is a significant security surface, especially when plumb is connected to a cloud LLM. Prompt-injection → shell execution is a real threat. If revisited: start with a locked-down command runner that only allows commands listed in `.plumb/allowed-commands.toml`, signed by the workspace owner.
 - **Per-agent identity for rate limiting and read tracking** — see Bugs & known limitations entries above. Requires upstream MCP support for a stable client-session header.
 
 ---
