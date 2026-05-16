@@ -10,7 +10,7 @@ import (
 const logoText = `╭─╮ ╷        ╷
 ┣━┛ ┃ ╷  ┏┳┓ ┣━┓
 ╵   ╵ ┃┃ ╵╵╵ ╰─╯
-────╮ ╰╯ ╭───────`
+────╮ ╰╯ ╭──────`
 
 // PrintLogo renders the industrial "piping" logo.
 func PrintLogo() {
