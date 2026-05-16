@@ -2,6 +2,7 @@ package stats
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -86,6 +87,53 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 	}
 	if !got[0].Success {
 		t.Errorf("Success = false, want true")
+	}
+}
+
+func TestPerProjectDBSurvivesWorkspaceMove(t *testing.T) {
+	parent := t.TempDir()
+	oldWorkspace := filepath.Join(parent, "old", "plumb")
+	newWorkspace := filepath.Join(parent, "new", "plumb")
+
+	db, err := Open(DBPathFor(oldWorkspace))
+	if err != nil {
+		t.Fatalf("Open old workspace DB: %v", err)
+	}
+	if err := db.Record(Call{
+		SessionID: "sess-1",
+		Tool:      "read_file",
+		CalledAt:  time.Now(),
+		Success:   true,
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	db.Close()
+
+	if err := os.MkdirAll(filepath.Dir(newWorkspace), 0o755); err != nil {
+		t.Fatalf("MkdirAll new parent: %v", err)
+	}
+	if err := os.Rename(oldWorkspace, newWorkspace); err != nil {
+		t.Fatalf("Rename workspace: %v", err)
+	}
+
+	moved, err := OpenReadOnly(DBPathFor(newWorkspace))
+	if err != nil {
+		t.Fatalf("OpenReadOnly moved workspace DB: %v", err)
+	}
+	if moved == nil {
+		t.Fatal("moved workspace DB was not found")
+	}
+	defer moved.Close()
+
+	got, err := moved.Recent(10, Filter{})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Recent rows = %d, want 1", len(got))
+	}
+	if got[0].Tool != "read_file" {
+		t.Errorf("Tool = %q, want read_file", got[0].Tool)
 	}
 }
 
