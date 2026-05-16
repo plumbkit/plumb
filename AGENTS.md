@@ -2,7 +2,7 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-Current version: **0.5.11** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.5.28** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -37,7 +37,7 @@ Key packages:
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | SQLite tool-call statistics (WAL, per-tool summary, P95, `user_version` 1) |
+| `internal/stats/` | Per-project SQLite tool-call statistics (WAL, per-tool summary, P95, `user_version` 3) |
 | `internal/memory/` | Per-workspace markdown memory store; exposed as MCP resources |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |

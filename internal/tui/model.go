@@ -210,7 +210,7 @@ func (m *Model) refreshPopupCalls() {
 		return
 	}
 	prev := selectedCallKey(m.popupCalls, m.popupCallCursor)
-	m.popupCalls, _ = db.CallsForTool(m.popupTool, ws, 200)
+	m.popupCalls, _ = db.CallsForTool(m.popupTool, 200)
 	m.popupCallCursor = locateCall(m.popupCalls, prev, m.popupCallCursor)
 	m.popupDetail = popupDetailCache{}
 }

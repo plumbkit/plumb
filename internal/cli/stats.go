@@ -135,15 +135,11 @@ func runStats(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("querying recent calls: %w", err)
 	}
-	for i := range recent {
-		recent[i].Workspace = ws
-	}
 
 	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
 
 	wWhen := 8 // "WHEN"
 	wTool := 4 // "TOOL"
-	wWork := 9 // "WORKSPACE"
 	for _, c := range recent {
 		if l := len(humanAge(c.CalledAt)); l > wWhen {
 			wWhen = l
@@ -151,23 +147,18 @@ func runStats(_ *cobra.Command, _ []string) error {
 		if l := len(c.Tool); l > wTool {
 			wTool = l
 		}
-		if l := len(contractSessionPath(c.Workspace)); l > wWork {
-			wWork = l
-		}
 	}
 
 	wWhen += 2
 	wTool += 2
-	wWork += 2
 
 	// Print header
 	// 11 = "ms" (3 chars, %-3s) + 2 spaces padding + "Status" (6 chars)
-	headerWidth := wWhen + wTool + wWork + 11
+	headerWidth := wWhen + wTool + 11
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
-	fmt.Printf("%s%s%s%-3s  %s\n",
+	fmt.Printf("%s%s%-3s  %s\n",
 		padRight(tui.HintStyle.Render("When"), wWhen),
 		padRight(tui.HintStyle.Render("Tool"), wTool),
-		padRight(tui.HintStyle.Render("Workspace"), wWork),
 		tui.HintStyle.Render("ms"),
 		tui.HintStyle.Render("Status"),
 	)
@@ -191,10 +182,9 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 		// %-3d (3 chars) + "  " (2 spaces) = 5.
 		// The ok character aligns perfectly with the 'S' in "Status".
-		rowStr := fmt.Sprintf("%s%s%s%-3d  %s",
+		rowStr := fmt.Sprintf("%s%s%-3d  %s",
 			padRight(humanAge(c.CalledAt), wWhen),
 			padRight(c.Tool, wTool),
-			padRight(contractSessionPath(c.Workspace), wWork),
 			c.DurationMs,
 			ok,
 		)
@@ -202,10 +192,9 @@ func runStats(_ *cobra.Command, _ []string) error {
 		if !c.Success {
 			// Print the entire row in WarnStyle, but preserve the spacing layout
 			// by removing the OK string and replacing it with the colored one later
-			rawRow := fmt.Sprintf("%s%s%s%-3d  ",
+			rawRow := fmt.Sprintf("%s%s%-3d  ",
 				padRight(humanAge(c.CalledAt), wWhen),
 				padRight(c.Tool, wTool),
-				padRight(contractSessionPath(c.Workspace), wWork),
 				c.DurationMs,
 			)
 			fmt.Println(tui.WarnStyle.Render(rawRow) + ok)

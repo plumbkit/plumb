@@ -1,8 +1,7 @@
 // Package stats records MCP tool call metrics to a SQLite database.
 //
-// The database lives at DataDir()/stats.db, which mirrors the same
-// XDG_DATA_HOME convention used by the session package so all plumb
-// data is co-located in one directory.
+// The database lives at <workspace>/.plumb/stats.db, so tool-call history
+// travels with the project it describes.
 //
 // WAL journal mode allows the daemon (writer) and the TUI / CLI (readers)
 // to operate from different OS processes simultaneously without blocking.
@@ -27,7 +26,6 @@ const schema = `
 CREATE TABLE IF NOT EXISTS tool_calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id   TEXT    NOT NULL DEFAULT '',
-    workspace    TEXT    NOT NULL DEFAULT '',
     tool         TEXT    NOT NULL,
     called_at    INTEGER NOT NULL,
     duration_ms  INTEGER NOT NULL DEFAULT 0,
@@ -111,19 +109,6 @@ func hasColumn(db *sql.DB, table, col string) (bool, error) {
 type DB struct {
 	db *sql.DB
 	mu sync.Mutex
-}
-
-// DataDir returns the plumb data directory using XDG_DATA_HOME conventions,
-// consistent with the session package.
-func DataDir() string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "plumb")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "plumb")
-	}
-	return filepath.Join(home, ".local", "share", "plumb")
 }
 
 // DBPathFor returns the per-workspace stats database path at
@@ -216,7 +201,6 @@ func (d *DB) Close() {
 // Call holds one tool invocation record.
 type Call struct {
 	SessionID   string
-	Workspace   string
 	Tool        string
 	CalledAt    time.Time
 	DurationMs  int64
@@ -254,9 +238,9 @@ func (d *DB) Record(c Call) error {
 	}
 	if _, err := d.db.Exec(
 		`INSERT INTO tool_calls
-		 (session_id, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.SessionID, c.Workspace, c.Tool,
+		 (session_id, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.SessionID, c.Tool,
 		c.CalledAt.UnixMilli(), c.DurationMs,
 		c.InputBytes, c.OutputBytes,
 		success, c.ErrorMsg,
@@ -427,7 +411,6 @@ func (d *DB) p95All(filter Filter) map[string]int64 {
 type RecentCall struct {
 	Tool        string
 	SessionID   string
-	Workspace   string
 	CalledAt    time.Time
 	DurationMs  int64
 	Success     bool
@@ -444,7 +427,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		return nil, nil
 	}
 	where, args := filter.where()
-	q := `SELECT tool, session_id, workspace, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json, output_text
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
@@ -461,7 +444,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		var calledMs int64
 		var success int
 		if err := rows.Scan(
-			&c.Tool, &c.SessionID, &c.Workspace, &calledMs, &c.DurationMs, &success,
+			&c.Tool, &c.SessionID, &calledMs, &c.DurationMs, &success,
 			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText,
 		); err != nil {
 			continue
@@ -473,11 +456,11 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	return out, rows.Err()
 }
 
-// CallsForTool returns recorded calls for a specific tool, workspace-wide,
+// CallsForTool returns recorded calls for a specific tool in this database,
 // ordered newest-first. limit caps the result set (0 = no cap).
 // input_json and output_text (potentially 64 KiB each) are intentionally
 // excluded from this list query — they are fetched on demand via CallDetail.
-func (d *DB) CallsForTool(tool, _ string, limit int) ([]RecentCall, error) {
+func (d *DB) CallsForTool(tool string, limit int) ([]RecentCall, error) {
 	if d == nil {
 		return nil, nil
 	}
@@ -486,7 +469,7 @@ func (d *DB) CallsForTool(tool, _ string, limit int) ([]RecentCall, error) {
 	}
 	f := Filter{Tool: tool}
 	where, args := f.where()
-	q := `SELECT tool, session_id, workspace, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -503,7 +486,7 @@ func (d *DB) CallsForTool(tool, _ string, limit int) ([]RecentCall, error) {
 		var calledMs int64
 		var success int
 		if err := rows.Scan(
-			&c.Tool, &c.SessionID, &c.Workspace, &calledMs, &c.DurationMs, &success,
+			&c.Tool, &c.SessionID, &calledMs, &c.DurationMs, &success,
 			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
 		); err != nil {
 			continue
@@ -563,25 +546,4 @@ func (d *DB) TotalTokensSaved(filter Filter) int64 {
 		total += int64(TokensSaved(tool, out))
 	}
 	return total
-}
-
-// Workspaces returns all distinct workspaces that have recorded calls.
-func (d *DB) Workspaces() ([]string, error) {
-	if d == nil {
-		return nil, nil
-	}
-	rows, err := d.db.Query(
-		`SELECT DISTINCT workspace FROM tool_calls WHERE workspace != '' ORDER BY workspace`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var w string
-		if err := rows.Scan(&w); err == nil {
-			out = append(out, w)
-		}
-	}
-	return out, rows.Err()
 }

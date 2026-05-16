@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"database/sql"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/golimpio/plumb/internal/stats"
 )
@@ -20,16 +23,8 @@ func TestRunStats_ShowsRowsAfterWorkspaceMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open old workspace DB: %v", err)
 	}
-	if err := db.Record(stats.Call{
-		SessionID: "sess-1",
-		Workspace: oldWorkspace,
-		Tool:      "read_file",
-		CalledAt:  time.Now(),
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
 	db.Close()
+	seedOldWorkspaceRow(t, stats.DBPathFor(oldWorkspace), oldWorkspace)
 
 	if err := os.MkdirAll(filepath.Dir(newWorkspace), 0o755); err != nil {
 		t.Fatalf("MkdirAll new parent: %v", err)
@@ -55,6 +50,30 @@ func TestRunStats_ShowsRowsAfterWorkspaceMove(t *testing.T) {
 	}
 	if !strings.Contains(out, "read_file") {
 		t.Fatalf("runStats output did not include moved DB row:\n%s", out)
+	}
+}
+
+func seedOldWorkspaceRow(t *testing.T, dbPath, oldWorkspace string) {
+	t.Helper()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite DB: %v", err)
+	}
+	defer raw.Close()
+
+	if _, err := raw.Exec(`ALTER TABLE tool_calls ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`); err != nil {
+		t.Fatalf("add old workspace column: %v", err)
+	}
+
+	_, err = raw.Exec(
+		`INSERT INTO tool_calls
+		 (session_id, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"sess-1", oldWorkspace, "read_file", time.Now().UnixMilli(), 1, 0, 0, 1, "", "", "",
+	)
+	if err != nil {
+		t.Fatalf("insert old workspace row: %v", err)
 	}
 }
 

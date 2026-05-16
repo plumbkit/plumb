@@ -128,9 +128,10 @@ Key design properties:
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
 
-XDG: `XDG_DATA_HOME` (sessions, stats) and `XDG_CONFIG_HOME` (config) are
-respected when set. Cache paths use `os.UserCacheDir()` directly because they
-are runtime, not data — see Daemon architecture above for why.
+XDG: `XDG_DATA_HOME` (sessions) and `XDG_CONFIG_HOME` (config) are respected
+when set. Stats live in the project database at `<workspace>/.plumb/stats.db`.
+Cache paths use `os.UserCacheDir()` directly because they are runtime, not
+data — see Daemon architecture above for why.
 
 ### Statistics database (`stats.db`)
 
@@ -140,7 +141,6 @@ Single SQLite file containing one table:
 CREATE TABLE tool_calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id   TEXT    NOT NULL DEFAULT '',  -- session.Info.ID
-    workspace    TEXT    NOT NULL DEFAULT '',  -- reserved; per-project DB path is the workspace identity
     tool         TEXT    NOT NULL,              -- e.g. "find_symbol"
     called_at    INTEGER NOT NULL,              -- Unix milliseconds
     duration_ms  INTEGER NOT NULL DEFAULT 0,    -- wall-clock execution time

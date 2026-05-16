@@ -19,7 +19,6 @@ func TestRecent_RoundTripsErrorAndByteFields(t *testing.T) {
 	now := time.Now()
 	if err := db.Record(Call{
 		SessionID:   "sess-1",
-		Workspace:   "/tmp/ws",
 		Tool:        "find_symbol",
 		CalledAt:    now,
 		DurationMs:  42,
@@ -69,7 +68,6 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 
 	if err := db.Record(Call{
 		SessionID:  "sess-1",
-		Workspace:  "/tmp/ws",
 		Tool:       "list_symbols",
 		CalledAt:   time.Now(),
 		DurationMs: 5,
