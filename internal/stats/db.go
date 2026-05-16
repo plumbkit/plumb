@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
-CREATE INDEX IF NOT EXISTS idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX IF NOT EXISTS idx_tc_session   ON tool_calls(session_id);
 `
 
@@ -125,13 +124,6 @@ func DataDir() string {
 		return filepath.Join(os.TempDir(), "plumb")
 	}
 	return filepath.Join(home, ".local", "share", "plumb")
-}
-
-// DBPath returns the legacy global stats database path. Kept for backward
-// compatibility with installations that have history under the global path;
-// new writes go to per-project databases via DBPathFor.
-func DBPath() string {
-	return filepath.Join(DataDir(), "stats.db")
 }
 
 // DBPathFor returns the per-workspace stats database path at
@@ -290,7 +282,6 @@ type ToolStat struct {
 
 // Filter narrows a stats query. Empty fields are not constrained.
 type Filter struct {
-	Workspace string
 	SessionID string
 	Tool      string // when set, restricts to calls for this exact tool name
 }
@@ -298,10 +289,6 @@ type Filter struct {
 func (f Filter) where() (string, []any) {
 	var conds []string
 	var args []any
-	if f.Workspace != "" {
-		conds = append(conds, "workspace = ?")
-		args = append(args, f.Workspace)
-	}
 	if f.SessionID != "" {
 		conds = append(conds, "session_id = ?")
 		args = append(args, f.SessionID)
@@ -490,14 +477,14 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 // ordered newest-first. limit caps the result set (0 = no cap).
 // input_json and output_text (potentially 64 KiB each) are intentionally
 // excluded from this list query — they are fetched on demand via CallDetail.
-func (d *DB) CallsForTool(tool, workspace string, limit int) ([]RecentCall, error) {
+func (d *DB) CallsForTool(tool, _ string, limit int) ([]RecentCall, error) {
 	if d == nil {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	f := Filter{Workspace: workspace, Tool: tool}
+	f := Filter{Tool: tool}
 	where, args := f.where()
 	q := `SELECT tool, session_id, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes

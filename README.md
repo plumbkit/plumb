@@ -347,7 +347,7 @@ Every write through plumb (`write_file`, `edit_file`, `delete_file`, `rename_fil
 
 ## Statistics
 
-Tool-call statistics are stored in a per-project SQLite database at `<workspace>/.plumb/stats.db` (schema version 1 since 0.5.3, stamped in `PRAGMA user_version`). The TUI and `plumb stats` read concurrently with the daemon writing, using WAL journal mode. Each row still stores the workspace path as historical metadata, so projects moved between directories can contain old rows with the previous absolute path; `plumb stats` filters to the requested workspace path by default.
+Tool-call statistics are stored in a per-project SQLite database at `<workspace>/.plumb/stats.db` (schema version 1 since 0.5.3, stamped in `PRAGMA user_version`). The database location is the workspace identity, so project history moves with the checkout. The TUI and `plumb stats` read concurrently with the daemon writing, using WAL journal mode.
 
 ```sh
 plumb stats                         # current directory's project

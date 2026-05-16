@@ -54,7 +54,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	}
 	defer db.Close()
 
-	filter := stats.Filter{Workspace: ws}
+	filter := stats.Filter{}
 
 	total := db.TotalCalls(filter)
 	if total == 0 {
@@ -134,6 +134,9 @@ func runStats(_ *cobra.Command, _ []string) error {
 	recent, err := db.Recent(statsFlagLimit, filter)
 	if err != nil {
 		return fmt.Errorf("querying recent calls: %w", err)
+	}
+	for i := range recent {
+		recent[i].Workspace = ws
 	}
 
 	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)

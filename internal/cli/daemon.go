@@ -400,7 +400,6 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		}
 		statsStore.Record(root, stats.Call{
 			SessionID:   sessID,
-			Workspace:   root,
 			Tool:        toolName,
 			CalledAt:    time.Now(),
 			DurationMs:  dur.Milliseconds(),

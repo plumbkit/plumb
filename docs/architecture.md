@@ -120,7 +120,6 @@ Key design properties:
 | `~/.config/plumb/config.toml` | user | LSP commands, cache TTL, log level |
 | `~/.local/share/plumb/sessions/<id>.json` | daemon | Active session metadata (one file per MCP connection) |
 | `<workspace>/.plumb/stats.db` | daemon (writer) / TUI + `plumb stats` (readers) | Per-project tool call statistics, SQLite WAL |
-| `~/.local/share/plumb/stats.db` | legacy | Old global stats from < 0.3.1; safe to delete |
 | `~/Library/Caches/plumb/plumb.sock` | daemon | Unix socket for MCP proxy connections |
 | `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
 | `~/Library/Caches/plumb/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
@@ -141,18 +140,19 @@ Single SQLite file containing one table:
 CREATE TABLE tool_calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id   TEXT    NOT NULL DEFAULT '',  -- session.Info.ID
-    workspace    TEXT    NOT NULL DEFAULT '',  -- absolute project path
+    workspace    TEXT    NOT NULL DEFAULT '',  -- reserved; per-project DB path is the workspace identity
     tool         TEXT    NOT NULL,              -- e.g. "find_symbol"
     called_at    INTEGER NOT NULL,              -- Unix milliseconds
     duration_ms  INTEGER NOT NULL DEFAULT 0,    -- wall-clock execution time
     input_bytes  INTEGER NOT NULL DEFAULT 0,    -- raw JSON arg length
     output_bytes INTEGER NOT NULL DEFAULT 0,    -- text response length
     success      INTEGER NOT NULL DEFAULT 1,    -- 1 = ok, 0 = error
-    error_msg    TEXT    NOT NULL DEFAULT ''
+    error_msg    TEXT    NOT NULL DEFAULT '',
+    input_json   TEXT    NOT NULL DEFAULT '',   -- raw tool args, capped
+    output_text  TEXT    NOT NULL DEFAULT ''    -- tool output, capped
 );
 CREATE INDEX idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
-CREATE INDEX idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX idx_tc_session   ON tool_calls(session_id);
 ```
 
@@ -168,16 +168,17 @@ Concurrency model:
 - **Read-only readers** — the TUI opens the same file with `?mode=ro`. If
   the file does not yet exist (no calls recorded), the read open returns
   `(nil, nil)` and the caller renders "No statistics yet."
-- **Best-effort writes** — `Record` swallows errors silently. Stats must
-  never break a tool call.
+- **Best-effort writes** — `Record` returns insert errors so the daemon can log
+  storage failures, but stats must never break a tool call.
 
 Every successful or failed `tools/call` triggers `srv.OnAfterTool`, which the
 daemon connects to `statsDB.Record(stats.Call{...})` capturing tool name,
-session, workspace, timing, and I/O sizes.
+session, timing, and I/O sizes. The workspace is derived from the database
+path (`<workspace>/.plumb/stats.db`), not from a per-row absolute path.
 
-Schema migrations: none yet. New columns must be added with `ALTER TABLE …
-ADD COLUMN … DEFAULT …` so old rows remain valid; index changes are
-idempotent (`CREATE INDEX IF NOT EXISTS`).
+Schema migrations are driven by `PRAGMA user_version`; new columns are added
+with `ALTER TABLE … ADD COLUMN … DEFAULT …` so old rows remain valid. Index
+changes are idempotent (`CREATE INDEX IF NOT EXISTS`).
 
 ### Session registry (`sessions/<id>.json`)
 

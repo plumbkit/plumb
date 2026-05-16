@@ -54,10 +54,10 @@ type RootsResolver func(ctx context.Context) string
 //  3. roots/list query to the MCP client (Claude Desktop's roots support)
 //  4. walk up from os.Getwd() looking for a project marker
 type SessionStart struct {
-	ws        WorkspaceFn
-	diag      diagnosticsSource // may be nil; diagnostics section skipped when nil
-	roots     RootsResolver     // may be nil; roots/list fallback skipped when nil
-	refuseFn  func() bool       // may be nil; treated as false (no refusal)
+	ws       WorkspaceFn
+	diag     diagnosticsSource // may be nil; diagnostics section skipped when nil
+	roots    RootsResolver     // may be nil; roots/list fallback skipped when nil
+	refuseFn func() bool       // may be nil; treated as false (no refusal)
 }
 
 // NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted
@@ -177,7 +177,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	// ── 6. Recent tool usage stats ────────────────────────────────────────
 	if db, err := stats.OpenReadOnly(stats.DBPathFor(ws)); err == nil && db != nil {
 		defer db.Close()
-		if toolStats, err := db.Summary(stats.Filter{Workspace: ws}); err == nil && len(toolStats) > 0 {
+		if toolStats, err := db.Summary(stats.Filter{}); err == nil && len(toolStats) > 0 {
 			sb.WriteString("## Most-used tools (this workspace)\n\n")
 			limit := 5
 			if len(toolStats) < limit {
