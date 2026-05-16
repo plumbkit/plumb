@@ -572,6 +572,24 @@ Proving things actually work end-to-end. The unit suite is green; what's missing
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).
 
+### `--log-level` flag does not propagate to the daemon or respect config
+
+**Priority:** medium.
+**Effort:** 30 min.
+
+The `--log-level` flag in the `plumb` CLI is misleading and effectively broken for debugging the daemon. It suffers from three main issues:
+
+1.  **Does not propagate to the daemon:** Most work happens in the background `daemon` process. When `plumb serve --log-level=debug` spawns the daemon (`startDaemonProcess()`), it explicitly drops the flag, so the daemon always starts at the default `info` level.
+2.  **Ignores TOML config:** The TOML configuration system (`internal/config/config.go`) includes a `LogLevel` field, but `setupLogging()` in `internal/cli/root.go` only binds to the CLI flag `logLevelFlag`.
+3.  **Appears as a Local Flag:** Because it's a `PersistentFlag` printed via a custom `SetHelpFunc`, it shows up under `Flags:` rather than `Global Flags:`.
+
+**Definition of done:**
+1.  `startDaemonProcess()` forwards the active log level: `exec.Command(exe, "daemon", "--log-level", logLevelFlag)`.
+2.  Daemon initialization falls back to `cfg.LogLevel` if the CLI flag wasn't explicitly overridden.
+3.  The custom help function in `internal/cli/root.go` is updated to group `--log-level` under `Global Flags:`.
+
+---
+
 ### `pathLocks` is permanent process-global state
 
 Every path ever locked by any tool stays in the `sync.Map[string]*sync.Mutex` in `internal/tools/file_write_helpers.go` for the daemon's lifetime. For long-running daemons handling many sessions across many files, this can grow without bound. Not a leak in the GC sense (the mutexes are reachable), but a slow memory creep.
