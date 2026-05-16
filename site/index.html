@@ -64,7 +64,7 @@
           <span class="t-bar-title">plumb status</span>
         </div>
         <div class="t-body">
-          <div class="tl d1"><span class="tb">plumb 0.3.0</span></div>
+          <div class="tl d1"><span class="tb">plumb 0.5.29</span></div>
           <div class="tl d2"><span class="td">┌─ Sessions (1) ─────────────┬─ Detail ──────────────────┐</span></div>
           <div class="tl d3"><span class="td">│</span> <span class="tb">▸ go: ~/Projects/myapp</span>    <span class="td">│</span>  <span class="tc">Folder</span>   <span class="tw">~/Projects/myapp</span>   <span class="td">│</span></div>
           <div class="tl d4"><span class="td">│</span>                            <span class="td">│</span>  <span class="tc">Language</span> <span class="tw">go</span>                 <span class="td">│</span></div>
@@ -94,22 +94,30 @@
     <p class="sec-sub">Pasting raw source into context is wasteful and imprecise. Plumb gives Claude structured semantic queries instead.</p>
     <div class="why-grid">
       <div class="why-card">
-        <span class="why-icon">⚡</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path stroke="var(--blue)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 3 4 14h7l-1 7 9-11h-7z"/><path fill="var(--blue)" fill-opacity=".12" d="M13 3 4 14h7l-1 7 9-11h-7z"/></svg>
+        </span>
         <h3>Shared daemon</h3>
         <p>One gopls process per workspace, shared across all your conversations. Gopls stays warm between sessions — no re-indexing on every new chat.</p>
       </div>
       <div class="why-card">
-        <span class="why-icon">🔍</span>
-        <h3>27 tools, multi-language</h3>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" stroke="var(--cyan)" stroke-width="1.5"/><circle cx="12" cy="12" r="3" stroke="var(--cyan)" stroke-width="1.5"/><circle cx="12" cy="12" r="1" fill="var(--cyan)"/><path stroke="var(--cyan)" stroke-linecap="round" stroke-width="1.5" d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+        </span>
+        <h3>33 tools, multi-language</h3>
         <p>Symbols, definitions, references, call/type hierarchies, diagnostics, file search, semantic edits, project memories — across Go (gopls) and Python (pyright). Cross-project queries work in a single MCP session.</p>
       </div>
       <div class="why-card">
-        <span class="why-icon">📍</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path stroke="var(--green)" stroke-linejoin="round" stroke-width="1.5" d="M12 3 21 12 12 21 3 12z"/><path fill="var(--green)" fill-opacity=".1" d="M12 3 21 12 12 21 3 12z"/><path stroke="var(--green)" stroke-linejoin="round" stroke-width="1" d="M12 8 16 12 12 16 8 12z" opacity=".45"/><circle cx="12" cy="12" r="1.5" fill="var(--green)"/></svg>
+        </span>
         <h3>Workspace-aware</h3>
         <p>Drop a <code>.plumb</code> directory in your project root. Plumb detects it automatically, even when nested modules or testdata are present.</p>
       </div>
       <div class="why-card">
-        <span class="why-icon">✏️</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path stroke="var(--purple)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 3 21 8 8 21H3v-5z"/><path fill="var(--purple)" fill-opacity=".1" d="M16 3 21 8 8 21H3v-5z"/><path stroke="var(--purple)" stroke-linecap="round" stroke-width="1.5" d="m13.5 5.5 5 5"/></svg>
+        </span>
         <h3>Semantic edits</h3>
         <p>LSP-driven refactoring tools — <code>rename_symbol</code>, <code>replace_symbol_body</code>, <code>insert_before/after_symbol</code>, <code>safe_delete_symbol</code>. Scope-aware, dry-run by default. Git subcommands stay allowlisted to safe, read-only operations.</p>
       </div>
@@ -123,7 +131,7 @@
 <section id="tools">
   <div class="container">
     <div class="label">MCP tools</div>
-    <h2 class="sec-title">Twenty-seven tools. Each returns exactly what Claude needs.</h2>
+    <h2 class="sec-title">Thirty-three tools. Each returns exactly what Claude needs.</h2>
     <p class="sec-sub">Designed to minimise round-trips and eliminate redundant file reads — the source line is already in the response.</p>
     <div class="tools-grid">
 
@@ -518,32 +526,169 @@
 <section id="architecture">
   <div class="container">
     <div class="label">Architecture</div>
-    <h2 class="sec-title">One daemon. One gopls. Many conversations.</h2>
+    <h2 class="sec-title">One daemon. Many conversations.</h2>
     <p class="sec-sub">A shared daemon means the language server is always warm — no re-indexing when you open a new chat.</p>
 
-    <div class="arch-wrap">
-      <div class="arch-node accent-top">
-        <div class="arch-node-name">Claude Desktop</div>
-        <div class="arch-node-desc">MCP client — spawns one <code>plumb serve</code> per conversation</div>
+    <!-- Runtime flow diagram -->
+    <div class="arch2">
+
+      <!-- Tier 1 — MCP clients -->
+      <div class="arch2-clients">
+        <div class="arch2-tier-label">MCP Clients</div>
+        <div class="arch2-clients-row">
+          <div class="arch2-client-box">
+            <span class="arch2-client-icon" style="color:var(--purple)">◈</span>
+            <span class="arch2-client-name">Claude Desktop</span>
+            <span class="arch2-client-sub">one serve per conversation</span>
+          </div>
+          <div class="arch2-client-box">
+            <span class="arch2-client-icon" style="color:var(--blue)">◈</span>
+            <span class="arch2-client-name">Claude Code</span>
+            <span class="arch2-client-sub">one serve per conversation</span>
+          </div>
+          <div class="arch2-client-box arch2-client-dim">
+            <span class="arch2-client-icon" style="color:var(--text-muted)">◈</span>
+            <span class="arch2-client-name">Any MCP Client</span>
+            <span class="arch2-client-sub">open protocol</span>
+          </div>
+        </div>
       </div>
-      <div class="arch-connector">
-        <span class="arch-conn-label">stdio (MCP JSON-RPC)</span>
-        <span class="arch-conn-arrow">↓</span>
+
+      <!-- Arrow 1 -->
+      <div class="arch2-arrow">
+        <div class="arch2-arrow-track">
+          <div class="arch2-arrow-line"></div>
+          <div class="arch2-arrow-tip">▾</div>
+        </div>
+        <div class="arch2-arrow-label">stdio &middot; MCP JSON-RPC 2.0</div>
       </div>
-      <div class="arch-node accent-blue">
-        <div class="arch-node-name">plumb serve</div>
-        <div class="arch-node-desc">thin proxy · dials Unix socket · forwards bytes</div>
+
+      <!-- Tier 2 — plumb serve (stacked to show N instances) -->
+      <div class="arch2-serve-wrap">
+        <div class="arch2-serve">
+          <div class="arch2-serve-title">plumb serve</div>
+          <div class="arch2-serve-sub">thin stdio proxy &middot; one instance per conversation &middot; dials Unix socket &middot; forwards bytes verbatim</div>
+        </div>
       </div>
-      <div class="arch-connector">
-        <span class="arch-conn-label">~/Library/Caches/plumb/plumb.sock</span>
-        <span class="arch-conn-arrow">↓</span>
+
+      <!-- Arrow 2 -->
+      <div class="arch2-arrow">
+        <div class="arch2-arrow-track">
+          <div class="arch2-arrow-line"></div>
+          <div class="arch2-arrow-tip">▾</div>
+        </div>
+        <div class="arch2-arrow-label">~/Library/Caches/plumb/plumb.sock</div>
       </div>
-      <div class="arch-node accent-green">
-        <div class="arch-node-name">plumb daemon</div>
-        <div class="arch-node-desc">one long-lived process · workspace pool · one gopls per root</div>
-        <div class="arch-pool">
-          <div class="arch-pool-chip">gopls · ~/projects/foo</div>
-          <div class="arch-pool-chip">gopls · ~/projects/bar</div>
+
+      <!-- Tier 3 — plumb daemon -->
+      <div class="arch2-daemon">
+        <div class="arch2-daemon-header">
+          <span class="arch2-daemon-name">plumb daemon</span>
+          <span class="arch2-daemon-badge">singleton &middot; flock enforced &middot; one process shared across all conversations</span>
+        </div>
+        <div class="arch2-daemon-body">
+
+          <div class="arch2-pool">
+            <div class="arch2-pool-title">workspacePool</div>
+            <div class="arch2-pool-sub">one language server per workspace root</div>
+            <div class="arch2-pool-list">
+              <div class="arch2-pool-entry">
+                <span class="arch2-lang arch2-lang-go">go</span>
+                <div class="arch2-entry-info">
+                  <span class="arch2-entry-adapter">gopls</span>
+                  <span class="arch2-entry-path">~/projects/myapp</span>
+                </div>
+                <span class="arch2-entry-live"></span>
+              </div>
+              <div class="arch2-pool-entry">
+                <span class="arch2-lang arch2-lang-py">py</span>
+                <div class="arch2-entry-info">
+                  <span class="arch2-entry-adapter">pyright</span>
+                  <span class="arch2-entry-path">~/projects/api</span>
+                </div>
+                <span class="arch2-entry-live"></span>
+              </div>
+              <div class="arch2-pool-new">
+                + auto-added on first tool call for a new root
+              </div>
+            </div>
+          </div>
+
+          <div class="arch2-session">
+            <div class="arch2-session-title">per-connection session</div>
+            <div class="arch2-session-list">
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:var(--blue)"></span>
+                <div>
+                  <div class="arch2-session-name">readTracker</div>
+                  <div class="arch2-session-desc">strict-mode gate &middot; mtime fencing</div>
+                </div>
+              </div>
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:#e2b714"></span>
+                <div>
+                  <div class="arch2-session-name">writeLimiter</div>
+                  <div class="arch2-session-desc">sliding-window rate cap (120/min default)</div>
+                </div>
+              </div>
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:var(--purple)"></span>
+                <div>
+                  <div class="arch2-session-name">symbolCache</div>
+                  <div class="arch2-session-desc">LSP-invalidated &middot; per-session isolation</div>
+                </div>
+              </div>
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:var(--green)"></span>
+                <div>
+                  <div class="arch2-session-name">stats.db</div>
+                  <div class="arch2-session-desc">SQLite WAL &middot; per-tool P95 metrics</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer architecture -->
+    <div class="arch2-layers">
+      <div class="arch2-layers-header">
+        <span class="arch2-layers-title">Strict layer architecture</span>
+        <span class="arch2-layers-rule">lower layers never import higher ones</span>
+      </div>
+      <div class="arch2-layers-row">
+        <div class="arch2-layer arch2-layer-1">
+          <div class="arch2-layer-num">01</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Transport</div>
+            <div class="arch2-layer-pkgs">internal/mcp &middot; internal/lsp</div>
+          </div>
+        </div>
+        <div class="arch2-layer-sep">→</div>
+        <div class="arch2-layer arch2-layer-2">
+          <div class="arch2-layer-num">02</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Domain</div>
+            <div class="arch2-layer-pkgs">internal/cache &middot; internal/config &middot; internal/session</div>
+          </div>
+        </div>
+        <div class="arch2-layer-sep">→</div>
+        <div class="arch2-layer arch2-layer-3">
+          <div class="arch2-layer-num">03</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Application</div>
+            <div class="arch2-layer-pkgs">internal/tools &middot; internal/stats &middot; internal/memory</div>
+          </div>
+        </div>
+        <div class="arch2-layer-sep">→</div>
+        <div class="arch2-layer arch2-layer-4">
+          <div class="arch2-layer-num">04</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Presentation</div>
+            <div class="arch2-layer-pkgs">internal/tui &middot; internal/cli</div>
+          </div>
         </div>
       </div>
     </div>
@@ -551,9 +696,9 @@
     <div class="arch-note">
       <strong>Workspace detection</strong> — plumb finds the project root by walking up from the file URI:
       first looking for a <code>.plumb/</code> directory (run <code>plumb init</code> at your project root),
-      then falling back to the nearest <code>go.mod</code>. The <code>.plumb</code> marker takes
-      priority, preventing nested modules in <code>testdata/</code> or <code>vendor/</code> from
-      being selected as the root.
+      then falling back to the nearest language root marker (<code>go.mod</code>, <code>pyproject.toml</code>).
+      The <code>.plumb</code> marker takes priority, preventing nested modules in <code>testdata/</code>
+      or <code>vendor/</code> from being selected as the root.
     </div>
   </div>
 </section>
@@ -569,22 +714,30 @@
 
     <div class="why-grid" style="margin-bottom: 48px;">
       <div class="why-card">
-        <span class="why-icon">📊</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><polyline stroke="var(--blue)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" points="1,12 5,12 7,5 9,19 11,12 15,12 17,8 19,12 23,12"/></svg>
+        </span>
         <h3>Per-tool statistics</h3>
         <p>Call count, average latency, P95, total I/O, and error rate — broken down by tool and workspace.</p>
       </div>
       <div class="why-card">
-        <span class="why-icon">🖥️</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="20" height="14" x="2" y="3" rx="2" stroke="var(--cyan)" stroke-width="1.5"/><path stroke="var(--cyan)" stroke-linecap="round" stroke-width="1.5" d="M8 21h8M12 17v4"/><path stroke="var(--cyan)" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m7 9 3 2.5L7 14"/><line x1="13" y1="14" x2="17" y2="14" stroke="var(--cyan)" stroke-linecap="round" stroke-width="1.5" opacity=".55"/></svg>
+        </span>
         <h3>Client detection</h3>
         <p>Plumb identifies which app connected — Claude Desktop, Claude Code, or any other MCP client — via the MCP initialize handshake.</p>
       </div>
       <div class="why-card">
-        <span class="why-icon">⚡</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path stroke="var(--green)" stroke-linecap="round" stroke-width="1.5" d="M5.5 19a8 8 0 1 1 13 0"/><circle cx="12" cy="12" r="1.5" fill="var(--green)"/><path stroke="var(--green)" stroke-linecap="round" stroke-width="1.5" d="m12 12 2.5-4"/></svg>
+        </span>
         <h3>Live dashboard</h3>
         <p>The built-in TUI shows active sessions, tool stats, and recent calls in real time. Refreshes every second.</p>
       </div>
       <div class="why-card">
-        <span class="why-icon">🗄️</span>
+        <span class="why-icon">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><ellipse cx="12" cy="6" rx="8" ry="3" stroke="var(--purple)" stroke-width="1.5"/><ellipse cx="12" cy="6" rx="8" ry="3" fill="var(--purple)" fill-opacity=".1"/><path stroke="var(--purple)" stroke-width="1.5" d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path stroke="var(--purple)" stroke-width="1.5" d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
+        </span>
         <h3>SQLite store</h3>
         <p>All data is stored locally in <code>~/.local/share/plumb/stats.db</code>. WAL mode lets the TUI and CLI read concurrently while the daemon writes.</p>
       </div>
