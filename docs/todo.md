@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.12** (2026-05-11).
+Last reviewed against: **0.5.29** (2026-05-16).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -23,31 +23,15 @@ Topics:
 
 ## The next two hours
 
-If you have ~2 hours of work to invest, do these in this order. They're the items whose absence undermines the most confidence right now:
+If you have ~2 hours of work to invest, do these in this order:
 
 1. **Pyright integration smoke test** (~20 min, once `pyright-langserver` is installed) — same shape as the gopls test that landed in 0.5.6. Highest-value confidence boost. See [Testing & verification > Pyright integration smoke test](#pyright-integration-smoke-test).
 
-2. **Claude Desktop end-to-end test** (~30 min, no code) — the whole 0.5.x line was built for Claude Desktop. Connect real Claude Desktop to current binary, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back. See [Testing & verification > Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test).
+2. **Claude Desktop end-to-end test** (~30 min, no code) — connect real Claude Desktop to current binary, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back. See [Testing & verification > Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test).
 
-3. **`expected_sha` parameter on `edit_file`** (~30 min) — the mtime path stays as the cheap default; the SHA path is for callers that care. Doesn't break existing behaviour. See [Architecture > `expected_sha` parameter on `edit_file` and `transaction_apply`](#expected_sha-parameter-on-edit_file-and-transaction_apply).
+3. **`find_replace` discoverability** (~15 min) — agents searching for "grep" or "content search" don't find `find_replace` because its description leads with "Search and replace". Adding "Grep-equivalent: find text across files with optional replacement." as the first sentence of its description would fix this. Low effort, high agent UX value.
 
-Total: ~1½ hours. After these, plumb is *proven* (not just claimed) production-ready against the two LSPs we support and against the client we built for.
-
----
-
-Claude failed to find existing tools in Plumb...Here's the feedback:
-Why I missed the plumb grep tool
-When I called tool_search with "plumb find replace parameters" I was already looking for the specific tool I'd partially loaded. Earlier when I needed to search file contents I used plumb:search_in_files — which I found fine. The miss was specifically on find_replace because I called it with wrong parameters the first time, then used tool_search to look up the schema rather than discovering the tool fresh.
-The deeper issue: tool_search searches tool descriptions, not tool names directly. When I searched "grep" or "find replace" early in that session I got no result because the find_replace description says "Search and replace text across files" — grep-like discovery only works if I search "search replace files" rather than "grep".
-How to improve plumb's discoverability:
-The find_replace description could add a single line at the top:
-
-"Grep-equivalent: find text across files in a directory tree, with optional replacement."
-
-Or the description keywords could include grep, search files, content search. Right now the description leads with "Search and replace" which implies you already know you want to replace — a pure search use case (like finding all files with a reference) doesn't obviously map to it.
-A separate search_in_files that does read-only grep (no replacement) would also make the distinction clearer — you have plumb:search_in_files but it only searches filenames/symbols via the LSP index, not raw file contents. The gap between "search file contents" and "find_replace with dry_run=true" is the blind spot.
-
-The TODO here is about what can we do to make this bullet proof.
+Total: ~1 hour. After items 1 and 2, plumb is *proven* (not just claimed) production-ready against both supported LSPs and the primary client.
 
 ---
 
@@ -87,6 +71,26 @@ Why this is architecturally important, not just a nice feature:
 - It scales linguistically: every language plumb supports already has a mature offline analyser. The contract is the same shape per language.
 - It dovetails with `[edits].strict` and rate-limiting: agents that *care* about quality get richer feedback; those that don't can disable.
 
+**Why `golangci-lint` is the right first analyser for plumb.**
+
+This repo already has `.golangci.yml`, `make lint`, and CI wiring. Integrating the same analyser into plumb's daemon would bring those checks into the agent's inner loop instead of leaving them as a final CI gate.
+
+- It catches issues LSP diagnostics often miss: unchecked errors, ineffective assignments, security footguns, formatting/import drift, dead parameters, complexity spikes, and style regressions.
+- It is especially valuable for plumb's risk profile: daemon concurrency, filesystem writes, symlink-aware path handling, rollback paths, and error propagation are all places where lint findings catch real bugs rather than cosmetic nits.
+- It gives agents the same standard as human contributors. The repo already says `golangci-lint` runs before every commit; surfacing those findings through plumb makes that contract visible to agents before review.
+- It makes CI failures more local. Instead of "write code, push, wait for CI, then discover lint", plumb can tell the agent soon after the edit that the change violated the project's lint policy.
+- It keeps quality rules project-specific. `golangci-lint` reads the workspace's checked-in config, so plumb does not need to invent its own Go style policy.
+
+**Daemon-aware design direction.**
+
+Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspace state, and can do useful background work without blocking every tool response. That should shape this feature.
+
+- Default design should be **background analysis**: write tools enqueue changed files after a successful write; the daemon coalesces rapid edits and runs the analyser shortly after.
+- Tool responses should stay bounded. If fresh findings are already available, append them; if analysis is still running, say so briefly and let the next orientation/status/tool response surface the result.
+- Optional **synchronous mode** can exist for users who want strict immediate feedback, but it should be opt-in because `golangci-lint` can be slow on cold caches.
+- Findings should be cached per workspace and invalidated by file mtime/content hash so the TUI, `session_start`, and future status/quality views can show the latest known quality state.
+- The daemon can warm analyser caches opportunistically after workspace attach, but this must be low-priority and cancellable so it never competes with active tool calls.
+
 **Definition of done — Phase 1 (Go, minimum viable):**
 
 1. New abstraction: `internal/quality/Analyser` interface:
@@ -110,16 +114,20 @@ Why this is architecturally important, not just a nice feature:
 3. New config layer (in `[edits]` or new `[quality]` block):
    ```toml
    [quality]
-   enabled = true                      # default false until proven
+   enabled = false                     # opt-in until proven in real use
+   mode = "background"                 # "background" | "sync"
    analysers = ["golangci-lint"]       # opt-in list
-   timeout_ms = 2000                   # bound the wait
+   timeout_ms = 2000                   # bound each analyser run
    max_findings_per_file = 5           # don't overwhelm responses
    ```
-4. `WriteDeps` gains `Quality Analyser` (may be nil). The daemon constructs an `analysers.Composite` for the resolved workspace's language and passes it.
-5. `write_file` / `edit_file` / `transaction_apply` invoke the analyser after the post-write-diagnostics poll. The analyser runs against the file(s) just written, with the configured timeout. Findings are formatted and appended to the response.
-6. `plumb config show` displays the resolved `[quality]` block with provenance.
-7. Tests:
+4. The daemon owns a per-workspace quality runner: a small queue, one active analyser process per workspace, coalescing repeated writes to the same file.
+5. `WriteDeps` gains a quality reporter/enqueuer (may be nil). `write_file` / `edit_file` / `transaction_apply` enqueue changed Go files after the post-write-diagnostics poll; sync mode may also wait for the bounded result and append findings immediately.
+6. Findings are formatted as a compact "code quality" section and capped per file. Background findings are available to `session_start`, the TUI, and a future `plumb quality` / status view.
+7. `plumb config show` displays the resolved `[quality]` block with provenance.
+8. Tests:
    - Unit test the parser with a captured `golangci-lint --out-format=json` output sample.
+   - Unit test daemon queue coalescing and stale-result invalidation without shelling out.
+   - Unit test response formatting and max-findings caps.
    - Integration test (`//go:build integration`): write a file with a known style issue, assert the matching code appears in the response.
 
 **Phase 2 (Python and beyond):**
@@ -137,62 +145,22 @@ Why this is architecturally important, not just a nice feature:
 
 **Where to start — the discussion to have first:**
 
-- Synchronous vs async (Phase 1 says sync; what's the latency budget?).
+- Background vs sync should be a config choice. Recommendation: background by default, sync opt-in for strict workflows.
 - How wide is "code quality"? Strict linters (`govet`, `staticcheck`) only, or include style (`gofumpt`, `golines`)? Recommendation: start strict, add style behind a flag.
 - Does `[quality].enabled = true` by default? Recommendation: false initially, flip to true in 0.6.0 once it's been used in anger.
 - Same severity scale as LSP diagnostics, or distinct? Recommendation: distinct labels (`quality.warn`, `quality.suggestion`) so the agent can tell "I broke the build" apart from "I introduced a style nit".
 - Should `transaction_apply` analyse the union of all files (more useful, slower) or each file individually (faster, less context-aware)?
+- Where should background findings surface first? Recommendation: append fresh findings to write responses when available, include latest cached findings in `session_start`, then add a dedicated TUI/status view later.
 
 **Watch out for:**
 
 - `golangci-lint` is heavy. First-run on a fresh project can be 30+ seconds. The 2-second `timeout_ms` is a starting point; users with cold caches will hit it. Consider warming the cache on daemon start.
+- Do not spawn unbounded lint processes. One active run per workspace is enough; coalesce queued files while a run is active.
+- Avoid stale findings after rapid edits. Store the file mtime or content hash with each result and discard findings for older revisions.
+- Missing `golangci-lint` should be a quiet, explainable skip, not a failed write.
 - `ruff` is fast (~10ms typical). Don't apply gopls-tier timeouts to ruff and vice versa.
 - Findings can be very noisy in legacy codebases. Without per-file caps (`max_findings_per_file`) the response will balloon.
 - This is the kind of feature that's transformative when it works and infuriating when it doesn't (false positives = agent corrects perfectly good code into worse code). Roll out behind a feature flag.
-
----
-
-### `expected_sha` parameter on `edit_file` and `transaction_apply`
-
-**Priority:** medium-high.
-**Effort:** 30 min.
-
-**Why this matters.** `expected_mtime` is the optimistic-concurrency primitive we have today. It relies on the filesystem reporting mtime honestly, and it doesn't:
-
-- `touch -d` sets mtime arbitrarily.
-- Restore-from-backup preserves mtime.
-- Same-second writes on coarse-mtime filesystems can yield identical mtime for different content.
-- Some `mmap` write patterns don't update mtime.
-
-For honest use, mtime is fine; for any adversarial or replicated scenario, content hashing is what you'd want. A SHA-256 in the `read_file` output header and an optional `expected_sha` on `edit_file` / `transaction_apply` would make this ironclad without breaking the existing cheap mtime path.
-
-**Definition of done.**
-
-1. `read_file`'s output header is augmented to include `sha256=<hex>` alongside the mtime:
-   ```
-   # plumb-read mtime=2026-05-11T13:46:38.895137000+10:00 sha256=3a7bd3e2360a3...
-   ```
-   Computed over the *full file content* (not the line-sliced excerpt). 200 KiB cap applies to the body, not the hash.
-2. `edit_file` accepts an optional `expected_sha` parameter (RFC: hex-encoded lowercase 64-char string). If provided, the file's current SHA-256 is computed before any edit; mismatch rejects with `editLogicErr`.
-3. `transaction_apply` operations accept `expected_sha` the same way.
-4. Tests:
-   - `read_file` output includes `sha256=`.
-   - `edit_file` rejects when `expected_sha` doesn't match.
-   - `edit_file` succeeds when both `expected_mtime` and `expected_sha` are correct.
-   - `expected_mtime` + `expected_sha` together: both must match.
-5. AGENTS.md and docs/mcp-tools.md updated.
-
-**Where to start.**
-
-1. In `internal/tools/read_file.go`, after the `os.Stat` and before the binary-detection sniff, compute SHA-256 of the file via `crypto/sha256.New()` + `io.Copy`. *Caveat:* the existing code reads the file via `io.MultiReader(bytes.NewReader(sniff), f)` to avoid seeking. For SHA you need the full content — either compute by opening the file a second time, or hash the prefix and the rest via a `io.TeeReader`. The two-open approach is simpler; the cost (one extra `os.Open` + linear read) is acceptable for files at the 200 KiB cap.
-2. In `internal/tools/edit_file.go`, add `ExpectedSha string \`json:"expected_sha"\`` to `editFileArgs`. After the `expected_mtime` block, add a parallel check: read the file, compute SHA, compare.
-3. In `internal/tools/transaction.go`, mirror the same change in `txOperation`.
-4. Update schemas in both `editFileSchema` and `transactionApplySchema`.
-
-**Watch out for:**
-
-- The schemas are inline `json.RawMessage` strings. Match the format of `expected_mtime` for consistency.
-- Don't recompute the SHA inside `tryEdit`'s retry loop — compute once before the loop and pass into the retry. Otherwise three retries means three full-file reads.
 
 ---
 
@@ -236,89 +204,6 @@ The fix is a tiny on-disk WAL.
 
 Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.
 
-### Automatic session orientation via the MCP `instructions` field
-
-**Priority:** high. Small change, large UX gain. Best paired with the "Project-root identification fails when no language marker is present" item under [Improvements](#improvements) — together they deliver zero-touch onboarding.
-**Effort:** ~15 min for the wiring; ~1–2 hours to draft the instruction text and verify behaviour across MCP clients.
-**Status:** Idea captured. Not started.
-
-**The gap.** The MCP `initialize` response defines an optional `instructions: string` field (per the MCP protocol spec). When the server populates it, the MCP client surfaces the text to the model as a system-prompt-style hint — "here is how to use this server." Plumb's `handleInitialize` in `internal/mcp/server.go` does not set this field, so the model has no nudge from plumb's side about what to do first. The `session_start` tool exists and returns a high-quality orientation packet (workspace, language, branch, recent commits, recently-modified files, memories, top tool stats, active diagnostics), but the model only calls it if it chooses to. There's also an `orient` MCP prompt registered (`mcp.NewOrientPrompt(wsFn)` in `internal/cli/daemon.go`), but prompts are *user-triggered* — they only fire when the user clicks the prompt in the client UI. Neither path makes orientation reliably automatic.
-
-**The fix in one sentence.** Add an `Instructions` field to the `initialize` result struct in `internal/mcp/server.go:365-369` and populate it with a short directive that tells the model to (a) call `session_start` as the first tool of every session, and (b) handle the "(resolving workspace…)" outcome by asking the user whether to bootstrap `.plumb/`.
-
-**Why this is leverage.** With `instructions` populated, the client (Claude Desktop, Claude Code, Cursor, Gemini CLI, Continue, Cody, etc.) is supposed to inject the text as a system-level hint to the model. Models follow system-level hints reliably. Compare:
-
-- *Today:* model may or may not discover `session_start`. Even when it does, it has no reason to think "I should call this first." Users see inconsistent onboarding behaviour across conversations.
-- *With this fix:* model has a server-authored directive telling it exactly what to do on turn 1. Behaviour becomes consistent across all MCP-capable clients without per-client configuration.
-
-**Definition of done.**
-
-1. `internal/mcp/server.go`'s `handleInitialize` result struct gains `Instructions string \`json:"instructions,omitempty"\``.
-2. The instructions text is composed at startup from a constant — or, better, from a `ServerInfo.Instructions` field so callers can override it (tests, downstream embedders).
-3. The default instruction text covers:
-   - Tell the agent to call `session_start` as the first tool of every session, with no arguments.
-   - Explain what `session_start` returns and why it matters (orientation packet — workspace, language, recent activity, memories, diagnostics).
-   - Cover the "no workspace resolved" branch: if `session_start` reports the workspace as "(resolving workspace…)" or empty, the project hasn't been onboarded. Instruct the model to either (a) ask the user to run `plumb init` in the project root, or (b) — when the user has authorised file-write access — call a future auto-onboarding tool that materialises `.plumb/` for them. The exact wording for branch (b) depends on whether the auto-attach item ships first.
-   - Encourage reading recent diagnostics from the orientation packet before making edits.
-   - Discourage reading large files end-to-end when symbol-aware tools are available (mild nudge toward `find_symbol`, `list_symbols`, etc., over `read_file`).
-   - Keep it short. The `instructions` field competes for context budget with the user's actual prompt — 300–500 tokens, not 2000.
-4. The text lives in one place (a `const instructionsText = \`...\`` in a new file like `internal/mcp/instructions.go` or alongside the prompts in `internal/mcp/prompts.go`). One source of truth. The literal string is unit-tested for shape (contains "session_start", contains "first tool", doesn't exceed 2000 chars).
-5. The `instructions` field is omitted from the JSON output when empty (use `omitempty`), so clients that predate this feature don't see unexpected keys.
-6. README.md and CLAUDE.md document the behaviour: "Plumb tells the MCP client to instruct the model to orient first via `session_start`. No agent-side configuration required." Document the override path if `ServerInfo.Instructions` is exposed.
-7. CHANGELOG entry.
-8. Manual verification matrix (see "Where to start" step 4). Add results to a short note in CHANGELOG so we know which clients honour the field.
-
-**Where to start.**
-
-1. **Define the constant.** Create `internal/mcp/instructions.go`:
-   ```go
-   package mcp
-
-   // DefaultInstructions is the text plumb's MCP server returns in the
-   // initialize response's "instructions" field. Per the MCP protocol spec,
-   // clients surface this text to the model as a system-prompt-style hint —
-   // "how to use this server." Plumb uses it to make session orientation
-   // automatic without requiring the user to click an MCP prompt or the
-   // model to discover session_start on its own.
-   //
-   // Keep this short — it competes for context budget with the user's prompt.
-   const DefaultInstructions = `You have access to plumb, an MCP server that exposes ...`
-   ```
-2. **Wire it through `Server`.** Add `Instructions string` to `mcp.ServerInfo` (in `internal/mcp/server.go`), with a default fallback to `DefaultInstructions` if empty. Override-friendly so tests and downstream embedders can change it.
-3. **Populate the initialize result.** In `handleInitialize`, after building `caps`, add `Instructions: s.info.Instructions` to the result struct. Omit if empty.
-4. **Manual verification.** Connect each MCP client to plumb in turn, send any tool call, observe whether the model calls `session_start` unprompted. Confirm via:
-   - Daemon log: `slog.Info` entries showing `mcp: tool dispatch` with `tool=session_start` as the first tool of the session.
-   - Claude Desktop's per-server log at `~/Library/Logs/Claude/mcp-server-plumb.log` — look for `Message from client` calling `session_start` first.
-   - Repeat for Claude Code (`~/Library/Logs/Claude/mcp.log` or the Claude Code per-project log), Gemini CLI (TBD), Cursor, Continue.
-5. **Add to integration tests** if `internal/mcp/server_test.go` has coverage for the initialize handshake — assert the response JSON contains the `instructions` key. If it doesn't, add one: feed a synthetic `initialize` request, parse the response, check the key.
-
-**Draft instruction text (starting point — refine per real-world testing).**
-
-> You have access to plumb, an MCP server that provides LSP-backed and filesystem tools for navigating and editing source code. Before making any other tool calls in a new conversation, call `session_start` with no arguments. It returns the workspace root, language, current git branch, recent commits, recently modified files, project memories, top tool statistics, and any active diagnostics — your orientation packet.
->
-> If `session_start` reports the workspace as `(resolving workspace…)` or empty, plumb has not been onboarded for this project. Tell the user the project has no `.plumb/` marker and ask whether to run `plumb init` in the project root, or — if you have authorisation to write files — create `.plumb/` and seed `.plumb/context.md` yourself.
->
-> Prefer symbol-aware tools (`find_symbol`, `list_symbols`, `get_definition`, `find_references`) over `read_file` when you only need to understand structure. Read entire files only when you'll be editing them.
->
-> Check the diagnostics in the orientation packet and after every write — they show compile errors, type errors, and warnings from the language server.
-
-**Watch out for.**
-
-- **Not every MCP client honours `instructions`.** The spec calls it optional and "MAY be added to the system prompt." Some clients ignore it; others include it verbatim; others summarise it. Verify per-client (see step 4 in "Where to start"). For clients that ignore it, the existing `orient` MCP prompt remains the fallback — keep that prompt registered.
-- **Don't write a manual.** The temptation is to dump every tool's purpose into `instructions`. Don't. The tool descriptions handle per-tool documentation. `instructions` is for **cross-cutting behaviour** the agent needs to know about: when to orient, what to do first, what conventions to follow. Anything else belongs in tool descriptions or `.plumb/context.md`.
-- **Token budget.** Every conversation pays this cost. 300–500 tokens is the target ceiling; 2000+ starts to crowd out the user's prompt on small models. Track length in tests if needed.
-- **The instructions can become stale.** When a tool is renamed or `session_start`'s shape changes, the instructions must be updated. Mitigation: the unit test mentioned in step 5 should also assert that every tool name referenced in `instructions` actually exists in the registered tool set. That way a rename breaks the test, not production.
-- **Per-project override.** Eventually users may want project-specific instructions (e.g., "always run `make test` before claiming a fix is done in *this* codebase"). Don't build that now — let `.plumb/context.md` carry per-project guidance, surfaced via `session_start`'s response. The `instructions` field stays global and short.
-- **Don't lie to the agent.** If you say "always call `session_start` first" but plumb is in a state where `session_start` doesn't actually work (e.g., daemon down, session not yet attached), the agent will burn turns trying to recover. Pair this with robust `session_start` behaviour: it should never hang, never error unrecoverably, always return *something* useful even on a cold session.
-
-**Relationship to other items.**
-
-- **Project-root identification fallback** (under [Improvements](#improvements)) is the natural companion. With both shipped: model auto-calls `session_start`, which either returns a real workspace (via the standard marker path) or returns a synthetic one (via the root-identification fallback). The "(resolving workspace…)" branch in the instruction text becomes unreachable in practice, which is the desired end state. Without the fallback, the instruction text is still useful — the agent at least knows it should ask the user to run `plumb init`.
-- **`orient` prompt** (`internal/mcp/prompts.go`'s `NewOrientPrompt`) stays as the manual fallback for clients that ignore `instructions`. The user clicks it; Claude follows it. Same end state, different trigger.
-- **`session_start` tool** is the load-bearing surface. Before this feature ships, verify its response is genuinely useful when called cold on a new session — that's what every conversation will start with.
-
----
-
 ### Token Usage Optimization — Automatic Diffing & Truncation
 
 **Priority:** high.
@@ -330,107 +215,6 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 1. **Automatic Diffing:** `edit_file` and `write_file` return a unified diff of the change in the response. This gives the agent immediate confirmation of the change without requiring a fresh `read_file` turn.
 2. **Smart Truncation:** Large tool outputs (especially `search_in_files` and `git log`) are automatically capped (e.g., at 100 lines). The response includes a summary ("Showing 100 of 450 matches") and instructions on how to page or narrow the search.
 3. **Implicit Verification Mode:** A configuration option to suppress full output and return only high-signal metadata for repetitive tasks.
-
----
-
-### `plumb doctor` — discovery + health-check CLI
-
-**Priority:** medium. Improves first-run experience and ongoing debuggability.
-**Effort:** 2–4 hours depending on scope.
-
-**Why this matters.** Users install plumb but don't always know it can be wired into multiple MCP-capable clients (Claude Desktop, Claude Code, Gemini CLI, Cursor, Continue, possibly others). Discovery is one-by-one through docs. A `plumb doctor` (in the spirit of `brew doctor`) would scan the host for known MCP-capable clients, show config status for each, and surface system-level health issues (daemon running, version match, LSP servers on PATH, stats DB writable, etc.).
-
-**Scope:** detection and reporting only. Does **not** auto-configure — the user runs `plumb setup <client>` for the ones they want. The point is *visibility*: "here's everything you could be using plumb with, and where things stand right now."
-
-**Definition of done.**
-
-1. New `plumb doctor` subcommand (`internal/cli/doctor.go`). Output is a traffic-light report:
-   ```
-   plumb doctor — 0.5.9
-
-   System
-     ✓ plumb binary       /usr/local/bin/plumb (0.5.9)
-     ✓ daemon running     PID 21370, version 0.5.9 (matches binary)
-     ✓ gopls              /Users/gilberto/go/bin/gopls (v0.16.2)
-     ⚠ pyright-langserver not found on PATH (Python projects won't have an LSP backend)
-     ✓ stats DB           ~/Projects/plumb/.plumb/stats.db (246 calls, schema v2)
-
-   Configuration
-     ✓ global config      ~/.config/plumb/config.toml (exists)
-     ⚠ project config     ~/Projects/plumb/.plumb/config.toml (not found — using global)
-
-   MCP clients
-     ✓ Claude Desktop     ~/Library/Application Support/Claude/claude_desktop_config.json (plumb registered)
-     ✓ Claude Code        ~/.claude.json (plumb registered)
-     ✗ Gemini CLI         ~/.gemini/settings.json (exists, plumb NOT registered — run `plumb setup gemini`)
-     ⚠ Cursor             ~/.cursor/mcp.json (not found — install Cursor or skip)
-     ⚠ Continue           ~/.continue/config.json (not found — install Continue or skip)
-
-   Status: 1 problem (Gemini CLI), 3 informational warnings.
-   ```
-
-2. The check set:
-   - **System**: plumb binary path + version; daemon process running + version-match (compare to `~/Library/Caches/plumb/plumb.version`); `gopls` on `$PATH`; `pyright-langserver` on `$PATH`; current workspace's `.plumb/stats.db` exists + readable + at expected schema version.
-   - **Configuration**: global config existence; project config existence (if `--workspace` or cwd is inside a project); `[edits].strict` and rate-limit values; warn if env-var overrides are active.
-   - **MCP clients**: walk a known list of client config paths; for each, parse the JSON, check whether `plumb` appears in the `mcpServers` (or equivalent) block; check whether the command path matches our binary.
-
-3. Exit code: `0` if everything is ✓, `1` if any ✗. ⚠ (warnings) don't fail.
-
-4. `plumb doctor --json` for machine-readable output.
-
-5. Tests: each detector is unit-testable by injecting fake filesystem paths and binaries. The composition function that prints the report can be tested by feeding it a synthetic detector-result set.
-
-**Where to start.**
-
-1. Look at `internal/cli/setup.go` for the existing client-config writers — they already know how to locate Claude Desktop / Claude Code / Gemini CLI config paths. Reuse those path-resolution helpers (`claudeDesktopConfigPath`, `GeminiConfigPath`, etc.). Each `setup-*` command already knows its target; doctor just needs the read-side equivalents.
-2. Create `internal/cli/doctor.go` with one function per check:
-   ```go
-   type checkResult struct {
-       Name    string
-       Status  status // ok | warn | fail
-       Detail  string
-       Hint    string // what to do about it
-   }
-   func checkPlumbBinary() checkResult { ... }
-   func checkDaemon() checkResult { ... }
-   func checkGopls() checkResult { ... }
-   func checkPyright() checkResult { ... }
-   func checkStatsDB(ws string) checkResult { ... }
-   func checkGlobalConfig() checkResult { ... }
-   func checkProjectConfig(ws string) checkResult { ... }
-   func checkClaudeDesktop() checkResult { ... }
-   func checkClaudeCode() checkResult { ... }
-   func checkGemini() checkResult { ... }
-   func checkCursor() checkResult { ... }
-   func checkContinue() checkResult { ... }
-   ```
-3. The `runDoctor` function calls all of them, groups by section, prints with appropriate colour, sets exit code.
-4. Register in `rootCmd.AddCommand(...)` in `root.go`.
-
-**Known MCP client config locations** (research these per-OS; macOS paths shown):
-
-| Client | Config path | Detection rule |
-|---|---|---|
-| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | parse JSON, check `mcpServers.plumb` |
-| Claude Code (user) | `~/.claude.json` | parse JSON, check `mcpServers.plumb` |
-| Claude Code (project) | `<workspace>/.mcp.json` | parse JSON, check `mcpServers.plumb` |
-| Gemini CLI | `~/.gemini/settings.json` | (research; the user added Gemini support in 0.5.x — see `internal/cli/setup.go` and `internal/cli/config.go`'s `GeminiConfigPath`) |
-| Cursor | `~/.cursor/mcp.json` (or similar — verify with Cursor docs) | parse JSON, check for plumb entry |
-| Continue | `~/.continue/config.json` | parse JSON, check `mcpServers` |
-| Cline / Cody | research per-tool | likely JSON config in `~/.config/<tool>/` |
-
-**Watch out for:**
-
-- Each client uses slightly different JSON shape for MCP server registration. Don't assume one schema fits all. Use the existing `setup-*` writers as the source of truth for "what plumb's entry looks like in this client's config".
-- Detection should be *gentle*: a missing config file means the user hasn't installed the client, not that plumb is broken. Use ⚠ (warning), not ✗ (failure), for those.
-- The "command path matches our binary" check is the one that catches stale installs (e.g. plumb was installed via `go install`, then via Homebrew; the config points at the old `go install` path). Get this right and you'll save a lot of "why isn't plumb working?" debugging.
-- Don't shell out to each client to "test" the integration — purely static analysis. Keep it fast.
-
-**Future extensions (don't do them now, but worth noting):**
-
-- `plumb doctor --fix`: opt-in auto-fix for the simplest issues (register plumb in a detected-but-unconfigured client).
-- `plumb doctor --client <name>`: deep-dive on one client (full config dump, validation against the client's known schema).
-- Integration into `plumb` (the TUI) — show a small "doctor: 1 issue" badge at the bottom if any ✗ is present.
 
 ---
 

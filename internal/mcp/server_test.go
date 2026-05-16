@@ -73,6 +73,38 @@ func TestServer_Initialize(t *testing.T) {
 	if info["name"] != "test" {
 		t.Fatalf("unexpected serverInfo.name: %v", info["name"])
 	}
+	instr, _ := result["instructions"].(string)
+	if !strings.Contains(instr, "session_start") {
+		t.Fatalf("instructions field missing or doesn't mention session_start: %q", instr)
+	}
+}
+
+func TestServer_Initialize_CustomInstructions(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0", Instructions: "custom"})
+	s.Register(&echoTool{})
+	var out bytes.Buffer
+	_ = s.Serve(context.Background(), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n"), &out)
+	dec := json.NewDecoder(&out)
+	var resp map[string]any
+	_ = dec.Decode(&resp)
+	result, _ := resp["result"].(map[string]any)
+	if result["instructions"] != "custom" {
+		t.Fatalf("want custom instructions, got %v", result["instructions"])
+	}
+}
+
+func TestServer_Initialize_SuppressedInstructions(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0", Instructions: "-"})
+	s.Register(&echoTool{})
+	var out bytes.Buffer
+	_ = s.Serve(context.Background(), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n"), &out)
+	dec := json.NewDecoder(&out)
+	var resp map[string]any
+	_ = dec.Decode(&resp)
+	result, _ := resp["result"].(map[string]any)
+	if _, present := result["instructions"]; present {
+		t.Fatalf("instructions should be omitted when set to \"-\", got %v", result["instructions"])
+	}
 }
 
 func TestServer_Ping(t *testing.T) {

@@ -29,8 +29,11 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +45,22 @@ import (
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
+
+// fileSHA256 computes the hex-encoded SHA-256 of the named file's full
+// content. Used by read_file (header output) and edit_file / transaction_apply
+// (optional expected_sha concurrency check).
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
 
 // invalidateCache evicts every cache entry whose key references uri. Safe
 // when c is nil. Called by all write tools immediately after a successful

@@ -55,8 +55,11 @@ type mcpError struct {
 
 // ServerInfo identifies this server to the MCP client.
 type ServerInfo struct {
-	Name    string
-	Version string
+	Name         string
+	Version      string
+	// Instructions is included in the MCP initialize response. When non-empty
+	// it overrides DefaultInstructions; set to "-" to send no instructions.
+	Instructions string
 }
 
 // Server is an MCP server. Register tools, then call Serve.
@@ -366,6 +369,7 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		ProtocolVersion string         `json:"protocolVersion"`
 		Capabilities    map[string]any `json:"capabilities"`
 		ServerInfo      serverInfoWire `json:"serverInfo"`
+		Instructions    string         `json:"instructions,omitempty"`
 	}
 	caps := map[string]any{"tools": map[string]any{}}
 	if s.Resources != nil {
@@ -377,10 +381,17 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 	if hasPrompts {
 		caps["prompts"] = map[string]any{}
 	}
+	instructions := s.info.Instructions
+	if instructions == "" {
+		instructions = DefaultInstructions
+	} else if instructions == "-" {
+		instructions = ""
+	}
 	res := result{
 		ProtocolVersion: protocolVersion,
 		Capabilities:    caps,
 		ServerInfo:      serverInfoWire{Name: s.info.Name, Version: s.info.Version},
+		Instructions:    instructions,
 	}
 	return okResp(req.ID, res)
 }

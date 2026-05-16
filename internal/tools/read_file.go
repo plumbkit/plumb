@@ -39,13 +39,14 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 // Supports line-range slicing for large files (streamed — only the requested
 // lines are read into memory).
 //
-// Output begins with a header line carrying the file's mtime in RFC3339Nano:
+// Output begins with a header line carrying the file's mtime and SHA-256:
 //
-//	# plumb-read mtime=2026-05-11T13:46:38.895137000+10:00
+//	# plumb-read mtime=2026-05-11T13:46:38.895137000+10:00 sha256=3a7bd3e2…
 //
-// Subsequent edit_file calls may pass this value as expected_mtime to assert
-// the file has not changed between read and edit. The header is followed by
-// a blank line, then the content (or selected line range).
+// Subsequent edit_file calls may pass either value as expected_mtime or
+// expected_sha to guard against concurrent modifications. The header is
+// followed by a blank line, then the content (or selected line range).
+// sha256 is computed over the full file, not the sliced excerpt.
 //
 // If a non-nil ReadTracker is supplied, every successful read records the
 // observed mtime so edit_file's strict mode can verify the agent did read
@@ -65,8 +66,9 @@ func (t *ReadFile) Description() string {
 		"Use start_line and end_line to read a slice of a large file without loading it entirely " +
 		"(only the requested lines are streamed into memory). " +
 		"Binary files are detected and rejected. Output is capped at 200 KiB — use line ranges on large files. " +
-		"The output begins with a header carrying the file's mtime (RFC3339Nano); pass that " +
-		"value back as expected_mtime to edit_file for optimistic-concurrency guarantees. " +
+		"The output begins with a header carrying the file's mtime (RFC3339Nano) and SHA-256 hash. " +
+		"Pass mtime back as expected_mtime to edit_file for fast optimistic-concurrency checks; " +
+		"pass the hash as expected_sha for content-based checks that survive mtime aliasing. " +
 		"Essential for clients without filesystem access of their own (Claude Desktop, Cursor MCP, etc.)."
 }
 
@@ -129,8 +131,11 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		truncated = true
 	}
 
+	sha, _ := fileSHA256(fpath)
+
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n\n", mtime.Format(time.RFC3339Nano), classifyIndent(content))
+	fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s\n\n",
+		mtime.Format(time.RFC3339Nano), sha, classifyIndent(content))
 	sb.WriteString(content)
 	if truncated {
 		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")

@@ -118,6 +118,51 @@ func TestReadFile_MissingPath(t *testing.T) {
 	}
 }
 
+func TestReadFile_HeaderContainsSHA256(t *testing.T) {
+	path := writeTextFile(t, "hello\nworld\n")
+	out, err := callReadFile(t, map[string]any{"path": path})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	header := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(header, "sha256=") {
+		t.Fatalf("header missing sha256 field: %q", header)
+	}
+	// Extract and sanity-check the hash length (64 hex chars).
+	hash := extractSHA(out)
+	if len(hash) != 64 {
+		t.Fatalf("sha256 field has wrong length %d: %q", len(hash), hash)
+	}
+}
+
+func TestReadFile_SHA256ConsistentWithFullContent(t *testing.T) {
+	// Range reads must return the SHA of the full file, not just the slice.
+	path := writeTextFile(t, "line1\nline2\nline3\n")
+
+	full, _ := callReadFile(t, map[string]any{"path": path})
+	start, end := 2, 2
+	partial, _ := callReadFile(t, map[string]any{"path": path, "start_line": start, "end_line": end})
+
+	shaFull := extractSHA(full)
+	shaPartial := extractSHA(partial)
+	if shaFull == "" || shaPartial == "" {
+		t.Fatal("could not extract sha256 from header")
+	}
+	if shaFull != shaPartial {
+		t.Fatalf("sha256 must match for full and partial reads: full=%s partial=%s", shaFull, shaPartial)
+	}
+}
+
+func extractSHA(out string) string {
+	header := strings.SplitN(out, "\n", 2)[0]
+	for field, rest, ok := strings.Cut(header, "sha256="); ok; field, rest, ok = strings.Cut(rest, "sha256=") {
+		_ = field
+		val, _, _ := strings.Cut(rest, " ")
+		return val
+	}
+	return ""
+}
+
 func TestReadFile_OutputHasMtimeHeader(t *testing.T) {
 	path := writeTextFile(t, "hello\n")
 	out, err := callReadFile(t, map[string]any{"path": path})

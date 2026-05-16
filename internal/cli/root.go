@@ -83,7 +83,7 @@ func init() {
 	})
 
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "log level (debug, info, warn, error)")
-	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd)
+	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd)
 }
 
 // Execute runs the root command and returns any error.

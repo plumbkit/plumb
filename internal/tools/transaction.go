@@ -42,6 +42,10 @@ var transactionApplySchema = json.RawMessage(`{
           "expected_mtime": {
             "type": "string",
             "description": "Optional RFC3339Nano mtime previously returned by read_file. If provided, the operation is rejected if the file's current mtime differs."
+          },
+          "expected_sha": {
+            "type": "string",
+            "description": "Optional hex-encoded SHA-256 previously returned by read_file. If provided, the operation is rejected if the file's current content hash differs."
           }
         },
         "required": ["path", "edits"]
@@ -90,6 +94,7 @@ type txOperation struct {
 	Path          string    `json:"path"`
 	Edits         []strEdit `json:"edits"`
 	ExpectedMtime string    `json:"expected_mtime"`
+	ExpectedSha   string    `json:"expected_sha"`
 }
 
 type transactionApplyArgs struct {
@@ -166,6 +171,19 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 				return "", &editLogicErr{fmt.Errorf(
 					"transaction_apply: op[%d]: %q changed since you read it (expected %s, got %s)",
 					i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano))}
+			}
+		}
+		if op.ExpectedSha != "" {
+			current, err := fileSHA256(path)
+			if err != nil {
+				return "", &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: computing sha256 of %q: %w", i, path, err)}
+			}
+			if current != op.ExpectedSha {
+				return "", &editLogicErr{fmt.Errorf(
+					"transaction_apply: op[%d]: %q content has changed since you read it\n"+
+						"  expected sha256: %s\n"+
+						"  current  sha256: %s",
+					i, path, op.ExpectedSha, current)}
 			}
 		}
 		data, err := os.ReadFile(path)

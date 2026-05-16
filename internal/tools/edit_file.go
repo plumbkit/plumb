@@ -41,7 +41,11 @@ var editFileSchema = json.RawMessage(`{
     },
     "expected_mtime": {
       "type": "string",
-      "description": "Optional. RFC3339Nano mtime previously returned by read_file. If provided, the edit is rejected if the file's current mtime is newer — guarantees the agent edits the same revision it read."
+      "description": "Optional. RFC3339Nano mtime previously returned by read_file. If provided, the edit is rejected if the file's current mtime differs — fast optimistic-concurrency check."
+    },
+    "expected_sha": {
+      "type": "string",
+      "description": "Optional. Hex-encoded SHA-256 previously returned by read_file. If provided, the edit is rejected if the file's current content hash differs — stronger than expected_mtime, survives mtime aliasing."
     }
   },
   "required": ["path", "edits"]
@@ -115,6 +119,7 @@ type editFileArgs struct {
 	Path          string    `json:"path"`
 	Edits         []strEdit `json:"edits"`
 	ExpectedMtime string    `json:"expected_mtime"`
+	ExpectedSha   string    `json:"expected_sha"`
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -155,6 +160,23 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 					"  current mtime:  %s\n"+
 					"  Re-read the file and try again.",
 				path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
+			)}
+		}
+	}
+
+	// expected_sha gate — content-hash check, stronger than mtime.
+	if a.ExpectedSha != "" {
+		current, err := fileSHA256(path)
+		if err != nil {
+			return "", &editLogicErr{fmt.Errorf("edit_file: computing sha256 of %q: %w", path, err)}
+		}
+		if current != a.ExpectedSha {
+			return "", &editLogicErr{fmt.Errorf(
+				"edit_file: file %q content has changed since you read it\n"+
+					"  expected sha256: %s\n"+
+					"  current  sha256: %s\n"+
+					"  Re-read the file and try again.",
+				path, a.ExpectedSha, current,
 			)}
 		}
 	}

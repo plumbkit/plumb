@@ -320,3 +320,39 @@ func TestEditFile_FileUnchangedOnEditFailure(t *testing.T) {
 		t.Errorf("file should be unchanged after failed multi-edit, got: %q", data)
 	}
 }
+
+func TestEditFile_ExpectedSHA_AcceptsCorrect(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	sha, err := fileSHA256(path)
+	if err != nil {
+		t.Fatalf("fileSHA256: %v", err)
+	}
+
+	_, err = callEditFile(t, map[string]any{
+		"path":         path,
+		"expected_sha": sha,
+		"edits":        []map[string]string{{"old_str": "hello", "new_str": "world"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error with correct expected_sha: %v", err)
+	}
+}
+
+func TestEditFile_ExpectedSHA_RejectsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"path":         path,
+		"expected_sha": "0000000000000000000000000000000000000000000000000000000000000000",
+		"edits":        []map[string]string{{"old_str": "hello", "new_str": "world"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong expected_sha")
+	}
+	if !strings.Contains(err.Error(), "content has changed") {
+		t.Errorf("expected 'content has changed' in error, got: %v", err)
+	}
+}

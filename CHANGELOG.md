@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.29 — 2026-05-16
+
+### Added
+- **`plumb doctor`** — new health-check command. Runs a series of checks and reports pass/fail in a table: daemon reachable + version matches, language servers on PATH, MCP client registrations, global/project config parseable, stats DB readable. Pass `--workspace` to include per-project checks. Each failing check prints a one-line fix hint.
+- **`expected_sha` parameter on `edit_file` and `transaction_apply`.** `read_file`'s output header now includes `sha256=<hex>` (over the full file, not the sliced excerpt). Pass the hash as `expected_sha` to `edit_file` or per-operation in `transaction_apply` for content-hash concurrency checks. Rejected edits return an `editLogicErr` with both the expected and current hashes so the agent knows to re-read. Stronger than `expected_mtime` — survives coarse-mtime filesystems, restore-from-backup, and `touch -d` aliasing.
+- **MCP `instructions` field.** The `initialize` response now includes an `instructions` string that directs the model to call `session_start` as the first tool of every session. Clients (Claude Desktop, Claude Code, Gemini CLI, Cursor, etc.) inject this as a system-prompt-style hint — session orientation becomes automatic without per-client configuration. The text is sourced from `DefaultInstructions` in `internal/mcp/instructions.go`; pass a custom value via `ServerInfo.Instructions` or `"-"` to suppress. `internal/mcp/server_test.go` covers default, custom, and suppressed cases.
+
 ## 0.5.28 — 2026-05-16
 
 ### Added
