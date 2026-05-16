@@ -53,6 +53,27 @@ func TestRunStats_ShowsRowsAfterWorkspaceMove(t *testing.T) {
 	}
 }
 
+func TestRunStats_NoStatsPrintsLogo(t *testing.T) {
+	oldWorkspaceFlag, oldLimit := statsFlagWorkspace, statsFlagLimit
+	statsFlagWorkspace, statsFlagLimit = t.TempDir(), 5
+	defer func() {
+		statsFlagWorkspace, statsFlagLimit = oldWorkspaceFlag, oldLimit
+	}()
+
+	out := captureStdout(t, func() {
+		if err := runStats(nil, nil); err != nil {
+			t.Fatalf("runStats: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "╭─╮") {
+		t.Fatalf("runStats output did not include logo:\n%s", out)
+	}
+	if !strings.Contains(out, "No statistics recorded yet") {
+		t.Fatalf("runStats output did not include no-statistics message:\n%s", out)
+	}
+}
+
 func seedOldWorkspaceRow(t *testing.T, dbPath, oldWorkspace string) {
 	t.Helper()
 

@@ -54,9 +54,10 @@ func init() {
 		// Print Available Commands
 		if cmd.HasAvailableSubCommands() {
 			fmt.Println(tui.ItemStyle.Render("Available Commands:"))
+			nameWidth := availableCommandNameWidth(cmd)
 			for _, c := range cmd.Commands() {
 				if c.IsAvailableCommand() {
-					name := fmt.Sprintf("  %-12s", c.Name())
+					name := fmt.Sprintf("  %-*s", nameWidth, c.Name())
 					fmt.Printf("%s %s\n", tui.HintStyle.Bold(true).Render(name), tui.MutedStyle.Render(c.Short))
 				}
 			}
@@ -69,7 +70,7 @@ func init() {
 			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.LocalFlags().FlagUsages(), "\n")))
 			fmt.Println()
 		}
-		
+
 		if cmd.HasAvailableInheritedFlags() {
 			fmt.Println(tui.ItemStyle.Render("Global Flags:"))
 			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.InheritedFlags().FlagUsages(), "\n")))
@@ -86,13 +87,44 @@ func init() {
 	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd)
 }
 
+func availableCommandNameWidth(cmd *cobra.Command) int {
+	maxName := 0
+	for _, c := range cmd.Commands() {
+		if c.IsAvailableCommand() && len(c.Name()) > maxName {
+			maxName = len(c.Name())
+		}
+	}
+	return maxName + 1
+}
+
 // Execute runs the root command and returns any error.
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		printLogoIfNeeded(os.Stderr)
+		printCLIDiagnostic(os.Stderr, cliDiagnostic{
+			Kind:        "error",
+			Title:       "error",
+			Body:        err.Error(),
+			Suggestions: diagnosticSuggestions(err),
+		})
 		return err
 	}
 	return nil
+}
+
+func diagnosticSuggestions(err error) []string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "unknown command"):
+		return []string{"plumb --help"}
+	case strings.Contains(msg, "no workspace") || strings.Contains(msg, "could not resolve a project"):
+		return []string{
+			"plumb init",
+			"plumb status --workspace /path/to/project",
+		}
+	default:
+		return nil
+	}
 }
 
 func setupLogging(level string) error {

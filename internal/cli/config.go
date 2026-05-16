@@ -130,10 +130,10 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	geminiPath, _ := GeminiConfigPath()
 	codexPath, _ := CodexConfigPath()
 
-	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), contractConfigPath(claudeDesktopPath))
 	mcpTable.Row("Claude Code", existsIcon(claudeCodePath), registeredIcon(claudeCodePath), contractConfigPath(claudeCodePath))
-	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), contractConfigPath(geminiPath))
+	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), contractConfigPath(claudeDesktopPath))
 	mcpTable.Row("Codex", existsIcon(codexPath), registeredIcon(codexPath), contractConfigPath(codexPath))
+	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), contractConfigPath(geminiPath))
 	fmt.Println(mcpTable.Render())
 
 	// 3. Plumb Configuration

@@ -34,6 +34,8 @@ func init() {
 }
 
 func runStats(_ *cobra.Command, _ []string) error {
+	PrintLogo()
+
 	ws := statsFlagWorkspace
 	if ws == "" {
 		cwd, err := os.Getwd()
@@ -48,8 +50,11 @@ func runStats(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("opening stats db: %w", err)
 	}
 	if db == nil {
-		fmt.Printf("No statistics recorded yet for %s.\n", contractSessionPath(ws))
-		fmt.Println("Stats live at <workspace>/.plumb/stats.db — make some tool calls first.")
+		printCLIDiagnostic(os.Stdout, cliDiagnostic{
+			Kind:  "info",
+			Title: "No statistics recorded yet",
+			Body:  fmt.Sprintf("No statistics recorded yet for %s. Stats live at <workspace>/.plumb/stats.db — make some tool calls first.", contractSessionPath(ws)),
+		})
 		return nil
 	}
 	defer db.Close()
@@ -58,18 +63,15 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	total := db.TotalCalls(filter)
 	if total == 0 {
-		if ws != "" {
-			fmt.Printf("No statistics for workspace %q.\n", ws)
-		} else {
-			fmt.Println("No statistics recorded yet.")
-		}
+		printCLIDiagnostic(os.Stdout, cliDiagnostic{
+			Kind:  "info",
+			Title: "No statistics recorded yet",
+			Body:  fmt.Sprintf("No statistics for workspace %s.", contractSessionPath(ws)),
+		})
 		return nil
 	}
 
 	tui.RebuildStyles()
-
-	// Print Logo
-	PrintLogo()
 
 	saved := db.TotalTokensSaved(filter)
 
