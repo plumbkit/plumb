@@ -340,6 +340,9 @@ func printChecks(checks []checkResult) {
 		Headers("Check", "Status", "Detail").
 		StyleFunc(func(row, col int) lipgloss.Style {
 			s := lipgloss.NewStyle().PaddingRight(2)
+			if col == 1 { // Status
+				s = s.Align(lipgloss.Center)
+			}
 			if row == table.HeaderRow {
 				return s.Inherit(tui.HintStyle)
 			}
@@ -347,9 +350,9 @@ func printChecks(checks []checkResult) {
 		})
 
 	for _, c := range checks {
-		status := tui.OkStyle.Render("✓  ok")
+		status := tui.OkStyle.Render("✓")
 		if !c.ok {
-			status = tui.WarnStyle.Render("✗  fail")
+			status = tui.WarnStyle.Render("✗")
 		}
 		detail := c.detail
 		if !c.ok && c.fix != "" {
