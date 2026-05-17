@@ -9,6 +9,7 @@ package stats
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +56,10 @@ var migrations = []migration{
 	{from: 1, to: 2, addColumn: "input_json", sql: `ALTER TABLE tool_calls ADD COLUMN input_json  TEXT NOT NULL DEFAULT ''`},
 	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text TEXT NOT NULL DEFAULT ''`},
 }
+
+// ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
+// read-only query paths. Open it read-write through Open to apply migrations.
+var ErrReadOnlySchemaUpgradeRequired = errors.New("stats schema upgrade required")
 
 // migrate applies all pending forward migrations from currentVersion up to
 // targetVersion. ADD COLUMN steps are skipped when the column already exists,
@@ -188,7 +193,33 @@ func OpenReadOnly(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stats: open readonly %s: %w", path, err)
 	}
+	if err := checkReadOnlySchema(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &DB{db: db}, nil
+}
+
+func checkReadOnlySchema(db *sql.DB) error {
+	var currentVersion int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
+		return fmt.Errorf("stats: reading readonly schema version: %w", err)
+	}
+	if currentVersion >= SchemaVersion {
+		return nil
+	}
+	hasInput, err := hasColumn(db, "tool_calls", "input_json")
+	if err != nil {
+		return fmt.Errorf("stats: checking readonly schema: %w", err)
+	}
+	hasOutput, err := hasColumn(db, "tool_calls", "output_text")
+	if err != nil {
+		return fmt.Errorf("stats: checking readonly schema: %w", err)
+	}
+	if hasInput && hasOutput {
+		return nil
+	}
+	return fmt.Errorf("%w: stats database is schema version %d, current version is %d; run a write-capable plumb command to migrate it", ErrReadOnlySchemaUpgradeRequired, currentVersion, SchemaVersion)
 }
 
 // Close closes the database.

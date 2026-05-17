@@ -2,6 +2,7 @@ package stats
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -196,5 +197,84 @@ func TestOpen_IdempotentOnUnstampedAllColumnsDB(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Errorf("Recent rows = %d, want 1", len(got))
+	}
+}
+
+func TestOpenReadOnly_OldSchemaReturnsUpgradeError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stats.db")
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("manual open: %v", err)
+	}
+	if _, err := raw.Exec(schema); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+	if _, err := raw.Exec("PRAGMA user_version = 1"); err != nil {
+		t.Fatalf("stamp old schema: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	db, err := OpenReadOnly(path)
+	if db != nil {
+		db.Close()
+	}
+	if !errors.Is(err, ErrReadOnlySchemaUpgradeRequired) {
+		t.Fatalf("OpenReadOnly old schema error = %v, want ErrReadOnlySchemaUpgradeRequired", err)
+	}
+}
+
+func TestOpenReadOnly_UnstampedAllColumnsDBAllowed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stats.db")
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("manual open: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE tool_calls (
+		    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		    session_id   TEXT    NOT NULL DEFAULT '',
+		    tool         TEXT    NOT NULL,
+		    called_at    INTEGER NOT NULL,
+		    duration_ms  INTEGER NOT NULL DEFAULT 0,
+		    input_bytes  INTEGER NOT NULL DEFAULT 0,
+		    output_bytes INTEGER NOT NULL DEFAULT 0,
+		    success      INTEGER NOT NULL DEFAULT 1,
+		    error_msg    TEXT    NOT NULL DEFAULT '',
+		    input_json   TEXT    NOT NULL DEFAULT '',
+		    output_text  TEXT    NOT NULL DEFAULT ''
+		);
+	`)
+	if err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO tool_calls
+		 (session_id, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"sess-1", "read_file", time.Now().UnixMilli(), 1, 2, 3, 1, "", "{}", "ok",
+	); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	db, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("OpenReadOnly unstamped all-columns DB: %v", err)
+	}
+	defer db.Close()
+	got, err := db.Recent(10, Filter{})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 || got[0].InputJSON != "{}" || got[0].OutputText != "ok" {
+		t.Fatalf("Recent = %#v, want row with detail columns", got)
 	}
 }
