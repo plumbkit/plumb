@@ -187,15 +187,26 @@ func strictModeEnabled() bool {
 	return v == "1" || v == "true" || v == "yes"
 }
 
-// lockPath returns a release function that unlocks the path. The path is
-// canonicalised via filepath.Clean so file:// URIs and absolute paths share
-// the same lock.
+// lockPath returns a release function that unlocks the path. The lock key is
+// canonicalised through symlinks when possible so link paths and their real
+// targets serialise through the same mutex.
 func lockPath(path string) func() {
-	key := filepath.Clean(path)
+	key := lockPathKey(path)
 	v, _ := pathLocks.LoadOrStore(key, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+func lockPathKey(path string) string {
+	path = strings.TrimPrefix(path, "file://")
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(path)
 }
 
 // writeResult is returned by safeWrite and carries metadata about the write

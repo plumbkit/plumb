@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -120,5 +122,21 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Message != "changed" {
 		t.Errorf("zero window: want updated diag via default window, got %v", got)
+	}
+}
+
+func TestLockPathKeyResolvesSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := lockPathKey(link), lockPathKey(target); got != want {
+		t.Fatalf("lockPathKey(link) = %q, want target key %q", got, want)
 	}
 }
