@@ -251,6 +251,152 @@ func TestNoOpLog(t *testing.T) {
 	if err := l.Record("/any/path", []byte("content"), 0o644); err != nil {
 		t.Errorf("no-op Record: %v", err)
 	}
-	l.Commit()    // must not panic
-	l.Rollback()  // must not panic
+	l.Commit()   // must not panic
+	l.Rollback() // must not panic
+}
+
+// TestRollback_MultiFile verifies that Rollback restores all recorded files
+// when a transaction writes A then fails before writing B. This is the
+// primary correctness scenario the txlog exists for.
+func TestRollback_MultiFile(t *testing.T) {
+	ws := initWorkspace(t)
+	a := filepath.Join(ws, "a.txt")
+	b := filepath.Join(ws, "b.txt")
+	for _, f := range []struct{ path, content string }{
+		{a, "original-a"},
+		{b, "original-b"},
+	} {
+		if err := os.WriteFile(f.path, []byte(f.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	l, err := Begin(ws)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	txDir := l.dir
+
+	// Record both files before any write.
+	if err := l.Record(a, []byte("original-a"), 0o644); err != nil {
+		t.Fatalf("Record a: %v", err)
+	}
+	if err := l.Record(b, []byte("original-b"), 0o644); err != nil {
+		t.Fatalf("Record b: %v", err)
+	}
+
+	// Simulate: a was written, b write failed.
+	if err := os.WriteFile(a, []byte("modified-a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	l.Rollback()
+
+	if _, err := os.Stat(txDir); !os.IsNotExist(err) {
+		t.Error("tx-log dir should be gone after Rollback")
+	}
+	if got, _ := os.ReadFile(a); string(got) != "original-a" {
+		t.Errorf("a: got %q, want %q", got, "original-a")
+	}
+	if got, _ := os.ReadFile(b); string(got) != "original-b" {
+		t.Errorf("b: got %q, want %q", got, "original-b")
+	}
+}
+
+// TestRollback_SkipsUnsnapshottedOps verifies that Rollback skips ops with
+// snapshotted=false (large files) without panicking.
+func TestRollback_SkipsUnsnapshottedOps(t *testing.T) {
+	ws := initWorkspace(t)
+	target := filepath.Join(ws, "file.txt")
+	if err := os.WriteFile(target, []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually build a manifest with snapshotted=false — simulating a file
+	// that exceeded maxSnapSize at Record time.
+	txID := "unsnapshotted-test"
+	txDir := filepath.Join(ws, ".plumb", "tx-log", txID)
+	if err := os.MkdirAll(txDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := txManifest{
+		TxID:      txID,
+		Workspace: ws,
+		Ops:       []opMeta{{N: 0, Path: target, Perm: 0o644, Snapshotted: false}},
+	}
+	data, _ := json.MarshalIndent(m, "", "  ")
+	if err := os.WriteFile(filepath.Join(txDir, "manifest.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// rollbackDir must log a warning and NOT touch the file.
+	rollbackDir(txDir)
+
+	got, _ := os.ReadFile(target)
+	if string(got) != "current" {
+		t.Errorf("file must not be touched for unsnapshotted op; got %q", got)
+	}
+}
+
+// TestRollback_PermissionsPreserved verifies that Rollback writes the restored
+// content with the permission bits recorded in the manifest.
+func TestRollback_PermissionsPreserved(t *testing.T) {
+	ws := initWorkspace(t)
+	target := filepath.Join(ws, "script.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := Begin(ws)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := l.Record(target, []byte("#!/bin/sh"), 0o755); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	// Simulate a write that changed both content and permissions.
+	if err := os.WriteFile(target, []byte("modified"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	l.Rollback()
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat after rollback: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("perm = %o, want %o", info.Mode().Perm(), 0o755)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "#!/bin/sh" {
+		t.Errorf("content after rollback = %q, want %q", got, "#!/bin/sh")
+	}
+}
+
+// TestScan_MissingManifest verifies Scan handles an orphaned directory with no
+// manifest.json (daemon crashed before Begin finished writing it).
+func TestScan_MissingManifest(t *testing.T) {
+	ws := initWorkspace(t)
+	txDir := filepath.Join(ws, ".plumb", "tx-log", "crash-before-manifest")
+	if err := os.MkdirAll(txDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No manifest.json written — Scan must not panic.
+	Scan(ws) // should log an error and continue
+	// Directory should survive (Scan's RemoveAll only fires after rollbackDir).
+	// Either outcome (removed or not) is acceptable — what we care about is no panic.
+}
+
+// TestScan_CorruptManifest verifies Scan handles a directory whose manifest
+// contains invalid JSON (e.g. filesystem corruption) without panicking.
+func TestScan_CorruptManifest(t *testing.T) {
+	ws := initWorkspace(t)
+	txDir := filepath.Join(ws, ".plumb", "tx-log", "corrupt-manifest")
+	if err := os.MkdirAll(txDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(txDir, "manifest.json"), []byte("not valid json{{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	Scan(ws) // must not panic
 }

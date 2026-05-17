@@ -9,6 +9,26 @@ import (
 	"testing"
 )
 
+// initPlumbWorkspace creates a temp dir with a .plumb/ subdirectory so the
+// txlog has a place to write its snapshot directory.
+func initPlumbWorkspace(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".plumb"), 0o755); err != nil {
+		t.Fatalf("creating .plumb: %v", err)
+	}
+	return dir
+}
+
+// callTransactionInWorkspace runs transaction_apply with WorkspaceFn wired to
+// a real workspace directory so the txlog is exercised.
+func callTransactionInWorkspace(t *testing.T, ws string, args map[string]any) (string, error) {
+	t.Helper()
+	raw, _ := json.Marshal(args)
+	deps := WriteDeps{WorkspaceFn: func() string { return ws }}
+	return NewTransactionApply(deps).Execute(context.Background(), raw)
+}
+
 func callTransaction(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
@@ -99,5 +119,64 @@ func TestTransaction_RespectsExpectedMtime(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "changed since you read it") {
 		t.Fatalf("expected mtime rejection, got: %v", err)
+	}
+}
+
+// TestTransaction_TxlogCommittedOnSuccess verifies that the txlog snapshot
+// directory is created during the transaction and removed on Commit, so no
+// orphan is left behind after a successful run.
+func TestTransaction_TxlogCommittedOnSuccess(t *testing.T) {
+	ws := initPlumbWorkspace(t)
+	a := filepath.Join(ws, "a.txt")
+	b := filepath.Join(ws, "b.txt")
+	_ = os.WriteFile(a, []byte("original-a"), 0o644)
+	_ = os.WriteFile(b, []byte("original-b"), 0o644)
+
+	out, err := callTransactionInWorkspace(t, ws, map[string]any{
+		"operations": []map[string]any{
+			{"path": a, "edits": []map[string]string{{"old_str": "original-a", "new_str": "new-a"}}},
+			{"path": b, "edits": []map[string]string{{"old_str": "original-b", "new_str": "new-b"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "2 files updated") {
+		t.Errorf("unexpected output: %q", out)
+	}
+
+	// No orphaned tx-log directories must remain.
+	txLogDir := filepath.Join(ws, ".plumb", "tx-log")
+	entries, err := os.ReadDir(txLogDir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("reading tx-log dir: %v", err)
+	}
+	if len(entries) > 0 {
+		t.Errorf("tx-log dir should be empty after success, found: %v", entries)
+	}
+}
+
+// TestTransaction_TxlogRolledBackOnValidationFailure verifies that when phase 1
+// fails (no writes happen), the txlog directory is not created at all — Begin
+// is only called at the start of phase 2.
+func TestTransaction_TxlogRolledBackOnValidationFailure(t *testing.T) {
+	ws := initPlumbWorkspace(t)
+	a := filepath.Join(ws, "a.txt")
+	_ = os.WriteFile(a, []byte("hello"), 0o644)
+
+	_, err := callTransactionInWorkspace(t, ws, map[string]any{
+		"operations": []map[string]any{
+			{"path": a, "edits": []map[string]string{{"old_str": "missing-string", "new_str": "x"}}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+
+	// Phase 1 failed → phase 2 never started → no txlog directory created.
+	txLogDir := filepath.Join(ws, ".plumb", "tx-log")
+	entries, _ := os.ReadDir(txLogDir)
+	if len(entries) > 0 {
+		t.Errorf("no txlog dir expected when phase 1 fails, found: %v", entries)
 	}
 }
