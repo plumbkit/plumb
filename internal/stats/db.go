@@ -662,10 +662,24 @@ func (d *DB) TotalCalls(filter Filter) int64 {
 // TotalTokensSaved sums TokensSaved across all matching calls. Best-effort
 // estimate based on per-tool alternative-cost multipliers (see savings.go).
 func (d *DB) TotalTokensSaved(filter Filter) int64 {
+	return d.TotalTokensSavedSince(time.Time{}, filter)
+}
+
+// TotalTokensSavedSince sums TokensSaved across matching calls recorded at or
+// after since. A zero since includes all matching rows.
+func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 	if d == nil {
 		return 0
 	}
 	where, args := filter.where()
+	if !since.IsZero() {
+		if where == "" {
+			where = " WHERE called_at >= ?"
+		} else {
+			where += " AND called_at >= ?"
+		}
+		args = append(args, since.UnixMilli())
+	}
 	q := `SELECT tool, output_bytes FROM tool_calls` + where
 	rows, err := d.db.Query(q, args...)
 	if err != nil {

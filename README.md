@@ -296,7 +296,7 @@ gopls initialisation is lazy — workspace resolves on first tool call.
 
 ## Monitoring
 
-The `plumb` command (alias: `plumb status`) opens a live TUI dashboard showing active sessions, tool call statistics, recent edits, and recent calls per session.
+The `plumb` command (alias: `plumb status`) opens a live TUI dashboard showing active sessions, tool call statistics, recent edits, and recent calls per session. Use `/` to open the section selector, `ctrl+h` for help, and `ctrl+q` to quit.
 
 ```
 plumb 0.5.4

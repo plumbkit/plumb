@@ -144,10 +144,12 @@ func TestMouseDragDividerResizesLeftPanel(t *testing.T) {
 func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	RebuildStyles()
 	m := Model{
+		currentSection: 1,
 		activity: stats.ActivitySummary{
 			Calls:   5200,
 			Buckets: []int64{0, 1, 2, 3, 2, 1, 0, 0, 3, 4, 5, 4, 3, 2, 1, 0},
 		},
+		tokenSavings: 913000,
 	}
 
 	lines := m.renderTopMenu(60, false)
@@ -162,9 +164,9 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 		}
 	}
 	for i, want := range []string{
-		"  Home        ╭─ Activity (1m) ────────────╮",
-		"▌ Sessions    │ ",
-		"  Logs        ╰────────────────────────────╯",
+		"╭────────────────╮ ╭─ Activity (1m) ────────────╮",
+		"│ ❯ Sessions   ▾ │ │ ",
+		"╰────────────────╯ ╰────────────────────────────╯",
 	} {
 		if !strings.HasPrefix(plain[i], want) {
 			t.Fatalf("line %d = %q, want prefix %q", i, plain[i], want)
@@ -172,6 +174,89 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	}
 	if !strings.Contains(plain[1], "5.2k calls") {
 		t.Fatalf("activity row = %q, want call count", plain[1])
+	}
+
+	lines = m.renderTopMenu(96, false)
+	plain = make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+	if !strings.Contains(plain[0], "Tokens Saved") {
+		t.Fatalf("top menu = %#v, want tokens saved box title", plain)
+	}
+	if !strings.Contains(plain[1], "913k") {
+		t.Fatalf("token savings row = %q, want savings value", plain[1])
+	}
+	if !strings.Contains(plain[0], "╮ ╭─ Tokens Saved") {
+		t.Fatalf("top menu = %q, want one-space widget gap", plain[0])
+	}
+}
+
+func TestSectionSelectorKeyFlow(t *testing.T) {
+	m := NewModel()
+
+	updated, _ := m.Update(keyPress("/"))
+	m = updated.(Model)
+	if !m.sectionMenuOpen {
+		t.Fatal("section menu did not open")
+	}
+	if m.sectionMenuCursor != 1 {
+		t.Fatalf("sectionMenuCursor = %d, want Sessions index", m.sectionMenuCursor)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = updated.(Model)
+	if m.sectionMenuCursor != 2 {
+		t.Fatalf("sectionMenuCursor after down = %d, want Memory index", m.sectionMenuCursor)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = updated.(Model)
+	if m.sectionMenuOpen {
+		t.Fatal("section menu stayed open after enter")
+	}
+	if m.currentSection != 2 {
+		t.Fatalf("currentSection = %d, want Memory index", m.currentSection)
+	}
+
+	updated, _ = m.Update(keyPress("/"))
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(Model)
+	if m.sectionMenuOpen {
+		t.Fatal("section menu stayed open after esc")
+	}
+}
+
+func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
+	m := NewModel()
+
+	updated, cmd := m.Update(keyPress("h"))
+	m = updated.(Model)
+	if m.showHelp {
+		t.Fatal("plain h opened help")
+	}
+	if cmd != nil {
+		t.Fatal("plain h returned a command")
+	}
+
+	updated, cmd = m.Update(ctrlKey('h'))
+	m = updated.(Model)
+	if !m.showHelp {
+		t.Fatal("ctrl+h did not open help")
+	}
+	if cmd != nil {
+		t.Fatal("ctrl+h returned a command")
+	}
+
+	_, cmd = m.Update(keyPress("q"))
+	if cmd != nil {
+		t.Fatal("plain q returned a command")
+	}
+
+	_, cmd = m.Update(ctrlKey('q'))
+	if cmd == nil {
+		t.Fatal("ctrl+q did not return a quit command")
 	}
 }
 
@@ -191,6 +276,23 @@ func TestActivitySparklineAndCallFormatting(t *testing.T) {
 			t.Fatalf("formatActivityCalls(%d) = %q, want %q", n, got, want)
 		}
 	}
+}
+
+func TestTokenSavingsBar(t *testing.T) {
+	if got := tokenSavingsBar(913000, 16); got != "█████████░░░░░░░" {
+		t.Fatalf("tokenSavingsBar = %q, want sample shape", got)
+	}
+	if got := tokenSavingsBar(0, 4); got != "░░░░" {
+		t.Fatalf("tokenSavingsBar(0) = %q, want empty bar", got)
+	}
+}
+
+func keyPress(s string) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Text: s, Code: []rune(s)[0]})
+}
+
+func ctrlKey(r rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: r, Mod: tea.ModCtrl})
 }
 
 func ansiStripForTest(s string) string {

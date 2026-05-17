@@ -26,11 +26,14 @@ const (
 	defaultLeftWidth  = 30
 	minLeftWidth      = 16
 	minPopupLeftWidth = 30 // enough for " > ● ✓ 05-12 00:00:00 000ms"
+	sectionMenuWidth  = 18
 	pollInterval      = 2 * time.Second
 	activityInterval  = 10 * time.Second
 	activityBuckets   = 16
 	bodyStartRow      = 4
 )
+
+var sectionMenuItems = []string{"Dashboard", "Sessions", "Memory", "Logs", "Settings"}
 
 // pollMsg is sent by the periodic refresh tick.
 type pollMsg struct{}
@@ -52,6 +55,7 @@ type Model struct {
 	toolStats       []stats.ToolStat
 	recentCalls     []stats.RecentCall
 	activity        stats.ActivitySummary
+	tokenSavings    int64
 	cursor          int
 	statsCursor     int
 	toolStatsCursor int
@@ -70,6 +74,10 @@ type Model struct {
 	// UI Overlays
 	showPopup bool
 	showHelp  bool
+
+	sectionMenuOpen   bool
+	sectionMenuCursor int
+	currentSection    int
 
 	popupTool         string
 	popupCalls        []stats.RecentCall
@@ -93,7 +101,7 @@ type popupDetailCache struct {
 }
 
 func NewModel() Model {
-	m := Model{leftWidth: defaultLeftWidth}
+	m := Model{leftWidth: defaultLeftWidth, currentSection: 1, sectionMenuCursor: 1}
 	m.refresh()
 	return m
 }
@@ -123,6 +131,7 @@ func (m *Model) refreshStats() {
 		m.toolStats = nil
 		m.recentCalls = nil
 		m.activity = stats.ActivitySummary{}
+		m.tokenSavings = 0
 		return
 	}
 	s := m.sessions[m.cursor]
@@ -135,6 +144,7 @@ func (m *Model) refreshStats() {
 		m.toolStats = nil
 		m.recentCalls = nil
 		m.activity = stats.ActivitySummary{}
+		m.tokenSavings = 0
 		return
 	}
 
@@ -156,6 +166,7 @@ func (m *Model) refreshStats() {
 func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 	if db == nil {
 		m.activity = stats.ActivitySummary{}
+		m.tokenSavings = 0
 		return
 	}
 	// We no longer tie caching to activitySession because the activity view is global.
@@ -182,6 +193,7 @@ func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 		return
 	}
 	m.activity = activity
+	m.tokenSavings = db.TotalTokensSavedSince(start, stats.Filter{})
 	m.lastActivityAt = now
 	m.activitySession = "" // clear to prevent any residual checks
 }
@@ -379,7 +391,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.showPopup {
 			switch msg.String() {
-			case "q", "ctrl+c":
+			case "ctrl+q", "ctrl+c":
 				return m, tea.Quit
 			case "esc":
 				m.showPopup = false
@@ -470,17 +482,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "h":
+		case "/":
+			m.sectionMenuOpen = true
+			m.sectionMenuCursor = m.currentSection
+		case "ctrl+h":
+			m.sectionMenuOpen = false
 			m.showHelp = true
-		case "q", "ctrl+c":
-			if m.showHelp {
-				m.showHelp = false
-				break
-			}
+		case "ctrl+q", "ctrl+c":
 			return m, tea.Quit
 		case "esc":
+			m.sectionMenuOpen = false
 			m.showHelp = false
 		case "enter":
+			if m.sectionMenuOpen {
+				m.currentSection = m.sectionMenuCursor
+				m.sectionMenuOpen = false
+				break
+			}
 			switch m.focusPanel {
 			case focusToolStats:
 				if len(m.toolStats) > 0 {
@@ -535,6 +553,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusPanel = focusDetails
 			}
 		case "up", "k":
+			if m.sectionMenuOpen {
+				if m.sectionMenuCursor > 0 {
+					m.sectionMenuCursor--
+				}
+				break
+			}
 			switch m.focusPanel {
 			case focusToolStats:
 				if m.toolStatsCursor > 0 {
@@ -557,6 +581,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "down", "j":
+			if m.sectionMenuOpen {
+				if m.sectionMenuCursor < len(sectionMenuItems)-1 {
+					m.sectionMenuCursor++
+				}
+				break
+			}
 			switch m.focusPanel {
 			case focusToolStats:
 				if m.toolStatsCursor < len(m.toolStats)-1 {
@@ -713,7 +743,7 @@ func (m Model) render() string {
 	}
 
 	var sb strings.Builder
-	isOverlay := m.showPopup || m.showHelp
+	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen
 
 	sepStyle := SepStyle
 	statusStyle := StatusStyle
@@ -808,7 +838,7 @@ func (m Model) render() string {
 	}
 	leftFooter := fmt.Sprintf(" plumb %s  ·  %d session(s)  ·  %d tool calls  ·  ~%s tokens saved",
 		vStr, len(m.sessions), totalCalls, stats.FormatSavings(int(savedTok)))
-	rightFooter := "q quit  ·  h help "
+	rightFooter := "/ sections  ·  ctrl+q quit  ·  ctrl+h help "
 	footerGap := m.width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooter)
 	if footerGap < 1 {
 		footerGap = 1
@@ -821,6 +851,9 @@ func (m Model) render() string {
 	}
 	if m.showHelp {
 		final = m.renderHelp(final)
+	}
+	if m.sectionMenuOpen {
+		final = m.renderSectionMenuOverlay(final)
 	}
 	return final
 }
@@ -926,15 +959,17 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 func (m Model) renderHelp(bg string) string {
 	helpLines := []string{
 		" ↑/↓ or j/k      Navigate sessions/calls/scroll details",
+		" /               Open section selector",
 		" pgup/pgdown     Page through lists",
 		" tab/shift+tab   Switch panel focus (sessions → details → tools → recent)",
-		" enter           Open tool call detail",
-		" [/]             Resize columns",
-		" q               Quit",
-		" esc             Close popup",
+		" enter           Open detail / select menu item",
+		" [ and ]         Resize columns",
+		" ctrl+h          Open help",
+		" ctrl+q          Quit",
+		" esc             Close popup/menu",
 	}
 
-	boxW := 52
+	boxW := 76
 	innerW := boxW - 2
 	topLabel := " Help & Navigation "
 
@@ -964,6 +999,32 @@ func (m Model) renderHelp(bg string) string {
 
 	popup := top + "\n" + strings.Join(bodyLines, "\n") + "\n" + bottom
 	return spliceOverlay(bg, popup, m.width, m.height)
+}
+
+func (m Model) renderSectionMenuOverlay(bg string) string {
+	border := SepStyle
+	textStyle := DetailStyle
+	selectedStyle := SelectedStyle
+
+	innerW := sectionMenuWidth - 2
+	lines := []string{border.Render("╭" + strings.Repeat("─", innerW) + "╮")}
+	for i, item := range sectionMenuItems {
+		prefix := "  "
+		style := textStyle
+		if i == m.sectionMenuCursor {
+			prefix = "❯ "
+			style = selectedStyle
+		}
+		content := " " + style.Render(prefix+item)
+		pad := innerW - lipgloss.Width(content)
+		if pad < 0 {
+			pad = 0
+		}
+		lines = append(lines, border.Render("│")+content+strings.Repeat(" ", pad)+border.Render("│"))
+	}
+	lines = append(lines, border.Render("╰"+strings.Repeat("─", innerW)+"╯"))
+
+	return spliceOverlayAt(bg, strings.Join(lines, "\n"), 0, 0)
 }
 
 func (m Model) renderTopBorderPopup(pLW, pRW int) string {
@@ -1385,32 +1446,17 @@ func padRight(s string, w int) string {
 }
 
 func (m Model) renderTopMenu(width int, dimmed bool) []string {
-	rows := []struct {
-		label  string
-		active bool
-	}{
-		{label: "Home"},
-		{label: "Sessions", active: true},
-		{label: "Logs"},
-	}
-	box := m.renderActivityBox(dimmed)
-	out := make([]string, 0, len(rows))
-	for i, row := range rows {
-		prefix := "  "
-		style := MutedStyle
-		if row.active {
-			prefix = "▌ "
-			style = SelectedStyle
+	selector := m.renderSectionSelector(dimmed)
+	activityBox := m.renderActivityBox(dimmed)
+	tokenBox := m.renderTokenSavingsBox(dimmed)
+	selectorWidth := lipgloss.Width(selector[0])
+	showTokenBox := width >= selectorWidth+1+30+1+lipgloss.Width(tokenBox[0])
+	out := make([]string, 0, len(selector))
+	for i := range selector {
+		line := selector[i] + " " + activityBox[i]
+		if showTokenBox {
+			line += " " + tokenBox[i]
 		}
-		if dimmed {
-			style = InactiveStyle
-		}
-		menu := style.Render(prefix + row.label)
-		menuPad := 14 - lipgloss.Width(menu)
-		if menuPad < 1 {
-			menuPad = 1
-		}
-		line := menu + strings.Repeat(" ", menuPad) + box[i]
 		pad := width - lipgloss.Width(line)
 		if pad < 0 {
 			pad = 0
@@ -1418,6 +1464,72 @@ func (m Model) renderTopMenu(width int, dimmed bool) []string {
 		out = append(out, line+strings.Repeat(" ", pad))
 	}
 	return out
+}
+
+func (m Model) renderSectionSelector(dimmed bool) []string {
+	border := SepStyle
+	textStyle := SelectedStyle
+	hintStyle := MutedStyle
+	if dimmed {
+		border = SepInactiveStyle
+		textStyle = InactiveStyle
+		hintStyle = InactiveStyle
+	}
+
+	current := "Sessions"
+	if m.currentSection >= 0 && m.currentSection < len(sectionMenuItems) {
+		current = sectionMenuItems[m.currentSection]
+	}
+	content := " " + textStyle.Render("❯ "+current) + " "
+	arrow := hintStyle.Render("▾")
+	pad := sectionMenuWidth - 2 - lipgloss.Width(content) - lipgloss.Width(arrow) - 1
+	if pad < 1 {
+		pad = 1
+	}
+	row := content + strings.Repeat(" ", pad) + arrow + " "
+
+	return []string{
+		border.Render("╭" + strings.Repeat("─", sectionMenuWidth-2) + "╮"),
+		border.Render("│") + row + border.Render("│"),
+		border.Render("╰" + strings.Repeat("─", sectionMenuWidth-2) + "╯"),
+	}
+}
+
+func (m Model) renderTokenSavingsBox(dimmed bool) []string {
+	border := SepStyle
+	title := PanelHeaderFadedStyle
+	barStyle := SelectedStyle
+	valueStyle := DetailStyle
+	if dimmed {
+		border = SepInactiveStyle
+		title = PanelHeaderInactiveStyle
+		barStyle = InactiveStyle
+		valueStyle = InactiveStyle
+	}
+
+	const (
+		barWidth = 16
+	)
+
+	titleText := " Tokens Saved "
+	value := stats.FormatSavings(int(m.tokenSavings))
+	bar := tokenSavingsBar(m.tokenSavings, barWidth)
+	content := " " + barStyle.Render(bar) + " " + valueStyle.Render(value) + " "
+	innerWidth := lipgloss.Width(content)
+	minInnerWidth := lipgloss.Width("─") + lipgloss.Width(titleText)
+	if innerWidth < minInnerWidth {
+		innerWidth = minInnerWidth
+	}
+	topFill := innerWidth - lipgloss.Width("─") - lipgloss.Width(titleText)
+	if topFill < 0 {
+		topFill = 0
+	}
+
+	return []string{
+		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
+		border.Render("│") + content + border.Render("│"),
+		border.Render("╰" + strings.Repeat("─", innerWidth) + "╯"),
+	}
 }
 
 func formatUptime(d time.Duration) string {
@@ -1515,6 +1627,24 @@ func activitySparkline(buckets []int64, width int) string {
 		out[i] = levels[levelIdx]
 	}
 	return string(out)
+}
+
+func tokenSavingsBar(tokens int64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	const targetTokens = 1_500_000
+	filled := int(tokens * int64(width) / targetTokens)
+	if tokens > 0 && filled == 0 {
+		filled = 1
+	}
+	if filled > width {
+		filled = width
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 func formatActivityCalls(n int64) string {
@@ -1657,7 +1787,6 @@ func copyToClipboard(c stats.RecentCall, ij, ot string) tea.Cmd {
 }
 
 func spliceOverlay(bg, overlay string, w, h int) string {
-	bgLines := strings.Split(bg, "\n")
 	ovLines := strings.Split(overlay, "\n")
 	ovH := len(ovLines)
 	ovW := 0
@@ -1667,7 +1796,19 @@ func spliceOverlay(bg, overlay string, w, h int) string {
 		}
 	}
 	sy, sx := (h-ovH)/2, (w-ovW)/2
-	for i := 0; i < ovH; i++ {
+	return spliceOverlayAt(bg, overlay, sx, sy)
+}
+
+func spliceOverlayAt(bg, overlay string, sx, sy int) string {
+	bgLines := strings.Split(bg, "\n")
+	ovLines := strings.Split(overlay, "\n")
+	ovW := 0
+	for _, l := range ovLines {
+		if lw := lipgloss.Width(l); lw > ovW {
+			ovW = lw
+		}
+	}
+	for i := 0; i < len(ovLines); i++ {
 		y := sy + i
 		if y < 0 || y >= len(bgLines) {
 			continue

@@ -22,6 +22,7 @@
 - **`--log-level` global flag removed.** The flag was broken by design: it only took effect when spawning a new daemon subprocess, had no effect on an already-running daemon, and was not propagated correctly. Use `plumb log-level <level>` to change the running daemon's log level at any time, or set `log_level` in `~/.config/plumb/config.toml` for a persistent default.
 
 ### Changed
+- **TUI top rail controls.** The old vertical menu is now a compact section selector opened with `/`, navigated with arrows or `j`/`k`, selected with `enter`, and closed with `esc`. The TUI now uses `ctrl+h` for help and `ctrl+q` for quit, with the footer and help panel updated to match. The top rail also shows a `Tokens Saved` box beside daemon activity when there is enough horizontal room; it reports estimated token savings for calls recorded since the current daemon's first active session, matching the Activity widget's daemon-lifetime scope.
 - **Stats are global again to match the singleton daemon.** `internal/stats` now writes to one database under `config.DataDir()/stats.db`; each `tool_calls` row carries `workspace`, `session_id`, and `session_name`. `plumb stats`, `session_start`, and TUI project/session views filter by row attributes instead of opening per-project database files.
 - **`find_replace` description** now opens with "Grep-equivalent: find text across files with optional replacement." so agents searching for grep or content-search find the tool via semantic matching.
 

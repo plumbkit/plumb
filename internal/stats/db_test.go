@@ -254,6 +254,32 @@ func TestCallDetailScopesByWorkspaceAndSession(t *testing.T) {
 	}
 }
 
+func TestTotalTokensSavedSinceScopesByTime(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	calls := []Call{
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now.Add(-time.Hour), Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now, Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "search_in_files", CalledAt: now, Success: true},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record %s: %v", c.Tool, err)
+		}
+	}
+
+	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 800 {
+		t.Fatalf("TotalTokensSavedSince = %d, want 800", got)
+	}
+}
+
 func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
