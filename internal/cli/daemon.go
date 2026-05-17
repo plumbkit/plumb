@@ -372,7 +372,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewFindFiles())
 	srv.Register(tools.NewGit())
 	srv.Register(tools.NewFileDiff())
-	srv.Register(tools.NewFindReplace())
+	srv.Register(tools.NewFindReplace(writeDeps))
 	srv.Register(tools.NewVersion())
 	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn, refuseHomeRootsFn))
 

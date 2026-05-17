@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,11 +17,21 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
-type findReplaceTool struct{}
+type findReplaceTool struct {
+	deps WriteDeps
+}
 
-func NewFindReplace() *findReplaceTool { return &findReplaceTool{} }
+func NewFindReplace(deps ...WriteDeps) *findReplaceTool {
+	var d WriteDeps
+	if len(deps) > 0 {
+		d = deps[0]
+	}
+	return &findReplaceTool{deps: d}
+}
 
 func (*findReplaceTool) Name() string { return "find_replace" }
 
@@ -146,6 +158,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	type fileChange struct {
 		path  string
 		count int
+		err   error
 	}
 
 	scan := func(path string) (int, []byte) {
@@ -202,8 +215,8 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 
 	paths := make(chan string)
 	results := make(chan fileChange, workers)
-	var claimed atomic.Int32
-	maxFiles := int32(a.MaxFiles)
+	var claimed atomic.Int64
+	maxFiles := int64(a.MaxFiles)
 
 	var wg sync.WaitGroup
 	for range workers {
@@ -221,14 +234,23 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 					continue
 				}
 				if !dryRun {
-					tmp := path + ".tmp"
-					if err := os.WriteFile(tmp, newData, 0o644); err != nil {
+					if !t.deps.Limiter.Allow() {
+						results <- fileChange{path: path, count: count, err: rateLimitError("find_replace", t.deps.Limiter)}
+						cancel()
 						continue
 					}
-					if err := os.Rename(tmp, path); err != nil {
-						os.Remove(tmp)
+					unlock := lockPath(path)
+					_, err := safeWrite(path, newData, 0o644)
+					unlock()
+					if err != nil {
+						results <- fileChange{path: path, count: count, err: fmt.Errorf("find_replace: writing %s: %w", path, err)}
+						cancel()
 						continue
 					}
+					if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
+						slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
+					}
+					invalidateCache(t.deps.Cache, "file://"+path)
 				}
 				select {
 				case results <- fileChange{path: path, count: count}:
@@ -255,8 +277,13 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	}()
 
 	var changes []fileChange
+	var writeErrs []error
 	totalReplacements := 0
 	for r := range results {
+		if r.err != nil {
+			writeErrs = append(writeErrs, r.err)
+			continue
+		}
 		changes = append(changes, r)
 		totalReplacements += r.count
 	}
@@ -286,6 +313,9 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 
 	if dryRun && len(changes) > 0 {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
+	}
+	if len(writeErrs) > 0 {
+		return sb.String(), errors.Join(writeErrs...)
 	}
 
 	return sb.String(), nil

@@ -79,6 +79,35 @@ func TestFindReplace_ApplyChanges(t *testing.T) {
 	}
 }
 
+func TestFindReplace_ApplyConsumesRateLimit(t *testing.T) {
+	dir := setupReplaceTree(t)
+	tool := NewFindReplace(WriteDeps{
+		Limiter: NewRateLimiter(1, time.Minute),
+	})
+
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "TODO",
+		"replacement": "DONE",
+		"dry_run":     false,
+		"max_files":   2,
+	})
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("expected rate limit error")
+	}
+
+	changed := 0
+	for _, name := range []string{"a.go", "b.go"} {
+		data, _ := os.ReadFile(filepath.Join(dir, name))
+		if strings.Contains(string(data), "DONE") {
+			changed++
+		}
+	}
+	if changed != 1 {
+		t.Fatalf("changed files = %d, want 1", changed)
+	}
+}
+
 func TestFindReplace_GlobLimitsScope(t *testing.T) {
 	dir := setupReplaceTree(t)
 	tool := NewFindReplace()
