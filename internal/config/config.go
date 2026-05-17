@@ -138,7 +138,35 @@ var defaults = Config{
 // Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
 // that want to compare what's in the resolved config against the baseline.
 func Defaults() Config {
-	return defaults
+	return cloneConfig(defaults)
+}
+
+func cloneConfig(cfg Config) Config {
+	out := cfg
+	if cfg.LSP != nil {
+		out.LSP = make(map[string]LSPConfig, len(cfg.LSP))
+		for name, lspCfg := range cfg.LSP {
+			out.LSP[name] = cloneLSPConfig(lspCfg)
+		}
+	}
+	return out
+}
+
+func cloneLSPConfig(cfg LSPConfig) LSPConfig {
+	out := cfg
+	if cfg.Args != nil {
+		out.Args = append([]string(nil), cfg.Args...)
+	}
+	if cfg.RootMarkers != nil {
+		out.RootMarkers = append([]string(nil), cfg.RootMarkers...)
+	}
+	if cfg.Env != nil {
+		out.Env = make(map[string]string, len(cfg.Env))
+		for k, v := range cfg.Env {
+			out.Env[k] = v
+		}
+	}
+	return out
 }
 
 // GlobalConfigPath returns the path where the global config file lives.
@@ -162,7 +190,7 @@ func configPath() string {
 // Load reads the config file, applies env overrides, and validates the result.
 // A missing config file is not an error — defaults are returned.
 func Load() (Config, error) {
-	cfg := defaults
+	cfg := cloneConfig(defaults)
 
 	path := configPath()
 	if path != "" {
@@ -231,7 +259,7 @@ func ProjectConfigPath(workspace string) string {
 // The result is what tools should consult for per-project settings (strict
 // mode, rate limit).
 func LoadProject(base Config, workspace string) (Config, error) {
-	merged := base
+	merged := cloneConfig(base)
 	path := ProjectConfigPath(workspace)
 	if path != "" {
 		data, err := os.ReadFile(path)

@@ -75,6 +75,56 @@ func TestDefaults_RefuseHomeRootsEnabled(t *testing.T) {
 	}
 }
 
+func TestDefaults_ReturnsDeepCopy(t *testing.T) {
+	got := Defaults()
+	got.LSP["go"] = LSPConfig{Command: "mutated"}
+	got.LSP["python"] = LSPConfig{
+		Command:     "mutated",
+		Args:        []string{"changed"},
+		RootMarkers: []string{"changed"},
+		Env:         map[string]string{"X": "Y"},
+	}
+
+	again := Defaults()
+	if again.LSP["go"].Command != "gopls" {
+		t.Fatalf("mutating Defaults result changed later defaults: %#v", again.LSP["go"])
+	}
+	if again.LSP["python"].Command != "pyright-langserver" {
+		t.Fatalf("mutating Defaults result changed later python config: %#v", again.LSP["python"])
+	}
+}
+
+func TestLoadProject_ReturnsDeepCopyOfBase(t *testing.T) {
+	base := Defaults()
+	base.LSP["go"] = LSPConfig{
+		Command:     "gopls",
+		Args:        []string{"serve"},
+		RootMarkers: []string{"go.work", "go.mod"},
+		Env:         map[string]string{"A": "B"},
+		Enabled:     true,
+	}
+
+	got, err := LoadProject(base, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotGo := got.LSP["go"]
+	gotGo.Args[0] = "mutated"
+	gotGo.RootMarkers[0] = "mutated"
+	gotGo.Env["A"] = "mutated"
+	got.LSP["go"] = gotGo
+
+	if base.LSP["go"].Args[0] != "serve" {
+		t.Fatalf("LoadProject result shared Args with base: %#v", base.LSP["go"].Args)
+	}
+	if base.LSP["go"].RootMarkers[0] != "go.work" {
+		t.Fatalf("LoadProject result shared RootMarkers with base: %#v", base.LSP["go"].RootMarkers)
+	}
+	if base.LSP["go"].Env["A"] != "B" {
+		t.Fatalf("LoadProject result shared Env with base: %#v", base.LSP["go"].Env)
+	}
+}
+
 func TestLoadProject_OverridesWalk(t *testing.T) {
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")
