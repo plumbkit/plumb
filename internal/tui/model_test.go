@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
 )
 
@@ -88,4 +92,68 @@ func TestLocateTool_RemovedToolClampsToLast(t *testing.T) {
 	if got != 0 {
 		t.Errorf("locateTool with removed tool = %d, want 0 (clamped)", got)
 	}
+}
+
+func TestLeftLines_RenderSessionsAsTwoLineRows(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		leftWidth: 42,
+		sessions: []session.Info{
+			{Name: "CRAZY-PLUMB", Language: "go", Folder: "/Users/gilberto/Projects/plumb"},
+			{Name: "SUPER-FRIEND", Language: "go", Folder: "/Users/gilberto/Projects/plumb"},
+		},
+	}
+
+	lines := m.leftLines()
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+	joined := strings.Join(plain, "\n")
+	for _, want := range []string{
+		" ● CRAZY-PLUMB  go ",
+		"    ╰─ ~/Projects/plumb",
+		" ○ SUPER-FRIEND  go ",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("leftLines missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestMouseDragDividerResizesLeftPanel(t *testing.T) {
+	m := Model{leftWidth: 42, width: 100, height: 30}
+
+	updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 43, Y: 10, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if !m.draggingDivider {
+		t.Fatal("expected divider drag to start")
+	}
+	updated, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: 50, Y: 10, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if m.leftWidth != 49 {
+		t.Fatalf("leftWidth = %d, want 49", m.leftWidth)
+	}
+	updated, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: 50, Y: 10, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if m.draggingDivider {
+		t.Fatal("expected divider drag to stop")
+	}
+}
+
+func ansiStripForTest(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		switch {
+		case inEsc && r == 'm':
+			inEsc = false
+		case inEsc:
+		case r == '\x1b':
+			inEsc = true
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

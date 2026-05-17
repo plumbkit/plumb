@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.golimpio.plumb
 
-.PHONY: build test test-race lint run clean tidy install-hooks codesign
+.PHONY: build test test-race integration-test lint run clean tidy install-hooks codesign
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -53,6 +53,9 @@ test: $(TESTCACHE)
 
 test-race: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -race ./...
+
+integration-test: $(TESTCACHE)
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=2m ./...
 
 lint:
 	golangci-lint run

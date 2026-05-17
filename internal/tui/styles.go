@@ -17,6 +17,9 @@ var (
 	ValStyle                 lipgloss.Style
 	ItemStyle                lipgloss.Style
 	SelectedStyle            lipgloss.Style
+	SessionLangStyle         lipgloss.Style
+	SessionLangSelectedStyle lipgloss.Style
+	SessionLangFadedStyle    lipgloss.Style
 	InactiveStyle            lipgloss.Style // full panel content behind popup
 	MutedStyle               lipgloss.Style
 	FadedStyle               lipgloss.Style // content in active-but-unfocused panel
@@ -30,10 +33,10 @@ var (
 	TabInactiveEdgeStyle     lipgloss.Style
 	StatusStyle              lipgloss.Style
 
-	OkStyle                  lipgloss.Style
-	WarnStyle                lipgloss.Style
-	ScrollThumbStyle         lipgloss.Style
-	ScrollTrackStyle         lipgloss.Style
+	OkStyle          lipgloss.Style
+	WarnStyle        lipgloss.Style
+	ScrollThumbStyle lipgloss.Style
+	ScrollTrackStyle lipgloss.Style
 )
 
 func init() { RebuildStyles() }
@@ -84,6 +87,19 @@ func RebuildStyles() {
 	SelectedStyle = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(t.Accent)
+
+	SessionLangStyle = lipgloss.NewStyle().
+		Background(t.Border).
+		Foreground(t.TextPrimary)
+
+	SessionLangSelectedStyle = lipgloss.NewStyle().
+		Bold(true).
+		Background(t.Accent).
+		Foreground(lipgloss.Color("0"))
+
+	SessionLangFadedStyle = lipgloss.NewStyle().
+		Background(t.TextInactive).
+		Foreground(t.TextFaded)
 
 	// InactiveStyle: every character in the panel that is behind a popup.
 	InactiveStyle = lipgloss.NewStyle().

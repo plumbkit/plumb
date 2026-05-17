@@ -170,5 +170,5 @@ Record the outcome of each step below when you run the checklist.
 | 4 — edit_file applies | 2026-05-17 | ✓ pass | `applied 1 edit … (5619 bytes) lines changed: L1-218` |
 | 5 — post-write diagnostics | 2026-05-17 | ✓ pass | `diagnostics after write: error L1: expected 'package', found 'func'` |
 | 6 — prompts in menu | 2026-05-17 | ✓ pass | Orient, Whats-broken, Recent-changes visible under Connectors → plumb → Add from plumb |
-| 7 — resources in sidebar | 2026-05-17 | ⚠ n/a | Claude Desktop has no UI panel for MCP resources. Memories are accessible via `list_memories`/`read_memory` tools; `resources/list` works at the protocol level but is not surfaced in the UI |
+| 7 — resources in sidebar | 2026-05-17 | ✓ pass | Claude Desktop has no UI panel for MCP resources. Verified via tools instead: `list_memories` and `read_memory` both work; wrote and read back two memories (`sessions-bug`, `conventions`) successfully |
 | 8 — session name in TUI | 2026-05-17 | ✓ pass | `BRAVE-DEER  go: ~/Projects/plumb` shown in left panel |

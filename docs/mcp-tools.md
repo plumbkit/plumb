@@ -500,7 +500,7 @@ Each `old_str` must appear **exactly once** in the file at the time the edit is 
 **Safety model** (in addition to the shared model above):
 1. **Per-path lock** serialises against any concurrent `write_file` / `edit_file` / `delete_file` / `rename_file` / `transaction_apply` targeting the same path.
 2. **Uniqueness lock** — the exact-once requirement detects concurrent modifications that changed the surrounding context.
-3. **CRLF tolerance** — line endings in `old_str` are normalised against the file before matching. An LF `old_str` matches a CRLF file.
+3. **CRLF tolerance** — line endings in `old_str` are normalised against the file before matching. An LF `old_str` matches a CRLF file. **Limitation:** detection looks for the first CRLF in the file; files with mixed line endings (both `\r\n` and `\n`) have undefined matching behaviour. Normalise with `dos2unix` or `unix2dos` before editing.
 4. **expected_mtime gate** — when supplied, the file's current mtime must equal the provided value, else the edit is rejected immediately.
 5. **Strict mode** (opt-in via `[edits].strict = true` or `PLUMB_STRICT_EDITS=1`) — the file must have been read via `read_file` in this MCP session AND its current mtime must match what `read_file` observed. Per-session via `ReadTracker`.
 6. **In-memory application** — all edits applied in memory before any write. File untouched on validation failure.
@@ -684,4 +684,24 @@ Designed for Claude Desktop where no filesystem access is available without tool
 | Field | Required | Description |
 |---|---|---|
 | `workspace` | no | Absolute workspace path. Defaults to the daemon-resolved workspace; falls back to roots/list, then cwd walk |
+
+### `daemon_info`
+
+Returns metadata about the current MCP session and daemon process.
+
+**Source**: `internal/tools/daemon_info.go`
+
+Includes the current session name, session ID, daemon version, daemon start timestamp, and uptime. The session name reflects any successful `rename_session` call in the same MCP session.
+
+### `rename_session`
+
+Renames the current MCP session using the existing session `Name` field.
+
+**Source**: `internal/tools/rename_session.go`
+
+Names are normalised to uppercase, may contain only ASCII letters and `-`, must not start or end with `-`, and are capped at 16 characters to match the generated session-name envelope. A successful rename updates the session JSON, future stats rows, and existing stats rows for the current session in open workspace databases.
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | New session name. Letters and `-` only; stored uppercase |
 

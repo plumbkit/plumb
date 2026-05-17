@@ -224,7 +224,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			continue
 		}
 
-		if concurrentWriteDetected(path, result) {
+		if concurrentWriteDetected(path, result, t.deps.ConcurrentWriteSkew) {
 			slog.Warn("edit_file: concurrent write detected after rename, retrying",
 				"path", path, "attempt", attempt)
 			lastErr = fmt.Errorf(

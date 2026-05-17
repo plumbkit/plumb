@@ -90,6 +90,11 @@ type EditsConfig struct {
 	// wait for the LSP server to re-publish diagnostics after a successful
 	// write. 0 disables the wait entirely. Defaults to 300.
 	PostWriteDiagnosticsMs int `toml:"post_write_diagnostics_ms"`
+	// ConcurrentWriteSkewMs is the clock-skew allowance (in milliseconds)
+	// used by edit_file's concurrent-write detector. After a rename, the
+	// file's mtime must be newer than tempWrittenAt+skew to trigger a retry.
+	// Increase on slow filesystems (network mounts, FUSE). Defaults to 100.
+	ConcurrentWriteSkewMs int `toml:"concurrent_write_skew_ms"`
 }
 
 // Config is the resolved configuration for a plumb process.
@@ -115,6 +120,7 @@ var defaults = Config{
 		Strict:                 false,
 		RateLimitPerMinute:     120,
 		PostWriteDiagnosticsMs: 300,
+		ConcurrentWriteSkewMs:  100,
 	},
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,
@@ -239,6 +245,11 @@ func applyEnv(cfg *Config) {
 			cfg.Edits.PostWriteDiagnosticsMs = n
 		}
 	}
+	if v := os.Getenv("PLUMB_CONCURRENT_WRITE_SKEW_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.Edits.ConcurrentWriteSkewMs = n
+		}
+	}
 }
 
 // ProjectConfigPath returns the conventional location of a workspace's
@@ -300,6 +311,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Edits.PostWriteDiagnosticsMs < 0 {
 		return fmt.Errorf("edits.post_write_diagnostics_ms must be non-negative (0 disables)")
+	}
+	if cfg.Edits.ConcurrentWriteSkewMs < 0 {
+		return fmt.Errorf("edits.concurrent_write_skew_ms must be non-negative")
 	}
 	for name, lsp := range cfg.LSP {
 		if lsp.Enabled && lsp.Command == "" {

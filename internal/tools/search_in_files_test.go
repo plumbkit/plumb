@@ -255,6 +255,88 @@ func TestSearchInFiles_ManyFiles_ParallelCorrectness(t *testing.T) {
 	}
 }
 
+// TestSearchInFiles_ExcludeSuppresesMatch verifies that an exclude pattern hides
+// matches that would otherwise appear.
+func TestSearchInFiles_ExcludeSuppresesMatch(t *testing.T) {
+	dir := t.TempDir()
+	mustMkdir := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p, content string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir(filepath.Join(dir, "vendor", "dep"))
+	mustWrite(filepath.Join(dir, "main.go"), "needle\n")
+	mustWrite(filepath.Join(dir, "vendor", "dep", "lib.go"), "needle in vendor\n")
+
+	tool := NewSearchInFiles()
+
+	// Without exclude: both files match.
+	args, _ := json.Marshal(map[string]any{"pattern": "needle", "path": dir})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "main.go") || !strings.Contains(out, "vendor") {
+		t.Errorf("expected both matches without exclude:\n%s", out)
+	}
+
+	// With exclude: vendor subtree is pruned.
+	args2, _ := json.Marshal(map[string]any{
+		"pattern": "needle",
+		"path":    dir,
+		"exclude": []string{"vendor"},
+	})
+	out2, err := tool.Execute(context.Background(), args2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out2, "main.go") {
+		t.Errorf("main.go should still match:\n%s", out2)
+	}
+	if strings.Contains(out2, "vendor") {
+		t.Errorf("vendor/ should be excluded:\n%s", out2)
+	}
+}
+
+// TestSearchInFiles_ExcludeByGlob verifies that glob patterns in exclude work
+// against file base names.
+func TestSearchInFiles_ExcludeByGlob(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.go", "needle\n")
+	write("main.pb.go", "needle in generated\n")
+
+	tool := NewSearchInFiles()
+
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "needle",
+		"path":    dir,
+		"exclude": []string{"*.pb.go"},
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "main.go") {
+		t.Errorf("main.go should match:\n%s", out)
+	}
+	if strings.Contains(out, "main.pb.go") {
+		t.Errorf("main.pb.go should be excluded by glob:\n%s", out)
+	}
+}
+
 // TestSearchInFiles_GlobPrunesSiblingDirs verifies that a glob with a literal
 // directory prefix prunes sibling subtrees so matches inside them never
 // surface.

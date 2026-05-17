@@ -63,7 +63,7 @@ func runSessions(_ *cobra.Command, _ []string) error {
 		BorderTop(true).
 		BorderBottom(false).
 		BorderStyle(tui.SepStyle).
-		Headers("ID", "Language", "Folder", "Adapter", "PID", "Started").
+		Headers("ID", "Name", "Language", "Folder", "Adapter", "PID", "Started").
 		StyleFunc(func(row, col int) lipgloss.Style {
 			s := lipgloss.NewStyle().PaddingRight(2)
 			if row == table.HeaderRow {
@@ -78,7 +78,8 @@ func runSessions(_ *cobra.Command, _ []string) error {
 			folder = "(resolving…)"
 		}
 		t.Row(
-			s.ID,
+			shortSessionID(s.ID),
+			s.Name,
 			s.Language,
 			folder,
 			s.Adapter,

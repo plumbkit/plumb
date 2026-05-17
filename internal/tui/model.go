@@ -23,10 +23,11 @@ import (
 var Version string
 
 const (
-	defaultLeftWidth  = 26
+	defaultLeftWidth  = 30
 	minLeftWidth      = 16
 	minPopupLeftWidth = 30 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	pollInterval      = 2 * time.Second
+	bodyStartRow      = 4
 )
 
 // pollMsg is sent by the periodic refresh tick.
@@ -39,6 +40,7 @@ const (
 	focusSessions  panelFocus = iota // j/k moves the session cursor (default)
 	focusToolStats                   // j/k moves the Tool Statistics cursor
 	focusStats                       // j/k moves the Recent calls cursor
+	focusDetails                     // j/k scrolls the right (Details) panel
 )
 
 // Model is the root Bubble Tea model for the sessions dashboard.
@@ -51,10 +53,13 @@ type Model struct {
 	statsCursor     int
 	toolStatsCursor int
 	focusPanel      panelFocus
+	leftScroll      int
+	rightScroll     int
 	leftWidth       int
 	width           int
 	height          int
 	ready           bool
+	draggingDivider bool
 	loadErr         string
 
 	// UI Overlays
@@ -307,6 +312,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 
+	case tea.MouseClickMsg:
+		mouse := msg.Mouse()
+		if mouse.Button == tea.MouseLeft {
+			if m.onDivider(mouse.X) {
+				m.draggingDivider = true
+				m.setLeftWidthFromMouse(mouse.X)
+			} else if m.onSessionsPanel(mouse.X, mouse.Y) {
+				m.selectSessionAtBodyRow(mouse.Y - bodyStartRow)
+			}
+		}
+
+	case tea.MouseMotionMsg:
+		mouse := msg.Mouse()
+		if m.draggingDivider && mouse.Button == tea.MouseLeft {
+			m.setLeftWidthFromMouse(mouse.X)
+		}
+
+	case tea.MouseReleaseMsg:
+		m.draggingDivider = false
+
 	case tea.KeyPressMsg:
 		if m.showPopup {
 			switch msg.String() {
@@ -426,10 +451,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			switch m.focusPanel {
 			case focusSessions:
+				m.focusPanel = focusDetails
+			case focusDetails:
 				if len(m.toolStats) > 0 {
 					m.focusPanel = focusToolStats
 				} else if len(m.recentCalls) > 0 {
 					m.focusPanel = focusStats
+				} else {
+					m.focusPanel = focusSessions
 				}
 			case focusToolStats:
 				if len(m.recentCalls) > 0 {
@@ -447,15 +476,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.focusPanel = focusStats
 				} else if len(m.toolStats) > 0 {
 					m.focusPanel = focusToolStats
+				} else {
+					m.focusPanel = focusDetails
 				}
+			case focusDetails:
+				m.focusPanel = focusSessions
 			case focusStats:
 				if len(m.toolStats) > 0 {
 					m.focusPanel = focusToolStats
 				} else {
-					m.focusPanel = focusSessions
+					m.focusPanel = focusDetails
 				}
 			case focusToolStats:
-				m.focusPanel = focusSessions
+				m.focusPanel = focusDetails
 			}
 		case "up", "k":
 			switch m.focusPanel {
@@ -467,9 +500,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor > 0 {
 					m.statsCursor--
 				}
+			case focusDetails:
+				if m.rightScroll > 0 {
+					m.rightScroll--
+				}
 			default:
 				if m.cursor > 0 {
 					m.cursor--
+					m.leftScroll = 0
+					m.rightScroll = 0
 					m.refreshStats()
 				}
 			}
@@ -483,9 +522,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor < len(m.recentCalls)-1 {
 					m.statsCursor++
 				}
+			case focusDetails:
+				m.rightScroll++
 			default:
 				if m.cursor < len(m.sessions)-1 {
 					m.cursor++
+					m.leftScroll = 0
+					m.rightScroll = 0
 					m.refreshStats()
 				}
 			}
@@ -498,11 +541,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "]":
 			m.leftWidth += 2
-			maxLeft := m.width - 23
-			if maxLeft < minLeftWidth {
-				maxLeft = minLeftWidth
-			}
-			if m.leftWidth > maxLeft {
+			if maxLeft := m.maxLeftWidth(); m.leftWidth > maxLeft {
 				m.leftWidth = maxLeft
 			}
 		case "pgdown":
@@ -521,11 +560,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor >= len(m.recentCalls) {
 					m.statsCursor = len(m.recentCalls) - 1
 				}
+			case focusDetails:
+				m.rightScroll += pageSize
 			default:
 				m.cursor += pageSize
 				if m.cursor >= len(m.sessions) {
 					m.cursor = len(m.sessions) - 1
 				}
+				m.leftScroll = 0
+				m.rightScroll = 0
 				m.refreshStats()
 			}
 		case "pgup":
@@ -543,6 +586,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statsCursor -= pageSize
 				if m.statsCursor < 0 {
 					m.statsCursor = 0
+				}
+			case focusDetails:
+				m.rightScroll -= pageSize
+				if m.rightScroll < 0 {
+					m.rightScroll = 0
 				}
 			default:
 				m.cursor -= pageSize
@@ -565,6 +613,49 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+func (m Model) maxLeftWidth() int {
+	maxLeft := m.width - 23
+	if maxLeft < minLeftWidth {
+		return minLeftWidth
+	}
+	return maxLeft
+}
+
+func (m Model) onDivider(x int) bool {
+	return x == m.leftWidth+1
+}
+
+func (m Model) onSessionsPanel(x, y int) bool {
+	if y < bodyStartRow || x <= 0 || x > m.leftWidth {
+		return false
+	}
+	return len(m.sessions) > 0
+}
+
+func (m *Model) setLeftWidthFromMouse(x int) {
+	next := x - 1
+	if next < minLeftWidth {
+		next = minLeftWidth
+	}
+	if maxLeft := m.maxLeftWidth(); next > maxLeft {
+		next = maxLeft
+	}
+	m.leftWidth = next
+}
+
+func (m *Model) selectSessionAtBodyRow(row int) {
+	if row < 1 {
+		return
+	}
+	idx := (row - 1) / 3
+	if idx < 0 || idx >= len(m.sessions) {
+		return
+	}
+	m.cursor = idx
+	m.focusPanel = focusSessions
+	m.refreshStats()
 }
 
 func (m Model) render() string {
@@ -603,8 +694,30 @@ func (m Model) render() string {
 	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
 
 	// Body content
-	leftLines := m.leftLines()
-	rightLines := (&m).rightLines(rightWidth)
+	allLeftLines := m.leftLines()
+	allRightLines := (&m).rightLines(rightWidth)
+
+	// Clamp scroll offsets
+	maxLeftScroll := len(allLeftLines) - bodyHeight
+	if maxLeftScroll < 0 {
+		maxLeftScroll = 0
+	}
+	if m.leftScroll > maxLeftScroll {
+		m.leftScroll = maxLeftScroll
+	}
+	maxRightScroll := len(allRightLines) - bodyHeight
+	if maxRightScroll < 0 {
+		maxRightScroll = 0
+	}
+	if m.rightScroll > maxRightScroll {
+		m.rightScroll = maxRightScroll
+	}
+
+	leftLines := allLeftLines[m.leftScroll:]
+	rightLines := allRightLines[m.rightScroll:]
+
+	leftScrollbar := scrollbarCol(len(allLeftLines), bodyHeight, m.leftScroll)
+	rightScrollbar := scrollbarCol(len(allRightLines), bodyHeight, m.rightScroll)
 
 	for i := range bodyHeight {
 		l, r := "", ""
@@ -618,13 +731,22 @@ func (m Model) render() string {
 		leftCell := lipgloss.NewStyle().Width(m.leftWidth).Render(l)
 		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(r)
 
+		lBar := SepStyle.Render("│")
+		if leftScrollbar != nil && i < len(leftScrollbar) {
+			lBar = leftScrollbar[i]
+		}
+		rBar := SepStyle.Render("│")
+		if rightScrollbar != nil && i < len(rightScrollbar) {
+			rBar = rightScrollbar[i]
+		}
+
 		if isOverlay {
 			lDim := InactiveStyle.Render(ansi.Strip(leftCell))
 			rDim := InactiveStyle.Render(ansi.Strip(rightCell))
 			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
 			sb.WriteString(line + "\n")
 		} else {
-			sb.WriteString(SepStyle.Render("│") + leftCell + SepStyle.Render("┆") + rightCell + SepStyle.Render("│") + "\n")
+			sb.WriteString(lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar + "\n")
 		}
 	}
 
@@ -679,7 +801,7 @@ func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
 	}
 
 	leftTitle = fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
-	rightTitle = " Session + Stats "
+	rightTitle = " Details "
 
 	leftPart := sepStyle.Render("╭─") + leftStyle.Render(leftTitle)
 	leftFill := m.leftWidth - 1 - len(leftTitle)
@@ -761,9 +883,9 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 
 func (m Model) renderHelp(bg string) string {
 	helpLines := []string{
-		" ↑/↓ or j/k      Navigate sessions/calls",
+		" ↑/↓ or j/k      Navigate sessions/calls/scroll details",
 		" pgup/pgdown     Page through lists",
-		" tab/shift+tab   Switch panel focus",
+		" tab/shift+tab   Switch panel focus (sessions → details → tools → recent)",
 		" enter           Open tool call detail",
 		" [/]             Resize columns",
 		" q               Quit",
@@ -1006,39 +1128,60 @@ func (m Model) leftLines() []string {
 		return lines
 	}
 	for i, s := range m.sessions {
-		nm := ""
-		if s.Name != "" {
-			nm = s.Name + " "
+		selected := i == m.cursor
+		indicator := "○"
+		if selected {
+			indicator = "●"
 		}
-		var label string
-		if s.Folder == "" {
-			label = nm + "⟳ resolving…"
-		} else {
-			lp := ""
-			if s.Language != "" && s.Language != "none" {
-				lp = s.Language + ": "
-			}
-			mf := m.leftWidth - 4 - len([]rune(nm)) - len([]rune(lp))
+		name := s.Name
+		if name == "" {
+			name = s.ID
+		}
+		firstLine := " " + indicator + " " + name
+		if s.Language != "" && s.Language != "none" {
+			firstLine += " " + sessionLangBadge(s.Language, selected, lf)
+		}
+		path := "resolving…"
+		if s.Folder != "" {
+			mf := m.leftWidth - len([]rune("    ╰─ "))
 			if mf < 0 {
 				mf = 0
 			}
-			label = nm + lp + contractPath(s.Folder, mf)
+			path = contractPath(s.Folder, mf)
 		}
+		secondLine := "   └ " + path
 		if i == m.cursor {
 			if lf {
-				lines = append(lines, SelectedStyle.Render(" > "+label))
+				lines = append(lines, SelectedStyle.Render(firstLine))
+				lines = append(lines, SelectedStyle.Render(secondLine))
 			} else {
-				lines = append(lines, FadedStyle.Render(" > "+label))
+				lines = append(lines, FadedStyle.Render(firstLine))
+				lines = append(lines, FadedStyle.Render(secondLine))
 			}
 		} else {
 			if lf {
-				lines = append(lines, ItemStyle.Render("   "+label))
+				lines = append(lines, ItemStyle.Render(firstLine))
+				lines = append(lines, MutedStyle.Render(secondLine))
 			} else {
-				lines = append(lines, FadedStyle.Render("   "+label))
+				lines = append(lines, FadedStyle.Render(firstLine))
+				lines = append(lines, FadedStyle.Render(secondLine))
 			}
 		}
+		lines = append(lines, "")
 	}
 	return lines
+}
+
+func sessionLangBadge(language string, selected, focused bool) string {
+	badge := " " + language + " "
+	switch {
+	case selected && focused:
+		return SessionLangSelectedStyle.Render(badge)
+	case focused:
+		return SessionLangStyle.Render(badge)
+	default:
+		return SessionLangFadedStyle.Render(badge)
+	}
 }
 
 func (m *Model) handleRightPanelClick(bodyRow int) {

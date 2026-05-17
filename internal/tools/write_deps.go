@@ -45,4 +45,8 @@ type WriteDeps struct {
 	// "use the 300 ms default" (back-compat for test setups that use
 	// WriteDeps{}). Negative means "disabled — skip the wait entirely".
 	PostWriteDiagWindow time.Duration
+	// ConcurrentWriteSkew is the clock-skew allowance for edit_file's
+	// post-rename mtime check. Zero falls back to the 100 ms compiled-in
+	// default. Increase on slow filesystems (network mounts, FUSE).
+	ConcurrentWriteSkew time.Duration
 }

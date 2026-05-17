@@ -50,6 +50,11 @@ var searchInFilesSchema = json.RawMessage(`{
       "type": "string",
       "description": "Glob to restrict which files are searched, e.g. '*.go' or '**/*_test.go'"
     },
+    "exclude": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Glob patterns for paths to exclude, e.g. [\"vendor\", \"*.pb.go\", \"testdata/**\"]. Matched against the entry's base name and relative path. Matching directories are pruned from the walk; matching files are skipped."
+    },
     "case_sensitive": {
       "type": "boolean",
       "description": "Force case-sensitive matching. Default: smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise."
@@ -97,14 +102,15 @@ func (t *SearchInFiles) Description() string {
 }
 
 type searchInFilesArgs struct {
-	Pattern       string `json:"pattern"`
-	Path          string `json:"path"`
-	Glob          string `json:"glob"`
-	CaseSensitive *bool  `json:"case_sensitive"`
-	ContextLines  int    `json:"context_lines"`
-	MaxResults    int    `json:"max_results"`
-	IncludeHidden bool   `json:"include_hidden"`
-	MaxFileBytes  int64  `json:"max_file_bytes"`
+	Pattern       string   `json:"pattern"`
+	Path          string   `json:"path"`
+	Glob          string   `json:"glob"`
+	Exclude       []string `json:"exclude"`
+	CaseSensitive *bool    `json:"case_sensitive"`
+	ContextLines  int      `json:"context_lines"`
+	MaxResults    int      `json:"max_results"`
+	IncludeHidden bool     `json:"include_hidden"`
+	MaxFileBytes  int64    `json:"max_file_bytes"`
 }
 
 func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -193,10 +199,16 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 			return err
 		}
 		if d.IsDir() {
-			if globPrefix != "" && path != root {
+			if path != root && (globPrefix != "" || len(a.Exclude) > 0) {
 				rel, _ := filepath.Rel(root, path)
-				if !dirCompatibleWithPrefix(filepath.ToSlash(rel), globPrefix) {
+				relSlash := filepath.ToSlash(rel)
+				if globPrefix != "" && !dirCompatibleWithPrefix(relSlash, globPrefix) {
 					return fs.SkipDir
+				}
+				for _, excl := range a.Exclude {
+					if m, _ := doubleStarMatchFile(excl, relSlash); m {
+						return fs.SkipDir
+					}
 				}
 			}
 			return nil
@@ -210,6 +222,17 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 				rel, _ := filepath.Rel(root, path)
 				matched2, _ := doubleStarMatchFile(a.Glob, filepath.ToSlash(rel))
 				if !matched2 {
+					return nil
+				}
+			}
+		}
+
+		// Exclude filter.
+		if len(a.Exclude) > 0 {
+			rel, _ := filepath.Rel(root, path)
+			relSlash := filepath.ToSlash(rel)
+			for _, excl := range a.Exclude {
+				if m, _ := doubleStarMatchFile(excl, relSlash); m {
 					return nil
 				}
 			}

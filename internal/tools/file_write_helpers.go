@@ -343,16 +343,20 @@ func isCrossDevice(err error) bool {
 // tempWrittenAt by more than a small clock-skew allowance (100ms), it strongly
 // suggests a third party wrote the file after our rename. We treat this as a
 // concurrent write and trigger retry.
-func concurrentWriteDetected(path string, res writeResult) bool {
+const defaultConcurrentWriteSkew = 100 * time.Millisecond
+
+func concurrentWriteDetected(path string, res writeResult, skew time.Duration) bool {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
+	}
+	if skew <= 0 {
+		skew = defaultConcurrentWriteSkew
 	}
 	mtime := info.ModTime()
 	// If mtime predates when we started writing the temp, the file hasn't
 	// been touched by anyone — our rename set it to approximately tempWrittenAt.
 	// If mtime is much newer than our write, a third party wrote after us.
-	const skew = 100 * time.Millisecond
 	return mtime.After(res.tempWrittenAt.Add(skew))
 }
 
