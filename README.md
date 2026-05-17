@@ -103,13 +103,15 @@ Plumb determines the workspace root using this precedence:
 2. **MCP `roots/list`** — used if the client reports a root (Claude Desktop does this).
 3. **Cwd walk** — walks up from `os.Getwd()` looking for a project marker (`go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, etc.).
 
-## Available tools (33)
+## Available tools (34)
 
 ### Session
 
 | Tool | Description |
 |---|---|
 | `session_start` | Bootstrap tool — call first in every session. Returns workspace info, language, git branch, recent commits, recently-modified files, memories, top-5 tool usage, and active diagnostics in one call. Cold-start fallback chain: explicit → daemon-resolved → `roots/list` → cwd walk. |
+| `daemon_info` | Current session name and ID, daemon version, daemon start timestamp, and uptime. |
+| `rename_session` | Rename the current MCP session. Names are stored uppercase, may contain only letters and `-`, and are capped at 16 characters. |
 
 ### LSP tools — require a running language server
 

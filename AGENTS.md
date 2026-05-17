@@ -168,7 +168,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (33)
+## Available tools (34)
 
 **Bootstrap**
 
@@ -229,6 +229,8 @@ Pyright is the worked example.
 | `git` | `git.go` | Read-only subcommands (status, log, diff, show, blame, branch, tag, shortlog, stash). |
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
+| `daemon_info` | `daemon_info.go` | Current session name, session ID, daemon version, start time, uptime. |
+| `rename_session` | `rename_session.go` | Rename the current MCP session. Letters and `-` only; stored uppercase; max 16 characters. |
 
 **Memory** — per-workspace markdown notes at `<workspace>/.plumb/memories/`. Also exposed as MCP resources.
 

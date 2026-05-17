@@ -89,6 +89,41 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 	}
 }
 
+func TestRenameSessionBackfillsRows(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "stats.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	if err := db.Record(Call{SessionID: "sess-1", SessionName: "OLD-NAME", Tool: "read_file", CalledAt: now, Success: true}); err != nil {
+		t.Fatalf("Record first: %v", err)
+	}
+	if err := db.Record(Call{SessionID: "sess-2", SessionName: "OTHER", Tool: "read_file", CalledAt: now.Add(time.Millisecond), Success: true}); err != nil {
+		t.Fatalf("Record second: %v", err)
+	}
+
+	if err := db.RenameSession("sess-1", "NEW-NAME"); err != nil {
+		t.Fatalf("RenameSession: %v", err)
+	}
+	got, err := db.Recent(10, Filter{})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	bySession := make(map[string]string)
+	for _, c := range got {
+		bySession[c.SessionID] = c.SessionName
+	}
+	if bySession["sess-1"] != "NEW-NAME" {
+		t.Fatalf("sess-1 name = %q, want NEW-NAME", bySession["sess-1"])
+	}
+	if bySession["sess-2"] != "OTHER" {
+		t.Fatalf("sess-2 name = %q, want OTHER", bySession["sess-2"])
+	}
+}
+
 func TestPerProjectDBSurvivesWorkspaceMove(t *testing.T) {
 	parent := t.TempDir()
 	oldWorkspace := filepath.Join(parent, "old", "plumb")

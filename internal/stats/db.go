@@ -53,8 +53,9 @@ type migration struct {
 // migrations is the ordered list of schema upgrades. Each entry carries the
 // version it upgrades *from* and the version it produces. Apply in order.
 var migrations = []migration{
-	{from: 1, to: 2, addColumn: "input_json", sql: `ALTER TABLE tool_calls ADD COLUMN input_json  TEXT NOT NULL DEFAULT ''`},
-	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text TEXT NOT NULL DEFAULT ''`},
+	{from: 1, to: 2, addColumn: "input_json", sql: `ALTER TABLE tool_calls ADD COLUMN input_json    TEXT NOT NULL DEFAULT ''`},
+	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text  TEXT NOT NULL DEFAULT ''`},
+	{from: 3, to: 4, addColumn: "session_name", sql: `ALTER TABLE tool_calls ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -112,8 +113,9 @@ func hasColumn(db *sql.DB, table, col string) (bool, error) {
 
 // DB is a thread-safe statistics store backed by SQLite.
 type DB struct {
-	db *sql.DB
-	mu sync.Mutex
+	db             *sql.DB
+	mu             sync.Mutex
+	hasSessionName bool // false for pre-v4 databases opened read-only
 }
 
 // DBPathFor returns the per-workspace stats database path at
@@ -134,7 +136,8 @@ func DBPathFor(workspace string) string {
 //	1 — first explicitly versioned schema (0.5.3+) — no column changes
 //	2 — added input_json column (0.5.12+)
 //	3 — added output_text column (0.5.12+)
-const SchemaVersion = 3
+//	4 — added session_name column (0.5.30+)
+const SchemaVersion = 4
 
 // Open opens (or creates) the stats database at path.
 func Open(path string) (*DB, error) {
@@ -167,7 +170,7 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("stats: stamping user_version: %w", err)
 	}
-	return &DB{db: db}, nil
+	return &DB{db: db, hasSessionName: true}, nil
 }
 
 // CurrentSchemaVersion reads PRAGMA user_version from the open db. Returns
@@ -197,7 +200,8 @@ func OpenReadOnly(path string) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return &DB{db: db}, nil
+	hasSN, _ := hasColumn(db, "tool_calls", "session_name")
+	return &DB{db: db, hasSessionName: hasSN}, nil
 }
 
 func checkReadOnlySchema(db *sql.DB) error {
@@ -232,6 +236,7 @@ func (d *DB) Close() {
 // Call holds one tool invocation record.
 type Call struct {
 	SessionID   string
+	SessionName string // human-readable name, e.g. "SWIFT-FALCON"
 	Tool        string
 	CalledAt    time.Time
 	DurationMs  int64
@@ -255,6 +260,16 @@ func capString(s string) string {
 	return s
 }
 
+// sessionNameCol returns the SQL column expression for session_name. Pre-v4
+// databases opened read-only don't have the column, so a literal empty string
+// is substituted to keep query compatibility.
+func (d *DB) sessionNameCol() string {
+	if d.hasSessionName {
+		return "session_name"
+	}
+	return "'' AS session_name"
+}
+
 // Record inserts a call. Stats are best-effort, but the caller gets the
 // insert error so the daemon can log storage failures.
 func (d *DB) Record(c Call) error {
@@ -269,15 +284,30 @@ func (d *DB) Record(c Call) error {
 	}
 	if _, err := d.db.Exec(
 		`INSERT INTO tool_calls
-		 (session_id, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.SessionID, c.Tool,
+		 (session_id, session_name, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.SessionID, c.SessionName, c.Tool,
 		c.CalledAt.UnixMilli(), c.DurationMs,
 		c.InputBytes, c.OutputBytes,
 		success, c.ErrorMsg,
 		capString(c.InputJSON), capString(c.OutputText),
 	); err != nil {
 		return fmt.Errorf("stats: insert call: %w", err)
+	}
+	return nil
+}
+
+// RenameSession updates the stored human-readable name for all calls in a
+// session. It is best-effort for current schema DBs and a no-op for old
+// read-only-compatible handles that do not expose session_name.
+func (d *DB) RenameSession(sessionID, name string) error {
+	if d == nil || sessionID == "" || !d.hasSessionName {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, err := d.db.Exec(`UPDATE tool_calls SET session_name=? WHERE session_id=?`, name, sessionID); err != nil {
+		return fmt.Errorf("stats: rename session: %w", err)
 	}
 	return nil
 }
@@ -297,8 +327,9 @@ type ToolStat struct {
 
 // Filter narrows a stats query. Empty fields are not constrained.
 type Filter struct {
-	SessionID string
-	Tool      string // when set, restricts to calls for this exact tool name
+	SessionID   string
+	SessionName string // when set, restricts to calls for this session name
+	Tool        string // when set, restricts to calls for this exact tool name
 }
 
 func (f Filter) where() (string, []any) {
@@ -307,6 +338,10 @@ func (f Filter) where() (string, []any) {
 	if f.SessionID != "" {
 		conds = append(conds, "session_id = ?")
 		args = append(args, f.SessionID)
+	}
+	if f.SessionName != "" {
+		conds = append(conds, "session_name = ?")
+		args = append(args, f.SessionName)
 	}
 	if f.Tool != "" {
 		conds = append(conds, "tool = ?")
@@ -442,6 +477,7 @@ func (d *DB) p95All(filter Filter) map[string]int64 {
 type RecentCall struct {
 	Tool        string
 	SessionID   string
+	SessionName string // human-readable name; empty for pre-v4 rows
 	CalledAt    time.Time
 	DurationMs  int64
 	Success     bool
@@ -457,8 +493,9 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	if d == nil {
 		return nil, nil
 	}
+	snCol := d.sessionNameCol()
 	where, args := filter.where()
-	q := `SELECT tool, session_id, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, ` + snCol + `, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json, output_text
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
@@ -475,7 +512,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		var calledMs int64
 		var success int
 		if err := rows.Scan(
-			&c.Tool, &c.SessionID, &calledMs, &c.DurationMs, &success,
+			&c.Tool, &c.SessionID, &c.SessionName, &calledMs, &c.DurationMs, &success,
 			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText,
 		); err != nil {
 			continue
@@ -499,8 +536,9 @@ func (d *DB) CallsForTool(tool string, limit int) ([]RecentCall, error) {
 		limit = 500
 	}
 	f := Filter{Tool: tool}
+	snCol := d.sessionNameCol()
 	where, args := f.where()
-	q := `SELECT tool, session_id, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, ` + snCol + `, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -517,7 +555,7 @@ func (d *DB) CallsForTool(tool string, limit int) ([]RecentCall, error) {
 		var calledMs int64
 		var success int
 		if err := rows.Scan(
-			&c.Tool, &c.SessionID, &calledMs, &c.DurationMs, &success,
+			&c.Tool, &c.SessionID, &c.SessionName, &calledMs, &c.DurationMs, &success,
 			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
 		); err != nil {
 			continue

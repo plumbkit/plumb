@@ -12,7 +12,7 @@ import (
 // the project being worked on (<workspace>/.plumb/stats.db), rather than
 // in a single global database where unrelated projects mingle.
 //
-// Concurrency: safe for concurrent Record / Close.
+// Concurrency: safe for concurrent Record / RenameSession / Close.
 type statsStore struct {
 	mu  sync.Mutex
 	dbs map[string]*stats.DB
@@ -49,6 +49,27 @@ func (s *statsStore) Record(workspace string, call stats.Call) {
 			"session", call.SessionID,
 			"tool", call.Tool,
 			"err", err)
+	}
+}
+
+// RenameSession backfills the display name for every open workspace DB that
+// has recorded calls for sessionID. Future rows use the daemon's current name.
+func (s *statsStore) RenameSession(sessionID, name string) {
+	if s == nil || sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	dbs := make([]*stats.DB, 0, len(s.dbs))
+	for _, db := range s.dbs {
+		dbs = append(dbs, db)
+	}
+	s.mu.Unlock()
+	for _, db := range dbs {
+		if err := db.RenameSession(sessionID, name); err != nil {
+			slog.Warn("stats: cannot rename session",
+				"session", sessionID,
+				"err", err)
+		}
 	}
 }
 

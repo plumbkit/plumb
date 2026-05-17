@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,63 @@ func TestRegisterUnregister(t *testing.T) {
 	}
 	if len(sessions) != 0 {
 		t.Fatalf("expected 0 sessions after unregister, got %d", len(sessions))
+	}
+}
+
+func TestNormaliseName(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    string
+		wantErr bool
+	}{
+		{name: "build-fix", want: "BUILD-FIX"},
+		{name: " Release ", want: "RELEASE"},
+		{name: "", wantErr: true},
+		{name: "bad name", wantErr: true},
+		{name: "bad_name", wantErr: true},
+		{name: "-bad", wantErr: true},
+		{name: "bad-", wantErr: true},
+		{name: strings.Repeat("a", session.MaxNameLength+1), wantErr: true},
+	}
+	for _, tt := range tests {
+		got, err := session.NormaliseName(tt.name)
+		if tt.wantErr {
+			if err == nil {
+				t.Fatalf("NormaliseName(%q) returned nil error", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("NormaliseName(%q): %v", tt.name, err)
+		}
+		if got != tt.want {
+			t.Fatalf("NormaliseName(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestRenameUpdatesSessionFile(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	id, err := session.Register(session.Info{Name: "OLD-NAME"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	got, err := session.Rename(id, "new-name")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if got != "NEW-NAME" {
+		t.Fatalf("Rename returned %q, want NEW-NAME", got)
+	}
+	sessions, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Name != "NEW-NAME" {
+		t.Fatalf("session name = %#v, want NEW-NAME", sessions)
 	}
 }
 

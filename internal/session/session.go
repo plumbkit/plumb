@@ -24,6 +24,7 @@ import (
 // Info describes one active plumb serve instance.
 type Info struct {
 	ID            string    `json:"id"`
+	Name          string    `json:"name,omitempty"`
 	PID           int       `json:"pid"`
 	DaemonVersion string    `json:"daemon_version,omitempty"`
 	Language      string    `json:"language"`
@@ -48,6 +49,9 @@ func Register(info Info) (string, error) {
 	if info.ID == "" {
 		info.ID = newID()
 	}
+	if info.Name == "" {
+		info.Name = GenerateName()
+	}
 	if info.PID == 0 {
 		info.PID = os.Getpid()
 	}
@@ -59,10 +63,41 @@ func Register(info Info) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, info.ID+".json")
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		return "", fmt.Errorf("writing session file: %w", err)
 	}
 	return info.ID, nil
+}
+
+// Rename validates and writes a new session name for id, returning the
+// normalised name that was stored.
+func Rename(id, name string) (string, error) {
+	name, err := NormaliseName(name)
+	if err != nil {
+		return "", err
+	}
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, id+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading session file: %w", err)
+	}
+	var info Info
+	if err := json.Unmarshal(data, &info); err != nil {
+		return "", fmt.Errorf("decoding session file: %w", err)
+	}
+	info.Name = name
+	out, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encoding session file: %w", err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o600); err != nil {
+		return "", fmt.Errorf("writing session file: %w", err)
+	}
+	return name, nil
 }
 
 // Patch reads the session file for id, calls fn with a pointer to the parsed

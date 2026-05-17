@@ -115,6 +115,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat)
 	}
 
+	daemonStartedAt := time.Now()
 	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid(), "log", daemonLogPath())
 
 	tools.Version = Version
@@ -151,14 +152,14 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, cfg, statsStore)
+			handleConn(ctx, conn, pool, cfg, statsStore, daemonStartedAt)
 		})
 	}
 }
 
 // handleConn runs a complete MCP session over conn, attaching to a shared
 // gopls process from pool once the workspace root is determined.
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg config.Config, statsStore *statsStore) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time) {
 	defer conn.Close()
 
 	// Register the session immediately so it appears in `plumb sessions` and the
@@ -167,7 +168,9 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	// is detected (Go, Python, or "none" for an LSP-less .plumb/ workspace).
 	// Empty here so the TUI shows "(resolving...)" rather than mis-claiming
 	// "gopls" for what might turn out to be a Python or no-LSP project.
+	sessName := session.GenerateName()
 	sessID, _ := session.Register(session.Info{
+		Name:          sessName,
 		DaemonVersion: Version,
 	})
 	defer session.Unregister(sessID)
@@ -253,6 +256,22 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		stateMu.Lock()
 		defer stateMu.Unlock()
 		return acquiredRoot
+	}
+	nameFn := func() string {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		return sessName
+	}
+	renameSessionFn := func(name string) (string, error) {
+		name, err := session.Rename(sessID, name)
+		if err != nil {
+			return "", err
+		}
+		stateMu.Lock()
+		sessName = name
+		stateMu.Unlock()
+		statsStore.RenameSession(sessID, name)
+		return name, nil
 	}
 
 	// clientRequest is the latest RequestFn captured from OnInit. Tools
@@ -362,6 +381,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		Strict:              strictFn,
 		Reads:               readTracker,
 		PostWriteDiagWindow: diagWindow,
+		ConcurrentWriteSkew: time.Duration(cfg.Edits.ConcurrentWriteSkewMs) * time.Millisecond,
 	}
 	srv.Register(tools.NewWriteFile(writeDeps))
 	srv.Register(tools.NewEditFile(writeDeps))
@@ -374,6 +394,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace(writeDeps))
 	srv.Register(tools.NewVersion())
+	srv.Register(tools.NewDaemonInfoFunc(sessID, nameFn, Version, daemonStartedAt))
+	srv.Register(tools.NewRenameSession(renameSessionFn))
 	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn, refuseHomeRootsFn))
 
 	// Edit tools — LSP-semantic refactoring + body replacement / inserts.
@@ -416,6 +438,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		// attributed to any project's history.
 		stateMu.Lock()
 		root := acquiredRoot
+		sessionName := sessName
 		stateMu.Unlock()
 		if w := workspaceFromArgs(pool, args); w != "" {
 			root = w
@@ -425,6 +448,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		}
 		statsStore.Record(root, stats.Call{
 			SessionID:   sessID,
+			SessionName: sessionName,
 			Tool:        toolName,
 			CalledAt:    time.Now(),
 			DurationMs:  dur.Milliseconds(),

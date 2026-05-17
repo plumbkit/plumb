@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.29** (2026-05-16).
+Last reviewed against: **0.5.29** (2026-05-17).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -23,13 +23,7 @@ Topics:
 
 ## The next two hours
 
-If you have ~2 hours of work to invest, do these in this order:
-
-1. **Pyright integration smoke test** (~20 min, once `pyright-langserver` is installed) — same shape as the gopls test that landed in 0.5.6. Highest-value confidence boost. See [Testing & verification > Pyright integration smoke test](#pyright-integration-smoke-test).
-
-2. **Claude Desktop end-to-end test** (~30 min, no code) — connect real Claude Desktop to current binary, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back. See [Testing & verification > Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test).
-
-Total: ~45 min. After items 1 and 2, plumb is *proven* (not just claimed) production-ready against both supported LSPs and the primary client.
+Run the **Claude Desktop end-to-end smoke test** checklist in `docs/claude-desktop-smoke.md` (~30 min, no code). After that, plumb is *proven* (not just claimed) production-ready against both supported LSPs and the primary client.
 
 ---
 
@@ -271,20 +265,6 @@ When implementing this, you might consider migrating to a third-party JSON loggi
 
 ---
 
-### Session tagging — `purpose` metadata on `session_start`
-
-**Priority:** low.
-**Effort:** 1–2 hours.
-
-`session_start` could accept an optional `purpose` string (e.g. `"intune-project-deployment"`) that tags every subsequent tool call in that session. The TUI and stats DB could then display coherent timelines per task, making it easier to audit what the agent did across multi-turn conversations without trawling Claude Desktop history.
-
-**Definition of done:**
-1. `session_start` accepts `purpose string` (optional).
-2. The purpose is stored in the session info file and in the stats DB alongside each tool call.
-3. TUI session list row shows the purpose string (truncated if long).
-
----
-
 ## Improvements
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
@@ -392,132 +372,6 @@ User's verbatim request: *"Even without any supported language, it should have c
 
 ---
 
-### `search_in_files` exclude-glob patterns
-
-**Priority:** low-medium.
-**Effort:** 1–2 hours.
-
-Agents investigating an issue in a directory with known irrelevant subtrees (e.g. a vendored client folder, generated code, or test fixtures) currently see false leads when `search_in_files` matches inside those subtrees. An `exclude` parameter (string array of glob patterns) would let the agent filter them out, mirroring ripgrep's `--glob='!pattern'` flag.
-
-**Definition of done:**
-1. `search_in_files` gains an `exclude []string` parameter; each entry is passed to ripgrep as `--glob='!<pattern>'`.
-2. Schema and `docs/mcp-tools.md` updated.
-3. Tests: search with an exclude that suppresses a hit; without exclude the hit appears.
-
----
-
-## Testing & verification
-
-Proving things actually work end-to-end. The unit suite is green; what's missing is *end-to-end confidence in a real environment*.
-
-### Claude Desktop end-to-end smoke test
-
-**Priority:** highest in this section.
-**Effort:** 30 min, no code.
-
-**Why this matters.** Plumb was rebuilt across 0.5.x specifically to make Claude Desktop work. None of the new mechanism has been verified against real Claude Desktop:
-
-- `session_start`'s `roots/list` fallback (added in 0.5.1 #3) — Claude Desktop's roots support has historically been spotty; verify it actually responds.
-- The cold-start workspace chain — when the daemon launches from `$HOME`, does the cwd walk find anything useful, or does roots/list save us?
-- The MCP Prompts (`orient`, `whats-broken`, `recent-changes`) — do they render correctly as Desktop menu items?
-- Memory resources (`plumb-memory://`, `plumb://workspace/context`) — do they appear in the resources sidebar?
-- Post-write diagnostics in `edit_file` output — does the agent actually see them in its tool response?
-
-**How to test:** wire `plumb setup claude-desktop`, restart Desktop, open a Go project, ask Claude to read + edit a file, watch the daemon log for the relevant calls.
-
-**Definition of done.** A manual checklist run successfully against real Claude Desktop, with results captured in a `docs/claude-desktop-smoke.md` (or appended to this file). The checklist:
-
-1. `plumb stop && make build && plumb setup claude-desktop`. Restart Claude Desktop.
-2. Open Claude Desktop. Open a Go project (e.g. this one). Watch `~/Library/Caches/plumb/daemon.log` while the conversation starts.
-3. Did the workspace resolve via `roots/list`? The log should show `daemon: session attached`  with the project root, not "no project root found".
-4. Type `/orient` (or invoke the Orient prompt manually). Claude should respond with a 3–5 sentence summary including the project's language, branch, and any active diagnostics.
-5. Ask Claude to read a small file via `read_file`. The response should begin with `# plumb-read mtime=...`.
-6. Ask Claude to edit that file using `edit_file` with the mtime from step 5. The response should include `applied N edit(s)` and a `lines changed: ...` summary.
-7. Ask Claude to introduce a syntax error via `edit_file`. Within 300 ms the response should include `diagnostics after write:` with at least one error line. *This is the load-bearing test for the post-write-diagnostics feature.*
-8. Open the resources sidebar in Claude Desktop. Confirm `Project context` and any memories are visible.
-
-**Likely failure modes (so you know what to watch for):**
-
-- **Step 3 failing** means Claude Desktop's `roots/list` support is broken or absent for your install. In that case `session_start` falls through to the cwd-walk fallback, which probably won't find anything because Desktop launches the daemon from `$HOME`. The fix is in `internal/cli/daemon.go`'s `rootsFn` / `applyProjectConfig`.
-- **Step 7 failing** ("diagnostics after write" never appears) means gopls didn't republish within the configured window (default 300 ms, tunable via `[edits].post_write_diagnostics_ms` in config). Either the window is too short for your machine, or `didChangeWatchedFiles` isn't being consumed. The gopls integration smoke test rules out the latter; if it passes locally with `go test -tags=integration`, raise the window in `.plumb/config.toml`.
-
----
-
-### Pyright integration smoke test
-
-**Priority:** highest after Claude Desktop.
-**Effort:** 20–30 min.
-**Prerequisite:** `pyright-langserver` on `$PATH` (`npm install -g pyright`).
-
-**Why this matters.** `TestIntegration_DidChangeWatchedFiles` in `internal/lsp/adapters/gopls/adapter_test.go` proves the 0.5.x architectural rewrite is load-bearing for gopls. The pyright adapter has identical wiring (same `LSPClient` interface, same `DefaultClientCapabilities` declaration, same `handleServerRequest` for `client/registerCapability`), but **the equivalent integration test does not exist**. Until it does, `AGENTS.md` honestly has to keep pyright marked "Experimental" — a structural asymmetry that's purely about test coverage.
-
-**Definition of done.**
-
-1. A test `TestIntegration_DidChangeWatchedFiles` exists in `internal/lsp/adapters/pyright/adapter_test.go`, gated `//go:build integration`.
-2. It spawns real `pyright-langserver --stdio`, initialises against a temp workspace populated from `testdata/python-fixture/`, writes a syntactically broken `.py` file, sends `DidChangeWatchedFiles{FileCreated}`, and asserts pyright republishes at least one error diagnostic within 5 seconds.
-3. `testdata/python-fixture/` exists with minimum: `pyproject.toml` (or `setup.py`) + `main.py`. If it doesn't exist, create it with one valid Python file.
-4. The test runs green with `go test -tags=integration ./internal/lsp/adapters/pyright/...`.
-5. AGENTS.md's adapter validation status table updates pyright from "Experimental" to "Validated".
-
-**Where to start.**
-
-1. Copy `internal/lsp/adapters/gopls/adapter_test.go`'s `TestIntegration_DidChangeWatchedFiles` verbatim into `internal/lsp/adapters/pyright/adapter_test.go`.
-2. Replace the gopls-specific bits:
-   - `startGopls` → `startPyright` (same shape; spawn `pyright-langserver --stdio` instead of `gopls serve`)
-   - `gopls.New(conn)` → `pyright.New(conn)`
-   - `gopls.DefaultInitParams` → `pyright.DefaultInitParams`
-   - Fixture path: `testdata/go-fixture` → `testdata/python-fixture`
-   - Broken file content: invalid Python (`def broken( {`)
-   - `requireGopls` → `requirePyright` (checks `pyright-langserver` is on PATH; `t.Skip` if not)
-3. Run with `go test -tags=integration ./internal/lsp/adapters/pyright/... -run DidChangeWatchedFiles -v`.
-
-**Likely failure modes (and what they mean):**
-
-- **`pyright-langserver: not found`** → install it (`npm install -g pyright`). Test should `t.Skip` cleanly.
-- **`gopls did not publish error diagnostics within 5s`** equivalent for pyright → either the `client/registerCapability` handler in `internal/lsp/adapters/pyright/adapter.go` isn't responding (unlikely — same code as gopls), or pyright wants its diagnostics in a different format. Increase the timeout to 15s for a slow first-run and re-check.
-- **`testdata/python-fixture/` doesn't exist** → create it. Minimum content: `pyproject.toml` with `[tool.pyright]` empty section, and a `main.py` with `def greet(name: str) -> str: return f"hello, {name}"`.
-
----
-
-### CI matrix that runs integration tests
-
-**Priority:** high.
-**Effort:** 30–60 min (depends on CI provider).
-
-**Why this matters.** The smoke test that proves the architecture works (`TestIntegration_DidChangeWatchedFiles`) is gated `//go:build integration`. If your CI doesn't include this build tag, the load-bearing test never runs in PR checks — only locally, only when someone remembers. A regression that breaks `client/registerCapability` handling would slip through `go test ./...` without complaint and ship to users.
-
-**Definition of done.**
-
-1. CI config (`.github/workflows/*.yml`, `.gitlab-ci.yml`, or whatever you use) has a job that:
-   - Installs `gopls` (and `pyright-langserver` once the pyright smoke test lands).
-   - Runs `go test -tags=integration ./...` with a per-test timeout of 30s.
-   - Fails the PR on any test failure.
-2. The job runs on every PR and on every merge to `main`.
-3. A `make integration-test` target exists for local convenience and matches what CI runs (so "passes locally" → "passes in CI").
-
-**Where to start.**
-
-1. Look at the existing CI config (probably `.github/workflows/test.yml`). The current setup almost certainly runs `make test` which is `go test ./...`.
-2. Add a second job (or expand the existing one) with steps:
-   ```yaml
-   - name: Install gopls
-     run: go install golang.org/x/tools/gopls@latest
-   - name: Integration tests
-     run: go test -tags=integration -timeout=2m ./...
-   ```
-3. Add `integration-test:` to `Makefile`:
-   ```makefile
-   integration-test:
-       go test -tags=integration -timeout=2m ./...
-   ```
-
-**Watch out for:**
-
-- gopls install in CI takes time; cache it via the standard Go module cache action.
-- Some CI runners are slow; the gopls smoke test passes in ~1.2s locally but may need 5s in CI. Bump the deadline in the test if it flakes — better than dropping the assertion.
-
----
-
 ## Bugs & known limitations
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).
@@ -543,16 +397,6 @@ Every path ever locked by any tool stays in the `sync.Map[string]*sync.Mutex` in
 **When to fix:** if you see the limiter actually being abused, or if you start running plumb in a multi-tenant context where connection counts can be untrusted.
 
 **How to fix:** key the limiter by `ClientName + ClientVersion` (captured by `srv.OnClientInfo` in `daemon.go`) or by the MCP session's client-reported identity, not by Go's per-connection struct. Use a shared `sync.Map[string]*RateLimiter` at daemon scope.
-
----
-
-### CRLF normalisation in `edit_file` is one-directional toward the file
-
-If the file uses CRLF and `old_str` is LF, plumb normalises `old_str` to CRLF before matching. If the file is LF and `old_str` is CRLF, plumb normalises `old_str` to LF. **Mixed-ending files** — rare but they exist, especially in repos that have travelled through both Windows and Unix toolchains — have undefined behaviour because the "what does the file use?" detection (`strings.Contains(ref, "\r\n")`) only sees the first CRLF, not the proportion.
-
-**Why it's not fixed:** mixed-ending files are an editor-level pathology, not something plumb should encourage. The right answer is probably "run `dos2unix`" or its inverse before letting plumb touch the file.
-
-**Documentation action:** call this out explicitly in `docs/mcp-tools.md`'s `edit_file` section ("if the file has mixed line endings, normalise it first"). The current docs imply CRLF tolerance is comprehensive; it isn't.
 
 ---
 
@@ -593,16 +437,6 @@ When gopls registers a watcher (e.g. `{"method": "workspace/didChangeWatchedFile
 **Why it's not fixed:** sending extra notifications is harmless — the server ignores files outside its registered globs. gopls in practice registers `**/*.go`, `**/go.mod`, `**/go.sum`, `**/*.work` — matching ~everything we'd write in a Go project anyway.
 
 **When to fix:** if a future LSP server is sensitive to receiving notifications for unregistered files (logs a warning, terminates connection, etc.).
-
----
-
-### The 100 ms concurrent-write skew constant is hard-coded
-
-`concurrentWriteDetected` in `internal/tools/file_write_helpers.go` uses `const skew = 100 * time.Millisecond` to decide whether the file's post-rename mtime indicates a third-party write. Too narrow → false negatives (concurrent writes within 100 ms are invisible). Too wide → false positives (we retry edits that didn't actually race).
-
-**Why it's not configurable:** 100 ms is a reasonable default for SSD-backed filesystems where typical rename + stat latency is well under 10 ms. On slow filesystems (network mounts, FUSE) or under heavy load, both thresholds could be wrong in different directions.
-
-**Recommendation:** if you see flaky `concurrent write detected` errors in legitimate workflows, bump the constant. If you see silent corruption from concurrent writes that should have been retried, lower it. Both this constant and the post-write diagnostics window (`[edits].post_write_diagnostics_ms`) share the same "expose-as-config" concern.
 
 ---
 
