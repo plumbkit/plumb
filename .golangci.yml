@@ -1,30 +1,45 @@
+version: "2"
 linters:
   enable:
-    - errcheck
-    - govet
-    - staticcheck
-    - gosec
-    - revive
     - gocyclo
+    - gosec
+    - prealloc
+    - revive
+    - unparam
+  settings:
+    gocyclo:
+      min-complexity: 15
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - gosec
+          - unparam
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
     - gofumpt
     - goimports
-    - ineffassign
-    - unparam
-    - prealloc
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  goimports:
-    local-prefixes: github.com/golimpio/plumb
-  revive:
-    rules:
-      - name: exported
-        disabled: false
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
-        - unparam
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/golimpio/plumb
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

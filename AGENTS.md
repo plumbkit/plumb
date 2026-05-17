@@ -254,7 +254,7 @@ Pyright is the worked example.
 ## Code style rules
 
 - **Australian English** in all prose: docs, comments, log messages, error strings. Use -ise/-isation (initialise, serialise, synchronise, organise, recognise). Use behaviour, colour, honour, favour. **Exception:** identifiers defined by external specifications keep their canonical spelling — LSP method names (`initialize`, `publishDiagnostics`), MCP protocol fields, and Go standard library names are never changed.
-- **`gofumpt`** on save. `golangci-lint` before every commit; CI enforces.
+- **`gofumpt`** on save. `golangci-lint` v2.12.2 before every commit; CI enforces.
 - **`log/slog`** exclusively. Never `log` package or `fmt.Println` for logging.
 - **Errors wrap context:** `fmt.Errorf("loading config: %w", err)`.
 - **Context everywhere:** every blocking/I/O operation takes `context.Context` first.
