@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -67,9 +68,7 @@ func init() {
 func runConfigShow(_ *cobra.Command, _ []string) error {
 	ws := configShowWorkspace
 	if ws == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			ws = cwd
-		}
+		ws = "."
 	}
 
 	defaultsCfg := config.Defaults()
@@ -77,6 +76,12 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	if gerr != nil {
 		return fmt.Errorf("loading global config: %w", gerr)
 	}
+	requestedWorkspace, _ := filepath.Abs(ws)
+	resolvedWorkspace, rerr := resolveCLIWorkspace(ws, globalCfg)
+	if rerr != nil {
+		return rerr
+	}
+	ws = resolvedWorkspace
 	projectCfg, perr := config.LoadProject(globalCfg, ws)
 	if perr != nil {
 		return fmt.Errorf("loading project config: %w", perr)
@@ -105,6 +110,9 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	ctxTable.Row("global config", existsIcon(globalPath), contractConfigPath(globalPath))
 	ctxTable.Row("project config", existsIcon(projectPath), contractConfigPath(projectPath))
+	if requestedWorkspace != "" && requestedWorkspace != ws {
+		ctxTable.Row("requested workspace", tui.OkStyle.Render("✓"), contractConfigPath(requestedWorkspace))
+	}
 	ctxTable.Row("workspace", tui.OkStyle.Render("✓"), contractConfigPath(ws))
 	fmt.Println(ctxTable.Render())
 

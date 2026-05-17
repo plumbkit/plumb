@@ -12,6 +12,7 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 	"github.com/spf13/cobra"
 
+	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tui"
 )
@@ -38,11 +39,15 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	ws := statsFlagWorkspace
 	if ws == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("getwd: %w", err)
-		}
-		ws = cwd
+		ws = "."
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	ws, err = resolveCLIWorkspace(ws, cfg)
+	if err != nil {
+		return err
 	}
 
 	db, err := stats.OpenReadOnly(stats.DBPathFor(ws))
@@ -188,9 +193,9 @@ func runStats(_ *cobra.Command, _ []string) error {
 		}
 		sess := shortSessionID(c.SessionID)
 
-		when   := padRight(humanAge(c.CalledAt), wWhen)
-		tool   := padRight(c.Tool, wTool)
-		ms     := padRight(fmt.Sprintf("%d", c.DurationMs), wMs)
+		when := padRight(humanAge(c.CalledAt), wWhen)
+		tool := padRight(c.Tool, wTool)
+		ms := padRight(fmt.Sprintf("%d", c.DurationMs), wMs)
 		status := centerStr(ok, wStatus)
 
 		if !c.Success {

@@ -141,6 +141,36 @@ func (p *workspacePool) detectLanguageAt(dir string) string {
 	}
 }
 
+// resolveCLIWorkspace resolves start to the same workspace root the daemon
+// would use, without acquiring or starting a language server. If no project
+// marker exists, it returns start unchanged so explicit non-project inspection
+// paths keep their current behaviour.
+func resolveCLIWorkspace(start string, cfg config.Config) (string, error) {
+	if start == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("getwd: %w", err)
+		}
+		start = cwd
+	}
+	abs, err := filepath.Abs(start)
+	if err != nil {
+		return "", fmt.Errorf("resolving workspace path %s: %w", start, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("stat workspace path %s: %w", abs, err)
+	}
+	if !info.IsDir() {
+		abs = filepath.Dir(abs)
+	}
+	root, _, err := newWorkspacePool(cfg).Detect(abs)
+	if err != nil {
+		return abs, nil
+	}
+	return root, nil
+}
+
 // acquireLang returns (or starts) the shared workspace state for root.
 // Pass "" for language to detect from root markers; otherwise the named
 // adapter is used directly.

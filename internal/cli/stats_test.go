@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/stats"
 )
 
@@ -71,6 +72,75 @@ func TestRunStats_NoStatsPrintsLogo(t *testing.T) {
 	}
 	if !strings.Contains(out, "No statistics recorded yet") {
 		t.Fatalf("runStats output did not include no-statistics message:\n%s", out)
+	}
+}
+
+func TestResolveCLIWorkspace_NestedDirectoryUsesProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveCLIWorkspace(nested, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != root {
+		t.Fatalf("resolveCLIWorkspace(%s) = %s, want %s", nested, got, root)
+	}
+}
+
+func TestResolveCLIWorkspace_NonProjectDirectoryPreserved(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveCLIWorkspace(dir, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != dir {
+		t.Fatalf("resolveCLIWorkspace(non-project) = %s, want %s", got, dir)
+	}
+}
+
+func TestRunStats_ExplicitNestedWorkspaceUsesRootDB(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "child")
+	if err := os.MkdirAll(filepath.Join(root, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := stats.Open(stats.DBPathFor(root))
+	if err != nil {
+		t.Fatalf("Open root DB: %v", err)
+	}
+	if err := db.Record(stats.Call{SessionID: "sess-1", Tool: "read_file", CalledAt: time.Now(), Success: true}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	db.Close()
+
+	oldWorkspaceFlag, oldLimit := statsFlagWorkspace, statsFlagLimit
+	statsFlagWorkspace, statsFlagLimit = nested, 5
+	defer func() {
+		statsFlagWorkspace, statsFlagLimit = oldWorkspaceFlag, oldLimit
+	}()
+
+	out := captureStdout(t, func() {
+		if err := runStats(nil, nil); err != nil {
+			t.Fatalf("runStats: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "No statistics") {
+		t.Fatalf("runStats reported no statistics for nested workspace:\n%s", out)
+	}
+	if !strings.Contains(out, "read_file") {
+		t.Fatalf("runStats output did not include root DB row:\n%s", out)
 	}
 }
 
