@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.30** (2026-05-17).
+Last reviewed against: **0.5.31** (2026-05-17).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -153,42 +153,6 @@ Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspac
 - `ruff` is fast (~10ms typical). Don't apply gopls-tier timeouts to ruff and vice versa.
 - Findings can be very noisy in legacy codebases. Without per-file caps (`max_findings_per_file`) the response will balloon.
 - This is the kind of feature that's transformative when it works and infuriating when it doesn't (false positives = agent corrects perfectly good code into worse code). Roll out behind a feature flag.
-
----
-
-### Transaction durable rollback log
-
-**Priority:** medium-low.
-**Effort:** 3–4 hours including tests.
-
-**Why this matters.** `transaction_apply`'s rollback is **best-effort**. The current implementation: if a write in phase 2 fails, we iterate over the already-written files and call `safeWrite(path, p.before, p.perm)` to restore. If that restoration itself fails (disk full, permission revoked, fs went read-only between phase-2 writes), we log an error and the file stays in its post-write state.
-
-For an editor-class tool, this is acceptable. For "production data" use cases — anywhere a partial transaction could leave a system in a corrupt state — it isn't.
-
-The fix is a tiny on-disk WAL.
-
-**Definition of done.**
-
-1. New package `internal/tools/txlog` (or similar) with `Begin(workspace, txID) (*Log, error)`, `Record(path, beforeContent, perm)`, `Commit()`, `Rollback()`.
-2. `Begin` creates `.plumb/tx-log/<txID>/`, writes a `manifest.json` listing the planned operations.
-3. `Record` writes each pre-edit content to `.plumb/tx-log/<txID>/<n>-before` before phase 2 starts the corresponding write.
-4. `Commit` removes `.plumb/tx-log/<txID>/`.
-5. `Rollback` reads each `<n>-before` and `safeWrite`s it back to the original path. Best-effort on each; logs the rest.
-6. `transaction_apply` calls `Begin` at the start of phase 2, `Record` for each prepared op, `Commit` on success, `Rollback` on failure.
-7. On daemon startup, `txlog.Scan(workspace)` finds orphaned `.plumb/tx-log/*` directories (= daemon crashed mid-transaction) and completes their rollback.
-8. Tests:
-   - Happy path: transaction commits, tx-log dir is gone.
-   - Mid-transaction failure: tx-log dir survives, contains expected snapshots, rollback restores all files.
-   - Crash simulation: write tx-log + partial files manually, run `txlog.Scan`, confirm restoration.
-   - Concurrent transactions on disjoint paths: each gets its own txID dir; no interference.
-
-**Where to start.** Start with the package interface; build the simpler `Begin/Record/Commit/Rollback` flow first. Add `Scan` only once the basic path works. The startup scan in `daemon.go` is one line: `txlog.Scan(workspace)` immediately after the workspace resolves.
-
-**Watch out for:**
-
-- Cleanup of `.plumb/tx-log/` on success has to be reliable — if it's left behind it'll trigger a phantom rollback on next startup. Use `os.RemoveAll`.
-- Snapshot file size cap: a transaction touching a 100 MiB file would duplicate 100 MiB to the tx-log. Worth either capping per-file or rejecting transactions where any operation exceeds some size.
-- The user can manually inspect `.plumb/tx-log/` to recover from a crash plumb couldn't.
 
 ---
 

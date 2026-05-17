@@ -49,4 +49,8 @@ type WriteDeps struct {
 	// post-rename mtime check. Zero falls back to the 100 ms compiled-in
 	// default. Increase on slow filesystems (network mounts, FUSE).
 	ConcurrentWriteSkew time.Duration
+	// WorkspaceFn returns the resolved workspace root for the current session.
+	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
+	// rollback log. nil or a function returning "" disables the txlog.
+	WorkspaceFn func() string
 }

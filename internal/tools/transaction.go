@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/golimpio/plumb/internal/tools/txlog"
 )
 
 var transactionApplySchema = json.RawMessage(`{
@@ -263,24 +264,43 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 
 	// Phase 2: write. On failure mid-stream, restore everything already written.
+	// The durable rollback log records pre-write content before each write so
+	// a daemon crash can be recovered on the next workspace attach via txlog.Scan.
+	workspace := ""
+	if t.deps.WorkspaceFn != nil {
+		workspace = t.deps.WorkspaceFn()
+	}
+	txl, txErr := txlog.Begin(workspace)
+	if txErr != nil {
+		slog.Warn("transaction_apply: txlog unavailable — rollback not durable", "err", txErr)
+		txl, _ = txlog.Begin("") // returns no-op log
+	}
+
 	written := make([]txPrepared, 0, len(prepared))
 	for _, p := range prepared {
 		// Pre-rename mtime guard: did anything change between phase 1 and now?
 		if info, err := os.Stat(p.path); err == nil {
 			if !info.ModTime().Equal(p.preMtime) {
 				rollback(written)
+				txl.Rollback()
 				return "", fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
 					p.path, len(written))
 			}
 		}
+		if err := txl.Record(p.path, []byte(p.before), p.perm); err != nil {
+			slog.Warn("transaction_apply: txlog record failed — this write is not durable",
+				"path", p.path, "err", err)
+		}
 		if _, err := safeWrite(p.path, []byte(p.after), p.perm); err != nil {
 			rollback(written)
+			txl.Rollback()
 			return "", fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
 				p.path, err, len(written))
 		}
 		written = append(written, p)
 	}
+	txl.Commit()
 
 	// Phase 3: notifications + cache invalidation per file.
 	uris := make([]string, 0, len(written))

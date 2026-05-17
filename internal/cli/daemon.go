@@ -27,6 +27,7 @@ import (
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tools"
+	"github.com/golimpio/plumb/internal/tools/txlog"
 )
 
 var daemonCmd = &cobra.Command{
@@ -231,6 +232,10 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		}
 		acquiredRoot = folder
 
+		// Scan for orphaned transaction logs from a previous daemon crash and
+		// roll them back before any new transactions can touch those files.
+		go txlog.Scan(folder)
+
 		// Update the session file with the now-resolved workspace.
 		cn, cv := clientName, clientVersion
 		session.Patch(sessID, func(info *session.Info) {
@@ -382,6 +387,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		Reads:               readTracker,
 		PostWriteDiagWindow: diagWindow,
 		ConcurrentWriteSkew: time.Duration(cfg.Edits.ConcurrentWriteSkewMs) * time.Millisecond,
+		WorkspaceFn:         wsFn,
 	}
 	srv.Register(tools.NewWriteFile(writeDeps))
 	srv.Register(tools.NewEditFile(writeDeps))
