@@ -43,7 +43,7 @@ Key packages:
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | Per-project SQLite tool-call statistics (WAL, per-tool summary, P95, `user_version` 4) |
+| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, `user_version` 5) |
 | `internal/memory/` | Per-workspace markdown memory store; exposed as MCP resources |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |
@@ -78,6 +78,11 @@ On daemon start the binary writes:
 | `~/Library/Caches/plumb/plumb.daemon.lock` | `flock`'d by `plumb daemon` for its lifetime; a second daemon sees `EWOULDBLOCK` and exits |
 | `~/Library/Caches/plumb/plumb.ctrl.sock` | Admin Unix socket; accepts line-based `set-level <level>` commands from `plumb log-level` |
 | `~/Library/Caches/plumb/daemon.log` | All daemon logs |
+
+Stats live in one persistent global database at `config.DataDir()/stats.db`
+(for example `~/.local/share/plumb/stats.db` on Linux). This follows the
+single-daemon architecture: every row must carry both `workspace` and
+`session_id`, and project/session views filter on those row attributes.
 
 ### Singleton enforcement
 

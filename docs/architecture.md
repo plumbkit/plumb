@@ -119,7 +119,7 @@ Key design properties:
 |---|---|---|
 | `~/.config/plumb/config.toml` | user | LSP commands, cache TTL, log level |
 | `~/.local/share/plumb/sessions/<id>.json` | daemon | Active session metadata (one file per MCP connection) |
-| `<workspace>/.plumb/stats.db` | daemon (writer) / TUI + `plumb stats` (readers) | Per-project tool call statistics, SQLite WAL |
+| `~/.local/share/plumb/stats.db` | daemon (writer) / TUI + `plumb stats` (readers) | Global tool call statistics, SQLite WAL, row-scoped by workspace and session |
 | `~/Library/Caches/plumb/plumb.sock` | daemon | Unix socket for MCP proxy connections |
 | `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
 | `~/Library/Caches/plumb/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
@@ -128,10 +128,9 @@ Key design properties:
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
 
-XDG: `XDG_DATA_HOME` (sessions) and `XDG_CONFIG_HOME` (config) are respected
-when set. Stats live in the project database at `<workspace>/.plumb/stats.db`.
-Cache paths use `os.UserCacheDir()` directly because they are runtime, not
-data — see Daemon architecture above for why.
+XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
+respected when set. Cache paths use `os.UserCacheDir()` directly because they
+are runtime, not data — see Daemon architecture above for why.
 
 ### Statistics database (`stats.db`)
 
@@ -141,6 +140,8 @@ Single SQLite file containing one table:
 CREATE TABLE tool_calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id   TEXT    NOT NULL DEFAULT '',  -- session.Info.ID
+    session_name TEXT    NOT NULL DEFAULT '',  -- session.Info.Name
+    workspace    TEXT    NOT NULL DEFAULT '',  -- absolute project root
     tool         TEXT    NOT NULL,              -- e.g. "find_symbol"
     called_at    INTEGER NOT NULL,              -- Unix milliseconds
     duration_ms  INTEGER NOT NULL DEFAULT 0,    -- wall-clock execution time
@@ -154,6 +155,8 @@ CREATE TABLE tool_calls (
 CREATE INDEX idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
 CREATE INDEX idx_tc_session   ON tool_calls(session_id);
+CREATE INDEX idx_tc_workspace ON tool_calls(workspace);
+CREATE INDEX idx_tc_ws_session ON tool_calls(workspace, session_id);
 ```
 
 Concurrency model:
@@ -173,12 +176,13 @@ Concurrency model:
 
 Every successful or failed `tools/call` triggers `srv.OnAfterTool`, which the
 daemon connects to `statsDB.Record(stats.Call{...})` capturing tool name,
-session, timing, and I/O sizes. The workspace is derived from the database
-path (`<workspace>/.plumb/stats.db`), not from a per-row absolute path.
+workspace, session, timing, and I/O sizes. The workspace and session fields are
+required row attributes because the single stats database contains all projects
+served by the single daemon.
 
-Schema migrations are driven by `PRAGMA user_version`; new columns are added
-with `ALTER TABLE … ADD COLUMN … DEFAULT …` so old rows remain valid. Index
-changes are idempotent (`CREATE INDEX IF NOT EXISTS`).
+Schema versioning is driven by `PRAGMA user_version`. Before 1.0, plumb treats
+the current schema as the supported shape; read-only tools require the current
+version, and write-capable opens stamp the active version.
 
 ### Session registry (`sessions/<id>.json`)
 

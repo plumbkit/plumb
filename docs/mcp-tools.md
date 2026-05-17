@@ -705,9 +705,8 @@ Renames the current MCP session using the existing session `Name` field.
 
 **Source**: `internal/tools/rename_session.go`
 
-Names are normalised to uppercase, may contain only ASCII letters and `-`, must not start or end with `-`, and are capped at 16 characters to match the generated session-name envelope. A successful rename updates the session JSON, future stats rows, and existing stats rows for the current session in open workspace databases.
+Names are normalised to uppercase, may contain only ASCII letters and `-`, must not start or end with `-`, and are capped at 16 characters to match the generated session-name envelope. A successful rename updates the session JSON, future stats rows, and existing stats rows for the current session in the global stats database.
 
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | New session name. Letters and `-` only; stored uppercase |
-

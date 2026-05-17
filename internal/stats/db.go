@@ -1,7 +1,7 @@
 // Package stats records MCP tool call metrics to a SQLite database.
 //
-// The database lives at <workspace>/.plumb/stats.db, so tool-call history
-// travels with the project it describes.
+// The database lives in plumb's global data directory. Each row records the
+// workspace and session it belongs to, matching plumb's single-daemon model.
 //
 // WAL journal mode allows the daemon (writer) and the TUI / CLI (readers)
 // to operate from different OS processes simultaneously without blocking.
@@ -21,24 +21,30 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// schema is the v1 baseline. Newer columns are added by migrations so that
-// fresh databases and old databases follow the same code path. Do not edit
-// this to reflect later schema states — add a migration instead.
+// schema is the current fresh database shape. The global stats database uses
+// row-level workspace and session fields to separate project history inside the
+// single daemon-owned store.
 const schema = `
 CREATE TABLE IF NOT EXISTS tool_calls (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id   TEXT    NOT NULL DEFAULT '',
+    session_name TEXT    NOT NULL DEFAULT '',
+    workspace    TEXT    NOT NULL DEFAULT '',
     tool         TEXT    NOT NULL,
     called_at    INTEGER NOT NULL,
     duration_ms  INTEGER NOT NULL DEFAULT 0,
     input_bytes  INTEGER NOT NULL DEFAULT 0,
     output_bytes INTEGER NOT NULL DEFAULT 0,
     success      INTEGER NOT NULL DEFAULT 1,
-    error_msg    TEXT    NOT NULL DEFAULT ''
+    error_msg    TEXT    NOT NULL DEFAULT '',
+    input_json   TEXT    NOT NULL DEFAULT '',
+    output_text  TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
 CREATE INDEX IF NOT EXISTS idx_tc_session   ON tool_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_tc_workspace ON tool_calls(workspace);
+CREATE INDEX IF NOT EXISTS idx_tc_ws_session ON tool_calls(workspace, session_id);
 `
 
 // migration describes a single forward schema step. For ADD COLUMN migrations,
@@ -115,9 +121,8 @@ func hasColumn(db *sql.DB, table, col string) (bool, error) {
 
 // DB is a thread-safe statistics store backed by SQLite.
 type DB struct {
-	db             *sql.DB
-	mu             sync.Mutex
-	hasSessionName bool // false for pre-v4 databases opened read-only
+	db *sql.DB
+	mu sync.Mutex
 }
 
 // DBPathFor returns the global stats database path in the persistent data
@@ -172,7 +177,7 @@ func Open() (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("stats: stamping user_version: %w", err)
 	}
-	return &DB{db: db, hasSessionName: true}, nil
+	return &DB{db: db}, nil
 }
 
 // OpenReadOnly opens the existing global stats database for reading only.
@@ -190,8 +195,7 @@ func OpenReadOnly() (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	hasSN, _ := hasColumn(db, "tool_calls", "session_name")
-	return &DB{db: db, hasSessionName: hasSN}, nil
+	return &DB{db: db}, nil
 }
 
 func checkReadOnlySchema(db *sql.DB) error {
@@ -200,17 +204,6 @@ func checkReadOnlySchema(db *sql.DB) error {
 		return fmt.Errorf("stats: reading readonly schema version: %w", err)
 	}
 	if currentVersion >= SchemaVersion {
-		return nil
-	}
-	hasInput, err := hasColumn(db, "tool_calls", "input_json")
-	if err != nil {
-		return fmt.Errorf("stats: checking readonly schema: %w", err)
-	}
-	hasOutput, err := hasColumn(db, "tool_calls", "output_text")
-	if err != nil {
-		return fmt.Errorf("stats: checking readonly schema: %w", err)
-	}
-	if hasInput && hasOutput {
 		return nil
 	}
 	return fmt.Errorf("%w: stats database is schema version %d, current version is %d; run a write-capable plumb command to migrate it", ErrReadOnlySchemaUpgradeRequired, currentVersion, SchemaVersion)
@@ -251,21 +244,20 @@ func capString(s string) string {
 	return s
 }
 
-// sessionNameCol returns the SQL column expression for session_name. Pre-v4
-// databases opened read-only don't have the column, so a literal empty string
-// is substituted to keep query compatibility.
-func (d *DB) sessionNameCol() string {
-	if d.hasSessionName {
-		return "session_name"
-	}
-	return "'' AS session_name"
-}
-
 // Record inserts a call. Stats are best-effort, but the caller gets the
 // insert error so the daemon can log storage failures.
 func (d *DB) Record(c Call) error {
 	if d == nil {
 		return nil
+	}
+	if c.Workspace == "" {
+		return fmt.Errorf("stats: workspace is required")
+	}
+	if c.SessionID == "" {
+		return fmt.Errorf("stats: session_id is required")
+	}
+	if c.Tool == "" {
+		return fmt.Errorf("stats: tool is required")
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -289,10 +281,9 @@ func (d *DB) Record(c Call) error {
 }
 
 // RenameSession updates the stored human-readable name for all calls in a
-// session. It is best-effort for current schema DBs and a no-op for old
-// read-only-compatible handles that do not expose session_name.
+// session. It is best-effort for the global stats database.
 func (d *DB) RenameSession(sessionID, name string) error {
-	if d == nil || sessionID == "" || !d.hasSessionName {
+	if d == nil || sessionID == "" {
 		return nil
 	}
 	d.mu.Lock()
@@ -553,16 +544,16 @@ func (d *DB) p95All(filter Filter) map[string]int64 {
 type RecentCall struct {
 	Tool        string
 	SessionID   string
-	SessionName string // human-readable name; empty for pre-v4 rows
-	Workspace   string // absolute path; empty for pre-v5 rows
+	SessionName string // human-readable name
+	Workspace   string // absolute path to the project root
 	CalledAt    time.Time
 	DurationMs  int64
 	Success     bool
 	ErrorMsg    string
 	InputBytes  int
 	OutputBytes int
-	InputJSON   string // raw args JSON; empty for pre-v2 rows
-	OutputText  string // full output; empty for pre-v3 rows
+	InputJSON   string // raw args JSON
+	OutputText  string // full output
 }
 
 // Recent returns the n most recent calls matching filter.
@@ -570,9 +561,8 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	if d == nil {
 		return nil, nil
 	}
-	snCol := d.sessionNameCol()
 	where, args := filter.where()
-	q := `SELECT tool, session_id, ` + snCol + `, workspace, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json, output_text
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
@@ -613,9 +603,8 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 		limit = 500
 	}
 	f := Filter{Tool: tool, Workspace: workspace}
-	snCol := d.sessionNameCol()
 	where, args := f.where()
-	q := `SELECT tool, session_id, ` + snCol + `, workspace, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -645,14 +634,15 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 }
 
 // CallDetail fetches the full input_json and output_text for a single call
-// identified by (session_id, called_at). Returns empty strings if not found.
-func (d *DB) CallDetail(sessionID string, calledAt time.Time) (inputJSON, outputText string) {
+// identified by (workspace, session_id, called_at). Returns empty strings if
+// not found.
+func (d *DB) CallDetail(workspace, sessionID string, calledAt time.Time) (inputJSON, outputText string) {
 	if d == nil {
 		return
 	}
 	_ = d.db.QueryRow(
-		`SELECT input_json, output_text FROM tool_calls WHERE session_id=? AND called_at=? LIMIT 1`,
-		sessionID, calledAt.UnixMilli(),
+		`SELECT input_json, output_text FROM tool_calls WHERE workspace=? AND session_id=? AND called_at=? LIMIT 1`,
+		workspace, sessionID, calledAt.UnixMilli(),
 	).Scan(&inputJSON, &outputText)
 	return
 }

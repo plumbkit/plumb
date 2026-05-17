@@ -439,9 +439,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	}
 
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
-		// Per-project DB lives at <workspace>/.plumb/stats.db. Calls
-		// without a discoverable workspace are dropped — they can't be
-		// attributed to any project's history.
+		// The global stats DB stores project identity per row. Calls without a
+		// discoverable workspace are dropped because they cannot be attributed.
 		stateMu.Lock()
 		root := acquiredRoot
 		sessionName := sessName

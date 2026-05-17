@@ -144,7 +144,7 @@ func (m *Model) refreshStats() {
 	}
 	prevCall := selectedCallKey(m.recentCalls, m.statsCursor)
 
-	filter := stats.Filter{SessionID: s.ID}
+	filter := stats.Filter{Workspace: s.Folder, SessionID: s.ID}
 	m.toolStats, _ = m.globalDB.Summary(filter)
 	m.recentCalls, _ = m.globalDB.Recent(50, filter)
 	m.refreshActivity(m.globalDB, time.Now())
@@ -164,8 +164,8 @@ func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 	}
 
 	var start time.Time
-	if db != nil {
-		start = db.FirstCallAt()
+	if len(m.sessions) > 0 {
+		start = m.sessions[0].StartedAt
 	}
 	if start.IsZero() {
 		start = now.Add(-time.Minute)
@@ -328,7 +328,7 @@ func (m *Model) currentDetail() (inputJSON, outputText string) {
 	if m.globalDB == nil {
 		return
 	}
-	inputJSON, outputText = m.globalDB.CallDetail(c.SessionID, c.CalledAt)
+	inputJSON, outputText = m.globalDB.CallDetail(c.Workspace, c.SessionID, c.CalledAt)
 	m.popupDetail = popupDetailCache{
 		sessionID:  c.SessionID,
 		calledAt:   key,
@@ -1456,13 +1456,13 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 		innerWidth = boxWidth - 2
 		sparkWidth = 16
 	)
-	
+
 	windowStr := "1m"
 	if m.activity.Window > 0 {
 		windowStr = formatUptime(m.activity.Window)
 	}
 	titleText := fmt.Sprintf(" Activity (%s) ", windowStr)
-	
+
 	topFill := boxWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
 	if topFill < 0 {
 		topFill = 0
@@ -1470,7 +1470,7 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 
 	spark := activitySparkline(m.activity.Buckets, sparkWidth)
 	count := formatActivityCalls(m.activity.Calls)
-	content := " " + sparkStyle.Render(spark) + " " + countStyle.Render(count)
+	content := " " + sparkStyle.Render(spark) + " " + countStyle.Render(count) + " "
 	contentPad := innerWidth - lipgloss.Width(content)
 	if contentPad < 0 {
 		contentPad = 0
@@ -1520,9 +1520,17 @@ func activitySparkline(buckets []int64, width int) string {
 func formatActivityCalls(n int64) string {
 	switch {
 	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fm calls", float64(n)/1_000_000)
+		val := float64(n) / 1_000_000
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%.0fm calls", val)
+		}
+		return fmt.Sprintf("%.1fm calls", val)
 	case n >= 1000:
-		return fmt.Sprintf("%.1fk calls", float64(n)/1000)
+		val := float64(n) / 1000
+		if val >= 100 || val == float64(int64(val)) {
+			return fmt.Sprintf("%.0fk calls", val)
+		}
+		return fmt.Sprintf("%.1fk calls", val)
 	case n == 1:
 		return "1 call"
 	default:

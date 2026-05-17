@@ -26,7 +26,7 @@ var doctorCmd = &cobra.Command{
 	Long: `Run a series of health checks and report the status of plumb's
 daemon, language servers, MCP client registrations, and configuration.
 
-Use --workspace to include per-project checks (stats DB, project config).`,
+Use --workspace to include project-scoped checks (stats rows, project config).`,
 	RunE: runDoctor,
 }
 
@@ -296,7 +296,7 @@ func checkConfigs(ws string) []checkResult {
 	return results
 }
 
-// checkStatsDB verifies the per-workspace stats DB is readable.
+// checkStatsDB verifies the global stats DB is readable.
 func checkStatsDB(ws string) []checkResult {
 	dbPath := stats.DBPathFor()
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {

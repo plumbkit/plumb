@@ -212,7 +212,7 @@ The fix below is one possible solution (an auto-attach fallback that synthesises
 **The symptom.** A Claude Desktop session that drives plumb against a directory with no `go.mod`, no `pyproject.toml`, no `setup.py`, and no `.plumb/` marker stays unattached for its entire lifetime. The session file is registered with `folder=""`, `language=""`, `adapter=""`. Consequences:
 
 - **TUI** shows the session as `⟳ resolving…` forever; no Recent Edits, no Tool Statistics, no useful right-panel data.
-- **Stats are silently dropped.** `OnAfterTool` in `internal/cli/daemon.go` short-circuits when `root == ""` (line ~398), so no `.plumb/stats.db` is ever created, no history accumulates.
+- **Stats are silently dropped.** `OnAfterTool` in `internal/cli/daemon.go` short-circuits when `root == ""`, so no global stats row is written and no history accumulates for that project.
 - **Per-project config never loads.** Global config applies, project-local overrides under `<workspace>/.plumb/config.toml` are unreachable because there is no workspace.
 - **LSP notifications fail harmlessly** ("LSP server not yet ready") on every write — logged as WARN noise.
 
@@ -254,7 +254,7 @@ User's verbatim request: *"Even without any supported language, it should have c
 
    a. **Yes — create `.plumb/` at the synthetic root the first time the session attaches.** Persistent: next session resolves via the standard marker path with no fallback needed. Side effect: a `.plumb/` directory shows up in the user's project tree (visible to git, possibly creating a diff against committed state).
 
-   b. **No — keep the synthetic root in-memory only.** Stats DB lives at e.g. `~/.local/share/plumb/orphan-stats/<hash>.db` keyed by absolute path. No on-disk pollution of the user's project. Cost: synthetic resolution must repeat every session.
+   b. **No — keep the synthetic root in-memory only.** Stats still write to the global stats DB with the synthetic absolute root in the `workspace` column. No on-disk pollution of the user's project. Cost: synthetic resolution must repeat every session.
 
    **Recommendation:** (a) gated behind a second flag (`auto_attach_persist = true/false`). Default to in-memory-only for v1 (option b), let users explicitly opt into the persist behaviour. Re-evaluate the default in a later release.
 
@@ -264,7 +264,7 @@ User's verbatim request: *"Even without any supported language, it should have c
 2. `pool.Detect` unchanged. New helper `pool.DetectOrSynthesise(seedDir, strategy)` returns `(root, language, synthetic bool, err)`. `synthetic=true` means the root was inferred, not found via marker.
 3. `OnBeforeTool` calls the new helper *only* when `Detect` failed AND `auto_attach` is true. On success, calls `attachWorkspace` with the synthetic root. `language` is `LanguageNone` for the synthetic path.
 4. `session.Info` gains `Synthetic bool` field, serialised to the session JSON. TUI displays `(auto)` suffix next to the folder name for synthetic sessions so the user can tell them apart from real ones.
-5. Stats store: if `auto_attach_persist` is false, route writes for synthetic workspaces to `~/.local/share/plumb/orphan-stats/<sha256(root)>.db`. If true, use `<root>/.plumb/stats.db` as today and `os.MkdirAll` the `.plumb/` dir at attach time.
+5. Stats store: always write synthetic workspace calls to the global stats DB, using the synthetic root as the row `workspace`. If `auto_attach_persist` is true, also create `<root>/.plumb/` at attach time so the next session resolves through the normal marker path.
 6. `plumb config show` displays both `auto_attach` and `auto_attach_persist` with provenance.
 7. CLAUDE.md documents the behaviour under "Workspace detection" — explicit about the precedence: `.plumb/` > language marker > (if `auto_attach`) git root > seed parent dir.
 8. CHANGELOG entry for the version that ships it.
@@ -281,7 +281,7 @@ User's verbatim request: *"Even without any supported language, it should have c
        root, _, synthetic, err = pool.DetectOrSynthesise(startDir, strategy)
    }
    ```
-5. `internal/cli/stats_store.go`: add `OrphanRecord(synthRoot, call)` that routes to the orphan-stats DB. `statsStore.Record` checks the session for `Synthetic` and dispatches.
+5. `internal/cli/stats_store.go`: ensure `statsStore.Record` writes the synthetic root into the global row `workspace` field.
 6. `internal/tui/model.go`: display `(auto)` suffix in the session list label when `info.Synthetic`.
 7. Tests:
    - `pool_test.go`: `TestDetectOrSynthesise_*` for git-root fallback, seed-parent fallback, both-found-prefer-real.
@@ -297,7 +297,7 @@ User's verbatim request: *"Even without any supported language, it should have c
 - **Don't auto-attach from `route()` in `routing_proxy.go`.** That path runs on every LSP-bound URI and would burn cycles on irrelevant paths. Synthetic attach must only happen on the *first* tool call after a session connects, via `OnBeforeTool`.
 - **The synthetic root can be wrong.** A user editing `/Users/me/scratch/quick-edit.txt` from a `$HOME`-rooted Claude Desktop would attach to `/Users/me/scratch/` (if no git) — sensible enough. But editing `/tmp/foo.txt` would attach to `/tmp/`. Document this and let the user override with explicit `plumb init`.
 - **macOS `$HOME` walks.** Many users will trigger auto-attach with `$HOME` or `~/Documents` as the de facto seed. The session attaches to whatever is up-tree from the first file touched, which could be a noisy parent dir. The git-repo-first strategy mitigates this for real projects.
-- **Persisting `.plumb/` writes to a user's git-tracked directory.** If the user has `auto_attach_persist = true` and edits a file inside their git repo, plumb will create `repo/.plumb/` (and probably `stats.db`) — which will show as untracked in `git status` until they `.gitignore` it. CLAUDE.md should explicitly recommend adding `.plumb/` to global gitignore or per-project gitignore. The `plumb init` command should already do this; verify when implementing.
+- **Persisting `.plumb/` writes to a user's git-tracked directory.** If the user has `auto_attach_persist = true` and edits a file inside their git repo, plumb will create `repo/.plumb/`, which will show as untracked in `git status` until they `.gitignore` it. CLAUDE.md should explicitly recommend adding `.plumb/` to global gitignore or per-project gitignore. The `plumb init` command should already do this; verify when implementing.
 - **Backwards compatibility.** Existing sessions that DO resolve a workspace via `.plumb/`/`go.mod`/etc. must behave identically. Auto-attach only kicks in on the `Detect` error path. Add a regression test: with marker present, `Synthetic` stays false; with marker absent and flag off, `acquiredRoot` stays "" as today.
 
 ---
