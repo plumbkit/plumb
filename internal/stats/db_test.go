@@ -1,6 +1,11 @@
 package stats
 
 import (
+	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -308,5 +313,42 @@ func TestOpenReadOnlyCurrentSchemaAllowed(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].InputJSON != "{}" || got[0].OutputText != "ok" {
 		t.Fatalf("Recent = %#v, want row with detail columns", got)
+	}
+}
+
+func TestOpenReadOnlyOldSchemaTellsUserToDeleteDB(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	path := DBPathFor()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("manual open: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	db, err := OpenReadOnly()
+	if db != nil {
+		db.Close()
+	}
+	if !errors.Is(err, ErrReadOnlySchemaUpgradeRequired) {
+		t.Fatalf("OpenReadOnly error = %v, want ErrReadOnlySchemaUpgradeRequired", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("OpenReadOnly error = %q, want full DB path %q", err, path)
+	}
+	if !strings.Contains(err.Error(), "delete") || !strings.Contains(err.Error(), "fresh global stats database") {
+		t.Fatalf("OpenReadOnly error = %q, want delete instruction", err)
 	}
 }

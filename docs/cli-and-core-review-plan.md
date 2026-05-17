@@ -124,9 +124,9 @@ Acceptance criteria:
 
 Problem:
 
-`plumb status` uses the literal cwd, or the literal `--workspace` value, to open
-`<path>/.plumb/stats.db`. If the user runs it from a subdirectory, it reports no
-stats even when the project root has a stats database.
+`plumb status` uses the literal cwd, or the literal `--workspace` value, as the
+workspace filter for the global stats DB. If the user runs it from a
+subdirectory, it reports no stats even when the project root has matching rows.
 
 Relevant files:
 
@@ -144,7 +144,7 @@ Plan:
 4. Make the displayed path clear:
    - inspected path;
    - resolved workspace root;
-   - stats DB location.
+   - global stats DB location.
 5. Add tests for:
    - cwd at workspace root;
    - cwd in a nested subdirectory;
@@ -347,9 +347,10 @@ Acceptance criteria:
 
 Problem:
 
-`OpenReadOnly` does not run migrations, but read paths query columns added in
-later schema versions. Old databases can fail in `status` or the TUI until a
-writer opens and migrates them.
+`OpenReadOnly` does not run migrations, but read paths query current schema
+columns. Before 1.0, plumb treats the active global stats schema as the
+supported shape, so read-only opens should fail clearly when the DB is older
+than the current `PRAGMA user_version`.
 
 Relevant file:
 
@@ -357,16 +358,16 @@ Relevant file:
 
 Plan:
 
-1. Decide whether read-only opens should:
-   - detect old schema and return a clear upgrade-required diagnostic; or
-   - open read-write briefly to migrate when invoked from local CLI/TUI.
-2. Make `Recent` resilient to missing `input_json`/`output_text` if read-only
-   compatibility is preferred.
-3. Add fixtures for schema versions 1, 2, and 3.
+1. Detect old schema and return a clear upgrade-required diagnostic.
+2. Keep read paths current-schema-only; do not add pre-1.0 compatibility
+   shims for missing columns.
+3. Add tests that current-schema read-only opens succeed and stale versions
+   fail clearly.
 
 Acceptance criteria:
 
 - Old stats DBs do not fail with raw SQL errors in CLI/TUI.
+- Current-schema global stats DBs expose workspace/session filters correctly.
 
 ### 11. Deep-copy config defaults and merge inputs
 

@@ -193,7 +193,7 @@ func OpenReadOnly() (*DB, error) {
 	}
 	if err := checkReadOnlySchema(db); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w; delete %s so plumb can create a fresh global stats database", err, path)
 	}
 	return &DB{db: db}, nil
 }
@@ -206,7 +206,7 @@ func checkReadOnlySchema(db *sql.DB) error {
 	if currentVersion >= SchemaVersion {
 		return nil
 	}
-	return fmt.Errorf("%w: stats database is schema version %d, current version is %d; run a write-capable plumb command to migrate it", ErrReadOnlySchemaUpgradeRequired, currentVersion, SchemaVersion)
+	return fmt.Errorf("%w: stats database is schema version %d, current version is %d", ErrReadOnlySchemaUpgradeRequired, currentVersion, SchemaVersion)
 }
 
 // Close closes the database.
