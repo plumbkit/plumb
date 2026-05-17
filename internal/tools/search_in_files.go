@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,9 +25,9 @@ import (
 // behind that the user can't cancel.
 const searchDefaultDeadline = 30 * time.Second
 
-// searchMaxLineBytes raises bufio.Scanner's per-line cap (default 64 KB) so
-// minified or generated single-line files don't silently truncate. Lines
-// longer than this are still skipped, but we won't drop the rest of the file.
+// searchMaxLineBytes caps individual lines so a minified or generated file
+// cannot dominate a search. Oversized lines are skipped while the rest of the
+// file is still scanned.
 const searchMaxLineBytes = 1 << 20 // 1 MiB
 
 // searchDefaultMaxFileBytes guards against a single multi-hundred-MB text
@@ -85,7 +84,7 @@ type SearchInFiles struct{}
 
 func NewSearchInFiles() *SearchInFiles { return &SearchInFiles{} }
 
-func (t *SearchInFiles) Name() string             { return "search_in_files" }
+func (t *SearchInFiles) Name() string                 { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
 func (t *SearchInFiles) Description() string {
 	return "Workspace-scoped regex content search. Prefer this over shelling out to grep/rg: " +
@@ -169,9 +168,10 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 
 	type fileMatch struct {
-		relPath string
-		lines   []string // formatted "LINE: content" entries
-		hits    int      // raw hit count, used for max_results truncation
+		relPath      string
+		lines        []string // formatted "LINE: content" entries
+		hits         int      // raw hit count, used for max_results truncation
+		skippedLines int
 	}
 
 	opts := walkOptions{
@@ -247,14 +247,17 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 			return nil
 		}
 
-		lines := splitLines(buf.Bytes())
+		lines, skippedLines := splitLines(buf.Bytes())
 		var hitLines []int
 		for i, line := range lines {
-			if re.Match(line) {
+			if re.Match(line.data) {
 				hitLines = append(hitLines, i)
 			}
 		}
 		if len(hitLines) == 0 {
+			if skippedLines > 0 {
+				return &fileMatch{relPath: p.rel, skippedLines: skippedLines}
+			}
 			return nil
 		}
 
@@ -274,10 +277,10 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 					prefix = "> " // mark the actual match line
 				}
 				formatted = append(formatted,
-					fmt.Sprintf("  %d:%s%s", i+1, prefix, strings.TrimRight(string(lines[i]), "\r")))
+					fmt.Sprintf("  %d:%s%s", lines[i].number, prefix, strings.TrimRight(string(lines[i].data), "\r")))
 			}
 		}
-		return &fileMatch{relPath: p.rel, lines: formatted, hits: len(hitLines)}
+		return &fileMatch{relPath: p.rel, lines: formatted, hits: len(hitLines), skippedLines: skippedLines}
 	}
 
 	wctx, cancel := context.WithCancel(ctx)
@@ -324,8 +327,13 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 
 	var results []*fileMatch
 	totalLines := 0
+	totalSkippedLines := 0
 	truncated := false
 	for r := range resultsCh {
+		totalSkippedLines += r.skippedLines
+		if r.hits == 0 {
+			continue
+		}
 		if truncated {
 			continue // drain remaining sends so workers can exit
 		}
@@ -370,6 +378,9 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	case truncated:
 		summary += fmt.Sprintf(" (truncated past %d hits — narrow with glob or a tighter pattern)", a.MaxResults)
 	}
+	if totalSkippedLines > 0 {
+		summary += fmt.Sprintf(" (%d oversized line(s) skipped)", totalSkippedLines)
+	}
 	sb.WriteString(summary)
 	return sb.String(), nil
 }
@@ -384,19 +395,38 @@ func allLower(s string) bool {
 	return true
 }
 
-// splitLines splits b into lines, preserving the newline character for each line.
-func splitLines(b []byte) [][]byte {
-	var lines [][]byte
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	// Raise the per-line cap from bufio's 64 KB default so generated/minified
-	// single-line files don't get silently chopped mid-scan.
-	sc.Buffer(make([]byte, 64*1024), searchMaxLineBytes)
-	for sc.Scan() {
-		cp := make([]byte, len(sc.Bytes()))
-		copy(cp, sc.Bytes())
-		lines = append(lines, cp)
+type searchLine struct {
+	number int
+	data   []byte
+}
+
+// splitLines splits b into searchable lines. Lines over searchMaxLineBytes are
+// skipped without aborting the rest of the file.
+func splitLines(b []byte) ([]searchLine, int) {
+	var lines []searchLine
+	skipped := 0
+	lineNo := 1
+	for len(b) > 0 {
+		next := bytes.IndexByte(b, '\n')
+		var line []byte
+		if next < 0 {
+			line = b
+			b = nil
+		} else {
+			line = b[:next]
+			b = b[next+1:]
+		}
+		if len(line) > searchMaxLineBytes {
+			skipped++
+			lineNo++
+			continue
+		}
+		cp := make([]byte, len(line))
+		copy(cp, line)
+		lines = append(lines, searchLine{number: lineNo, data: cp})
+		lineNo++
 	}
-	return lines
+	return lines, skipped
 }
 
 // doubleStarMatchFile matches a glob that may contain ** against a slash-separated path.
@@ -411,4 +441,3 @@ func doubleStarMatchFile(glob, path string) (bool, error) {
 	}
 	return doubleStarMatch(glob, path), nil
 }
-

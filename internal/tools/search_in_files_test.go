@@ -197,6 +197,31 @@ func TestSearchInFiles_MaxFileBytesSkipsLargeFiles(t *testing.T) {
 	}
 }
 
+func TestSearchInFiles_MatchAfterOversizedLine(t *testing.T) {
+	dir := t.TempDir()
+	long := strings.Repeat("x", searchMaxLineBytes+1)
+	content := long + "\nneedle after long line\n"
+	if err := os.WriteFile(filepath.Join(dir, "generated.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSearchInFiles()
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "needle",
+		"path":    dir,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "generated.txt") || !strings.Contains(out, "2:> needle after long line") {
+		t.Fatalf("expected match after oversized line with original line number:\n%s", out)
+	}
+	if !strings.Contains(out, "oversized line(s) skipped") {
+		t.Fatalf("expected oversized-line warning:\n%s", out)
+	}
+}
+
 // TestSearchInFiles_ManyFiles_ParallelCorrectness writes many matching files
 // and verifies the parallel scan returns every file's content and the output
 // is sorted by relative path.
