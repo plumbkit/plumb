@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,8 +14,8 @@ import (
 // echoTool echoes its "text" argument — minimal Tool for server tests.
 type echoTool struct{}
 
-func (e *echoTool) Name() string             { return "echo" }
-func (e *echoTool) Description() string      { return "echoes the text argument" }
+func (e *echoTool) Name() string        { return "echo" }
+func (e *echoTool) Description() string { return "echoes the text argument" }
 func (e *echoTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`)
 }
@@ -192,4 +193,52 @@ func TestServer_MultipleRequests(t *testing.T) {
 	if len(resps) != 3 {
 		t.Fatalf("want 3 responses, got %d", len(resps))
 	}
+}
+
+func TestServer_LargeRequestBelowLimit(t *testing.T) {
+	const testMaxMessageBytes = 4 << 20
+	req := paddedPingRequest(7, testMaxMessageBytes-1)
+	var out bytes.Buffer
+	if err := newServer().Serve(context.Background(), strings.NewReader(req+"\n"), &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	dec := json.NewDecoder(&out)
+	var resp map[string]any
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != nil {
+		t.Fatalf("unexpected error for below-limit request: %v", resp["error"])
+	}
+}
+
+func TestServer_OversizedRequestReturnsJSONRPCError(t *testing.T) {
+	const testMaxMessageBytes = 4 << 20
+	req := paddedPingRequest(99, testMaxMessageBytes+1024)
+	var out bytes.Buffer
+	if err := newServer().Serve(context.Background(), strings.NewReader(req+"\n"), &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	dec := json.NewDecoder(&out)
+	var resp map[string]any
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["id"].(float64) != 99 {
+		t.Fatalf("oversized response id = %v, want 99", resp["id"])
+	}
+	errObj, _ := resp["error"].(map[string]any)
+	if errObj == nil || !strings.Contains(errObj["message"].(string), "message exceeds") {
+		t.Fatalf("expected message-size error, got %#v", resp)
+	}
+}
+
+func paddedPingRequest(id, targetBytes int) string {
+	prefix := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"ping","params":{"padding":"`, id)
+	suffix := `"}}`
+	padLen := targetBytes - len(prefix) - len(suffix)
+	if padLen < 0 {
+		padLen = 0
+	}
+	return prefix + strings.Repeat("x", padLen) + suffix
 }

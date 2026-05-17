@@ -5,8 +5,10 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +19,8 @@ import (
 )
 
 const protocolVersion = "2024-11-05"
+
+const maxMessageBytes = 4 << 20 // 4 MiB per newline-delimited JSON-RPC message
 
 // JSON-RPC 2.0 standard error codes.
 const (
@@ -55,8 +59,8 @@ type mcpError struct {
 
 // ServerInfo identifies this server to the MCP client.
 type ServerInfo struct {
-	Name         string
-	Version      string
+	Name    string
+	Version string
 	// Instructions is included in the MCP initialize response. When non-empty
 	// it overrides DefaultInstructions; set to "-" to send no instructions.
 	Instructions string
@@ -140,8 +144,7 @@ func (s *Server) Register(t Tool) {
 // responses to w until r is exhausted or ctx is cancelled. Each request is
 // handled concurrently; Serve waits for all in-flight handlers before returning.
 func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20) // 1 MiB per line
+	reader := bufio.NewReader(r)
 
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
@@ -201,16 +204,29 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		}
 	}
 
-	// scanCh carries lines from the scanner goroutine. A nil payload signals EOF.
-	type scanLine struct{ data []byte }
+	// scanCh carries lines from the reader goroutine.
+	type scanLine struct {
+		data     []byte
+		err      error
+		tooLarge bool
+	}
 	scanCh := make(chan scanLine)
 	go func() {
 		defer close(scanCh)
-		for scanner.Scan() {
-			b := make([]byte, len(scanner.Bytes()))
-			copy(b, scanner.Bytes())
+		for {
+			b, tooLarge, err := readMessageLine(reader, maxMessageBytes)
+			if err != nil {
+				if errors.Is(err, io.EOF) && len(b) == 0 && !tooLarge {
+					return
+				}
+				select {
+				case scanCh <- scanLine{data: b, err: err, tooLarge: tooLarge}:
+				case <-ctx.Done():
+				}
+				return
+			}
 			select {
-			case scanCh <- scanLine{b}:
+			case scanCh <- scanLine{data: b, tooLarge: tooLarge}:
 			case <-ctx.Done():
 				return
 			}
@@ -228,9 +244,17 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		case line, ok := <-scanCh:
 			if !ok {
 				wg.Wait()
-				return scanner.Err()
+				return nil
 			}
 			data := line.data
+			if line.tooLarge {
+				write(errResp(extractID(data), codeInvalidRequest, fmt.Sprintf("message exceeds %d byte limit", maxMessageBytes)))
+				continue
+			}
+			if line.err != nil {
+				wg.Wait()
+				return line.err
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -475,6 +499,99 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+func readMessageLine(r *bufio.Reader, limit int) ([]byte, bool, error) {
+	var out []byte
+	for {
+		part, err := r.ReadSlice('\n')
+		if len(part) > 0 {
+			remaining := limit - len(out)
+			if remaining > 0 {
+				if len(part) > remaining {
+					out = append(out, part[:remaining]...)
+				} else {
+					out = append(out, part...)
+				}
+			}
+			if len(out) >= limit && (err == bufio.ErrBufferFull || len(part) > remaining) {
+				if err := discardMessageRest(r); err != nil && !errors.Is(err, io.EOF) {
+					return out, true, err
+				}
+				return out, true, nil
+			}
+		}
+		switch {
+		case err == nil:
+			return trimTrailingNewline(out), false, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			if len(out) > 0 {
+				return out, false, nil
+			}
+			return nil, false, io.EOF
+		default:
+			return out, false, err
+		}
+	}
+}
+
+func discardMessageRest(r *bufio.Reader) error {
+	for {
+		part, err := r.ReadSlice('\n')
+		if len(part) > 0 && part[len(part)-1] == '\n' {
+			return nil
+		}
+		if err == nil || errors.Is(err, io.EOF) {
+			return err
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return err
+		}
+	}
+}
+
+func trimTrailingNewline(b []byte) []byte {
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	if len(b) > 0 && b[len(b)-1] == '\r' {
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+func extractID(prefix []byte) any {
+	var req struct {
+		ID any `json:"id"`
+	}
+	if json.Unmarshal(prefix, &req) == nil {
+		return req.ID
+	}
+	const key = `"id"`
+	idx := bytes.Index(prefix, []byte(key))
+	if idx < 0 {
+		return nil
+	}
+	rest := prefix[idx+len(key):]
+	colon := bytes.IndexByte(rest, ':')
+	if colon < 0 {
+		return nil
+	}
+	rest = bytes.TrimSpace(rest[colon+1:])
+	end := len(rest)
+	for i, b := range rest {
+		if b == ',' || b == '}' || b == '\n' || b == '\r' {
+			end = i
+			break
+		}
+	}
+	var id any
+	if json.Unmarshal(bytes.TrimSpace(rest[:end]), &id) == nil {
+		return id
+	}
+	return nil
+}
 
 func okResp(id, result any) mcpResponse {
 	return mcpResponse{JSONRPC: "2.0", ID: id, Result: result}
