@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 (2026-05-17)
+
+### Changed
+- **Rate limiter keyed by client identity.** `RateLimiter` gains an optional `parent *RateLimiter` (set via `SetParent`). The daemon creates one shared `RateLimiter` per MCP client identity (`ClientName/ClientVersion`) in a daemon-scoped `sync.Map`. When `OnClientInfo` fires, the connection's per-connection limiter is linked to this shared budget as its parent. `Allow()` evaluates the local window first (early return without side-effects), then checks the parent without holding the local lock (prevents lock-ordering issues), then re-acquires and records the slot only if both pass. Per-connection limiters remain isolated for per-project config updates (`applyProjectConfig → SetLimit`); only the shared budget prevents cross-connection bypass.
+
 ## 0.6.0 (2026-05-17)
 
 ### Changed

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -13,12 +14,20 @@ import (
 // permissive (120/min) — it exists to protect against a runaway loop in
 // the agent, not to throttle normal use.
 //
-// Concurrency: Allow is safe for concurrent use.
+// A limiter may have an optional parent (set via SetParent). If a parent is
+// set, Allow checks the parent's shared budget BEFORE recording a local slot.
+// This enables daemon-scoped, per-client-identity budgets: each connection
+// keeps its own per-connection limiter (so per-project config changes remain
+// isolated), but shares a parent budget with all other connections from the
+// same MCP client, preventing limit bypass by opening multiple connections.
+//
+// Concurrency: all methods are safe for concurrent use.
 type RateLimiter struct {
 	mu     sync.Mutex
 	stamps []time.Time
 	limit  int
 	window time.Duration
+	parent atomic.Pointer[RateLimiter] // optional shared budget; nil means standalone
 }
 
 // NewRateLimiter creates a limiter that allows up to limit operations per
@@ -27,32 +36,82 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return &RateLimiter{limit: limit, window: window}
 }
 
+// SetParent attaches a shared parent budget to this limiter. Subsequent Allow
+// calls will check the parent before recording a local slot. Pass nil to
+// detach the parent and make this limiter standalone again.
+func (r *RateLimiter) SetParent(parent *RateLimiter) {
+	if r == nil {
+		return
+	}
+	if parent == nil {
+		r.parent.Store(nil)
+	} else {
+		r.parent.Store(parent)
+	}
+}
+
 // Allow reports whether one operation is permitted right now. If true, the
-// operation is recorded against the window. If false, the caller should
-// refuse the operation; nothing is recorded.
+// operation is recorded against both the local window and the parent budget
+// (when one is set). If false, the caller should refuse the operation;
+// nothing is recorded.
+//
+// Checking order: the local window is evaluated first (no side-effects until
+// both checks pass). The parent is then checked without holding the local
+// lock (to avoid a lock-chain between sibling limiters). The local lock is
+// re-acquired and the window is re-verified before recording the stamp.
 func (r *RateLimiter) Allow() bool {
 	if r == nil {
 		return true
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.limit <= 0 {
-		return true
+
+	// Evaluate the local window.
+	localOK := true
+	if r.limit > 0 {
+		now := time.Now()
+		cutoff := now.Add(-r.window)
+		i := 0
+		for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
+			i++
+		}
+		if i > 0 {
+			r.stamps = r.stamps[i:]
+		}
+		if len(r.stamps) >= r.limit {
+			localOK = false
+		}
 	}
-	now := time.Now()
-	cutoff := now.Add(-r.window)
-	// Evict timestamps older than the window.
-	i := 0
-	for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
-		i++
-	}
-	if i > 0 {
-		r.stamps = r.stamps[i:]
-	}
-	if len(r.stamps) >= r.limit {
+	if !localOK {
+		r.mu.Unlock()
 		return false
 	}
-	r.stamps = append(r.stamps, now)
+
+	// Check parent without holding our lock (prevents lock ordering issues).
+	p := r.parent.Load()
+	r.mu.Unlock()
+	if p != nil && !p.Allow() {
+		return false
+	}
+
+	// Re-acquire and re-verify the local window, then record the slot.
+	// The window may have advanced while we were checking the parent.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.limit > 0 {
+		now := time.Now()
+		cutoff := now.Add(-r.window)
+		i := 0
+		for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
+			i++
+		}
+		if i > 0 {
+			r.stamps = r.stamps[i:]
+		}
+		if len(r.stamps) >= r.limit {
+			return false
+		}
+		r.stamps = append(r.stamps, now)
+	}
 	return true
 }
 

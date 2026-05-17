@@ -131,6 +131,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	pool := newWorkspacePool(cfg)
 	defer pool.close()
 
+	// clientLimiters holds one RateLimiter per MCP client identity
+	// (ClientName+"/"+ClientVersion). Connections from the same client share
+	// this budget so opening multiple connections cannot multiply the allowed
+	// write rate.
+	var clientLimiters sync.Map // map[string]*tools.RateLimiter
+
 	var wg sync.WaitGroup
 	go func() {
 		<-ctx.Done()
@@ -157,14 +163,14 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, cfg, statsStore, daemonStartedAt)
+			handleConn(ctx, conn, pool, cfg, statsStore, daemonStartedAt, &clientLimiters)
 		})
 	}
 }
 
 // handleConn runs a complete MCP session over conn, attaching to a shared
 // gopls process from pool once the workspace root is determined.
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	defer conn.Close()
 
 	// Register the session immediately so it appears in `plumb sessions` and the
@@ -440,6 +446,19 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		slog.Info("daemon: client identified", "client", name, "version", version)
 		// Always update: sessID is registered immediately on connection.
 		session.SetClient(sessID, name, version)
+
+		// Attach the daemon-scoped client budget as the parent of this
+		// connection's per-connection limiter. All connections from the same
+		// client share one budget, preventing limit bypass by opening multiple
+		// MCP connections. The per-connection limiter remains independent so
+		// per-project config changes (applyProjectConfig → SetLimit) are
+		// isolated to this connection.
+		if clientLimiters != nil {
+			key := name + "/" + version
+			shared, _ := clientLimiters.LoadOrStore(key,
+				tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute))
+			writeLimiter.SetParent(shared.(*tools.RateLimiter))
+		}
 	}
 
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {

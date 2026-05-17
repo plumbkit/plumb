@@ -8,7 +8,7 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-Current version: **0.6.0** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.6.1** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -62,7 +62,7 @@ Claude Desktop / Claude Code / Codex / Gemini CLI
                     │     └── poolEntry{proxy, inv, cache} for /projects/bar
                     └── handleConn()  (per-connection MCP session)
                           ├── readTracker        (per-connection strict-mode state)
-                          ├── writeLimiter       (per-connection rate limit)
+                          ├── writeLimiter       (per-connection limit + shared client budget parent)
                           ├── editsCfg + strictFn (resolved per-project [edits])
                           └── sessionCache       (per-connection symbol cache)
 ```

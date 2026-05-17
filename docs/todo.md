@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.0** (2026-05-17).
+Last reviewed against: **0.6.1** (2026-05-17).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -305,18 +305,6 @@ User's verbatim request: *"Even without any supported language, it should have c
 ## Bugs & known limitations
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).
-
-### The rate limiter is per-connection, not per-agent
-
-`RateLimiter` is constructed once per `handleConn` in `daemon.go`. A single agent process making 1000 MCP connections in a minute can do 120 writes per connection — effectively unlimited.
-
-**Why it's not fixed:** the threat model is "runaway autonomous loop". A real autonomous loop runs within one MCP session and gets caught by the per-connection limit. The "open 1000 connections to bypass the limit" attack requires coordinating across connections, which a real agent doesn't naturally do.
-
-**When to fix:** if you see the limiter actually being abused, or if you start running plumb in a multi-tenant context where connection counts can be untrusted.
-
-**How to fix:** key the limiter by `ClientName + ClientVersion` (captured by `srv.OnClientInfo` in `daemon.go`) or by the MCP session's client-reported identity, not by Go's per-connection struct. Use a shared `sync.Map[string]*RateLimiter` at daemon scope.
-
----
 
 ### `expected_mtime` is voluntary; strict mode is opt-in
 
