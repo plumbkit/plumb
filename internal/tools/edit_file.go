@@ -256,7 +256,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			sb.WriteString(summary)
 		}
 		if t.deps.Diag != nil {
-			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags)
+			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.PostWriteDiagWindow)
 			sb.WriteString(formatPostWriteDiagnostics(fresh))
 		}
 		return sb.String(), nil

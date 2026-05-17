@@ -59,6 +59,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	configLevel := cfg.LogLevel // saved for "plumb log-level reset"
+	if err := setupLogging(configLevel, cfg.LogFormat); err != nil {
+		slog.Warn("daemon: invalid log config; keeping defaults", "err", err)
+	}
+
 	hasEnabled := false
 	for _, lspCfg := range cfg.LSP {
 		if lspCfg.Enabled {
@@ -94,6 +99,21 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		slog.Warn("daemon: could not write version file", "path", versionPath, "err", err)
 	}
 	defer os.Remove(versionPath)
+
+	ctrlPath := daemonCtrlSocketPath()
+	_ = os.Remove(ctrlPath)
+	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
+	if ctrlErr != nil {
+		slog.Warn("daemon: could not start control socket", "path", ctrlPath, "err", ctrlErr)
+	} else {
+		defer os.Remove(ctrlPath)
+		defer ctrlLn.Close()
+		go func() {
+			<-ctx.Done()
+			ctrlLn.Close()
+		}()
+		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat)
+	}
 
 	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid(), "log", daemonLogPath())
 
@@ -330,13 +350,18 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 				"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots)
 		}
 	}
+	diagWindow := time.Duration(cfg.Edits.PostWriteDiagnosticsMs) * time.Millisecond
+	if cfg.Edits.PostWriteDiagnosticsMs == 0 {
+		diagWindow = -1 // sentinel: disabled
+	}
 	writeDeps := tools.WriteDeps{
-		Client:  sessionProxy,
-		Cache:   sessionCache,
-		Diag:    sessionInv,
-		Limiter: writeLimiter,
-		Strict:  strictFn,
-		Reads:   readTracker,
+		Client:              sessionProxy,
+		Cache:               sessionCache,
+		Diag:                sessionInv,
+		Limiter:             writeLimiter,
+		Strict:              strictFn,
+		Reads:               readTracker,
+		PostWriteDiagWindow: diagWindow,
 	}
 	srv.Register(tools.NewWriteFile(writeDeps))
 	srv.Register(tools.NewEditFile(writeDeps))
@@ -464,6 +489,13 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 // daemonSocketPath returns the Unix socket path for the plumb daemon.
 func daemonSocketPath() string {
 	return filepath.Join(plumbRuntimeDir(), "plumb.sock")
+}
+
+// daemonCtrlSocketPath returns the Unix socket path for daemon admin commands
+// (log level changes). Separate from the MCP socket so it never appears in the
+// tool list and cannot be reached by MCP clients.
+func daemonCtrlSocketPath() string {
+	return filepath.Join(plumbRuntimeDir(), "plumb.ctrl.sock")
 }
 
 // daemonPIDPath returns the path where the daemon writes its PID.

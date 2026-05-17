@@ -13,16 +13,11 @@ import (
 	"github.com/golimpio/plumb/internal/tui"
 )
 
-var logLevelFlag string
-
 var rootCmd = &cobra.Command{
 	Use:           "plumb",
 	Short:         "MCP server exposing LSP capabilities to LLMs",
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-		return setupLogging(logLevelFlag)
-	},
 	RunE: func(_ *cobra.Command, _ []string) error {
 		tui.Version = Version
 		return tui.Run()
@@ -64,14 +59,22 @@ func init() {
 			fmt.Println()
 		}
 
-		// Print Flags
-		if cmd.HasAvailableLocalFlags() {
+		// Print local non-persistent flags under "Flags:"
+		if cmd.LocalNonPersistentFlags().HasAvailableFlags() {
 			fmt.Println(tui.ItemStyle.Render("Flags:"))
-			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.LocalFlags().FlagUsages(), "\n")))
+			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.LocalNonPersistentFlags().FlagUsages(), "\n")))
 			fmt.Println()
 		}
 
-		if cmd.HasAvailableInheritedFlags() {
+		// Print persistent flags under "Global Flags:". For the root command
+		// these are its own persistent flags; for subcommands they are inherited.
+		if !cmd.HasParent() {
+			if cmd.PersistentFlags().HasAvailableFlags() {
+				fmt.Println(tui.ItemStyle.Render("Global Flags:"))
+				fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.PersistentFlags().FlagUsages(), "\n")))
+				fmt.Println()
+			}
+		} else if cmd.HasAvailableInheritedFlags() {
 			fmt.Println(tui.ItemStyle.Render("Global Flags:"))
 			fmt.Println(tui.MutedStyle.Render(strings.TrimRight(cmd.InheritedFlags().FlagUsages(), "\n")))
 			fmt.Println()
@@ -83,8 +86,7 @@ func init() {
 		}
 	})
 
-	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "log level (debug, info, warn, error)")
-	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd)
+	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd, logLevelCmd)
 }
 
 func availableCommandNameWidth(cmd *cobra.Command) int {
@@ -127,12 +129,18 @@ func diagnosticSuggestions(err error) []string {
 	}
 }
 
-func setupLogging(level string) error {
+func setupLogging(level, format string) error {
 	var l slog.Level
 	if err := l.UnmarshalText([]byte(level)); err != nil {
 		return fmt.Errorf("invalid log level %q: %w", level, err)
 	}
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l})
+	opts := &slog.HandlerOptions{Level: l}
+	var h slog.Handler
+	if format == "json" {
+		h = slog.NewJSONHandler(os.Stderr, opts)
+	} else {
+		h = slog.NewTextHandler(os.Stderr, opts)
+	}
 	slog.SetDefault(slog.New(h))
 	return nil
 }

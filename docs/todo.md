@@ -29,9 +29,7 @@ If you have ~2 hours of work to invest, do these in this order:
 
 2. **Claude Desktop end-to-end test** (~30 min, no code) — connect real Claude Desktop to current binary, run the `orient` prompt, write a file via `edit_file`, check that diagnostics come back. See [Testing & verification > Claude Desktop end-to-end smoke test](#claude-desktop-end-to-end-smoke-test).
 
-3. **`find_replace` discoverability** (~15 min) — agents searching for "grep" or "content search" don't find `find_replace` because its description leads with "Search and replace". Adding "Grep-equivalent: find text across files with optional replacement." as the first sentence of its description would fix this. Low effort, high agent UX value.
-
-Total: ~1 hour. After items 1 and 2, plumb is *proven* (not just claimed) production-ready against both supported LSPs and the primary client.
+Total: ~45 min. After items 1 and 2, plumb is *proven* (not just claimed) production-ready against both supported LSPs and the primary client.
 
 ---
 
@@ -394,40 +392,6 @@ User's verbatim request: *"Even without any supported language, it should have c
 
 ---
 
-### Configurable post-write diagnostics window
-
-**Priority:** medium.
-**Effort:** 20 min.
-
-**Why this matters.** `postWriteDiagWindow = 300 * time.Millisecond` is a magic constant in `internal/tools/file_write_helpers.go`. The gopls integration smoke test passes in ~1.2 s, but the diagnostic itself arrives within ~300 ms; that's our budget. For:
-
-- Cold pyright on a large project: 1–3 s before republishing. Our window is too short; the agent doesn't see the error.
-- Fast warm gopls on small file: <50 ms. Our window is wastefully long; we sleep until the deadline instead of returning quickly.
-
-The right answer is configurable, with the existing four-layer precedence (default → global → project → env).
-
-**Definition of done.**
-
-1. `EditsConfig` gains `PostWriteDiagnosticsMs int \`toml:"post_write_diagnostics_ms"\``. Default 300.
-2. `validate` enforces `>= 0` (0 disables polling entirely).
-3. `WriteDeps` gains `PostWriteDiagWindow time.Duration` (zero value = 300 ms for back-compat).
-4. `awaitDiagnosticsRefresh` uses the passed-in duration, not the constant.
-5. Daemon wiring: `applyProjectConfig` updates the window on the live `WriteDeps`. Tools read from `deps.PostWriteDiagWindow`.
-6. AGENTS.md and README.md document the field.
-7. `plumb config show` displays the resolved value.
-
-**Where to start.**
-
-1. `internal/config/config.go`: add the field to `EditsConfig`, set default in `defaults`.
-2. `internal/tools/write_deps.go`: add `PostWriteDiagWindow time.Duration`.
-3. `internal/tools/file_write_helpers.go`: change `awaitDiagnosticsRefresh` signature to take a duration, fall back to 300ms if zero.
-4. Update `write_file.go` and `edit_file.go` to pass `t.deps.PostWriteDiagWindow`.
-5. `internal/cli/daemon.go`'s `applyProjectConfig`: when the config changes, the closure-captured `editsCfg` already updates. Either expose the window through `editsCfg` and have the tools read via a closure (cleaner) or set it on `writeDeps` once at startup and accept that runtime config changes don't propagate to the window (simpler, probably fine).
-
-**Watch out for:** the test for `awaitDiagnosticsRefresh` doesn't exist today. Worth adding one: stub `postWriteDiagSource`, call with a 50ms window and `time.Sleep(60ms)`, confirm the function returns. Then bump the window to 200ms and confirm it returns immediately when a diagnostic change fires.
-
----
-
 ### `search_in_files` exclude-glob patterns
 
 **Priority:** low-medium.
@@ -439,20 +403,6 @@ Agents investigating an issue in a directory with known irrelevant subtrees (e.g
 1. `search_in_files` gains an `exclude []string` parameter; each entry is passed to ripgrep as `--glob='!<pattern>'`.
 2. Schema and `docs/mcp-tools.md` updated.
 3. Tests: search with an exclude that suppresses a hit; without exclude the hit appears.
-
----
-
-### Daemon log format: structured JSON for TUI log viewer
-
-**Priority:** prerequisite for TUI: Live Log Viewer (see above); low until that work starts.
-**Effort:** 30 min.
-
-A logging ecosystem review confirmed `log/slog` is the right choice for plumb — no third-party framework (Zap, Zerolog, Logrus) is warranted. The one actionable change before the TUI log viewer can be built: the daemon's handler needs to switch from `slog.NewTextHandler` to `slog.NewJSONHandler` (or make the format config-driven) so the TUI can parse structured fields without regex.
-
-**Definition of done:**
-1. `config.toml` gains `log_format = "text" | "json"` (default `"text"` for back-compat).
-2. `internal/cli/root.go`'s `setupLogging` selects the handler based on the resolved config value.
-3. `plumb config show` displays the resolved `log_format` with provenance.
 
 ---
 
@@ -489,7 +439,7 @@ Proving things actually work end-to-end. The unit suite is green; what's missing
 **Likely failure modes (so you know what to watch for):**
 
 - **Step 3 failing** means Claude Desktop's `roots/list` support is broken or absent for your install. In that case `session_start` falls through to the cwd-walk fallback, which probably won't find anything because Desktop launches the daemon from `$HOME`. The fix is in `internal/cli/daemon.go`'s `rootsFn` / `applyProjectConfig`.
-- **Step 7 failing** ("diagnostics after write" never appears) means gopls didn't republish within 300 ms. Either the `postWriteDiagWindow` constant in `internal/tools/file_write_helpers.go` is too short for your machine, or `didChangeWatchedFiles` isn't being consumed. The gopls integration smoke test rules out the latter; if it passes locally with `go test -tags=integration`, the issue is timing — see [Configurable post-write diagnostics window](#configurable-post-write-diagnostics-window) above.
+- **Step 7 failing** ("diagnostics after write" never appears) means gopls didn't republish within the configured window (default 300 ms, tunable via `[edits].post_write_diagnostics_ms` in config). Either the window is too short for your machine, or `didChangeWatchedFiles` isn't being consumed. The gopls integration smoke test rules out the latter; if it passes locally with `go test -tags=integration`, raise the window in `.plumb/config.toml`.
 
 ---
 
@@ -572,24 +522,6 @@ Proving things actually work end-to-end. The unit suite is green; what's missing
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).
 
-### `--log-level` flag does not propagate to the daemon or respect config
-
-**Priority:** medium.
-**Effort:** 30 min.
-
-The `--log-level` flag in the `plumb` CLI is misleading and effectively broken for debugging the daemon. It suffers from three main issues:
-
-1.  **Does not propagate to the daemon:** Most work happens in the background `daemon` process. When `plumb serve --log-level=debug` spawns the daemon (`startDaemonProcess()`), it explicitly drops the flag, so the daemon always starts at the default `info` level.
-2.  **Ignores TOML config:** The TOML configuration system (`internal/config/config.go`) includes a `LogLevel` field, but `setupLogging()` in `internal/cli/root.go` only binds to the CLI flag `logLevelFlag`.
-3.  **Appears as a Local Flag:** Because it's a `PersistentFlag` printed via a custom `SetHelpFunc`, it shows up under `Flags:` rather than `Global Flags:`.
-
-**Definition of done:**
-1.  `startDaemonProcess()` forwards the active log level: `exec.Command(exe, "daemon", "--log-level", logLevelFlag)`.
-2.  Daemon initialization falls back to `cfg.LogLevel` if the CLI flag wasn't explicitly overridden.
-3.  The custom help function in `internal/cli/root.go` is updated to group `--log-level` under `Global Flags:`.
-
----
-
 ### `pathLocks` is permanent process-global state
 
 Every path ever locked by any tool stays in the `sync.Map[string]*sync.Mutex` in `internal/tools/file_write_helpers.go` for the daemon's lifetime. For long-running daemons handling many sessions across many files, this can grow without bound. Not a leak in the GC sense (the mutexes are reachable), but a slow memory creep.
@@ -670,7 +602,7 @@ When gopls registers a watcher (e.g. `{"method": "workspace/didChangeWatchedFile
 
 **Why it's not configurable:** 100 ms is a reasonable default for SSD-backed filesystems where typical rename + stat latency is well under 10 ms. On slow filesystems (network mounts, FUSE) or under heavy load, both thresholds could be wrong in different directions.
 
-**Recommendation:** if you see flaky `concurrent write detected` errors in legitimate workflows, bump the constant. If you see silent corruption from concurrent writes that should have been retried, lower it. Pair this with the [Configurable post-write diagnostics window](#configurable-post-write-diagnostics-window) work — they share the same "exposed-as-config?" question.
+**Recommendation:** if you see flaky `concurrent write detected` errors in legitimate workflows, bump the constant. If you see silent corruption from concurrent writes that should have been retried, lower it. Both this constant and the post-write diagnostics window (`[edits].post_write_diagnostics_ms`) share the same "expose-as-config" concern.
 
 ---
 

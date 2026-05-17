@@ -74,22 +74,28 @@ func invalidateCache(c *cache.Cache, uri string) {
 	_ = c.InvalidateByPath(uri)
 }
 
-// postWriteDiagWindow is how long write/edit tools wait for the LSP server
-// to re-publish diagnostics for the URI they just wrote. Short enough that
-// fast servers (gopls on a small package) usually deliver within the window,
-// long enough that the agent doesn't have to round-trip again to find out
-// it broke the build. Empirically ~150-250ms for gopls on incremental edits.
-const postWriteDiagWindow = 300 * time.Millisecond
+// defaultPostWriteDiagWindow is the fallback window used when WriteDeps.PostWriteDiagWindow
+// is zero (i.e. not explicitly configured). Empirically ~150-250ms for gopls on incremental edits.
+const defaultPostWriteDiagWindow = 300 * time.Millisecond
 
-// awaitDiagnosticsRefresh waits up to postWriteDiagWindow for the diagnostics
-// for uri to change from the supplied baseline. Returns the post-write
-// diagnostics slice (which may equal the baseline if the server didn't
-// republish in time). nil-safe on the diagnosticsSource argument.
-func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, baseline []protocol.Diagnostic) []protocol.Diagnostic {
+// awaitDiagnosticsRefresh waits up to window for the diagnostics for uri to
+// change from the supplied baseline. Returns the post-write diagnostics slice
+// (which may equal the baseline if the server didn't republish in time).
+// nil-safe on the diag argument.
+//
+// window semantics: 0 → use defaultPostWriteDiagWindow (back-compat for
+// WriteDeps{}); negative → disabled, return baseline immediately.
+func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, baseline []protocol.Diagnostic, window time.Duration) []protocol.Diagnostic {
 	if diag == nil {
 		return nil
 	}
-	deadline := time.Now().Add(postWriteDiagWindow)
+	if window < 0 {
+		return baseline
+	}
+	if window == 0 {
+		window = defaultPostWriteDiagWindow
+	}
+	deadline := time.Now().Add(window)
 	for {
 		current := diag.Diagnostics(uri)
 		if !diagnosticsEqual(current, baseline) {

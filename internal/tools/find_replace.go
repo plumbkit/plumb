@@ -24,7 +24,7 @@ func NewFindReplace() *findReplaceTool { return &findReplaceTool{} }
 func (*findReplaceTool) Name() string { return "find_replace" }
 
 func (*findReplaceTool) Description() string {
-	return `Search and replace text across files in a directory tree.
+	return `Grep-equivalent: find text across files with optional replacement. Search and replace text across files in a directory tree.
 
 Defaults to dry_run=true so you can preview the diff before committing. Set dry_run=false to write changes.
 

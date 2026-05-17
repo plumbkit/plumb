@@ -86,28 +86,35 @@ type EditsConfig struct {
 	// edit_file, delete_file, rename_file, transaction_apply per-op) a
 	// session may issue per minute. 0 disables limiting. Defaults to 120.
 	RateLimitPerMinute int `toml:"rate_limit_per_minute"`
+	// PostWriteDiagnosticsMs is how long (in milliseconds) write/edit tools
+	// wait for the LSP server to re-publish diagnostics after a successful
+	// write. 0 disables the wait entirely. Defaults to 300.
+	PostWriteDiagnosticsMs int `toml:"post_write_diagnostics_ms"`
 }
 
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
-	LogLevel string               `toml:"log_level"`
-	LogFile  string               `toml:"log_file"`
-	Cache    CacheConfig          `toml:"cache"`
-	Edits    EditsConfig          `toml:"edits"`
-	Walk     WalkConfig           `toml:"walk"`
-	LSP      map[string]LSPConfig `toml:"lsp"`
+	LogLevel  string               `toml:"log_level"`
+	LogFormat string               `toml:"log_format"`
+	LogFile   string               `toml:"log_file"`
+	Cache     CacheConfig          `toml:"cache"`
+	Edits     EditsConfig          `toml:"edits"`
+	Walk      WalkConfig           `toml:"walk"`
+	LSP       map[string]LSPConfig `toml:"lsp"`
 }
 
 var defaults = Config{
-	LogLevel: "info",
+	LogLevel:  "info",
+	LogFormat: "text",
 	Cache: CacheConfig{
 		TTL:     Duration{5 * time.Minute},
 		MaxSize: 1000,
 	},
 	Edits: EditsConfig{
-		Strict:             false,
-		RateLimitPerMinute: 120,
+		Strict:                 false,
+		RateLimitPerMinute:     120,
+		PostWriteDiagnosticsMs: 300,
 	},
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,
@@ -196,6 +203,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PLUMB_REFUSE_HOME_ROOTS"); v != "" {
 		cfg.Walk.RefuseHomeRoots = v == "1" || v == "true" || v == "yes"
 	}
+	if v := os.Getenv("PLUMB_LOG_FORMAT"); v != "" {
+		cfg.LogFormat = v
+	}
+	if v := os.Getenv("PLUMB_POST_WRITE_DIAG_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.Edits.PostWriteDiagnosticsMs = n
+		}
+	}
 }
 
 // ProjectConfigPath returns the conventional location of a workspace's
@@ -244,11 +259,19 @@ func validate(cfg Config) error {
 	default:
 		return fmt.Errorf("log_level must be one of debug, info, warn, error; got %q", cfg.LogLevel)
 	}
+	switch cfg.LogFormat {
+	case "text", "json":
+	default:
+		return fmt.Errorf("log_format must be one of text, json; got %q", cfg.LogFormat)
+	}
 	if cfg.Cache.MaxSize < 0 {
 		return fmt.Errorf("cache.max_size must be non-negative")
 	}
 	if cfg.Edits.RateLimitPerMinute < 0 {
 		return fmt.Errorf("edits.rate_limit_per_minute must be non-negative (0 disables)")
+	}
+	if cfg.Edits.PostWriteDiagnosticsMs < 0 {
+		return fmt.Errorf("edits.post_write_diagnostics_ms must be non-negative (0 disables)")
 	}
 	for name, lsp := range cfg.LSP {
 		if lsp.Enabled && lsp.Command == "" {

@@ -140,8 +140,13 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
 
-	wWhen := 8 // "WHEN"
-	wTool := 4 // "TOOL"
+	const (
+		wSess   = 10 // 8 hex chars + 2 padding
+		wStatus = 8  // "Status" (6) padded to 8; ✓/✗ centred within
+		wMs     = 3  // duration digits min width
+	)
+	wWhen := 8 // "When"
+	wTool := 4 // "Tool"
 	for _, c := range recent {
 		if l := len(humanAge(c.CalledAt)); l > wWhen {
 			wWhen = l
@@ -154,15 +159,15 @@ func runStats(_ *cobra.Command, _ []string) error {
 	wWhen += 2
 	wTool += 2
 
-	// Print header
-	// 11 = "ms" (3 chars, %-3s) + 2 spaces padding + "Status" (6 chars)
-	headerWidth := wWhen + wTool + 11
+	// wMs + "  " + wStatus + "  " + wSess
+	headerWidth := wWhen + wTool + wMs + 2 + wStatus + 2 + wSess
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
-	fmt.Printf("%s%s%-3s  %s\n",
+	fmt.Printf("%s%s%s  %s  %s\n",
 		padRight(tui.HintStyle.Render("When"), wWhen),
 		padRight(tui.HintStyle.Render("Tool"), wTool),
-		tui.HintStyle.Render("ms"),
-		tui.HintStyle.Render("Status"),
+		padRight(tui.HintStyle.Render("ms"), wMs),
+		padRight(tui.HintStyle.Render("Status"), wStatus),
+		tui.HintStyle.Render("Session"),
 	)
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
 
@@ -181,27 +186,17 @@ func runStats(_ *cobra.Command, _ []string) error {
 		if !c.Success {
 			ok = tui.WarnStyle.Render("✗")
 		}
+		sess := shortSessionID(c.SessionID)
 
-		// %-3d (3 chars) + "  " (2 spaces) = 5.
-		// The ok character aligns perfectly with the 'S' in "Status".
-		rowStr := fmt.Sprintf("%s%s%-3d  %s",
-			padRight(humanAge(c.CalledAt), wWhen),
-			padRight(c.Tool, wTool),
-			c.DurationMs,
-			ok,
-		)
+		when   := padRight(humanAge(c.CalledAt), wWhen)
+		tool   := padRight(c.Tool, wTool)
+		ms     := padRight(fmt.Sprintf("%d", c.DurationMs), wMs)
+		status := centerStr(ok, wStatus)
 
 		if !c.Success {
-			// Print the entire row in WarnStyle, but preserve the spacing layout
-			// by removing the OK string and replacing it with the colored one later
-			rawRow := fmt.Sprintf("%s%s%-3d  ",
-				padRight(humanAge(c.CalledAt), wWhen),
-				padRight(c.Tool, wTool),
-				c.DurationMs,
-			)
-			fmt.Println(tui.WarnStyle.Render(rawRow) + ok)
+			fmt.Println(tui.WarnStyle.Render(when+tool+ms) + "  " + status + "  " + tui.MutedStyle.Render(sess))
 		} else {
-			fmt.Println(rowStr)
+			fmt.Println(when + tool + ms + "  " + status + "  " + tui.MutedStyle.Render(sess))
 		}
 
 		if !c.Success && c.ErrorMsg != "" {
@@ -231,13 +226,32 @@ func runStats(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// padRight pads a string with spaces up to a given visual width (ignoring ANSI codes).
+// shortSessionID returns the first 8 characters of a session ID for compact display.
+func shortSessionID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+// padRight pads a string with spaces on the right up to a given visual width (ignoring ANSI codes).
 func padRight(s string, width int) string {
 	vis := lipgloss.Width(s)
 	if vis >= width {
 		return s
 	}
 	return s + strings.Repeat(" ", width-vis)
+}
+
+// centerStr centres a string within the given visual width (ignoring ANSI codes).
+func centerStr(s string, width int) string {
+	vis := lipgloss.Width(s)
+	if vis >= width {
+		return s
+	}
+	left := (width - vis) / 2
+	right := width - vis - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }
 
 // humanAge formats a past time as a human-readable age string.

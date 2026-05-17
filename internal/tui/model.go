@@ -1165,6 +1165,9 @@ func (m *Model) rightLines(rw int) []string {
 			}
 		}
 	} else {
+		lines = append(lines, "")
+		lines = append(lines, "  "+HintStyle.Render("Recent Tools"))
+		lines = append(lines, "  "+MutedStyle.Render("No calls in this session yet."))
 		m.recentTableBodyRow = -1
 	}
 	return lines

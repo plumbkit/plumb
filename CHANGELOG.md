@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`[edits].post_write_diagnostics_ms` config field.** Controls how long `write_file` and `edit_file` wait for the LSP server to re-publish diagnostics after a successful write. Default 300 ms (matching the old hard-coded constant). Set to 0 to disable the wait; raise it for slow/cold language servers (e.g. pyright on first run). Configurable at all four layers (compiled default → global → project → env `PLUMB_POST_WRITE_DIAG_MS`). Visible in `plumb config show` under the `edits` section.
+- **`log_format` config field** (`"text"` | `"json"`, default `"text"`). Controls the daemon's structured log output format. Set to `"json"` to enable machine-parseable log lines for the future TUI log viewer or external log pipelines. Configurable via `PLUMB_LOG_FORMAT` env var. Visible in `plumb config show` under the `core` section.
+
+### Added (cont.)
+- **`plumb log-level <level>`** — new subcommand to change the running daemon's log level without restarting it. Accepted values: `debug`, `info`, `warn`, `error`, `reset`. `reset` restores the level from config (`log_level` in `config.toml` or `PLUMB_LOG_LEVEL` env var). The change is daemon-lifetime only — the daemon reverts on next restart. Implemented via a separate admin Unix socket (`plumb.ctrl.sock`) so it never appears in the MCP tool list and cannot be reached by MCP clients. Includes `plumb log-level reset` as a clean "undo debugging session" workflow.
+
+### Removed
+- **`--log-level` global flag removed.** The flag was broken by design: it only took effect when spawning a new daemon subprocess, had no effect on an already-running daemon, and was not propagated correctly. Use `plumb log-level <level>` to change the running daemon's log level at any time, or set `log_level` in `~/.config/plumb/config.toml` for a persistent default.
+
+### Changed
+- **`find_replace` description** now opens with "Grep-equivalent: find text across files with optional replacement." so agents searching for grep or content-search find the tool via semantic matching.
+
 ## 0.5.29 — 2026-05-16
 
 ### Added

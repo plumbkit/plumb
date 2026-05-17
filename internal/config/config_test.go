@@ -115,3 +115,65 @@ func TestLoadProject_InvalidRateLimitRejected(t *testing.T) {
 		t.Fatal("expected validation error for negative rate limit")
 	}
 }
+
+func TestDefaults_PostWriteDiagnosticsMs(t *testing.T) {
+	if defaults.Edits.PostWriteDiagnosticsMs != 300 {
+		t.Errorf("default PostWriteDiagnosticsMs = %d, want 300", defaults.Edits.PostWriteDiagnosticsMs)
+	}
+}
+
+func TestValidate_PostWriteDiagnosticsMs_NegativeRejected(t *testing.T) {
+	cfg := defaults
+	cfg.Edits.PostWriteDiagnosticsMs = -1
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for negative post_write_diagnostics_ms")
+	}
+}
+
+func TestValidate_PostWriteDiagnosticsMs_ZeroAllowed(t *testing.T) {
+	cfg := defaults
+	cfg.Edits.PostWriteDiagnosticsMs = 0
+	if err := validate(cfg); err != nil {
+		t.Fatalf("zero post_write_diagnostics_ms should be valid (disables polling): %v", err)
+	}
+}
+
+func TestApplyEnv_PostWriteDiagMs(t *testing.T) {
+	t.Setenv("PLUMB_POST_WRITE_DIAG_MS", "1500")
+	cfg := defaults
+	applyEnv(&cfg)
+	if cfg.Edits.PostWriteDiagnosticsMs != 1500 {
+		t.Errorf("PLUMB_POST_WRITE_DIAG_MS=1500 not applied, got %d", cfg.Edits.PostWriteDiagnosticsMs)
+	}
+}
+
+func TestDefaults_LogFormat(t *testing.T) {
+	if defaults.LogFormat != "text" {
+		t.Errorf("default LogFormat = %q, want \"text\"", defaults.LogFormat)
+	}
+}
+
+func TestValidate_LogFormat_InvalidRejected(t *testing.T) {
+	cfg := defaults
+	cfg.LogFormat = "yaml"
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for invalid log_format")
+	}
+}
+
+func TestValidate_LogFormat_JSONAllowed(t *testing.T) {
+	cfg := defaults
+	cfg.LogFormat = "json"
+	if err := validate(cfg); err != nil {
+		t.Fatalf("log_format=json should be valid: %v", err)
+	}
+}
+
+func TestApplyEnv_LogFormat(t *testing.T) {
+	t.Setenv("PLUMB_LOG_FORMAT", "json")
+	cfg := defaults
+	applyEnv(&cfg)
+	if cfg.LogFormat != "json" {
+		t.Errorf("PLUMB_LOG_FORMAT=json not applied, got %q", cfg.LogFormat)
+	}
+}

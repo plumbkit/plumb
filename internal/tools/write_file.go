@@ -129,7 +129,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	out := fmt.Sprintf("%s %s (%d bytes)", verb, path, len(a.Content))
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags)
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.PostWriteDiagWindow)
 		out += formatPostWriteDiagnostics(fresh)
 	}
 	return out, nil

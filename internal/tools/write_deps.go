@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"time"
+
 	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 )
@@ -38,4 +40,9 @@ type WriteDeps struct {
 	// edit_file consults in strict mode. nil disables per-session
 	// tracking (strict mode becomes a no-op for the requires-read check).
 	Reads *ReadTracker
+	// PostWriteDiagWindow is how long write/edit tools wait for the LSP
+	// server to re-publish diagnostics after a successful write. Zero means
+	// "use the 300 ms default" (back-compat for test setups that use
+	// WriteDeps{}). Negative means "disabled — skip the wait entirely".
+	PostWriteDiagWindow time.Duration
 }

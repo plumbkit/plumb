@@ -169,6 +169,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	addSection("core", [][]string{
 		{"log_level", projectCfg.LogLevel, sourceFor("log_level", defaultsCfg.LogLevel, globalCfg.LogLevel, projectCfg.LogLevel)},
+		{"log_format", projectCfg.LogFormat, sourceFor("log_format", defaultsCfg.LogFormat, globalCfg.LogFormat, projectCfg.LogFormat)},
 		{"log_file", logFileDisplay, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile)},
 	})
 
@@ -180,6 +181,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	addSection("edits", [][]string{
 		{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
 		{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
+		{"post_write_diagnostics_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteDiagnosticsMs), sourceFor("post_write_diagnostics_ms", defaultsCfg.Edits.PostWriteDiagnosticsMs, globalCfg.Edits.PostWriteDiagnosticsMs, projectCfg.Edits.PostWriteDiagnosticsMs)},
 	})
 
 	addSection("walk", [][]string{
@@ -289,6 +291,10 @@ func envVarForField(field string) string {
 		return "PLUMB_LOG_FILE"
 	case "refuse_home_roots":
 		return "PLUMB_REFUSE_HOME_ROOTS"
+	case "log_format":
+		return "PLUMB_LOG_FORMAT"
+	case "post_write_diagnostics_ms":
+		return "PLUMB_POST_WRITE_DIAG_MS"
 	}
 	return ""
 }
