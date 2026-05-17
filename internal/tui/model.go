@@ -1338,6 +1338,9 @@ func (m Model) leftLines() []string {
 		if s.Language != "" && s.Language != "none" {
 			firstLine += " " + sessionLangBadge(s.Language, selected, lf)
 		}
+		if s.Synthetic {
+			firstLine += " (auto)"
+		}
 		path := "resolving…"
 		if s.Folder != "" {
 			mf := m.leftWidth - len([]rune("    ╰─ "))

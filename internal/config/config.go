@@ -74,6 +74,22 @@ type WalkConfig struct {
 	RefuseHomeRoots bool `toml:"refuse_home_roots"`
 }
 
+// WorkspaceConfig controls how the daemon identifies the workspace root for
+// sessions that don't match any recognised project marker.
+type WorkspaceConfig struct {
+	// AutoAttach enables the synthetic-root fallback. When true and a tool
+	// call's seed path does not match any .plumb/, go.mod, or other project
+	// marker, the daemon walks up to the nearest .git/ directory (or uses the
+	// seed directory itself) as the workspace root. Stats, project config, and
+	// TUI attribution all work normally; LSP is unavailable. Default false.
+	AutoAttach bool `toml:"auto_attach"`
+	// AutoAttachPersist, when true, causes the daemon to create a .plumb/
+	// directory at the synthetic root on first attach. On subsequent sessions
+	// the directory resolves via the standard marker path and auto-attach is
+	// no longer needed. Implies AutoAttach. Default false.
+	AutoAttachPersist bool `toml:"auto_attach_persist"`
+}
+
 // EditsConfig controls safety behaviour for write/edit tools. Both fields
 // can be set globally (~/.config/plumb/config.toml) and overridden per
 // project (<workspace>/.plumb/config.toml). Environment variables
@@ -113,6 +129,7 @@ type Config struct {
 	Cache     CacheConfig          `toml:"cache"`
 	Edits     EditsConfig          `toml:"edits"`
 	Walk      WalkConfig           `toml:"walk"`
+	Workspace WorkspaceConfig      `toml:"workspace"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
 }
 
@@ -302,6 +319,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("PLUMB_SHOW_WRITE_DIFF"); v != "" {
 		cfg.Edits.ShowWriteDiff = !(v == "0" || v == "false" || v == "no")
+	}
+	if v := os.Getenv("PLUMB_AUTO_ATTACH"); v != "" {
+		cfg.Workspace.AutoAttach = v == "1" || v == "true" || v == "yes"
+	}
+	if v := os.Getenv("PLUMB_AUTO_ATTACH_PERSIST"); v != "" {
+		cfg.Workspace.AutoAttachPersist = v == "1" || v == "true" || v == "yes"
 	}
 }
 

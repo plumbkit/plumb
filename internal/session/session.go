@@ -33,6 +33,10 @@ type Info struct {
 	StartedAt     time.Time `json:"started_at"`
 	ClientName    string    `json:"client_name,omitempty"`
 	ClientVersion string    `json:"client_version,omitempty"`
+	// Synthetic is true when the workspace root was inferred by the
+	// auto-attach fallback (git root or seed directory) rather than discovered
+	// via a standard project marker (.plumb/, go.mod, etc.).
+	Synthetic bool `json:"synthetic,omitempty"`
 }
 
 // Register writes a session file for this process.

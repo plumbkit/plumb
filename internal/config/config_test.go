@@ -227,3 +227,56 @@ func TestApplyEnv_LogFormat(t *testing.T) {
 		t.Errorf("PLUMB_LOG_FORMAT=json not applied, got %q", cfg.LogFormat)
 	}
 }
+
+func TestDefaults_WorkspaceAutoAttachDisabled(t *testing.T) {
+	if defaults.Workspace.AutoAttach {
+		t.Error("default Workspace.AutoAttach should be false — opt-in only")
+	}
+	if defaults.Workspace.AutoAttachPersist {
+		t.Error("default Workspace.AutoAttachPersist should be false — opt-in only")
+	}
+}
+
+func TestApplyEnv_AutoAttach(t *testing.T) {
+	for _, val := range []string{"1", "true", "yes"} {
+		t.Run(val, func(t *testing.T) {
+			t.Setenv("PLUMB_AUTO_ATTACH", val)
+			cfg := defaults
+			applyEnv(&cfg)
+			if !cfg.Workspace.AutoAttach {
+				t.Errorf("PLUMB_AUTO_ATTACH=%s should enable AutoAttach", val)
+			}
+		})
+	}
+}
+
+func TestApplyEnv_AutoAttachPersist(t *testing.T) {
+	t.Setenv("PLUMB_AUTO_ATTACH_PERSIST", "1")
+	cfg := defaults
+	applyEnv(&cfg)
+	if !cfg.Workspace.AutoAttachPersist {
+		t.Error("PLUMB_AUTO_ATTACH_PERSIST=1 should enable AutoAttachPersist")
+	}
+}
+
+func TestLoadProject_OverridesWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[workspace]\nauto_attach = true\nauto_attach_persist = true\n"
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if !got.Workspace.AutoAttach {
+		t.Error("project config should have set Workspace.AutoAttach to true")
+	}
+	if !got.Workspace.AutoAttachPersist {
+		t.Error("project config should have set Workspace.AutoAttachPersist to true")
+	}
+}

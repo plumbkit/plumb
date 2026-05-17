@@ -159,6 +159,46 @@ func TestDetect_NothingFound(t *testing.T) {
 	}
 }
 
+func TestSynthesiseRoot_GitDirAtSeed(t *testing.T) {
+	dir := freshTempDir(t)
+	mustMkdir(t, filepath.Join(dir, ".git"))
+
+	pool := detectTestPool()
+	got := pool.SynthesiseRoot(dir)
+	if got != dir {
+		t.Errorf("SynthesiseRoot: got %s, want %s", got, dir)
+	}
+}
+
+func TestSynthesiseRoot_GitDirInAncestor(t *testing.T) {
+	root := freshTempDir(t)
+	mustMkdir(t, filepath.Join(root, ".git"))
+	sub := filepath.Join(root, "pkg", "foo")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+	got := pool.SynthesiseRoot(sub)
+	if got != root {
+		t.Errorf("SynthesiseRoot: got %s, want %s", got, root)
+	}
+}
+
+// TestSynthesiseRoot_NoGitFallsBackToSeed verifies the fallback: when no .git/
+// exists anywhere up the tree, the seed directory itself is returned.
+func TestSynthesiseRoot_NoGitFallsBackToSeed(t *testing.T) {
+	// Build a subtree under os.MkdirTemp to stay away from any .git above.
+	base := freshTempDir(t)
+	sub := filepath.Join(base, "a", "b")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+	got := pool.SynthesiseRoot(sub)
+	// The seed is sub; no .git anywhere above it in the temp tree.
+	if got != sub {
+		t.Errorf("SynthesiseRoot: got %s, want %s (seed fallback)", got, sub)
+	}
+}
+
 // mustWrite writes data to path, creating parent dirs as needed.
 func mustWrite(t *testing.T, path, data string) {
 	t.Helper()

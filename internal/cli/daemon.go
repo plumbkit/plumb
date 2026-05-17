@@ -509,6 +509,33 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		applyProjectConfig(wsFn())
 	}
 
+	// attachSynthetic records a synthetic workspace root for sessions where
+	// Detect failed (no project marker found). The session is fully attributed
+	// — Folder, Language=none, Synthetic=true — so stats and TUI work normally;
+	// only LSP tools are unavailable. If AutoAttachPersist is true the caller
+	// is responsible for materialising the .plumb/ directory.
+	attachSynthetic := func(_ context.Context, root string) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		if acquiredRoot != "" {
+			return
+		}
+		acquiredRoot = root
+		go txlog.Scan(root)
+		cn, cv := clientName, clientVersion
+		session.Patch(sessID, func(info *session.Info) {
+			info.Folder = root
+			info.Language = LanguageNone
+			info.Adapter = ""
+			info.Synthetic = true
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		slog.Info("daemon: session auto-attached (synthetic)", "root", root)
+	}
+
 	srv.OnBeforeTool = func(toolCtx context.Context, _ string, args json.RawMessage) {
 		stateMu.Lock()
 		hasPrimary := acquiredRoot != ""
@@ -529,7 +556,23 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		}
 		root, _, err := pool.Detect(startDir)
 		if err != nil {
-			slog.Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
+			if !cfg.Workspace.AutoAttach {
+				slog.Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
+				return
+			}
+			synthRoot := pool.SynthesiseRoot(startDir)
+			attachSynthetic(toolCtx, synthRoot)
+			if cfg.Workspace.AutoAttachPersist {
+				go func() {
+					plumbDir := filepath.Join(synthRoot, ".plumb")
+					if mkErr := os.MkdirAll(plumbDir, 0o755); mkErr != nil {
+						slog.Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
+						return
+					}
+					slog.Info("daemon: materialised .plumb/ at synthetic root", "root", synthRoot)
+				}()
+			}
+			applyProjectConfig(wsFn())
 			return
 		}
 		attachWorkspace(toolCtx, "file://"+root)

@@ -120,6 +120,29 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 	}
 }
 
+// SynthesiseRoot returns a synthetic workspace root for seedDir, used as a
+// last resort when Detect has already failed. It walks up from seedDir
+// looking for a .git directory (the conventional project-root signal for
+// unrecognised languages). If found, that directory is returned. If the
+// filesystem root is reached without finding .git, seedDir itself is
+// returned as the safest approximation.
+//
+// SynthesiseRoot must only be called on the Detect error path in
+// OnBeforeTool — never inside route() or LSP-routing paths.
+func (p *workspacePool) SynthesiseRoot(seedDir string) string {
+	d := seedDir
+	for {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return seedDir // reached filesystem root — use the seed itself
+		}
+		d = parent
+	}
+}
+
 // detectLanguageAt returns the language for dir based on which root marker
 // is present at dir or any ancestor. Used after a .plumb/ marker is found
 // to determine which adapter to start.

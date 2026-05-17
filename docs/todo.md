@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.3** (2026-05-18).
+Last reviewed against: **0.6.4** (2026-05-18).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -36,6 +36,7 @@ Deep design changes, contract changes, and new infrastructure. These are the ite
 **Priority:** ⭐ top architectural priority. Discuss before implementing.
 **Effort:** Significant (multi-day, possibly multi-week). Phased delivery makes sense.
 **Status:** Idea captured. Not started.
+**Discussion:** See [Real-time Code-quality Feedback for Agents](ideas.md#real-time-code-quality-feedback-for-agents) for the product shape, tradeoffs, and open questions.
 
 **The pitch — what makes plumb genuinely different.**
 
@@ -163,107 +164,6 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 ## Improvements
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
-
-### Project-root identification fails when no language marker is present (auto-attach fallback)
-
-**Priority:** high. User-visible breakage today.
-**Effort:** ~3–4 hours including tests and config plumbing.
-**Status:** Diagnosed. Design discussion pending — see "Decision points" below.
-
-**The core problem.** Plumb identifies a workspace's *project root* by walking up from a tool call's seed path looking for one of a small fixed set of marker files: `.plumb/`, `go.mod`, `pyproject.toml`, `setup.py`. If none of those exist anywhere up the tree, plumb cannot identify the root — and without a root, the session has no workspace, no stats DB, no project config, no TUI presence. This is the wall that PowerShell, JavaScript/TypeScript, Rust, Java, shell-script, and any other-language project hits the first time it's opened in Claude Desktop without someone having run `plumb init` ahead of time.
-
-The fix below is one possible solution (an auto-attach fallback that synthesises a root from the seed path or nearest git repo); other approaches are possible — see "Decision points." The point of this entry is that **root identification is a known gap, not a bug in any single tool.**
-
-**The symptom.** A Claude Desktop session that drives plumb against a directory with no `go.mod`, no `pyproject.toml`, no `setup.py`, and no `.plumb/` marker stays unattached for its entire lifetime. The session file is registered with `folder=""`, `language=""`, `adapter=""`. Consequences:
-
-- **TUI** shows the session as `⟳ resolving…` forever; no Recent Edits, no Tool Statistics, no useful right-panel data.
-- **Stats are silently dropped.** `OnAfterTool` in `internal/cli/daemon.go` short-circuits when `root == ""`, so no global stats row is written and no history accumulates for that project.
-- **Per-project config never loads.** Global config applies, project-local overrides under `<workspace>/.plumb/config.toml` are unreachable because there is no workspace.
-- **LSP notifications fail harmlessly** ("LSP server not yet ready") on every write — logged as WARN noise.
-
-**Concrete repro (2026-05-15 incident).** Claude Desktop session attached to PowerShell project at `/Users/golimpio/Projects/engine/devtool/devtool-intune/windows/live-response/`. Hours of `write_file` / `transaction_apply` calls, all succeed at the filesystem level. `pool.Detect` walks up to `/` without finding any marker, returns error, `acquiredRoot` stays empty. User sees no session in TUI, no stats, no project config — even though plumb is clearly being used.
-
-**Today's behaviour, traced.**
-
-1. `OnInit` → `roots/list` returns "Method not found" (Claude Desktop limitation).
-2. `OnBeforeTool` fires on each tool call → extracts seed path → calls `pool.Detect(filepath.Dir(seedPath))`.
-3. `pool.Detect` walks up looking for `.plumb/`, `go.mod`, `pyproject.toml`, or `setup.py`. None found → returns `("", "", err)`.
-4. `OnBeforeTool` logs `daemon: cannot determine workspace root` and returns. `attachWorkspace` is never called.
-5. `acquiredRoot` stays "" forever. The session is a ghost.
-
-User's verbatim request: *"Even without any supported language, it should have created a .plumb file, since the MCP is working in there via Claude Desktop."*
-
-**The fix in one line.** When `pool.Detect` fails inside `OnBeforeTool` (and only there — never inside `route` or LSP-routing paths), fall back to a synthetic workspace root derived from the seed path, and treat the session as attached for everything except LSP. Optionally write `.plumb/` on attach so subsequent sessions resolve via the existing marker path.
-
-**Decision points (need user input before implementing).**
-
-1. **Which directory becomes the synthetic root?** Three plausible strategies, ordered safest → most useful:
-
-   a. **Seed file's parent dir.** Cheapest. Workspace shifts every time you touch a file in a different subdir of the same project. Likely annoying for a real project (would attach 5 sibling workspaces while editing 5 files).
-
-   b. **Walk up to nearest git repo root** (`.git/` marker). Falls back to (a) if no `.git/` found going up. Matches "this project" semantics for most users. Implementation: add `.git` to the marker list in `Detect`, but only as a *last-resort tier* — primary tiers stay as-is so existing behaviour is preserved when a real marker exists. Returns the git root with `language = LanguageNone`.
-
-   c. **Session-cumulative common ancestor.** Track every distinct seed parent seen in this session; the workspace is the longest common path prefix. Best UX but stateful (each new file might shift the workspace upward). Requires careful invalidation if a path lands far outside the current ancestor.
-
-   **Recommendation:** (b) with fallback to (a). (b) is the directory the user mentally calls "this project"; (a) is the safety net when there's no git either. (c) is over-engineered for the v1.
-
-2. **Opt-in or default-on?** Plumb is in production. New behaviour that silently changes where stats are written could surprise existing users. Two options:
-
-   a. **Opt-in via `[workspace] auto_attach = true`** in global/project config. Defaults to `false`. Existing users see zero change unless they enable it. Ship for one or two releases of soak, then flip default to `true`.
-
-   b. **Default-on, opt-out via `auto_attach = false`.** Faster wins for new users but riskier for existing fleets.
-
-   **Recommendation:** (a). The user who reported this can enable it on day one. Default flip is a separate release decision.
-
-3. **Should the `.plumb/` directory be auto-created on disk?** The user's wording ("it should have created a .plumb file") suggests they want this. Two sub-options:
-
-   a. **Yes — create `.plumb/` at the synthetic root the first time the session attaches.** Persistent: next session resolves via the standard marker path with no fallback needed. Side effect: a `.plumb/` directory shows up in the user's project tree (visible to git, possibly creating a diff against committed state).
-
-   b. **No — keep the synthetic root in-memory only.** Stats still write to the global stats DB with the synthetic absolute root in the `workspace` column. No on-disk pollution of the user's project. Cost: synthetic resolution must repeat every session.
-
-   **Recommendation:** (a) gated behind a second flag (`auto_attach_persist = true/false`). Default to in-memory-only for v1 (option b), let users explicitly opt into the persist behaviour. Re-evaluate the default in a later release.
-
-**Definition of done.**
-
-1. New section in resolved config: `[workspace]` with `auto_attach bool` (default `false`) and `auto_attach_persist bool` (default `false`). Reads from global, project, env (`PLUMB_AUTO_ATTACH`, `PLUMB_AUTO_ATTACH_PERSIST`).
-2. `pool.Detect` unchanged. New helper `pool.DetectOrSynthesise(seedDir, strategy)` returns `(root, language, synthetic bool, err)`. `synthetic=true` means the root was inferred, not found via marker.
-3. `OnBeforeTool` calls the new helper *only* when `Detect` failed AND `auto_attach` is true. On success, calls `attachWorkspace` with the synthetic root. `language` is `LanguageNone` for the synthetic path.
-4. `session.Info` gains `Synthetic bool` field, serialised to the session JSON. TUI displays `(auto)` suffix next to the folder name for synthetic sessions so the user can tell them apart from real ones.
-5. Stats store: always write synthetic workspace calls to the global stats DB, using the synthetic root as the row `workspace`. If `auto_attach_persist` is true, also create `<root>/.plumb/` at attach time so the next session resolves through the normal marker path.
-6. `plumb config show` displays both `auto_attach` and `auto_attach_persist` with provenance.
-7. CLAUDE.md documents the behaviour under "Workspace detection" — explicit about the precedence: `.plumb/` > language marker > (if `auto_attach`) git root > seed parent dir.
-8. CHANGELOG entry for the version that ships it.
-
-**Where to start.**
-
-1. `internal/config/config.go`: add `WorkspaceConfig` struct with `AutoAttach`, `AutoAttachPersist`. Wire defaults. Add env-var override path mirroring `EditsConfig`.
-2. `internal/cli/pool.go`: add `DetectOrSynthesise`. Use `.git/` walk as the synthetic-root marker (don't pollute the existing `Detect` marker list — keep the synthetic path opt-in).
-3. `internal/session/session.go`: add `Synthetic bool` to `Info`.
-4. `internal/cli/daemon.go`'s `OnBeforeTool`: add the conditional fallback. The simplest shape:
-   ```go
-   root, _, err := pool.Detect(startDir)
-   if err != nil && workspaceCfg.AutoAttach {
-       root, _, synthetic, err = pool.DetectOrSynthesise(startDir, strategy)
-   }
-   ```
-5. `internal/cli/stats_store.go`: ensure `statsStore.Record` writes the synthetic root into the global row `workspace` field.
-6. `internal/tui/model.go`: display `(auto)` suffix in the session list label when `info.Synthetic`.
-7. Tests:
-   - `pool_test.go`: `TestDetectOrSynthesise_*` for git-root fallback, seed-parent fallback, both-found-prefer-real.
-   - `daemon_test.go`: extend with `TestOnBeforeTool_AutoAttachOff` (silently skips), `TestOnBeforeTool_AutoAttachOn` (attaches synthetic).
-   - `stats_store_test.go`: orphan DB created at expected path; survives daemon restart.
-
-**Related code already fixed (don't duplicate).** Today's commit added `seedPathFromArgs` to `internal/cli/daemon.go` which now handles `operations[*].path` (`transaction_apply`) and `paths[*]` (`read_multiple_files`). Before that fix, `transaction_apply` and `read_multiple_files` couldn't even produce a seed for `OnBeforeTool` to work with — even with this auto-attach work in place, the workspace would never resolve for those tools. The seed-extraction fix is a prerequisite that's now done.
-
-**Relationship to `plumb init [--discover]` (already shipped).** `plumb init` is a *manual* CLI command (`internal/cli/init.go`): the user runs it in a terminal, it creates `.plumb/` and seeds `context.md`. It is **not** invoked automatically by the daemon when a tool call lands on an unattached directory. This auto-attach work is the missing automatic counterpart: same end-state on disk (if `auto_attach_persist = true`), but triggered from the daemon's tool-call hook instead of requiring the user to know about `plumb init` ahead of time. When implementing, consider factoring out `init.go`'s `os.MkdirAll(plumbDir) + write context.md template` into a reusable helper (e.g., `plumb.MaterialiseWorkspace(dir)`) that both `runInit` and the daemon's auto-attach path call into, so the on-disk shape stays identical.
-
-**Watch out for.**
-
-- **Don't auto-attach from `route()` in `routing_proxy.go`.** That path runs on every LSP-bound URI and would burn cycles on irrelevant paths. Synthetic attach must only happen on the *first* tool call after a session connects, via `OnBeforeTool`.
-- **The synthetic root can be wrong.** A user editing `/Users/me/scratch/quick-edit.txt` from a `$HOME`-rooted Claude Desktop would attach to `/Users/me/scratch/` (if no git) — sensible enough. But editing `/tmp/foo.txt` would attach to `/tmp/`. Document this and let the user override with explicit `plumb init`.
-- **macOS `$HOME` walks.** Many users will trigger auto-attach with `$HOME` or `~/Documents` as the de facto seed. The session attaches to whatever is up-tree from the first file touched, which could be a noisy parent dir. The git-repo-first strategy mitigates this for real projects.
-- **Persisting `.plumb/` writes to a user's git-tracked directory.** If the user has `auto_attach_persist = true` and edits a file inside their git repo, plumb will create `repo/.plumb/`, which will show as untracked in `git status` until they `.gitignore` it. CLAUDE.md should explicitly recommend adding `.plumb/` to global gitignore or per-project gitignore. The `plumb init` command should already do this; verify when implementing.
-- **Backwards compatibility.** Existing sessions that DO resolve a workspace via `.plumb/`/`go.mod`/etc. must behave identically. Auto-attach only kicks in on the `Detect` error path. Add a regression test: with marker present, `Synthetic` stays false; with marker absent and flag off, `acquiredRoot` stays "" as today.
 
 ---
 

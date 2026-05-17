@@ -196,6 +196,11 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"refuse_home_roots", fmt.Sprintf("%v", projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
 	})
 
+	addSection("workspace", [][]string{
+		{"auto_attach", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttach), sourceFor("auto_attach", defaultsCfg.Workspace.AutoAttach, globalCfg.Workspace.AutoAttach, projectCfg.Workspace.AutoAttach)},
+		{"auto_attach_persist", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttachPersist), sourceFor("auto_attach_persist", defaultsCfg.Workspace.AutoAttachPersist, globalCfg.Workspace.AutoAttachPersist, projectCfg.Workspace.AutoAttachPersist)},
+	})
+
 	// Collect and sort LSP adapters
 	var lspLangs []string
 	for lang := range projectCfg.LSP {
@@ -303,6 +308,10 @@ func envVarForField(field string) string {
 		return "PLUMB_LOG_FORMAT"
 	case "post_write_diagnostics_ms":
 		return "PLUMB_POST_WRITE_DIAG_MS"
+	case "auto_attach":
+		return "PLUMB_AUTO_ATTACH"
+	case "auto_attach_persist":
+		return "PLUMB_AUTO_ATTACH_PERSIST"
 	}
 	return ""
 }

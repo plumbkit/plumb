@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.4 (2026-05-18)
+
+### Added
+- **Auto-attach fallback for undetected workspaces.** When `pool.Detect` fails (no `.plumb/`, `go.mod`, `pyproject.toml`, or `setup.py` anywhere above the seed path) and `[workspace].auto_attach = true` is set, `OnBeforeTool` now calls `pool.SynthesiseRoot` to walk up to the nearest `.git/` directory and uses that as a synthetic workspace root — falling back to the seed directory itself when no `.git/` is found. The session is fully attributed: stats, project config, and TUI presence all work normally; only LSP tools are unavailable (language = `none`). The session JSON and TUI session list show a `Synthetic: true` flag / `(auto)` suffix so synthetic sessions are visually distinguishable from real ones. If `[workspace].auto_attach_persist = true`, the daemon also creates `<root>/.plumb/` on first attach so subsequent sessions resolve via the standard marker path without fallback. Both flags default to `false` (opt-in); existing sessions using real markers are unaffected. Configurable at all four layers; exposed in `plumb config show` under the new `workspace` section. Env vars: `PLUMB_AUTO_ATTACH`, `PLUMB_AUTO_ATTACH_PERSIST`.
+
 ## 0.6.3 (2026-05-18)
 
 ### Added

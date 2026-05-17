@@ -8,7 +8,7 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-Current version: **0.6.3** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.6.4** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -115,6 +115,19 @@ rate_limit_per_minute = 30     # 0 disables; default 120
 | `strict` | `PLUMB_STRICT_EDITS` | `true`/`1`/`yes` enables strict mode. Every `edit_file` target must have been read in this session AND the mtime must match. Closes the "edit without read" footgun. Per-session via `ReadTracker`. |
 | `rate_limit_per_minute` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. Protects against runaway-loop scenarios. |
 
+### `[workspace]` section — root detection fallback
+
+```toml
+[workspace]
+auto_attach = false         # opt-in synthetic root when no project marker exists
+auto_attach_persist = false # create .plumb/ at the synthetic root on first attach
+```
+
+| Field | Env var | Effect |
+|---|---|---|
+| `auto_attach` | `PLUMB_AUTO_ATTACH` | When `true`, `OnBeforeTool` falls back to `SynthesiseRoot` (nearest `.git/` or seed dir) if `Detect` fails. Stats and TUI work; LSP unavailable. |
+| `auto_attach_persist` | `PLUMB_AUTO_ATTACH_PERSIST` | When `true`, the daemon creates `<root>/.plumb/` on first attach so the next session resolves via the normal marker path. Implies `auto_attach`. |
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server for supported clients:
@@ -139,6 +152,8 @@ Setup helpers must preserve existing MCP servers, back up existing config before
 If neither is found, walk to the parent. Returning an error only happens after we walk past the filesystem root.
 
 `LanguageNone` (`"none"`) is the sentinel for case 1's second branch. The session is fully attached (Folder set, stats DB opened, project config loaded), the LSP-bearing routing proxies just have no primary. This was added in 0.5.26 to fix the "TUI stuck on resolving…" symptom in JS/TS and other non-Go/non-Python projects.
+
+**Auto-attach fallback (opt-in, 0.6.4+).** When `Detect` returns an error (no marker found) and `[workspace].auto_attach = true`, `OnBeforeTool` calls `pool.SynthesiseRoot(seedDir)` which walks up to the nearest `.git/` directory, falling back to the seed directory itself. The synthetic root is used for stats, TUI, and project config; LSP is unavailable (language `none`). The session JSON and TUI session list mark synthetic sessions with `Synthetic = true` / `(auto)` so they are visually distinguishable. If `[workspace].auto_attach_persist = true`, the daemon also creates `<root>/.plumb/` on first attach so subsequent sessions resolve normally. Both flags default to `false`; existing sessions with markers are unaffected. Env vars: `PLUMB_AUTO_ATTACH`, `PLUMB_AUTO_ATTACH_PERSIST`.
 
 When the daemon starts without a workspace (Claude Desktop launches the daemon from `$HOME`), `session_start` resolves it via this chain:
 
