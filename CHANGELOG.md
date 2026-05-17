@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3 (2026-05-18)
+
+### Added
+- **TUI Live Log Viewer (`Logs` section).** Switching to the `Logs` tab in the section menu (press `/` → select `Logs`) opens a full-width, live-tailing view of `daemon.log`. On first entry the tab reads the last 64 KiB of the log file; subsequent polls (every 2 s) append new lines. Entries are rendered with a timestamp, colour-coded level badge (`INFO` green, `WARN`/`ERROR` yellow, `DEBUG` muted), message, and sorted `key=val` attribute pairs for JSON log lines; plain-text lines are shown as-is. Navigation: `j`/`k` or `↑`/`↓` to scroll, `pgup`/`pgdown` for page scroll, `G` to re-engage follow mode (auto-scroll to newest entry). Typing any printable character appends to a substring filter (case-insensitive, matched against the raw line); `backspace` erases one character; `esc` clears the filter or opens the section menu when the filter is empty. The entry count and follow status are shown in the border and footer. Works with both `log_format = "text"` and `log_format = "json"` — JSON lines are parsed into structured fields; plain text is shown verbatim.
+
 ## 0.6.2 (2026-05-18)
 
 ### Added

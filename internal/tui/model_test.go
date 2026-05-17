@@ -193,7 +193,7 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 }
 
 func TestSectionSelectorKeyFlow(t *testing.T) {
-	m := NewModel()
+	m := NewModel("")
 
 	updated, _ := m.Update(keyPress("/"))
 	m = updated.(Model)
@@ -229,7 +229,7 @@ func TestSectionSelectorKeyFlow(t *testing.T) {
 }
 
 func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
-	m := NewModel()
+	m := NewModel("")
 
 	updated, cmd := m.Update(keyPress("h"))
 	m = updated.(Model)

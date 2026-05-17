@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,6 +47,7 @@ const (
 	focusToolStats                   // j/k moves the Tool Statistics cursor
 	focusStats                       // j/k moves the Recent calls cursor
 	focusDetails                     // j/k scrolls the right (Details) panel
+	focusLogs                        // j/k scrolls the log viewer
 )
 
 // Model is the root Bubble Tea model for the sessions dashboard.
@@ -90,6 +92,15 @@ type Model struct {
 
 	statsTableBodyRow  int
 	recentTableBodyRow int
+
+	// Log viewer state (Logs section, index 3).
+	logPath    string
+	logEntries []logEntry
+	logFilter  string
+	logScroll  int
+	logOffset  int64
+	logFollow  bool // true = auto-scroll to the newest entry
+	logInitd   bool // true = initLogTail has been called
 }
 
 type popupDetailCache struct {
@@ -100,8 +111,14 @@ type popupDetailCache struct {
 	loaded     bool
 }
 
-func NewModel() Model {
-	m := Model{leftWidth: defaultLeftWidth, currentSection: 1, sectionMenuCursor: 1}
+func NewModel(logPath string) Model {
+	m := Model{
+		leftWidth:         defaultLeftWidth,
+		currentSection:    1,
+		sectionMenuCursor: 1,
+		logPath:           logPath,
+		logFollow:         true,
+	}
 	m.refresh()
 	return m
 }
@@ -361,6 +378,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showPopup {
 			m.refreshPopupCalls()
 		}
+		if m.currentSection == 3 && m.logInitd {
+			newEntries, newOffset := readNewLogLines(m.logPath, m.logOffset)
+			if len(newEntries) > 0 {
+				m.logOffset = newOffset
+				m.logEntries = append(m.logEntries, newEntries...)
+				if len(m.logEntries) > maxLogEntries {
+					m.logEntries = m.logEntries[len(m.logEntries)-maxLogEntries:]
+				}
+			}
+		}
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
 
 	case tea.WindowSizeMsg:
@@ -481,6 +508,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Logs section intercepts keys when the menu/help overlay is not open.
+		if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
+			switch msg.String() {
+			case "ctrl+q", "ctrl+c":
+				return m, tea.Quit
+			case "esc":
+				if m.logFilter != "" {
+					m.logFilter = ""
+					m.logScroll = 0
+				} else {
+					m.sectionMenuOpen = true
+					m.sectionMenuCursor = m.currentSection
+				}
+			case "/":
+				m.sectionMenuOpen = true
+				m.sectionMenuCursor = m.currentSection
+			case "ctrl+h":
+				m.showHelp = true
+			case "up", "k":
+				if m.logScroll > 0 {
+					m.logScroll--
+					m.logFollow = false
+				}
+			case "down", "j":
+				m.logScroll++
+			case "pgup":
+				pageSize := m.height - 6
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				m.logScroll -= pageSize
+				if m.logScroll < 0 {
+					m.logScroll = 0
+				}
+				m.logFollow = false
+			case "pgdown":
+				pageSize := m.height - 6
+				if pageSize < 1 {
+					pageSize = 1
+				}
+				m.logScroll += pageSize
+			case "G":
+				m.logFollow = true
+			case "backspace":
+				if r := []rune(m.logFilter); len(r) > 0 {
+					m.logFilter = string(r[:len(r)-1])
+					m.logScroll = 0
+				}
+			default:
+				s := msg.String()
+				if len(s) == 1 && s[0] >= 32 && s[0] < 127 {
+					m.logFilter += s
+					m.logScroll = 0
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "/":
 			m.sectionMenuOpen = true
@@ -497,6 +582,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.sectionMenuOpen {
 				m.currentSection = m.sectionMenuCursor
 				m.sectionMenuOpen = false
+				if m.currentSection == 3 && !m.logInitd {
+					m.logEntries, m.logOffset = initLogTail(m.logPath)
+					m.logInitd = true
+				}
 				break
 			}
 			switch m.focusPanel {
@@ -733,6 +822,11 @@ func (m *Model) selectSessionAtBodyRow(row int) {
 }
 
 func (m Model) render() string {
+	// Logs section uses a dedicated full-width renderer.
+	if m.currentSection == 3 && !m.showPopup {
+		return m.renderLogsSection()
+	}
+
 	rightWidth := m.width - m.leftWidth - 3
 	if rightWidth < 10 {
 		rightWidth = 10
@@ -1830,9 +1924,247 @@ func spliceOverlayAt(bg, overlay string, sx, sy int) string {
 	return strings.Join(bgLines, "\n")
 }
 
-func Run() error {
+func Run(logPath string) error {
 	RebuildStyles()
-	p := tea.NewProgram(NewModel())
+	p := tea.NewProgram(NewModel(logPath))
 	_, err := p.Run()
 	return err
+}
+
+// filteredLogEntries returns log entries that match the current filter string
+// (case-insensitive substring match on the raw line). Returns all entries when
+// the filter is empty.
+func (m Model) filteredLogEntries() []logEntry {
+	if m.logFilter == "" {
+		return m.logEntries
+	}
+	lower := strings.ToLower(m.logFilter)
+	var out []logEntry
+	for _, e := range m.logEntries {
+		if strings.Contains(strings.ToLower(e.Raw), lower) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// renderLogEntry formats a single log entry for display within width visible
+// characters. Structured JSON entries are rendered with a timestamp, level
+// badge, message, and key=val attributes; plain-text entries are shown as-is.
+func (m Model) renderLogEntry(e logEntry, width int) string {
+	if e.Msg == "" {
+		// Plain text line — just show raw content.
+		return " " + MutedStyle.Render(truncate(e.Raw, width-1))
+	}
+
+	// Timestamp: "15:04:05" (8 chars) or blank.
+	ts := "        "
+	if !e.Time.IsZero() {
+		ts = e.Time.Format("15:04:05")
+	}
+
+	// Level badge padded to 5 chars.
+	const levelW = 5
+	lvlText := padRight(e.Level, levelW)
+	var lvlStyled string
+	switch strings.ToUpper(strings.TrimSpace(e.Level)) {
+	case "ERROR":
+		lvlStyled = WarnStyle.Render(lvlText)
+	case "WARN", "WARNING":
+		lvlStyled = WarnStyle.Render(lvlText)
+	case "DEBUG":
+		lvlStyled = MutedStyle.Render(lvlText)
+	default: // INFO and unknown
+		lvlStyled = OkStyle.Render(lvlText)
+	}
+
+	// Attrs: key=val pairs, sorted for deterministic output.
+	var attrParts []string
+	if len(e.Attrs) > 0 {
+		keys := make([]string, 0, len(e.Attrs))
+		for k := range e.Attrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			attrParts = append(attrParts, k+"="+e.Attrs[k])
+		}
+	}
+
+	prefix := " " + MutedStyle.Render(ts) + " " + lvlStyled + "  "
+	msg := DetailStyle.Render(e.Msg)
+	attrs := ""
+	if len(attrParts) > 0 {
+		attrs = "  " + MutedStyle.Render(strings.Join(attrParts, " "))
+	}
+
+	line := prefix + msg + attrs
+	// ANSI-aware truncation to keep within the cell boundary.
+	if lipgloss.Width(line) > width-1 {
+		line = ansi.Truncate(line, width-2, "…")
+	}
+	return line
+}
+
+// renderTopBorderLogs builds the top border for the Logs section. It embeds
+// the section title, an optional filter indicator, and an entry count.
+func (m Model) renderTopBorderLogs(dimmed bool) string {
+	sep := SepStyle
+	titleSt := PanelHeaderStyle
+	filterSt := DetailStyle
+	statsSt := MutedStyle
+	if dimmed {
+		sep = SepInactiveStyle
+		titleSt = PanelHeaderInactiveStyle
+		filterSt = InactiveStyle
+		statsSt = InactiveStyle
+	}
+
+	titleR := titleSt.Render(" Logs ")
+
+	filtered := m.filteredLogEntries()
+	statsR := statsSt.Render(fmt.Sprintf(" %d/%d lines ", len(filtered), len(m.logEntries)))
+
+	var filterR string
+	if m.logFilter != "" {
+		filterR = filterSt.Render(" Filter: " + m.logFilter + " ")
+	}
+
+	// ╭─ + title + mid + stats + ╮  must equal m.width total.
+	// mid = fillTotal dashes ± filterR.
+	fillTotal := m.width - 2 - lipgloss.Width(titleR) - lipgloss.Width(statsR) - 1
+	if fillTotal < 0 {
+		fillTotal = 0
+	}
+
+	var midPart string
+	if filterR != "" {
+		fW := lipgloss.Width(filterR)
+		if fW > fillTotal {
+			fW = fillTotal
+			filterR = ansi.Truncate(filterR, fW, "")
+		}
+		leftFill := (fillTotal - fW) / 2
+		rightFill := fillTotal - fW - leftFill
+		midPart = sep.Render(strings.Repeat("─", leftFill)) + filterR + sep.Render(strings.Repeat("─", rightFill))
+	} else {
+		midPart = sep.Render(strings.Repeat("─", fillTotal))
+	}
+
+	return sep.Render("╭─") + titleR + midPart + statsR + sep.Render("╮")
+}
+
+// logBodyScroll computes the clamped scroll offset for the log body given the
+// total number of filtered entries and the available body height.
+func (m Model) logBodyScroll(total, bodyHeight int) int {
+	maxScroll := total - bodyHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.logFollow {
+		return maxScroll
+	}
+	s := m.logScroll
+	if s > maxScroll {
+		return maxScroll
+	}
+	if s < 0 {
+		return 0
+	}
+	return s
+}
+
+// renderLogBodyLine renders one row of the log body, applying the isOverlay
+// dim treatment when an overlay panel is open.
+func (m Model) renderLogBodyLine(entry *logEntry, innerW int, isOverlay bool, rBar string) string {
+	var line string
+	if entry != nil {
+		line = m.renderLogEntry(*entry, innerW-1)
+	}
+	cell := lipgloss.NewStyle().Width(innerW - 1).Render(line)
+	if isOverlay {
+		return SepInactiveStyle.Render("│") + InactiveStyle.Render(ansi.Strip(cell)) + rBar
+	}
+	return SepStyle.Render("│") + cell + rBar
+}
+
+// renderLogsSection renders the full terminal content for the Logs section.
+// It reuses the standard top menu and logo header but replaces the two-panel
+// body with a full-width, scrollable log viewer.
+func (m Model) renderLogsSection() string {
+	bodyHeight := m.height - 6
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	innerW := m.width - 2 // visible content width inside │ borders
+
+	var sb strings.Builder
+	isOverlay := m.showHelp || m.sectionMenuOpen
+
+	sepStyle := SepStyle
+	statusStyle := StatusStyle
+	if isOverlay {
+		sepStyle = SepInactiveStyle
+		statusStyle = InactiveStyle
+	}
+
+	// Header: 3-line top menu + logo.
+	logoLines := strings.Split(LogoText, "\n")
+	logoW := lipgloss.Width(logoLines[0])
+	menu := m.renderTopMenu(m.width-logoW, isOverlay)
+	for i := range 3 {
+		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
+	}
+	sb.WriteString(m.renderTopBorderLogs(isOverlay) + "\n")
+
+	// Body: filtered log entries with scroll.
+	filtered := m.filteredLogEntries()
+	scroll := m.logBodyScroll(len(filtered), bodyHeight)
+	visible := filtered[scroll:]
+	scrollbar := scrollbarCol(len(filtered), bodyHeight, scroll)
+
+	for i := range bodyHeight {
+		rBar := SepStyle.Render("│")
+		if scrollbar != nil && i < len(scrollbar) {
+			rBar = scrollbar[i]
+		}
+		var entry *logEntry
+		if i < len(visible) {
+			e := visible[i]
+			entry = &e
+		}
+		sb.WriteString(m.renderLogBodyLine(entry, innerW, isOverlay, rBar) + "\n")
+	}
+
+	// Bottom border and footer.
+	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
+	sb.WriteString(statusStyle.Render(m.logFooter(filtered)))
+
+	final := sb.String()
+	if m.showHelp {
+		final = m.renderHelp(final)
+	}
+	if m.sectionMenuOpen {
+		final = m.renderSectionMenuOverlay(final)
+	}
+	return final
+}
+
+// logFooter builds the status-bar text for the Logs section.
+func (m Model) logFooter(filtered []logEntry) string {
+	followStatus := MutedStyle.Render("G follow")
+	if m.logFollow {
+		followStatus = OkStyle.Render("G follow")
+	}
+	noMatchHint := ""
+	if m.logFilter != "" && len(filtered) == 0 {
+		noMatchHint = WarnStyle.Render("  no matches")
+	}
+	leftFooter := fmt.Sprintf(" j/k scroll · %s%s", followStatus, noMatchHint)
+	rightFooter := " type to filter · backspace erase · / sections · ctrl+q quit "
+	gap := m.width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooter)
+	if gap < 1 {
+		gap = 1
+	}
+	return leftFooter + strings.Repeat(" ", gap) + rightFooter
 }

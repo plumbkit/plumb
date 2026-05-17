@@ -8,7 +8,7 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-Current version: **0.6.2** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.6.3** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -256,11 +256,13 @@ Pyright is the worked example.
 ## TUI conventions (Bubble Tea v2)
 
 - Import paths: `charm.land/bubbletea/v2`, `charm.land/lipgloss/v2`, `charm.land/bubbles/v2`.
-- `Model` is exported; `NewModel` is the constructor.
+- `Model` is exported; `NewModel(logPath string)` is the constructor; `Run(logPath string)` is the entry point.
 - `View()` returns `tea.View`. Use `tea.NewView(content)` and set `v.AltScreen = true`.
 - Key handling: `tea.KeyPressMsg`, match via `msg.String()`.
-- Right panel has three sections: **Tool Statistics** (top-5), **Recent Edits** (write-tool calls), **Recent** (all calls, j/k navigable).
-- Sub-views are separate types with `SetSize(w, h int)` and their own `View() string` methods.
+- Section menu opened with `/`; sections are `Dashboard`, `Sessions`, `Memory`, `Logs`, `Settings` (indices 0–4).
+- Sessions section (index 1, default): two-panel layout — **Sessions** list (left) and **Details** / **Tool Statistics** / **Recent Tools** (right).
+- Logs section (index 3): full-width live log viewer (`internal/tui/log_view.go`). Tails `daemon.log` from `daemonLogPath()` (passed by CLI at startup). Filters by substring (`logFilter`); follows newest entry when `logFollow = true` (default). Press `G` to re-engage follow, `esc` to clear filter, type to filter.
+- `panelFocus` constants: `focusSessions`, `focusToolStats`, `focusStats`, `focusDetails`, `focusLogs` — only the first four are used in the Sessions section; `focusLogs` is reserved for future use within the Logs section.
 - Overlays: dim the background with `dimLines()`, splice the box via `spliceOverlay()`.
 
 ## Code style rules

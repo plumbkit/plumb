@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.2** (2026-05-18).
+Last reviewed against: **0.6.3** (2026-05-18).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -159,27 +159,6 @@ Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspac
 ### Features
 
 Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.
-
-### TUI: Live Log Viewer with Real-time Filtering
-
-**Priority:** low (nice to have)
-**Effort:** 3–5 hours
-
-**Why this matters.** Currently, debugging Plumb or an agent's interactions requires tailing `daemon.log` in a separate terminal. Bringing a live, filterable log view into the TUI (via a new tab) creates a unified developer experience. 
-
-**Architectural Note: Zap vs. Zerolog vs. slog**
-When implementing this, you might consider migrating to a third-party JSON logging framework like Uber's **Zap** or **Zerolog**.
-*   **Zerolog** is excellent for fluent, JSON-only pipelines and would make parsing easy.
-*   **Zap** is the industry standard for raw speed in high-throughput servers.
-*   **Recommendation: Use neither.** Introducing either framework violates Plumb's current lightweight, dependency-minimal architecture. More importantly, Go's standard library `log/slog` already supports high-performance JSON output natively via `slog.NewJSONHandler`. Sticking with `slog` keeps the binary small and avoids a massive refactoring of existing log calls, while fully enabling the TUI to parse structured JSON.
-
-**Definition of done:**
-1. The daemon's log output format is updated to write structured JSON (`slog.NewJSONHandler`) to `daemon.log` instead of plain text, so the TUI can easily parse the fields. (Alternatively, make the format configurable in `config.toml`).
-2. A new Bubble Tea tab is added to the TUI (e.g., `focusLogs`).
-3. The TUI model tails `daemon.log` asynchronously and unmarshals incoming JSON lines.
-4. A text input field allows real-time fuzzy filtering of logs (e.g., by log level, tool name, or error text).
-
----
 
 ## Improvements
 
