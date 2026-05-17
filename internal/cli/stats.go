@@ -146,12 +146,13 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
 
 	const (
-		wSess   = 10 // 8 hex chars + 2 padding
+		wSessID = 10 // 8 hex chars + 2 padding
 		wStatus = 8  // "Status" (6) padded to 8; ✓/✗ centred within
 		wMs     = 3  // duration digits min width
 	)
-	wWhen := 8 // "When"
-	wTool := 4 // "Tool"
+	wWhen := 8  // "When"
+	wTool := 4  // "Tool"
+	wName := 7  // "Name" (session human name)
 	for _, c := range recent {
 		if l := len(humanAge(c.CalledAt)); l > wWhen {
 			wWhen = l
@@ -159,20 +160,24 @@ func runStats(_ *cobra.Command, _ []string) error {
 		if l := len(c.Tool); l > wTool {
 			wTool = l
 		}
+		if l := len(c.SessionName); l > wName {
+			wName = l
+		}
 	}
 
 	wWhen += 2
 	wTool += 2
 
-	// wMs + "  " + wStatus + "  " + wSess
-	headerWidth := wWhen + wTool + wMs + 2 + wStatus + 2 + wSess
+	// wMs + "  " + wStatus + "  " + wSessID + "  " + wName
+	headerWidth := wWhen + wTool + wMs + 2 + wStatus + 2 + wSessID + 2 + wName
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
-	fmt.Printf("%s%s%s  %s  %s\n",
+	fmt.Printf("%s%s%s  %s  %s  %s\n",
 		padRight(tui.HintStyle.Render("When"), wWhen),
 		padRight(tui.HintStyle.Render("Tool"), wTool),
 		padRight(tui.HintStyle.Render("ms"), wMs),
 		padRight(tui.HintStyle.Render("Status"), wStatus),
-		tui.HintStyle.Render("Session"),
+		padRight(tui.HintStyle.Render("Session"), wSessID),
+		tui.HintStyle.Render("Name"),
 	)
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
 
@@ -191,7 +196,8 @@ func runStats(_ *cobra.Command, _ []string) error {
 		if !c.Success {
 			ok = tui.WarnStyle.Render("✗")
 		}
-		sess := shortSessionID(c.SessionID)
+		sessID := padRight(shortSessionID(c.SessionID), wSessID)
+		name := tui.MutedStyle.Render(c.SessionName)
 
 		when := padRight(humanAge(c.CalledAt), wWhen)
 		tool := padRight(c.Tool, wTool)
@@ -199,9 +205,9 @@ func runStats(_ *cobra.Command, _ []string) error {
 		status := centerStr(ok, wStatus)
 
 		if !c.Success {
-			fmt.Println(tui.WarnStyle.Render(when+tool+ms) + "  " + status + "  " + tui.MutedStyle.Render(sess))
+			fmt.Println(tui.WarnStyle.Render(when+tool+ms) + "  " + status + "  " + tui.MutedStyle.Render(sessID) + "  " + name)
 		} else {
-			fmt.Println(when + tool + ms + "  " + status + "  " + tui.MutedStyle.Render(sess))
+			fmt.Println(when + tool + ms + "  " + status + "  " + tui.MutedStyle.Render(sessID) + "  " + name)
 		}
 
 		if !c.Success && c.ErrorMsg != "" {

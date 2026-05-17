@@ -898,7 +898,11 @@ func (m Model) popupRightAll(rw int) []string {
 	if len(sID) > 12 {
 		sID = sID[:12] + "…"
 	}
-	lines = append(lines, detailRow("Tool", DetailStyle.Render(c.Tool)), detailRow("Status", st), detailRow("Called at", DetailStyle.Render(c.CalledAt.Format("2006-01-02 15:04:05"))), detailRow("Session", sID+"  "+sl), detailRow("Duration", DetailStyle.Render(fmt.Sprintf("%d ms", c.DurationMs))), detailRow("Input", DetailStyle.Render(fmt.Sprintf("%d bytes", c.InputBytes))), detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))))
+	sessLabel := sID + "  " + sl
+	if c.SessionName != "" {
+		sessLabel = DetailStyle.Render(c.SessionName) + "  " + sID + "  " + sl
+	}
+	lines = append(lines, detailRow("Tool", DetailStyle.Render(c.Tool)), detailRow("Status", st), detailRow("Called at", DetailStyle.Render(c.CalledAt.Format("2006-01-02 15:04:05"))), detailRow("Session", sessLabel), detailRow("Duration", DetailStyle.Render(fmt.Sprintf("%d ms", c.DurationMs))), detailRow("Input", DetailStyle.Render(fmt.Sprintf("%d bytes", c.InputBytes))), detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))))
 	bx := func(label string, content []string) {
 		inner := rw - 4
 		if inner < 8 {
@@ -1002,19 +1006,23 @@ func (m Model) leftLines() []string {
 		return lines
 	}
 	for i, s := range m.sessions {
+		nm := ""
+		if s.Name != "" {
+			nm = s.Name + " "
+		}
 		var label string
 		if s.Folder == "" {
-			label = "⟳ resolving…"
+			label = nm + "⟳ resolving…"
 		} else {
 			lp := ""
 			if s.Language != "" && s.Language != "none" {
 				lp = s.Language + ": "
 			}
-			mf := m.leftWidth - 4 - len([]rune(lp))
+			mf := m.leftWidth - 4 - len([]rune(nm)) - len([]rune(lp))
 			if mf < 0 {
 				mf = 0
 			}
-			label = lp + contractPath(s.Folder, mf)
+			label = nm + lp + contractPath(s.Folder, mf)
 		}
 		if i == m.cursor {
 			if lf {
@@ -1072,7 +1080,11 @@ func (m *Model) rightLines(rw int) []string {
 	if adp == "" {
 		adp = "—"
 	}
-	lines = append(lines, detailRow("ID", s.ID), detailRow("Language", s.Language), detailRow("Folder", fld), detailRow("Adapter", adp), detailRow("PID", fmt.Sprintf("%d", s.PID)))
+	nm := s.Name
+	if nm == "" {
+		nm = MutedStyle.Render("—")
+	}
+	lines = append(lines, detailRow("Name", nm), detailRow("ID", s.ID), detailRow("Language", s.Language), detailRow("Folder", fld), detailRow("Adapter", adp), detailRow("PID", fmt.Sprintf("%d", s.PID)))
 	if s.DaemonVersion != "" {
 		lines = append(lines, detailRow("Daemon", s.DaemonVersion))
 	}
@@ -1086,12 +1098,16 @@ func (m *Model) rightLines(rw int) []string {
 	}
 	lines = append(lines, detailRow("Client", cl))
 	const (
-		c2w, c3w, c4w = 8, 10, 6
+		c2w, c3w, c4w, c5w = 8, 10, 6, 12
 	)
 	s3 := "   "
 	c1w := rw - 2 - c2w - c3w - c4w - 12
 	if c1w < 10 {
 		c1w = 10
+	}
+	rc1w := c1w - c5w - 3
+	if rc1w < 8 {
+		rc1w = 8
 	}
 	sln := "  " + SepStyle.Render(strings.Repeat("─", rw-3))
 	roww := rw - 2
@@ -1136,22 +1152,23 @@ func (m *Model) rightLines(rw int) []string {
 		lines = append(lines, "")
 		var rlc string
 		if m.focusPanel == focusStats {
-			rlc = padRight(SelectedStyle.Render("Recent Tools"), c1w)
+			rlc = padRight(SelectedStyle.Render("Recent Tools"), rc1w)
 		} else {
-			rlc = padRight(HintStyle.Render("Recent Tools"), c1w)
+			rlc = padRight(HintStyle.Render("Recent Tools"), rc1w)
 		}
-		h := "  " + rlc + s3 + padLeft(HintStyle.Render("Dur"), c2w) + s3 + padLeft(HintStyle.Render("When"), c3w) + s3 + HintStyle.Render("Errors")
+		h := "  " + rlc + s3 + padLeft(HintStyle.Render("Dur"), c2w) + s3 + padLeft(HintStyle.Render("When"), c3w) + s3 + padLeft(HintStyle.Render("Err"), c4w) + s3 + HintStyle.Render("Session")
 		lines = append(lines, h, sln)
 		m.recentTableBodyRow = len(lines)
 		for i, c := range m.recentCalls {
 			sel := m.focusPanel == focusStats && i == m.statsCursor
-			tn := padRight(truncate(c.Tool, c1w-2), c1w-2)
+			tn := padRight(truncate(c.Tool, rc1w-2), rc1w-2)
+			sn := padRight(truncate(c.SessionName, c5w), c5w)
 			if sel {
 				pd, pw, pe := padLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), padLeft(humanAgeTUI(c.CalledAt), c3w), padLeft("", c4w)
 				if !c.Success {
 					pe = padLeft("✗", c4w)
 				}
-				lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pd+s3+pw+s3+pe+s3))
+				lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pd+s3+pw+s3+pe+s3+sn))
 			} else {
 				mk := OkStyle.Render("✓") + " "
 				if !c.Success {
@@ -1161,7 +1178,8 @@ func (m *Model) rightLines(rw int) []string {
 				if !c.Success {
 					c4 = padLeft(WarnStyle.Render("✗"), c4w)
 				}
-				lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3)
+				c5 := padRight(MutedStyle.Render(truncate(c.SessionName, c5w)), c5w)
+				lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3+c5)
 			}
 		}
 	} else {
