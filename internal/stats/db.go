@@ -325,6 +325,13 @@ type ToolStat struct {
 	LastCalledAt  time.Time
 }
 
+// ActivitySummary is a bucketed view of recent tool-call activity.
+type ActivitySummary struct {
+	Window  time.Duration
+	Calls   int64
+	Buckets []int64
+}
+
 // Filter narrows a stats query. Empty fields are not constrained.
 type Filter struct {
 	SessionID   string
@@ -399,6 +406,79 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		out[i].TokensSaved = d.tokensSavedFor(filter, out[i].Tool)
 	}
 	return out, nil
+}
+
+// Activity returns a bucketed activity summary for calls in the last window.
+func (d *DB) Activity(window time.Duration, bucketCount int, filter Filter) (ActivitySummary, error) {
+	return d.ActivityAt(time.Now(), window, bucketCount, filter)
+}
+
+// ActivityAt returns a bucketed activity summary ending at now. It exists so
+// tests can use stable timestamps while the TUI uses Activity.
+func (d *DB) ActivityAt(now time.Time, window time.Duration, bucketCount int, filter Filter) (ActivitySummary, error) {
+	if d == nil {
+		return ActivitySummary{}, nil
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+	if bucketCount <= 0 {
+		bucketCount = 16
+	}
+	start := now.Add(-window)
+	summary := ActivitySummary{
+		Window:  window,
+		Buckets: make([]int64, bucketCount),
+	}
+
+	where, args := filter.where()
+	if where == "" {
+		where = " WHERE called_at >= ? AND called_at <= ?"
+	} else {
+		where += " AND called_at >= ? AND called_at <= ?"
+	}
+	args = append(args, start.UnixMilli(), now.UnixMilli())
+	q := `SELECT called_at FROM tool_calls` + where + ` ORDER BY called_at`
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return summary, fmt.Errorf("stats: activity: %w", err)
+	}
+	defer rows.Close()
+
+	bucketMs := window.Milliseconds() / int64(bucketCount)
+	if bucketMs < 1 {
+		bucketMs = 1
+	}
+	startMs := start.UnixMilli()
+	for rows.Next() {
+		var calledMs int64
+		if err := rows.Scan(&calledMs); err != nil {
+			continue
+		}
+		idx := int((calledMs - startMs) / bucketMs)
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= bucketCount {
+			idx = bucketCount - 1
+		}
+		summary.Buckets[idx]++
+		summary.Calls++
+	}
+	return summary, rows.Err()
+}
+
+// FirstCallAt returns the timestamp of the earliest recorded call, or zero if empty.
+func (d *DB) FirstCallAt() time.Time {
+	if d == nil {
+		return time.Time{}
+	}
+	var ms sql.NullInt64
+	err := d.db.QueryRow("SELECT MIN(called_at) FROM tool_calls").Scan(&ms)
+	if err != nil || !ms.Valid {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms.Int64)
 }
 
 // tokensSavedFor totals estimated savings for one tool under filter.

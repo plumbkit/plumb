@@ -124,6 +124,43 @@ func TestRenameSessionBackfillsRows(t *testing.T) {
 	}
 }
 
+func TestActivityAtBucketsRecentCalls(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "stats.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.UnixMilli(1_000_000)
+	calls := []Call{
+		{SessionID: "sess-1", Tool: "read_file", CalledAt: now.Add(-59 * time.Second), Success: true},
+		{SessionID: "sess-1", Tool: "edit_file", CalledAt: now.Add(-30 * time.Second), Success: true},
+		{SessionID: "sess-1", Tool: "git", CalledAt: now.Add(-1 * time.Second), Success: true},
+		{SessionID: "sess-1", Tool: "old", CalledAt: now.Add(-2 * time.Minute), Success: true},
+		{SessionID: "sess-2", Tool: "other", CalledAt: now.Add(-1 * time.Second), Success: true},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record %s: %v", c.Tool, err)
+		}
+	}
+
+	got, err := db.ActivityAt(now, time.Minute, 6, Filter{SessionID: "sess-1"})
+	if err != nil {
+		t.Fatalf("ActivityAt: %v", err)
+	}
+	if got.Calls != 3 {
+		t.Fatalf("Calls = %d, want 3", got.Calls)
+	}
+	wantBuckets := []int64{1, 0, 0, 1, 0, 1}
+	for i, want := range wantBuckets {
+		if got.Buckets[i] != want {
+			t.Fatalf("bucket %d = %d, want %d (all buckets %#v)", i, got.Buckets[i], want, got.Buckets)
+		}
+	}
+}
+
 func TestPerProjectDBSurvivesWorkspaceMove(t *testing.T) {
 	parent := t.TempDir()
 	oldWorkspace := filepath.Join(parent, "old", "plumb")

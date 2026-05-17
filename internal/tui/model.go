@@ -27,6 +27,8 @@ const (
 	minLeftWidth      = 16
 	minPopupLeftWidth = 30 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	pollInterval      = 2 * time.Second
+	activityInterval  = 10 * time.Second
+	activityBuckets   = 16
 	bodyStartRow      = 4
 )
 
@@ -49,6 +51,7 @@ type Model struct {
 	statsDBs        map[string]*stats.DB
 	toolStats       []stats.ToolStat
 	recentCalls     []stats.RecentCall
+	activity        stats.ActivitySummary
 	cursor          int
 	statsCursor     int
 	toolStatsCursor int
@@ -60,6 +63,8 @@ type Model struct {
 	height          int
 	ready           bool
 	draggingDivider bool
+	lastActivityAt  time.Time
+	activitySession string // DEPRECATED: no longer used for activity caching since it's global
 	loadErr         string
 
 	// UI Overlays
@@ -126,6 +131,8 @@ func (m *Model) refreshStats() {
 	if len(m.sessions) == 0 {
 		m.toolStats = nil
 		m.recentCalls = nil
+		m.activity = stats.ActivitySummary{}
+		m.activitySession = ""
 		return
 	}
 	s := m.sessions[m.cursor]
@@ -133,6 +140,8 @@ func (m *Model) refreshStats() {
 	if db == nil {
 		m.toolStats = nil
 		m.recentCalls = nil
+		m.activity = stats.ActivitySummary{}
+		m.activitySession = ""
 		return
 	}
 	var prevTool string
@@ -144,9 +153,43 @@ func (m *Model) refreshStats() {
 	filter := stats.Filter{SessionID: s.ID}
 	m.toolStats, _ = db.Summary(filter)
 	m.recentCalls, _ = db.Recent(50, filter)
+	m.refreshActivity(db, time.Now())
 
 	m.statsCursor = locateCall(m.recentCalls, prevCall, m.statsCursor)
 	m.toolStatsCursor = locateTool(m.toolStats, prevTool, m.toolStatsCursor)
+}
+
+func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
+	if db == nil {
+		m.activity = stats.ActivitySummary{}
+		return
+	}
+	// We no longer tie caching to activitySession because the activity view is global.
+	if !m.lastActivityAt.IsZero() && now.Sub(m.lastActivityAt) < activityInterval {
+		return
+	}
+
+	var start time.Time
+	if db != nil {
+		start = db.FirstCallAt()
+	}
+	if start.IsZero() {
+		start = now.Add(-time.Minute)
+	}
+	window := now.Sub(start)
+	if window < time.Minute {
+		window = time.Minute
+	}
+
+	// Pass an empty stats.Filter{} to get ALL calls, regardless of session or tool.
+	activity, err := db.Activity(window, activityBuckets, stats.Filter{})
+	if err != nil {
+		m.activity = stats.ActivitySummary{}
+		return
+	}
+	m.activity = activity
+	m.lastActivityAt = now
+	m.activitySession = "" // clear to prevent any residual checks
 }
 
 type callKey struct {
@@ -1351,18 +1394,24 @@ func (m Model) renderTopMenu(width int, dimmed bool) []string {
 		{label: "Sessions", active: true},
 		{label: "Logs"},
 	}
+	box := m.renderActivityBox(dimmed)
 	out := make([]string, 0, len(rows))
-	for _, row := range rows {
-		marker := "○"
-		style := ItemStyle
+	for i, row := range rows {
+		prefix := "  "
+		style := MutedStyle
 		if row.active {
-			marker = "●"
+			prefix = "▌ "
 			style = SelectedStyle
 		}
 		if dimmed {
 			style = InactiveStyle
 		}
-		line := style.Render(" " + marker + " " + row.label)
+		menu := style.Render(prefix + row.label)
+		menuPad := 14 - lipgloss.Width(menu)
+		if menuPad < 1 {
+			menuPad = 1
+		}
+		line := menu + strings.Repeat(" ", menuPad) + box[i]
 		pad := width - lipgloss.Width(line)
 		if pad < 0 {
 			pad = 0
@@ -1370,6 +1419,116 @@ func (m Model) renderTopMenu(width int, dimmed bool) []string {
 		out = append(out, line+strings.Repeat(" ", pad))
 	}
 	return out
+}
+
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return "< 1m"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm+", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh+", int(d.Hours()))
+	}
+	if d < 30*24*time.Hour {
+		return fmt.Sprintf("%dd+", int(d.Hours()/24))
+	}
+	if d < 365*24*time.Hour {
+		return fmt.Sprintf("%dmo+", int(d.Hours()/(24*30)))
+	}
+	return fmt.Sprintf("%dy+", int(d.Hours()/(24*365)))
+}
+
+func (m Model) renderActivityBox(dimmed bool) []string {
+	border := SepStyle
+	title := PanelHeaderFadedStyle
+	sparkStyle := SelectedStyle
+	countStyle := DetailStyle
+	if dimmed {
+		border = SepInactiveStyle
+		title = PanelHeaderInactiveStyle
+		sparkStyle = InactiveStyle
+		countStyle = InactiveStyle
+	}
+
+	const (
+		boxWidth   = 30
+		innerWidth = boxWidth - 2
+		sparkWidth = 16
+	)
+	
+	windowStr := "1m"
+	if m.activity.Window > 0 {
+		windowStr = formatUptime(m.activity.Window)
+	}
+	titleText := fmt.Sprintf(" Activity (%s) ", windowStr)
+	
+	topFill := boxWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
+	if topFill < 0 {
+		topFill = 0
+	}
+
+	spark := activitySparkline(m.activity.Buckets, sparkWidth)
+	count := formatActivityCalls(m.activity.Calls)
+	content := " " + sparkStyle.Render(spark) + " " + countStyle.Render(count)
+	contentPad := innerWidth - lipgloss.Width(content)
+	if contentPad < 0 {
+		contentPad = 0
+	}
+
+	return []string{
+		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
+		border.Render("│") + content + strings.Repeat(" ", contentPad) + border.Render("│"),
+		border.Render("╰" + strings.Repeat("─", innerWidth) + "╯"),
+	}
+}
+
+func activitySparkline(buckets []int64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(buckets) == 0 {
+		return strings.Repeat(" ", width)
+	}
+	out := make([]rune, width)
+	var max int64 = 10 // Enforce a minimum ceiling so 1-2 calls don't draw a full 100% bar
+	for _, v := range buckets {
+		if v > max {
+			max = v
+		}
+	}
+	levels := []rune("⡀⡄⡆⡇⣇⣧⣷⣿")
+	for i := range width {
+		bucketIdx := i * len(buckets) / width
+		v := buckets[bucketIdx]
+		if max == 0 || v == 0 {
+			out[i] = ' '
+			continue
+		}
+		levelIdx := int((v*int64(len(levels)) - 1) / max)
+		if levelIdx < 0 {
+			levelIdx = 0
+		}
+		if levelIdx >= len(levels) {
+			levelIdx = len(levels) - 1
+		}
+		out[i] = levels[levelIdx]
+	}
+	return string(out)
+}
+
+func formatActivityCalls(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fm calls", float64(n)/1_000_000)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk calls", float64(n)/1000)
+	case n == 1:
+		return "1 call"
+	default:
+		return fmt.Sprintf("%d calls", n)
+	}
 }
 
 func padLeft(s string, w int) string {

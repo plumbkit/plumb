@@ -141,27 +141,54 @@ func TestMouseDragDividerResizesLeftPanel(t *testing.T) {
 	}
 }
 
-func TestRenderTopMenuUsesVerticalRows(t *testing.T) {
+func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	RebuildStyles()
-	m := Model{}
+	m := Model{
+		activity: stats.ActivitySummary{
+			Calls:   5200,
+			Buckets: []int64{0, 1, 2, 3, 2, 1, 0, 0, 3, 4, 5, 4, 3, 2, 1, 0},
+		},
+	}
 
-	lines := m.renderTopMenu(20, false)
+	lines := m.renderTopMenu(60, false)
 	if len(lines) != 3 {
 		t.Fatalf("renderTopMenu returned %d lines, want 3", len(lines))
 	}
 	plain := make([]string, len(lines))
 	for i, line := range lines {
 		plain[i] = ansiStripForTest(line)
-		if !strings.HasPrefix(plain[i], " ") {
-			t.Fatalf("line %d = %q, want leading space", i, plain[i])
-		}
-		if strings.ContainsAny(plain[i], "▄▀") {
+		if strings.Contains(plain[i], "▀") {
 			t.Fatalf("line %d contains old tab box glyphs: %q", i, plain[i])
 		}
 	}
-	for i, want := range []string{" ○ Home", " ● Sessions", " ○ Logs"} {
+	for i, want := range []string{
+		"  Home        ╭─ Activity (1m) ────────────╮",
+		"▌ Sessions    │ ",
+		"  Logs        ╰────────────────────────────╯",
+	} {
 		if !strings.HasPrefix(plain[i], want) {
 			t.Fatalf("line %d = %q, want prefix %q", i, plain[i], want)
+		}
+	}
+	if !strings.Contains(plain[1], "5.2k calls") {
+		t.Fatalf("activity row = %q, want call count", plain[1])
+	}
+}
+
+func TestActivitySparklineAndCallFormatting(t *testing.T) {
+	got := activitySparkline([]int64{0, 1, 2, 4}, 4)
+	if got != " ⡀⡄⡇" {
+		t.Fatalf("activitySparkline = %q, want %q", got, " ⡀⡄⡇")
+	}
+	for n, want := range map[int64]string{
+		0:       "0 calls",
+		1:       "1 call",
+		999:     "999 calls",
+		5200:    "5.2k calls",
+		1200000: "1.2m calls",
+	} {
+		if got := formatActivityCalls(n); got != want {
+			t.Fatalf("formatActivityCalls(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
