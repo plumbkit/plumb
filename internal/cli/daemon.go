@@ -121,6 +121,10 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 
 	tools.Version = Version
 
+	// Start the background LRU sweep for per-path write locks. Runs for the
+	// daemon's lifetime; ctx cancellation stops the sweep goroutine cleanly.
+	tools.StartPathLockSweep(ctx)
+
 	statsStore := newStatsStore()
 	defer statsStore.Close()
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0 (2026-05-17)
+
+### Changed
+- **`pathLocks` LRU eviction.** Per-path write-lock entries are now wrapped in a `pathLockEntry` struct that tracks `lastUsedNs` via `atomic.Int64`. A background sweep goroutine (started once per daemon lifetime via `tools.StartPathLockSweep(ctx)`) evicts entries idle for more than one hour every five minutes. The sweep uses `TryLock` to skip entries that are currently held, and re-checks idleness after acquiring to guard against entries refreshed between the initial Range scan and the TryLock call. Prevents unbounded memory growth in daemons running for extended periods against large numbers of distinct file paths.
+
 ## Unreleased
 
 ### Added

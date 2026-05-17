@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.31** (2026-05-17).
+Last reviewed against: **0.6.0** (2026-05-17).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -305,18 +305,6 @@ User's verbatim request: *"Even without any supported language, it should have c
 ## Bugs & known limitations
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).
-
-### `pathLocks` is permanent process-global state
-
-Every path ever locked by any tool stays in the `sync.Map[string]*sync.Mutex` in `internal/tools/file_write_helpers.go` for the daemon's lifetime. For long-running daemons handling many sessions across many files, this can grow without bound. Not a leak in the GC sense (the mutexes are reachable), but a slow memory creep.
-
-**Why it's not fixed:** in practice, plumb daemons restart often (every `make build && plumb stop && plumb serve`), and the per-path mutex overhead is ~40 bytes plus the map entry. A daemon that touches 100,000 distinct files leaks ~4 MiB. Tolerable.
-
-**When to fix:** if you find someone running a plumb daemon for weeks against a project with millions of unique paths.
-
-**How to fix:** wrap the mutex in a struct with a `lastUsed time.Time`, set it in `lockPath` / on release, run an LRU sweep every 5 minutes that deletes entries idle for more than an hour. The sweep needs to acquire each mutex (with `TryLock`) before deletion to avoid racing with an in-flight lock.
-
----
 
 ### The rate limiter is per-connection, not per-agent
 

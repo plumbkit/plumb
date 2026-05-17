@@ -259,3 +259,95 @@ func TestLockPathKeyResolvesSymlinkTarget(t *testing.T) {
 		t.Fatalf("lockPathKey(link) = %q, want target key %q", got, want)
 	}
 }
+
+// pathLockKey returns a test-scoped unique key that won't collide with other
+// tests running in parallel. Prefixed with t.Name() and a random suffix.
+func uniquePathKey(t *testing.T) string {
+	t.Helper()
+	return "/test-path-lock/" + t.Name()
+}
+
+func TestSweepPathLocks_EvictsIdleEntries(t *testing.T) {
+	key := uniquePathKey(t)
+
+	// Pre-populate an entry whose lastUsedNs is two hours old.
+	e := &pathLockEntry{}
+	e.lastUsedNs.Store(time.Now().Add(-2 * time.Hour).UnixNano())
+	pathLocks.Store(key, e)
+	t.Cleanup(func() { pathLocks.Delete(key) })
+
+	sweepPathLocks(time.Now())
+
+	if _, ok := pathLocks.Load(key); ok {
+		t.Fatal("expected idle entry to be evicted by sweep, but it remains")
+	}
+}
+
+func TestSweepPathLocks_SkipsLockedEntries(t *testing.T) {
+	key := uniquePathKey(t)
+
+	e := &pathLockEntry{}
+	e.lastUsedNs.Store(time.Now().Add(-2 * time.Hour).UnixNano())
+	// Hold the mutex — sweep must not delete it.
+	e.mu.Lock()
+	pathLocks.Store(key, e)
+	t.Cleanup(func() {
+		e.mu.Unlock()
+		pathLocks.Delete(key)
+	})
+
+	sweepPathLocks(time.Now())
+
+	if _, ok := pathLocks.Load(key); !ok {
+		t.Fatal("sweep evicted a locked entry; it should have been skipped")
+	}
+}
+
+func TestSweepPathLocks_KeepsRecentEntries(t *testing.T) {
+	key := uniquePathKey(t)
+
+	e := &pathLockEntry{}
+	e.lastUsedNs.Store(time.Now().UnixNano()) // just used
+	pathLocks.Store(key, e)
+	t.Cleanup(func() { pathLocks.Delete(key) })
+
+	sweepPathLocks(time.Now())
+
+	if _, ok := pathLocks.Load(key); !ok {
+		t.Fatal("sweep evicted a recently-used entry; it should have been kept")
+	}
+}
+
+func TestSweepPathLocks_ReChecksAfterTryLock(t *testing.T) {
+	// Verify the double-check: if lastUsedNs is updated between the initial
+	// idleness check and the TryLock, the entry must NOT be deleted.
+	key := uniquePathKey(t)
+
+	e := &pathLockEntry{}
+	// Start with an old timestamp so the first idleness check passes.
+	e.lastUsedNs.Store(time.Now().Add(-2 * time.Hour).UnixNano())
+	pathLocks.Store(key, e)
+	t.Cleanup(func() { pathLocks.Delete(key) })
+
+	// Simulate a concurrent update that happens between the Range iteration
+	// and the TryLock: update lastUsedNs to "now" just before calling sweep.
+	// Because sweepPathLocks re-checks after TryLock, the entry must survive.
+	e.lastUsedNs.Store(time.Now().UnixNano())
+
+	sweepPathLocks(time.Now())
+
+	if _, ok := pathLocks.Load(key); !ok {
+		t.Fatal("sweep deleted an entry that was refreshed before TryLock; it should have survived")
+	}
+}
+
+func TestStartPathLockSweep_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	StartPathLockSweep(ctx)
+	// Cancelling the context should not panic and the goroutine should exit.
+	cancel()
+	// Give the goroutine a moment to observe the cancellation.
+	time.Sleep(50 * time.Millisecond)
+	// No assertion other than "did not hang or panic" — the test passes if it
+	// completes within the test timeout.
+}

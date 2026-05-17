@@ -39,6 +39,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -168,12 +169,74 @@ func formatPostWriteDiagnostics(d []protocol.Diagnostic) string {
 	return sb.String()
 }
 
+// pathLockEntry is the value stored in pathLocks. It pairs a per-path mutex
+// with an atomic timestamp recording when the path was last accessed. The
+// timestamp is updated on every lockPath call and on every unlock, so the
+// background LRU sweep can safely evict entries that have been idle for
+// longer than pathLockIdleExpiry.
+type pathLockEntry struct {
+	mu         sync.Mutex
+	lastUsedNs atomic.Int64 // Unix nanoseconds; read/written via sync/atomic
+}
+
 // pathLocks serialises write operations to the same on-disk path across all
-// concurrent tool calls in this process. The map is consulted by lockPath /
-// unlockPath. Without it, two simultaneous edit_file calls to the same file
-// could each read the pre-edit content, each apply their edits independently,
-// and the second writer would silently overwrite the first.
-var pathLocks sync.Map // map[string]*sync.Mutex
+// concurrent tool calls in this process. The map is consulted by lockPath.
+// Without it, two simultaneous edit_file calls to the same file could each
+// read the pre-edit content, apply their edits independently, and the second
+// writer would silently overwrite the first.
+//
+// Entries are evicted by StartPathLockSweep after they have been idle for
+// pathLockIdleExpiry. The sweep is started once per daemon lifetime.
+var pathLocks sync.Map // map[string]*pathLockEntry
+
+const (
+	pathLockSweepInterval = 5 * time.Minute
+	pathLockIdleExpiry    = 1 * time.Hour
+)
+
+// StartPathLockSweep launches a background goroutine that evicts idle entries
+// from pathLocks every pathLockSweepInterval. It should be called once from
+// the daemon's run loop, passing the daemon's lifetime context.
+func StartPathLockSweep(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(pathLockSweepInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sweepPathLocks(time.Now())
+			}
+		}
+	}()
+}
+
+// sweepPathLocks removes entries from pathLocks that have been idle for longer
+// than pathLockIdleExpiry as of now. It uses TryLock to skip entries that are
+// currently held, and re-checks idleness after acquiring to guard against a
+// lock that became active between the Range iteration and the TryLock call.
+func sweepPathLocks(now time.Time) {
+	pathLocks.Range(func(key, value any) bool {
+		e := value.(*pathLockEntry)
+		lastUsed := time.Unix(0, e.lastUsedNs.Load())
+		if now.Sub(lastUsed) < pathLockIdleExpiry {
+			return true // recently used — keep
+		}
+		if !e.mu.TryLock() {
+			return true // currently held — skip
+		}
+		// Re-check: the entry might have been claimed between Range and TryLock.
+		lastUsed = time.Unix(0, e.lastUsedNs.Load())
+		if now.Sub(lastUsed) < pathLockIdleExpiry {
+			e.mu.Unlock()
+			return true
+		}
+		pathLocks.Delete(key)
+		e.mu.Unlock()
+		return true
+	})
+}
 
 // StrictModeFn returns the current strict-mode setting. The daemon
 // installs a closure that reads from the resolved per-workspace config
@@ -191,12 +254,25 @@ func strictModeEnabled() bool {
 // lockPath returns a release function that unlocks the path. The lock key is
 // canonicalised through symlinks when possible so link paths and their real
 // targets serialise through the same mutex.
+//
+// The entry's lastUsedNs is stamped on every call (before blocking on Lock)
+// and again when the caller releases, so the LRU sweep never evicts an entry
+// that is either about to be locked or was recently released.
 func lockPath(path string) func() {
 	key := lockPathKey(path)
-	v, _ := pathLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	now := time.Now().UnixNano()
+	newEntry := &pathLockEntry{}
+	newEntry.lastUsedNs.Store(now)
+	v, _ := pathLocks.LoadOrStore(key, newEntry)
+	e := v.(*pathLockEntry)
+	// Mark the entry as wanted even if we got back an existing one — this
+	// prevents the sweep from evicting it while we are waiting for mu.Lock.
+	e.lastUsedNs.Store(now)
+	e.mu.Lock()
+	return func() {
+		e.lastUsedNs.Store(time.Now().UnixNano())
+		e.mu.Unlock()
+	}
 }
 
 func lockPathKey(path string) string {

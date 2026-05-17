@@ -8,7 +8,7 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-Current version: **0.5.30** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.6.0** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
