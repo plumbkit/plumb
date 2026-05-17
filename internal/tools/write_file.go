@@ -26,6 +26,10 @@ var writeFileSchema = json.RawMessage(`{
     "create_dirs": {
       "type": "boolean",
       "description": "Create parent directories if they do not exist. Default true."
+    },
+    "dirty_ok": {
+      "type": "boolean",
+      "description": "Allow writing a file that has uncommitted changes in its git repository. Default false — the write is refused if the target file is dirty. Pass true to overwrite anyway."
     }
   },
   "required": ["path", "content"]
@@ -64,6 +68,7 @@ type writeFileArgs struct {
 	Path       string `json:"path"`
 	Content    string `json:"content"`
 	CreateDirs *bool  `json:"create_dirs"`
+	DirtyOk    bool   `json:"dirty_ok"`
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -89,6 +94,11 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return "", fmt.Errorf("write_file: %q is a directory", path)
+	}
+
+	if !a.DirtyOk && pathIsDirty(ctx, path) {
+		return "", fmt.Errorf("write_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to overwrite", path)
 	}
 
 	createDirs := true

@@ -46,6 +46,10 @@ var editFileSchema = json.RawMessage(`{
     "expected_sha": {
       "type": "string",
       "description": "Optional. Hex-encoded SHA-256 previously returned by read_file. If provided, the edit is rejected if the file's current content hash differs — stronger than expected_mtime, survives mtime aliasing."
+    },
+    "dirty_ok": {
+      "type": "boolean",
+      "description": "Allow editing a file that has uncommitted changes in its git repository. Default false — the edit is refused if the target file is dirty. Pass true to proceed anyway."
     }
   },
   "required": ["path", "edits"]
@@ -120,6 +124,7 @@ type editFileArgs struct {
 	Edits         []strEdit `json:"edits"`
 	ExpectedMtime string    `json:"expected_mtime"`
 	ExpectedSha   string    `json:"expected_sha"`
+	DirtyOk       bool      `json:"dirty_ok"`
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -142,6 +147,11 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	// Per-path lock: serialise all concurrent writes to this path.
 	unlock := lockPath(path)
 	defer unlock()
+
+	if !a.DirtyOk && pathIsDirty(ctx, path) {
+		return "", &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", path)}
+	}
 
 	// expected_mtime gate (optimistic concurrency).
 	if a.ExpectedMtime != "" {

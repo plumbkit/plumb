@@ -26,6 +26,10 @@ var renameFileSchema = json.RawMessage(`{
     "overwrite": {
       "type": "boolean",
       "description": "Allow overwriting an existing destination file. Default false."
+    },
+    "dirty_ok": {
+      "type": "boolean",
+      "description": "Allow moving a file that has uncommitted changes in its git repository. Default false — the move is refused if the source file is dirty. Pass true to proceed anyway."
     }
   },
   "required": ["from", "to"]
@@ -58,6 +62,7 @@ type renameFileArgs struct {
 	From      string `json:"from"`
 	To        string `json:"to"`
 	Overwrite bool   `json:"overwrite"`
+	DirtyOk   bool   `json:"dirty_ok"`
 }
 
 func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -94,6 +99,11 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("rename_file: %q is a directory — refusing to move recursively", from)
+	}
+
+	if !a.DirtyOk && pathIsDirty(ctx, from) {
+		return "", fmt.Errorf("rename_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", from)
 	}
 
 	if !a.Overwrite {

@@ -17,6 +17,10 @@ var deleteFileSchema = json.RawMessage(`{
     "path": {
       "type": "string",
       "description": "Absolute path or file:// URI of the file to delete."
+    },
+    "dirty_ok": {
+      "type": "boolean",
+      "description": "Allow deleting a file that has uncommitted changes in its git repository. Default false — deletion is refused if the file is dirty. Pass true to proceed anyway."
     }
   },
   "required": ["path"]
@@ -41,7 +45,8 @@ func (*DeleteFile) Description() string {
 }
 
 type deleteFileArgs struct {
-	Path string `json:"path"`
+	Path    string `json:"path"`
+	DirtyOk bool   `json:"dirty_ok"`
 }
 
 func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -66,6 +71,11 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("delete_file: %q is a directory — refusing to delete recursively", path)
+	}
+
+	if !a.DirtyOk && pathIsDirty(ctx, path) {
+		return "", fmt.Errorf("delete_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", path)
 	}
 
 	if err := os.Remove(path); err != nil {

@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.5.29** (2026-05-17).
+Last reviewed against: **0.5.30** (2026-05-17).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -207,40 +207,6 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 1. **Automatic Diffing:** `edit_file` and `write_file` return a unified diff of the change in the response. This gives the agent immediate confirmation of the change without requiring a fresh `read_file` turn.
 2. **Smart Truncation:** Large tool outputs (especially `search_in_files` and `git log`) are automatically capped (e.g., at 100 lines). The response includes a summary ("Showing 100 of 450 matches") and instructions on how to page or narrow the search.
 3. **Implicit Verification Mode:** A configuration option to suppress full output and return only high-signal metadata for repetitive tasks.
-
----
-
-### "Working tree is dirty" guard before plumb-initiated writes
-
-**Priority:** medium.
-**Effort:** 1–2 hours (depending on chosen approach).
-
-**Why this matters.** Plumb will happily edit a file that has uncommitted changes the user hasn't reviewed. If the agent goes off the rails, the user can't easily distinguish "what I wrote" from "what plumb wrote on the agent's behalf". `git stash` recovers the file, but only if the user noticed in time and the stash hasn't been overwritten.
-
-**Three options, listed least-disruptive first. Pick one before starting:**
-
-1. **`dirty_ok: bool` parameter, default `false`.** Each write tool checks `git status --porcelain <path>` for the target. If output is non-empty, refuse with a clear error unless `dirty_ok=true`. Minimal surprise. Doesn't require any persistent state.
-2. **Append a notice to the tool output.** "Note: foo.go had uncommitted changes before this edit. Previous content is recoverable via `git stash` if needed." Non-blocking; informational. Easier for the agent to ignore (might be the right outcome — agents are working on user behalf).
-3. **Snapshot to `.plumb/snapshots/<sha>` before every write.** Heavy. Real undo log. Closest to what an editor does. Pairs naturally with the transaction durable log. Worth doing only if option 1 turns out to be too restrictive in practice.
-
-**Definition of done (assuming option 1):**
-
-1. New helper in `internal/tools/file_write_helpers.go`: `pathIsDirty(path string) (bool, error)` runs `git status --porcelain --` against the file's containing git repo, returns true if there's a non-empty result.
-2. `write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply` all accept `dirty_ok bool` (default false). Each calls `pathIsDirty` and refuses if true and `dirty_ok=false`.
-3. The error message tells the agent what to do: "foo.go has uncommitted changes; review and commit, or pass `dirty_ok: true` if you intend to overwrite".
-4. Tests:
-   - File outside any git repo → not dirty (no error, write proceeds).
-   - Clean file in a git repo → not dirty.
-   - File with uncommitted modifications → dirty (refused).
-   - With `dirty_ok=true` → proceeds anyway.
-
-**Where to start.** `internal/tools/file_write_helpers.go` for the helper. Each write tool adds the parameter to its `args` struct and the check to its `Execute`. Update tool schemas.
-
-**Watch out for:**
-
-- `git status` is slow on huge repos (>10 s on a kernel-size repo). Cache the result per-call by `filepath.Dir(path)` to avoid running it once per edit in a transaction.
-- `pathIsDirty` needs to handle: not a git repo (`err`); file inside `.gitignore` (clean); newly-added file (dirty).
-- Don't shell out to `git` if `git` is not on `$PATH` — return false silently and let the write proceed.
 
 ---
 

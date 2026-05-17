@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -122,6 +124,123 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Message != "changed" {
 		t.Errorf("zero window: want updated diag via default window, got %v", got)
+	}
+}
+
+// gitExec runs a git command in dir and calls t.Fatal on failure.
+func gitExec(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// initGitRepo creates a temporary git repository with a single empty commit so
+// git status works. Returns the repo root directory.
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir, err := os.MkdirTemp("", "plumb-gitrepo-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.email", "test@plumb.test")
+	gitExec(t, dir, "config", "user.name", "Plumb Test")
+	// Seed an initial commit so the repo is usable.
+	seed := filepath.Join(dir, ".gitkeep")
+	if err := os.WriteFile(seed, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", ".gitkeep")
+	gitExec(t, dir, "commit", "-m", "init")
+	return dir
+}
+
+func TestPathIsDirty_OutsideGitRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	// os.MkdirTemp with "" prefix lands in the system temp dir, which is
+	// outside any git repo on a normal development machine.
+	dir, err := os.MkdirTemp("", "plumb-nogit-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	f := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(f, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pathIsDirty(context.Background(), f) {
+		t.Error("expected not dirty for file outside any git repository")
+	}
+}
+
+func TestPathIsDirty_CleanCommittedFile(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "clean.txt")
+	if err := os.WriteFile(f, []byte("committed content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "clean.txt")
+	gitExec(t, dir, "commit", "-m", "add clean")
+
+	if pathIsDirty(context.Background(), f) {
+		t.Error("expected not dirty for a committed, unmodified file")
+	}
+}
+
+func TestPathIsDirty_ModifiedTrackedFile(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "modified.txt")
+	if err := os.WriteFile(f, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "modified.txt")
+	gitExec(t, dir, "commit", "-m", "add")
+
+	// Modify after commit → dirty.
+	if err := os.WriteFile(f, []byte("modified content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !pathIsDirty(context.Background(), f) {
+		t.Error("expected dirty for a committed file with working-tree modifications")
+	}
+}
+
+func TestPathIsDirty_UntrackedFile(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "untracked.txt")
+	if err := os.WriteFile(f, []byte("new file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !pathIsDirty(context.Background(), f) {
+		t.Error("expected dirty for an untracked (newly-added) file")
+	}
+}
+
+func TestPathIsDirty_GitIgnoredFile(t *testing.T) {
+	dir := initGitRepo(t)
+	// Write a .gitignore that ignores *.log.
+	gi := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gi, []byte("*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", ".gitignore")
+	gitExec(t, dir, "commit", "-m", "gitignore")
+
+	f := filepath.Join(dir, "ignored.log")
+	if err := os.WriteFile(f, []byte("log content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pathIsDirty(context.Background(), f) {
+		t.Error("expected not dirty for a gitignored file")
 	}
 }
 

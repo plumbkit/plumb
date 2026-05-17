@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -358,6 +359,49 @@ func concurrentWriteDetected(path string, res writeResult, skew time.Duration) b
 	// been touched by anyone — our rename set it to approximately tempWrittenAt.
 	// If mtime is much newer than our write, a third party wrote after us.
 	return mtime.After(res.tempWrittenAt.Add(skew))
+}
+
+// dirtyBasenamesInDir runs one git status --porcelain call for a set of files
+// within dir, returning a set of dirty basenames. Returns nil (no dirty files)
+// when git is not on PATH or dir is not inside a git repository.
+//
+// Batching files from the same directory avoids spawning one git process per
+// file in transaction_apply. Git errors (not a repo, unreachable, etc.) are
+// silently treated as "not dirty" to avoid false positives.
+func dirtyBasenamesInDir(ctx context.Context, dir string, files []string) map[string]bool {
+	if _, err := exec.LookPath("git"); err != nil {
+		return nil
+	}
+	args := make([]string, 0, 3+len(files))
+	args = append(args, "status", "--porcelain", "--")
+	args = append(args, files...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return nil
+	}
+	dirty := make(map[string]bool)
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\n"), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		// Porcelain v1: "XY filename" (XY = two status chars + space).
+		// Rename format: "R  old -> new" — take the new name after " -> ".
+		name := line[3:]
+		if i := strings.Index(name, " -> "); i >= 0 {
+			name = name[i+4:]
+		}
+		dirty[strings.TrimSpace(name)] = true
+	}
+	return dirty
+}
+
+// pathIsDirty reports whether path has uncommitted changes in its git repository.
+// Returns false when git is not on PATH or path is not inside a git repository.
+// Git errors are silently treated as not dirty to avoid blocking writes.
+func pathIsDirty(ctx context.Context, path string) bool {
+	return dirtyBasenamesInDir(ctx, filepath.Dir(path), []string{filepath.Base(path)})[filepath.Base(path)]
 }
 
 // notifyLSP tells the server "this file on disk just changed" via

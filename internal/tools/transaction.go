@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,10 @@ import (
 var transactionApplySchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "dirty_ok": {
+      "type": "boolean",
+      "description": "Allow editing files that have uncommitted changes in their git repository. Default false — the transaction is refused if any target file is dirty. Pass true to proceed anyway."
+    },
     "operations": {
       "type": "array",
       "description": "Ordered list of per-file edit groups. Every file is validated first; only if all validate do any writes happen.",
@@ -98,6 +103,7 @@ type txOperation struct {
 }
 
 type transactionApplyArgs struct {
+	DirtyOk    bool          `json:"dirty_ok"`
 	Operations []txOperation `json:"operations"`
 }
 
@@ -153,6 +159,41 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 			u()
 		}
 	}()
+
+	// Dirty check: group paths by directory so we spawn one git process per
+	// directory instead of one per file. This is especially important for
+	// transactions that touch many files in the same project.
+	if !a.DirtyOk {
+		type dirBatch struct {
+			bases []string
+			fulls []string
+		}
+		batches := make(map[string]*dirBatch, len(paths))
+		for _, p := range paths {
+			dir := filepath.Dir(p)
+			if batches[dir] == nil {
+				batches[dir] = &dirBatch{}
+			}
+			batches[dir].bases = append(batches[dir].bases, filepath.Base(p))
+			batches[dir].fulls = append(batches[dir].fulls, p)
+		}
+		var dirtyPaths []string
+		for dir, batch := range batches {
+			dirty := dirtyBasenamesInDir(ctx, dir, batch.bases)
+			for i, base := range batch.bases {
+				if dirty[base] {
+					dirtyPaths = append(dirtyPaths, batch.fulls[i])
+				}
+			}
+		}
+		if len(dirtyPaths) > 0 {
+			sort.Strings(dirtyPaths)
+			return "", &editLogicErr{fmt.Errorf(
+				"transaction_apply: %d file(s) have uncommitted changes; "+
+					"review and commit first, or pass dirty_ok: true to overwrite:\n  %s",
+				len(dirtyPaths), strings.Join(dirtyPaths, "\n  "))}
+		}
+	}
 
 	// Phase 1: validate every operation in memory. No writes yet.
 	prepared := make([]txPrepared, 0, len(a.Operations))

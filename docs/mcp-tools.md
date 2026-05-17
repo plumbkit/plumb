@@ -470,8 +470,10 @@ Create or overwrite a file atomically.
 | `path` | yes | Absolute path or `file://` URI |
 | `content` | yes | Full content to write |
 | `create_dirs` | no | Create parent directories if absent. Default `true` |
+| `dirty_ok` | no | Allow writing a file that has uncommitted changes. Default `false` — refused if the target file is dirty. Pass `true` to overwrite anyway. |
 
 **Safety model** (shared with all write tools):
+- **Dirty check** — before writing, plumb runs `git status --porcelain -- <file>`. If the file has uncommitted changes (modified, staged, or untracked) and `dirty_ok` is `false` (the default), the write is refused with a clear error message. This protects uncommitted work from being silently overwritten by an agent. Pass `dirty_ok: true` to bypass. When git is not on `$PATH` or the file is not inside a git repository, the check is skipped and the write proceeds normally.
 - **Per-path lock** serialises concurrent writes to the same file from any session.
 - **Atomic rename** — content staged in `os.TempDir()` then `os.Rename`. EXDEV cross-device falls back to a `.plumb.tmp` sibling automatically.
 - **Symlink-aware** — if `path` is a symlink, the link is resolved and the write goes through to the underlying target (the symlink is not replaced with a regular file).
@@ -494,6 +496,7 @@ Apply one or more str_replace edits to an existing file.
 | `path` | yes | Absolute path or `file://` URI |
 | `edits` | yes | Array of `{old_str, new_str}` objects, applied sequentially |
 | `expected_mtime` | no | RFC3339Nano mtime previously emitted by `read_file`'s header. If present, the edit is rejected when the file's current mtime differs — opt-in optimistic concurrency. |
+| `dirty_ok` | no | Allow editing a file that has uncommitted changes. Default `false`. |
 
 Each `old_str` must appear **exactly once** in the file at the time the edit is evaluated. Absent or ambiguous strings are rejected with a clear error.
 
@@ -519,6 +522,7 @@ Delete a single file. Refuses directories — use shell tools for recursive remo
 | Field | Required | Description |
 |---|---|---|
 | `path` | yes | Absolute path or `file://` URI |
+| `dirty_ok` | no | Allow deleting a file that has uncommitted changes. Default `false`. |
 
 Sends `FileDeleted` via `workspace/didChangeWatchedFiles`. Symbol cache invalidated. Per-path lock acquired. Rate-limited.
 
@@ -535,6 +539,7 @@ Move or rename a single file. Distinct from `rename_symbol` (LSP-semantic identi
 | `from` | yes | Source absolute path or `file://` URI |
 | `to` | yes | Destination absolute path or `file://` URI; parent directories created automatically |
 | `overwrite` | no | Allow overwriting an existing destination. Default `false` |
+| `dirty_ok` | no | Allow moving a file that has uncommitted changes. Default `false`. |
 
 Two-path locking: both source and destination paths are locked in lexical order, deadlock-safe even if two `rename_file` calls swap two files. Sends `FileDeleted` (source) + `FileCreated` (destination) via `workspace/didChangeWatchedFiles`. Symbol cache invalidated for both URIs.
 
@@ -548,11 +553,12 @@ Apply str_replace edits across multiple files atomically.
 
 | Field | Required | Description |
 |---|---|---|
+| `dirty_ok` | no | Allow editing files that have uncommitted changes. Default `false` — the transaction is refused if any target file is dirty. |
 | `operations` | yes | Array of `{path, edits, expected_mtime?}` (max 50). Each operation's `edits` array uses the same schema as `edit_file`. |
 
 **Three-phase commit:**
 
-1. **Phase 1 — validation.** Acquire per-path locks for every target in lexical order (deadlock-safe). For each path: stat, read, validate every edit in memory, check `expected_mtime`. If any operation fails validation, NO writes happen.
+1. **Phase 1 — validation.** Acquire per-path locks for every target in lexical order (deadlock-safe). Dirty check: if `dirty_ok` is `false`, all target files are checked for uncommitted changes before validation begins — a single dirty file aborts the transaction with the full list of dirty paths. For each path: stat, read, validate every edit in memory, check `expected_mtime`. If any operation fails validation, NO writes happen.
 2. **Phase 2 — write.** Write each prepared content via `safeWrite`. If any write fails partway through the list, already-written files are rolled back to their pre-transaction content via best-effort restoration writes.
 3. **Phase 3 — notify.** Per file: fire `FileChanged` via `didChangeWatchedFiles`, invalidate symbol cache for the URI.
 

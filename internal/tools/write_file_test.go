@@ -115,6 +115,65 @@ func TestWriteFile_PreservesSymlink(t *testing.T) {
 	}
 }
 
+func TestWriteFile_DirtyCheck_RefusesDirtyFile(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(f, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "file.txt")
+	gitExec(t, dir, "commit", "-m", "add")
+	// Modify after commit to make dirty.
+	if err := os.WriteFile(f, []byte("modified"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := callWriteFile(t, map[string]any{"path": f, "content": "new"})
+	if err == nil {
+		t.Fatal("expected error for dirty file")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+	// File must be unchanged.
+	got, _ := os.ReadFile(f)
+	if string(got) != "modified" {
+		t.Errorf("file content changed unexpectedly: %q", got)
+	}
+}
+
+func TestWriteFile_DirtyOk_OverwritesDirtyFile(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(f, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "file.txt")
+	gitExec(t, dir, "commit", "-m", "add")
+	if err := os.WriteFile(f, []byte("modified"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := callWriteFile(t, map[string]any{"path": f, "content": "new content", "dirty_ok": true})
+	if err != nil {
+		t.Fatalf("unexpected error with dirty_ok=true: %v", err)
+	}
+	got, _ := os.ReadFile(f)
+	if string(got) != "new content" {
+		t.Errorf("unexpected content: %q", got)
+	}
+}
+
+func TestWriteFile_DirtyCheck_AllowsNewFile(t *testing.T) {
+	dir := initGitRepo(t)
+	// A file that doesn't exist yet is not dirty — creation must succeed.
+	f := filepath.Join(dir, "brand-new.txt")
+	_, err := callWriteFile(t, map[string]any{"path": f, "content": "hello"})
+	if err != nil {
+		t.Fatalf("unexpected error creating new file: %v", err)
+	}
+}
+
 func TestWriteFile_AtomicTmpCleanedOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
