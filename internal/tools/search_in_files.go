@@ -394,12 +394,14 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		sb.WriteByte('\n')
 	}
 
-	summary := fmt.Sprintf("%d file(s) matched, %d hits", len(results), totalLines)
+	var summary string
 	switch {
 	case timedOut:
-		summary += fmt.Sprintf(" (partial — search timed out after %s; narrow with path/glob)", searchDefaultDeadline)
+		summary = fmt.Sprintf("Showing %d hit(s) across %d file(s) — partial (search timed out after %s; narrow with path/glob or set a tighter pattern).", totalLines, len(results), searchDefaultDeadline)
 	case truncated:
-		summary += fmt.Sprintf(" (truncated past %d hits — narrow with glob or a tighter pattern)", a.MaxResults)
+		summary = fmt.Sprintf("Showing first %d hit(s) across %d file(s) — limit reached (pass max_results=N to raise, or narrow with glob/path/pattern).", a.MaxResults, len(results))
+	default:
+		summary = fmt.Sprintf("%d hit(s) across %d file(s).", totalLines, len(results))
 	}
 	if totalSkippedLines > 0 {
 		summary += fmt.Sprintf(" (%d oversized line(s) skipped)", totalSkippedLines)

@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.1** (2026-05-17).
+Last reviewed against: **0.6.2** (2026-05-18).
 
 When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -159,20 +159,6 @@ Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspac
 ### Features
 
 Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.
-
-### Token Usage Optimization — Automatic Diffing & Truncation
-
-**Priority:** high.
-**Effort:** Significant (multi-step).
-
-**Why this matters.** Agents often re-read files to verify changes or dump too much data into the context (logs, grep results). Plumb can solve this at the tool level.
-
-**Definition of done:**
-1. **Automatic Diffing:** `edit_file` and `write_file` return a unified diff of the change in the response. This gives the agent immediate confirmation of the change without requiring a fresh `read_file` turn.
-2. **Smart Truncation:** Large tool outputs (especially `search_in_files` and `git log`) are automatically capped (e.g., at 100 lines). The response includes a summary ("Showing 100 of 450 matches") and instructions on how to page or narrow the search.
-3. **Implicit Verification Mode:** A configuration option to suppress full output and return only high-signal metadata for repetitive tasks.
-
----
 
 ### TUI: Live Log Viewer with Real-time Filtering
 

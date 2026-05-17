@@ -53,4 +53,10 @@ type WriteDeps struct {
 	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
 	// rollback log. nil or a function returning "" disables the txlog.
 	WorkspaceFn func() string
+	// ShowWriteDiff, when true, appends a unified diff of the change to
+	// write_file and edit_file responses. Defaults to true (zero value of
+	// bool is false, but callers should set this from the resolved config).
+	// Set to false for implicit-verification mode (tokens matter more than
+	// inline confirmation).
+	ShowWriteDiff bool
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2 (2026-05-18)
+
+### Added
+- **Unified diff in `edit_file` and `write_file` responses.** After a successful write, both tools append a unified diff (Myers O(ND) algorithm, capped at 80 lines) so the calling agent can verify what changed without a round-trip `read_file`. For `write_file` creating a new file the response says `new file` instead of a diff. Controlled by `[edits].show_write_diff` (default `true`) or `PLUMB_SHOW_WRITE_DIFF=0` for implicit-verification mode.
+- **Smart truncation for `search_in_files` and `git log/blame`.** `search_in_files` summary messages now say `Showing first N hit(s) across M file(s) — limit reached (pass max_results=N to raise, or narrow with glob/path/pattern)` when the result set is truncated, and `N hit(s) across M file(s).` otherwise. `git log` and `git blame` output is capped at 200 lines with a how-to-narrow hint; the existing 100 KiB byte cap remains as the final safety net.
+
 ## 0.6.1 (2026-05-17)
 
 ### Changed

@@ -398,6 +398,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		PostWriteDiagWindow: diagWindow,
 		ConcurrentWriteSkew: time.Duration(cfg.Edits.ConcurrentWriteSkewMs) * time.Millisecond,
 		WorkspaceFn:         wsFn,
+		ShowWriteDiff:       cfg.Edits.ShowWriteDiff,
 	}
 	srv.Register(tools.NewWriteFile(writeDeps))
 	srv.Register(tools.NewEditFile(writeDeps))

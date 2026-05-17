@@ -114,6 +114,15 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	_, statErr := os.Stat(path)
 	isNew := os.IsNotExist(statErr)
 
+	// Read the old content before writing so we can diff it. Only done when
+	// the file exists and diff output is enabled; small files only (≤200 KiB).
+	var oldContent string
+	if !isNew && t.deps.ShowWriteDiff {
+		if b, err := os.ReadFile(path); err == nil && len(b) <= 200*1024 {
+			oldContent = string(b)
+		}
+	}
+
 	uri := "file://" + path
 	var preDiags []protocol.Diagnostic
 	if t.deps.Diag != nil {
@@ -137,11 +146,20 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if isNew {
 		verb = "created"
 	}
-	out := fmt.Sprintf("%s %s (%d bytes)", verb, path, len(a.Content))
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s %s (%d bytes)", verb, path, len(a.Content))
+	if t.deps.ShowWriteDiff {
+		if isNew {
+			sb.WriteString("\nnew file")
+		} else if d := unifiedDiff(path, oldContent, a.Content); d != "" {
+			sb.WriteString("\n")
+			sb.WriteString(d)
+		}
+	}
 	if t.deps.Diag != nil {
 		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.PostWriteDiagWindow)
-		out += formatPostWriteDiagnostics(fresh)
+		sb.WriteString(formatPostWriteDiagnostics(fresh))
 	}
-	return out, nil
+	return sb.String(), nil
 }
 

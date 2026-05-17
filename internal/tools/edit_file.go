@@ -265,6 +265,12 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			sb.WriteString("\n")
 			sb.WriteString(summary)
 		}
+		if t.deps.ShowWriteDiff {
+			if d := unifiedDiff(path, before, content); d != "" {
+				sb.WriteString("\n")
+				sb.WriteString(d)
+			}
+		}
 		if t.deps.Diag != nil {
 			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.PostWriteDiagWindow)
 			sb.WriteString(formatPostWriteDiagnostics(fresh))

@@ -99,6 +99,14 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	}
 
 	result := string(out)
+
+	// For log and blame, apply a line-count cap so large histories or files
+	// don't flood the agent context. The byte cap is the final safety net.
+	const maxLogLines = 200
+	if a.Subcommand == "log" || a.Subcommand == "blame" {
+		result = truncateLines(result, maxLogLines,
+			fmt.Sprintf("… (showing first %d lines — add --oneline / -n N to narrow, or use args to filter)", maxLogLines))
+	}
 	if len(result) > maxGitBytes {
 		result = result[:maxGitBytes] + "\n… (output truncated at 100 KiB)"
 	}
@@ -106,6 +114,16 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 		return "(no output)", nil
 	}
 	return result, nil
+}
+
+// truncateLines caps s at maxLines lines. If the output is longer, the suffix
+// is appended on a new line after the last included line.
+func truncateLines(s string, maxLines int, suffix string) string {
+	lines := strings.SplitN(s, "\n", maxLines+2)
+	if len(lines) <= maxLines+1 {
+		return s // fits within limit
+	}
+	return strings.Join(lines[:maxLines], "\n") + "\n" + suffix
 }
 
 // findGitRoot returns the root of the git repository that contains path.

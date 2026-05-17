@@ -244,8 +244,8 @@ func TestSearchInFiles_ManyFiles_ParallelCorrectness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, fmt.Sprintf("%d file(s) matched, %d hits", n, n)) {
-		t.Fatalf("expected %d files / %d hits summary:\n%s", n, n, out)
+	if !strings.Contains(out, fmt.Sprintf("%d hit(s) across %d file(s)", n, n)) {
+		t.Fatalf("expected %d hits / %d files summary:\n%s", n, n, out)
 	}
 	// Output should be sorted by path: f000.go before f001.go before ... .
 	idx0 := strings.Index(out, "f000.go")

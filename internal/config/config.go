@@ -96,6 +96,12 @@ type EditsConfig struct {
 	// file's mtime must be newer than tempWrittenAt+skew to trigger a retry.
 	// Increase on slow filesystems (network mounts, FUSE). Defaults to 100.
 	ConcurrentWriteSkewMs int `toml:"concurrent_write_skew_ms"`
+	// ShowWriteDiff controls whether edit_file and write_file append a unified
+	// diff of the change to their response. Defaults to true. Set to false
+	// (or PLUMB_SHOW_WRITE_DIFF=0) for implicit-verification mode where only
+	// path, size, and mtime metadata are returned — useful when tokens matter
+	// more than inline confirmation.
+	ShowWriteDiff bool `toml:"show_write_diff"`
 }
 
 // Config is the resolved configuration for a plumb process.
@@ -122,6 +128,7 @@ var defaults = Config{
 		RateLimitPerMinute:     120,
 		PostWriteDiagnosticsMs: 300,
 		ConcurrentWriteSkewMs:  100,
+		ShowWriteDiff:          true,
 	},
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,
@@ -292,6 +299,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.Edits.ConcurrentWriteSkewMs = n
 		}
+	}
+	if v := os.Getenv("PLUMB_SHOW_WRITE_DIFF"); v != "" {
+		cfg.Edits.ShowWriteDiff = !(v == "0" || v == "false" || v == "no")
 	}
 }
 

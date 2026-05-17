@@ -1,0 +1,267 @@
+package tools
+
+// diff.go — minimal unified diff generator for edit_file and write_file responses.
+//
+// Implements the Myers O(ND) diff algorithm. Used to produce a compact change
+// summary in write-tool responses so the calling agent can verify what changed
+// without a follow-up read_file call.
+
+import (
+	"fmt"
+	"strings"
+)
+
+// maxDiffLines is the maximum number of diff output lines (header + hunks)
+// included in a write-tool response. Diffs that exceed this are truncated.
+const maxDiffLines = 80
+
+type diffLine struct {
+	kind byte // ' ' common, '-' delete, '+' add
+	text string
+}
+
+// unifiedDiff returns a unified diff comparing oldContent to newContent.
+// path is used only in the header (--- a/path, +++ b/path). Returns "" when
+// there is no difference. Output is capped at maxDiffLines; a truncation note
+// is appended when the full diff would be longer.
+func unifiedDiff(path, oldContent, newContent string) string {
+	if oldContent == newContent {
+		return ""
+	}
+	oldLines := diffSplitLines(oldContent)
+	newLines := diffSplitLines(newContent)
+	ops := computeEditScript(oldLines, newLines)
+	hunks := groupHunks(ops, 3)
+	if len(hunks) == 0 {
+		return ""
+	}
+
+	var out []string
+	out = append(out, fmt.Sprintf("--- a/%s", path))
+	out = append(out, fmt.Sprintf("+++ b/%s", path))
+	total := len(out)
+	truncated := false
+	for _, h := range hunks {
+		lines := formatHunk(h)
+		if total+len(lines) > maxDiffLines {
+			out = append(out, lines[:max(0, maxDiffLines-total)]...)
+			truncated = true
+			break
+		}
+		out = append(out, lines...)
+		total += len(lines)
+	}
+	if truncated {
+		out = append(out, "… (diff truncated; use file_diff for the full view)")
+	}
+	return strings.Join(out, "\n")
+}
+
+func diffSplitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	lines := strings.Split(s, "\n")
+	// If the string ends with a newline, Split produces a spurious empty last
+	// element. Remove it so line counts are accurate.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// editScript is a sequence of diffLines encoding the shortest edit script.
+type editScript []diffLine
+
+// computeEditScript runs Myers' O(ND) shortest-edit-script algorithm and
+// returns the full edit script as a flat sequence of diffLines.
+//
+// Myers' algorithm builds a greedy forward pass (finding the furthest-
+// reaching d-path on each diagonal k) and then backtracks through saved
+// snapshots to reconstruct the exact edit sequence.
+func computeEditScript(old, new []string) editScript {
+	n, m := len(old), len(new)
+	if n == 0 && m == 0 {
+		return nil
+	}
+
+	maxD := n + m // worst-case edit distance
+	offset := maxD // offset so index k+offset is always ≥0
+
+	v := make([]int, 2*maxD+1)
+
+	// trace[d] is a snapshot of v taken before processing round d.
+	// trace[d][k+offset] = furthest x on diagonal k after d-1 edits.
+	type snap []int
+	trace := make([]snap, 0, maxD+1)
+
+	found := false
+	var endD int
+
+outer:
+	for d := 0; d <= maxD; d++ {
+		s := make(snap, len(v))
+		copy(s, v)
+		trace = append(trace, s)
+
+		for k := -d; k <= d; k += 2 {
+			// Choose whether to move right (delete) or down (insert).
+			var x int
+			if k == -d || (k != d && v[k-1+offset] < v[k+1+offset]) {
+				x = v[k+1+offset] // insert: move down on diagonal k+1
+			} else {
+				x = v[k-1+offset] + 1 // delete: move right on diagonal k-1
+			}
+			y := x - k
+			// Extend along diagonal (common lines).
+			for x < n && y < m && old[x] == new[y] {
+				x++
+				y++
+			}
+			v[k+offset] = x
+			if x == n && y == m {
+				endD = d
+				found = true
+				break outer
+			}
+		}
+	}
+	if !found {
+		return nil // should never happen for finite inputs
+	}
+
+	// Backtrack through snapshots to reconstruct the edit script.
+	x, y := n, m
+	var script editScript
+	for d := endD; d > 0; d-- {
+		vPrev := trace[d] // state of v before round d (= after round d-1)
+		k := x - y
+
+		// Determine which diagonal we came from in round d.
+		var prevK int
+		if k == -d || (k != d && vPrev[k-1+offset] < vPrev[k+1+offset]) {
+			prevK = k + 1 // insertion (y-step) from diagonal k+1
+		} else {
+			prevK = k - 1 // deletion (x-step) from diagonal k-1
+		}
+		prevX := vPrev[prevK+offset]
+		prevY := prevX - prevK
+
+		if prevK == k+1 {
+			// Insertion from diagonal k+1: snake from (prevX, prevY+1) → (x, y).
+			for x > prevX && y > prevY+1 && old[x-1] == new[y-1] {
+				x--
+				y--
+				script = append(script, diffLine{' ', old[x]})
+			}
+			y-- // the actual insertion
+			script = append(script, diffLine{'+', new[y]})
+		} else {
+			// Deletion from diagonal k-1: snake from (prevX+1, prevY) → (x, y).
+			for x > prevX+1 && y > prevY && old[x-1] == new[y-1] {
+				x--
+				y--
+				script = append(script, diffLine{' ', old[x]})
+			}
+			x-- // the actual deletion
+			script = append(script, diffLine{'-', old[x]})
+		}
+		x, y = prevX, prevY
+	}
+	// Any remaining diagonal at the very start is all common lines.
+	for x > 0 {
+		x--
+		y--
+		script = append(script, diffLine{' ', old[x]})
+	}
+
+	// Reverse: backtracking produces the script in reverse order.
+	for i, j := 0, len(script)-1; i < j; i, j = i+1, j-1 {
+		script[i], script[j] = script[j], script[i]
+	}
+	return script
+}
+
+// hunk groups a contiguous changed region with surrounding context lines.
+type hunk struct {
+	oldStart, oldCount int
+	newStart, newCount int
+	lines              []diffLine
+}
+
+// groupHunks converts a flat edit script into hunks with ctx lines of context.
+func groupHunks(script editScript, ctx int) []hunk {
+	if len(script) == 0 {
+		return nil
+	}
+	var hunks []hunk
+	i := 0
+	oldLine, newLine := 1, 1
+
+	for i < len(script) {
+		// Advance past common lines until we find a change.
+		for i < len(script) && script[i].kind == ' ' {
+			oldLine++
+			newLine++
+			i++
+		}
+		if i >= len(script) {
+			break
+		}
+
+		// Collect up to ctx preceding context lines.
+		ctxStart := max(0, i-ctx)
+		ctxBack := i - ctxStart
+		h := hunk{
+			oldStart: oldLine - ctxBack,
+			newStart: newLine - ctxBack,
+		}
+		for j := ctxStart; j < i; j++ {
+			h.lines = append(h.lines, script[j])
+			h.oldCount++
+			h.newCount++
+		}
+
+		// Collect the changed region, stopping after ctx trailing context lines.
+		for i < len(script) {
+			dl := script[i]
+			h.lines = append(h.lines, dl)
+			switch dl.kind {
+			case ' ':
+				oldLine++
+				newLine++
+				h.oldCount++
+				h.newCount++
+			case '-':
+				oldLine++
+				h.oldCount++
+			case '+':
+				newLine++
+				h.newCount++
+			}
+			i++
+
+			// Count trailing common lines collected so far.
+			trailing := 0
+			for j := len(h.lines) - 1; j >= 0 && h.lines[j].kind == ' '; j-- {
+				trailing++
+			}
+			// Stop collecting if we have ctx trailing context lines and the next
+			// line (if any) is also common — i.e. we are past the change region.
+			if trailing >= ctx && (i >= len(script) || script[i].kind == ' ') {
+				break
+			}
+		}
+		hunks = append(hunks, h)
+	}
+	return hunks
+}
+
+func formatHunk(h hunk) []string {
+	header := fmt.Sprintf("@@ -%d,%d +%d,%d @@", h.oldStart, h.oldCount, h.newStart, h.newCount)
+	out := []string{header}
+	for _, dl := range h.lines {
+		out = append(out, string(dl.kind)+dl.text)
+	}
+	return out
+}
