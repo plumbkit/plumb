@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -65,7 +66,7 @@ type FindFiles struct{}
 
 func NewFindFiles() *FindFiles { return &FindFiles{} }
 
-func (t *FindFiles) Name() string             { return "find_files" }
+func (t *FindFiles) Name() string                 { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
 func (t *FindFiles) Description() string {
 	return "Workspace-scoped file/directory finder. Prefer this over shelling out to find/fd: " +
@@ -157,7 +158,7 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		respectIgnore: true,
 	}
 
-	_ = walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
+	walkErr := walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -214,7 +215,19 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return nil
 	})
 
+	timedOut := errors.Is(walkErr, context.DeadlineExceeded)
+	cancelled := errors.Is(walkErr, context.Canceled)
+
 	if len(hits) == 0 {
+		if timedOut {
+			return fmt.Sprintf("find_files for %q timed out before any matches were found (budget %s — narrow with path or max_depth).", a.Pattern, findFilesDefaultDeadline), nil
+		}
+		if cancelled {
+			return "", walkErr
+		}
+		if walkErr != nil {
+			return "", fmt.Errorf("find_files: walking %s: %w", root, walkErr)
+		}
 		return fmt.Sprintf("No files found matching %q.", a.Pattern), nil
 	}
 
@@ -225,6 +238,10 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	if truncated {
 		fmt.Fprintf(&sb, "\n(truncated at %d results — use a more specific pattern or set max_depth)", a.MaxResults)
+	} else if timedOut {
+		fmt.Fprintf(&sb, "\n%d result(s) (partial — walk timed out after %s; narrow with path or max_depth)", len(hits), findFilesDefaultDeadline)
+	} else if walkErr != nil {
+		fmt.Fprintf(&sb, "\n%d result(s) (partial — walk stopped: %v)", len(hits), walkErr)
 	} else {
 		fmt.Fprintf(&sb, "\n%d result(s)", len(hits))
 	}

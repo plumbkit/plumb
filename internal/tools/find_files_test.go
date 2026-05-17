@@ -141,6 +141,21 @@ func TestFindFiles_NoMatch(t *testing.T) {
 	}
 }
 
+func TestFindFiles_CancelledContextReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewFindFiles()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	args, _ := json.Marshal(map[string]any{"pattern": "*.go", "path": dir})
+	if _, err := tool.Execute(ctx, args); err == nil {
+		t.Fatal("expected cancellation error")
+	}
+}
+
 // TestFindFiles_GlobPrunesSiblingDirs verifies that a glob with a literal
 // path prefix (e.g. "wanted/**") never returns hits from sibling subtrees,
 // even when files inside those subtrees would have matched the trailing glob
