@@ -343,7 +343,7 @@ code {
 .ty  { color: var(--neon-yellow); }
 .tm  { color: var(--text-muted); }
 .tw  { color: var(--text); }
-.td  { color: var(--border-b); }
+.td  { color: var(--text-dim); } /* Fixed contrast: was --border-b */
 .tp  { color: var(--neon-magenta); }
 
 /* ============================================================
@@ -352,10 +352,10 @@ code {
 section { padding: 100px 0; border-top: 1px solid var(--border); }
 .sec-title {
   font-family: var(--sans);
-  font-size: clamp(2rem, 4vw, 2.8rem);
+  font-size: clamp(1.8rem, 3.5vw, 2.3rem); /* Scaled down from 2.8rem */
   font-weight: 900;
   text-transform: uppercase;
-  letter-spacing: -1px;
+  letter-spacing: -0.5px;
   margin-bottom: 16px;
   color: #fff;
 }
