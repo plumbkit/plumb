@@ -685,11 +685,11 @@ func (m Model) render() string {
 	logoW := lipgloss.Width(logoLines[0])
 	tabSpaceW := m.width - logoW
 
-	tabs := m.renderTabs(tabSpaceW, isOverlay)
+	menu := m.renderTopMenu(tabSpaceW, isOverlay)
 
 	for i := 0; i < 3; i++ {
-		// Draw the tabs on the left, then the logo piece on the right
-		sb.WriteString(tabs[i] + sepStyle.Render(logoLines[i]) + "\n")
+		// Draw the menu on the left, then the logo piece on the right.
+		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
 	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
 
@@ -1149,7 +1149,7 @@ func (m Model) leftLines() []string {
 			}
 			path = contractPath(s.Folder, mf)
 		}
-		secondLine := "   └ " + path
+		secondLine := "    ╰─ " + path
 		if i == m.cursor {
 			if lf {
 				lines = append(lines, SelectedStyle.Render(firstLine))
@@ -1342,57 +1342,34 @@ func padRight(s string, w int) string {
 	return s + strings.Repeat(" ", w-v)
 }
 
-func (m Model) renderTabs(width int, dimmed bool) []string {
-	tabNames := []string{"⌂ HOME", "◈ SESSIONS", "≡ LOGS"}
-	tabWidth := 16 // "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄" is 16 blocks wide
-	gapWidth := 3
-
-	topLine := ""
-	midLine := ""
-	botLine := ""
-
-	for i, name := range tabNames {
-		isActive := i == 1 // Hardcode 'Sessions' as active for prototyping
-
-		var midStyle, edgeStyle lipgloss.Style
+func (m Model) renderTopMenu(width int, dimmed bool) []string {
+	rows := []struct {
+		label  string
+		active bool
+	}{
+		{label: "Home"},
+		{label: "Sessions", active: true},
+		{label: "Logs"},
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		marker := "○"
+		style := ItemStyle
+		if row.active {
+			marker = "●"
+			style = SelectedStyle
+		}
 		if dimmed {
-			midStyle = TabInactiveStyle.Copy().Background(ActiveTheme.Border)
-			edgeStyle = TabInactiveEdgeStyle.Copy().Foreground(ActiveTheme.Border)
-		} else if isActive {
-			midStyle = TabActiveStyle.Copy().Width(tabWidth)
-			edgeStyle = TabActiveEdgeStyle
-		} else {
-			midStyle = TabInactiveStyle.Copy().Width(tabWidth)
-			edgeStyle = TabInactiveEdgeStyle
+			style = InactiveStyle
 		}
-
-		topLine += edgeStyle.Render(strings.Repeat("▄", tabWidth))
-		midLine += midStyle.Render(name)
-		botLine += edgeStyle.Render(strings.Repeat("▀", tabWidth))
-
-		if i < len(tabNames)-1 {
-			topLine += strings.Repeat(" ", gapWidth)
-			midLine += strings.Repeat(" ", gapWidth)
-			botLine += strings.Repeat(" ", gapWidth)
+		line := style.Render(" " + marker + " " + row.label)
+		pad := width - lipgloss.Width(line)
+		if pad < 0 {
+			pad = 0
 		}
+		out = append(out, line+strings.Repeat(" ", pad))
 	}
-
-	// Pad the rest of the layout width so it aligns perfectly with the logo
-	// We also offset the entire tab bar by 1 column on the left
-	leftOffset := " "
-
-	padLeftSize := width - lipgloss.Width(topLine) - 1 // Subtract 1 for the offset
-	if padLeftSize < 0 {
-		padLeftSize = 0
-	}
-
-	padStr := strings.Repeat(" ", padLeftSize)
-
-	return []string{
-		leftOffset + topLine + padStr,
-		leftOffset + midLine + padStr,
-		leftOffset + botLine + padStr,
-	}
+	return out
 }
 
 func padLeft(s string, w int) string {

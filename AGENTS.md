@@ -1,8 +1,14 @@
 # Plumb — Agent Instructions
 
+> Source of truth: edit `AGENTS.md` only.
+>
+> `CLAUDE.md`, `GEMINI.md`, and `CHATGPT.md` are local symlinks to this file for client compatibility. Do not replace, unlink, rewrite, or edit those symlink paths directly. If an instruction change is needed, update `AGENTS.md`; the linked files will reflect it automatically.
+>
+> These agent-context files are intentionally ignored by git in this workspace.
+
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-Current version: **0.5.28** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.5.30** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -37,7 +43,7 @@ Key packages:
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | Per-project SQLite tool-call statistics (WAL, per-tool summary, P95, `user_version` 3) |
+| `internal/stats/` | Per-project SQLite tool-call statistics (WAL, per-tool summary, P95, `user_version` 4) |
 | `internal/memory/` | Per-workspace markdown memory store; exposed as MCP resources |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |
@@ -70,6 +76,7 @@ On daemon start the binary writes:
 | `~/Library/Caches/plumb/plumb.version` | Build version; `plumb serve` warns on mismatch |
 | `~/Library/Caches/plumb/plumb.spawn.lock` | `flock`'d briefly by `plumb serve` to serialise daemon spawn decisions (see "Singleton enforcement" below) |
 | `~/Library/Caches/plumb/plumb.daemon.lock` | `flock`'d by `plumb daemon` for its lifetime; a second daemon sees `EWOULDBLOCK` and exits |
+| `~/Library/Caches/plumb/plumb.ctrl.sock` | Admin Unix socket; accepts line-based `set-level <level>` commands from `plumb log-level` |
 | `~/Library/Caches/plumb/daemon.log` | All daemon logs |
 
 ### Singleton enforcement
@@ -142,9 +149,7 @@ Run `plumb init` in any project root to create a `.plumb/` marker directory (als
 | Adapter | Status |
 |---|---|
 | `gopls` | **Validated** — unit-tested with mock transport; integration-tested against real gopls binary; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed |
-| `pyright` | **Experimental** — real code, unit-tested with mocked transport; the wire format for `DidChangeWatchedFiles` is tested but pyright's end-to-end consumption of the notification has not been confirmed in CI |
-
-Promoting pyright to validated requires: integration tests in `internal/lsp/adapters/pyright/` that spawn a real pyright binary against `testdata/python-fixture/` and confirm fresh diagnostics arrive after a write via plumb.
+| `pyright` | **Validated** — unit-tested with mock transport; integration-tested against real pyright-langserver binary; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed |
 
 ## How to add an LSP adapter
 
@@ -209,17 +214,17 @@ Pyright is the worked example.
 | `list_directory` | `list_directory.go` | Immediate children, `[FILE]`/`[DIR]` prefixes, sizes, mtimes. Glob `pattern`. Sort by name/size/modified. |
 | `list_files` | `list_files.go` | Recursive; glob filter; depth control; respects `.gitignore`. |
 | `find_files` | `find_files.go` | Glob/regex finder; honours `.gitignore`. |
-| `search_in_files` | `search_in_files.go` | ripgrep-style; smart-case; honours `.gitignore`. |
+| `search_in_files` | `search_in_files.go` | ripgrep-style; smart-case; honours `.gitignore`; `exclude` glob patterns prune directories and files. |
 
-**Filesystem writes** (all take `WriteDeps`; all hold per-path locks; all notify LSP via `didChangeWatchedFiles`; all invalidate the symbol cache; all consume one rate-limit slot)
+**Filesystem writes** (all take `WriteDeps`; all hold per-path locks; all check git dirty state; all notify LSP via `didChangeWatchedFiles`; all invalidate the symbol cache; all consume one rate-limit slot)
 
 | Tool | File | Notes |
 |---|---|---|
-| `write_file` | `write_file.go` | Atomic (tmpdir + rename + EXDEV-fallback). Symlink-aware. Permissions preserved. Post-write diagnostics appended to response. `FileCreated`/`FileChanged` notification. |
-| `edit_file` | `edit_file.go` | str_replace; uniqueness lock; CRLF tolerance; in-memory application (all-or-nothing); pre-rename mtime check; post-rename concurrent-write retry (max 3); optional `expected_mtime` opt-in concurrency check; strict-mode requires-read check; line-range summary + post-write diagnostics in response. |
-| `delete_file` | `delete_file.go` | Refuses directories. `FileDeleted` notification. |
-| `rename_file` | `rename_file.go` | Atomic. Two-path locks (lexical order, deadlock-safe). `FileDeleted` + `FileCreated` notifications. Refuses to overwrite without `overwrite=true`. |
-| `transaction_apply` | `transaction.go` | Multi-file atomic edits. Up to 50 ops. Phase 1 validates everything in memory; phase 2 writes under locks; phase 3 rolls back successful writes on partial failure. Each op consumes one rate-limit slot. Use for cross-file refactors. |
+| `write_file` | `write_file.go` | Atomic (tmpdir + rename + EXDEV-fallback). Symlink-aware. Permissions preserved. Post-write diagnostics appended to response. `FileCreated`/`FileChanged` notification. `dirty_ok` param (default false) — refused if target has uncommitted changes. |
+| `edit_file` | `edit_file.go` | str_replace; uniqueness lock; CRLF tolerance; in-memory application (all-or-nothing); pre-rename mtime check; post-rename concurrent-write retry (max 3); optional `expected_mtime` opt-in concurrency check; strict-mode requires-read check; line-range summary + post-write diagnostics in response. `dirty_ok` param. |
+| `delete_file` | `delete_file.go` | Refuses directories. `FileDeleted` notification. `dirty_ok` param. |
+| `rename_file` | `rename_file.go` | Atomic. Two-path locks (lexical order, deadlock-safe). `FileDeleted` + `FileCreated` notifications. Refuses to overwrite without `overwrite=true`. `dirty_ok` param (checks source). |
+| `transaction_apply` | `transaction.go` | Multi-file atomic edits. Up to 50 ops. Phase 1 validates everything in memory; phase 2 writes under locks; phase 3 rolls back successful writes on partial failure. Each op consumes one rate-limit slot. Use for cross-file refactors. `dirty_ok` param — batched check per directory, all dirty files reported at once. |
 
 **Other**
 
@@ -339,6 +344,7 @@ You are likely an AI agent reading this through plumb. Treat the following as th
 - **See your own activity:** `plumb` TUI's right panel shows "Recent Edits" for the selected session.
 - **Throttled?** You hit the rate limit (default 120/min). Wait or set `PLUMB_WRITE_RATE_LIMIT=0`.
 - **Rejected for "has not been read"?** Strict mode is on. Call `read_file` first.
+- **Rejected for "uncommitted changes"?** The target file is dirty in git. Review and commit the changes, or pass `dirty_ok: true` to overwrite anyway.
+- **Too much log noise from the daemon?** `plumb log-level warn` raises the floor instantly, no restart required. `plumb log-level reset` restores the config-file default.
 
 When in doubt about the resolved config, `plumb config show --workspace .` from the project directory.
-.` from the project directory.

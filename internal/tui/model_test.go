@@ -141,6 +141,31 @@ func TestMouseDragDividerResizesLeftPanel(t *testing.T) {
 	}
 }
 
+func TestRenderTopMenuUsesVerticalRows(t *testing.T) {
+	RebuildStyles()
+	m := Model{}
+
+	lines := m.renderTopMenu(20, false)
+	if len(lines) != 3 {
+		t.Fatalf("renderTopMenu returned %d lines, want 3", len(lines))
+	}
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+		if !strings.HasPrefix(plain[i], " ") {
+			t.Fatalf("line %d = %q, want leading space", i, plain[i])
+		}
+		if strings.ContainsAny(plain[i], "▄▀") {
+			t.Fatalf("line %d contains old tab box glyphs: %q", i, plain[i])
+		}
+	}
+	for i, want := range []string{" ○ Home", " ● Sessions", " ○ Logs"} {
+		if !strings.HasPrefix(plain[i], want) {
+			t.Fatalf("line %d = %q, want prefix %q", i, plain[i], want)
+		}
+	}
+}
+
 func ansiStripForTest(s string) string {
 	var b strings.Builder
 	inEsc := false
