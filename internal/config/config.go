@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -181,6 +182,18 @@ func GlobalConfigPath() string {
 	return configPath()
 }
 
+// CacheDir returns the path to the ephemeral plumb cache directory.
+// This is for disposable state: sockets, pids, locks.
+func CacheDir() string {
+	return cachePath()
+}
+
+// DataDir returns the path to the persistent plumb data directory.
+// This is for important history: stats.db, telemetry.
+func DataDir() string {
+	return dataPath()
+}
+
 func configPath() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -191,6 +204,36 @@ func configPath() string {
 		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, "plumb", "config.toml")
+}
+
+func cachePath() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "plumb")
+}
+
+func dataPath() string {
+	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return cachePath() // fallback to cache if home unknown
+		}
+		switch runtime.GOOS {
+		case "darwin":
+			base = filepath.Join(home, "Library", "Application Support")
+		case "windows":
+			base = os.Getenv("APPDATA")
+			if base == "" {
+				base = filepath.Join(home, "AppData", "Roaming")
+			}
+		default:
+			base = filepath.Join(home, ".local", "share")
+		}
+	}
+	return filepath.Join(base, "plumb")
 }
 
 // Load reads the config file, applies env overrides, and validates the result.

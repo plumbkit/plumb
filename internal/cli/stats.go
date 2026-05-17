@@ -50,7 +50,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	db, err := stats.OpenReadOnly(stats.DBPathFor(ws))
+	db, err := stats.OpenReadOnly()
 	if err != nil {
 		return fmt.Errorf("opening stats db: %w", err)
 	}
@@ -58,13 +58,14 @@ func runStats(_ *cobra.Command, _ []string) error {
 		printCLIDiagnostic(os.Stdout, cliDiagnostic{
 			Kind:  "info",
 			Title: "No statistics recorded yet",
-			Body:  fmt.Sprintf("No statistics recorded yet for %s. Stats live at <workspace>/.plumb/stats.db — make some tool calls first.", contractSessionPath(ws)),
+			Body:  "No statistics recorded yet. Make some tool calls first.",
 		})
 		return nil
 	}
 	defer db.Close()
 
-	filter := stats.Filter{}
+	// Filter stats to the requested workspace.
+	filter := stats.Filter{Workspace: ws}
 
 	total := db.TotalCalls(filter)
 	if total == 0 {

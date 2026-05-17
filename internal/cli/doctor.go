@@ -298,10 +298,7 @@ func checkConfigs(ws string) []checkResult {
 
 // checkStatsDB verifies the per-workspace stats DB is readable.
 func checkStatsDB(ws string) []checkResult {
-	if ws == "" {
-		return nil
-	}
-	dbPath := stats.DBPathFor(ws)
+	dbPath := stats.DBPathFor()
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return []checkResult{{
 			name:   "stats db",
@@ -309,7 +306,7 @@ func checkStatsDB(ws string) []checkResult {
 			detail: "not present yet (created on first tool call)",
 		}}
 	}
-	db, err := stats.OpenReadOnly(dbPath)
+	db, err := stats.OpenReadOnly()
 	if err != nil {
 		return []checkResult{{
 			name:   "stats db",
@@ -318,7 +315,12 @@ func checkStatsDB(ws string) []checkResult {
 			fix:    "the DB may be corrupt — remove " + contractConfigPath(dbPath) + " to reset",
 		}}
 	}
-	total := db.TotalCalls(stats.Filter{})
+	// Total calls for the workspace if provided, otherwise global.
+	filter := stats.Filter{}
+	if ws != "" {
+		filter.Workspace = ws
+	}
+	total := db.TotalCalls(filter)
 	db.Close()
 	return []checkResult{{
 		name:   "stats db",

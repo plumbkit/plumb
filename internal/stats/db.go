@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golimpio/plumb/internal/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -56,6 +57,7 @@ var migrations = []migration{
 	{from: 1, to: 2, addColumn: "input_json", sql: `ALTER TABLE tool_calls ADD COLUMN input_json    TEXT NOT NULL DEFAULT ''`},
 	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text  TEXT NOT NULL DEFAULT ''`},
 	{from: 3, to: 4, addColumn: "session_name", sql: `ALTER TABLE tool_calls ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
+	{from: 4, to: 5, addColumn: "workspace", sql: `ALTER TABLE tool_calls ADD COLUMN workspace    TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -118,12 +120,10 @@ type DB struct {
 	hasSessionName bool // false for pre-v4 databases opened read-only
 }
 
-// DBPathFor returns the per-workspace stats database path at
-// <workspace>/.plumb/stats.db. This is the preferred location: stats live
-// next to the project they describe and don't aggregate across unrelated
-// codebases.
-func DBPathFor(workspace string) string {
-	return filepath.Join(workspace, ".plumb", "stats.db")
+// DBPathFor returns the global stats database path in the persistent data
+// directory.
+func DBPathFor() string {
+	return filepath.Join(config.DataDir(), "stats.db")
 }
 
 // SchemaVersion is the current on-disk stats schema version. Persisted in
@@ -137,10 +137,12 @@ func DBPathFor(workspace string) string {
 //	2 — added input_json column (0.5.12+)
 //	3 — added output_text column (0.5.12+)
 //	4 — added session_name column (0.5.30+)
-const SchemaVersion = 4
+//	5 — added workspace column (0.5.31+)
+const SchemaVersion = 5
 
-// Open opens (or creates) the stats database at path.
-func Open(path string) (*DB, error) {
+// Open opens (or creates) the stats database at the conventional global path.
+func Open() (*DB, error) {
+	path := DBPathFor()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("stats: mkdir: %w", err)
 	}
@@ -173,22 +175,10 @@ func Open(path string) (*DB, error) {
 	return &DB{db: db, hasSessionName: true}, nil
 }
 
-// CurrentSchemaVersion reads PRAGMA user_version from the open db. Returns
-// 0 for pre-0.5.3 databases that were never stamped. Used by migrations.
-func (d *DB) CurrentSchemaVersion() (int, error) {
-	if d == nil {
-		return 0, nil
-	}
-	var v int
-	if err := d.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
-		return 0, err
-	}
-	return v, nil
-}
-
-// OpenReadOnly opens an existing stats database for reading only.
+// OpenReadOnly opens the existing global stats database for reading only.
 // Returns (nil, nil) if the database does not yet exist.
-func OpenReadOnly(path string) (*DB, error) {
+func OpenReadOnly() (*DB, error) {
+	path := DBPathFor()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -237,6 +227,7 @@ func (d *DB) Close() {
 type Call struct {
 	SessionID   string
 	SessionName string // human-readable name, e.g. "SWIFT-FALCON"
+	Workspace   string // absolute path to the project root
 	Tool        string
 	CalledAt    time.Time
 	DurationMs  int64
@@ -284,9 +275,9 @@ func (d *DB) Record(c Call) error {
 	}
 	if _, err := d.db.Exec(
 		`INSERT INTO tool_calls
-		 (session_id, session_name, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.SessionID, c.SessionName, c.Tool,
+		 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.SessionID, c.SessionName, c.Workspace, c.Tool,
 		c.CalledAt.UnixMilli(), c.DurationMs,
 		c.InputBytes, c.OutputBytes,
 		success, c.ErrorMsg,
@@ -336,6 +327,7 @@ type ActivitySummary struct {
 type Filter struct {
 	SessionID   string
 	SessionName string // when set, restricts to calls for this session name
+	Workspace   string // absolute path; when set, restricts to calls for this workspace
 	Tool        string // when set, restricts to calls for this exact tool name
 }
 
@@ -349,6 +341,10 @@ func (f Filter) where() (string, []any) {
 	if f.SessionName != "" {
 		conds = append(conds, "session_name = ?")
 		args = append(args, f.SessionName)
+	}
+	if f.Workspace != "" {
+		conds = append(conds, "workspace = ?")
+		args = append(args, f.Workspace)
 	}
 	if f.Tool != "" {
 		conds = append(conds, "tool = ?")
@@ -558,6 +554,7 @@ type RecentCall struct {
 	Tool        string
 	SessionID   string
 	SessionName string // human-readable name; empty for pre-v4 rows
+	Workspace   string // absolute path; empty for pre-v5 rows
 	CalledAt    time.Time
 	DurationMs  int64
 	Success     bool
@@ -575,7 +572,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	}
 	snCol := d.sessionNameCol()
 	where, args := filter.where()
-	q := `SELECT tool, session_id, ` + snCol + `, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, ` + snCol + `, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json, output_text
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
@@ -592,7 +589,7 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		var calledMs int64
 		var success int
 		if err := rows.Scan(
-			&c.Tool, &c.SessionID, &c.SessionName, &calledMs, &c.DurationMs, &success,
+			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
 			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText,
 		); err != nil {
 			continue
@@ -608,17 +605,17 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 // ordered newest-first. limit caps the result set (0 = no cap).
 // input_json and output_text (potentially 64 KiB each) are intentionally
 // excluded from this list query — they are fetched on demand via CallDetail.
-func (d *DB) CallsForTool(tool string, limit int) ([]RecentCall, error) {
+func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCall, error) {
 	if d == nil {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 500
 	}
-	f := Filter{Tool: tool}
+	f := Filter{Tool: tool, Workspace: workspace}
 	snCol := d.sessionNameCol()
 	where, args := f.where()
-	q := `SELECT tool, session_id, ` + snCol + `, called_at, duration_ms, success,
+	q := `SELECT tool, session_id, ` + snCol + `, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes
 	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -635,7 +632,7 @@ func (d *DB) CallsForTool(tool string, limit int) ([]RecentCall, error) {
 		var calledMs int64
 		var success int
 		if err := rows.Scan(
-			&c.Tool, &c.SessionID, &c.SessionName, &calledMs, &c.DurationMs, &success,
+			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
 			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
 		); err != nil {
 			continue

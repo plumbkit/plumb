@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"database/sql"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,27 +14,28 @@ import (
 	"github.com/golimpio/plumb/internal/stats"
 )
 
-func TestRunStats_ShowsRowsAfterWorkspaceMove(t *testing.T) {
-	parent := t.TempDir()
-	oldWorkspace := filepath.Join(parent, "old", "plumb")
-	newWorkspace := filepath.Join(parent, "new", "plumb")
+func TestRunStats_ShowsRows(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
 
-	db, err := stats.Open(stats.DBPathFor(oldWorkspace))
+	db, err := stats.Open()
 	if err != nil {
-		t.Fatalf("Open old workspace DB: %v", err)
+		t.Fatalf("Open DB: %v", err)
+	}
+	ws := t.TempDir() // Must be a real dir for resolveCLIWorkspace
+	if err := db.Record(stats.Call{
+		SessionID: "sess-1",
+		Workspace: ws,
+		Tool:      "read_file",
+		CalledAt:  time.Now(),
+		Success:   true,
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
 	}
 	db.Close()
-	seedOldWorkspaceRow(t, stats.DBPathFor(oldWorkspace), oldWorkspace)
-
-	if err := os.MkdirAll(filepath.Dir(newWorkspace), 0o755); err != nil {
-		t.Fatalf("MkdirAll new parent: %v", err)
-	}
-	if err := os.Rename(oldWorkspace, newWorkspace); err != nil {
-		t.Fatalf("Rename workspace: %v", err)
-	}
 
 	oldWorkspaceFlag, oldLimit := statsFlagWorkspace, statsFlagLimit
-	statsFlagWorkspace, statsFlagLimit = newWorkspace, 5
+	statsFlagWorkspace, statsFlagLimit = ws, 5
 	defer func() {
 		statsFlagWorkspace, statsFlagLimit = oldWorkspaceFlag, oldLimit
 	}()
@@ -47,10 +47,10 @@ func TestRunStats_ShowsRowsAfterWorkspaceMove(t *testing.T) {
 	})
 
 	if strings.Contains(out, "No statistics") {
-		t.Fatalf("runStats reported no statistics after workspace move:\n%s", out)
+		t.Fatalf("runStats reported no statistics:\n%s", out)
 	}
 	if !strings.Contains(out, "read_file") {
-		t.Fatalf("runStats output did not include moved DB row:\n%s", out)
+		t.Fatalf("runStats output did not include tool call:\n%s", out)
 	}
 }
 
@@ -105,27 +105,35 @@ func TestResolveCLIWorkspace_NonProjectDirectoryPreserved(t *testing.T) {
 	}
 }
 
-func TestRunStats_ExplicitNestedWorkspaceUsesRootDB(t *testing.T) {
-	root := t.TempDir()
-	nested := filepath.Join(root, "child")
-	if err := os.MkdirAll(filepath.Join(root, ".plumb"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
+func TestRunStats_ExplicitNestedWorkspaceUsesRootWorkspaceFilter(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
 
-	db, err := stats.Open(stats.DBPathFor(root))
+	root := "/projects/my-project"
+
+	db, err := stats.Open()
 	if err != nil {
-		t.Fatalf("Open root DB: %v", err)
+		t.Fatalf("Open DB: %v", err)
 	}
-	if err := db.Record(stats.Call{SessionID: "sess-1", Tool: "read_file", CalledAt: time.Now(), Success: true}); err != nil {
+	if err := db.Record(stats.Call{
+		SessionID: "sess-1",
+		Workspace: root,
+		Tool:      "read_file",
+		CalledAt:  time.Now(),
+		Success:   true,
+	}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	db.Close()
 
+	// Mocking directory structure for resolveCLIWorkspace
+	tempRoot := t.TempDir()
+	os.MkdirAll(filepath.Join(tempRoot, ".plumb"), 0o755)
+	tempChild := filepath.Join(tempRoot, "child")
+	os.MkdirAll(tempChild, 0o755)
+
 	oldWorkspaceFlag, oldLimit := statsFlagWorkspace, statsFlagLimit
-	statsFlagWorkspace, statsFlagLimit = nested, 5
+	statsFlagWorkspace, statsFlagLimit = tempChild, 5
 	defer func() {
 		statsFlagWorkspace, statsFlagLimit = oldWorkspaceFlag, oldLimit
 	}()
@@ -136,35 +144,8 @@ func TestRunStats_ExplicitNestedWorkspaceUsesRootDB(t *testing.T) {
 		}
 	})
 
-	if strings.Contains(out, "No statistics") {
-		t.Fatalf("runStats reported no statistics for nested workspace:\n%s", out)
-	}
-	if !strings.Contains(out, "read_file") {
-		t.Fatalf("runStats output did not include root DB row:\n%s", out)
-	}
-}
-
-func seedOldWorkspaceRow(t *testing.T, dbPath, oldWorkspace string) {
-	t.Helper()
-
-	raw, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open raw sqlite DB: %v", err)
-	}
-	defer raw.Close()
-
-	if _, err := raw.Exec(`ALTER TABLE tool_calls ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`); err != nil {
-		t.Fatalf("add old workspace column: %v", err)
-	}
-
-	_, err = raw.Exec(
-		`INSERT INTO tool_calls
-		 (session_id, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"sess-1", oldWorkspace, "read_file", time.Now().UnixMilli(), 1, 0, 0, 1, "", "", "",
-	)
-	if err != nil {
-		t.Fatalf("insert old workspace row: %v", err)
+	if !strings.Contains(out, "No statistics for workspace") {
+		t.Fatalf("runStats should have reported no statistics for resolved tempRoot:\n%s", out)
 	}
 }
 

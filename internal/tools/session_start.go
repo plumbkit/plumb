@@ -175,9 +175,10 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 
 	// ── 6. Recent tool usage stats ────────────────────────────────────────
-	if db, err := stats.OpenReadOnly(stats.DBPathFor(ws)); err == nil && db != nil {
+	// Use global stats DB filtered by workspace.
+	if db, err := stats.OpenReadOnly(); err == nil && db != nil {
 		defer db.Close()
-		if toolStats, err := db.Summary(stats.Filter{}); err == nil && len(toolStats) > 0 {
+		if toolStats, err := db.Summary(stats.Filter{Workspace: ws}); err == nil && len(toolStats) > 0 {
 			sb.WriteString("## Most-used tools (this workspace)\n\n")
 			limit := 5
 			if len(toolStats) < limit {

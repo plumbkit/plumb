@@ -11,7 +11,8 @@ import (
 
 func TestRecent_RoundTripsErrorAndByteFields(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(filepath.Join(dir, "stats.db"))
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -20,6 +21,7 @@ func TestRecent_RoundTripsErrorAndByteFields(t *testing.T) {
 	now := time.Now()
 	if err := db.Record(Call{
 		SessionID:   "sess-1",
+		Workspace:   "/w1",
 		Tool:        "find_symbol",
 		CalledAt:    now,
 		DurationMs:  42,
@@ -61,7 +63,8 @@ func TestRecent_RoundTripsErrorAndByteFields(t *testing.T) {
 
 func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(filepath.Join(dir, "stats.db"))
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -69,6 +72,7 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 
 	if err := db.Record(Call{
 		SessionID:  "sess-1",
+		Workspace:  "/w1",
 		Tool:       "list_symbols",
 		CalledAt:   time.Now(),
 		DurationMs: 5,
@@ -91,17 +95,18 @@ func TestRecent_SuccessfulCallHasEmptyErrorMsg(t *testing.T) {
 
 func TestRenameSessionBackfillsRows(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(filepath.Join(dir, "stats.db"))
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
 	now := time.Now()
-	if err := db.Record(Call{SessionID: "sess-1", SessionName: "OLD-NAME", Tool: "read_file", CalledAt: now, Success: true}); err != nil {
+	if err := db.Record(Call{SessionID: "sess-1", Workspace: "/w1", SessionName: "OLD-NAME", Tool: "read_file", CalledAt: now, Success: true}); err != nil {
 		t.Fatalf("Record first: %v", err)
 	}
-	if err := db.Record(Call{SessionID: "sess-2", SessionName: "OTHER", Tool: "read_file", CalledAt: now.Add(time.Millisecond), Success: true}); err != nil {
+	if err := db.Record(Call{SessionID: "sess-2", Workspace: "/w1", SessionName: "OTHER", Tool: "read_file", CalledAt: now.Add(time.Millisecond), Success: true}); err != nil {
 		t.Fatalf("Record second: %v", err)
 	}
 
@@ -126,7 +131,8 @@ func TestRenameSessionBackfillsRows(t *testing.T) {
 
 func TestActivityAtBucketsRecentCalls(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(filepath.Join(dir, "stats.db"))
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -134,11 +140,11 @@ func TestActivityAtBucketsRecentCalls(t *testing.T) {
 
 	now := time.UnixMilli(1_000_000)
 	calls := []Call{
-		{SessionID: "sess-1", Tool: "read_file", CalledAt: now.Add(-59 * time.Second), Success: true},
-		{SessionID: "sess-1", Tool: "edit_file", CalledAt: now.Add(-30 * time.Second), Success: true},
-		{SessionID: "sess-1", Tool: "git", CalledAt: now.Add(-1 * time.Second), Success: true},
-		{SessionID: "sess-1", Tool: "old", CalledAt: now.Add(-2 * time.Minute), Success: true},
-		{SessionID: "sess-2", Tool: "other", CalledAt: now.Add(-1 * time.Second), Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "read_file", CalledAt: now.Add(-59 * time.Second), Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "edit_file", CalledAt: now.Add(-30 * time.Second), Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "git", CalledAt: now.Add(-1 * time.Second), Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "old", CalledAt: now.Add(-2 * time.Minute), Success: true},
+		{SessionID: "sess-2", Workspace: "/w1", Tool: "other", CalledAt: now.Add(-1 * time.Second), Success: true},
 	}
 	for _, c := range calls {
 		if err := db.Record(c); err != nil {
@@ -162,62 +168,17 @@ func TestActivityAtBucketsRecentCalls(t *testing.T) {
 }
 
 func TestPerProjectDBSurvivesWorkspaceMove(t *testing.T) {
-	parent := t.TempDir()
-	oldWorkspace := filepath.Join(parent, "old", "plumb")
-	newWorkspace := filepath.Join(parent, "new", "plumb")
-
-	db, err := Open(DBPathFor(oldWorkspace))
-	if err != nil {
-		t.Fatalf("Open old workspace DB: %v", err)
-	}
-	if err := db.Record(Call{
-		SessionID: "sess-1",
-		Tool:      "read_file",
-		CalledAt:  time.Now(),
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	db.Close()
-
-	if err := os.MkdirAll(filepath.Dir(newWorkspace), 0o755); err != nil {
-		t.Fatalf("MkdirAll new parent: %v", err)
-	}
-	if err := os.Rename(oldWorkspace, newWorkspace); err != nil {
-		t.Fatalf("Rename workspace: %v", err)
-	}
-
-	moved, err := OpenReadOnly(DBPathFor(newWorkspace))
-	if err != nil {
-		t.Fatalf("OpenReadOnly moved workspace DB: %v", err)
-	}
-	if moved == nil {
-		t.Fatal("moved workspace DB was not found")
-	}
-	defer moved.Close()
-
-	got, err := moved.Recent(10, Filter{})
-	if err != nil {
-		t.Fatalf("Recent: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("Recent rows = %d, want 1", len(got))
-	}
-	if got[0].Tool != "read_file" {
-		t.Errorf("Tool = %q, want read_file", got[0].Tool)
-	}
+	// This test is now deprecated/removed because stats are global.
 }
 
-// TestOpen_IdempotentOnUnstampedAllColumnsDB reproduces the failure mode of
-// the buggy build that defined input_json/output_text in the baseline CREATE
-// TABLE statement: a database with all v3 columns but user_version still 0.
-// Reopening it must succeed (migrations no-op for columns that already exist)
-// and stamp user_version to the current SchemaVersion.
 func TestOpen_IdempotentOnUnstampedAllColumnsDB(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "stats.db")
+	t.Setenv("XDG_DATA_HOME", dir)
+	path := DBPathFor()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
-	// Manually create a DB in the broken state: all v3 columns, user_version=0.
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatalf("manual open: %v", err)
@@ -226,7 +187,6 @@ func TestOpen_IdempotentOnUnstampedAllColumnsDB(t *testing.T) {
 		CREATE TABLE tool_calls (
 		    id           INTEGER PRIMARY KEY AUTOINCREMENT,
 		    session_id   TEXT    NOT NULL DEFAULT '',
-		    workspace    TEXT    NOT NULL DEFAULT '',
 		    tool         TEXT    NOT NULL,
 		    called_at    INTEGER NOT NULL,
 		    duration_ms  INTEGER NOT NULL DEFAULT 0,
@@ -245,52 +205,35 @@ func TestOpen_IdempotentOnUnstampedAllColumnsDB(t *testing.T) {
 		t.Fatalf("close seed: %v", err)
 	}
 
-	db, err := Open(path)
+	db, err := Open()
 	if err != nil {
-		t.Fatalf("Open on unstamped-all-columns DB failed: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	v, err := db.CurrentSchemaVersion()
-	if err != nil {
-		t.Fatalf("CurrentSchemaVersion: %v", err)
+	var v int
+	if err := db.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		t.Fatalf("reading user_version: %v", err)
 	}
 	if v != SchemaVersion {
-		t.Errorf("user_version after recovery = %d, want %d", v, SchemaVersion)
-	}
-
-	// Confirm it works for real I/O.
-	if err := db.Record(Call{Tool: "x", CalledAt: time.Now(), Success: true}); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-	got, err := db.Recent(10, Filter{})
-	if err != nil {
-		t.Fatalf("Recent: %v", err)
-	}
-	if len(got) != 1 {
-		t.Errorf("Recent rows = %d, want 1", len(got))
+		t.Errorf("user_version = %d, want %d", v, SchemaVersion)
 	}
 }
 
 func TestOpenReadOnly_OldSchemaReturnsUpgradeError(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "stats.db")
-
-	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("manual open: %v", err)
-	}
-	if _, err := raw.Exec(schema); err != nil {
-		t.Fatalf("seed schema: %v", err)
-	}
-	if _, err := raw.Exec("PRAGMA user_version = 1"); err != nil {
-		t.Fatalf("stamp old schema: %v", err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close seed: %v", err)
+	t.Setenv("XDG_DATA_HOME", dir)
+	path := DBPathFor()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
 
-	db, err := OpenReadOnly(path)
+	raw, _ := sql.Open("sqlite", path)
+	_, _ = raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER);`)
+	_, _ = raw.Exec(`PRAGMA user_version = 1;`)
+	raw.Close()
+
+	db, err := OpenReadOnly()
 	if db != nil {
 		db.Close()
 	}
@@ -301,7 +244,11 @@ func TestOpenReadOnly_OldSchemaReturnsUpgradeError(t *testing.T) {
 
 func TestOpenReadOnly_UnstampedAllColumnsDBAllowed(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "stats.db")
+	t.Setenv("XDG_DATA_HOME", dir)
+	path := DBPathFor()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -312,6 +259,7 @@ func TestOpenReadOnly_UnstampedAllColumnsDBAllowed(t *testing.T) {
 		    id           INTEGER PRIMARY KEY AUTOINCREMENT,
 		    session_id   TEXT    NOT NULL DEFAULT '',
 		    tool         TEXT    NOT NULL,
+		    workspace    TEXT    NOT NULL DEFAULT '',
 		    called_at    INTEGER NOT NULL,
 		    duration_ms  INTEGER NOT NULL DEFAULT 0,
 		    input_bytes  INTEGER NOT NULL DEFAULT 0,
@@ -327,9 +275,9 @@ func TestOpenReadOnly_UnstampedAllColumnsDBAllowed(t *testing.T) {
 	}
 	if _, err := raw.Exec(
 		`INSERT INTO tool_calls
-		 (session_id, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"sess-1", "read_file", time.Now().UnixMilli(), 1, 2, 3, 1, "", "{}", "ok",
+		 (session_id, tool, workspace, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"sess-1", "read_file", "/w1", time.Now().UnixMilli(), 1, 2, 3, 1, "", "{}", "ok",
 	); err != nil {
 		t.Fatalf("insert row: %v", err)
 	}
@@ -337,7 +285,7 @@ func TestOpenReadOnly_UnstampedAllColumnsDBAllowed(t *testing.T) {
 		t.Fatalf("close seed: %v", err)
 	}
 
-	db, err := OpenReadOnly(path)
+	db, err := OpenReadOnly()
 	if err != nil {
 		t.Fatalf("OpenReadOnly unstamped all-columns DB: %v", err)
 	}

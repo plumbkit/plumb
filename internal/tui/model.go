@@ -48,7 +48,7 @@ const (
 // Model is the root Bubble Tea model for the sessions dashboard.
 type Model struct {
 	sessions        []session.Info
-	statsDBs        map[string]*stats.DB
+	globalDB        *stats.DB
 	toolStats       []stats.ToolStat
 	recentCalls     []stats.RecentCall
 	activity        stats.ActivitySummary
@@ -93,7 +93,7 @@ type popupDetailCache struct {
 }
 
 func NewModel() Model {
-	m := Model{leftWidth: defaultLeftWidth, statsDBs: make(map[string]*stats.DB)}
+	m := Model{leftWidth: defaultLeftWidth}
 	m.refresh()
 	return m
 }
@@ -114,17 +114,8 @@ func (m *Model) refresh() {
 }
 
 func (m *Model) dbFor(workspace string) *stats.DB {
-	if workspace == "" {
-		return nil
-	}
-	if db, ok := m.statsDBs[workspace]; ok && db != nil {
-		return db
-	}
-	db, _ := stats.OpenReadOnly(stats.DBPathFor(workspace))
-	if db != nil {
-		m.statsDBs[workspace] = db
-	}
-	return db
+	// DEPRECATED: stats are now global.
+	return m.globalDB
 }
 
 func (m *Model) refreshStats() {
@@ -132,18 +123,21 @@ func (m *Model) refreshStats() {
 		m.toolStats = nil
 		m.recentCalls = nil
 		m.activity = stats.ActivitySummary{}
-		m.activitySession = ""
 		return
 	}
 	s := m.sessions[m.cursor]
-	db := m.dbFor(s.Folder)
-	if db == nil {
+
+	// Open global DB if not already open.
+	if m.globalDB == nil {
+		m.globalDB, _ = stats.OpenReadOnly()
+	}
+	if m.globalDB == nil {
 		m.toolStats = nil
 		m.recentCalls = nil
 		m.activity = stats.ActivitySummary{}
-		m.activitySession = ""
 		return
 	}
+
 	var prevTool string
 	if m.toolStatsCursor < len(m.toolStats) {
 		prevTool = m.toolStats[m.toolStatsCursor].Tool
@@ -151,9 +145,9 @@ func (m *Model) refreshStats() {
 	prevCall := selectedCallKey(m.recentCalls, m.statsCursor)
 
 	filter := stats.Filter{SessionID: s.ID}
-	m.toolStats, _ = db.Summary(filter)
-	m.recentCalls, _ = db.Recent(50, filter)
-	m.refreshActivity(db, time.Now())
+	m.toolStats, _ = m.globalDB.Summary(filter)
+	m.recentCalls, _ = m.globalDB.Recent(50, filter)
+	m.refreshActivity(m.globalDB, time.Now())
 
 	m.statsCursor = locateCall(m.recentCalls, prevCall, m.statsCursor)
 	m.toolStatsCursor = locateTool(m.toolStats, prevTool, m.toolStatsCursor)
@@ -251,14 +245,19 @@ func (m *Model) refreshPopupCalls() {
 		m.popupCalls = nil
 		return
 	}
-	ws := m.sessions[m.cursor].Folder
-	db := m.dbFor(ws)
-	if db == nil {
+	// Open global DB if not already open.
+	if m.globalDB == nil {
+		m.globalDB, _ = stats.OpenReadOnly()
+	}
+	if m.globalDB == nil {
 		m.popupCalls = nil
 		return
 	}
+
 	prev := selectedCallKey(m.popupCalls, m.popupCallCursor)
-	m.popupCalls, _ = db.CallsForTool(m.popupTool, 200)
+	// We want calls for this tool in this workspace.
+	ws := m.sessions[m.cursor].Folder
+	m.popupCalls, _ = m.globalDB.CallsForTool(m.popupTool, ws, 200)
 	m.popupCallCursor = locateCall(m.popupCalls, prev, m.popupCallCursor)
 	m.popupDetail = popupDetailCache{}
 }
@@ -322,11 +321,14 @@ func (m *Model) currentDetail() (inputJSON, outputText string) {
 	if len(m.sessions) == 0 {
 		return
 	}
-	db := m.dbFor(m.sessions[m.cursor].Folder)
-	if db == nil {
+	// Open global DB if not already open.
+	if m.globalDB == nil {
+		m.globalDB, _ = stats.OpenReadOnly()
+	}
+	if m.globalDB == nil {
 		return
 	}
-	inputJSON, outputText = db.CallDetail(c.SessionID, c.CalledAt)
+	inputJSON, outputText = m.globalDB.CallDetail(c.SessionID, c.CalledAt)
 	m.popupDetail = popupDetailCache{
 		sessionID:  c.SessionID,
 		calledAt:   key,
@@ -336,7 +338,6 @@ func (m *Model) currentDetail() (inputJSON, outputText string) {
 	}
 	return
 }
-
 func (m Model) Init() tea.Cmd {
 	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
 }
@@ -797,11 +798,9 @@ func (m Model) render() string {
 
 	// Footer
 	var totalCalls, savedTok int64
-	for _, s := range m.sessions {
-		if db := m.dbFor(s.Folder); db != nil {
-			totalCalls += db.TotalCalls(stats.Filter{})
-			savedTok += db.TotalTokensSaved(stats.Filter{})
-		}
+	if m.globalDB != nil {
+		totalCalls = m.globalDB.TotalCalls(stats.Filter{})
+		savedTok = m.globalDB.TotalTokensSaved(stats.Filter{})
 	}
 	vStr := Version
 	if vStr == "" {
