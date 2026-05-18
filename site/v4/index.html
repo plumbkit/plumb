@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>plumb — Semantic code intelligence</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <nav>
+    <div class="container nav-inner">
+      <a href="#" class="nav-logo" aria-label="plumb">
+        <svg class="logo-mark" width="133" height="64" viewBox="0 0 133 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+          <path d="M 10.5,16 L 10.5,9.75 A 1.75 1.75 0 0 1 12.25,8 L 14,8 M 14,8 L 21,8 M 24.5,16 L 24.5,9.75 A 1.75 1.75 0 0 0 22.75,8 L 21,8 M 38.5,8 L 38.5,16 M 101.5,8 L 101.5,16 M 10.5,16 L 10.5,32 M 10.5,24 L 14,24 M 14,24 L 21,24 M 24.5,16 L 24.5,22.25 A 1.75 1.75 0 0 1 22.75,24 L 21,24 M 38.5,16 L 38.5,32 M 52.5,24 L 52.5,32 M 73.5,32 L 73.5,25.75 A 1.75 1.75 0 0 1 75.25,24 L 77,24 M 77,24 L 84,24 M 80.5,24 L 80.5,32 M 87.5,32 L 87.5,25.75 A 1.75 1.75 0 0 0 85.75,24 L 84,24 M 101.5,16 L 101.5,32 M 101.5,24 L 105,24 M 105,24 L 112,24 M 115.5,32 L 115.5,25.75 A 1.75 1.75 0 0 0 113.75,24 L 112,24 M 10.5,32 L 10.5,40 M 38.5,32 L 38.5,40 M 52.5,32 L 52.5,48 M 59.5,32 L 59.5,48 M 73.5,32 L 73.5,40 M 80.5,32 L 80.5,40 M 87.5,32 L 87.5,40 M 101.5,32 L 101.5,38.25 A 1.75 1.75 0 0 0 103.25,40 L 105,40 M 105,40 L 112,40 M 115.5,32 L 115.5,38.25 A 1.75 1.75 0 0 1 113.75,40 L 112,40 M 0,56 L 7,56 M 7,56 L 14,56 M 14,56 L 21,56 M 21,56 L 28,56 M 28,56 L 35,56 M 38.5,64 L 38.5,57.75 A 1.75 1.75 0 0 0 36.75,56 L 35,56 M 52.5,48 L 52.5,54.25 A 1.75 1.75 0 0 0 54.25,56 L 56,56 M 59.5,48 L 59.5,54.25 A 1.75 1.75 0 0 1 57.75,56 L 56,56 M 73.5,64 L 73.5,57.75 A 1.75 1.75 0 0 1 75.25,56 L 77,56 M 77,56 L 84,56 M 84,56 L 91,56 M 91,56 L 98,56 M 98,56 L 105,56 M 105,56 L 112,56 M 112,56 L 119,56 M 119,56 L 126,56 " />
+        </svg>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#features">Tools</a></li>
+        <li><a href="#efficiency">Efficiency</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+      </ul>
+      <a href="https://github.com/golimpio/plumb" class="btn btn-outline">GitHub</a>
+    </div>
+  </nav>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-content">
+          <span class="label">Semantic Infrastructure</span>
+          <h1>Plumb your codebase.</h1>
+          <h2 class="hero-subtitle">
+            LLMs don't need your files.<br>They need your answers.
+          </h2>
+          <p>
+            The frameless semantic bridge between AI agents and your source code. Give LLMs high-precision
+            access to symbols, definitions, and references without dumping raw files into context.
+          </p>
+          <div class="cta-group">
+            <a href="#quickstart" class="btn btn-primary">Init Workspace</a>
+          </div>
+        </div>
+
+        <div class="hologram-term">
+          <div class="holo-line cmd"><span class="holo-prompt">$</span> plumb status --live</div>
+          <div class="holo-line indent"><span class="holo-key">SESSION</span> <span class="holo-val">polyglot: ~/Projects/app</span></div>
+          <div class="holo-line indent"><span class="holo-key">ADAPTER</span> <span class="holo-val">lsp-pool (gopls, pyright)</span></div>
+          <div class="holo-line indent"><span class="holo-key">CLIENT</span>  <span class="holo-val">Any MCP Agent</span></div>
+          <br>
+          <div class="holo-line indent"><span class="holo-key">find_symbol</span><span class="holo-val">89 calls &middot; 23ms avg</span></div>
+          <div class="holo-line indent"><span class="holo-key">get_def</span>    <span class="holo-val">31 calls &middot; 31ms avg</span></div>
+          <br>
+          <div class="holo-line indent"><span class="holo-active">●</span> <span style="color: var(--muted)">Daemon running securely</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="container">
+        <span class="label">01 / Capabilities</span>
+        <h2>Thirty-three tools. One semantic layer.</h2>
+
+        <div class="frameless-grid">
+          <div class="frameless-item">
+            <h3>Shared Daemon</h3>
+            <p>One LSP process per workspace. Language servers stay warm between sessions — no re-indexing on every new chat.</p>
+          </div>
+          <div class="frameless-item">
+            <h3>Multi-Language</h3>
+            <p>Symbols, definitions, call hierarchies, diagnostics, file search, and edits — across supported LSPs in a single MCP session.</p>
+          </div>
+          <div class="frameless-item">
+            <h3>Workspace-Aware</h3>
+            <p>Drop a .plumb directory in your project root. Plumb detects it automatically, even across nested modules.</p>
+          </div>
+          <div class="frameless-item">
+            <h3>Semantic Edits</h3>
+            <p>LSP-driven refactoring tools. Scope-aware edits, dry-run by default. Guarded by strict mtime concurrency checks.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="efficiency">
+      <div class="container">
+        <span class="label">02 / Token Economics</span>
+        <h2>Up to 5× fewer tokens.</h2>
+        <p>Plumb returns exactly what the model needs — symbol outlines, inline source lines, type signatures — without the noise of raw file content.</p>
+
+        <table class="open-table">
+          <thead>
+            <tr>
+              <th>Operation</th>
+              <th>Filesystem (grep + read)</th>
+              <th>Plumb (Semantic)</th>
+              <th>Efficiency</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Understand file structure</td>
+              <td>~1,600 tokens</td>
+              <td>~300 tokens</td>
+              <td class="win-text">80% Saved</td>
+            </tr>
+            <tr>
+              <td>Get type & docs</td>
+              <td>~800 tokens</td>
+              <td>~150 tokens</td>
+              <td class="win-text">81% Saved</td>
+            </tr>
+            <tr>
+              <td>Trace call chain</td>
+              <td>~1,500 tokens</td>
+              <td>~200 tokens</td>
+              <td class="win-text">86% Saved</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="architecture">
+
+  <div class="container">
+    <div class="label">Architecture</div>
+    <h2 class="sec-title">One daemon. Many conversations.</h2>
+    <p class="sec-sub">A shared daemon means the language server is always warm — no re-indexing when you open a new chat.</p>
+
+    <!-- Runtime flow diagram -->
+    <div class="arch2">
+
+      <!-- Tier 1 — MCP clients -->
+      <div class="arch2-clients">
+        <div class="arch2-tier-label">MCP Clients</div>
+        <div class="arch2-clients-row">
+          <div class="arch2-client-box">
+            <span class="arch2-client-icon" style="color:var(--purple)">◈</span>
+            <span class="arch2-client-name">Claude Desktop</span>
+            <span class="arch2-client-sub">one serve per conversation</span>
+          </div>
+          <div class="arch2-client-box">
+            <span class="arch2-client-icon" style="color:var(--blue)">◈</span>
+            <span class="arch2-client-name">Claude Code</span>
+            <span class="arch2-client-sub">one serve per conversation</span>
+          </div>
+          <div class="arch2-client-box arch2-client-dim">
+            <span class="arch2-client-icon" style="color:var(--text-muted)">◈</span>
+            <span class="arch2-client-name">Any MCP Client</span>
+            <span class="arch2-client-sub">open protocol</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Arrow 1 -->
+      <div class="arch2-arrow">
+        <div class="arch2-arrow-track">
+          <div class="arch2-arrow-line"></div>
+          <div class="arch2-arrow-tip">▾</div>
+        </div>
+        <div class="arch2-arrow-label">stdio &middot; MCP JSON-RPC 2.0</div>
+      </div>
+
+      <!-- Tier 2 — plumb serve (stacked to show N instances) -->
+      <div class="arch2-serve-wrap">
+        <div class="arch2-serve">
+          <div class="arch2-serve-title">plumb serve</div>
+          <div class="arch2-serve-sub">thin stdio proxy &middot; one instance per conversation &middot; dials Unix socket &middot; forwards bytes verbatim</div>
+        </div>
+      </div>
+
+      <!-- Arrow 2 -->
+      <div class="arch2-arrow">
+        <div class="arch2-arrow-track">
+          <div class="arch2-arrow-line"></div>
+          <div class="arch2-arrow-tip">▾</div>
+        </div>
+        <div class="arch2-arrow-label">~/Library/Caches/plumb/plumb.sock</div>
+      </div>
+
+      <!-- Tier 3 — plumb daemon -->
+      <div class="arch2-daemon">
+        <div class="arch2-daemon-header">
+          <span class="arch2-daemon-name">plumb daemon</span>
+          <span class="arch2-daemon-badge">singleton &middot; flock enforced &middot; one process shared across all conversations</span>
+        </div>
+        <div class="arch2-daemon-body">
+
+          <div class="arch2-pool">
+            <div class="arch2-pool-title">workspacePool</div>
+            <div class="arch2-pool-sub">one language server per workspace root</div>
+            <div class="arch2-pool-list">
+              <div class="arch2-pool-entry">
+                <span class="arch2-lang arch2-lang-go">go</span>
+                <div class="arch2-entry-info">
+                  <span class="arch2-entry-adapter">gopls</span>
+                  <span class="arch2-entry-path">~/projects/myapp</span>
+                </div>
+                <span class="arch2-entry-live"></span>
+              </div>
+              <div class="arch2-pool-entry">
+                <span class="arch2-lang arch2-lang-py">py</span>
+                <div class="arch2-entry-info">
+                  <span class="arch2-entry-adapter">pyright</span>
+                  <span class="arch2-entry-path">~/projects/api</span>
+                </div>
+                <span class="arch2-entry-live"></span>
+              </div>
+              <div class="arch2-pool-new">
+                + auto-added on first tool call for a new root
+              </div>
+            </div>
+          </div>
+
+          <div class="arch2-session">
+            <div class="arch2-session-title">per-connection session</div>
+            <div class="arch2-session-list">
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:var(--blue)"></span>
+                <div>
+                  <div class="arch2-session-name">readTracker</div>
+                  <div class="arch2-session-desc">strict-mode gate &middot; mtime fencing</div>
+                </div>
+              </div>
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:#e2b714"></span>
+                <div>
+                  <div class="arch2-session-name">writeLimiter</div>
+                  <div class="arch2-session-desc">sliding-window rate cap (120/min default)</div>
+                </div>
+              </div>
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:var(--purple)"></span>
+                <div>
+                  <div class="arch2-session-name">symbolCache</div>
+                  <div class="arch2-session-desc">LSP-invalidated &middot; per-session isolation</div>
+                </div>
+              </div>
+              <div class="arch2-session-item">
+                <span class="arch2-dot" style="background:var(--green)"></span>
+                <div>
+                  <div class="arch2-session-name">stats.db</div>
+                  <div class="arch2-session-desc">SQLite WAL &middot; per-tool P95 metrics</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer architecture -->
+    <div class="arch2-layers">
+      <div class="arch2-layers-header">
+        <span class="arch2-layers-title">Strict layer architecture</span>
+        <span class="arch2-layers-rule">lower layers never import higher ones</span>
+      </div>
+      <div class="arch2-layers-row">
+        <div class="arch2-layer arch2-layer-1">
+          <div class="arch2-layer-num">01</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Transport</div>
+            <div class="arch2-layer-pkgs">internal/mcp &middot; internal/lsp</div>
+          </div>
+        </div>
+        <div class="arch2-layer-sep">→</div>
+        <div class="arch2-layer arch2-layer-2">
+          <div class="arch2-layer-num">02</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Domain</div>
+            <div class="arch2-layer-pkgs">internal/cache &middot; internal/config &middot; internal/session</div>
+          </div>
+        </div>
+        <div class="arch2-layer-sep">→</div>
+        <div class="arch2-layer arch2-layer-3">
+          <div class="arch2-layer-num">03</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Application</div>
+            <div class="arch2-layer-pkgs">internal/tools &middot; internal/stats &middot; internal/memory</div>
+          </div>
+        </div>
+        <div class="arch2-layer-sep">→</div>
+        <div class="arch2-layer arch2-layer-4">
+          <div class="arch2-layer-num">04</div>
+          <div class="arch2-layer-body">
+            <div class="arch2-layer-name">Presentation</div>
+            <div class="arch2-layer-pkgs">internal/tui &middot; internal/cli</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arch-note">
+      <strong>Workspace detection</strong> — plumb finds the project root by walking up from the file URI:
+      first looking for a <code>.plumb/</code> directory (run <code>plumb init</code> at your project root),
+      then falling back to the nearest language root marker (<code>go.mod</code>, <code>pyproject.toml</code>).
+      The <code>.plumb</code> marker takes priority, preventing nested modules in <code>testdata/</code>
+      or <code>vendor/</code> from being selected as the root.
+    </div>
+  </div>
+
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <span style="font-family: var(--head); font-size: 1.5rem; color: var(--accent);">plumb</span>
+      <span style="color: var(--muted); font-size: 0.875rem;">MIT License</span>
+    </div>
+  </footer>
+
+</body>
+</html>
