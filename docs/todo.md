@@ -157,6 +157,171 @@ Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspac
 
 ---
 
+### Client-aware token-savings model
+
+**Priority:** high for TUI/stats credibility.
+**Effort:** Medium. Mostly stats modelling, documentation, and UI wording; no protocol change required.
+**Status:** Current implementation is a rough static estimate. Needs redesign before treating the number as a product metric.
+
+**The problem.**
+
+The current `Tokens Saved` widget is useful as a lightweight directional signal, but the model is too simple:
+
+```go
+tokens_saved = alternative_tokens - (output_bytes / 4)
+```
+
+`alternative_tokens` is currently a static per-tool constant in `internal/stats/savings.go`, and several tools are hard-coded to zero savings (`list_files`, `find_files`, `search_in_files`, `file_diff`, `git`). This means the widget moves for semantic/LSP tools like `list_symbols`, `explain_symbol`, and `workspace_symbols`, but not for filesystem/search tools even when those tools may have saved a specific client from dumping much more context.
+
+The deeper issue: **fallback cost depends on the client.** A Claude Desktop user, a Claude Code user, a Gemini CLI user, and a Codex user do not have the same baseline capabilities.
+
+Examples:
+
+- **Claude Desktop** often has weaker direct repo/file/shell ergonomics. Plumb filesystem and semantic tools can save substantial context versus broad file/resource dumps.
+- **Claude Code** and **Codex CLI** can operate in a local development environment, read files, propose or apply edits, and run commands depending on approval mode. For these clients, `read_file`, `git`, and `search_in_files` may save fewer tokens than they do for Claude Desktop, while semantic/LSP tools (`list_symbols`, `find_references`, `call_hierarchy`) still save context because the alternative is often multiple shell/file calls plus reasoning over raw text.
+- **Gemini CLI** needs its own observed profile rather than inheriting Claude Desktop or Codex assumptions.
+- The same tool can have different value by argument/result shape: `list_symbols` on a 40-symbol file is not the same as `list_symbols` on a tiny file; `search_in_files` with 2 matches is not the same as a broad grep that avoids multiple follow-up reads.
+
+**Codex-specific notes.**
+
+OpenAI's Codex CLI is a local coding agent that can read and modify files and, depending on approval mode, run commands in the terminal. That means the Codex fallback profile should assume strong local file/shell access, not a Claude Desktop-style weak filesystem baseline. The savings model for Codex should reward plumb most for semantic compression and structured context, not for merely replacing `cat`, `rg`, or `git`.
+
+Starting Codex profile recommendation:
+
+| Tool family | Codex fallback assumption | Initial savings stance |
+|---|---|---|
+| `read_file` / `list_files` / `git` | Codex can usually do these locally with low overhead. | Zero or near-zero. |
+| `search_in_files` / `find_files` | Codex can often use shell search, but plumb still adds bounded, structured, ignored-file-aware output. | Low, shape-dependent. |
+| `list_symbols` / `workspace_symbols` | Shell fallback requires reading/parsing files or combining multiple commands. | Medium/high. |
+| `find_references` / `get_definition` / `explain_symbol` | Shell fallback is approximate and often needs follow-up reads. | High when output is compact. |
+| `call_hierarchy` / `type_hierarchy` | Hard to reproduce with plain shell/file access. | High. |
+| write tools | No clear token alternative; value is safety, not token savings. | Usually zero; maybe track separately as "safety actions". |
+
+**Claude Code-specific notes.**
+
+Claude Code has a `Read` tool, `Edit`, `Write`, and a `Bash` tool that can run `grep`, `find`, `git`, `rg`, `go vet`, and arbitrary shell commands. This makes it closer to Codex than to Claude Desktop for filesystem/VCS tools, but LSP-backed tools are still highly valuable because the shell alternative requires multiple round-trips and in-context reasoning.
+
+Claude Code sends `{"name": "claude-code", "version": "X.Y.Z"}` in the MCP `initialize` clientInfo. Match on the name prefix `"claude-code"` (version suffix varies by release).
+
+Starting Claude Code profile recommendation:
+
+| Tool | CC alternative | Suggested savings stance |
+|---|---|---|
+| `read_file` | CC has a native `Read` tool — direct equivalent | Zero |
+| `list_files` / `find_files` | `Bash: find .` or `rg --files` | Near-zero (plumb adds gitignore bounds) |
+| `search_in_files` | `Bash: rg` / `grep` | Low — gitignore-aware bounded output avoids some follow-up reads |
+| `git` | `Bash: git` directly | Zero |
+| `file_diff` | `Bash: diff` | Zero |
+| `diagnostics` | `Bash: go vet`, `golangci-lint` | Near-zero (plumb gives structured output but CC can run the same commands) |
+| `list_symbols` | Must `Read` full file, then reason about structure | Medium-high — scales with file size |
+| `find_symbol` | Must `Read` full file | Medium |
+| `workspace_symbols` | Multiple `Bash: grep` + several `Read` calls across workspace | High — hard to replicate accurately |
+| `get_definition` | `Bash: grep -n` + `Read` surrounding lines | Medium |
+| `explain_symbol` | `Read` file + in-context reasoning | Medium |
+| `find_references` | `Bash: grep -rn` + `Read` context around each hit | High — scales with reference count |
+| `call_hierarchy` / `type_hierarchy` | Many `grep` + `Read` + substantial in-context reasoning | Very high — essentially irreplaceable without LSP |
+| `rename_symbol` | CC could do cross-file find-replace, but semantic safety is the value | Zero tokens; track separately as "safety action" if at all |
+| Write tools | No token alternative | Zero |
+
+**Design direction.**
+
+Replace the single static `altCost` table with a client-aware model:
+
+```go
+type SavingsModel interface {
+    TokensSaved(call stats.Call) int
+}
+
+type ClientProfile struct {
+    Name string // claude-desktop, claude-code, codex, gemini, unknown
+    ToolCosts map[string]ToolCostModel
+}
+```
+
+The model should use `stats.Call.ClientName` / `ClientVersion` (or the existing client fields on session rows if call rows need extending) to select a profile. Unknown clients should use a conservative default, not the most flattering numbers.
+
+Recommended formula:
+
+```text
+tokens_saved =
+  estimated_fallback_tokens(client_profile, tool, args, output, workspace_context)
+  - estimated_plumb_tokens(output)
+```
+
+Where:
+
+- `estimated_plumb_tokens` should still be simple initially (`output_bytes / chars_per_token`), but centralise `chars_per_token` and document it.
+- `estimated_fallback_tokens` should be per-client and per-tool, with optional shape modifiers.
+- If the result is negative, clamp to zero.
+- If confidence is low, either report zero or mark the estimate as low-confidence in docs/diagnostics.
+
+**Shape modifiers worth considering.**
+
+- `output_bytes`: already stored; larger output reduces savings.
+- Tool arguments: line ranges, query text, `max_results`, `context_lines`, glob/path narrowness.
+- Result shape: number of symbols, references, diagnostics, files, matches, hierarchy nodes.
+- Workspace scale: file count / language / first-party vs dependency path.
+- Follow-up avoidance: a `find_references` response with source lines may avoid several `read_file` calls; a `list_symbols` response may avoid reading the entire file just to discover structure.
+- Cache effects: repeated identical calls should probably not claim full savings every time unless they prevented repeated context dumps.
+
+**Definition of done — Phase 1 (honest model + docs).**
+
+1. Add `client_name` and `client_version` to `stats.Call` and the `tool_calls` table. This is the prerequisite for every other item — without client identity at the row level, the model can only use the static fallback for all calls. Concrete steps: add fields to `stats.Call`; add them to the `INSERT` in `Record()`; wire `clientName` from the `stateMu`-guarded copy into `OnAfterTool`'s `Call` literal; add migration v6 (`ALTER TABLE tool_calls ADD COLUMN client_name TEXT NOT NULL DEFAULT ''` and `client_version`). Do not rely on session JSON for historical rows — the join is fragile.
+2. Rename UI/documentation wording to **Estimated Tokens Saved** wherever practical. Keep the compact TUI label if space is tight, but docs and help text must say "estimated".
+3. Document the calculation in README or `docs/mcp-tools.md`: formula, current profiles, zero-savings tools, and caveats. Document `charsPerToken = 4` with its basis (rough English/code average, GPT-3 tokeniser).
+4. Add a `SavingsModel` abstraction under `internal/stats/` and move the current static table behind a default profile.
+5. Add client profiles for at least:
+   - `claude-desktop`
+   - `claude-code`
+   - `codex`
+   - `gemini`
+   - `unknown`
+6. Keep profile constants conservative and explain their basis. A lower but defensible estimate is better than a large number users cannot trust.
+7. Update `plumb stats`, TUI footer, and top `Tokens Saved` widget to use the same model.
+8. Unit tests:
+   - Same tool/output produces different estimates for Claude Desktop vs Codex where expected.
+   - Zero/negative savings clamps to zero.
+   - Unknown client uses conservative default.
+   - Filesystem/search tools can be low/zero for Codex but non-zero for Claude Desktop if the profile says so.
+   - TUI windowed total and all-time stats total agree with the same model over the same rows.
+
+**Phase 2 (shape-aware estimates).**
+
+- Parse stored `input_json` / `output_text` for result counts where cheap and stable.
+- Add per-tool shape functions, e.g.:
+  - `list_symbols`: fallback scales with approximate source lines or symbol count.
+  - `find_references`: fallback scales with reference count and whether source lines are included.
+  - `search_in_files`: fallback can be non-zero for clients without strong local search, but low for Codex/Claude Code.
+  - `diagnostics`: fallback differs by client and language because some clients can run build/test/lint locally.
+- Add tests with representative stored calls rather than only output byte counts.
+
+**Phase 3 (calibration and user-configurable profiles).**
+
+- Add a debug/report command or stats view that shows savings by client profile and tool so bad estimates are visible.
+- Compare estimates against real session transcripts: how many `read_file` / shell calls did plumb actually avoid after semantic calls?
+- Expose profile constants as a `[savings]` block in the global config so users can override built-in estimates for any client they use. This allows teams with strong intuitions about their own workflow (e.g. "we know our Claude Code sessions never use Bash search, so `search_in_files` is worth more for us") to tune the numbers without forking the binary. Example shape:
+
+  ```toml
+  [savings.claude-code]
+  list_symbols   = 1200   # override built-in estimate
+  find_references = 900
+  search_in_files = 0     # or non-zero if the team avoids Bash search
+  ```
+
+  The `[savings.<client>]` key should match the normalised client name. Missing keys fall back to the built-in profile; a missing profile block falls back to the `unknown` default. This makes the model fully auditable: `plumb config show` can print the resolved savings table alongside the rest of the config.
+
+**Watch out for.**
+
+- Do not present the number as billing telemetry. It is an estimate of avoided context, not actual model tokens billed.
+- Be careful with marketing pressure: inflated numbers will make the TUI feel untrustworthy.
+- Client names may vary (`codex`, `Codex CLI`, `claude-code`, versioned identifiers, etc.). Normalise names by lowercasing and matching on the name prefix before version in one place; test all known aliases. Claude Code sends `"claude-code"` as `clientInfo.name`; Codex typically sends `"codex"`.
+- Codex and Claude Code can both run local commands, but their approval/sandbox modes change fallback cost. If mode is not observable through MCP client info, keep the profile conservative.
+- `charsPerToken = 4` is already a named constant in `internal/stats/savings.go`. When adding the `SavingsModel` abstraction, expose it as a documented package-level constant rather than burying it. The number is a rough average; if a user-configurable override is added later, this is the knob.
+- Historical rows may lack client identity (they will have empty `client_name` after the migration). Treat empty `client_name` as `"unknown"` and apply the conservative default profile; do not backfill from session files unless the join is trivially cheap.
+- Keep the model deterministic. The TUI should not fluctuate because of background heuristics changing without new calls.
+
+---
+
 ### Features
 
 Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.

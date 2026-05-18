@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
@@ -189,6 +190,30 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	}
 	if !strings.Contains(plain[0], "╮ ╭─ Tokens Saved") {
 		t.Fatalf("top menu = %q, want one-space widget gap", plain[0])
+	}
+}
+
+func TestActivityBoxKeepsOneSpaceAfterCallCount(t *testing.T) {
+	RebuildStyles()
+	for _, calls := range []int64{2, 10, 500, 1300, 5200} {
+		t.Run(formatActivityCalls(calls), func(t *testing.T) {
+			m := Model{
+				activity: stats.ActivitySummary{
+					Calls:   calls,
+					Buckets: []int64{0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+				},
+			}
+
+			row := ansiStripForTest(m.renderActivityBox(false)[1])
+			count := formatActivityCalls(calls)
+			wantSuffix := count + " │"
+			if !strings.HasSuffix(row, wantSuffix) {
+				t.Fatalf("activity row = %q, want suffix %q", row, wantSuffix)
+			}
+			if lipgloss.Width(row) != 30 {
+				t.Fatalf("activity row width = %d, want 30: %q", lipgloss.Width(row), row)
+			}
+		})
 	}
 }
 

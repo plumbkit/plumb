@@ -1661,9 +1661,9 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 	}
 
 	const (
-		boxWidth   = 30
-		innerWidth = boxWidth - 2
-		sparkWidth = 16
+		boxWidth      = 30
+		innerWidth    = boxWidth - 2
+		maxSparkWidth = 16
 	)
 
 	windowStr := "1m"
@@ -1677,17 +1677,25 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 		topFill = 0
 	}
 
-	spark := activitySparkline(m.activity.Buckets, sparkWidth)
 	count := formatActivityCalls(m.activity.Calls)
-	content := " " + sparkStyle.Render(spark) + " " + countStyle.Render(count) + " "
-	contentPad := innerWidth - lipgloss.Width(content)
-	if contentPad < 0 {
-		contentPad = 0
+	countWidth := lipgloss.Width(count)
+	sparkWidth := innerWidth - countWidth - 3 // left pad + gap + right pad
+	if sparkWidth > maxSparkWidth {
+		sparkWidth = maxSparkWidth
 	}
+	if sparkWidth < 1 {
+		sparkWidth = 1
+	}
+	spark := activitySparkline(m.activity.Buckets, sparkWidth)
+	middlePad := innerWidth - lipgloss.Width(spark) - countWidth - 2
+	if middlePad < 1 {
+		middlePad = 1
+	}
+	content := " " + sparkStyle.Render(spark) + strings.Repeat(" ", middlePad) + countStyle.Render(count) + " "
 
 	return []string{
 		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
-		border.Render("│") + content + strings.Repeat(" ", contentPad) + border.Render("│"),
+		border.Render("│") + content + border.Render("│"),
 		border.Render("╰" + strings.Repeat("─", innerWidth) + "╯"),
 	}
 }
