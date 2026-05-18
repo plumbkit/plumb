@@ -21,7 +21,7 @@ func requireJDTLS(t *testing.T) string {
 	t.Helper()
 	p, err := exec.LookPath("jdtls")
 	if err != nil {
-		t.Skip("jdtls not found on PATH — install with: brew install jdtls")
+		t.Skip("jdtls not found on PATH — install jdtls (Java 21+ required) and ensure it is on PATH")
 	}
 	return p
 }

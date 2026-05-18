@@ -332,6 +332,28 @@ Refinements to existing behaviour. No new contracts, no new infrastructure — j
 
 ---
 
+### Java adapter (jdtls) — multi-OS polish and validation
+
+**Priority:** medium — acceptable as experimental, needed before "validated".
+**Effort:** Small–medium. Mostly portability fixes and CI wiring.
+**Status:** Adapter works on macOS with Homebrew + SDKMAN. Not yet validated on Linux or Windows.
+
+Known gaps to address before promoting from experimental to validated:
+
+1. **`rootURI` construction.** `internal/cli/pool.go` builds `rootURI := "file://" + root`. On Unix absolute paths this is correct (`/project` → `file:///project`). On Windows it produces the wrong form (`C:\project` → `file://C:\project`). The fix is a proper `pathToFileURI(path string) string` helper in `internal/lsp/protocol/types.go` that uses `filepath.ToSlash` and prepends a leading `/` for Windows drive paths. All three adapters (gopls, pyright, jdtls) use the same construction and would benefit from the fix.
+
+2. **CI integration test.** The `//go:build integration` test in `internal/lsp/adapters/jdtls/` skips silently in CI because no runner installs jdtls. Add a CI step (Ubuntu, using the Eclipse JDT LS release tarball or a package manager) and run `go test -tags=integration -timeout=3m ./internal/lsp/adapters/jdtls/`. Promote the adapter to **validated** once this passes in CI.
+
+3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test uses a 60-second deadline. In CI this may not be enough on cold runners. Monitor and raise the timeout if needed, or pre-warm the JVM cache in the CI step.
+
+4. **`jdtls` binary name on non-Homebrew installs.** The compiled default is `command = "jdtls"`. On Linux/Windows the launcher may be named differently (e.g. `jdtls.sh`, `jdtls.bat`, or a full path). Document this in `docs/adding-an-lsp.md` and consider a `command` override example in the config docs. Users can already override via `[lsp.java] command = "..."` in config.toml.
+
+5. **`plumb doctor` Java runtime version check.** The check calls `java --version` and parses the first output line. This covers OpenJDK and GraalVM. Confirm it also handles Eclipse Temurin, Microsoft Build of OpenJDK, and Amazon Corretto version strings; add test cases in `doctor_test.go` once that file exists.
+
+**Definition of done:** CI integration test passes on Linux; rootURI helper lands in `internal/lsp/protocol`; adapter doc.go says "Validated".
+
+---
+
 ## Bugs & known limitations
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).

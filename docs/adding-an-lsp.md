@@ -231,8 +231,9 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 
 ### jdtls (Java)
 
-- **Binary**: `jdtls` — install with `brew install jdtls` (macOS).
-  Requires Java 17 or later. With SDKMAN: `sdk install java 21.0.x-tem`.
+- **Binary**: `jdtls` — install jdtls and ensure it is on PATH. Requires Java 21 or later.
+  macOS: `brew install jdtls`. SDKMAN: `sdk install java 21-tem`.
+  Other platforms: download from https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases.
 - **Status**: experimental — unit-tested with mocked transport;
   integration tests in `internal/lsp/adapters/jdtls/` (gated with `//go:build integration`).
 - **Root markers**: `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath`
