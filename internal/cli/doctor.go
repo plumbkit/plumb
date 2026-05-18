@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -51,7 +52,6 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 
 	tui.RebuildStyles()
 	PrintLogo()
-	fmt.Println()
 
 	sections := []struct {
 		title  string
@@ -85,9 +85,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 
 // printSection prints a titled section followed by its checks, aligned by name column.
 func printSection(title string, checks []checkResult) {
-	const width = 78
-	dashes := strings.Repeat("─", max(0, width-4-len(title)))
-	fmt.Println(tui.HintStyle.Render(fmt.Sprintf("── %s ─%s", title, dashes)))
+	fmt.Println(tui.HintStyle.Render("● " + title))
 	fmt.Println()
 
 	nameW := 0
@@ -102,9 +100,13 @@ func printSection(title string, checks []checkResult) {
 		if !c.ok {
 			marker = tui.WarnStyle.Render("✗")
 		}
-		fmt.Printf("  %s  %-*s  %s\n", marker, nameW, c.name, c.detail)
+		detailLines := strings.Split(c.detail, "\n")
+		fmt.Printf("  %s  %-*s  %s\n", marker, nameW, c.name, detailLines[0])
+		indent := strings.Repeat(" ", 7+nameW)
+		for _, line := range detailLines[1:] {
+			fmt.Printf("%s%s\n", indent, line)
+		}
 		if !c.ok && c.fix != "" {
-			indent := strings.Repeat(" ", 6+nameW)
 			fmt.Printf("%s%s\n", indent, tui.MutedStyle.Render("→ "+c.fix))
 		}
 	}
@@ -219,7 +221,7 @@ func checkLSPBinary(lang string, lspCfg config.LSPConfig) checkResult {
 		}
 	}
 
-	out, _ := exec.Command(path, "--version").Output()
+	out, _ := commandOutputTimeout(path, "--version")
 	version := strings.TrimSpace(string(out))
 	detail := contractConfigPath(path)
 	if version != "" {
@@ -247,7 +249,7 @@ func checkJavaRuntime() checkResult {
 			fix:    "install Java 21+ (SDKMAN: sdk install java 21-tem, or your OS package manager)",
 		}
 	}
-	out, err := exec.Command(path, "--version").Output()
+	out, err := commandOutputTimeout(path, "--version")
 	if err != nil || len(out) == 0 {
 		return checkResult{
 			name:   "java runtime",
@@ -257,7 +259,7 @@ func checkJavaRuntime() checkResult {
 	}
 	firstLine := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
 	major := parseJavaMajorVersion(firstLine)
-	detail := contractConfigPath(path) + "  " + firstLine
+	detail := contractConfigPath(path) + "\n" + firstLine
 	if major > 0 && major < 21 {
 		return checkResult{
 			name:   "java runtime",
@@ -286,6 +288,12 @@ func parseJavaMajorVersion(versionLine string) int {
 		}
 	}
 	return 0
+}
+
+func commandOutputTimeout(name string, arg ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, arg...).Output()
 }
 
 // checkMCPClients checks whether plumb is registered with each known MCP client.
