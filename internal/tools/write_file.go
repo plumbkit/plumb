@@ -53,7 +53,7 @@ type WriteFile struct {
 
 func NewWriteFile(deps WriteDeps) *WriteFile { return &WriteFile{deps: deps} }
 
-func (*WriteFile) Name() string               { return "write_file" }
+func (*WriteFile) Name() string                 { return "write_file" }
 func (*WriteFile) InputSchema() json.RawMessage { return writeFileSchema }
 func (*WriteFile) Description() string {
 	return "Create or overwrite a file with the given content. The write is atomic: " +
@@ -117,7 +117,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	// Read the old content before writing so we can diff it. Only done when
 	// the file exists and diff output is enabled; small files only (≤200 KiB).
 	var oldContent string
-	if !isNew && t.deps.ShowWriteDiff {
+	if !isNew && t.deps.showWriteDiff() {
 		if b, err := os.ReadFile(path); err == nil && len(b) <= 200*1024 {
 			oldContent = string(b)
 		}
@@ -148,7 +148,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s %s (%d bytes)", verb, path, len(a.Content))
-	if t.deps.ShowWriteDiff {
+	if t.deps.showWriteDiff() {
 		if isNew {
 			sb.WriteString("\nnew file")
 		} else if d := unifiedDiff(path, oldContent, a.Content); d != "" {
@@ -157,9 +157,8 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		}
 	}
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.PostWriteDiagWindow)
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
 		sb.WriteString(formatPostWriteDiagnostics(fresh))
 	}
 	return sb.String(), nil
 }
-

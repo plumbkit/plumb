@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSeedPathFromArgs(t *testing.T) {
@@ -124,5 +125,39 @@ func TestWorkspaceFromArgs_NestedShapes(t *testing.T) {
 				t.Errorf("workspaceFromArgs = %q, want %q", got, dir)
 			}
 		})
+	}
+}
+
+func TestDaemonScansTxlogSynchronouslyOnAttach(t *testing.T) {
+	called := make(chan struct{})
+	release := make(chan struct{})
+	scan := func(string) {
+		close(called)
+		<-release
+	}
+
+	done := make(chan struct{})
+	go func() {
+		recoverWorkspaceTxlog("/workspace", scan)
+		close(done)
+	}()
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("scanTxlog was not called")
+	}
+
+	select {
+	case <-done:
+		t.Fatal("recoverWorkspaceTxlog returned before txlog scan completed")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recoverWorkspaceTxlog did not return after txlog scan completed")
 	}
 }

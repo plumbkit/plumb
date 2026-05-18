@@ -278,6 +278,7 @@ func Load() (Config, error) {
 	}
 
 	applyEnv(&cfg)
+	normaliseConfig(&cfg)
 
 	if err := validate(cfg); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
@@ -326,6 +327,13 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PLUMB_AUTO_ATTACH_PERSIST"); v != "" {
 		cfg.Workspace.AutoAttachPersist = v == "1" || v == "true" || v == "yes"
 	}
+	normaliseConfig(cfg)
+}
+
+func normaliseConfig(cfg *Config) {
+	if cfg.Workspace.AutoAttachPersist {
+		cfg.Workspace.AutoAttach = true
+	}
 }
 
 // ProjectConfigPath returns the conventional location of a workspace's
@@ -362,6 +370,7 @@ func LoadProject(base Config, workspace string) (Config, error) {
 		}
 	}
 	applyEnv(&merged)
+	normaliseConfig(&merged)
 	if err := validate(merged); err != nil {
 		return base, fmt.Errorf("invalid project config: %w", err)
 	}

@@ -257,6 +257,32 @@ func TestApplyEnv_AutoAttachPersist(t *testing.T) {
 	if !cfg.Workspace.AutoAttachPersist {
 		t.Error("PLUMB_AUTO_ATTACH_PERSIST=1 should enable AutoAttachPersist")
 	}
+	if !cfg.Workspace.AutoAttach {
+		t.Error("PLUMB_AUTO_ATTACH_PERSIST=1 should imply AutoAttach")
+	}
+}
+
+func TestLoadProject_AutoAttachPersistImpliesAutoAttach(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[workspace]\nauto_attach_persist = true\n"
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if !got.Workspace.AutoAttachPersist {
+		t.Fatal("project config should have set Workspace.AutoAttachPersist to true")
+	}
+	if !got.Workspace.AutoAttach {
+		t.Error("Workspace.AutoAttachPersist should imply Workspace.AutoAttach")
+	}
 }
 
 func TestLoadProject_OverridesWorkspace(t *testing.T) {

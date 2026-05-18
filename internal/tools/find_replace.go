@@ -56,6 +56,7 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 			"glob":{"type":"string","description":"File glob filter, e.g. '*.go' or '**/*.md'. Empty = all non-binary files."},
 			"case_sensitive":{"type":"boolean","description":"Default: smart-case (case-insensitive iff pattern is all lowercase)."},
 			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write files."},
+			"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing files that have uncommitted changes in their git repository. Default false — the replacement is refused if any target file is dirty. Pass true to proceed anyway."},
 			"max_files":{"type":"integer","default":100,"description":"Cap on number of files modified."},
 			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip files larger than this many bytes. Default 50 MiB."}
 		},
@@ -74,6 +75,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		Glob          string `json:"glob"`
 		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
 		DryRun        *bool  `json:"dry_run,omitempty"`
+		DirtyOk       bool   `json:"dirty_ok"`
 		MaxFiles      int    `json:"max_files"`
 		MaxFileBytes  int64  `json:"max_file_bytes"`
 	}
@@ -240,6 +242,12 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 						continue
 					}
 					unlock := lockPath(path)
+					if !a.DirtyOk && pathIsDirty(ctx, path) {
+						unlock()
+						results <- fileChange{path: path, count: count, err: fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)}
+						cancel()
+						continue
+					}
 					_, err := safeWrite(path, newData, 0o644)
 					unlock()
 					if err != nil {

@@ -118,3 +118,16 @@ func TestRateLimiter_SetParentNil(t *testing.T) {
 		t.Fatal("expected allow after parent detached")
 	}
 }
+
+func TestRateLimiter_ZeroLocalLimitBypassesParent(t *testing.T) {
+	parent := NewRateLimiter(1, time.Minute)
+	conn := NewRateLimiter(0, time.Minute)
+	conn.SetParent(parent)
+
+	if !conn.Allow() {
+		t.Fatal("zero local limit should allow first call")
+	}
+	if !conn.Allow() {
+		t.Fatal("zero local limit should disable rate limiting for this connection, including the shared parent")
+	}
+}

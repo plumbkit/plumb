@@ -45,10 +45,17 @@ type WriteDeps struct {
 	// "use the 300 ms default" (back-compat for test setups that use
 	// WriteDeps{}). Negative means "disabled — skip the wait entirely".
 	PostWriteDiagWindow time.Duration
+	// PostWriteDiagWindowFn, when set, overrides PostWriteDiagWindow at call
+	// time. The daemon uses this so project config loaded after tool
+	// registration affects subsequent writes.
+	PostWriteDiagWindowFn func() time.Duration
 	// ConcurrentWriteSkew is the clock-skew allowance for edit_file's
 	// post-rename mtime check. Zero falls back to the 100 ms compiled-in
 	// default. Increase on slow filesystems (network mounts, FUSE).
 	ConcurrentWriteSkew time.Duration
+	// ConcurrentWriteSkewFn, when set, overrides ConcurrentWriteSkew at call
+	// time.
+	ConcurrentWriteSkewFn func() time.Duration
 	// WorkspaceFn returns the resolved workspace root for the current session.
 	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
 	// rollback log. nil or a function returning "" disables the txlog.
@@ -59,4 +66,27 @@ type WriteDeps struct {
 	// Set to false for implicit-verification mode (tokens matter more than
 	// inline confirmation).
 	ShowWriteDiff bool
+	// ShowWriteDiffFn, when set, overrides ShowWriteDiff at call time.
+	ShowWriteDiffFn func() bool
+}
+
+func (d WriteDeps) postWriteDiagWindow() time.Duration {
+	if d.PostWriteDiagWindowFn != nil {
+		return d.PostWriteDiagWindowFn()
+	}
+	return d.PostWriteDiagWindow
+}
+
+func (d WriteDeps) concurrentWriteSkew() time.Duration {
+	if d.ConcurrentWriteSkewFn != nil {
+		return d.ConcurrentWriteSkewFn()
+	}
+	return d.ConcurrentWriteSkew
+}
+
+func (d WriteDeps) showWriteDiff() bool {
+	if d.ShowWriteDiffFn != nil {
+		return d.ShowWriteDiffFn()
+	}
+	return d.ShowWriteDiff
 }

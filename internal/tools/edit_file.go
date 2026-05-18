@@ -234,7 +234,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			continue
 		}
 
-		if concurrentWriteDetected(path, result, t.deps.ConcurrentWriteSkew) {
+		if concurrentWriteDetected(path, result, t.deps.concurrentWriteSkew()) {
 			slog.Warn("edit_file: concurrent write detected after rename, retrying",
 				"path", path, "attempt", attempt)
 			lastErr = fmt.Errorf(
@@ -265,14 +265,14 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			sb.WriteString("\n")
 			sb.WriteString(summary)
 		}
-		if t.deps.ShowWriteDiff {
+		if t.deps.showWriteDiff() {
 			if d := unifiedDiff(path, before, content); d != "" {
 				sb.WriteString("\n")
 				sb.WriteString(d)
 			}
 		}
 		if t.deps.Diag != nil {
-			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.PostWriteDiagWindow)
+			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
 			sb.WriteString(formatPostWriteDiagnostics(fresh))
 		}
 		return sb.String(), nil

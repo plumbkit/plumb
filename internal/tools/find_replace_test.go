@@ -108,6 +108,83 @@ func TestFindReplace_ApplyConsumesRateLimit(t *testing.T) {
 	}
 }
 
+func TestFindReplace_DirtyCheckRefusesDirtyFile(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.email", "test@example.com")
+	gitExec(t, dir, "config", "user.name", "Test User")
+
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "a.txt")
+	gitExec(t, dir, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("before\nneedle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewFindReplace()
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "needle",
+		"replacement": "replacement",
+		"dry_run":     false,
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected dirty file rejection")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("expected dirty file error, got %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "replacement") {
+		t.Fatal("dirty file was modified despite rejection")
+	}
+}
+
+func TestFindReplace_DirtyOkOverwritesDirtyFile(t *testing.T) {
+	dir := t.TempDir()
+	gitExec(t, dir, "init")
+	gitExec(t, dir, "config", "user.email", "test@example.com")
+	gitExec(t, dir, "config", "user.name", "Test User")
+
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "a.txt")
+	gitExec(t, dir, "commit", "-m", "initial")
+	if err := os.WriteFile(path, []byte("before\nneedle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewFindReplace()
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "needle",
+		"replacement": "replacement",
+		"dry_run":     false,
+		"dirty_ok":    true,
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("unexpected error with dirty_ok=true: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "replacement") {
+		t.Fatal("dirty_ok=true did not apply replacement")
+	}
+}
+
 func TestFindReplace_GlobLimitsScope(t *testing.T) {
 	dir := setupReplaceTree(t)
 	tool := NewFindReplace()

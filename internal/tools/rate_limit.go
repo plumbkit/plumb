@@ -67,6 +67,10 @@ func (r *RateLimiter) Allow() bool {
 
 	// Evaluate the local window.
 	localOK := true
+	if r.limit <= 0 {
+		r.mu.Unlock()
+		return true
+	}
 	if r.limit > 0 {
 		now := time.Now()
 		cutoff := now.Add(-r.window)

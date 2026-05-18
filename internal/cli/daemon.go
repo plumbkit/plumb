@@ -30,6 +30,21 @@ import (
 	"github.com/golimpio/plumb/internal/tools/txlog"
 )
 
+func recoverWorkspaceTxlog(folder string, scan func(string)) {
+	scan(folder)
+}
+
+func postWriteDiagWindow(edits config.EditsConfig) time.Duration {
+	if edits.PostWriteDiagnosticsMs == 0 {
+		return -1
+	}
+	return time.Duration(edits.PostWriteDiagnosticsMs) * time.Millisecond
+}
+
+func concurrentWriteSkew(edits config.EditsConfig) time.Duration {
+	return time.Duration(edits.ConcurrentWriteSkewMs) * time.Millisecond
+}
+
 var daemonCmd = &cobra.Command{
 	Use:    "daemon",
 	Short:  "Run the background daemon (usually started automatically by serve)",
@@ -244,7 +259,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 
 		// Scan for orphaned transaction logs from a previous daemon crash and
 		// roll them back before any new transactions can touch those files.
-		go txlog.Scan(folder)
+		recoverWorkspaceTxlog(folder, txlog.Scan)
 
 		// Update the session file with the now-resolved workspace.
 		cn, cv := clientName, clientVersion
@@ -338,14 +353,19 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	// inside applyProjectConfig once the workspace resolves.
 	writeLimiter := tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute)
 	// editsCfg is updated by applyProjectConfig when project-local config
-	// loads. All write tools consult it via a closure so changes take effect
-	// on the next call.
+	// loads. Write tools consult it via closures so changes take effect on
+	// the next call.
 	var editsMu sync.RWMutex
 	editsCfg := cfg.Edits
 	strictFn := func() bool {
 		editsMu.RLock()
 		defer editsMu.RUnlock()
 		return editsCfg.Strict
+	}
+	editConfigFn := func() config.EditsConfig {
+		editsMu.RLock()
+		defer editsMu.RUnlock()
+		return editsCfg
 	}
 	// walkCfg mirrors editsCfg's pattern: updated on project-config reload,
 	// read by session_start before every directory walk.
@@ -384,21 +404,17 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 				"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots)
 		}
 	}
-	diagWindow := time.Duration(cfg.Edits.PostWriteDiagnosticsMs) * time.Millisecond
-	if cfg.Edits.PostWriteDiagnosticsMs == 0 {
-		diagWindow = -1 // sentinel: disabled
-	}
 	writeDeps := tools.WriteDeps{
-		Client:              sessionProxy,
-		Cache:               sessionCache,
-		Diag:                sessionInv,
-		Limiter:             writeLimiter,
-		Strict:              strictFn,
-		Reads:               readTracker,
-		PostWriteDiagWindow: diagWindow,
-		ConcurrentWriteSkew: time.Duration(cfg.Edits.ConcurrentWriteSkewMs) * time.Millisecond,
-		WorkspaceFn:         wsFn,
-		ShowWriteDiff:       cfg.Edits.ShowWriteDiff,
+		Client:                sessionProxy,
+		Cache:                 sessionCache,
+		Diag:                  sessionInv,
+		Limiter:               writeLimiter,
+		Strict:                strictFn,
+		Reads:                 readTracker,
+		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(editConfigFn()) },
+		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(editConfigFn()) },
+		WorkspaceFn:           wsFn,
+		ShowWriteDiffFn:       func() bool { return editConfigFn().ShowWriteDiff },
 	}
 	srv.Register(tools.NewWriteFile(writeDeps))
 	srv.Register(tools.NewEditFile(writeDeps))
@@ -521,7 +537,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			return
 		}
 		acquiredRoot = root
-		go txlog.Scan(root)
+		recoverWorkspaceTxlog(root, txlog.Scan)
 		cn, cv := clientName, clientVersion
 		session.Patch(sessID, func(info *session.Info) {
 			info.Folder = root
