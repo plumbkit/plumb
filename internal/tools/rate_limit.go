@@ -65,27 +65,22 @@ func (r *RateLimiter) Allow() bool {
 	}
 	r.mu.Lock()
 
-	// Evaluate the local window.
-	localOK := true
 	if r.limit <= 0 {
 		r.mu.Unlock()
 		return true
 	}
-	if r.limit > 0 {
-		now := time.Now()
-		cutoff := now.Add(-r.window)
-		i := 0
-		for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
-			i++
-		}
-		if i > 0 {
-			r.stamps = r.stamps[i:]
-		}
-		if len(r.stamps) >= r.limit {
-			localOK = false
-		}
+
+	// Evaluate the local window.
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+	i := 0
+	for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
+		i++
 	}
-	if !localOK {
+	if i > 0 {
+		r.stamps = r.stamps[i:]
+	}
+	if len(r.stamps) >= r.limit {
 		r.mu.Unlock()
 		return false
 	}
