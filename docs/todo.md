@@ -354,6 +354,88 @@ Known gaps to address before promoting from experimental to validated:
 
 ---
 
+### Java adapter (jdtls) — daemon performance and memory budget
+
+**Priority:** medium-high before enabling Java by default or calling it production-grade.
+**Effort:** Medium. Requires measurement on real Java projects and a small daemon lifecycle design pass.
+**Status:** Planning only. No implementation started.
+
+The current Java adapter follows plumb's existing daemon architecture: one long-lived daemon, one shared language-server process per detected workspace root, and one cache/invalidator pair per pool entry. That is the right first implementation because it preserves the same contract as Go and Python: multiple MCP sessions against the same workspace reuse one LSP process instead of each conversation spawning its own server.
+
+jdtls changes the resource profile materially, though. Unlike gopls and pyright, it starts a JVM, loads Eclipse plugins, creates an Eclipse workspace data directory, imports Maven/Gradle projects, indexes source and dependencies, and can keep substantial heap and index state resident. In a single-daemon process model, that means Java support can turn plumb from "small background helper plus a few language servers" into "a daemon supervising one or more JVMs". That is acceptable, but it needs explicit budgets and lifecycle rules.
+
+**Current expected impact.**
+
+- **Cold start latency:** jdtls startup is dominated by JVM launch, plugin load, project import, and index warmup. First useful diagnostics can take seconds on small projects and much longer on large Maven/Gradle workspaces. `plumb doctor` and the integration test already hint at this by treating jdtls version/startup as potentially slow.
+- **Resident memory:** each Java workspace can keep a separate JVM alive. Even if the plumb daemon itself remains small, the total background footprint is daemon memory plus every supervised LSP process. Multiple Java workspaces can therefore multiply memory use quickly.
+- **Disk cache growth:** plumb computes a per-workspace `jdtls-data` directory under the cache dir. That isolates Eclipse state correctly, but the cache can grow with every Java project ever opened unless there is retention/cleanup policy.
+- **CPU spikes:** project import, dependency resolution, background indexing, and diagnostics can continue after the initial LSP handshake. In the singleton daemon model this background work can coincide with active tool calls from unrelated sessions or workspaces.
+- **User-perceived responsiveness:** the first Java tool call that causes `workspacePool.acquireLang` to start jdtls can block until the supervisor's `OnStart` completes. That is the correct correctness boundary, but it may feel much slower than Go/Python.
+
+**Questions to answer with measurement.**
+
+1. Measure cold and warm startup on at least:
+   - tiny Maven fixture,
+   - medium Maven or Gradle project,
+   - large multi-module project.
+2. Record:
+   - time to process start,
+   - time to `initialize` response,
+   - time to first `publishDiagnostics`,
+   - peak and steady resident memory for the jdtls process,
+   - size of the per-workspace `jdtls-data` directory,
+   - CPU load during import/indexing.
+3. Compare against gopls and pyright using the same daemon path so the numbers describe plumb's actual architecture, not standalone LSP behaviour.
+4. Test multiple Java workspaces attached to the same daemon. The important metric is aggregate memory/CPU, not only single-project startup.
+
+**Daemon design options.**
+
+- **Keep the current in-daemon supervisor model, but add lifecycle policy.** This is the smallest change. Add idle shutdown for expensive LSPs, configurable per language:
+
+  ```toml
+  [lsp.java]
+  enabled = true
+  idle_timeout = "20m"
+  max_workspaces = 2
+  memory_budget_mb = 2048
+  ```
+
+  The daemon would stop idle jdtls processes while preserving cached metadata where safe. The next Java request restarts the server.
+
+- **Add per-language process budgets.** Keep one daemon, but enforce "only N Java language servers active at once". If a new Java workspace attaches while the budget is full, either evict the least-recently-used idle entry or return a clear "Java LSP capacity reached" diagnostic.
+
+- **Introduce an independent worker process for heavyweight language services.** The daemon remains the MCP endpoint and session authority, but Java LSP supervision moves into a worker process. This is worth considering if jdtls proves unstable, memory-heavy, or prone to long blocking lifecycle operations. Benefits:
+  - a crashed or wedged Java worker cannot destabilise the main daemon;
+  - memory accounting and process cleanup are clearer;
+  - Java-specific logs, cache cleanup, and restart policy can be isolated;
+  - future heavyweight features (quality analysis, Gradle import, code actions) can share the worker boundary.
+
+  Costs:
+  - new IPC contract between daemon and worker;
+  - more moving parts during setup/debugging;
+  - duplicated lifecycle and health reporting unless designed carefully;
+  - harder cross-language features if workers own different pieces of state.
+
+Recommendation: **do not introduce workers yet**. First add measurement and idle/budget controls to the existing pool. Revisit workers only if real data shows jdtls memory or failure modes are too costly for the main daemon to supervise directly.
+
+**Definition of done.**
+
+1. Add a benchmark/smoke document or command that records startup, first diagnostics, RSS, and cache size for Java, Go, and Python workspaces.
+2. Add `plumb doctor` or `plumb status` visibility for active LSP processes: language, workspace, PID, uptime, state, and approximate RSS where the OS supports it.
+3. Add configurable idle shutdown for Java LSP processes, defaulting to a conservative timeout while Java remains experimental.
+4. Add a cache-retention policy for `jdtls-data` directories so old project state does not grow forever.
+5. Decide, based on measured data, whether per-language worker processes are justified. If yes, design the worker IPC contract as a separate architecture TODO before implementing.
+
+**Watch out for.**
+
+- The singleton daemon is a feature: it prevents each MCP conversation from spawning its own jdtls. Do not lose that sharing property when experimenting with workers.
+- Memory belongs mostly to child LSP processes, not the Go daemon heap. Any performance report should separate daemon RSS from supervised-process RSS.
+- Maven/Gradle dependency resolution can make first-run measurements noisy. Record warm-cache and cold-cache numbers separately.
+- A short startup timeout that works for gopls may be wrong for jdtls. Make Java-specific timeouts explicit rather than raising global limits for every language.
+- Idle shutdown saves memory but can make the next Java query slow. Surface this state in `doctor`/TUI so users understand why the next request is warming up.
+
+---
+
 ## Bugs & known limitations
 
 Footguns and behaviour to be aware of. None of these are urgent — they are documented here so anyone touching the relevant subsystem can make an informed decision (fix it, work around it, or leave it alone).

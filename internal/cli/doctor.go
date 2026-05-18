@@ -54,20 +54,20 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	PrintLogo()
 
 	sections := []struct {
-		title  string
-		checks []checkResult
+		title string
+		run   func() []checkResult
 	}{
-		{"Daemon", checkDaemon()},
-		{"Language Servers", checkLSPs(ws)},
-		{"MCP Clients", checkMCPClients()},
-		{"Configuration", checkConfigs(ws)},
-		{"Data", checkStatsDB(ws)},
+		{"Daemon", checkDaemon},
+		{"Language Servers", func() []checkResult { return checkLSPs(ws) }},
+		{"MCP Clients", checkMCPClients},
+		{"Configuration", func() []checkResult { return checkConfigs(ws) }},
+		{"Data", func() []checkResult { return checkStatsDB(ws) }},
 	}
 
 	failures := 0
 	for _, s := range sections {
-		printSection(s.title, s.checks)
-		for _, c := range s.checks {
+		checks := runSection(s.title, s.run)
+		for _, c := range checks {
 			if !c.ok {
 				failures++
 			}
@@ -83,11 +83,19 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// printSection prints a titled section followed by its checks, aligned by name column.
-func printSection(title string, checks []checkResult) {
+func runSection(title string, run func() []checkResult) []checkResult {
 	fmt.Println(tui.HintStyle.Render("● " + title))
 	fmt.Println()
+	stopWorking := startWorkingIndicator()
+	checks := run()
+	stopWorking()
+	printChecks(checks)
+	fmt.Println()
+	return checks
+}
 
+// printChecks prints checks aligned by name column.
+func printChecks(checks []checkResult) {
 	nameW := 0
 	for _, c := range checks {
 		if len(c.name) > nameW {
@@ -97,20 +105,58 @@ func printSection(title string, checks []checkResult) {
 
 	for _, c := range checks {
 		marker := tui.OkStyle.Render("✓")
+		name := fmt.Sprintf("%-*s", nameW, c.name)
 		if !c.ok {
 			marker = tui.WarnStyle.Render("✗")
+			name = tui.WarnStyle.Render(name)
 		}
 		detailLines := strings.Split(c.detail, "\n")
-		fmt.Printf("  %s  %-*s  %s\n", marker, nameW, c.name, detailLines[0])
+		detail := detailLines[0]
+		if !c.ok {
+			detail = tui.WarnStyle.Render(detail)
+		}
+		fmt.Printf("  %s  %s  %s\n", marker, name, detail)
 		indent := strings.Repeat(" ", 7+nameW)
 		for _, line := range detailLines[1:] {
+			if !c.ok {
+				line = tui.WarnStyle.Render(line)
+			}
 			fmt.Printf("%s%s\n", indent, line)
 		}
 		if !c.ok && c.fix != "" {
-			fmt.Printf("%s%s\n", indent, tui.MutedStyle.Render("→ "+c.fix))
+			fmt.Printf("%s%s\n", indent, tui.WarnStyle.Render("→ "+c.fix))
 		}
 	}
-	fmt.Println()
+}
+
+func startWorkingIndicator() func() {
+	if !stdoutIsTerminal() {
+		return func() {}
+	}
+	done := make(chan struct{})
+	printed := make(chan bool, 1)
+	go func() {
+		timer := time.NewTimer(250 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			fmt.Fprint(os.Stdout, "  working...")
+			printed <- true
+		case <-done:
+			printed <- false
+		}
+	}()
+	return func() {
+		close(done)
+		if <-printed {
+			fmt.Fprint(os.Stdout, "\r\033[2K")
+		}
+	}
+}
+
+func stdoutIsTerminal() bool {
+	info, err := os.Stdout.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // checkDaemon verifies the daemon is reachable and its version matches.
