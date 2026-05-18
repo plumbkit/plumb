@@ -659,6 +659,18 @@ func (d *DB) TotalCalls(filter Filter) int64 {
 	return n
 }
 
+// TotalSessions returns the number of distinct recorded sessions matching filter.
+func (d *DB) TotalSessions(filter Filter) int64 {
+	if d == nil {
+		return 0
+	}
+	where, args := filter.where()
+	q := `SELECT COUNT(DISTINCT session_id) FROM tool_calls` + where
+	var n int64
+	_ = d.db.QueryRow(q, args...).Scan(&n)
+	return n
+}
+
 // TotalTokensSaved sums TokensSaved across all matching calls. Best-effort
 // estimate based on per-tool alternative-cost multipliers (see savings.go).
 func (d *DB) TotalTokensSaved(filter Filter) int64 {

@@ -32,6 +32,11 @@ var (
 	TabActiveEdgeStyle       lipgloss.Style
 	TabInactiveEdgeStyle     lipgloss.Style
 	StatusStyle              lipgloss.Style
+	StatusKeyStyle           lipgloss.Style
+	LogStatusStyle           lipgloss.Style
+	LogSelectedStyle         lipgloss.Style
+	LogDetailKeyStyle        lipgloss.Style
+	LogDetailGutterStyle     lipgloss.Style
 
 	OkStyle          lipgloss.Style
 	WarnStyle        lipgloss.Style
@@ -145,6 +150,23 @@ func RebuildStyles() {
 
 	StatusStyle = lipgloss.NewStyle().
 		Foreground(t.TextHint)
+
+	StatusKeyStyle = lipgloss.NewStyle().
+		Foreground(t.TextMuted)
+
+	LogStatusStyle = lipgloss.NewStyle().
+		Background(t.TextInactive).
+		Foreground(t.TextPrimary)
+
+	LogSelectedStyle = lipgloss.NewStyle().
+		Background(t.SelectionBackground).
+		Foreground(t.TextPrimary)
+
+	LogDetailKeyStyle = lipgloss.NewStyle().
+		Foreground(t.Key)
+
+	LogDetailGutterStyle = lipgloss.NewStyle().
+		Foreground(t.TextFaded)
 
 	OkStyle = lipgloss.NewStyle().
 		Foreground(t.Success)

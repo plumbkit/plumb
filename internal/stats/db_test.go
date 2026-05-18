@@ -219,6 +219,15 @@ func TestFilterScopesSessionInsideWorkspace(t *testing.T) {
 	if got := db.TotalCalls(filter); got != 1 {
 		t.Fatalf("TotalCalls = %d, want 1", got)
 	}
+	if got := db.TotalSessions(Filter{}); got != 2 {
+		t.Fatalf("TotalSessions = %d, want 2", got)
+	}
+	if got := db.TotalSessions(Filter{Workspace: "/w1"}); got != 2 {
+		t.Fatalf("TotalSessions scoped to /w1 = %d, want 2", got)
+	}
+	if got := db.TotalSessions(filter); got != 1 {
+		t.Fatalf("TotalSessions scoped to /w1 sess-1 = %d, want 1", got)
+	}
 	recent, err := db.Recent(10, filter)
 	if err != nil {
 		t.Fatalf("Recent: %v", err)

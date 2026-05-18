@@ -165,9 +165,9 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 		}
 	}
 	for i, want := range []string{
-		"╭────────────────╮ ╭─ Activity (1m) ────────────╮",
-		"│ ❯ Sessions   ▾ │ │ ",
-		"╰────────────────╯ ╰────────────────────────────╯",
+		"╭────────────────────╮ ╭─ Activity (1m) ────────────╮",
+		"│ ❯ 2. Sessions    ▽ │ │ ",
+		"╰────────────────────╯ ╰────────────────────────────╯",
 	} {
 		if !strings.HasPrefix(plain[i], want) {
 			t.Fatalf("line %d = %q, want prefix %q", i, plain[i], want)
@@ -190,6 +190,26 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	}
 	if !strings.Contains(plain[0], "╮ ╭─ Tokens Saved") {
 		t.Fatalf("top menu = %q, want one-space widget gap", plain[0])
+	}
+}
+
+func TestSectionMenuUsesNumberedRows(t *testing.T) {
+	RebuildStyles()
+	m := Model{sectionMenuCursor: 3}
+	bg := strings.Repeat(strings.Repeat(" ", 40)+"\n", 8)
+	plain := ansiStripForTest(m.renderSectionMenuOverlay(bg))
+	for _, want := range []string{
+		"╭────────────────────╮",
+		"│   1. Dashboard     │",
+		"│   2. Sessions      │",
+		"│   3. Memory        │",
+		"│ ❯ 4. Logs          │",
+		"│   5. Settings      │",
+		"╰────────────────────╯",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("section menu missing %q in:\n%s", want, plain)
+		}
 	}
 }
 
@@ -253,6 +273,38 @@ func TestSectionSelectorKeyFlow(t *testing.T) {
 	}
 }
 
+func TestSectionSelectorMouseAndControlNumber(t *testing.T) {
+	m := Model{currentSection: 1, width: 100, height: 30}
+	updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: 1, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if !m.sectionMenuOpen {
+		t.Fatal("clicking selector did not open section menu")
+	}
+
+	updated, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 3, Y: 4, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if m.sectionMenuOpen {
+		t.Fatal("section menu stayed open after clicking a row")
+	}
+	if m.currentSection != 3 {
+		t.Fatalf("currentSection after row click = %d, want Logs index", m.currentSection)
+	}
+
+	updated, _ = m.Update(keyPress("ctrl+1"))
+	m = updated.(Model)
+	if m.currentSection != 0 {
+		t.Fatalf("currentSection after ctrl+1 = %d, want Dashboard index", m.currentSection)
+	}
+
+	updated, _ = m.Update(keyPress("/"))
+	m = updated.(Model)
+	updated, _ = m.Update(keyPress("5"))
+	m = updated.(Model)
+	if m.currentSection != 4 {
+		t.Fatalf("currentSection after local 5 = %d, want Settings index", m.currentSection)
+	}
+}
+
 func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
 	m := NewModel("")
 
@@ -282,6 +334,327 @@ func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
 	_, cmd = m.Update(ctrlKey('q'))
 	if cmd == nil {
 		t.Fatal("ctrl+q did not return a quit command")
+	}
+}
+
+func TestFooterUsesDatabaseTotalsWithoutLiveSessions(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	now := time.Now()
+	for _, call := range []stats.Call{
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now, OutputBytes: 4, Success: true},
+		{SessionID: "sess-2", Workspace: "/w2", Tool: "list_symbols", CalledAt: now.Add(time.Millisecond), OutputBytes: 4, Success: true},
+	} {
+		if err := db.Record(call); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	db.Close()
+
+	m := NewModel("")
+	if m.globalDB == nil {
+		t.Fatal("global stats DB was not opened without live sessions")
+	}
+	defer m.globalDB.Close()
+	m.width = 150
+	m.height = 12
+
+	plain := ansiStripForTest(m.render())
+	for _, want := range []string{
+		"2 sessions",
+		"2 tool calls",
+		"~2.3k tokens saved",
+		"/ menu",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("footer missing %q in:\n%s", want, plain)
+		}
+	}
+}
+
+func TestFooterCountFormatting(t *testing.T) {
+	for _, tt := range []struct {
+		n    int64
+		want string
+	}{
+		{0, "no sessions"},
+		{1, "1 session"},
+		{3, "3 sessions"},
+	} {
+		if got := formatSessionCount(tt.n); got != tt.want {
+			t.Fatalf("formatSessionCount(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+	if got := formatToolCallCount(1); got != "1 tool call" {
+		t.Fatalf("formatToolCallCount(1) = %q, want singular", got)
+	}
+	if got := pluralWord(1, "token", "tokens"); got != "token" {
+		t.Fatalf("pluralWord for one token = %q, want token", got)
+	}
+	if got := pluralWord(2, "token", "tokens"); got != "tokens" {
+		t.Fatalf("pluralWord for two tokens = %q, want tokens", got)
+	}
+}
+
+func TestLogBodyLineKeepsPadBeforeRightBorder(t *testing.T) {
+	RebuildStyles()
+	m := Model{}
+	entry := logEntry{Raw: "line 309 char abcdefghijklmnopqrstuvwxyz"}
+	got := ansiStripForTest(m.renderLogBodyLine(&entry, 22, false, false, SepStyle.Render("│")))
+	if !strings.HasSuffix(got, " │") {
+		t.Fatalf("log body line = %q, want a space before right border", got)
+	}
+	if lipgloss.Width(got) != 24 {
+		t.Fatalf("log body line width = %d, want 24: %q", lipgloss.Width(got), got)
+	}
+	if !strings.HasPrefix(got, "│ ") {
+		t.Fatalf("log body line = %q, want a space after left border", got)
+	}
+}
+
+func TestSelectedLogBodyLineStylesFullInnerRow(t *testing.T) {
+	RebuildStyles()
+	m := Model{}
+	entry := logEntry{Raw: "short"}
+	got := m.renderLogBodyLine(&entry, 30, true, false, SepStyle.Render("│"))
+	if strings.Count(got, "\x1b[48;2;46;52;64m") == 0 {
+		t.Fatalf("selected log row missing dark background escape: %q", got)
+	}
+	if lipgloss.Width(got) != 32 {
+		t.Fatalf("selected log row width = %d, want 32", lipgloss.Width(got))
+	}
+}
+
+func TestLogStatusBarUsesInFrameText(t *testing.T) {
+	RebuildStyles()
+	m := Model{logEntries: []logEntry{{Raw: "one"}, {Raw: "two"}}}
+	got := ansiStripForTest(m.renderLogStatusBar(m.logEntries, 58, false))
+	for _, want := range []string{"Type to filter", "enter details", "2/2 lines"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log status missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "backspace erase") {
+		t.Fatalf("log status still contains removed hint: %q", got)
+	}
+	if !strings.HasPrefix(got, "│  ") || !strings.HasSuffix(got, "  │") {
+		t.Fatalf("log status = %q, want frame gap plus status text padding", got)
+	}
+}
+
+func TestLogsTopBorderUsesPlainLogoIntegratedFrame(t *testing.T) {
+	RebuildStyles()
+	m := Model{width: 80, logEntries: []logEntry{{Raw: "one"}}, logFilter: "one"}
+	got := ansiStripForTest(m.renderTopBorderLogs(false))
+	for _, unwanted := range []string{"Logs", "Filter:", "lines"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("logs top border contains %q: %q", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "╰╯ ╭") {
+		t.Fatalf("logs top border does not include logo bottom join: %q", got)
+	}
+	if !strings.HasPrefix(got, "╭") {
+		t.Fatalf("logs top border = %q, want top-left corner", got)
+	}
+}
+
+func TestLogsSectionKeepsUniversalStatusBar(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		currentSection: 3,
+		width:          120,
+		height:         14,
+		logEntries:     []logEntry{{Raw: "one"}, {Raw: "two"}},
+	}
+	plain := ansiStripForTest(m.renderLogsSection())
+	for _, want := range []string{
+		"Type to filter",
+		"enter details",
+		"plumb dev",
+		"/ menu",
+		"^q quit",
+		"^h help",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("logs section missing %q in:\n%s", want, plain)
+		}
+	}
+	if got := len(strings.Split(plain, "\n")); got != m.height {
+		t.Fatalf("logs section rendered %d rows, want %d:\n%s", got, m.height, plain)
+	}
+}
+
+func TestLogMouseClickAndWheelSelectRows(t *testing.T) {
+	m := Model{
+		currentSection: 3,
+		width:          80,
+		height:         12,
+		logEntries: []logEntry{
+			{Raw: "one"},
+			{Raw: "two"},
+			{Raw: "three"},
+			{Raw: "four"},
+		},
+	}
+
+	updated, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 4, Y: bodyStartRow + 2, Button: tea.MouseLeft}))
+	m = updated.(Model)
+	if m.logCursor != 2 {
+		t.Fatalf("logCursor after click = %d, want 2", m.logCursor)
+	}
+
+	updated, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{X: 4, Y: bodyStartRow + 2, Button: tea.MouseWheelUp}))
+	m = updated.(Model)
+	if m.logCursor != 0 {
+		t.Fatalf("logCursor after wheel up = %d, want 0", m.logCursor)
+	}
+
+	updated, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{X: 4, Y: bodyStartRow + 2, Button: tea.MouseWheelDown}))
+	m = updated.(Model)
+	if m.logCursor != 3 {
+		t.Fatalf("logCursor after wheel down = %d, want 3", m.logCursor)
+	}
+}
+
+func TestLogEnterOpensDetail(t *testing.T) {
+	m := Model{
+		currentSection: 3,
+		width:          80,
+		height:         12,
+		logEntries:     []logEntry{{Raw: "one"}},
+	}
+	updated, _ := m.Update(keyPress("enter"))
+	m = updated.(Model)
+	if !m.logDetailOpen {
+		t.Fatal("enter did not open log detail")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = updated.(Model)
+	if m.logDetailOpen {
+		t.Fatal("esc did not close log detail")
+	}
+}
+
+func TestLogDetailCopyShortcutReturnsCommand(t *testing.T) {
+	m := Model{
+		currentSection: 3,
+		width:          80,
+		height:         12,
+		logEntries:     []logEntry{{Raw: "one"}},
+		logDetailOpen:  true,
+	}
+	updated, cmd := m.Update(keyPress("c"))
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("c did not return a copy command")
+	}
+	if !m.logDetailCopied {
+		t.Fatal("c did not set copied status")
+	}
+	updated, _ = m.Update(logDetailCopyResetMsg{})
+	m = updated.(Model)
+	if m.logDetailCopied {
+		t.Fatal("copy reset did not restore status")
+	}
+}
+
+func TestCurrentLogDetailTextReturnsRawLine(t *testing.T) {
+	raw := `time=2026-05-18T08:36:55.028+10:00 level=WARN msg="mcp: tool error" tool=read_file err="full raw value"`
+	m := Model{
+		logEntries: []logEntry{{Raw: raw}},
+	}
+	if got := m.currentLogDetailText(); got != raw+"\n" {
+		t.Fatalf("currentLogDetailText = %q, want raw line", got)
+	}
+}
+
+func TestLogDetailFormatsTextSlogFields(t *testing.T) {
+	raw := `time=2026-05-18T12:34:56Z level=INFO msg="daemon: ready" socket=/tmp/plumb.sock pid=123`
+	lines := ansiStripForTest(strings.Join(logDetailLines(logEntry{Raw: raw}, 80), "\n"))
+	for _, want := range []string{
+		"Time     2026-05-18T12:34:56Z",
+		"Level    INFO",
+		"Message  daemon: ready",
+		"┊ pid=123",
+		"┊ socket=/tmp/plumb.sock",
+		"Raw",
+		`┊ time=2026-05-18T12:34:56Z level=INFO msg="daemon: ready" socket=/tmp/plumb.soc`,
+		"┊ pid=123",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("log detail missing %q in:\n%s", want, lines)
+		}
+	}
+}
+
+func TestLogDetailFrameHasStatusBarAndFixedBlankRows(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		width:           100,
+		height:          20,
+		logDetailScroll: 0,
+	}
+	bg := strings.Repeat(strings.Repeat(" ", 100)+"\n", 19) + strings.Repeat(" ", 100)
+	got := ansiStripForTest(m.renderLogDetail(bg, []logEntry{{Raw: "line"}}))
+	if strings.Contains(got, "esc close ─╮") {
+		t.Fatalf("log detail top border still contains close hint:\n%s", got)
+	}
+	for _, want := range []string{"Log Detail", "c copy", "esc close"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log detail missing %q:\n%s", want, got)
+		}
+	}
+	lines := strings.Split(got, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "Log Detail") {
+			if i+1 >= len(lines) || strings.Trim(lines[i+1], " │") != "" {
+				t.Fatalf("line after top border should be blank:\n%s", got)
+			}
+			break
+		}
+	}
+}
+
+func TestLogDetailContentUsesTwoSpacePadding(t *testing.T) {
+	RebuildStyles()
+	m := Model{width: 100, height: 20}
+	bg := strings.Repeat(strings.Repeat(" ", 100)+"\n", 19) + strings.Repeat(" ", 100)
+	got := ansiStripForTest(m.renderLogDetail(bg, []logEntry{{Raw: `time=2026-05-18T12:34:56Z level=INFO msg="daemon: ready"`}}))
+	if !strings.Contains(got, "│  Time     2026-05-18T12:34:56Z") {
+		t.Fatalf("log detail content does not use two-space left padding:\n%s", got)
+	}
+	if strings.Contains(got, "│  c copy") {
+		t.Fatalf("log detail status bar should keep one-space padding:\n%s", got)
+	}
+}
+
+func TestLogDetailStatusShowsCopiedMessage(t *testing.T) {
+	RebuildStyles()
+	m := Model{logDetailCopied: true}
+	got := ansiStripForTest(m.renderLogDetailStatusBar(50))
+	if !strings.Contains(got, "Copied to the clipboard") {
+		t.Fatalf("copied status missing:\n%s", got)
+	}
+	if strings.Contains(got, "c copy") {
+		t.Fatalf("copied status should replace normal text:\n%s", got)
+	}
+}
+
+func TestLogDetailRawWrapsWithoutEllipsis(t *testing.T) {
+	RebuildStyles()
+	raw := `time=2026-05-18T08:36:55.028+10:00 level=WARN msg="mcp: tool error" tool=read_file err="read_file: stat /Users/gilberto/Projects/plumb/site/index.html: no such file or directory"`
+	lines := ansiStripForTest(strings.Join(logDetailLines(logEntry{Raw: raw}, 64), "\n"))
+	if strings.Contains(lines, "…") {
+		t.Fatalf("raw log detail should wrap without ellipsis:\n%s", lines)
+	}
+	for _, want := range []string{"tool=read_file", "no such file or directory"} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("raw log detail missing %q:\n%s", want, lines)
+		}
 	}
 }
 

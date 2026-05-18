@@ -72,6 +72,9 @@ type Theme struct {
 
 	// ScrollTrack is the colour of the inactive scrollbar track (╎).
 	ScrollTrack color.Color
+
+	// SelectionBackground is the dark background for selected table rows.
+	SelectionBackground color.Color
 }
 
 // Nordico is the default theme — a TUI adaptation of the Nordico colour
@@ -80,21 +83,22 @@ type Theme struct {
 // ("2", "3", "8" …) delegate to the user's terminal theme so that anyone
 // running a Nord terminal profile gets perfect harmony automatically.
 var Nordico = Theme{
-	Accent:        lipgloss.Color("12"),      // bright blue  — Nord9 / #88C0D0 family
-	Border:        lipgloss.Color("#4C566A"), // Nord3 — clearly visible border, not dominant
-	PanelTitle:    lipgloss.Color("15"),      // bright white — Nord6 #ECEFF4
-	TextPrimary:   lipgloss.Color("15"),      // bright white
-	TextSecondary: lipgloss.Color("#C8D8E8"), // light blue-white — Nord4 tint
-	TextMuted:     lipgloss.Color("#AABBCC"), // mid blue-gray — between Nord3 and Nord4
-	TextInactive:  lipgloss.Color("#3E444F"), // panel fully behind popup overlay
-	TextFaded:     lipgloss.Color("#6C768A"), // active panel that lost focus to sibling
-	TextHint:      lipgloss.Color("#7B8EA6"), // mid-tone — Nord3/Nord4 midpoint
-	Key:           lipgloss.Color("6"),       // cyan         — Nord8 #88C0D0
-	ItemText:      lipgloss.Color("7"),       // light gray   — Nord4
-	Success:       lipgloss.Color("2"),       // green        — Nord14 #A3BE8C
-	Warning:       lipgloss.Color("3"),       // yellow       — Nord13 #EBCB8B
-	ScrollThumb:   lipgloss.Color("12"),      // bright blue — same as Accent
-	ScrollTrack:   lipgloss.Color("#4C566A"), // same as Border — track blends with border
+	Accent:              lipgloss.Color("12"),      // bright blue  — Nord9 / #88C0D0 family
+	Border:              lipgloss.Color("#4C566A"), // Nord3 — clearly visible border, not dominant
+	PanelTitle:          lipgloss.Color("15"),      // bright white — Nord6 #ECEFF4
+	TextPrimary:         lipgloss.Color("15"),      // bright white
+	TextSecondary:       lipgloss.Color("#C8D8E8"), // light blue-white — Nord4 tint
+	TextMuted:           lipgloss.Color("#AABBCC"), // mid blue-gray — between Nord3 and Nord4
+	TextInactive:        lipgloss.Color("#3E444F"), // panel fully behind popup overlay
+	TextFaded:           lipgloss.Color("#6C768A"), // active panel that lost focus to sibling
+	TextHint:            lipgloss.Color("#7B8EA6"), // mid-tone — Nord3/Nord4 midpoint
+	Key:                 lipgloss.Color("6"),       // cyan         — Nord8 #88C0D0
+	ItemText:            lipgloss.Color("7"),       // light gray   — Nord4
+	Success:             lipgloss.Color("2"),       // green        — Nord14 #A3BE8C
+	Warning:             lipgloss.Color("3"),       // yellow       — Nord13 #EBCB8B
+	ScrollThumb:         lipgloss.Color("12"),      // bright blue — same as Accent
+	ScrollTrack:         lipgloss.Color("#4C566A"), // same as Border — track blends with border
+	SelectionBackground: lipgloss.Color("#2E3440"), // Nord0 — dark selected-row fill
 }
 
 // ActiveTheme is the theme used by RebuildStyles. Set it before calling
