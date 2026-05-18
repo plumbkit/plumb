@@ -38,7 +38,8 @@ Key packages:
 | `internal/mcp/` | MCP server, tool registry, prompts, stdio transport |
 | `internal/lsp/` | LSPClient interface, JSON-RPC 2.0 (with server-request support), process supervisor |
 | `internal/lsp/adapters/gopls/` | Validated Go adapter |
-| `internal/lsp/adapters/pyright/` | Real Python adapter, unit-tested only |
+| `internal/lsp/adapters/pyright/` | Validated Python adapter |
+| `internal/lsp/adapters/jdtls/` | Experimental Java adapter (jdtls); enabled via `[lsp.java] enabled = true` |
 | `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool dependencies |
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
@@ -170,6 +171,7 @@ Run `plumb init` in any project root to create a `.plumb/` marker directory (als
 |---|---|
 | `gopls` | **Validated** — unit-tested with mock transport; integration-tested against real gopls binary; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed |
 | `pyright` | **Validated** — unit-tested with mock transport; integration-tested against real pyright-langserver binary; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed |
+| `jdtls` | **Experimental** — unit-tested with mock transport; integration test exists (`//go:build integration`) but not yet run in CI; `client/registerCapability` answered. Enable with `[lsp.java] enabled = true` in config. Requires Java 17+ and `brew install jdtls`. The pool automatically passes `-data <per-workspace-dir>` so no manual config is needed. |
 
 ## How to add an LSP adapter
 

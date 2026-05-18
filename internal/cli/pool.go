@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/adapters/gopls"
+	"github.com/golimpio/plumb/internal/lsp/adapters/jdtls"
 	"github.com/golimpio/plumb/internal/lsp/adapters/pyright"
 	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
@@ -225,7 +227,7 @@ func (p *workspacePool) acquireLang(ctx context.Context, root, language string) 
 
 	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c}
 
-	sup := lsp.NewSupervisor(lspCfg.Command, lspCfg.Args, nil, lsp.SupervisorOptions{
+	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), nil, lsp.SupervisorOptions{
 		OnStart: func(startCtx context.Context, conn *jsonrpc.Conn) error {
 			ad, err := newAdapter(language, conn)
 			if err != nil {
@@ -271,6 +273,8 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.LSPClient, error) {
 	switch language {
 	case "go":
 		return gopls.New(conn), nil
+	case "java":
+		return jdtls.New(conn), nil
 	case "python":
 		return pyright.New(conn), nil
 	default:
@@ -281,11 +285,37 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.LSPClient, error) {
 // initParamsFor builds the Initialize params for a language.
 func initParamsFor(language, rootURI string) protocol.InitializeParams {
 	switch language {
+	case "java":
+		return jdtls.DefaultInitParams(rootURI)
 	case "python":
 		return pyright.DefaultInitParams(rootURI)
 	default:
 		return gopls.DefaultInitParams(rootURI)
 	}
+}
+
+// argsFor returns the supervisor args for the given language and workspace root.
+// For most languages this is lspCfg.Args verbatim. Java is special: jdtls
+// requires a -data <dir> argument pointing to an Eclipse workspace storage
+// directory. Using a per-root directory prevents classpath conflicts when
+// multiple Java projects are open simultaneously.
+func argsFor(language, root string, lspCfg config.LSPConfig) []string {
+	if language != "java" {
+		return lspCfg.Args
+	}
+	dataDir := jdtlsDataDir(root)
+	_ = os.MkdirAll(dataDir, 0o700)
+	out := make([]string, len(lspCfg.Args), len(lspCfg.Args)+2)
+	copy(out, lspCfg.Args)
+	return append(out, "-data", dataDir)
+}
+
+// jdtlsDataDir returns a per-workspace Eclipse workspace data directory for
+// jdtls. The directory name is derived from a hash of the workspace root so
+// each project gets isolated Eclipse state.
+func jdtlsDataDir(root string) string {
+	sum := sha256.Sum256([]byte(root))
+	return filepath.Join(config.CacheDir(), "jdtls-data", fmt.Sprintf("%x", sum[:8]))
 }
 
 // lookup returns the entry for root if it has already been acquired, or nil

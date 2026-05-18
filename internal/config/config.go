@@ -163,6 +163,12 @@ var defaults = Config{
 			RootMarkers: []string{"pyproject.toml", "setup.py", "pyrightconfig.json"},
 			Enabled:     false,
 		},
+		"java": {
+			Command:     "jdtls",
+			Args:        []string{},
+			RootMarkers: []string{"pom.xml", "build.gradle", "build.gradle.kts", ".classpath"},
+			Enabled:     false,
+		},
 	},
 }
 

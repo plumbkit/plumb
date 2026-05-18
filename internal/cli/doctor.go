@@ -128,7 +128,10 @@ func checkDaemon() []checkResult {
 	return results
 }
 
-// checkLSPs verifies that language server binaries are on PATH.
+// checkLSPs reports install status for all configured language servers.
+// Enabled languages that are missing their binary are reported as failures.
+// Disabled languages are always informational — present but not activated, or
+// not installed at all; neither case is a doctor failure.
 func checkLSPs(ws string) []checkResult {
 	cfg, err := config.Load()
 	if err != nil {
@@ -146,36 +149,45 @@ func checkLSPs(ws string) []checkResult {
 	}
 
 	var results []checkResult
-	for lang, lsp := range cfg.LSP {
-		if !lsp.Enabled || lsp.Command == "" {
+	for lang, lspCfg := range cfg.LSP {
+		if lspCfg.Command == "" {
 			continue
 		}
-		path, err := exec.LookPath(lsp.Command)
-		if err != nil {
-			results = append(results, checkResult{
-				name:   "lsp " + lang,
-				ok:     false,
-				detail: lsp.Command + " not found on PATH",
-				fix:    "install " + lsp.Command + " and ensure it is on your PATH",
-			})
+		path, lookErr := exec.LookPath(lspCfg.Command)
+		if lookErr != nil {
+			if lspCfg.Enabled {
+				results = append(results, checkResult{
+					name:   "lsp " + lang,
+					ok:     false,
+					detail: lspCfg.Command + " not found on PATH",
+					fix:    "install " + lspCfg.Command + " and ensure it is on your PATH",
+				})
+			} else {
+				results = append(results, checkResult{
+					name:   "lsp " + lang,
+					ok:     true,
+					detail: lspCfg.Command + " not installed — optional, enable in config.toml to activate",
+				})
+			}
 			continue
 		}
 		// Try --version to confirm it's executable.
-		out, err := exec.Command(path, "--version").Output()
+		out, _ := exec.Command(path, "--version").Output()
 		version := strings.TrimSpace(string(out))
-		if err != nil || version == "" {
-			results = append(results, checkResult{
-				name:   "lsp " + lang,
-				ok:     true,
-				detail: path + " (version unknown)",
-			})
+		detail := path
+		if version != "" {
+			detail += "  " + version
 		} else {
-			results = append(results, checkResult{
-				name:   "lsp " + lang,
-				ok:     true,
-				detail: path + "  " + version,
-			})
+			detail += " (version unknown)"
 		}
+		if !lspCfg.Enabled {
+			detail += " — disabled, enable in config.toml to activate"
+		}
+		results = append(results, checkResult{
+			name:   "lsp " + lang,
+			ok:     true,
+			detail: detail,
+		})
 	}
 	return results
 }

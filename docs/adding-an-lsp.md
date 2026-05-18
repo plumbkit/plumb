@@ -221,13 +221,43 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 ### pyright (Python)
 
 - **Binary**: `pyright-langserver` — install with `npm install -g pyright`
-- **Status**: experimental — unit-tested only; no integration test
+- **Status**: validated — integration tests in `internal/lsp/adapters/pyright/`
 - **Workspace model**: requires `rootUri` pointing to the Python project root.
   Reads configuration from `pyrightconfig.json` or `pyproject.toml` if present.
 - **Init options**: `pythonVersion: "3.12"`, `typeCheckingMode: "basic"`.
 - **Sync**: requires full-document sync (`SyncFull`).  Always send the complete
   document text in `DidChange` — incremental diffs are not supported by default.
 - **Notifications**: emits `textDocument/publishDiagnostics`.
+
+### jdtls (Java)
+
+- **Binary**: `jdtls` — install with `brew install jdtls` (macOS).
+  Requires Java 17 or later. With SDKMAN: `sdk install java 21.0.x-tem`.
+- **Status**: experimental — unit-tested with mocked transport;
+  integration tests in `internal/lsp/adapters/jdtls/` (gated with `//go:build integration`).
+- **Root markers**: `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath`
+- **Workspace model**: requires `rootUri` pointing to the project root (where
+  `pom.xml` or `build.gradle` lives). Unlike gopls and pyright, jdtls also
+  requires a `-data <dir>` process argument pointing to an Eclipse workspace
+  storage directory. Plumb computes a per-workspace data directory automatically
+  at `~/.cache/plumb/jdtls-data/<root-hash>` — this is handled in
+  `internal/cli/pool.go argsFor`; no manual configuration is needed.
+- **Init options**: `settings.java.home` is populated from `$JAVA_HOME` when
+  set; otherwise jdtls uses its own JDK detection. Leave `JAVA_HOME` unset to
+  let jdtls discover the JDK (recommended with SDKMAN).
+- **Sync**: supports full-document sync. Plumb sends full-document changes.
+- **Notifications**: emits `textDocument/publishDiagnostics` and sends
+  `client/registerCapability` during init to register file-watcher patterns.
+  The adapter responds `null` (OK) so jdtls's `DidChangeWatchedFiles` path
+  stays active.
+- **Enable in config**:
+  ```toml
+  [lsp.java]
+  enabled = true
+  ```
+- **Cold-start warning**: jdtls starts a JVM and loads Eclipse plugins on first
+  run. Initial startup can take 30–60 seconds. Subsequent runs within the same
+  daemon lifetime are fast because the JVM stays alive.
 
 ---
 
