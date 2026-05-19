@@ -342,7 +342,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewGetDefinition(sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewExplainSymbol(sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewListSymbols(sessionProxy, sessionCache, ttl))
-	srv.Register(tools.NewFindReferences(sessionProxy))
+	srv.Register(tools.NewFindReferences(sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewCallHierarchy(sessionProxy))
 	srv.Register(tools.NewTypeHierarchy(sessionProxy))
 	srv.Register(tools.NewDiagnostics(sessionInv))
@@ -350,6 +350,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewListDirectory())
 	readTracker := tools.NewReadTracker()
 	srv.Register(tools.NewReadFile(readTracker))
+	srv.Register(tools.NewReadSymbol(sessionProxy, sessionCache, ttl, readTracker))
 	srv.Register(tools.NewReadMultipleFiles())
 	// Initial limit from the global config; updated to per-project values
 	// inside applyProjectConfig once the workspace resolves.

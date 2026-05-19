@@ -28,6 +28,11 @@
 
 ## 0.6.5 (2026-05-19)
 
+### Added
+- **`read_symbol` tool.** Reads the source body of a named symbol in one call, collapsing the `list_symbols` + `read_file` two-round-trip pattern. Accepts a plain name (`handleConn`) or dotted `ReceiverType.MethodName` form (`Model.renderDashboard`). Returns all matches with line ranges when the name is ambiguous. The output header matches `read_file` so the mtime can be passed as `expected_mtime` to `edit_file`. Mtime is recorded in `ReadTracker` exactly as `read_file` does.
+- **Name-based lookup for `find_references`.** New optional `symbol_name` parameter: when provided alongside `uri`, the tool resolves the symbol's position via `DocumentSymbols` and then queries references, eliminating the `list_symbols → find_references` two-call pattern. For ambiguous names (multiple symbols sharing the name), references for all matches are returned with a per-symbol header. The positional form (`line` + `character`) remains unchanged.
+- **Name-based lookup for `get_definition`.** Same pattern as `find_references`: optional `symbol_name` resolves the position via `DocumentSymbols` and delegates to the existing definition lookup. Positional form unchanged.
+
 ### Fixed
 - **JSON-RPC conn: handle server requests with string IDs.** The `wireMessage.ID` field was `*int64`, which failed to unmarshal when a server sends a string-typed ID. jdtls sends `client/registerCapability` with `"id":"1"` (a JSON string); this caused `json.Unmarshal` to fail, the read loop to exit, and all subsequent messages — including `textDocument/publishDiagnostics` — to be silently dropped. ID is now `json.RawMessage` so both integer and string IDs round-trip correctly. The pending-call map uses `string(rawID)` as the key; outbound calls continue to use monotonically increasing integer IDs. Regression test added in `TestConn_ServerRequest_StringID`.
 

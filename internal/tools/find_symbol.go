@@ -101,6 +101,37 @@ func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string,
 	return sb.String(), nil
 }
 
+// resolveSymbolsByName returns all symbols in the tree matching name.
+// For dotted names like "ReceiverType.MethodName" it searches children of the
+// named parent. For plain names it matches at any depth.
+func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protocol.DocumentSymbol {
+	if parent, child, ok := strings.Cut(name, "."); ok {
+		var out []protocol.DocumentSymbol
+		for _, s := range syms {
+			if s.Name == parent {
+				for _, c := range s.Children {
+					if c.Name == child {
+						out = append(out, c)
+					}
+				}
+			}
+		}
+		return out
+	}
+	var out []protocol.DocumentSymbol
+	var walk func([]protocol.DocumentSymbol)
+	walk = func(ss []protocol.DocumentSymbol) {
+		for _, s := range ss {
+			if s.Name == name {
+				out = append(out, s)
+			}
+			walk(s.Children)
+		}
+	}
+	walk(syms)
+	return out
+}
+
 // flatFilterSymbols walks the symbol tree and returns all nodes whose name
 // contains query (case-insensitive).
 func flatFilterSymbols(syms []protocol.DocumentSymbol, query string) []protocol.DocumentSymbol {

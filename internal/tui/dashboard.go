@@ -185,8 +185,12 @@ func dashBox(titleText string, innerWidth int, contentLines []string) []string {
 	if topFill < 0 {
 		topFill = 0
 	}
-	out := make([]string, 0, 1+len(contentLines)+1)
+	out := make([]string, 0, len(contentLines)+4)
 	out = append(out, border.Render("╭─")+title.Render(titleText)+border.Render(strings.Repeat("─", topFill)+"╮"))
+	
+	// Top padding
+	out = append(out, border.Render("│")+strings.Repeat(" ", innerWidth)+border.Render("│"))
+
 	for _, l := range contentLines {
 		padW := innerWidth - lipgloss.Width(l)
 		if padW < 0 {
@@ -194,6 +198,9 @@ func dashBox(titleText string, innerWidth int, contentLines []string) []string {
 		}
 		out = append(out, border.Render("│")+l+strings.Repeat(" ", padW)+border.Render("│"))
 	}
+
+	// Bottom padding
+	out = append(out, border.Render("│")+strings.Repeat(" ", innerWidth)+border.Render("│"))
 	out = append(out, border.Render("╰"+strings.Repeat("─", innerWidth)+"╯"))
 	return out
 }

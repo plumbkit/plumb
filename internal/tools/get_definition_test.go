@@ -90,6 +90,64 @@ func TestGetDefinition_EmptyURI(t *testing.T) {
 	}
 }
 
+func TestGetDefinition_NeitherNameNorPosition(t *testing.T) {
+	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute)
+	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go"})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected error when neither symbol_name nor line+character provided")
+	}
+	if !strings.Contains(err.Error(), "symbol_name") {
+		t.Errorf("error should mention symbol_name: %v", err)
+	}
+}
+
+func TestGetDefinition_ByName_SingleMatch(t *testing.T) {
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{
+			{
+				Name: "Serve",
+				Kind: protocol.SKFunction,
+				Range: protocol.Range{
+					Start: protocol.Position{Line: 5, Character: 0},
+					End:   protocol.Position{Line: 10},
+				},
+			},
+		},
+		locations: []protocol.Location{
+			{URI: "file:///p/server.go", Range: protocol.Range{Start: protocol.Position{Line: 5, Character: 0}}},
+		},
+	}
+	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	args, _ := json.Marshal(map[string]any{
+		"uri":         "file:///p/main.go",
+		"symbol_name": "Serve",
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "server.go") {
+		t.Errorf("expected definition file in output:\n%s", out)
+	}
+}
+
+func TestGetDefinition_ByName_NotFound(t *testing.T) {
+	mock := &mockLSP{docSymbols: nil}
+	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	args, _ := json.Marshal(map[string]any{
+		"uri":         "file:///p/main.go",
+		"symbol_name": "Missing",
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "No symbol") {
+		t.Errorf("expected no-symbol message:\n%s", out)
+	}
+}
+
 func TestGetDefinition_Interface(t *testing.T) {
 	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute)
 	if tool.Name() != "get_definition" {
