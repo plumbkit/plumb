@@ -141,6 +141,71 @@ No symbols found matching "Xyz".
 
 ---
 
+### `list_symbols`
+
+Return the complete symbol outline of a file: every function, type, method, field, and constant with its kind and line range.
+
+**Source**: `internal/tools/list_symbols.go`
+
+#### Input schema
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "uri": {
+      "type": "string",
+      "description": "file:// URI of the document to outline"
+    },
+    "include_signatures": {
+      "type": "boolean",
+      "description": "When true, append the first non-blank, non-comment source line of each function, method, or constructor symbol below its entry."
+    }
+  },
+  "required": ["uri"]
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `uri` | yes | `file://` URI of the document to outline |
+| `include_signatures` | no | Append the declaration line of function/method/constructor symbols (shows parameter types and receiver types). Non-callable symbols (fields, constants, types) are not annotated. |
+
+#### Behaviour
+
+Calls `textDocument/documentSymbol` for the full symbol tree and formats
+every entry with its kind and line range. Children are indented one level per
+nesting depth. Results are cached by URI.
+
+When `include_signatures=true`, the tool reads the file on disk and appends
+the first non-blank, non-comment source line at each callable symbol's start
+line with a `→` prefix. This shows the signature without the full body and
+is skipped for non-callable kinds (struct fields, constants, type aliases,
+etc.) where the declaration line adds little value.
+
+#### Required LSP capabilities
+
+| Method | Capability check |
+|---|---|
+| `textDocument/documentSymbol` | `ServerCapabilities.DocumentSymbolProvider.Enabled` |
+
+#### Output format
+
+```
+Symbols in file:///project/main.go (4 total)
+
+Greeter (Struct) lines 5–9
+  Prefix (Field) line 6
+Greet (name string) string (Method) lines 11–13
+  → func (g Greeter) Greet(name string) string {
+```
+
+#### Cache key
+
+`<uri>:docSymbols`
+
+---
+
 ### `get_definition`
 
 Jump to the definition of the symbol at a given position in a document.

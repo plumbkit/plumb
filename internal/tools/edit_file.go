@@ -246,6 +246,11 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 		}
+		if t.deps.PostWriteNotifyFn != nil {
+			if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
+				slog.Warn("edit_file: post-write adapter notification failed", "path", path, "err", err)
+			}
+		}
 		invalidateCache(t.deps.Cache, uri)
 
 		noun := "edit"

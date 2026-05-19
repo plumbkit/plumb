@@ -140,6 +140,11 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if err := notifyLSP(ctx, t.deps.Client, path, changeType); err != nil {
 		slog.Warn("write_file: LSP notification failed", "path", path, "err", err)
 	}
+	if t.deps.PostWriteNotifyFn != nil {
+		if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
+			slog.Warn("write_file: post-write adapter notification failed", "path", path, "err", err)
+		}
+	}
 	invalidateCache(t.deps.Cache, uri)
 
 	verb := "updated"

@@ -87,7 +87,8 @@ func NewTransactionApply(deps WriteDeps) *TransactionApply {
 func (*TransactionApply) Name() string                 { return "transaction_apply" }
 func (*TransactionApply) InputSchema() json.RawMessage { return transactionApplySchema }
 func (*TransactionApply) Description() string {
-	return "Apply str_replace edits across multiple files atomically. Every operation is " +
+	return "No native Claude Code equivalent. " +
+		"Apply str_replace edits across multiple files atomically. Every operation is " +
 		"validated against the on-disk content first; if any old_str is missing or " +
 		"ambiguous, NO files are written. If writes start succeeding but one fails partway, " +
 		"the already-written files are rolled back to their pre-transaction content. " +
@@ -309,6 +310,11 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		uris = append(uris, uri)
 		if err := notifyLSP(ctx, t.deps.Client, p.path, protocol.FileChanged); err != nil {
 			slog.Warn("transaction_apply: LSP notification failed", "path", p.path, "err", err)
+		}
+		if t.deps.PostWriteNotifyFn != nil {
+			if err := t.deps.PostWriteNotifyFn(ctx, p.path); err != nil {
+				slog.Warn("transaction_apply: post-write adapter notification failed", "path", p.path, "err", err)
+			}
 		}
 		invalidateCache(t.deps.Cache, uri)
 	}

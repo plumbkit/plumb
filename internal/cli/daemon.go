@@ -22,6 +22,7 @@ import (
 
 	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/lsp/protocol"
 	"github.com/golimpio/plumb/internal/mcp"
 	"github.com/golimpio/plumb/internal/memory"
 	"github.com/golimpio/plumb/internal/monitor"
@@ -210,6 +211,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	sessionProxy := newRoutingProxy(pool)
 	sessionInv := newRoutingInvProxy(pool)
 	var acquiredRoot string
+	var acquiredLanguage string
 	var clientName, clientVersion string
 	var stateMu sync.Mutex
 
@@ -258,6 +260,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			}
 		}
 		acquiredRoot = folder
+		acquiredLanguage = language
 
 		// Scan for orphaned transaction logs from a previous daemon crash and
 		// roll them back before any new transactions can touch those files.
@@ -407,6 +410,35 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 				"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots)
 		}
 	}
+	// javaPostWriteNotify implements DidOpen + DidClose after writes on Java
+	// workspaces. jdtls only publishes diagnostics for open documents, so
+	// DidChangeWatchedFiles alone is not enough to trigger fresh diagnostics.
+	javaPostWriteNotify := func(ctx context.Context, path string) error {
+		stateMu.Lock()
+		lang := acquiredLanguage
+		stateMu.Unlock()
+		if lang != "java" {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("java post-write notify: read %s: %w", path, err)
+		}
+		uri := protocol.FileURI(path)
+		if err := sessionProxy.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{
+				URI:        uri,
+				LanguageID: "java",
+				Version:    1,
+				Text:       string(content),
+			},
+		}); err != nil {
+			return fmt.Errorf("java post-write notify: DidOpen: %w", err)
+		}
+		return sessionProxy.DidClose(ctx, protocol.DidCloseTextDocumentParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		})
+	}
 	writeDeps := tools.WriteDeps{
 		Client:                sessionProxy,
 		Cache:                 sessionCache,
@@ -418,6 +450,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(editConfigFn()) },
 		WorkspaceFn:           wsFn,
 		ShowWriteDiffFn:       func() bool { return editConfigFn().ShowWriteDiff },
+		PostWriteNotifyFn:     javaPostWriteNotify,
 	}
 	srv.Register(tools.NewWriteFile(writeDeps))
 	srv.Register(tools.NewEditFile(writeDeps))

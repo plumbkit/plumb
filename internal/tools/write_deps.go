@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"time"
 
 	"github.com/golimpio/plumb/internal/cache"
@@ -68,6 +69,12 @@ type WriteDeps struct {
 	ShowWriteDiff bool
 	// ShowWriteDiffFn, when set, overrides ShowWriteDiff at call time.
 	ShowWriteDiffFn func() bool
+	// PostWriteNotifyFn, when non-nil, is called after a successful
+	// notifyLSP to perform any adapter-specific post-write notification.
+	// The daemon sets this for Java workspaces to send DidOpen + DidClose so
+	// jdtls emits diagnostics for modified files (unlike gopls/pyright, jdtls
+	// only publishes diagnostics for open documents). nil is a no-op.
+	PostWriteNotifyFn func(ctx context.Context, path string) error
 }
 
 func (d WriteDeps) postWriteDiagWindow() time.Duration {

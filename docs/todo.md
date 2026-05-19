@@ -395,7 +395,7 @@ Refinements to existing behaviour. No new contracts, no new infrastructure — j
 
 **Priority:** medium — validated first version, but still needs cross-platform polish.
 **Effort:** Small–medium.
-**Status:** `rootURI` is now Windows-safe; CI jdtls integration step is wired. Remaining: cold-start tuning, binary naming docs, doctor version-check coverage, and write-tool DidOpen/DidClose.
+**Status:** `rootURI` is now Windows-safe; CI jdtls integration step is wired; write-tool `DidOpen`/`DidClose` implemented. Remaining: cold-start tuning, binary naming docs, doctor version-check coverage.
 
 **Cross-platform note:** current real-binary validation has only been exercised on macOS. Linux and Windows coverage are expected pre-v1 hardening work, not a blocker for the first validated Java adapter version.
 
@@ -407,9 +407,7 @@ Known gaps to address:
 
 3. **`plumb doctor` Java runtime version check.** The check calls `java --version` and parses the first output line. This covers OpenJDK and GraalVM. Confirm it also handles Eclipse Temurin, Microsoft Build of OpenJDK, and Amazon Corretto version strings; add test cases in `doctor_test.go` once that file exists.
 
-4. **Write tools need `DidOpen`/`DidClose` for jdtls diagnostics.** Unlike gopls and pyright, jdtls only publishes diagnostics for open documents. When plumb's write tools call `DidChangeWatchedFiles` after modifying a Java file, jdtls updates its project model but may not emit diagnostics promptly. For the `diagnostics` tool to return up-to-date results after a Java write, the write path should call `DidOpen` (with the new content) + `DidClose` in addition to `DidChangeWatchedFiles`. This requires the write tools to know the current language server type, or a per-adapter hook in the LSP notification path.
-
-**Definition of done:** write-tool diagnostics path handles Java's `DidOpen`/`DidClose` requirement; binary naming documented; doctor version-check covers major JDK distributions.
+**Definition of done:** binary naming documented; doctor version-check covers major JDK distributions.
 
 ---
 

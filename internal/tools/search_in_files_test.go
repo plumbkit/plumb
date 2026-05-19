@@ -376,3 +376,41 @@ func TestSearchInFiles_GlobPrunesSiblingDirs(t *testing.T) {
 		t.Errorf("skipme/ subtree should have been pruned:\n%s", out)
 	}
 }
+
+// BenchmarkSearchInFiles_WarmCall measures search latency with a pre-existing
+// directory tree that fits in the OS page cache. It proxies for the common
+// case of repeated searches in the same workspace and is a lower bound on the
+// p95 latency target (< 200 ms for a typical project).
+func BenchmarkSearchInFiles_WarmCall(b *testing.B) {
+	dir := b.TempDir()
+	mustWrite := func(path, content string) {
+		b.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			b.Fatal(err)
+		}
+	}
+	// Write enough files that the directory walk is non-trivial.
+	for i := range 50 {
+		mustWrite(filepath.Join(dir, fmt.Sprintf("sub%d", i/10), fmt.Sprintf("file%d.go", i)),
+			fmt.Sprintf("package p\n\nfunc F%d() {}\n// target marker\n", i))
+	}
+
+	tool := NewSearchInFiles()
+	args, _ := json.Marshal(map[string]any{"pattern": "target marker", "path": dir})
+	ctx := context.Background()
+
+	// Warm run: execute once outside the loop so the OS cache is warm.
+	if _, err := tool.Execute(ctx, args); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := tool.Execute(ctx, args); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

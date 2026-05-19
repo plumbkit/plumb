@@ -21,7 +21,7 @@ var listSymbolsSchema = json.RawMessage(`{
     },
     "include_signatures": {
       "type": "boolean",
-      "description": "When true, append the first source line of each symbol (the declaration) below its entry. Useful for seeing parameter types and receiver types without reading the full file."
+      "description": "When true, append the first non-blank, non-comment source line of each function, method, or constructor symbol below its entry. Useful for seeing parameter types and receiver types without reading the full file."
     }
   },
   "required": ["uri"]
@@ -48,7 +48,7 @@ func (t *ListSymbols) Description() string {
 	return "Return the complete symbol outline of a file: every function, type, method, field, " +
 		"and constant with its kind and line range. Use this before explain_symbol or get_definition " +
 		"to discover what a file contains without reading it. " +
-		"Set include_signatures=true to append the declaration line of each symbol " +
+		"Set include_signatures=true to append the declaration line of each function, method, or constructor " +
 		"(shows parameter types and receiver types)."
 }
 
@@ -99,12 +99,21 @@ func formatSymbolTree(uri string, syms []protocol.DocumentSymbol, includeSignatu
 	return sb.String()
 }
 
+// isCallableKind reports whether a symbol kind warrants a signature annotation
+// (function, method, or constructor). Non-callable kinds such as fields,
+// constants, and type declarations do not get the → prefix.
+func isCallableKind(kind protocol.SymbolKind) bool {
+	return kind == protocol.SKFunction || kind == protocol.SKMethod || kind == protocol.SKConstructor
+}
+
 func collectStartLines(syms []protocol.DocumentSymbol) map[uint32]bool {
 	lines := make(map[uint32]bool)
 	var walk func([]protocol.DocumentSymbol)
 	walk = func(ss []protocol.DocumentSymbol) {
 		for _, s := range ss {
-			lines[s.Range.Start.Line] = true
+			if isCallableKind(s.Kind) {
+				lines[s.Range.Start.Line] = true
+			}
 			walk(s.Children)
 		}
 	}
@@ -126,9 +135,10 @@ func writeSymbols(sb *strings.Builder, syms []protocol.DocumentSymbol, depth int
 		} else {
 			fmt.Fprintf(sb, "%s%s%s (%s) lines %d–%d\n", indent, s.Name, detail, symbolKindName(s.Kind), start, end)
 		}
-		if lineTexts != nil {
+		if lineTexts != nil && isCallableKind(s.Kind) {
 			if sig, ok := lineTexts[s.Range.Start.Line]; ok {
-				if sig = strings.TrimSpace(sig); sig != "" {
+				sig = strings.TrimSpace(sig)
+				if sig != "" && !strings.HasPrefix(sig, "//") && !strings.HasPrefix(sig, "#") && !strings.HasPrefix(sig, "/*") {
 					fmt.Fprintf(sb, "%s  → %s\n", indent, sig)
 				}
 			}

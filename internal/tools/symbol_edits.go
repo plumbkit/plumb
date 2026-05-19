@@ -230,7 +230,9 @@ func NewReplaceSymbolBody(client lsp.LSPClient) *ReplaceSymbolBody {
 func (*ReplaceSymbolBody) Name() string { return "replace_symbol_body" }
 
 func (*ReplaceSymbolBody) Description() string {
-	return `Replace the entire declaration of a symbol with new content.
+	return `No native Claude Code equivalent.
+
+Replace the entire declaration of a symbol with new content.
 
 The replacement spans the symbol's full Range as reported by the LSP — for a function, this is from 'func' keyword through the closing '}'. Provide the complete new declaration (signature + body) in 'content'.
 
