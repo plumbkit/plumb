@@ -427,17 +427,19 @@ Plumb is a long-lived singleton daemon shared across conversations. A TUI operat
 
 ---
 
-### Java adapter (jdtls) — multi-OS polish and validation
+### Java adapter (jdtls) — multi-OS polish and CI hardening
 
-**Priority:** medium — acceptable as experimental, needed before "validated".
+**Priority:** medium — validated first version, but still needs cross-platform polish.
 **Effort:** Small–medium. Mostly portability fixes and CI wiring.
-**Status:** Adapter works on macOS with Homebrew + SDKMAN. Not yet validated on Linux or Windows.
+**Status:** Adapter works with a real jdtls binary and Java 21+. Remaining work is portability, CI coverage, and write-tool integration polish.
 
-Known gaps to address before promoting from experimental to validated:
+**Cross-platform note:** current real-binary validation has only been exercised on macOS. Linux and Windows coverage are expected pre-v1 hardening work, not a blocker for the first validated Java adapter version.
+
+Known gaps to address:
 
 1. **`rootURI` construction.** `internal/cli/pool.go` builds `rootURI := "file://" + root`. On Unix absolute paths this is correct (`/project` → `file:///project`). On Windows it produces the wrong form (`C:\project` → `file://C:\project`). The fix is a proper `pathToFileURI(path string) string` helper in `internal/lsp/protocol/types.go` that uses `filepath.ToSlash` and prepends a leading `/` for Windows drive paths. All three adapters (gopls, pyright, jdtls) use the same construction and would benefit from the fix.
 
-2. **CI integration test.** The `//go:build integration` test in `internal/lsp/adapters/jdtls/` skips silently in CI because no runner installs jdtls. Add a CI step (Ubuntu, using the Eclipse JDT LS release tarball or a package manager) and run `go test -tags=integration -timeout=3m ./internal/lsp/adapters/jdtls/`. Promote the adapter to **validated** once this passes in CI.
+2. **CI integration test.** The `//go:build integration` test in `internal/lsp/adapters/jdtls/` skips silently in CI because no runner installs jdtls. Add a CI step (Ubuntu, using the Eclipse JDT LS release tarball or a package manager) and run `go test -tags=integration -timeout=3m ./internal/lsp/adapters/jdtls/`.
 
 3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test allows 5 minutes for ServiceReady and a further 2 minutes for diagnostics after DidOpen. In CI on a cold runner this may be tight — monitor and raise the deadline if needed, or pre-warm the JVM cache in the CI step. Set `JDTLS_FRESH_DATA=1` to force a hermetic per-test data directory (slower; default reuses `.testcache/jdtls-data` for warm-cache local runs).
 
@@ -447,7 +449,7 @@ Known gaps to address before promoting from experimental to validated:
 
 6. **Write tools need `DidOpen`/`DidClose` for jdtls diagnostics.** Unlike gopls and pyright, jdtls only publishes diagnostics for open documents. When plumb's write tools call `DidChangeWatchedFiles` after modifying a Java file, jdtls updates its project model but may not emit diagnostics promptly. For the `diagnostics` tool to return up-to-date results after a Java write, the write path should call `DidOpen` (with the new content) + `DidClose` in addition to `DidChangeWatchedFiles`. This requires the write tools to know the current language server type, or a per-adapter hook in the LSP notification path.
 
-**Definition of done:** CI integration test passes on Linux; rootURI helper lands in `internal/lsp/protocol`; adapter doc.go says "Validated".
+**Definition of done:** CI integration test passes on Linux; rootURI helper lands in `internal/lsp/protocol`; write-tool diagnostics path handles Java's `DidOpen`/`DidClose` requirement.
 
 ---
 

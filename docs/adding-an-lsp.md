@@ -234,8 +234,9 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 - **Binary**: `jdtls` — install jdtls and ensure it is on PATH. Requires Java 21 or later.
   macOS: `brew install jdtls`. SDKMAN: `sdk install java 21-tem`.
   Other platforms: download from https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases.
-- **Status**: experimental — unit-tested with mocked transport;
-  integration tests in `internal/lsp/adapters/jdtls/` (gated with `//go:build integration`).
+- **Status**: validated — unit-tested with mocked transport and integration-tested
+  against a real jdtls binary in `internal/lsp/adapters/jdtls/` (gated with
+  `//go:build integration`).
 - **Root markers**: `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath`
 - **Workspace model**: requires `rootUri` pointing to the project root (where
   `pom.xml` or `build.gradle` lives). Unlike gopls and pyright, jdtls also

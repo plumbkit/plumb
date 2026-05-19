@@ -1,11 +1,9 @@
 // Package jdtls is the plumb adapter for Eclipse JDT Language Server (jdtls),
 // the Java language server maintained by the Eclipse Foundation.
 //
-// Validation status: experimental — unit-tested with mocked transport;
-// integration test exists (integration_test.go, gated with //go:build integration)
-// but has not yet run in CI because no CI runner installs jdtls.
-// To promote to validated, run the integration test against a real jdtls binary
-// and add a CI step that installs jdtls; then update this comment.
+// Validation status: validated — unit-tested with mocked transport and
+// integration-tested against a real jdtls binary (integration_test.go, gated
+// with //go:build integration).
 //
 // # Installation
 //
