@@ -93,39 +93,6 @@ Implementation: `internal/tui/log_view.go`, integrated into `internal/tui/model.
 
 ---
 
-## Improvements
-
-### Project-root identification — auto-attach fallback
-
-**Completed in:** commit `e2700a5` — `feat(workspace): add auto-attach fallback for undetected workspace roots`
-**Original priority:** high
-
-When `pool.Detect` finds no `.plumb/`, `go.mod`, `pyproject.toml`, or `setup.py` marker, and `[workspace].auto_attach = true`, `OnBeforeTool` now calls `pool.SynthesiseRoot(seedDir)` which walks up to the nearest `.git/` directory (falling back to the seed directory). The synthetic root is used for stats, TUI, and project config; LSP is unavailable (`language = "none"`). Sessions using the synthetic root are marked `Synthetic = true` and shown with an `(auto)` suffix in the TUI.
-
-Optional `[workspace].auto_attach_persist = true` creates `.plumb/` at the synthetic root on first attach so subsequent sessions resolve via the standard marker path. Both flags default to `false`. Env vars: `PLUMB_AUTO_ATTACH`, `PLUMB_AUTO_ATTACH_PERSIST`.
-
----
-
-### Configurable post-write diagnostics window
-
-**Completed in:** commit `0f278f9` — `feat(cli,tools,config): log-level subcommand, configurable diag window, log format`
-**Original priority:** medium
-
-`[edits].post_write_diagnostics_ms` (default 300) is now configurable through the four-layer config system (global → project → env `PLUMB_POST_WRITE_DIAG_MS`). `WriteDeps` exposes `PostWriteDiagWindow time.Duration`; `awaitDiagnosticsRefresh` uses the value rather than the old hard-coded constant. Setting to 0 disables the polling entirely.
-
----
-
-### `session_start` orientation — Claude Code tool guidance
-
-**Completed in:** commit `b905c03` / `125cc30`
-**Original priority:** medium-high (partial — Claude Code tool guidance only)
-
-`session_start` now emits a `tool_guidance` block when the connecting client is Claude Code (`clientInfo.name == "claude-code"`). The block lists the most relevant plumb tools with brief descriptions tailored to what Claude Code already has natively and where plumb adds value (LSP semantic tools, atomic writes, post-write diagnostics).
-
-Remaining items from the parent todo (recommended next tool, memory summary, workspace scale signal) are still open in `todo.md`.
-
----
-
 ## Testing & verification
 
 ### Claude Desktop end-to-end smoke test
