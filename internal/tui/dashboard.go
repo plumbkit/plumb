@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -49,6 +50,12 @@ func (m *Model) refreshDashboard() {
 	m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
 	m.dashLifetimeTokens = m.globalDB.TotalTokensSaved(globalFilter)
 	m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
+	if !m.dashLifetimeFirstAt.IsZero() {
+		lifetimeWindow := max(time.Since(m.dashLifetimeFirstAt), time.Minute)
+		if summary, err := m.globalDB.Activity(lifetimeWindow, activityBuckets, globalFilter); err == nil {
+			m.dashLifetimeBuckets = summary.Buckets
+		}
+	}
 	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
 
 	if m.dashProjectFolder != "" {
@@ -141,6 +148,9 @@ func (m Model) dashboardBodyLines(width int) []string {
 	lines = append(lines, "")
 
 	lines = append(lines, m.dashAlertsWidget(width)...)
+	lines = append(lines, "")
+
+	lines = append(lines, m.dashActivityChart(width)...)
 	lines = append(lines, "")
 
 	lines = append(lines, m.dashStatsRow(width)...)
@@ -415,6 +425,149 @@ func (m Model) dashProjectWidget(width int) []string {
 		dashRow("Tokens Saved", "~"+stats.FormatSavings(int(m.dashProjectTokens))),
 		dashRow("Top Tools", topStr),
 	})
+}
+
+// dashActivityChart renders a 4-row borderless braille area chart of tool-call
+// activity with captions above and below. Top 2 rows show lifetime history
+// (bottom-fill, ⣀ idle background). Bottom 2 rows show daemon history
+// (top-fill, ⠉ idle background). Together they form a dotted centre-line when
+// the chart has no activity.
+func (m Model) dashActivityChart(width int) []string {
+	const halfH = 2 // chart rows per half
+
+	// Braille bottom-fill patterns: left/right column filled upward.
+	botL := [5]int{0, 0x40, 0x44, 0x46, 0x47}
+	botR := [5]int{0, 0x80, 0xA0, 0xB0, 0xB8}
+
+	// Braille top-fill patterns: left/right column filled downward.
+	topL := [5]int{0, 0x01, 0x03, 0x07, 0x47}
+	topR := [5]int{0, 0x08, 0x18, 0x38, 0xB8}
+
+	buildGrid := func(buckets []int64, fillDown bool) [][]int {
+		pixH := halfH * 4
+		var maxV int64 = 10
+		for _, v := range buckets {
+			if v > maxV {
+				maxV = v
+			}
+		}
+		sample := func(i int) int64 {
+			if len(buckets) == 0 {
+				return 0
+			}
+			idx := i * len(buckets) / (width * 2)
+			if idx >= len(buckets) {
+				idx = len(buckets) - 1
+			}
+			return buckets[idx]
+		}
+		toPx := func(v int64) int {
+			if v <= 0 {
+				return 0
+			}
+			px := int(float64(v) / float64(maxV) * float64(pixH-1))
+			if px < 1 {
+				px = 1
+			}
+			return px
+		}
+		grid := make([][]int, halfH)
+		for r := range halfH {
+			grid[r] = make([]int, width)
+		}
+		for x := range width {
+			pxL := toPx(sample(x * 2))
+			pxR := toPx(sample(x*2 + 1))
+			if fillDown {
+				for r := range halfH {
+					base := r * 4
+					lf := min(4, max(0, pxL-base))
+					rf := min(4, max(0, pxR-base))
+					grid[r][x] = topL[lf] | topR[rf]
+				}
+			} else {
+				for r := halfH - 1; r >= 0; r-- {
+					base := (halfH - 1 - r) * 4
+					lf := min(4, max(0, pxL-base))
+					rf := min(4, max(0, pxR-base))
+					grid[r][x] = botL[lf] | botR[rf]
+				}
+			}
+		}
+		return grid
+	}
+
+	renderRow := func(row []int, bgRune rune) string {
+		var sb strings.Builder
+		i := 0
+		for i < width {
+			faded := row[i] == 0
+			j := i + 1
+			for j < width && (row[j] == 0) == faded {
+				j++
+			}
+			var run strings.Builder
+			for k := i; k < j; k++ {
+				if faded {
+					run.WriteRune(bgRune)
+				} else {
+					run.WriteRune(rune(0x2800 + row[k]))
+				}
+			}
+			if faded {
+				sb.WriteString(SepStyle.Render(run.String()))
+			} else {
+				sb.WriteString(SelectedStyle.Render(run.String()))
+			}
+			i = j
+		}
+		return sb.String()
+	}
+
+	gridLife := buildGrid(m.dashLifetimeBuckets, false) // bottom-fill
+	gridDaem := buildGrid(m.activity.Buckets, true)     // top-fill
+
+	lines := make([]string, 0, halfH*2+2)
+
+	// Top caption: lifetime totals.
+	capTopL := formatLargeInt(m.dashLifetimeCalls) + " calls (all time)"
+	capTopR := ""
+	if !m.dashLifetimeFirstAt.IsZero() {
+		capTopR = formatUptime(time.Since(m.dashLifetimeFirstAt))
+	}
+	pad := max(width-lipgloss.Width(capTopL)-lipgloss.Width(capTopR), 1)
+	lines = append(lines, MutedStyle.Render(capTopL)+strings.Repeat(" ", pad)+MutedStyle.Render(capTopR))
+
+	// Top half: lifetime data, bottom-fill.
+	// Only the innermost row (r == halfH-1) shows ⣀ when idle; the outer row is blank.
+	for r := range halfH {
+		bg := rune(' ')
+		if r == halfH-1 {
+			bg = '⣀'
+		}
+		lines = append(lines, renderRow(gridLife[r], bg))
+	}
+
+	// Bottom half: daemon data, top-fill.
+	// Only the innermost row (r == 0) shows ⠉ when idle; the outer row is blank.
+	for r := range halfH {
+		bg := rune(' ')
+		if r == 0 {
+			bg = '⠉'
+		}
+		lines = append(lines, renderRow(gridDaem[r], bg))
+	}
+
+	// Bottom caption: daemon window.
+	capBotL := formatActivityCalls(m.activity.Calls) + " (uptime)"
+	capBotR := ""
+	if m.activity.Window > 0 {
+		capBotR = formatUptime(m.activity.Window)
+	}
+	pad = max(width-lipgloss.Width(capBotL)-lipgloss.Width(capBotR), 1)
+	lines = append(lines, MutedStyle.Render(capBotL)+strings.Repeat(" ", pad)+MutedStyle.Render(capBotR))
+
+	return lines
 }
 
 // joinWidgetRow joins widget []string slices horizontally with a one-space gap.

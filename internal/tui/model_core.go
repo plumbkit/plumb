@@ -98,7 +98,8 @@ type Model struct {
 	dashLifetimeSessions int64
 	dashLifetimeTokens   int64
 	dashLifetimeFirstAt  time.Time
-	dashLifetimeTopTools []stats.ToolStat
+	dashLifetimeTopTools  []stats.ToolStat
+	dashLifetimeBuckets  []int64
 	dashProjectFolder    string
 	dashProjectCalls     int64
 	dashProjectSessions  int64
