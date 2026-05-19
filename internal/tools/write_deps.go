@@ -22,7 +22,7 @@ import (
 type WriteDeps struct {
 	// Client is the LSP client used to send didChangeWatchedFiles. nil
 	// skips LSP notification (tests, headless mode).
-	Client lsp.LSPClient
+	Client lsp.Client
 	// Cache is the symbol cache that gets invalidated by URI after every
 	// successful write. nil skips invalidation.
 	Cache *cache.Cache

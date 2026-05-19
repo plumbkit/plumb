@@ -29,8 +29,10 @@ func NewResourceProvider(workspaceFn func() string) *ResourceProvider {
 	return &ResourceProvider{workspaceFn: workspaceFn}
 }
 
-const uriScheme = "plumb-memory://"
-const contextURI = "plumb://workspace/context"
+const (
+	uriScheme  = "plumb-memory://"
+	contextURI = "plumb://workspace/context"
+)
 
 // contextMDPath returns the path to .plumb/context.md for a workspace.
 func contextMDPath(workspace string) string {

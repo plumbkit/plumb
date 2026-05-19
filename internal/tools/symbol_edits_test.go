@@ -213,8 +213,8 @@ func TestInputSchema_IncludesDocCommentFlag(t *testing.T) {
 	// insert_after must not.
 	type schemaProvider interface{ InputSchema() json.RawMessage }
 	cases := []struct {
-		name     string
-		t        schemaProvider
+		name       string
+		t          schemaProvider
 		shouldHave bool
 	}{
 		{"insert_before", tools.NewInsertBeforeSymbol(nil), true},

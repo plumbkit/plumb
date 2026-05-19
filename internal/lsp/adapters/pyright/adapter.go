@@ -19,7 +19,7 @@ type pyrightInitOptions struct {
 	TypeCheckingMode string `json:"typeCheckingMode,omitempty"`
 }
 
-// Adapter implements lsp.LSPClient for pyright-langserver.
+// Adapter implements lsp.Client for pyright-langserver.
 //
 // Pyright uses a slightly different workspace model from gopls: it expects a
 // rootUri pointing to the project root and reads its configuration from
@@ -70,9 +70,9 @@ func (a *Adapter) handleServerRequest(_ context.Context, method string, params j
 // rootURI must be a file:// URI pointing to the Python project root.
 func DefaultInitParams(rootURI string) protocol.InitializeParams {
 	return protocol.InitializeParams{
-		ProcessID:  protocol.ProcessID(),
-		ClientInfo: &protocol.ClientInfo{Name: "plumb", Version: "dev"},
-		RootURI:    rootURI,
+		ProcessID:    protocol.ProcessID(),
+		ClientInfo:   &protocol.ClientInfo{Name: "plumb", Version: "dev"},
+		RootURI:      rootURI,
 		Capabilities: protocol.DefaultClientCapabilities(),
 		InitializationOptions: pyrightInitOptions{
 			PythonVersion:    "3.12",

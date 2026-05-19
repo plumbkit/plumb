@@ -19,6 +19,7 @@ func (e *echoTool) Description() string { return "echoes the text argument" }
 func (e *echoTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}}}`)
 }
+
 func (e *echoTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Text string `json:"text"`
@@ -185,7 +186,8 @@ func TestServer_Notification_NoResponse(t *testing.T) {
 }
 
 func TestServer_MultipleRequests(t *testing.T) {
-	resps := serve(t,
+	resps := serve(
+		t,
 		`{"jsonrpc":"2.0","id":1,"method":"ping"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"ping"}`,
 		`{"jsonrpc":"2.0","id":3,"method":"ping"}`,

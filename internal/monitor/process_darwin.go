@@ -9,7 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-
 func readProcessMetrics(pid int) (processMetrics, error) {
 	var out processMetrics
 

@@ -33,13 +33,13 @@ var listFilesSchema = json.RawMessage(`{
 
 // always-excluded directory names regardless of settings.
 var excludedDirs = map[string]bool{
-	".git":           true,
-	"vendor":         true,
-	"node_modules":   true,
-	"__pycache__":    true,
-	".pytest_cache":  true,
-	"dist":           false, // only excluded when hidden
-	"build":          false,
+	".git":          true,
+	"vendor":        true,
+	"node_modules":  true,
+	"__pycache__":   true,
+	".pytest_cache": true,
+	"dist":          false, // only excluded when hidden
+	"build":         false,
 }
 
 // ListFiles walks a directory tree and returns matching file paths.
@@ -49,7 +49,7 @@ type ListFiles struct{ ws WorkspaceFn }
 
 func NewListFiles(ws WorkspaceFn) *ListFiles { return &ListFiles{ws: ws} }
 
-func (t *ListFiles) Name() string             { return "list_files" }
+func (t *ListFiles) Name() string                 { return "list_files" }
 func (t *ListFiles) InputSchema() json.RawMessage { return listFilesSchema }
 func (t *ListFiles) Description() string {
 	return "Workspace-aware directory listing. Returns paths relative to the specified root, " +

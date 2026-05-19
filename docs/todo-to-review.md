@@ -200,3 +200,21 @@ Removed all unused declarations and simplified vestigial signatures flagged by `
 - `setState` in `internal/lsp/supervisor.go` had `conn *jsonrpc.Conn` and `proc *exec.Cmd` always passed as nil; both parameters removed, body now sets both fields to nil explicitly.
 
 Result: zero `unused`, zero `unparam` findings. All tests pass.
+
+---
+
+### CQ-1 — Mechanical lint cleanup (P0)
+
+**Completed in:** 0.6.6
+**Original priority:** P0 (foundational)
+
+Cleared all non-gocyclo findings from 79 total down to 51 (only gocyclo 37 + gosec 14 remain, both deferred):
+
+- **gofumpt/goimports**: `golangci-lint run --fix ./...` applied the embedded formatter to 10+ files that the standalone `gofumpt` binary (v0.10.0) would not flag, revealing a version mismatch. All formatting issues resolved.
+- **ineffassign**: Dead `rootURI = "file://" + folder` assignment in `daemon.go` removed (value never read after reassignment). Intermediate `name := relPath` in `walk.go` removed (overwritten immediately or unused).
+- **prealloc**: 5 slice preallocations added in `diff.go`, `edit_apply.go`, and `model_render.go` (×3).
+- **revive** (stutter): `lsp.LSPClient` renamed to `lsp.Client` across 18 files. LSP semantic rename attempted first but failed due to stale position index (proxy.go had been edited); completed via `find_replace` on the qualified name + targeted edits for bare-name comments.
+- **errcheck**: `os.MkdirAll` calls in `stats_test.go` wrapped with `t.Fatal`; `io.Copy` drain goroutine in `conn_test.go` uses `_, _ =`.
+- **staticcheck**: `QF1008` embedded Duration field selectors simplified; `QF1001` De Morgan applied; `QF1003` if-else chain → tagged switch in `mcp/server.go`; `ST1005` trailing periods removed from 4 error strings in `edit_file.go` and `lsp_err.go`; `SA4010` dead `uris = append(uris, uri)` in `transaction.go` removed (confirmed not a rollback bug — per-file `notifyLSP` calls already handle LSP notification; the slice was never consumed).
+
+Notes: Items 3, 4, 5 (make verify, pre-commit hook, CI enforcement) from the original CQ-1 definition of done are **not** completed here — those belong to CQ-6 and are tracked there.

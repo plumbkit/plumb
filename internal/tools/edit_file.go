@@ -168,7 +168,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 				"edit_file: file %q was modified since you read it\n"+
 					"  expected_mtime: %s\n"+
 					"  current mtime:  %s\n"+
-					"  Re-read the file and try again.",
+					"  Re-read the file and try again",
 				path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
 			)}
 		}
@@ -185,7 +185,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 				"edit_file: file %q content has changed since you read it\n"+
 					"  expected sha256: %s\n"+
 					"  current  sha256: %s\n"+
-					"  Re-read the file and try again.",
+					"  Re-read the file and try again",
 				path, a.ExpectedSha, current,
 			)}
 		}
@@ -200,7 +200,8 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		if recorded.IsZero() {
 			return "", &editLogicErr{fmt.Errorf(
 				"edit_file: strict mode: %q has not been read in this daemon session — call read_file first",
-				path)}
+				path,
+			)}
 		}
 		info, err := os.Stat(path)
 		if err != nil {
@@ -211,8 +212,9 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 				"edit_file: strict mode: %q has changed since you read it\n"+
 					"  recorded mtime: %s\n"+
 					"  current mtime:  %s\n"+
-					"  Re-read the file and try again.",
-				path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano))}
+					"  Re-read the file and try again",
+				path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
+			)}
 		}
 	}
 
@@ -239,7 +241,8 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 				"path", path, "attempt", attempt)
 			lastErr = fmt.Errorf(
 				"concurrent write detected after attempt %d: another process modified %q "+
-					"while this edit was in progress", attempt, path)
+					"while this edit was in progress", attempt, path,
+			)
 			continue
 		}
 
@@ -347,7 +350,8 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 		if !info2.ModTime().Equal(preReadMtime) {
 			return writeResult{}, "", "", fmt.Errorf(
 				"edit_file: file %q changed between read and write (mtime moved from %s to %s) — retry will re-read",
-				path, preReadMtime.Format(time.RFC3339Nano), info2.ModTime().Format(time.RFC3339Nano))
+				path, preReadMtime.Format(time.RFC3339Nano), info2.ModTime().Format(time.RFC3339Nano),
+			)
 		}
 	}
 

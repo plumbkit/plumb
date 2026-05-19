@@ -49,16 +49,16 @@ var findReferencesSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type FindReferences struct {
-	client lsp.LSPClient
+	client lsp.Client
 	cache  *cache.Cache
 	ttl    time.Duration
 }
 
-func NewFindReferences(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *FindReferences {
+func NewFindReferences(client lsp.Client, c *cache.Cache, ttl time.Duration) *FindReferences {
 	return &FindReferences{client: client, cache: c, ttl: ttl}
 }
 
-func (t *FindReferences) Name() string               { return "find_references" }
+func (t *FindReferences) Name() string                 { return "find_references" }
 func (t *FindReferences) InputSchema() json.RawMessage { return findReferencesSchema }
 func (t *FindReferences) Description() string {
 	return "Find all references to a symbol across the entire workspace. " +
@@ -199,7 +199,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 // server builds its in-memory view before we query references. Best-effort:
 // any I/O or LSP error is ignored — the subsequent references call will just
 // see whatever the server already had cached.
-func openFileForRefs(ctx context.Context, client lsp.LSPClient, uri string) {
+func openFileForRefs(ctx context.Context, client lsp.Client, uri string) {
 	path := strings.TrimPrefix(uri, "file://")
 	data, err := os.ReadFile(path)
 	if err != nil {

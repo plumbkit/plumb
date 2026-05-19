@@ -59,7 +59,7 @@ type ReadFile struct {
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
 
-func (t *ReadFile) Name() string               { return "read_file" }
+func (t *ReadFile) Name() string                 { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
 func (t *ReadFile) Description() string {
 	return "Read the text contents of a file. Accepts an absolute path or a file:// URI. " +

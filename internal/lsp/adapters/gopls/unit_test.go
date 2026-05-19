@@ -21,7 +21,7 @@ var mockInitResult = protocol.InitializeResult{
 		ReferencesProvider:      &protocol.BoolOrOptions{Enabled: true},
 		DocumentSymbolProvider:  &protocol.BoolOrOptions{Enabled: true},
 		WorkspaceSymbolProvider: &protocol.BoolOrOptions{Enabled: true},
-		RenameProvider: json.RawMessage(`true`),
+		RenameProvider:          json.RawMessage(`true`),
 	},
 	ServerInfo: &protocol.ServerInfo{Name: "gopls", Version: "0.21.0"},
 }

@@ -41,7 +41,7 @@ type FileDiff struct{}
 
 func NewFileDiff() *FileDiff { return &FileDiff{} }
 
-func (t *FileDiff) Name() string             { return "file_diff" }
+func (t *FileDiff) Name() string                 { return "file_diff" }
 func (t *FileDiff) InputSchema() json.RawMessage { return fileDiffSchema }
 func (t *FileDiff) Description() string {
 	return "Returns a unified diff between two arbitrary files. Works outside git — for tracked files use the git tool's diff subcommand instead, which understands refs and the index. " +
@@ -78,7 +78,6 @@ func (t *FileDiff) Execute(ctx context.Context, raw json.RawMessage) (string, er
 
 	cmd := exec.CommandContext(ctx, "diff", args...)
 	out, err := cmd.Output()
-
 	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {

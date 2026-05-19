@@ -201,7 +201,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 		pRW = 10
 	}
 
-	var lines []string
+	lines := make([]string, 0, 2+bodyHeight)
 	lines = append(lines, m.renderTopBorderPopup(pLW, pRW))
 	allLeft := m.popupLeftLines()
 	maxPL := max(len(allLeft)-bodyHeight, 0)
@@ -310,7 +310,7 @@ func (m Model) renderHelp(bg string) string {
 
 	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", rightDashes)+"╮")
 
-	var bodyLines []string
+	bodyLines := make([]string, 0, 2+len(helpLines))
 	// Empty row top
 	bodyLines = append(bodyLines, SepStyle.Render("│")+strings.Repeat(" ", innerW)+SepStyle.Render("│"))
 
@@ -334,7 +334,8 @@ func (m Model) renderSectionMenuOverlay(bg string) string {
 	selectedStyle := SelectedStyle
 
 	innerW := sectionMenuWidth - 2
-	lines := []string{border.Render("╭" + strings.Repeat("─", innerW) + "╮")}
+	lines := make([]string, 0, 2+len(sectionMenuItems))
+	lines = append(lines, border.Render("╭"+strings.Repeat("─", innerW)+"╮"))
 	for i, item := range sectionMenuItems {
 		marker := " "
 		style := textStyle

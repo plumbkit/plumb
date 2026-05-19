@@ -10,29 +10,29 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
-// clientProxy delegates lsp.LSPClient calls to the currently live adapter.
+// clientProxy delegates lsp.Client calls to the currently live adapter.
 // The serve command updates the proxy each time the supervisor (re)starts the
 // LSP process, so tools remain valid across crashes without being recreated.
 //
 // Concurrency: all methods are safe for concurrent use.
 type clientProxy struct {
 	mu  sync.RWMutex
-	cur lsp.LSPClient
+	cur lsp.Client
 }
 
-func (p *clientProxy) set(c lsp.LSPClient) {
+func (p *clientProxy) set(c lsp.Client) {
 	p.mu.Lock()
 	p.cur = c
 	p.mu.Unlock()
 }
 
-func (p *clientProxy) get() lsp.LSPClient {
+func (p *clientProxy) get() lsp.Client {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cur
 }
 
-func (p *clientProxy) getOrErr() (lsp.LSPClient, error) {
+func (p *clientProxy) getOrErr() (lsp.Client, error) {
 	c := p.get()
 	if c == nil {
 		return nil, fmt.Errorf("LSP server not yet ready")
@@ -47,6 +47,7 @@ func (p *clientProxy) Initialize(ctx context.Context, params protocol.Initialize
 	}
 	return c.Initialize(ctx, params)
 }
+
 func (p *clientProxy) Initialized(ctx context.Context) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -54,6 +55,7 @@ func (p *clientProxy) Initialized(ctx context.Context) error {
 	}
 	return c.Initialized(ctx)
 }
+
 func (p *clientProxy) Shutdown(ctx context.Context) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -61,6 +63,7 @@ func (p *clientProxy) Shutdown(ctx context.Context) error {
 	}
 	return c.Shutdown(ctx)
 }
+
 func (p *clientProxy) Exit(ctx context.Context) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -68,6 +71,7 @@ func (p *clientProxy) Exit(ctx context.Context) error {
 	}
 	return c.Exit(ctx)
 }
+
 func (p *clientProxy) DidOpen(ctx context.Context, params protocol.DidOpenTextDocumentParams) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -75,6 +79,7 @@ func (p *clientProxy) DidOpen(ctx context.Context, params protocol.DidOpenTextDo
 	}
 	return c.DidOpen(ctx, params)
 }
+
 func (p *clientProxy) DidChange(ctx context.Context, params protocol.DidChangeTextDocumentParams) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -82,6 +87,7 @@ func (p *clientProxy) DidChange(ctx context.Context, params protocol.DidChangeTe
 	}
 	return c.DidChange(ctx, params)
 }
+
 func (p *clientProxy) DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -89,6 +95,7 @@ func (p *clientProxy) DidClose(ctx context.Context, params protocol.DidCloseText
 	}
 	return c.DidClose(ctx, params)
 }
+
 func (p *clientProxy) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -96,6 +103,7 @@ func (p *clientProxy) DidChangeWatchedFiles(ctx context.Context, params protocol
 	}
 	return c.DidChangeWatchedFiles(ctx, params)
 }
+
 func (p *clientProxy) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -103,6 +111,7 @@ func (p *clientProxy) DocumentSymbols(ctx context.Context, params protocol.Docum
 	}
 	return c.DocumentSymbols(ctx, params)
 }
+
 func (p *clientProxy) WorkspaceSymbols(ctx context.Context, params protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -110,6 +119,7 @@ func (p *clientProxy) WorkspaceSymbols(ctx context.Context, params protocol.Work
 	}
 	return c.WorkspaceSymbols(ctx, params)
 }
+
 func (p *clientProxy) Definition(ctx context.Context, params protocol.DefinitionParams) ([]protocol.Location, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -117,6 +127,7 @@ func (p *clientProxy) Definition(ctx context.Context, params protocol.Definition
 	}
 	return c.Definition(ctx, params)
 }
+
 func (p *clientProxy) References(ctx context.Context, params protocol.ReferenceParams) ([]protocol.Location, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -124,6 +135,7 @@ func (p *clientProxy) References(ctx context.Context, params protocol.ReferenceP
 	}
 	return c.References(ctx, params)
 }
+
 func (p *clientProxy) Hover(ctx context.Context, params protocol.HoverParams) (*protocol.Hover, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -131,6 +143,7 @@ func (p *clientProxy) Hover(ctx context.Context, params protocol.HoverParams) (*
 	}
 	return c.Hover(ctx, params)
 }
+
 func (p *clientProxy) PrepareRename(ctx context.Context, params protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -138,6 +151,7 @@ func (p *clientProxy) PrepareRename(ctx context.Context, params protocol.Prepare
 	}
 	return c.PrepareRename(ctx, params)
 }
+
 func (p *clientProxy) Rename(ctx context.Context, params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -145,6 +159,7 @@ func (p *clientProxy) Rename(ctx context.Context, params protocol.RenameParams) 
 	}
 	return c.Rename(ctx, params)
 }
+
 func (p *clientProxy) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -152,6 +167,7 @@ func (p *clientProxy) PrepareCallHierarchy(ctx context.Context, params protocol.
 	}
 	return c.PrepareCallHierarchy(ctx, params)
 }
+
 func (p *clientProxy) IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -159,6 +175,7 @@ func (p *clientProxy) IncomingCalls(ctx context.Context, params protocol.CallHie
 	}
 	return c.IncomingCalls(ctx, params)
 }
+
 func (p *clientProxy) OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -166,6 +183,7 @@ func (p *clientProxy) OutgoingCalls(ctx context.Context, params protocol.CallHie
 	}
 	return c.OutgoingCalls(ctx, params)
 }
+
 func (p *clientProxy) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -173,6 +191,7 @@ func (p *clientProxy) PrepareTypeHierarchy(ctx context.Context, params protocol.
 	}
 	return c.PrepareTypeHierarchy(ctx, params)
 }
+
 func (p *clientProxy) Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -180,6 +199,7 @@ func (p *clientProxy) Supertypes(ctx context.Context, params protocol.TypeHierar
 	}
 	return c.Supertypes(ctx, params)
 }
+
 func (p *clientProxy) Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
 	c, err := p.getOrErr()
 	if err != nil {
@@ -187,6 +207,7 @@ func (p *clientProxy) Subtypes(ctx context.Context, params protocol.TypeHierarch
 	}
 	return c.Subtypes(ctx, params)
 }
+
 func (p *clientProxy) Capabilities() *protocol.ServerCapabilities {
 	c := p.get()
 	if c == nil {
@@ -194,6 +215,7 @@ func (p *clientProxy) Capabilities() *protocol.ServerCapabilities {
 	}
 	return c.Capabilities()
 }
+
 func (p *clientProxy) Subscribe(handler func(string, json.RawMessage)) func() {
 	c := p.get()
 	if c == nil {
@@ -203,4 +225,4 @@ func (p *clientProxy) Subscribe(handler func(string, json.RawMessage)) func() {
 }
 
 // ensure clientProxy satisfies the interface at compile time.
-var _ lsp.LSPClient = (*clientProxy)(nil)
+var _ lsp.Client = (*clientProxy)(nil)

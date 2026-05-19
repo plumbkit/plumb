@@ -36,15 +36,15 @@ var callHierarchySchema = json.RawMessage(`{
 
 // CallHierarchy implements the call_hierarchy MCP tool.
 type CallHierarchy struct {
-	client lsp.LSPClient
+	client lsp.Client
 }
 
 // NewCallHierarchy creates a CallHierarchy tool.
-func NewCallHierarchy(client lsp.LSPClient) *CallHierarchy {
+func NewCallHierarchy(client lsp.Client) *CallHierarchy {
 	return &CallHierarchy{client: client}
 }
 
-func (t *CallHierarchy) Name() string             { return "call_hierarchy" }
+func (t *CallHierarchy) Name() string                 { return "call_hierarchy" }
 func (t *CallHierarchy) InputSchema() json.RawMessage { return callHierarchySchema }
 func (t *CallHierarchy) Description() string {
 	return "No native Claude Code equivalent. " +

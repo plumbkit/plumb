@@ -79,7 +79,7 @@ func isCommentLine(trimmed string) bool {
 }
 
 // resolveSymbol fetches the DocumentSymbol tree for uri and locates namePath.
-func resolveSymbol(ctx context.Context, client lsp.LSPClient, uri, namePath string) (*protocol.DocumentSymbol, error) {
+func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string) (*protocol.DocumentSymbol, error) {
 	syms, err := client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
@@ -124,9 +124,9 @@ func capitalise(s string) string {
 
 // ─── insert_before_symbol ──────────────────────────────────────────────────
 
-type InsertBeforeSymbol struct{ client lsp.LSPClient }
+type InsertBeforeSymbol struct{ client lsp.Client }
 
-func NewInsertBeforeSymbol(client lsp.LSPClient) *InsertBeforeSymbol {
+func NewInsertBeforeSymbol(client lsp.Client) *InsertBeforeSymbol {
 	return &InsertBeforeSymbol{client: client}
 }
 
@@ -176,9 +176,9 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
 
-type InsertAfterSymbol struct{ client lsp.LSPClient }
+type InsertAfterSymbol struct{ client lsp.Client }
 
-func NewInsertAfterSymbol(client lsp.LSPClient) *InsertAfterSymbol {
+func NewInsertAfterSymbol(client lsp.Client) *InsertAfterSymbol {
 	return &InsertAfterSymbol{client: client}
 }
 
@@ -221,9 +221,9 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 
 // ─── replace_symbol_body ───────────────────────────────────────────────────
 
-type ReplaceSymbolBody struct{ client lsp.LSPClient }
+type ReplaceSymbolBody struct{ client lsp.Client }
 
-func NewReplaceSymbolBody(client lsp.LSPClient) *ReplaceSymbolBody {
+func NewReplaceSymbolBody(client lsp.Client) *ReplaceSymbolBody {
 	return &ReplaceSymbolBody{client: client}
 }
 
@@ -277,9 +277,9 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
 
-type SafeDeleteSymbol struct{ client lsp.LSPClient }
+type SafeDeleteSymbol struct{ client lsp.Client }
 
-func NewSafeDeleteSymbol(client lsp.LSPClient) *SafeDeleteSymbol {
+func NewSafeDeleteSymbol(client lsp.Client) *SafeDeleteSymbol {
 	return &SafeDeleteSymbol{client: client}
 }
 

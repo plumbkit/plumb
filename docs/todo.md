@@ -530,30 +530,6 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 ---
 
-### CQ-1 — Make `make lint` clean and enforce it (P0, foundational)
-
-**Priority:** ⭐ highest. Nothing else is trustworthy until the baseline is green and enforced.
-**Effort:** Medium. ~60 of the 79 findings are mechanical.
-**Status:** Not started.
-
-**Problem.** 79 outstanding golangci-lint findings. CI pins `v2.12.2` and the lint action would fail on a clean PR run today. Locally there is no pre-commit enforcement (`.git/hooks/` absent), so the contract in AGENTS.md ("golangci-lint v2.12.2 before every commit; CI enforces") is documented but not actually enforced — that is how a non-compiling test (`ansi.Strip` with no import) and unused imports reached `main`.
-
-**Definition of done.**
-
-1. Zero golangci-lint findings on `golangci-lint run ./...` at v2.12.2.
-2. Clear the mechanical linters first, grouped one commit per linter-or-package, **no behaviour change**, tests unchanged:
-   - `gofumpt` (3), `goimports` drift, `ineffassign` (2), `prealloc` (5), `revive` (1).
-   - `errcheck` (3) — handle or explicitly `_ =` with a reason.
-   - `staticcheck`: `ST1005` error strings ending in punctuation/newline (`internal/tools/edit_file.go:167,184,210`); `SA4010` never-used append (`internal/tools/transaction.go:310` — this one is a latent bug, investigate, don't just delete); `QF1003` tagged-switch (`internal/mcp/server.go:407`).
-   - `unparam` (3) — see CQ-2.
-3. Add a `make verify` target = `go build ./... && go vet ./... && go test ./... && golangci-lint run ./...`. Document it as the pre-commit gate in AGENTS.md.
-4. Install + harden the pre-commit hook: `scripts/pre-commit` must run `go build ./...`, `gofumpt -l` (fail if non-empty), and `golangci-lint run`. Make `make install-hooks` a documented mandatory step in AGENTS.md "Build commands" and in onboarding.
-5. Confirm the CI lint job is blocking (not advisory) on PRs to `main`.
-
-**Watch out for.** Do not silence findings with blanket `//nolint` to hit zero — that defeats the purpose. `SA4010` in `transaction.go` is likely a real rollback/URI-collection bug; treat it as a correctness item, not a lint nit.
-
----
-
 ### CQ-3 — Decompose the monolithic `Execute()` methods (P1, the core refactor)
 
 **Priority:** ⭐ this is the actual "good software engineering" ask. Discuss the standard, then execute per-tool.

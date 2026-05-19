@@ -1,4 +1,4 @@
-// Package lsp defines the LSPClient interface and the process supervisor.
+// Package lsp defines the Client interface and the process supervisor.
 package lsp
 
 import (
@@ -12,11 +12,11 @@ import (
 // It must not block; spawn a goroutine if processing takes time.
 type NotificationHandler func(method string, params json.RawMessage)
 
-// LSPClient defines the operations Plumb uses from any language server.
+// Client defines the operations Plumb uses from any language server.
 //
 // All methods take a context.Context and return an error.  Implementations
 // must document their concurrency contract in their type's doc comment.
-type LSPClient interface {
+type Client interface {
 	// ── Lifecycle ───────────────────────────────────────────────────────────
 
 	// Initialize sends the initialize request.  Must be called first.

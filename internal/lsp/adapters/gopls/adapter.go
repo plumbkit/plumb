@@ -15,13 +15,13 @@ import (
 // goplsOptions holds gopls-specific initialization options.
 // See https://github.com/golang/tools/blob/master/gopls/doc/settings.md
 type goplsOptions struct {
-	Analyses          map[string]bool `json:"analyses,omitempty"`
-	StaticCheck       bool            `json:"staticcheck,omitempty"`
-	Hints             map[string]bool `json:"hints,omitempty"`
-	VerboseOutput     bool            `json:"verboseOutput,omitempty"`
+	Analyses      map[string]bool `json:"analyses,omitempty"`
+	StaticCheck   bool            `json:"staticcheck,omitempty"`
+	Hints         map[string]bool `json:"hints,omitempty"`
+	VerboseOutput bool            `json:"verboseOutput,omitempty"`
 }
 
-// Adapter implements lsp.LSPClient for gopls.
+// Adapter implements lsp.Client for gopls.
 //
 // Concurrency: all exported methods are safe for concurrent use.
 // Capabilities() is safe to call concurrently with any other method.
@@ -68,9 +68,9 @@ func (a *Adapter) handleServerRequest(_ context.Context, method string, params j
 // DefaultInitParams returns InitializeParams suitable for gopls.
 func DefaultInitParams(rootURI string) protocol.InitializeParams {
 	return protocol.InitializeParams{
-		ProcessID:  protocol.ProcessID(),
-		ClientInfo: &protocol.ClientInfo{Name: "plumb", Version: "dev"},
-		RootURI:    rootURI,
+		ProcessID:    protocol.ProcessID(),
+		ClientInfo:   &protocol.ClientInfo{Name: "plumb", Version: "dev"},
+		RootURI:      rootURI,
 		Capabilities: protocol.DefaultClientCapabilities(),
 		InitializationOptions: goplsOptions{
 			Analyses: map[string]bool{

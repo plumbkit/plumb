@@ -12,8 +12,8 @@ func TestSessionStart_ClientNameGuidance(t *testing.T) {
 	// and version-qualified "claude-code/<ver>" matches (case-insensitive),
 	// but NOT for names that merely share the prefix (e.g. "claude-codegen").
 	tests := []struct {
-		name        string
-		clientName  string
+		name         string
+		clientName   string
 		wantGuidance bool
 	}{
 		{"exact lowercase", "claude-code", true},

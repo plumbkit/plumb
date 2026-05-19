@@ -56,11 +56,9 @@ func (p ignorePattern) matchesPath(relPath string, isDir bool) bool {
 	if p.dirOnly && !isDir {
 		return false
 	}
-	name := relPath
 	if !p.hasSlash && !p.rooted {
 		// Match against base name only (unless the pattern contains a slash).
-		name = filepath.Base(relPath)
-		return doubleStarMatch(p.glob, name)
+		return doubleStarMatch(p.glob, filepath.Base(relPath))
 	}
 	return doubleStarMatch(p.glob, relPath)
 }

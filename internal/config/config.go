@@ -40,7 +40,7 @@ func (d *Duration) UnmarshalText(b []byte) error {
 }
 
 func (d Duration) MarshalText() ([]byte, error) {
-	return []byte(d.Duration.String()), nil
+	return []byte(d.String()), nil
 }
 
 // LSPConfig holds per-language-server settings.
@@ -324,7 +324,7 @@ func applyEnv(cfg *Config) {
 		}
 	}
 	if v := os.Getenv("PLUMB_SHOW_WRITE_DIFF"); v != "" {
-		cfg.Edits.ShowWriteDiff = !(v == "0" || v == "false" || v == "no")
+		cfg.Edits.ShowWriteDiff = v != "0" && v != "false" && v != "no"
 	}
 	if v := os.Getenv("PLUMB_AUTO_ATTACH"); v != "" {
 		cfg.Workspace.AutoAttach = v == "1" || v == "true" || v == "yes"

@@ -22,15 +22,15 @@ const charsPerToken = 4 // rough English/code average
 // altCost is the approximate alternative token count for one call of a given
 // tool. Negative tools (no benefit over filesystem) return 0.
 var altCost = map[string]int{
-	"find_symbol":         800,
-	"workspace_symbols":   600,
-	"get_definition":      250,
-	"explain_symbol":      800,
-	"list_symbols":        1600,
-	"find_references":     400,
-	"call_hierarchy":      1500,
-	"type_hierarchy":      800,
-	"diagnostics":         300,
+	"find_symbol":       800,
+	"workspace_symbols": 600,
+	"get_definition":    250,
+	"explain_symbol":    800,
+	"list_symbols":      1600,
+	"find_references":   400,
+	"call_hierarchy":    1500,
+	"type_hierarchy":    800,
+	"diagnostics":       300,
 	// Filesystem & VCS tools roughly match their fallback cost — no savings.
 	"list_files":      0,
 	"find_files":      0,

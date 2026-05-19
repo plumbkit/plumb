@@ -35,17 +35,17 @@ var readSymbolSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type ReadSymbol struct {
-	client  lsp.LSPClient
+	client  lsp.Client
 	cache   *cache.Cache
 	ttl     time.Duration
 	tracker *ReadTracker
 }
 
-func NewReadSymbol(client lsp.LSPClient, c *cache.Cache, ttl time.Duration, tracker *ReadTracker) *ReadSymbol {
+func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl time.Duration, tracker *ReadTracker) *ReadSymbol {
 	return &ReadSymbol{client: client, cache: c, ttl: ttl, tracker: tracker}
 }
 
-func (t *ReadSymbol) Name() string               { return "read_symbol" }
+func (t *ReadSymbol) Name() string                 { return "read_symbol" }
 func (t *ReadSymbol) InputSchema() json.RawMessage { return readSymbolSchema }
 func (t *ReadSymbol) Description() string {
 	return "Read the source body of a named symbol (function, method, type) in one call — " +

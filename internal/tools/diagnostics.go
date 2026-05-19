@@ -40,7 +40,7 @@ func NewDiagnostics(inv diagnosticsSource) *Diagnostics {
 	return &Diagnostics{inv: inv}
 }
 
-func (t *Diagnostics) Name() string             { return "diagnostics" }
+func (t *Diagnostics) Name() string                 { return "diagnostics" }
 func (t *Diagnostics) InputSchema() json.RawMessage { return diagnosticsSchema }
 func (t *Diagnostics) Description() string {
 	return "Return LSP errors, warnings, and hints for a file or for all files in the workspace. " +

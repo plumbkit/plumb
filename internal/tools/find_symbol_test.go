@@ -15,12 +15,16 @@ import (
 func TestFindSymbol_DocumentSearch(t *testing.T) {
 	mock := &mockLSP{
 		docSymbols: []protocol.DocumentSymbol{
-			{Name: "Greeter", Kind: protocol.SKClass,
+			{
+				Name: "Greeter", Kind: protocol.SKClass,
 				Range: protocol.Range{Start: protocol.Position{Line: 4}},
 				Children: []protocol.DocumentSymbol{
-					{Name: "greet", Kind: protocol.SKMethod,
-						Range: protocol.Range{Start: protocol.Position{Line: 7}}},
-				}},
+					{
+						Name: "greet", Kind: protocol.SKMethod,
+						Range: protocol.Range{Start: protocol.Position{Line: 7}},
+					},
+				},
+			},
 		},
 	}
 	tool := tools.NewFindSymbol(mock, nil, time.Minute)

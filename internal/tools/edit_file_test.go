@@ -65,6 +65,7 @@ func TestEditFile_StrictMode_TrackerIsolation(t *testing.T) {
 		t.Fatalf("session B's edit should have been rejected (session A read), got: %v", err)
 	}
 }
+
 func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b

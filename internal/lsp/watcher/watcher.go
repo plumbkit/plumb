@@ -161,8 +161,8 @@ func matchGlob(pattern, filePath, base string) bool {
 
 	// Pattern with ** in the middle (e.g. /abs/root/**/*.go).
 	if idx := strings.Index(pattern, "/**/"); idx >= 0 {
-		prefix := pattern[:idx+1]  // e.g. "/abs/root/"
-		suffix := pattern[idx+4:]  // e.g. "*.go"
+		prefix := pattern[:idx+1] // e.g. "/abs/root/"
+		suffix := pattern[idx+4:] // e.g. "*.go"
 		if strings.HasPrefix(filePath, prefix) {
 			rest := filePath[len(prefix):]
 			// suffix must match the file's base or a relative sub-path.

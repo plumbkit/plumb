@@ -248,7 +248,6 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 		}
 		if projectRoot != folder {
 			folder = projectRoot
-			rootURI = "file://" + folder
 		}
 
 		stateMu.Lock()

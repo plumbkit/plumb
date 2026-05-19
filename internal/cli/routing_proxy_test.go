@@ -13,7 +13,7 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
-// stubClient is a minimal lsp.LSPClient that records which URIs it was called
+// stubClient is a minimal lsp.Client that records which URIs it was called
 // with so tests can verify routing dispatched to the expected adapter.
 type stubClient struct {
 	mu          sync.Mutex
@@ -30,60 +30,79 @@ func (s *stubClient) Exit(context.Context) error        { return nil }
 func (s *stubClient) DidOpen(context.Context, protocol.DidOpenTextDocumentParams) error {
 	return nil
 }
+
 func (s *stubClient) DidChange(context.Context, protocol.DidChangeTextDocumentParams) error {
 	return nil
 }
+
 func (s *stubClient) DidClose(context.Context, protocol.DidCloseTextDocumentParams) error {
 	return nil
 }
+
 func (s *stubClient) DidChangeWatchedFiles(context.Context, protocol.DidChangeWatchedFilesParams) error {
 	return nil
 }
+
 func (s *stubClient) DocumentSymbols(context.Context, protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	return nil, nil
 }
+
 func (s *stubClient) WorkspaceSymbols(context.Context, protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
 	return nil, nil
 }
+
 func (s *stubClient) Definition(_ context.Context, p protocol.DefinitionParams) ([]protocol.Location, error) {
 	s.mu.Lock()
 	s.definitions = append(s.definitions, p.TextDocument.URI)
 	s.mu.Unlock()
 	return nil, nil
 }
+
 func (s *stubClient) References(context.Context, protocol.ReferenceParams) ([]protocol.Location, error) {
 	return nil, nil
 }
+
 func (s *stubClient) Hover(context.Context, protocol.HoverParams) (*protocol.Hover, error) {
 	return nil, nil
 }
+
 func (s *stubClient) PrepareRename(context.Context, protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
 	return nil, nil
 }
+
 func (s *stubClient) Rename(context.Context, protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
 	return nil, nil
 }
+
 func (s *stubClient) PrepareCallHierarchy(context.Context, protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
 	return nil, nil
 }
+
 func (s *stubClient) IncomingCalls(context.Context, protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
 	return nil, nil
 }
+
 func (s *stubClient) OutgoingCalls(context.Context, protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
 	return nil, nil
 }
+
 func (s *stubClient) PrepareTypeHierarchy(context.Context, protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
 	return nil, nil
 }
+
 func (s *stubClient) Supertypes(context.Context, protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
 	return nil, nil
 }
+
 func (s *stubClient) Subtypes(context.Context, protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
 	return nil, nil
 }
-func (s *stubClient) Capabilities() *protocol.ServerCapabilities                       { return nil }
-func (s *stubClient) Subscribe(func(string, json.RawMessage)) func()                   { return func() {} }
-var _ lsp.LSPClient = (*stubClient)(nil)
+
+func (s *stubClient) Capabilities() *protocol.ServerCapabilities { return nil }
+
+func (s *stubClient) Subscribe(func(string, json.RawMessage)) func() { return func() {} }
+
+var _ lsp.Client = (*stubClient)(nil)
 
 // setupTwoProjects creates two go.mod-rooted project directories under a
 // shared tempdir. Returns (rootA, rootB).
@@ -119,7 +138,7 @@ func newTestPool() *workspacePool {
 
 // installEntry mounts a stubClient into the pool as if it had been acquired
 // via the normal flow, so routing can dispatch to it.
-func installEntry(pool *workspacePool, root string, client lsp.LSPClient) {
+func installEntry(pool *workspacePool, root string, client lsp.Client) {
 	cp := &clientProxy{}
 	cp.set(client)
 	pool.entries[root] = &poolEntry{root: root, language: "go", proxy: cp}

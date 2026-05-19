@@ -270,7 +270,7 @@ func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
 }
 
 // newAdapter constructs the right adapter for a language.
-func newAdapter(language string, conn *jsonrpc.Conn) (lsp.LSPClient, error) {
+func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
 	switch language {
 	case "go":
 		return gopls.New(conn), nil

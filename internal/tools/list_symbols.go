@@ -33,16 +33,16 @@ var listSymbolsSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type ListSymbols struct {
-	client lsp.LSPClient
+	client lsp.Client
 	cache  *cache.Cache
 	ttl    time.Duration
 }
 
-func NewListSymbols(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *ListSymbols {
+func NewListSymbols(client lsp.Client, c *cache.Cache, ttl time.Duration) *ListSymbols {
 	return &ListSymbols{client: client, cache: c, ttl: ttl}
 }
 
-func (t *ListSymbols) Name() string             { return "list_symbols" }
+func (t *ListSymbols) Name() string                 { return "list_symbols" }
 func (t *ListSymbols) InputSchema() json.RawMessage { return listSymbolsSchema }
 func (t *ListSymbols) Description() string {
 	return "Return the complete symbol outline of a file: every function, type, method, field, " +

@@ -490,7 +490,7 @@ func pathIsDirty(ctx context.Context, path string) bool {
 //
 // Best-effort: a notification failure must never roll back a successful file
 // write. Callers log and continue.
-func notifyLSP(ctx context.Context, client lsp.LSPClient, path string, changeType protocol.FileChangeType) error {
+func notifyLSP(ctx context.Context, client lsp.Client, path string, changeType protocol.FileChangeType) error {
 	if client == nil {
 		return nil
 	}

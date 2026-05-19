@@ -14,8 +14,8 @@ type PromptArgument struct {
 
 // PromptMessage is one turn in a prompt's messages array.
 type PromptMessage struct {
-	Role    string         `json:"role"` // "user" | "assistant"
-	Content PromptContent  `json:"content"`
+	Role    string        `json:"role"` // "user" | "assistant"
+	Content PromptContent `json:"content"`
 }
 
 // PromptContent holds the text (or other content) of a prompt message.

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"charm.land/lipgloss/v2"
+
 	"github.com/golimpio/plumb/internal/tui"
 )
 

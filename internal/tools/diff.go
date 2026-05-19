@@ -85,7 +85,7 @@ func computeEditScript(old, new []string) editScript {
 		return nil
 	}
 
-	maxD := n + m // worst-case edit distance
+	maxD := n + m  // worst-case edit distance
 	offset := maxD // offset so index k+offset is always ≥0
 
 	v := make([]int, 2*maxD+1)
@@ -259,7 +259,8 @@ func groupHunks(script editScript, ctx int) []hunk {
 
 func formatHunk(h hunk) []string {
 	header := fmt.Sprintf("@@ -%d,%d +%d,%d @@", h.oldStart, h.oldCount, h.newStart, h.newCount)
-	out := []string{header}
+	out := make([]string, 0, 1+len(h.lines))
+	out = append(out, header)
 	for _, dl := range h.lines {
 		out = append(out, string(dl.kind)+dl.text)
 	}

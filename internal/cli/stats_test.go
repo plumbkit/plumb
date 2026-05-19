@@ -128,9 +128,13 @@ func TestRunStats_ExplicitNestedWorkspaceUsesRootWorkspaceFilter(t *testing.T) {
 
 	// Mocking directory structure for resolveCLIWorkspace
 	tempRoot := t.TempDir()
-	os.MkdirAll(filepath.Join(tempRoot, ".plumb"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tempRoot, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	tempChild := filepath.Join(tempRoot, "child")
-	os.MkdirAll(tempChild, 0o755)
+	if err := os.MkdirAll(tempChild, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	oldWorkspaceFlag, oldLimit := statsFlagWorkspace, statsFlagLimit
 	statsFlagWorkspace, statsFlagLimit = tempChild, 5

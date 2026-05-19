@@ -113,11 +113,11 @@ type transactionApplyArgs struct {
 // pre-edit content, the post-edit content, the file's pre-write mtime, and
 // the file mode for the eventual safeWrite.
 type txPrepared struct {
-	path       string
-	before     string
-	after      string
-	preMtime   time.Time
-	perm       os.FileMode
+	path     string
+	before   string
+	after    string
+	preMtime time.Time
+	perm     os.FileMode
 }
 
 func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -193,7 +193,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 			return "", &editLogicErr{fmt.Errorf(
 				"transaction_apply: %d file(s) have uncommitted changes; "+
 					"review and commit first, or pass dirty_ok: true to overwrite:\n  %s",
-				len(dirtyPaths), strings.Join(dirtyPaths, "\n  "))}
+				len(dirtyPaths), strings.Join(dirtyPaths, "\n  "),
+			)}
 		}
 	}
 
@@ -213,7 +214,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 			if !info.ModTime().Equal(want) {
 				return "", &editLogicErr{fmt.Errorf(
 					"transaction_apply: op[%d]: %q changed since you read it (expected %s, got %s)",
-					i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano))}
+					i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
+				)}
 			}
 		}
 		if op.ExpectedSha != "" {
@@ -226,7 +228,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 					"transaction_apply: op[%d]: %q content has changed since you read it\n"+
 						"  expected sha256: %s\n"+
 						"  current  sha256: %s",
-					i, path, op.ExpectedSha, current)}
+					i, path, op.ExpectedSha, current,
+				)}
 			}
 		}
 		data, err := os.ReadFile(path)
@@ -246,13 +249,15 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 			case 0:
 				return "", &editLogicErr{fmt.Errorf(
 					"transaction_apply: op[%d].edits[%d]: old_str not found in %q",
-					i, j, path)}
+					i, j, path,
+				)}
 			case 1:
 				content = strings.Replace(content, oldStr, newStr, 1)
 			default:
 				return "", &editLogicErr{fmt.Errorf(
 					"transaction_apply: op[%d].edits[%d]: old_str appears %d times in %q — must be unique",
-					i, j, count, path)}
+					i, j, count, path,
+				)}
 			}
 		}
 		prepared = append(prepared, txPrepared{
@@ -286,7 +291,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 				txl.Rollback()
 				return "", fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
-					p.path, len(written))
+					p.path, len(written),
+				)
 			}
 		}
 		if err := txl.Record(p.path, []byte(p.before), p.perm); err != nil {
@@ -304,10 +310,8 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	txl.Commit()
 
 	// Phase 3: notifications + cache invalidation per file.
-	uris := make([]string, 0, len(written))
 	for _, p := range written {
 		uri := "file://" + p.path
-		uris = append(uris, uri)
 		if err := notifyLSP(ctx, t.deps.Client, p.path, protocol.FileChanged); err != nil {
 			slog.Warn("transaction_apply: LSP notification failed", "path", p.path, "err", err)
 		}

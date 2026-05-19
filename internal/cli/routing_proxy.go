@@ -13,7 +13,7 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
-// routingProxy implements lsp.LSPClient by dispatching each call to the gopls
+// routingProxy implements lsp.Client by dispatching each call to the gopls
 // instance for the workspace containing the URI in the method's params.
 //
 // Methods without a natural URI argument (Initialize, Shutdown, WorkspaceSymbols,
@@ -55,7 +55,7 @@ func (r *routingProxy) setPrimary(root string, p *clientProxy) {
 }
 
 // primaryClient returns the primary workspace's adapter or an error.
-func (r *routingProxy) primaryClient() (lsp.LSPClient, error) {
+func (r *routingProxy) primaryClient() (lsp.Client, error) {
 	r.mu.RLock()
 	p := r.primary
 	r.mu.RUnlock()
@@ -65,9 +65,9 @@ func (r *routingProxy) primaryClient() (lsp.LSPClient, error) {
 	return nil, fmt.Errorf("LSP server not yet ready")
 }
 
-// route returns the LSPClient responsible for the workspace containing uri.
+// route returns the Client responsible for the workspace containing uri.
 // Falls back to the primary if uri is empty or workspace resolution fails.
-func (r *routingProxy) route(ctx context.Context, uri string) (lsp.LSPClient, error) {
+func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error) {
 	if uri == "" {
 		return r.primaryClient()
 	}
@@ -97,7 +97,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.LSPClient, er
 	return nil, fmt.Errorf("LSP server not yet ready for %s", root)
 }
 
-// ─── lsp.LSPClient implementation ─────────────────────────────────────────
+// ─── lsp.Client implementation ─────────────────────────────────────────
 
 // Workspace-wide / lifecycle methods stick to the primary.
 func (r *routingProxy) Initialize(ctx context.Context, params protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -107,6 +107,7 @@ func (r *routingProxy) Initialize(ctx context.Context, params protocol.Initializ
 	}
 	return c.Initialize(ctx, params)
 }
+
 func (r *routingProxy) Initialized(ctx context.Context) error {
 	c, err := r.primaryClient()
 	if err != nil {
@@ -114,6 +115,7 @@ func (r *routingProxy) Initialized(ctx context.Context) error {
 	}
 	return c.Initialized(ctx)
 }
+
 func (r *routingProxy) Shutdown(ctx context.Context) error {
 	c, err := r.primaryClient()
 	if err != nil {
@@ -121,6 +123,7 @@ func (r *routingProxy) Shutdown(ctx context.Context) error {
 	}
 	return c.Shutdown(ctx)
 }
+
 func (r *routingProxy) Exit(ctx context.Context) error {
 	c, err := r.primaryClient()
 	if err != nil {
@@ -128,6 +131,7 @@ func (r *routingProxy) Exit(ctx context.Context) error {
 	}
 	return c.Exit(ctx)
 }
+
 func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
 	c, err := r.primaryClient()
 	if err != nil {
@@ -135,6 +139,7 @@ func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.Wor
 	}
 	return c.WorkspaceSymbols(ctx, params)
 }
+
 func (r *routingProxy) Capabilities() *protocol.ServerCapabilities {
 	c, err := r.primaryClient()
 	if err != nil {
@@ -142,6 +147,7 @@ func (r *routingProxy) Capabilities() *protocol.ServerCapabilities {
 	}
 	return c.Capabilities()
 }
+
 func (r *routingProxy) Subscribe(handler func(string, json.RawMessage)) func() {
 	c, err := r.primaryClient()
 	if err != nil {
@@ -158,6 +164,7 @@ func (r *routingProxy) DidOpen(ctx context.Context, params protocol.DidOpenTextD
 	}
 	return c.DidOpen(ctx, params)
 }
+
 func (r *routingProxy) DidChange(ctx context.Context, params protocol.DidChangeTextDocumentParams) error {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -165,6 +172,7 @@ func (r *routingProxy) DidChange(ctx context.Context, params protocol.DidChangeT
 	}
 	return c.DidChange(ctx, params)
 }
+
 func (r *routingProxy) DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -179,7 +187,7 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 	if len(params.Changes) == 0 {
 		return nil
 	}
-	groups := make(map[lsp.LSPClient][]protocol.FileEvent, 1)
+	groups := make(map[lsp.Client][]protocol.FileEvent, 1)
 	for _, ev := range params.Changes {
 		c, err := r.route(ctx, ev.URI)
 		if err != nil {
@@ -195,6 +203,7 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 	}
 	return firstErr
 }
+
 func (r *routingProxy) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -202,6 +211,7 @@ func (r *routingProxy) DocumentSymbols(ctx context.Context, params protocol.Docu
 	}
 	return c.DocumentSymbols(ctx, params)
 }
+
 func (r *routingProxy) Definition(ctx context.Context, params protocol.DefinitionParams) ([]protocol.Location, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -209,6 +219,7 @@ func (r *routingProxy) Definition(ctx context.Context, params protocol.Definitio
 	}
 	return c.Definition(ctx, params)
 }
+
 func (r *routingProxy) References(ctx context.Context, params protocol.ReferenceParams) ([]protocol.Location, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -216,6 +227,7 @@ func (r *routingProxy) References(ctx context.Context, params protocol.Reference
 	}
 	return c.References(ctx, params)
 }
+
 func (r *routingProxy) Hover(ctx context.Context, params protocol.HoverParams) (*protocol.Hover, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -223,6 +235,7 @@ func (r *routingProxy) Hover(ctx context.Context, params protocol.HoverParams) (
 	}
 	return c.Hover(ctx, params)
 }
+
 func (r *routingProxy) PrepareRename(ctx context.Context, params protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -230,6 +243,7 @@ func (r *routingProxy) PrepareRename(ctx context.Context, params protocol.Prepar
 	}
 	return c.PrepareRename(ctx, params)
 }
+
 func (r *routingProxy) Rename(ctx context.Context, params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -237,6 +251,7 @@ func (r *routingProxy) Rename(ctx context.Context, params protocol.RenameParams)
 	}
 	return c.Rename(ctx, params)
 }
+
 func (r *routingProxy) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -244,6 +259,7 @@ func (r *routingProxy) PrepareCallHierarchy(ctx context.Context, params protocol
 	}
 	return c.PrepareCallHierarchy(ctx, params)
 }
+
 func (r *routingProxy) IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
 	c, err := r.route(ctx, params.Item.URI)
 	if err != nil {
@@ -251,6 +267,7 @@ func (r *routingProxy) IncomingCalls(ctx context.Context, params protocol.CallHi
 	}
 	return c.IncomingCalls(ctx, params)
 }
+
 func (r *routingProxy) OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
 	c, err := r.route(ctx, params.Item.URI)
 	if err != nil {
@@ -258,6 +275,7 @@ func (r *routingProxy) OutgoingCalls(ctx context.Context, params protocol.CallHi
 	}
 	return c.OutgoingCalls(ctx, params)
 }
+
 func (r *routingProxy) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
 	c, err := r.route(ctx, params.TextDocument.URI)
 	if err != nil {
@@ -265,6 +283,7 @@ func (r *routingProxy) PrepareTypeHierarchy(ctx context.Context, params protocol
 	}
 	return c.PrepareTypeHierarchy(ctx, params)
 }
+
 func (r *routingProxy) Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
 	c, err := r.route(ctx, params.Item.URI)
 	if err != nil {
@@ -272,6 +291,7 @@ func (r *routingProxy) Supertypes(ctx context.Context, params protocol.TypeHiera
 	}
 	return c.Supertypes(ctx, params)
 }
+
 func (r *routingProxy) Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
 	c, err := r.route(ctx, params.Item.URI)
 	if err != nil {
@@ -280,7 +300,7 @@ func (r *routingProxy) Subtypes(ctx context.Context, params protocol.TypeHierarc
 	return c.Subtypes(ctx, params)
 }
 
-var _ lsp.LSPClient = (*routingProxy)(nil)
+var _ lsp.Client = (*routingProxy)(nil)
 
 // ─── routingInvProxy ─────────────────────────────────────────────────────
 

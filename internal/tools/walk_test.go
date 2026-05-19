@@ -56,13 +56,13 @@ func TestDoubleStarMatch(t *testing.T) {
 
 func TestParseIgnoreLine(t *testing.T) {
 	cases := []struct {
-		raw       string
-		wantOk    bool
-		negate    bool
-		dirOnly   bool
-		rooted    bool
-		hasSlash  bool
-		glob      string
+		raw      string
+		wantOk   bool
+		negate   bool
+		dirOnly  bool
+		rooted   bool
+		hasSlash bool
+		glob     string
 	}{
 		{"", false, false, false, false, false, ""},
 		{"# comment", false, false, false, false, false, ""},
@@ -113,10 +113,10 @@ func TestIgnoreStack(t *testing.T) {
 		{"foo.log", false, true},
 		{"foo.go", false, false},
 		{"vendor", true, true},
-		{"vendor", false, false},  // vendor/ only matches dirs
-		{"build", false, true},    // /build matches file or dir at root
-		{"a/build", false, false}, // rooted — doesn't match subdir
-		{"a/foo.log", false, true},// *.log matches anywhere
+		{"vendor", false, false},   // vendor/ only matches dirs
+		{"build", false, true},     // /build matches file or dir at root
+		{"a/build", false, false},  // rooted — doesn't match subdir
+		{"a/foo.log", false, true}, // *.log matches anywhere
 	}
 
 	for _, tc := range cases {

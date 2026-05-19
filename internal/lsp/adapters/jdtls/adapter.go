@@ -31,7 +31,7 @@ type jdtlsJavaSettings struct {
 	Home string `json:"home,omitempty"`
 }
 
-// Adapter implements lsp.LSPClient for Eclipse JDT Language Server (jdtls).
+// Adapter implements lsp.Client for Eclipse JDT Language Server (jdtls).
 //
 // jdtls uses the same JSON-RPC 2.0 / LSP protocol as gopls and pyright but
 // requires a -data <dir> process argument (passed by the pool) and may send

@@ -248,7 +248,6 @@ func spliceOverlay(bg, overlay string, w, h int) string {
 	return spliceOverlayAt(bg, overlay, sx, sy)
 }
 
-
 func dimAll(s string) string {
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {

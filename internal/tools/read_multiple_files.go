@@ -32,7 +32,7 @@ type ReadMultipleFiles struct{}
 
 func NewReadMultipleFiles() *ReadMultipleFiles { return &ReadMultipleFiles{} }
 
-func (*ReadMultipleFiles) Name() string               { return "read_multiple_files" }
+func (*ReadMultipleFiles) Name() string                 { return "read_multiple_files" }
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
 func (*ReadMultipleFiles) Description() string {
 	return "Read up to 20 files in a single call. Each file's content is returned " +

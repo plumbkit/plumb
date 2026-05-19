@@ -45,7 +45,7 @@ type ListDirectory struct{ ws WorkspaceFn }
 
 func NewListDirectory(ws WorkspaceFn) *ListDirectory { return &ListDirectory{ws: ws} }
 
-func (*ListDirectory) Name() string               { return "list_directory" }
+func (*ListDirectory) Name() string                 { return "list_directory" }
 func (*ListDirectory) InputSchema() json.RawMessage { return listDirectorySchema }
 func (*ListDirectory) Description() string {
 	return "List the immediate contents of a directory with [FILE] and [DIR] type prefixes, " +
@@ -205,4 +205,3 @@ func resolvePath(path string, ws WorkspaceFn) string {
 	}
 	return filepath.Join(base, p)
 }
-

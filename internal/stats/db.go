@@ -17,8 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
 	_ "modernc.org/sqlite"
+
+	"github.com/golimpio/plumb/internal/config"
 )
 
 // schema is the current fresh database shape. The global stats database uses

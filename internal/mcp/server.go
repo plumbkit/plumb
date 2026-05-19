@@ -404,9 +404,10 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		caps["prompts"] = map[string]any{}
 	}
 	instructions := s.info.Instructions
-	if instructions == "" {
+	switch instructions {
+	case "":
 		instructions = DefaultInstructions
-	} else if instructions == "-" {
+	case "-":
 		instructions = ""
 	}
 	res := result{

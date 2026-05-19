@@ -40,17 +40,17 @@ var getDefinitionSchema = json.RawMessage(`{
 // GetDefinition returns the definition location(s) for a symbol at a position
 // or by name.
 type GetDefinition struct {
-	client lsp.LSPClient
+	client lsp.Client
 	cache  *cache.Cache
 	ttl    time.Duration
 }
 
 // NewGetDefinition creates a GetDefinition tool. Pass a nil cache to disable caching.
-func NewGetDefinition(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *GetDefinition {
+func NewGetDefinition(client lsp.Client, c *cache.Cache, ttl time.Duration) *GetDefinition {
 	return &GetDefinition{client: client, cache: c, ttl: ttl}
 }
 
-func (t *GetDefinition) Name() string               { return "get_definition" }
+func (t *GetDefinition) Name() string                 { return "get_definition" }
 func (t *GetDefinition) InputSchema() json.RawMessage { return getDefinitionSchema }
 func (t *GetDefinition) Description() string {
 	return "Returns the SOURCE LOCATION (file path + line number) of where a symbol is defined. " +

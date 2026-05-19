@@ -53,7 +53,7 @@ type Git struct{}
 
 func NewGit() *Git { return &Git{} }
 
-func (t *Git) Name() string             { return "git" }
+func (t *Git) Name() string                 { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
 	return "Safe read-only git surface — only inspection subcommands are accepted; destructive operations (commit, push, reset, rebase, checkout, etc.) are rejected, so this is safe to call without confirmation. " +

@@ -15,10 +15,10 @@ import (
 // computes all call-site updates safely (across files, respecting scope and
 // types). Plumb applies the resulting WorkspaceEdit atomically to disk.
 type RenameSymbol struct {
-	client lsp.LSPClient
+	client lsp.Client
 }
 
-func NewRenameSymbol(client lsp.LSPClient) *RenameSymbol { return &RenameSymbol{client: client} }
+func NewRenameSymbol(client lsp.Client) *RenameSymbol { return &RenameSymbol{client: client} }
 
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 

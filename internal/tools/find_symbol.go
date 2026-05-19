@@ -30,17 +30,17 @@ var findSymbolSchema = json.RawMessage(`{
 // FindSymbol searches for symbols by name within a single document. For
 // workspace-wide search, use workspace_symbols.
 type FindSymbol struct {
-	client lsp.LSPClient
+	client lsp.Client
 	cache  *cache.Cache
 	ttl    time.Duration
 }
 
 // NewFindSymbol creates a FindSymbol tool. Pass a nil cache to disable caching.
-func NewFindSymbol(client lsp.LSPClient, c *cache.Cache, ttl time.Duration) *FindSymbol {
+func NewFindSymbol(client lsp.Client, c *cache.Cache, ttl time.Duration) *FindSymbol {
 	return &FindSymbol{client: client, cache: c, ttl: ttl}
 }
 
-func (t *FindSymbol) Name() string             { return "find_symbol" }
+func (t *FindSymbol) Name() string                 { return "find_symbol" }
 func (t *FindSymbol) InputSchema() json.RawMessage { return findSymbolSchema }
 func (t *FindSymbol) Description() string {
 	return "Search for symbols (functions, types, variables, classes) by name within a single document. Returns names, kinds, and line numbers. Matching is case-insensitive substring against the symbol name. For workspace-wide search, use workspace_symbols instead."

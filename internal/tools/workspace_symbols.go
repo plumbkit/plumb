@@ -25,7 +25,7 @@ var workspaceSymbolsSchema = json.RawMessage(`{
 
 // WorkspaceSymbols searches for symbols by name across the entire workspace.
 type WorkspaceSymbols struct {
-	client lsp.LSPClient
+	client lsp.Client
 	cache  *cache.Cache
 	ttl    time.Duration
 	ws     WorkspaceFn // used to filter out dependency-cache hits
@@ -33,11 +33,11 @@ type WorkspaceSymbols struct {
 
 // NewWorkspaceSymbols creates a WorkspaceSymbols tool. ws may be nil, in
 // which case no workspace-scoping filter is applied.
-func NewWorkspaceSymbols(client lsp.LSPClient, c *cache.Cache, ttl time.Duration, ws WorkspaceFn) *WorkspaceSymbols {
+func NewWorkspaceSymbols(client lsp.Client, c *cache.Cache, ttl time.Duration, ws WorkspaceFn) *WorkspaceSymbols {
 	return &WorkspaceSymbols{client: client, cache: c, ttl: ttl, ws: ws}
 }
 
-func (t *WorkspaceSymbols) Name() string             { return "workspace_symbols" }
+func (t *WorkspaceSymbols) Name() string                 { return "workspace_symbols" }
 func (t *WorkspaceSymbols) InputSchema() json.RawMessage { return workspaceSymbolsSchema }
 func (t *WorkspaceSymbols) Description() string {
 	return "No native Claude Code equivalent. " +

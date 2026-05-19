@@ -74,7 +74,7 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 		if startOff > endOff {
 			return fmt.Errorf("edit start after end")
 		}
-		var buf []byte
+		buf := make([]byte, 0, startOff+len(e.NewText)+(len(data)-endOff))
 		buf = append(buf, data[:startOff]...)
 		buf = append(buf, []byte(e.NewText)...)
 		buf = append(buf, data[endOff:]...)

@@ -182,7 +182,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	})
 
 	addSection("cache", [][]string{
-		{"ttl", projectCfg.Cache.TTL.Duration.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL)},
+		{"ttl", projectCfg.Cache.TTL.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL)},
 		{"max_size", fmt.Sprintf("%d", projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
 	})
 

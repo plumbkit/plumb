@@ -118,7 +118,7 @@ func TestConn_ContextCancel(t *testing.T) {
 	cr, cw := io.Pipe()
 	defer pw.Close()
 	defer cr.Close()
-	go io.Copy(io.Discard, cr) // drain requests; never sends a response
+	go func() { _, _ = io.Copy(io.Discard, cr) }() // drain requests; never sends a response
 
 	conn := NewConn(pr, cw)
 	defer conn.Close()

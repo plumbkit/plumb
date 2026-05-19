@@ -36,15 +36,15 @@ var typeHierarchySchema = json.RawMessage(`{
 
 // TypeHierarchy implements the type_hierarchy MCP tool.
 type TypeHierarchy struct {
-	client lsp.LSPClient
+	client lsp.Client
 }
 
 // NewTypeHierarchy creates a TypeHierarchy tool.
-func NewTypeHierarchy(client lsp.LSPClient) *TypeHierarchy {
+func NewTypeHierarchy(client lsp.Client) *TypeHierarchy {
 	return &TypeHierarchy{client: client}
 }
 
-func (t *TypeHierarchy) Name() string             { return "type_hierarchy" }
+func (t *TypeHierarchy) Name() string                 { return "type_hierarchy" }
 func (t *TypeHierarchy) InputSchema() json.RawMessage { return typeHierarchySchema }
 func (t *TypeHierarchy) Description() string {
 	return "No native Claude Code equivalent. " +

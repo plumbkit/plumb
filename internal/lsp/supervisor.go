@@ -114,7 +114,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 }
 
 // Stop cleanly stops the supervisor loop.  The supervised process is not
-// explicitly killed here — callers should call LSPClient.Shutdown + Exit first.
+// explicitly killed here — callers should call Client.Shutdown + Exit first.
 func (s *Supervisor) Stop() {
 	s.mu.RLock()
 	cancel := s.cancel
