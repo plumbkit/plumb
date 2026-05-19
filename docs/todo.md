@@ -4,7 +4,7 @@ Canonical index of known gaps, deferred work, and subtle footguns. Each entry ca
 
 Last reviewed against: **0.6.4** (2026-05-18).
 
-When you complete a TODO entry: delete its section, add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
+When you complete a TODO entry: **move its section to `docs/todo-to-review.md`** (do not just delete it), add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
 ## Organisation
 
@@ -366,7 +366,7 @@ Refinements to existing behaviour. No new contracts, no new infrastructure — j
 
 **Priority:** medium-high — first call shapes the entire session quality.
 **Effort:** Small. Additive changes to `session_start.go` response text; no new infrastructure.
-**Status:** Partial. Item 2 (Claude Code tool guidance) is done. Items 1, 3, 4 remain.
+**Status:** Partial. Items 1, 3, 4 remain. (Item 2 — Claude Code tool guidance — shipped in 0.6.5; see `docs/todo-to-review.md`.)
 
 **The problem.**
 
@@ -395,7 +395,7 @@ Refinements to existing behaviour. No new contracts, no new infrastructure — j
 
 **Priority:** medium — validated first version, but still needs cross-platform polish.
 **Effort:** Small–medium.
-**Status:** `rootURI` is now Windows-safe; CI jdtls integration step is wired; write-tool `DidOpen`/`DidClose` implemented. Remaining: cold-start tuning, binary naming docs, doctor version-check coverage.
+**Status:** Remaining: cold-start tuning, binary naming docs, doctor version-check coverage. (`rootURI` Windows safety, CI integration step, and write-tool `DidOpen`/`DidClose` shipped in 0.6.5; see `docs/todo-to-review.md`.)
 
 **Cross-platform note:** current real-binary validation has only been exercised on macOS. Linux and Windows coverage are expected pre-v1 hardening work, not a blocker for the first validated Java adapter version.
 
@@ -559,9 +559,11 @@ Items raised in past reviews and decided against (or deferred deliberately). Lis
 
 ## How to use this file
 
+> **IMPORTANT — completed item workflow:** when a todo is done, **move its section to `docs/todo-to-review.md`** rather than deleting it. This preserves the context and rationale for future reference. Add a `CHANGELOG.md` entry in the same commit.
+
 1. **Pick up an item:** read its section in full. The acceptance criteria (Definition of done) and the Where to start pointers should be enough to begin without re-deriving the problem.
 2. **While working:** if you find a new gap, add it to this file in the same commit as your fix.
-3. **When you finish:** delete the section from this file, add the corresponding entry to `CHANGELOG.md` under the version that ships the fix, and commit both changes together.
+3. **When you finish:** move the section from this file to `docs/todo-to-review.md`, add the corresponding entry to `CHANGELOG.md` under the version that ships the fix, and commit all three changes together.
 4. **If you can't finish:** leave the section in place but add a short "Status:" note describing how far you got and what's blocking, so the next person doesn't start from scratch.
 
 The cost of *not* capturing a gap is high — months later, the gap turns into a mystery bug or a confused new contributor. The cost of writing it down is one paragraph. Always favour capturing.
