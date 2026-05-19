@@ -316,7 +316,7 @@ func checkJavaRuntime() checkResult {
 			detail: contractConfigPath(path) + "  (version unknown)",
 		}
 	}
-	firstLine := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	firstLine, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
 	major := parseJavaMajorVersion(firstLine)
 	detail := contractConfigPath(path) + "\n" + firstLine
 	if major > 0 && major < 21 {
@@ -333,7 +333,7 @@ func checkJavaRuntime() checkResult {
 // parseJavaMajorVersion extracts the major version integer from a java --version
 // first line, e.g. "openjdk 21.0.3 ..." → 21, "java 17.0.1 ..." → 17.
 func parseJavaMajorVersion(versionLine string) int {
-	for _, f := range strings.Fields(versionLine) {
+	for f := range strings.FieldsSeq(versionLine) {
 		f = strings.Trim(f, "\"")
 		// Old-style "1.8.0_292" — major is the component after "1."
 		if strings.HasPrefix(f, "1.") && strings.Count(f, ".") >= 2 {

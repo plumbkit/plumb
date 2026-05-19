@@ -101,15 +101,13 @@ func TestConn_ConcurrentCalls(t *testing.T) {
 	}()
 
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			var got int64
 			if err := conn.Call(context.Background(), "echo", nil, &got); err != nil {
 				t.Errorf("Call error: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

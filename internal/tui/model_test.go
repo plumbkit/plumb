@@ -753,10 +753,10 @@ func TestCPUSparklineUsesFixedPercentScale(t *testing.T) {
 }
 
 func TestTokenSavingsBar(t *testing.T) {
-	if filled, unfilled := tokenSavingsBar(913000, 16); filled+unfilled != "█████████░░░░░░░" {
+	if filled, unfilled := tokenSavingsBar(913000, 12); filled != "■■■■■■■" || unfilled != "■■■■■" {
 		t.Fatalf("tokenSavingsBar = %q+%q, want sample shape", filled, unfilled)
 	}
-	if filled, unfilled := tokenSavingsBar(0, 4); filled+unfilled != "░░░░" {
+	if filled, unfilled := tokenSavingsBar(0, 4); filled != "" || unfilled != "■■■■" {
 		t.Fatalf("tokenSavingsBar(0) = %q+%q, want empty bar", filled, unfilled)
 	}
 }

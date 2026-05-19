@@ -30,7 +30,7 @@ func setupFindTree(t *testing.T) string {
 
 func TestFindFiles_GlobPattern(t *testing.T) {
 	dir := setupFindTree(t)
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "*_test.go", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
@@ -47,7 +47,7 @@ func TestFindFiles_GlobPattern(t *testing.T) {
 
 func TestFindFiles_RespectsGitignore(t *testing.T) {
 	dir := setupFindTree(t)
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "*.go", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
@@ -61,7 +61,7 @@ func TestFindFiles_RespectsGitignore(t *testing.T) {
 
 func TestFindFiles_RegexMode(t *testing.T) {
 	dir := setupFindTree(t)
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": `.*_test\.go$`, "path": dir, "use_regex": true})
 	out, err := tool.Execute(context.Background(), args)
@@ -85,7 +85,7 @@ func TestFindFiles_ExtensionFilter(t *testing.T) {
 	must(os.WriteFile(filepath.Join(dir, "b.ts"), []byte("x"), 0o644))
 	must(os.WriteFile(filepath.Join(dir, "c.go"), []byte("x"), 0o644))
 
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 	args, _ := json.Marshal(map[string]any{"pattern": "*", "path": dir, "extension": "go"})
 	out, err := tool.Execute(context.Background(), args)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestFindFiles_TypeDir(t *testing.T) {
 	must(os.MkdirAll(filepath.Join(dir, "mydir"), 0o755))
 	must(os.WriteFile(filepath.Join(dir, "myfile"), []byte("x"), 0o644))
 
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 	args, _ := json.Marshal(map[string]any{"pattern": "*", "path": dir, "type": "dir"})
 	out, err := tool.Execute(context.Background(), args)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestFindFiles_NoMatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "*.rs", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
@@ -146,7 +146,7 @@ func TestFindFiles_CancelledContextReturnsError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -179,7 +179,7 @@ func TestFindFiles_GlobPrunesSiblingDirs(t *testing.T) {
 	mustWrite(filepath.Join(dir, "skipme", "c.go"))
 	mustWrite(filepath.Join(dir, "skipme", "deep", "d.go"))
 
-	tool := NewFindFiles()
+	tool := NewFindFiles(nil)
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "wanted/**/*.go",
 		"path":    dir,

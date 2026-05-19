@@ -151,9 +151,9 @@ func runStats(_ *cobra.Command, _ []string) error {
 		wStatus = 8  // "Status" (6) padded to 8; ✓/✗ centred within
 		wMs     = 3  // duration digits min width
 	)
-	wWhen := 8  // "When"
-	wTool := 4  // "Tool"
-	wName := 7  // "Name" (session human name)
+	wWhen := 8 // "When"
+	wTool := 4 // "Tool"
+	wName := 7 // "Name" (session human name)
 	for _, c := range recent {
 		if l := len(humanAge(c.CalledAt)); l > wWhen {
 			wWhen = l
@@ -187,10 +187,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	if w, _, err := term.GetSize(uintptr(os.Stdout.Fd())); err == nil && w > 0 {
 		termWidth = w
 	}
-	errMaxWidth := termWidth - wWhen - 2
-	if errMaxWidth < 40 {
-		errMaxWidth = 40
-	}
+	errMaxWidth := max(termWidth-wWhen-2, 40)
 
 	for _, c := range recent {
 		ok := tui.OkStyle.Render("✓")

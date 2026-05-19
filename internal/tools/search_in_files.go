@@ -87,9 +87,9 @@ var searchInFilesSchema = json.RawMessage(`{
 }`)
 
 // SearchInFiles implements grep-like search across workspace files.
-type SearchInFiles struct{}
+type SearchInFiles struct{ ws WorkspaceFn }
 
-func NewSearchInFiles() *SearchInFiles { return &SearchInFiles{} }
+func NewSearchInFiles(ws WorkspaceFn) *SearchInFiles { return &SearchInFiles{ws: ws} }
 
 func (t *SearchInFiles) Name() string                 { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
@@ -136,14 +136,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 
 	// Resolve search root.
-	root := strings.TrimPrefix(a.Path, "file://")
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("search_in_files: getting cwd: %w", err)
-		}
-		root = cwd
-	}
+	root := resolvePath(a.Path, t.ws)
 	info, err := os.Stat(root)
 	if err != nil {
 		return "", fmt.Errorf("search_in_files: path %q: %w", root, err)

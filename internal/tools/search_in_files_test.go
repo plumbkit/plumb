@@ -22,7 +22,7 @@ func TestSearchInFiles_Basic(t *testing.T) {
 	write("b.go", "package main\n\nfunc world() {}\n")
 	write("c.txt", "hello world\n")
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "func hello", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
@@ -48,7 +48,7 @@ func TestSearchInFiles_GlobFilter(t *testing.T) {
 	write("main.go", "hello from go\n")
 	write("readme.txt", "hello from txt\n")
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "hello", "path": dir, "glob": "*.go"})
 	out, err := tool.Execute(context.Background(), args)
@@ -68,7 +68,7 @@ func TestSearchInFiles_SmartCase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "f.go"), []byte("Hello World\nhello world\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	// Lowercase pattern → case-insensitive → both lines match.
 	args, _ := json.Marshal(map[string]any{"pattern": "hello", "path": dir})
@@ -94,7 +94,7 @@ func TestSearchInFiles_ContextLines(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "f.go"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "TARGET", "path": dir, "context_lines": 1})
 	out, err := tool.Execute(context.Background(), args)
@@ -120,7 +120,7 @@ func TestSearchInFiles_RespectsGitignore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("vendor/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "needle", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
@@ -140,7 +140,7 @@ func TestSearchInFiles_NoMatch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "f.go"), []byte("nothing here\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "xyzzy_not_found", "path": dir})
 	out, err := tool.Execute(context.Background(), args)
@@ -154,7 +154,7 @@ func TestSearchInFiles_NoMatch(t *testing.T) {
 
 func TestSearchInFiles_InvalidRegex(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{"pattern": "[invalid", "path": dir})
 	_, err := tool.Execute(context.Background(), args)
@@ -179,7 +179,7 @@ func TestSearchInFiles_MaxFileBytesSkipsLargeFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 	args, _ := json.Marshal(map[string]any{
 		"pattern":        "needle",
 		"path":           dir,
@@ -205,7 +205,7 @@ func TestSearchInFiles_MatchAfterOversizedLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "needle",
 		"path":    dir,
@@ -234,7 +234,7 @@ func TestSearchInFiles_ManyFiles_ParallelCorrectness(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 	args, _ := json.Marshal(map[string]any{
 		"pattern":     "MARKER",
 		"path":        dir,
@@ -275,7 +275,7 @@ func TestSearchInFiles_ExcludeSuppresesMatch(t *testing.T) {
 	mustWrite(filepath.Join(dir, "main.go"), "needle\n")
 	mustWrite(filepath.Join(dir, "vendor", "dep", "lib.go"), "needle in vendor\n")
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	// Without exclude: both files match.
 	args, _ := json.Marshal(map[string]any{"pattern": "needle", "path": dir})
@@ -318,7 +318,7 @@ func TestSearchInFiles_ExcludeByGlob(t *testing.T) {
 	write("main.go", "needle\n")
 	write("main.pb.go", "needle in generated\n")
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "needle",
@@ -359,7 +359,7 @@ func TestSearchInFiles_GlobPrunesSiblingDirs(t *testing.T) {
 	mustWrite(filepath.Join(dir, "skipme", "c.txt"), "MATCH but pruned\n")
 	mustWrite(filepath.Join(dir, "skipme", "deep", "d.txt"), "MATCH but pruned\n")
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 	args, _ := json.Marshal(map[string]any{
 		"pattern": "MATCH",
 		"path":    dir,
@@ -398,7 +398,7 @@ func BenchmarkSearchInFiles_WarmCall(b *testing.B) {
 			fmt.Sprintf("package p\n\nfunc F%d() {}\n// target marker\n", i))
 	}
 
-	tool := NewSearchInFiles()
+	tool := NewSearchInFiles(nil)
 	args, _ := json.Marshal(map[string]any{"pattern": "target marker", "path": dir})
 	ctx := context.Background()
 

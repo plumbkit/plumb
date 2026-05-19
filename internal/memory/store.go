@@ -234,7 +234,7 @@ func parseFrontmatterFull(data []byte) (name, description string, paths []string
 	if len(fm) == 0 {
 		return "", "", nil
 	}
-	for _, line := range strings.Split(string(fm), "\n") {
+	for line := range strings.SplitSeq(string(fm), "\n") {
 		line = strings.TrimSpace(line)
 		if k, v, ok := strings.Cut(line, ":"); ok {
 			v = strings.TrimSpace(v)
@@ -274,9 +274,9 @@ func splitFrontmatter(data []byte) (delim, fm, body []byte) {
 		return nil, nil, data
 	}
 	rest := data[4:]
-	end := bytes.Index(rest, []byte("\n---\n"))
-	if end < 0 {
+	before, after, ok := bytes.Cut(rest, []byte("\n---\n"))
+	if !ok {
 		return nil, nil, data
 	}
-	return data[:4], rest[:end], rest[end+5:]
+	return data[:4], before, after
 }

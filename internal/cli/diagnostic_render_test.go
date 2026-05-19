@@ -59,7 +59,7 @@ func TestRenderCLIDiagnosticWrapsBody(t *testing.T) {
 	if got := strings.Count(out, "    ┊ "); got < 2 {
 		t.Fatalf("expected wrapped diagnostic body, got %d bordered lines:\n%s", got, out)
 	}
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
 		if strings.Contains(line, "┊") && !strings.HasPrefix(line, "    ┊ ") {
 			t.Fatalf("wrapped diagnostic continuation lost body alignment:\n%s", out)
 		}

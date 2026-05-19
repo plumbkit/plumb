@@ -432,20 +432,14 @@ func (d *DB) ActivityAt(now time.Time, window time.Duration, bucketCount int, fi
 	}
 	defer rows.Close()
 
-	bucketMs := window.Milliseconds() / int64(bucketCount)
-	if bucketMs < 1 {
-		bucketMs = 1
-	}
+	bucketMs := max(window.Milliseconds()/int64(bucketCount), 1)
 	startMs := start.UnixMilli()
 	for rows.Next() {
 		var calledMs int64
 		if err := rows.Scan(&calledMs); err != nil {
 			continue
 		}
-		idx := int((calledMs - startMs) / bucketMs)
-		if idx < 0 {
-			idx = 0
-		}
+		idx := max(int((calledMs-startMs)/bucketMs), 0)
 		if idx >= bucketCount {
 			idx = bucketCount - 1
 		}

@@ -40,10 +40,7 @@ func renderCLIDiagnostic(d cliDiagnostic, width int) string {
 		d.Title = d.Kind
 	}
 
-	contentWidth := width - len(diagnosticGutter) - 2
-	if contentWidth < 24 {
-		contentWidth = 24
-	}
+	contentWidth := max(width-len(diagnosticGutter)-2, 24)
 
 	title := diagnosticTitle(d)
 	lines := []string{title}
@@ -88,8 +85,8 @@ func diagnosticBorderedLines(text string, width int) []string {
 	rawLines := strings.Split(wrapped, "\n")
 	lines := make([]string, 0, len(rawLines))
 	for _, line := range rawLines {
-		if strings.HasPrefix(line, "  ") {
-			lines = append(lines, border+"  "+tui.HintStyle.Render(strings.TrimPrefix(line, "  ")))
+		if after, ok := strings.CutPrefix(line, "  "); ok {
+			lines = append(lines, border+"  "+tui.HintStyle.Render(after))
 			continue
 		}
 		lines = append(lines, border+" "+tui.MutedStyle.Render(line))

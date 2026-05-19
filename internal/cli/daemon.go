@@ -36,6 +36,13 @@ func recoverWorkspaceTxlog(folder string, scan func(string)) {
 	scan(folder)
 }
 
+// materialisePlumbDir creates <root>/.plumb/ if it does not already exist.
+// Called on the AutoAttachPersist path so the next session resolves via the
+// normal marker rather than going through synthetic attachment again.
+func materialisePlumbDir(root string) error {
+	return os.MkdirAll(filepath.Join(root, ".plumb"), 0o755)
+}
+
 func postWriteDiagWindow(edits config.EditsConfig) time.Duration {
 	if edits.PostWriteDiagnosticsMs == 0 {
 		return -1
@@ -356,8 +363,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewCallHierarchy(sessionProxy))
 	srv.Register(tools.NewTypeHierarchy(sessionProxy))
 	srv.Register(tools.NewDiagnostics(sessionInv))
-	srv.Register(tools.NewListFiles())
-	srv.Register(tools.NewListDirectory())
+	srv.Register(tools.NewListFiles(wsFn))
+	srv.Register(tools.NewListDirectory(wsFn))
 	readTracker := tools.NewReadTracker()
 	srv.Register(tools.NewReadFile(readTracker))
 	srv.Register(tools.NewReadSymbol(sessionProxy, sessionCache, ttl, readTracker))
@@ -464,8 +471,8 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewDeleteFile(writeDeps))
 	srv.Register(tools.NewRenameFile(writeDeps))
 	srv.Register(tools.NewTransactionApply(writeDeps))
-	srv.Register(tools.NewSearchInFiles())
-	srv.Register(tools.NewFindFiles())
+	srv.Register(tools.NewSearchInFiles(wsFn))
+	srv.Register(tools.NewFindFiles(wsFn))
 	srv.Register(tools.NewGit())
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace(writeDeps))
@@ -628,8 +635,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 			attachSynthetic(toolCtx, synthRoot)
 			if cfg.Workspace.AutoAttachPersist {
 				go func() {
-					plumbDir := filepath.Join(synthRoot, ".plumb")
-					if mkErr := os.MkdirAll(plumbDir, 0o755); mkErr != nil {
+					if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {
 						slog.Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
 						return
 					}

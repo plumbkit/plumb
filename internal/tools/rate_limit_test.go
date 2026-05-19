@@ -7,7 +7,7 @@ import (
 
 func TestRateLimiter_AllowsUpToLimit(t *testing.T) {
 	r := NewRateLimiter(3, time.Minute)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if !r.Allow() {
 			t.Fatalf("Allow #%d = false, want true", i+1)
 		}
@@ -36,7 +36,7 @@ func TestRateLimiter_RecoversAfterWindow(t *testing.T) {
 
 func TestRateLimiter_ZeroLimit_Unlimited(t *testing.T) {
 	r := NewRateLimiter(0, time.Minute)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if !r.Allow() {
 			t.Fatalf("Allow #%d on zero-limit limiter = false", i+1)
 		}

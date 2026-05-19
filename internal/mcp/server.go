@@ -255,9 +255,7 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 				wg.Wait()
 				return line.err
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				defer func() {
 					if r := recover(); r != nil {
 						slog.Error("mcp: handler panic", "err", r)
@@ -290,7 +288,7 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 						go safeRun("OnInit", func() { s.OnInit(ctx, requestFn) })
 					})
 				}
-			}()
+			})
 		}
 	}
 }
@@ -569,11 +567,11 @@ func extractID(prefix []byte) any {
 		return req.ID
 	}
 	const key = `"id"`
-	idx := bytes.Index(prefix, []byte(key))
-	if idx < 0 {
+	_, after, ok := bytes.Cut(prefix, []byte(key))
+	if !ok {
 		return nil
 	}
-	rest := prefix[idx+len(key):]
+	rest := after
 	colon := bytes.IndexByte(rest, ':')
 	if colon < 0 {
 		return nil

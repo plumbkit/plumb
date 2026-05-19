@@ -34,7 +34,7 @@ func makeTestTree(t *testing.T) string {
 
 func TestListFiles_AllFiles(t *testing.T) {
 	root := makeTestTree(t)
-	tool := tools.NewListFiles()
+	tool := tools.NewListFiles(nil)
 	raw, _ := json.Marshal(map[string]any{"root": root})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestListFiles_AllFiles(t *testing.T) {
 
 func TestListFiles_GoOnly(t *testing.T) {
 	root := makeTestTree(t)
-	tool := tools.NewListFiles()
+	tool := tools.NewListFiles(nil)
 	raw, _ := json.Marshal(map[string]any{"root": root, "pattern": "*.go"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestListFiles_GoOnly(t *testing.T) {
 
 func TestListFiles_MaxDepth(t *testing.T) {
 	root := makeTestTree(t)
-	tool := tools.NewListFiles()
+	tool := tools.NewListFiles(nil)
 	depth := 1
 	raw, _ := json.Marshal(map[string]any{"root": root, "max_depth": &depth})
 	out, err := tool.Execute(context.Background(), raw)
@@ -85,7 +85,7 @@ func TestListFiles_MaxDepth(t *testing.T) {
 
 func TestListFiles_IncludeHidden(t *testing.T) {
 	root := makeTestTree(t)
-	tool := tools.NewListFiles()
+	tool := tools.NewListFiles(nil)
 	raw, _ := json.Marshal(map[string]any{"root": root, "include_hidden": true})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestListFiles_IncludeHidden(t *testing.T) {
 }
 
 func TestListFiles_DefaultRoot(t *testing.T) {
-	tool := tools.NewListFiles()
+	tool := tools.NewListFiles(nil)
 	raw, _ := json.Marshal(map[string]any{"pattern": "*.go"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {

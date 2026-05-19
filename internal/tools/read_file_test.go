@@ -124,7 +124,7 @@ func TestReadFile_HeaderContainsSHA256(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	header := strings.SplitN(out, "\n", 2)[0]
+	header, _, _ := strings.Cut(out, "\n")
 	if !strings.Contains(header, "sha256=") {
 		t.Fatalf("header missing sha256 field: %q", header)
 	}
@@ -154,7 +154,7 @@ func TestReadFile_SHA256ConsistentWithFullContent(t *testing.T) {
 }
 
 func extractSHA(out string) string {
-	header := strings.SplitN(out, "\n", 2)[0]
+	header, _, _ := strings.Cut(out, "\n")
 	for field, rest, ok := strings.Cut(header, "sha256="); ok; field, rest, ok = strings.Cut(rest, "sha256=") {
 		_ = field
 		val, _, _ := strings.Cut(rest, " ")
@@ -198,7 +198,7 @@ func TestReadFile_HeaderIncludesIndentStyle(t *testing.T) {
 			}
 			// Header is the first line; it should contain both the mtime
 			// and the expected indent= field.
-			head := strings.SplitN(out, "\n", 2)[0]
+			head, _, _ := strings.Cut(out, "\n")
 			if !strings.HasPrefix(head, "# plumb-read mtime=") {
 				t.Fatalf("missing mtime in header: %q", head)
 			}

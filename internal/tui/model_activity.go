@@ -121,7 +121,7 @@ func (m Model) renderTokenSavingsBox(dimmed bool) []string {
 	}
 
 	const (
-		barWidth = 16
+		barWidth = 12
 	)
 
 	titleText := " Tokens Saved "
@@ -288,12 +288,10 @@ func tokenSavingsBar(tokens int64, width int) (string, string) {
 	}
 	filledBlocks = min(filledBlocks, width)
 
-	// Calculate the remaining visible width (number of character cells)
-	// lipgloss.Width correctly handles multi-byte runes like our blocks
-	filledStr := strings.Repeat("█", filledBlocks)
+	filledStr := strings.Repeat("■", filledBlocks)
 	unfilledLen := max(width-lipgloss.Width(filledStr), 0)
 
-	return filledStr, strings.Repeat("░", unfilledLen)
+	return filledStr, strings.Repeat("■", unfilledLen)
 }
 
 func formatActivityCalls(n int64) string {

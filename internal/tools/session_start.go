@@ -183,10 +183,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		defer db.Close()
 		if toolStats, err := db.Summary(stats.Filter{Workspace: ws}); err == nil && len(toolStats) > 0 {
 			sb.WriteString("## Most-used tools (this workspace)\n\n")
-			limit := 5
-			if len(toolStats) < limit {
-				limit = len(toolStats)
-			}
+			limit := min(len(toolStats), 5)
 			for _, s := range toolStats[:limit] {
 				fmt.Fprintf(&sb, "- %s: %d calls, avg %dms\n", s.Tool, s.Calls, int64(s.AvgMs))
 			}
@@ -195,7 +192,9 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 
 	// ── 7. Tool guidance (Claude Code only) ──────────────────────────────
-	if t.clientNameFn != nil && strings.EqualFold(t.clientNameFn(), "claude-code") {
+	// Match "claude-code" exactly or "claude-code/…" (version-qualified).
+	// A bare HasPrefix would incorrectly match "claude-codegen" etc.
+	if isClaudeCode(t.clientNameFn) {
 		sb.WriteString("## Tool guidance (Claude Code)\n\n")
 		sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
 		sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
@@ -344,4 +343,15 @@ func recentlyModifiedFiles(ws string, n int) []string {
 		out = append(out, rel)
 	}
 	return out
+}
+
+// isClaudeCode reports whether fn identifies the MCP client as Claude Code.
+// Matches "claude-code" exactly or "claude-code/<version>" — a bare HasPrefix
+// would falsely match names like "claude-codegen".
+func isClaudeCode(fn func() string) bool {
+	if fn == nil {
+		return false
+	}
+	n := strings.ToLower(fn())
+	return n == "claude-code" || strings.HasPrefix(n, "claude-code/")
 }

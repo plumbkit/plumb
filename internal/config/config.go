@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -199,9 +200,7 @@ func cloneLSPConfig(cfg LSPConfig) LSPConfig {
 	}
 	if cfg.Env != nil {
 		out.Env = make(map[string]string, len(cfg.Env))
-		for k, v := range cfg.Env {
-			out.Env[k] = v
-		}
+		maps.Copy(out.Env, cfg.Env)
 	}
 	return out
 }

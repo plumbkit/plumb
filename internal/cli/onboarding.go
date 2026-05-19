@@ -174,10 +174,10 @@ func readGitRemote(root string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(cfg), "\n") {
+	for line := range strings.SplitSeq(string(cfg), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "url = ") {
-			return strings.TrimPrefix(line, "url = ")
+		if after, ok := strings.CutPrefix(line, "url = "); ok {
+			return after
 		}
 	}
 	return ""

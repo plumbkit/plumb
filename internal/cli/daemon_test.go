@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -159,5 +160,76 @@ func TestDaemonScansTxlogSynchronouslyOnAttach(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("recoverWorkspaceTxlog did not return after txlog scan completed")
+	}
+}
+
+// TestAutoAttach_SynthesiseRootOnDetectFailure verifies that when pool.Detect
+// fails (no project marker) and AutoAttach is enabled, pool.SynthesiseRoot
+// returns the nearest .git ancestor — matching what OnBeforeTool would use.
+func TestAutoAttach_SynthesiseRootOnDetectFailure(t *testing.T) {
+	root := freshTempDir(t)
+	mustMkdir(t, filepath.Join(root, ".git"))
+	sub := filepath.Join(root, "pkg", "myapp")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+
+	// Detect must fail — there is no go.mod or pyproject.toml.
+	if _, _, err := pool.Detect(sub); err == nil {
+		t.Fatal("Detect: expected error for directory with no language marker, got nil")
+	}
+
+	// SynthesiseRoot must walk up to the .git-bearing ancestor.
+	got := pool.SynthesiseRoot(sub)
+	if got != root {
+		t.Errorf("SynthesiseRoot = %q, want %q (.git ancestor)", got, root)
+	}
+}
+
+// TestAutoAttach_SynthesiseRootNoGit verifies that when no .git exists anywhere
+// in the tree, SynthesiseRoot falls back to the seed directory itself.
+func TestAutoAttach_SynthesiseRootNoGit(t *testing.T) {
+	root := freshTempDir(t)
+	sub := filepath.Join(root, "a", "b", "c")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+	got := pool.SynthesiseRoot(sub)
+	if got != sub {
+		t.Errorf("SynthesiseRoot = %q, want seed %q", got, sub)
+	}
+}
+
+// TestAutoAttach_MaterialisePlumbDir verifies that materialisePlumbDir creates
+// <root>/.plumb/ and is idempotent (calling twice does not error).
+func TestAutoAttach_MaterialisePlumbDir(t *testing.T) {
+	root := freshTempDir(t)
+
+	if err := materialisePlumbDir(root); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	plumbDir := filepath.Join(root, ".plumb")
+	if info, err := os.Stat(plumbDir); err != nil || !info.IsDir() {
+		t.Fatalf(".plumb/ not created at %s", plumbDir)
+	}
+
+	// Idempotent — must not fail when the directory already exists.
+	if err := materialisePlumbDir(root); err != nil {
+		t.Fatalf("second call (idempotent): %v", err)
+	}
+}
+
+// TestAutoAttach_MaterialisePlumbDir_NestedRoot verifies creation works when
+// intermediate directories in the synthetic root path do not yet exist.
+func TestAutoAttach_MaterialisePlumbDir_NestedRoot(t *testing.T) {
+	root := freshTempDir(t)
+	nested := filepath.Join(root, "a", "b", "c")
+	// Do NOT create the nested directories — materialisePlumbDir must do it.
+	if err := materialisePlumbDir(nested); err != nil {
+		t.Fatalf("materialisePlumbDir: %v", err)
+	}
+	plumbDir := filepath.Join(nested, ".plumb")
+	if info, err := os.Stat(plumbDir); err != nil || !info.IsDir() {
+		t.Fatalf(".plumb/ not created under nested path %s", plumbDir)
 	}
 }

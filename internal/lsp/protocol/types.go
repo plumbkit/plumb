@@ -241,7 +241,7 @@ type ServerCapabilities struct {
 	DefinitionProvider      *BoolOrOptions           `json:"definitionProvider,omitempty"`
 	ReferencesProvider      *BoolOrOptions           `json:"referencesProvider,omitempty"`
 	DocumentSymbolProvider  *BoolOrOptions           `json:"documentSymbolProvider,omitempty"`
-	WorkspaceSymbolProvider *BoolOrOptions            `json:"workspaceSymbolProvider,omitempty"`
+	WorkspaceSymbolProvider *BoolOrOptions           `json:"workspaceSymbolProvider,omitempty"`
 	RenameProvider          json.RawMessage          `json:"renameProvider,omitempty"`
 }
 
@@ -284,16 +284,16 @@ func DefaultClientCapabilities() ClientCapabilities {
 			DocumentSymbol:  &DocumentSymbolClientCapabilities{HierarchicalDocumentSymbolSupport: true},
 		},
 		Workspace: WorkspaceClientCapabilities{
-			Symbol:                 &WorkspaceSymbolClientCapabilities{},
-			DidChangeWatchedFiles:  &DidChangeWatchedFilesClientCapabilities{DynamicRegistration: true},
+			Symbol:                &WorkspaceSymbolClientCapabilities{},
+			DidChangeWatchedFiles: &DidChangeWatchedFilesClientCapabilities{DynamicRegistration: true},
 		},
 	}
 }
 
 // ClientCapabilities describes what the client supports.
 type ClientCapabilities struct {
-	TextDocument TextDocumentClientCapabilities `json:"textDocument,omitempty"`
-	Workspace    WorkspaceClientCapabilities    `json:"workspace,omitempty"`
+	TextDocument TextDocumentClientCapabilities `json:"textDocument"`
+	Workspace    WorkspaceClientCapabilities    `json:"workspace"`
 }
 
 // TextDocumentClientCapabilities describes client text-document capabilities.
@@ -314,8 +314,8 @@ type DocumentSymbolClientCapabilities struct {
 
 // WorkspaceClientCapabilities describes workspace-level client capabilities.
 type WorkspaceClientCapabilities struct {
-	Symbol                *WorkspaceSymbolClientCapabilities         `json:"symbol,omitempty"`
-	DidChangeWatchedFiles *DidChangeWatchedFilesClientCapabilities   `json:"didChangeWatchedFiles,omitempty"`
+	Symbol                *WorkspaceSymbolClientCapabilities       `json:"symbol,omitempty"`
+	DidChangeWatchedFiles *DidChangeWatchedFilesClientCapabilities `json:"didChangeWatchedFiles,omitempty"`
 }
 
 // WorkspaceSymbolClientCapabilities describes workspace symbol client capabilities.
@@ -384,8 +384,8 @@ type DidOpenTextDocumentParams struct {
 
 // DidChangeTextDocumentParams is the payload for textDocument/didChange.
 type DidChangeTextDocumentParams struct {
-	TextDocument   VersionedTextDocumentIdentifier   `json:"textDocument"`
-	ContentChanges []TextDocumentContentChangeEvent  `json:"contentChanges"`
+	TextDocument   VersionedTextDocumentIdentifier  `json:"textDocument"`
+	ContentChanges []TextDocumentContentChangeEvent `json:"contentChanges"`
 }
 
 // DidCloseTextDocumentParams is the payload for textDocument/didClose.
@@ -470,12 +470,12 @@ type RenameParams struct {
 
 // CallHierarchyItem represents a call-hierarchy node (function/method).
 type CallHierarchyItem struct {
-	Name           string   `json:"name"`
+	Name           string     `json:"name"`
 	Kind           SymbolKind `json:"kind"`
-	URI            string   `json:"uri"`
-	Range          Range    `json:"range"`
-	SelectionRange Range    `json:"selectionRange"`
-	Detail         string   `json:"detail,omitempty"`
+	URI            string     `json:"uri"`
+	Range          Range      `json:"range"`
+	SelectionRange Range      `json:"selectionRange"`
+	Detail         string     `json:"detail,omitempty"`
 }
 
 // PrepareCallHierarchyParams is the payload for textDocument/prepareCallHierarchy.
@@ -510,12 +510,12 @@ type CallHierarchyOutgoingCall struct {
 
 // TypeHierarchyItem represents a type-hierarchy node (class/interface/struct).
 type TypeHierarchyItem struct {
-	Name           string   `json:"name"`
+	Name           string     `json:"name"`
 	Kind           SymbolKind `json:"kind"`
-	URI            string   `json:"uri"`
-	Range          Range    `json:"range"`
-	SelectionRange Range    `json:"selectionRange"`
-	Detail         string   `json:"detail,omitempty"`
+	URI            string     `json:"uri"`
+	Range          Range      `json:"range"`
+	SelectionRange Range      `json:"selectionRange"`
+	Detail         string     `json:"detail,omitempty"`
 }
 
 // PrepareTypeHierarchyParams is the payload for textDocument/prepareTypeHierarchy.

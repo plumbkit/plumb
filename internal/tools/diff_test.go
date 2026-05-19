@@ -35,7 +35,7 @@ func TestUnifiedDiff_PureAddition(t *testing.T) {
 		t.Errorf("diff missing +c:\n%s", d)
 	}
 	// Check that no hunk lines start with '-' (the header "---" is expected).
-	for _, line := range strings.Split(d, "\n") {
+	for line := range strings.SplitSeq(d, "\n") {
 		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
 			t.Errorf("diff should have no deletions, found: %q\n%s", line, d)
 		}

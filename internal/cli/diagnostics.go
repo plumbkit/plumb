@@ -104,7 +104,7 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	}
 
 	var goFiles []string
-	for _, line := range strings.Split(listOut, "\n") {
+	for line := range strings.SplitSeq(listOut, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") || strings.HasPrefix(line, "(") {
 			continue
@@ -149,7 +149,7 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	summary := fmt.Sprintf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked",
 		len(goFiles), totalClean, totalIssues, totalUntracked)
 	fmt.Println(tui.ItemStyle.Render(summary))
-	
+
 	if totalIssues > 0 {
 		fmt.Println()
 		for _, p := range perFile {
@@ -177,13 +177,13 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 			tui.ItemStyle.Bold(true).Render("Note:"),
 			tui.MutedStyle.Render("↳ Run a tool that touches each (or open in your editor) to force analysis."),
 		)
-		
+
 		noteBox := lipgloss.NewStyle().
 			Border(ContextBorder, false, false, false, true).
 			BorderForeground(tui.SepStyle.GetForeground()).
 			PaddingLeft(1).
 			Render(noteStr)
-			
+
 		fmt.Println(noteBox)
 	}
 	return nil
@@ -201,7 +201,7 @@ func styleDiagnostics(raw string) string {
 		if trimmed == "" {
 			continue
 		}
-		
+
 		// If it's a file path
 		if strings.HasSuffix(trimmed, ".go") {
 			contracted := contractSessionPath(trimmed)
@@ -216,7 +216,7 @@ func styleDiagnostics(raw string) string {
 				sev := parts[0]
 				pos := parts[1]
 				msg := strings.Join(parts[2:], " ")
-				
+
 				var style lipgloss.Style
 				switch sev {
 				case "ERROR":
@@ -226,10 +226,10 @@ func styleDiagnostics(raw string) string {
 				default:
 					style = tui.MutedStyle
 				}
-				
-				out = append(out, fmt.Sprintf("  %s %s  %s", 
-					style.Width(8).Render(sev), 
-					tui.MutedStyle.Render(pos), 
+
+				out = append(out, fmt.Sprintf("  %s %s  %s",
+					style.Width(8).Render(sev),
+					tui.MutedStyle.Render(pos),
 					msg))
 				continue
 			}
@@ -250,7 +250,7 @@ func printDiagHeader(workspace string) {
 			match = &sessions[i]
 		}
 	}
-	
+
 	ctxStr := contractSessionPath(workspace)
 	if match != nil {
 		ctxStr += fmt.Sprintf("\nsession %s", match.ID)

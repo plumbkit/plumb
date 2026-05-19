@@ -41,16 +41,16 @@ var listDirectorySchema = json.RawMessage(`{
 // find_files for recursive traversal.
 //
 // Concurrency: Execute is safe for concurrent use.
-type ListDirectory struct{}
+type ListDirectory struct{ ws WorkspaceFn }
 
-func NewListDirectory() *ListDirectory { return &ListDirectory{} }
+func NewListDirectory(ws WorkspaceFn) *ListDirectory { return &ListDirectory{ws: ws} }
 
 func (*ListDirectory) Name() string               { return "list_directory" }
 func (*ListDirectory) InputSchema() json.RawMessage { return listDirectorySchema }
 func (*ListDirectory) Description() string {
 	return "List the immediate contents of a directory with [FILE] and [DIR] type prefixes, " +
 		"file sizes, and last-modified times. Non-recursive — shows one level only. " +
-		"Accepts an absolute path or file:// URI. " +
+		"Accepts an absolute path, file:// URI, or workspace-relative path. " +
 		"Use list_files or find_files for recursive traversal."
 }
 
@@ -77,7 +77,7 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 		return "", fmt.Errorf("list_directory: path is required")
 	}
 
-	dir := strings.TrimPrefix(a.Path, "file://")
+	dir := resolvePath(a.Path, t.ws)
 
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -183,5 +183,26 @@ func plural(n int, singular, pluralSuffix string) string {
 		return singular
 	}
 	return pluralSuffix
+}
+
+// resolvePath resolves a path argument for filesystem tools. Strips a leading
+// file:// scheme, then anchors relative (or empty) paths to the workspace root
+// returned by ws. Falls back to os.Getwd() when ws is nil or unresolved.
+func resolvePath(path string, ws WorkspaceFn) string {
+	p := strings.TrimPrefix(path, "file://")
+	if filepath.IsAbs(p) {
+		return p
+	}
+	base := ""
+	if ws != nil {
+		base = ws()
+	}
+	if base == "" {
+		base, _ = os.Getwd()
+	}
+	if p == "" {
+		return base
+	}
+	return filepath.Join(base, p)
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -46,9 +45,9 @@ var excludedDirs = map[string]bool{
 // ListFiles walks a directory tree and returns matching file paths.
 //
 // Concurrency: Execute is safe for concurrent use.
-type ListFiles struct{}
+type ListFiles struct{ ws WorkspaceFn }
 
-func NewListFiles() *ListFiles { return &ListFiles{} }
+func NewListFiles(ws WorkspaceFn) *ListFiles { return &ListFiles{ws: ws} }
 
 func (t *ListFiles) Name() string             { return "list_files" }
 func (t *ListFiles) InputSchema() json.RawMessage { return listFilesSchema }
@@ -74,15 +73,7 @@ func (t *ListFiles) Execute(_ context.Context, raw json.RawMessage) (string, err
 		return "", fmt.Errorf("list_files: invalid arguments: %w", err)
 	}
 
-	root := a.Root
-	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("list_files: getting working directory: %w", err)
-		}
-	}
-	root = filepath.Clean(root)
+	root := filepath.Clean(resolvePath(a.Root, t.ws))
 
 	maxDepth := 8
 	if a.MaxDepth != nil {

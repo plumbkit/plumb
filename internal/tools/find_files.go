@@ -62,9 +62,9 @@ var findFilesSchema = json.RawMessage(`{
 }`)
 
 // FindFiles implements fd-like recursive file/directory finding.
-type FindFiles struct{}
+type FindFiles struct{ ws WorkspaceFn }
 
-func NewFindFiles() *FindFiles { return &FindFiles{} }
+func NewFindFiles(ws WorkspaceFn) *FindFiles { return &FindFiles{ws: ws} }
 
 func (t *FindFiles) Name() string                 { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
@@ -106,14 +106,7 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 
 	// Resolve search root.
-	root := strings.TrimPrefix(a.Path, "file://")
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("find_files: getting cwd: %w", err)
-		}
-		root = cwd
-	}
+	root := resolvePath(a.Path, t.ws)
 	if info, err := os.Stat(root); err != nil {
 		return "", fmt.Errorf("find_files: path %q: %w", root, err)
 	} else if !info.IsDir() {

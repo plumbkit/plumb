@@ -341,8 +341,8 @@ func readMessage(r *bufio.Reader) (wireMessage, error) {
 		if line == "" {
 			break
 		}
-		if strings.HasPrefix(line, "Content-Length: ") {
-			n, err := strconv.Atoi(strings.TrimPrefix(line, "Content-Length: "))
+		if after, ok := strings.CutPrefix(line, "Content-Length: "); ok {
+			n, err := strconv.Atoi(after)
 			if err != nil {
 				return wireMessage{}, fmt.Errorf("parsing Content-Length: %w", err)
 			}

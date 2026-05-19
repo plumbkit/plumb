@@ -236,9 +236,6 @@ func TestServer_OversizedRequestReturnsJSONRPCError(t *testing.T) {
 func paddedPingRequest(id, targetBytes int) string {
 	prefix := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"ping","params":{"padding":"`, id)
 	suffix := `"}}`
-	padLen := targetBytes - len(prefix) - len(suffix)
-	if padLen < 0 {
-		padLen = 0
-	}
+	padLen := max(targetBytes-len(prefix)-len(suffix), 0)
 	return prefix + strings.Repeat("x", padLen) + suffix
 }
