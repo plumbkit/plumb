@@ -10,6 +10,7 @@ import (
 
 	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/golimpio/plumb/internal/lsp/watcher"
 )
 
 // jdtlsInitOptions holds jdtls-specific initialisation options.
@@ -38,7 +39,8 @@ type jdtlsJavaSettings struct {
 //
 // Concurrency: all exported methods are safe for concurrent use.
 type Adapter struct {
-	conn jsonrpc.Caller
+	conn    jsonrpc.Caller
+	watcher watcher.Filter
 
 	capsMu sync.RWMutex
 	caps   *protocol.ServerCapabilities
@@ -61,11 +63,15 @@ func New(conn jsonrpc.Caller) *Adapter {
 }
 
 // handleServerRequest responds to server-initiated requests. jdtls sends
-// client/registerCapability to register file-watcher patterns; accepting is
-// required for DidChangeWatchedFiles notifications to reach the server.
-func (a *Adapter) handleServerRequest(_ context.Context, method string, _ json.RawMessage) (any, error) {
+// client/registerCapability to register file-watcher patterns; we accept and
+// record the glob patterns so DidChangeWatchedFiles can filter events.
+func (a *Adapter) handleServerRequest(_ context.Context, method string, params json.RawMessage) (any, error) {
 	switch method {
-	case protocol.MethodRegisterCapability, protocol.MethodUnregisterCapability:
+	case protocol.MethodRegisterCapability:
+		a.watcher.Register(params)
+		return nil, nil
+	case protocol.MethodUnregisterCapability:
+		a.watcher.Unregister(params)
 		return nil, nil
 	default:
 		return nil, &jsonrpc.MethodNotFoundError{Method: method}
@@ -156,7 +162,12 @@ func (a *Adapter) DidClose(ctx context.Context, params protocol.DidCloseTextDocu
 }
 
 // DidChangeWatchedFiles notifies jdtls that one or more files changed on disk.
+// Events are filtered to only those matching jdtls's registered glob patterns.
 func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
+	params.Changes = a.watcher.FilterEvents(params.Changes)
+	if len(params.Changes) == 0 {
+		return nil
+	}
 	if err := a.conn.Notify(ctx, protocol.MethodDidChangeWatchedFiles, params); err != nil {
 		return fmt.Errorf("jdtls didChangeWatchedFiles: %w", err)
 	}

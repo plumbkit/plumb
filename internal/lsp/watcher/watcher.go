@@ -1,0 +1,143 @@
+// Package watcher tracks file-watcher glob patterns registered by a language
+// server via client/registerCapability and filters DidChangeWatchedFiles events
+// to only those the server actually asked to watch.
+package watcher
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/golimpio/plumb/internal/lsp/protocol"
+)
+
+// Filter is a thread-safe store of file-watcher glob patterns registered by
+// the language server. Register and Unregister are called from the server-
+// request handler; FilterEvents is called inside DidChangeWatchedFiles.
+//
+// Concurrency: all methods are safe for concurrent use.
+type Filter struct {
+	mu   sync.RWMutex
+	byID map[string][]string // registration id → glob patterns
+}
+
+// Register parses a client/registerCapability params blob and stores any
+// workspace/didChangeWatchedFiles watcher patterns, keyed by registration ID.
+func (f *Filter) Register(raw json.RawMessage) {
+	var params struct {
+		Registrations []struct {
+			ID              string          `json:"id"`
+			Method          string          `json:"method"`
+			RegisterOptions json.RawMessage `json:"registerOptions"`
+		} `json:"registrations"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return
+	}
+	toAdd := make(map[string][]string)
+	for _, reg := range params.Registrations {
+		if reg.Method != protocol.MethodDidChangeWatchedFiles {
+			continue
+		}
+		var opts struct {
+			Watchers []struct {
+				GlobPattern string `json:"globPattern"`
+			} `json:"watchers"`
+		}
+		if err := json.Unmarshal(reg.RegisterOptions, &opts); err != nil {
+			continue
+		}
+		for _, w := range opts.Watchers {
+			if w.GlobPattern != "" {
+				toAdd[reg.ID] = append(toAdd[reg.ID], w.GlobPattern)
+			}
+		}
+	}
+	if len(toAdd) == 0 {
+		return
+	}
+	f.mu.Lock()
+	if f.byID == nil {
+		f.byID = make(map[string][]string)
+	}
+	for id, patterns := range toAdd {
+		f.byID[id] = append(f.byID[id], patterns...)
+	}
+	f.mu.Unlock()
+}
+
+// Unregister parses a client/unregisterCapability params blob and removes the
+// named registrations.
+func (f *Filter) Unregister(raw json.RawMessage) {
+	var params struct {
+		Unregistrations []struct {
+			ID string `json:"id"`
+		} `json:"unregistrations"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return
+	}
+	f.mu.Lock()
+	for _, u := range params.Unregistrations {
+		delete(f.byID, u.ID)
+	}
+	f.mu.Unlock()
+}
+
+// FilterEvents returns only the events whose file URI matches at least one
+// registered watcher pattern. When no patterns have been registered yet,
+// all events are returned unchanged (preserving the pre-registration
+// behaviour of sending everything).
+func (f *Filter) FilterEvents(events []protocol.FileEvent) []protocol.FileEvent {
+	f.mu.RLock()
+	patterns := allPatterns(f.byID)
+	f.mu.RUnlock()
+	if len(patterns) == 0 {
+		return events
+	}
+	out := make([]protocol.FileEvent, 0, len(events))
+	for _, ev := range events {
+		path := strings.TrimPrefix(ev.URI, "file://")
+		if matchesAny(patterns, path) {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func allPatterns(byID map[string][]string) []string {
+	var out []string
+	for _, ps := range byID {
+		out = append(out, ps...)
+	}
+	return out
+}
+
+// matchesAny reports whether filePath matches any of the given glob patterns.
+func matchesAny(patterns []string, filePath string) bool {
+	base := filepath.Base(filePath)
+	for _, p := range patterns {
+		if matchGlob(p, filePath, base) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchGlob matches an LSP glob pattern against a file path.
+// Handles the ubiquitous **/<suffix> form used by gopls, pyright, and jdtls.
+func matchGlob(pattern, filePath, base string) bool {
+	if after, ok := strings.CutPrefix(pattern, "**/"); ok {
+		// Fast path: match suffix against the file's base name.
+		if matched, _ := filepath.Match(after, base); matched {
+			return true
+		}
+		// Fallback: match suffix against the full path for patterns that
+		// include additional directory segments (e.g. **/src/*.go).
+		matched, _ := filepath.Match(after, filePath)
+		return matched
+	}
+	matched, _ := filepath.Match(pattern, filePath)
+	return matched
+}

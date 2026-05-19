@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -194,10 +195,10 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 	return sb.String(), nil
 }
 
-// openFileForRefs reads a file and sends textDocument/didOpen so gopls
-// builds its in-memory view before we query references. Best-effort: any
-// I/O or LSP error is ignored — the subsequent references call will just
-// see whatever gopls already had cached.
+// openFileForRefs reads a file and sends textDocument/didOpen so the language
+// server builds its in-memory view before we query references. Best-effort:
+// any I/O or LSP error is ignored — the subsequent references call will just
+// see whatever the server already had cached.
 func openFileForRefs(ctx context.Context, client lsp.LSPClient, uri string) {
 	path := strings.TrimPrefix(uri, "file://")
 	data, err := os.ReadFile(path)
@@ -207,11 +208,34 @@ func openFileForRefs(ctx context.Context, client lsp.LSPClient, uri string) {
 	_ = client.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
 			URI:        uri,
-			LanguageID: "go",
+			LanguageID: languageIDFromPath(path),
 			Version:    1,
 			Text:       string(data),
 		},
 	})
+}
+
+// languageIDFromPath returns the LSP language identifier for a file based on
+// its extension. Falls back to "plaintext" for unrecognised extensions.
+func languageIDFromPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		return "go"
+	case ".py", ".pyi":
+		return "python"
+	case ".java":
+		return "java"
+	case ".ts":
+		return "typescript"
+	case ".tsx":
+		return "typescriptreact"
+	case ".js", ".mjs", ".cjs":
+		return "javascript"
+	case ".jsx":
+		return "javascriptreact"
+	default:
+		return "plaintext"
+	}
 }
 
 // readFileLines opens path and returns the text of the requested lines (zero-based).
