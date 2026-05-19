@@ -8,6 +8,8 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
+> **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
+
 Current version: **0.6.4** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
