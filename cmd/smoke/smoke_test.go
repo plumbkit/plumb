@@ -197,7 +197,7 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 
 	// Stop the daemon we spawned at cleanup so it doesn't linger.
 	t.Cleanup(func() {
-		stopCmd := exec.Command(plumbBin, "stop")
+		stopCmd := exec.Command(plumbBin, "stop", "--force")
 		stopCmd.Env = env
 		stopCmd.Run() //nolint:errcheck
 	})

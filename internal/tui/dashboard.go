@@ -64,10 +64,7 @@ func (m *Model) refreshDashboard() {
 func (m Model) renderDashboard() string {
 	isOverlay := m.showHelp || m.sectionMenuOpen
 
-	bodyHeight := m.height - 6
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
+	bodyHeight := max(m.height-6, 1)
 	innerW := m.width - 2
 
 	var sb strings.Builder
@@ -88,29 +85,35 @@ func (m Model) renderDashboard() string {
 	// Top border integrated with logo bottom line (same pattern as Logs section).
 	titleText := " Dashboard "
 	logoBottom := strings.Split(LogoText, "\n")[3]
-	leftPartW := lipgloss.Width("╭─") + lipgloss.Width(titleText)
-	topFill := m.width - LogoWidth - leftPartW
-	if topFill < 0 {
-		topFill = 0
+
+	leftPart := "╭─" + titleText
+	leftPartW := lipgloss.Width(leftPart)
+	topFill := max(innerW-leftPartW+1, 0)
+
+	line := leftPart + strings.Repeat("─", topFill) + "╮"
+	// Ensure the line is at least m.width wide.
+	if m.width > len(line) {
+		line += strings.Repeat(" ", m.width-len(line))
 	}
+
+	// Overlay the logo bottom on the right edge of the frame.
+	logoW = lipgloss.Width(logoBottom)
+	if len(line) >= logoW {
+		line = line[:len(line)-logoW] + logoBottom
+	}
+
 	sb.WriteString(
-		sepStyle.Render("╭─") +
+		sepStyle.Render(line[:2]) +
 			PanelHeaderFadedStyle.Render(titleText) +
-			sepStyle.Render(strings.Repeat("─", topFill)) +
-			sepStyle.Render(logoBottom) + "\n")
+			sepStyle.Render(line[leftPartW:]) + "\n",
+	)
 
 	// Body: scrollable widget grid.
 	// contentW is 6 chars narrower than innerW to leave 3-space margins on each side.
-	contentW := innerW - 6
-	if contentW < 20 {
-		contentW = 20
-	}
+	contentW := max(innerW-6, 20)
 	allLines := m.dashboardBodyLines(contentW)
 
-	maxScroll := len(allLines) - bodyHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := max(len(allLines)-bodyHeight, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxDash = maxScroll
 	}
@@ -184,21 +187,15 @@ func dashBox(titleText string, innerWidth int, contentLines []string) []string {
 
 	// Top border total width must equal innerWidth+2 (same as content and bottom lines).
 	// Structure: "╭─" (2) + titleText + fill×"─" + "╮" (1) = inner+2 → fill = inner-1-len(title).
-	topFill := innerWidth - 1 - lipgloss.Width(titleText)
-	if topFill < 0 {
-		topFill = 0
-	}
+	topFill := max(innerWidth-1-lipgloss.Width(titleText), 0)
 	out := make([]string, 0, len(contentLines)+4)
 	out = append(out, border.Render("╭─")+title.Render(titleText)+border.Render(strings.Repeat("─", topFill)+"╮"))
-	
+
 	// Top padding
 	out = append(out, border.Render("│")+strings.Repeat(" ", innerWidth)+border.Render("│"))
 
 	for _, l := range contentLines {
-		padW := innerWidth - lipgloss.Width(l)
-		if padW < 0 {
-			padW = 0
-		}
+		padW := max(innerWidth-lipgloss.Width(l), 0)
 		out = append(out, border.Render("│")+l+strings.Repeat(" ", padW)+border.Render("│"))
 	}
 
@@ -301,8 +298,14 @@ func (m Model) dashDaemonWidget() []string {
 		spkW  = 14
 	)
 	na := MutedStyle.Render("n/a")
-	pidStr, memStr, allocStr, inuseStr, sysStr, gcStr, gorStr, cpuStr :=
-		na, na, na, na, na, na, na, na
+	pidStr := na
+	memStr := na
+	allocStr := na
+	inuseStr := na
+	sysStr := na
+	gcStr := na
+	gorStr := na
+	cpuStr := na
 
 	if m.daemonMetricsOK {
 		d := m.daemonMetrics
@@ -418,10 +421,7 @@ func (m Model) dashProjectWidget(width int) []string {
 		name = m.dashProjectFolder
 	}
 
-	topN := 3
-	if len(m.dashProjectTopTools) < topN {
-		topN = len(m.dashProjectTopTools)
-	}
+	topN := min(len(m.dashProjectTopTools), 3)
 	toolNames := make([]string, 0, topN)
 	for _, t := range m.dashProjectTopTools[:topN] {
 		toolNames = append(toolNames, t.Tool)
@@ -497,10 +497,7 @@ func (m Model) handleDashboardKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 	if m.currentSection != 0 || m.sectionMenuOpen || m.showHelp {
 		return m, nil, false
 	}
-	pageSize := m.height - 6
-	if pageSize < 1 {
-		pageSize = 1
-	}
+	pageSize := max(m.height-6, 1)
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
 		return m, tea.Quit, true

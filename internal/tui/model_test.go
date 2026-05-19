@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
@@ -708,6 +709,43 @@ func keyPress(s string) tea.KeyPressMsg {
 
 func ctrlKey(r rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Code: r, Mod: tea.ModCtrl})
+}
+
+func TestRender_AlignsBorders(t *testing.T) {
+	RebuildStyles()
+	m := NewModel("", "")
+	m.width = 80
+	m.height = 20
+	m.ready = true
+	m.leftWidth = 20
+	m.sessions = []session.Info{
+		{ID: "s1", Name: "VERY-LONG-SESSION-NAME-THAT-EXCEEDS-WIDTH", Folder: "/tmp"},
+	}
+
+	out := m.render()
+	lines := strings.Split(out, "\n")
+
+	// Top border is at line 4 (index 3)
+	topBorder := ansi.Strip(lines[3])
+	// Body starts at line 5 (index 4)
+	// Line 4 is Sessions (1) title
+	// Line 5 is empty
+	// Line 6 is the long session name
+	bodyLine := ansi.Strip(lines[6])
+
+	topIdx := strings.Index(topBorder, "┬")
+	bodyIdx := strings.Index(bodyLine, "┆")
+
+	topCharIdx := len([]rune(topBorder[:topIdx]))
+	bodyCharIdx := len([]rune(bodyLine[:bodyIdx]))
+
+	bottomBorder := ansi.Strip(lines[18])
+	bottomIdx := strings.Index(bottomBorder, "┴")
+	bottomCharIdx := len([]rune(bottomBorder[:bottomIdx]))
+
+	if topCharIdx != bodyCharIdx || topCharIdx != bottomCharIdx {
+		t.Errorf("Misalignment: top connector at char %d, body divider at char %d, bottom connector at char %d\ntop:    %s\nbody:   %s\nbottom: %s", topCharIdx, bodyCharIdx, bottomCharIdx, topBorder, bodyLine, bottomBorder)
+	}
 }
 
 func ansiStripForTest(s string) string {

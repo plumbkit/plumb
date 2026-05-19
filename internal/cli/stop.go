@@ -9,13 +9,24 @@ import (
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
+
+	"github.com/golimpio/plumb/internal/session"
+	"github.com/golimpio/plumb/internal/tui"
 )
+
+var stopFlagForce bool
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the background daemon",
 	RunE:  runStop,
+}
+
+func init() {
+	stopCmd.Flags().BoolVar(&stopFlagForce, "force", false, "stop without asking for confirmation")
 }
 
 func runStop(_ *cobra.Command, _ []string) error {
@@ -24,6 +35,16 @@ func runStop(_ *cobra.Command, _ []string) error {
 	if len(pids) == 0 {
 		fmt.Println("Daemon is not running.")
 		return nil
+	}
+	if !stopFlagForce {
+		ok, err := confirmStopWithActiveSessions()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Println("\nStop cancelled.")
+			return nil
+		}
 	}
 	if len(pids) > 1 {
 		fmt.Printf("Found %d daemon process(es) — stopping all.\n", len(pids))
@@ -35,6 +56,119 @@ func runStop(_ *cobra.Command, _ []string) error {
 		}
 	}
 	return lastErr
+}
+
+func confirmStopWithActiveSessions() (bool, error) {
+	active, err := session.List()
+	if err != nil {
+		return false, fmt.Errorf("listing active sessions: %w", err)
+	}
+	if len(active) == 0 {
+		return true, nil
+	}
+
+	if err := renderSessions(active, 0); err != nil {
+		return false, err
+	}
+	fmt.Println()
+	return runStopConfirmationSelector(len(active))
+}
+
+func runStopConfirmationSelector(sessionCount int) (bool, error) {
+	p := tea.NewProgram(newStopConfirmationModel(sessionCount))
+	finalModel, err := p.Run()
+	if err != nil {
+		return false, fmt.Errorf("confirming stop: %w", err)
+	}
+	m, ok := finalModel.(stopConfirmationModel)
+	if !ok {
+		return false, nil
+	}
+	return m.confirmed, nil
+}
+
+type stopConfirmationModel struct {
+	sessionCount int
+	cursor       int // 0 yes, 1 no
+	confirmed    bool
+}
+
+func newStopConfirmationModel(sessionCount int) stopConfirmationModel {
+	return stopConfirmationModel{
+		sessionCount: sessionCount,
+		cursor:       1, // default to No
+	}
+}
+
+func (m stopConfirmationModel) Init() tea.Cmd { return nil }
+
+func (m stopConfirmationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "up", "k", "left", "h", "down", "j", "right", "l", "tab", "shift+tab":
+			if m.cursor == 0 {
+				m.cursor = 1
+			} else {
+				m.cursor = 0
+			}
+		case "y", "Y":
+			m.cursor = 0
+			m.confirmed = true
+			return m, tea.Quit
+		case "n", "N", "q", "esc", "ctrl+c":
+			m.cursor = 1
+			m.confirmed = false
+			return m, tea.Quit
+		case "enter", " ":
+			m.confirmed = m.cursor == 0
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m stopConfirmationModel) View() tea.View {
+	return tea.NewView(renderStopConfirmationPrompt(m.sessionCount, m.cursor))
+}
+
+func renderStopConfirmationPrompt(sessionCount, cursor int) string {
+	tui.RebuildStyles()
+	infoBadge := lipgloss.NewStyle().
+		Foreground(tui.ActiveTheme.SelectionBackground).
+		Background(tui.ActiveTheme.Accent).
+		Bold(true).
+		Render(" i ")
+	sessionLabel := pluralSessionCount(sessionCount)
+	muted := tui.MutedStyle
+	selected := tui.SelectedStyle
+	options := []string{"Yes", "No"}
+	optionLines := make([]string, 0, len(options))
+	for i, option := range options {
+		marker := "  "
+		style := tui.HintStyle
+		if i == cursor {
+			marker = "❯ "
+			style = selected
+		}
+		optionLines = append(optionLines, tui.SepStyle.Render("    ┊ ")+style.Render(marker+option))
+	}
+	return fmt.Sprintf(
+		"%s %s\n%s\n%s\n%s\n%s\n",
+		infoBadge,
+		tui.ItemStyle.Render(fmt.Sprintf("You have %s.", sessionLabel)),
+		muted.Render("    Stopping the daemon will terminate all active sessions."),
+		tui.ItemStyle.Render("    Stop the daemon?"),
+		optionLines[0],
+		optionLines[1],
+	)
+}
+
+func pluralSessionCount(n int) string {
+	if n == 1 {
+		return "1 active session"
+	}
+	return fmt.Sprintf("%d active sessions", n)
 }
 
 // findAllDaemonPIDs locates every running daemon PID using three strategies,

@@ -1,0 +1,384 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/golimpio/plumb/internal/monitor"
+)
+
+func (m Model) View() tea.View {
+	content := "Loading…"
+	if m.ready {
+		content = m.render()
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+func (m Model) render() string {
+	// Dashboard and Logs sections each use a dedicated full-width renderer.
+	if m.currentSection == 0 && !m.showPopup {
+		return m.renderDashboard()
+	}
+	if m.currentSection == 3 && !m.showPopup {
+		return m.renderLogsSection()
+	}
+
+	rightWidth := max(m.width-m.leftWidth-3, 10)
+	bodyHeight := max(m.height-6, 1)
+
+	var sb strings.Builder
+	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen
+
+	sepStyle := SepStyle
+	if isOverlay {
+		sepStyle = SepInactiveStyle
+	}
+
+	// Header: 4-line Logo
+	logoLines := strings.Split(LogoText, "\n")
+
+	// Ensure logo starts at exactly right edge
+	logoW := lipgloss.Width(logoLines[0])
+	tabSpaceW := m.width - logoW
+
+	menu := m.renderTopMenu(tabSpaceW, isOverlay)
+
+	for i := range 3 {
+		// Draw the menu on the left, then the logo piece on the right.
+		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
+	}
+	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
+
+	// Body content
+	allLeftLines := m.leftLines()
+	allRightLines := (&m).rightLines(rightWidth)
+
+	// Clamp scroll offsets
+	maxLeftScroll := max(len(allLeftLines)-bodyHeight, 0)
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxLeft = maxLeftScroll
+	}
+	if m.leftScroll > maxLeftScroll {
+		m.leftScroll = maxLeftScroll
+	}
+	maxRightScroll := max(len(allRightLines)-bodyHeight, 0)
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxRight = maxRightScroll
+	}
+	if m.rightScroll > maxRightScroll {
+		m.rightScroll = maxRightScroll
+	}
+
+	leftLines := allLeftLines[m.leftScroll:]
+	rightLines := allRightLines[m.rightScroll:]
+
+	leftScrollbar := scrollbarCol(len(allLeftLines), bodyHeight, m.leftScroll)
+	rightScrollbar := scrollbarCol(len(allRightLines), bodyHeight, m.rightScroll)
+
+	for i := range bodyHeight {
+		l, r := "", ""
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+
+		leftCell := lipgloss.NewStyle().Width(m.leftWidth).Render(ansi.Truncate(l, m.leftWidth-1, "…") + " ")
+		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(ansi.Truncate(r, rightWidth, "…"))
+
+		lBar := SepStyle.Render("│")
+		if leftScrollbar != nil && i < len(leftScrollbar) {
+			lBar = leftScrollbar[i]
+		}
+		rBar := SepStyle.Render("│")
+		if rightScrollbar != nil && i < len(rightScrollbar) {
+			rBar = rightScrollbar[i]
+		}
+
+		if isOverlay {
+			lDim := InactiveStyle.Render(ansi.Strip(leftCell))
+			rDim := InactiveStyle.Render(ansi.Strip(rightCell))
+			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
+			sb.WriteString(line + "\n")
+		} else {
+			sb.WriteString(lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar + "\n")
+		}
+	}
+
+	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
+	sb.WriteString(m.renderMainStatusBar(isOverlay))
+
+	final := sb.String()
+	if m.showPopup {
+		final = m.renderPopup(final, rightWidth, bodyHeight-1)
+	}
+	if m.showHelp {
+		final = m.renderHelp(final)
+	}
+	if m.sectionMenuOpen {
+		final = m.renderSectionMenuOverlay(final)
+	}
+	return final
+}
+
+func (m Model) renderMainStatusBar(dimmed bool) string {
+	style := StatusStyle
+	keyStyle := StatusKeyStyle
+	if dimmed {
+		style = InactiveStyle
+		keyStyle = InactiveStyle
+	}
+	vStr := Version
+	if vStr == "" {
+		vStr = "dev"
+	}
+	sessCount := int64(len(m.sessions))
+	memStr := "n/a"
+	if m.daemonMetricsOK && m.daemonMetrics.RSSAvailable {
+		memStr = monitor.FormatBytes(m.daemonMetrics.RSSBytes)
+	}
+	leftFooter := fmt.Sprintf(
+		" plumb %s  ·  %s  ·  daemon mem: %s",
+		vStr,
+		formatSessionCount(sessCount),
+		memStr,
+	)
+	rightFooterPlain := "/ menu  ·  ^q quit  ·  ^h help "
+	footerGap := max(m.width-lipgloss.Width(leftFooter)-lipgloss.Width(rightFooterPlain), 1)
+	rightFooter := keyStyle.Render("/") + style.Render(" menu  ·  ") +
+		keyStyle.Render("^q") + style.Render(" quit  ·  ") +
+		keyStyle.Render("^h") + style.Render(" help ")
+	return style.Render(leftFooter) + strings.Repeat(" ", footerGap) + rightFooter
+}
+
+func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
+	sepStyle := SepStyle
+	if dimmed {
+		sepStyle = SepInactiveStyle
+	}
+
+	logoBottom := strings.Split(LogoText, "\n")[3]
+
+	// The body divider ┆ is at index m.leftWidth + 1.
+	// We want ┬ to be at the same index.
+	// Total width before the logo should match the body's content width.
+	contentW := m.leftWidth + rightWidth + 1
+	filler := []rune(strings.Repeat("─", contentW))
+	if m.leftWidth < len(filler) {
+		filler[m.leftWidth] = '┬'
+	}
+
+	line := "╭" + string(filler) + "╮"
+	// Ensure the line is at least m.width wide if the logo is present.
+	if m.width > len(line) {
+		line += strings.Repeat(" ", m.width-len(line))
+	}
+
+	// Overlay the logo bottom on the right edge of the frame.
+	logoW := lipgloss.Width(logoBottom)
+	if len(line) >= logoW {
+		line = line[:len(line)-logoW] + logoBottom
+	}
+
+	return sepStyle.Render(line)
+}
+
+func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
+	sepStyle := SepStyle
+	if dimmed {
+		sepStyle = SepInactiveStyle
+	}
+	contentW := m.leftWidth + rightWidth + 1
+	filler := []rune(strings.Repeat("─", contentW))
+	if m.leftWidth < len(filler) {
+		filler[m.leftWidth] = '┴'
+	}
+	return sepStyle.Render("╰" + string(filler) + "╯")
+}
+
+func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
+	if m.popupLeftWidth == 0 {
+		m.popupLeftWidth = minPopupLeftWidth
+	}
+	pLW, pRW := m.popupLeftWidth, m.width-m.popupLeftWidth-3
+	if pRW < 10 {
+		pRW = 10
+	}
+
+	var lines []string
+	lines = append(lines, m.renderTopBorderPopup(pLW, pRW))
+	allLeft := m.popupLeftLines()
+	maxPL := max(len(allLeft)-bodyHeight, 0)
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxPopupLeft = maxPL
+	}
+	if m.popupLeftScroll > maxPL {
+		m.popupLeftScroll = maxPL
+	}
+	visibleLeft := allLeft[m.popupLeftScroll:]
+	leftScrollbar := scrollbarCol(len(allLeft), bodyHeight, m.popupLeftScroll)
+	allRight := m.popupRightAll(pRW - 2)
+
+	rightScrollH := max(bodyHeight-2, 0)
+
+	maxDS := max(len(allRight)-rightScrollH, 0)
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxPopupDetail = maxDS
+	}
+	if m.popupDetailScroll > maxDS {
+		m.popupDetailScroll = maxDS
+	}
+	visibleRight := allRight[m.popupDetailScroll:]
+	scrollbar := scrollbarCol(len(allRight), rightScrollH, m.popupDetailScroll)
+
+	for i := range bodyHeight {
+		var lCell string
+		if i < len(visibleLeft) && visibleLeft[i] != "" {
+			lCell = lipgloss.NewStyle().Width(pLW).Render(visibleLeft[i])
+		} else {
+			lCell = lipgloss.NewStyle().Width(pLW).Render("")
+		}
+		var rStr string
+		if i >= bodyHeight-2 {
+			if i == bodyHeight-1 {
+				sep := StatusStyle.Render("  ·  ")
+				if m.popupRightFocus {
+					left := StatusKeyStyle.Render("c") + StatusStyle.Render(" copy")
+					mid := StatusKeyStyle.Render("tab") + StatusStyle.Render(" back")
+					right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
+					rStr = "  " + left + sep + mid + sep + right
+				} else {
+					mid := StatusKeyStyle.Render("tab") + StatusStyle.Render(" detail")
+					right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
+					rStr = "  " + mid + sep + right
+				}
+			}
+		} else if i < len(visibleRight) {
+			rStr = visibleRight[i]
+		}
+		rCell := lipgloss.NewStyle().Width(pRW).Render(rStr)
+
+		lb := SepStyle.Render("│")
+		if leftScrollbar != nil && i < len(leftScrollbar) {
+			lb = leftScrollbar[i]
+		}
+		rb := SepStyle.Render("│")
+		if scrollbar != nil && i < len(scrollbar) && i < rightScrollH {
+			rb = scrollbar[i]
+		}
+
+		lines = append(lines, lb+lCell+SepStyle.Render("┆")+rCell+rb)
+	}
+	lines = append(lines, m.renderBottomBorderPopup(pLW, pRW))
+
+	overlayText := strings.Join(lines, "\n")
+
+	// The overlay should start on row 4 (line 5 visually)
+	// and end 1 row above the status bar (m.height - 2).
+
+	ovLines := strings.Split(overlayText, "\n")
+	ovW := 0
+	for _, l := range ovLines {
+		if lw := lipgloss.Width(l); lw > ovW {
+			ovW = lw
+		}
+	}
+	sx := (m.width - ovW) / 2
+	sy := 4
+
+	return spliceOverlayAt(bg, overlayText, sx, sy)
+}
+
+func (m Model) renderHelp(bg string) string {
+	helpLines := []string{
+		" ↑/↓ or j/k      Navigate sessions/calls/scroll details",
+		" /               Open section selector",
+		" ^1-^5           Open Dashboard/Sessions/Memory/Logs/Settings",
+		" pgup/pgdown     Page through lists",
+		" tab/shift+tab   Switch panel focus (sessions → details → tools → recent)",
+		" enter           Open detail / select menu item",
+		" [ and ]         Resize columns",
+		" ^h              Open help",
+		" ^q              Quit",
+		" esc             Close popup/menu",
+	}
+
+	boxW := 76
+	innerW := boxW - 2
+	topLabel := " Help & Navigation "
+
+	// Calculate dashes for the top border correctly
+	labelW := lipgloss.Width(topLabel)
+	leftDashes := 1
+	rightDashes := max(innerW-labelW-leftDashes, 0)
+
+	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", rightDashes)+"╮")
+
+	var bodyLines []string
+	// Empty row top
+	bodyLines = append(bodyLines, SepStyle.Render("│")+strings.Repeat(" ", innerW)+SepStyle.Render("│"))
+
+	for _, l := range helpLines {
+		content := "  " + padRight(l, innerW-4) + "  "
+		bodyLines = append(bodyLines, SepStyle.Render("│")+content+SepStyle.Render("│"))
+	}
+
+	// Empty row bottom
+	bodyLines = append(bodyLines, SepStyle.Render("│")+strings.Repeat(" ", innerW)+SepStyle.Render("│"))
+
+	bottom := SepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯")
+
+	popup := top + "\n" + strings.Join(bodyLines, "\n") + "\n" + bottom
+	return spliceOverlay(bg, popup, m.width, m.height)
+}
+
+func (m Model) renderSectionMenuOverlay(bg string) string {
+	border := SepStyle
+	textStyle := DetailStyle
+	selectedStyle := SelectedStyle
+
+	innerW := sectionMenuWidth - 2
+	lines := []string{border.Render("╭" + strings.Repeat("─", innerW) + "╮")}
+	for i, item := range sectionMenuItems {
+		marker := " "
+		style := textStyle
+		if i == m.sectionMenuCursor {
+			marker = "❯"
+			style = selectedStyle
+		}
+		content := style.Render(fmt.Sprintf(" %s %d. %-11s  ", marker, i+1, item))
+		pad := max(innerW-lipgloss.Width(content), 0)
+		lines = append(lines, border.Render("│")+content+strings.Repeat(" ", pad)+border.Render("│"))
+	}
+	lines = append(lines, border.Render("╰"+strings.Repeat("─", innerW)+"╯"))
+
+	return spliceOverlayAt(bg, strings.Join(lines, "\n"), 0, 0)
+}
+
+func (m Model) renderTopBorderPopup(pLW, pRW int) string {
+	lt, rt := " Timestamp ", " Call Detail "
+	var lts, rts lipgloss.Style
+	if m.popupRightFocus {
+		lts, rts = PanelHeaderFadedStyle, PanelHeaderStyle
+	} else {
+		lts, rts = PanelHeaderStyle, PanelHeaderFadedStyle
+	}
+	lf := max(pLW-1-len(lt), 0)
+	rf := max(pRW-1-len(rt), 0)
+	return SepStyle.Render("╭─") + lts.Render(lt) + SepStyle.Render(strings.Repeat("─", lf)+"┬─") + rts.Render(rt) + SepStyle.Render(strings.Repeat("─", rf)+"╮")
+}
+
+func (m Model) renderBottomBorderPopup(pLW, pRW int) string {
+	b := []rune("╰" + strings.Repeat("─", pLW+pRW+1) + "╯")
+	b[pLW+1] = '┴'
+	return SepStyle.Render(string(b))
+}

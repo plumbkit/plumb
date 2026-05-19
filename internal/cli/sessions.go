@@ -33,16 +33,27 @@ func runSessions(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
 
+	sessions, hidden := filterSessions(all, sessionsFlagAll)
+	if err := renderSessions(sessions, hidden); err != nil {
+		return err
+	}
+	return nil
+}
+
+func filterSessions(all []session.Info, includeAll bool) ([]session.Info, int) {
 	var sessions []session.Info
 	hidden := 0
 	for _, s := range all {
-		if s.Folder == "" && !sessionsFlagAll {
+		if s.Folder == "" && !includeAll {
 			hidden++
 			continue
 		}
 		sessions = append(sessions, s)
 	}
+	return sessions, hidden
+}
 
+func renderSessions(sessions []session.Info, hidden int) error {
 	if len(sessions) == 0 {
 		if hidden > 0 {
 			fmt.Printf("No sessions with a resolved workspace. (%d pending — use --all to show)\n", hidden)
