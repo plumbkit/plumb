@@ -14,7 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/alecthomas/chroma/v2/quick"
+
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/golimpio/plumb/internal/monitor"
@@ -107,9 +107,9 @@ type Model struct {
 	popupLeftWidth    int
 	popupDetail       popupDetailCache
 
-	statsTableBodyRow      int
-	recentTableBodyRow     int
-	lastDiagnosticsOutput  string
+	statsTableBodyRow     int
+	recentTableBodyRow    int
+	lastDiagnosticsOutput string
 
 	// Log viewer state (Logs section, index 3).
 	logPath    string
@@ -388,7 +388,7 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 func (m *Model) ensurePopupCursorVisible() {
 	cursorLine := m.popupCallCursor + 1
 	totalLines := len(m.popupCalls) + 1
-	bodyHeight := m.height - 6
+	bodyHeight := m.height - 7
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
@@ -592,7 +592,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 					m.popupLeftWidth = maxPLeft
 				}
 			case "pgdown":
-				pageSize := m.height - 6
+				pageSize := m.height - 7
 				if pageSize < 1 {
 					pageSize = 1
 				}
@@ -608,7 +608,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 					m.ensurePopupCursorVisible()
 				}
 			case "pgup":
-				pageSize := m.height - 6
+				pageSize := m.height - 7
 				if pageSize < 1 {
 					pageSize = 1
 				}
@@ -659,7 +659,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 				case "down", "j":
 					m.logDetailScroll++
 				case "pgup":
-					pageSize := m.height - 6
+					pageSize := m.height - 14
 					if pageSize < 1 {
 						pageSize = 1
 					}
@@ -668,7 +668,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 						m.logDetailScroll = 0
 					}
 				case "pgdown":
-					pageSize := m.height - 6
+					pageSize := m.height - 14
 					if pageSize < 1 {
 						pageSize = 1
 					}
@@ -908,8 +908,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 			}
 		}
 	}
-	
-	
+
 	return m, nil
 }
 
@@ -1266,13 +1265,13 @@ func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
 	}
 
 	logoBottom := strings.Split(LogoText, "\n")[3]
-	
+
 	fillerW := m.width - LogoWidth - 1
 	if fillerW < 0 {
 		fillerW = 0
 	}
 
-	return sepStyle.Render("╭" + strings.Repeat("─", fillerW)) + sepStyle.Render(logoBottom)
+	return sepStyle.Render("╭"+strings.Repeat("─", fillerW)) + sepStyle.Render(logoBottom)
 }
 
 func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
@@ -1346,12 +1345,12 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 		lines = append(lines, lb+lCell+SepStyle.Render("┆")+rCell+rb)
 	}
 	lines = append(lines, m.renderBottomBorderPopup(pLW, pRW))
-	
+
 	overlayText := strings.Join(lines, "\n")
-	
+
 	// The overlay should start on row 4 (line 5 visually)
 	// and end 1 row above the status bar (m.height - 2).
-	
+
 	ovLines := strings.Split(overlayText, "\n")
 	ovW := 0
 	for _, l := range ovLines {
@@ -1480,14 +1479,14 @@ func (m Model) popupLeftLines() []string {
 		if i == m.popupCallCursor {
 			sc = "❯"
 		}
-		
+
 		ok := "✓"
 		if !c.Success {
 			ok = "✗"
 		}
 		ts := c.CalledAt.Format("01-02 15:04:05")
 		dur := fmt.Sprintf("%dms", c.DurationMs)
-		
+
 		// We format it as "  ❯ ✓ 05-19 15:04:05 22ms"
 		row := fmt.Sprintf("  %s %s %s %s", sc, ok, ts, dur)
 		maxW := m.popupLeftWidth - 1
@@ -1497,7 +1496,7 @@ func (m Model) popupLeftLines() []string {
 		if lipgloss.Width(row) > maxW {
 			row = string([]rune(row)[:maxW-1]) + "…"
 		}
-		
+
 		isSelectedRow := i == m.popupCallCursor
 
 		if isSelectedRow && !m.popupRightFocus {
@@ -1544,7 +1543,7 @@ func (m Model) popupRightAll(rw int) []string {
 		sessLabel = DetailStyle.Render(c.SessionName) + "  " + sID + "  " + sl
 	}
 	lines = append(lines, detailRow("Tool", DetailStyle.Render(c.Tool)), detailRow("Status", st), detailRow("Called at", DetailStyle.Render(c.CalledAt.Format("2006-01-02 15:04:05"))), detailRow("Session", sessLabel), detailRow("Duration", DetailStyle.Render(fmt.Sprintf("%d ms", c.DurationMs))), detailRow("Input", DetailStyle.Render(fmt.Sprintf("%d bytes", c.InputBytes))), detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))))
-	
+
 	gutterLine := func(label string, content []string) {
 		lines = append(lines, "", "  "+PanelHeaderStyle.Render(label))
 		gutterChar := SepStyle.Render("┊")
@@ -1572,16 +1571,8 @@ func (m Model) popupRightAll(rw int) []string {
 		var al []string
 		var pb bytes.Buffer
 		if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
-			var highlighted bytes.Buffer
-			if err := quick.Highlight(&highlighted, pb.String(), "json", "terminal256", "monokai"); err == nil {
-				for _, l := range strings.Split(strings.TrimRight(highlighted.String(), "\n"), "\n") {
-					al = append(al, l) // Chroma adds its own ANSI styles
-				}
-			} else {
-				// Fallback if highlight fails
-				for _, l := range strings.Split(strings.TrimRight(pb.String(), "\n"), "\n") {
-					al = append(al, DetailStyle.Render(l))
-				}
+			for _, l := range strings.Split(strings.TrimRight(pb.String(), "\n"), "\n") {
+				al = append(al, DetailStyle.Render(l))
 			}
 		} else {
 			al = append(al, DetailStyle.Render(ij))
