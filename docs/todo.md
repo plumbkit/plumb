@@ -341,11 +341,33 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 - **Tools:** Hook into existing memory tools (`list_memories`, `read_memory`).
 **Watch out for:** Ensure long memory content in the right panel is scrollable and handled consistently with the Log Detail and Call Detail panels.
 
+### Implement Color Scheme Picker
+
+**Priority:** Medium.
+**Effort:** Medium.
+**Status:** Planning.
+**Description:** Create a pop-up panel in the TUI that allows users to browse and switch between available color schemes.
+- **Layout:** A centered modal/pop-up showing a grid or list of available themes with a live preview.
+- **Navigation:** Arrow keys to select a theme, Enter to apply.
+- **Persistence:** Ensure the selected theme is saved to `~/.config/plumb/config.toml` (or appropriate config location) and applied immediately without daemon restart.
+**Watch out for:** Ensure the modal doesn't break the existing TUI layout and that the color palette transition is smooth.
+
 ---
 
 ## Improvements
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
+
+### Review and Sanitise Color Schemes
+
+**Priority:** Medium.
+**Effort:** Medium.
+**Status:** Planning.
+**Description:** Perform a comprehensive review of the current color palette and themes (`internal/tui/theme.go`, `internal/tui/styles.go`).
+- **Goal:** Ensure all color definitions are solid, consistent, and accessible.
+- **Action:** Sanitise existing color variables, eliminate any hard-coded colors in UI components, and define a central, well-typed theme interface.
+- **Outcome:** A robust and scalable theming system that is easy to extend and maintain.
+**Watch out for:** Ensure that changes maintain consistency across light/dark mode and that all UI elements (borders, text, accents, alerts) remain legible under the new scheme.
 
 ---
 
