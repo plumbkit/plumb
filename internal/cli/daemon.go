@@ -24,6 +24,7 @@ import (
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/mcp"
 	"github.com/golimpio/plumb/internal/memory"
+	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tools"
@@ -139,6 +140,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// Start the background LRU sweep for per-path write locks. Runs for the
 	// daemon's lifetime; ctx cancellation stops the sweep goroutine cleanly.
 	tools.StartPathLockSweep(ctx)
+	monitor.StartSnapshotWriter(ctx, monitor.SnapshotPath(), 2*time.Second)
 
 	statsStore := newStatsStore()
 	defer statsStore.Close()

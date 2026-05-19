@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
 )
@@ -112,7 +113,7 @@ func TestLeftLines_RenderSessionsAsTwoLineRows(t *testing.T) {
 	}
 	joined := strings.Join(plain, "\n")
 	for _, want := range []string{
-		" ● CRAZY-PLUMB  go ",
+		" ❯ CRAZY-PLUMB  go ",
 		"    ╰─ ~/Projects/plumb",
 		" ○ SUPER-FRIEND  go ",
 	} {
@@ -150,7 +151,13 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 			Calls:   5200,
 			Buckets: []int64{0, 1, 2, 3, 2, 1, 0, 0, 3, 4, 5, 4, 3, 2, 1, 0},
 		},
-		tokenSavings: 913000,
+		tokenSavings:    913000,
+		daemonMetricsOK: true,
+		daemonMetrics: monitor.DaemonMetrics{
+			CPUPercent:   42.5,
+			CPUAvailable: true,
+		},
+		daemonCPU: []float64{0, 5, 10, 20, 40, 60, 80, 100},
 	}
 
 	lines := m.renderTopMenu(60, false)
@@ -178,6 +185,22 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	}
 
 	lines = m.renderTopMenu(96, false)
+	plain = make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+	if !strings.Contains(plain[0], "Daemon CPU") {
+		t.Fatalf("top menu = %#v, want daemon CPU box title", plain)
+	}
+	if strings.Contains(plain[1], "RSS") || strings.Contains(plain[1], " H ") || strings.Contains(plain[1], " G ") {
+		t.Fatalf("daemon CPU row = %q, should not show memory or goroutine labels", plain[1])
+	}
+	if !strings.Contains(plain[0], "42%") {
+		t.Fatalf("daemon CPU title = %q, want CPU value in title", plain[0])
+	}
+
+	// Token savings box requires wide layouts: selector + activity + daemon CPU + token savings + gaps.
+	lines = m.renderTopMenu(120, false)
 	plain = make([]string, len(lines))
 	for i, line := range lines {
 		plain[i] = ansiStripForTest(line)
@@ -337,36 +360,20 @@ func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
 	}
 }
 
-func TestFooterUsesDatabaseTotalsWithoutLiveSessions(t *testing.T) {
+func TestFooterShowsLiveSessionsAndDaemonMem(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	db, err := stats.Open()
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	now := time.Now()
-	for _, call := range []stats.Call{
-		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now, OutputBytes: 4, Success: true},
-		{SessionID: "sess-2", Workspace: "/w2", Tool: "list_symbols", CalledAt: now.Add(time.Millisecond), OutputBytes: 4, Success: true},
-	} {
-		if err := db.Record(call); err != nil {
-			t.Fatalf("Record: %v", err)
-		}
-	}
-	db.Close()
 
 	m := NewModel("")
-	if m.globalDB == nil {
-		t.Fatal("global stats DB was not opened without live sessions")
+	if m.globalDB != nil {
+		defer m.globalDB.Close()
 	}
-	defer m.globalDB.Close()
 	m.width = 150
 	m.height = 12
 
 	plain := ansiStripForTest(m.render())
 	for _, want := range []string{
-		"2 sessions",
-		"2 tool calls",
-		"~2.3k tokens saved",
+		"no sessions",
+		"daemon mem:",
 		"/ menu",
 	} {
 		if !strings.Contains(plain, want) {
@@ -673,6 +680,16 @@ func TestActivitySparklineAndCallFormatting(t *testing.T) {
 		if got := formatActivityCalls(n); got != want {
 			t.Fatalf("formatActivityCalls(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestCPUSparklineUsesFixedPercentScale(t *testing.T) {
+	got := cpuSparkline([]float64{0, 25, 50, 75, 100, 150}, 6)
+	if got != " ⡄⡇⣧⣿⣿" {
+		t.Fatalf("cpuSparkline = %q, want fixed 0-100%% scale", got)
+	}
+	if got := cpuSparkline(nil, 4); got != "    " {
+		t.Fatalf("cpuSparkline(nil) = %q, want blank sparkline", got)
 	}
 }
 

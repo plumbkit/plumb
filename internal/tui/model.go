@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
 )
@@ -25,7 +26,7 @@ var Version string
 
 const (
 	defaultLeftWidth  = 30
-	minLeftWidth      = 16
+	minLeftWidth      = 20
 	minPopupLeftWidth = 30 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	sectionMenuWidth  = 22
 	pollInterval      = 2 * time.Second
@@ -43,11 +44,12 @@ type pollMsg struct{}
 type panelFocus int
 
 const (
-	focusSessions  panelFocus = iota // j/k moves the session cursor (default)
-	focusToolStats                   // j/k moves the Tool Statistics cursor
-	focusStats                       // j/k moves the Recent calls cursor
-	focusDetails                     // j/k scrolls the right (Details) panel
-	focusLogs                        // j/k scrolls the log viewer
+	focusSessions    panelFocus = iota // j/k moves the session cursor (default)
+	focusToolStats                     // j/k moves the Tool Statistics cursor
+	focusStats                         // j/k moves the Recent calls cursor
+	focusDetails                       // j/k scrolls the Details panel
+	focusDiagnostics                   // j/k scrolls the Diagnostics panel
+	focusLogs                          // j/k scrolls the log viewer (Logs section)
 )
 
 // Model is the root Bubble Tea model for the sessions dashboard.
@@ -58,6 +60,9 @@ type Model struct {
 	recentCalls     []stats.RecentCall
 	activity        stats.ActivitySummary
 	tokenSavings    int64
+	daemonMetrics   monitor.DaemonMetrics
+	daemonMetricsOK bool
+	daemonCPU       []float64
 	cursor          int
 	statsCursor     int
 	toolStatsCursor int
@@ -80,6 +85,7 @@ type Model struct {
 	sectionMenuOpen   bool
 	sectionMenuCursor int
 	currentSection    int
+	rightTab          int // 0=Details 1=Tools 2=History 3=Diagnostics
 
 	popupTool         string
 	popupCalls        []stats.RecentCall
@@ -90,8 +96,9 @@ type Model struct {
 	popupLeftWidth    int
 	popupDetail       popupDetailCache
 
-	statsTableBodyRow  int
-	recentTableBodyRow int
+	statsTableBodyRow      int
+	recentTableBodyRow     int
+	lastDiagnosticsOutput  string
 
 	// Log viewer state (Logs section, index 3).
 	logPath    string
@@ -142,7 +149,24 @@ func (m *Model) refresh() {
 	if m.cursor >= len(m.sessions) && m.cursor > 0 {
 		m.cursor = len(m.sessions) - 1
 	}
+	m.refreshDaemonMetrics()
 	m.refreshStats()
+}
+
+func (m *Model) refreshDaemonMetrics() {
+	metrics, err := monitor.ReadSnapshot(monitor.SnapshotPath())
+	if err != nil || metrics.SampledAt.IsZero() || time.Since(metrics.SampledAt) > 10*time.Second {
+		m.daemonMetricsOK = false
+		return
+	}
+	m.daemonMetrics = metrics
+	m.daemonMetricsOK = true
+	if metrics.CPUAvailable {
+		m.daemonCPU = append(m.daemonCPU, clampPercent(metrics.CPUPercent))
+		if len(m.daemonCPU) > activityBuckets {
+			m.daemonCPU = m.daemonCPU[len(m.daemonCPU)-activityBuckets:]
+		}
+	}
 }
 
 func (m *Model) dbFor(workspace string) *stats.DB {
@@ -183,6 +207,22 @@ func (m *Model) refreshStats() {
 
 	m.statsCursor = locateCall(m.recentCalls, prevCall, m.statsCursor)
 	m.toolStatsCursor = locateTool(m.toolStats, prevTool, m.toolStatsCursor)
+	m.refreshDiagnostics()
+}
+
+func (m *Model) refreshDiagnostics() {
+	if m.globalDB == nil || len(m.sessions) == 0 {
+		m.lastDiagnosticsOutput = ""
+		return
+	}
+	s := m.sessions[m.cursor]
+	calls, _ := m.globalDB.CallsForTool("diagnostics", s.Folder, 1)
+	if len(calls) == 0 {
+		m.lastDiagnosticsOutput = ""
+		return
+	}
+	_, output := m.globalDB.CallDetail(calls[0].Workspace, calls[0].SessionID, calls[0].CalledAt)
+	m.lastDiagnosticsOutput = output
 }
 
 func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
@@ -660,46 +700,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "tab":
-			switch m.focusPanel {
-			case focusSessions:
-				m.focusPanel = focusDetails
-			case focusDetails:
-				if len(m.toolStats) > 0 {
-					m.focusPanel = focusToolStats
-				} else if len(m.recentCalls) > 0 {
-					m.focusPanel = focusStats
-				} else {
-					m.focusPanel = focusSessions
-				}
-			case focusToolStats:
-				if len(m.recentCalls) > 0 {
-					m.focusPanel = focusStats
-				} else {
-					m.focusPanel = focusSessions
-				}
-			case focusStats:
+			if m.focusPanel == focusSessions {
+				m.focusPanel = m.rightTabFocusPanel()
+			} else if m.rightTab < 3 {
+				m.rightTab++
+				m.focusPanel = m.rightTabFocusPanel()
+				m.rightScroll = 0
+			} else {
+				m.rightTab = 0
 				m.focusPanel = focusSessions
 			}
 		case "shift+tab":
-			switch m.focusPanel {
-			case focusSessions:
-				if len(m.recentCalls) > 0 {
-					m.focusPanel = focusStats
-				} else if len(m.toolStats) > 0 {
-					m.focusPanel = focusToolStats
-				} else {
-					m.focusPanel = focusDetails
-				}
-			case focusDetails:
+			if m.focusPanel == focusSessions {
+				m.rightTab = 3
+				m.focusPanel = m.rightTabFocusPanel()
+			} else if m.rightTab > 0 {
+				m.rightTab--
+				m.focusPanel = m.rightTabFocusPanel()
+				m.rightScroll = 0
+			} else {
 				m.focusPanel = focusSessions
-			case focusStats:
-				if len(m.toolStats) > 0 {
-					m.focusPanel = focusToolStats
-				} else {
-					m.focusPanel = focusDetails
-				}
-			case focusToolStats:
-				m.focusPanel = focusDetails
 			}
 		case "up", "k":
 			if m.sectionMenuOpen {
@@ -717,7 +737,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor > 0 {
 					m.statsCursor--
 				}
-			case focusDetails:
+			case focusDetails, focusDiagnostics:
 				if m.rightScroll > 0 {
 					m.rightScroll--
 				}
@@ -745,7 +765,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor < len(m.recentCalls)-1 {
 					m.statsCursor++
 				}
-			case focusDetails:
+			case focusDetails, focusDiagnostics:
 				m.rightScroll++
 			default:
 				if m.cursor < len(m.sessions)-1 {
@@ -788,7 +808,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor >= len(m.recentCalls) {
 					m.statsCursor = len(m.recentCalls) - 1
 				}
-			case focusDetails:
+			case focusDetails, focusDiagnostics:
 				m.rightScroll += pageSize
 			default:
 				m.cursor += pageSize
@@ -815,7 +835,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.statsCursor < 0 {
 					m.statsCursor = 0
 				}
-			case focusDetails:
+			case focusDetails, focusDiagnostics:
 				m.rightScroll -= pageSize
 				if m.rightScroll < 0 {
 					m.rightScroll = 0
@@ -1079,22 +1099,19 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 		style = InactiveStyle
 		keyStyle = InactiveStyle
 	}
-	var totalSessions, totalCalls, savedTok int64
-	if m.globalDB != nil {
-		totalSessions = m.globalDB.TotalSessions(stats.Filter{})
-		totalCalls = m.globalDB.TotalCalls(stats.Filter{})
-		savedTok = m.globalDB.TotalTokensSaved(stats.Filter{})
-	}
 	vStr := Version
 	if vStr == "" {
 		vStr = "dev"
 	}
-	leftFooter := fmt.Sprintf(" plumb %s  ·  %s  ·  %s  ·  ~%s %s saved",
+	sessCount := int64(len(m.sessions))
+	memStr := "n/a"
+	if m.daemonMetricsOK && m.daemonMetrics.RSSAvailable {
+		memStr = monitor.FormatBytes(m.daemonMetrics.RSSBytes)
+	}
+	leftFooter := fmt.Sprintf(" plumb %s  ·  %s  ·  daemon mem: %s",
 		vStr,
-		formatSessionCount(totalSessions),
-		formatToolCallCount(totalCalls),
-		stats.FormatSavings(int(savedTok)),
-		pluralWord(savedTok, "token", "tokens"),
+		formatSessionCount(sessCount),
+		memStr,
 	)
 	rightFooterPlain := "/ menu  ·  ^q quit  ·  ^h help "
 	footerGap := m.width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooterPlain)
@@ -1108,31 +1125,29 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 }
 
 func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
-	var leftTitle, rightTitle string
-	var leftStyle, rightStyle lipgloss.Style
+	var leftTitle string
+	var leftStyle lipgloss.Style
 	sepStyle := SepStyle
 
 	if dimmed {
 		sepStyle = SepInactiveStyle
 		leftStyle = PanelHeaderInactiveStyle
-		rightStyle = PanelHeaderInactiveStyle
 	} else {
 		if m.focusPanel == focusSessions {
-			leftStyle, rightStyle = PanelHeaderStyle, PanelHeaderFadedStyle
+			leftStyle = PanelHeaderStyle
 		} else {
-			leftStyle, rightStyle = PanelHeaderFadedStyle, PanelHeaderStyle
+			leftStyle = PanelHeaderFadedStyle
 		}
 	}
 
 	leftTitle = fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
-	rightTitle = " Details "
 
 	leftPart := sepStyle.Render("╭─") + leftStyle.Render(leftTitle)
 	leftFill := m.leftWidth - 1 - len(leftTitle)
 	if leftFill < 0 {
 		leftFill = 0
 	}
-	midPart := sepStyle.Render(strings.Repeat("─", leftFill)+"┬─") + rightStyle.Render(rightTitle)
+	midPart := sepStyle.Render(strings.Repeat("─", leftFill) + "┬")
 
 	logoBottom := strings.Split(LogoText, "\n")[3]
 	currentW := lipgloss.Width(leftPart) + lipgloss.Width(midPart)
@@ -1459,6 +1474,24 @@ func scrollbarCol(total, visible, offset int) []string {
 	return col
 }
 
+func (m Model) leftPanelHeader() string {
+	bg := ActiveTheme.Border
+	bgStyle := lipgloss.NewStyle().Background(bg)
+	text := fmt.Sprintf("  Sessions (%d)", len(m.sessions))
+	var textStyle lipgloss.Style
+	if m.focusPanel == focusSessions {
+		textStyle = bgStyle.Foreground(ActiveTheme.Accent).Bold(true)
+	} else {
+		textStyle = bgStyle.Foreground(ActiveTheme.TextFaded)
+	}
+	styled := textStyle.Render(text)
+	remaining := m.leftWidth - lipgloss.Width(styled)
+	if remaining > 0 {
+		styled += bgStyle.Render(strings.Repeat(" ", remaining))
+	}
+	return styled
+}
+
 func (m Model) leftLines() []string {
 	lf := m.focusPanel == focusSessions
 	lines := []string{""}
@@ -1484,7 +1517,7 @@ func (m Model) leftLines() []string {
 		selected := i == m.cursor
 		indicator := "○"
 		if selected {
-			indicator = "●"
+			indicator = "❯"
 		}
 		name := s.Name
 		if name == "" {
@@ -1541,28 +1574,83 @@ func sessionLangBadge(language string, selected, focused bool) string {
 }
 
 func (m *Model) handleRightPanelClick(bodyRow int) {
-	if m.statsTableBodyRow >= 0 && len(m.toolStats) > 0 {
-		idx := bodyRow - m.statsTableBodyRow
-		if idx >= 0 && idx < len(m.toolStats) {
-			m.toolStatsCursor, m.focusPanel = idx, focusToolStats
-			return
+	switch m.rightTab {
+	case 1: // Tools tab
+		if m.statsTableBodyRow >= 0 && len(m.toolStats) > 0 {
+			idx := bodyRow - m.statsTableBodyRow
+			if idx >= 0 && idx < len(m.toolStats) {
+				m.toolStatsCursor, m.focusPanel = idx, focusToolStats
+			}
 		}
-	}
-	if m.recentTableBodyRow >= 0 && len(m.recentCalls) > 0 {
-		idx := bodyRow - m.recentTableBodyRow
-		if idx >= 0 && idx < len(m.recentCalls) {
-			m.statsCursor, m.focusPanel = idx, focusStats
-			return
+	case 2: // History tab
+		if m.recentTableBodyRow >= 0 && len(m.recentCalls) > 0 {
+			idx := bodyRow - m.recentTableBodyRow
+			if idx >= 0 && idx < len(m.recentCalls) {
+				m.statsCursor, m.focusPanel = idx, focusStats
+			}
 		}
 	}
 }
 
+// rightTabFocusPanel returns the panelFocus that corresponds to the current rightTab.
+func (m Model) rightTabFocusPanel() panelFocus {
+	switch m.rightTab {
+	case 1:
+		return focusToolStats
+	case 2:
+		return focusStats
+	case 3:
+		return focusDiagnostics
+	default:
+		return focusDetails
+	}
+}
+
+// rightTabBar renders the pill-style tab header row for the right panel.
+// Active pill uses accent colour; inactive pills use muted text.
+func (m Model) rightTabBar(_ int) string {
+	activeLabel := lipgloss.NewStyle().Foreground(ActiveTheme.Accent).Bold(true)
+	activeBracket := lipgloss.NewStyle().Foreground(ActiveTheme.Accent)
+	inactiveLabel := lipgloss.NewStyle().Foreground(ActiveTheme.TextFaded)
+	inactiveBracket := lipgloss.NewStyle().Foreground(ActiveTheme.TextMuted)
+	rightFocused := m.focusPanel != focusSessions
+
+	tabs := []string{"Details", "Tools", "History", "Diagnostics"}
+	var sb strings.Builder
+	sb.WriteString(" ")
+	for i, name := range tabs {
+		if i > 0 {
+			sb.WriteString("  ")
+		}
+		if i == m.rightTab && rightFocused {
+			sb.WriteString(activeBracket.Render("[") + activeLabel.Render(" "+name+" ") + activeBracket.Render("]"))
+		} else {
+			sb.WriteString(inactiveBracket.Render("[") + inactiveLabel.Render(" "+name+" ") + inactiveBracket.Render("]"))
+		}
+	}
+	return sb.String()
+}
+
 func (m *Model) rightLines(rw int) []string {
-	lines := []string{""}
+	lines := []string{m.rightTabBar(rw), ""}
 	if len(m.sessions) == 0 {
 		lines = append(lines, "  "+MutedStyle.Render("Select a session to view details."))
 		return lines
 	}
+	switch m.rightTab {
+	case 1:
+		lines = append(lines, m.rightLinesTools(rw)...)
+	case 2:
+		lines = append(lines, m.rightLinesHistory(rw)...)
+	case 3:
+		lines = append(lines, m.rightLinesDiagnostics(rw)...)
+	default:
+		lines = append(lines, m.rightLinesDetails(rw)...)
+	}
+	return lines
+}
+
+func (m Model) rightLinesDetails(rw int) []string {
 	const kw = 14
 	mv := rw - kw
 	if mv < 8 {
@@ -1583,7 +1671,14 @@ func (m *Model) rightLines(rw int) []string {
 	if nm == "" {
 		nm = MutedStyle.Render("—")
 	}
-	lines = append(lines, detailRow("Name", nm), detailRow("ID", s.ID), detailRow("Language", s.Language), detailRow("Folder", fld), detailRow("Adapter", adp), detailRow("PID", fmt.Sprintf("%d", s.PID)))
+	lines := []string{
+		detailRow("Name", nm),
+		detailRow("ID", s.ID),
+		detailRow("Language", s.Language),
+		detailRow("Folder", fld),
+		detailRow("Adapter", adp),
+		detailRow("PID", fmt.Sprintf("%d", s.PID)),
+	}
 	if s.DaemonVersion != "" {
 		lines = append(lines, detailRow("Daemon", s.DaemonVersion))
 	}
@@ -1596,6 +1691,52 @@ func (m *Model) rightLines(rw int) []string {
 		cl = MutedStyle.Render("unknown")
 	}
 	lines = append(lines, detailRow("Client", cl))
+	return lines
+}
+
+func (m *Model) rightLinesTools(rw int) []string {
+	const (
+		c2w, c3w, c4w = 8, 10, 6
+	)
+	s3 := "   "
+	c1w := rw - 2 - c2w - c3w - c4w - 12
+	if c1w < 10 {
+		c1w = 10
+	}
+	sln := "  " + SepStyle.Render(strings.Repeat("─", rw-3))
+	roww := rw - 2
+
+	if len(m.toolStats) == 0 {
+		m.statsTableBodyRow = -1
+		return []string{
+			"  " + MutedStyle.Render("No calls recorded yet."),
+		}
+	}
+	lc := padRight(HintStyle.Render("Tool"), c1w)
+	h := "  " + lc + s3 + padLeft(HintStyle.Render("Calls"), c2w) + s3 + padLeft(HintStyle.Render("Avg"), c3w) + s3 + HintStyle.Render("Errors")
+	lines := []string{h, sln}
+	m.statsTableBodyRow = 2 // tab bar + blank = 2 rows before this content
+	for i, ts := range m.toolStats {
+		sel := m.focusPanel == focusToolStats && i == m.toolStatsCursor
+		tn := padRight(truncate(ts.Tool, c1w-2), c1w-2)
+		if sel {
+			pc, pa, pe := padLeft(fmt.Sprintf("%d", ts.Calls), c2w), padLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), padLeft("", c4w)
+			if ts.Errors > 0 {
+				pe = padLeft(fmt.Sprintf("%d", ts.Errors), c4w)
+			}
+			lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pc+s3+pa+s3+pe+s3))
+		} else {
+			c2, c3, c4 := padLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), c2w), padLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), c3w), padLeft("", c4w)
+			if ts.Errors > 0 {
+				c4 = padLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), c4w)
+			}
+			lines = append(lines, "  ○ "+tn+s3+c2+s3+c3+s3+c4+s3)
+		}
+	}
+	return lines
+}
+
+func (m *Model) rightLinesHistory(rw int) []string {
 	const (
 		c2w, c3w, c4w, c5w = 8, 10, 6, 12
 	)
@@ -1610,82 +1751,59 @@ func (m *Model) rightLines(rw int) []string {
 	}
 	sln := "  " + SepStyle.Render(strings.Repeat("─", rw-3))
 	roww := rw - 2
-	lines = append(lines, "")
-	if len(m.toolStats) == 0 {
-		if m.focusPanel == focusToolStats {
-			lines = append(lines, "  "+SelectedStyle.Render("Tools"))
-		} else {
-			lines = append(lines, "  "+HintStyle.Render("Tools"))
-		}
-		lines = append(lines, "  "+MutedStyle.Render("No calls recorded yet."))
-		m.statsTableBodyRow = -1
-	} else {
-		var lc string
-		if m.focusPanel == focusToolStats {
-			lc = padRight(SelectedStyle.Render("Tools"), c1w)
-		} else {
-			lc = padRight(HintStyle.Render("Tools"), c1w)
-		}
-		h := "  " + lc + s3 + padLeft(HintStyle.Render("Calls"), c2w) + s3 + padLeft(HintStyle.Render("Avg"), c3w) + s3 + HintStyle.Render("Errors")
-		lines = append(lines, h, sln)
-		m.statsTableBodyRow = len(lines)
-		for i, ts := range m.toolStats {
-			sel := m.focusPanel == focusToolStats && i == m.toolStatsCursor
-			tn := padRight(truncate(ts.Tool, c1w-2), c1w-2)
-			if sel {
-				pc, pa, pe := padLeft(fmt.Sprintf("%d", ts.Calls), c2w), padLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), padLeft("", c4w)
-				if ts.Errors > 0 {
-					pe = padLeft(fmt.Sprintf("%d", ts.Errors), c4w)
-				}
-				lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pc+s3+pa+s3+pe+s3))
-			} else {
-				c2, c3, c4 := padLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), c2w), padLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), c3w), padLeft("", c4w)
-				if ts.Errors > 0 {
-					c4 = padLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), c4w)
-				}
-				lines = append(lines, "  ○ "+tn+s3+c2+s3+c3+s3+c4+s3)
-			}
+
+	if len(m.recentCalls) == 0 {
+		m.recentTableBodyRow = -1
+		return []string{
+			"  " + MutedStyle.Render("No calls in this session yet."),
 		}
 	}
-	if len(m.recentCalls) > 0 {
-		lines = append(lines, "")
-		var rlc string
-		if m.focusPanel == focusStats {
-			rlc = padRight(SelectedStyle.Render("Recent Tools"), rc1w)
-		} else {
-			rlc = padRight(HintStyle.Render("Recent Tools"), rc1w)
-		}
-		h := "  " + rlc + s3 + padLeft(HintStyle.Render("Dur"), c2w) + s3 + padLeft(HintStyle.Render("When"), c3w) + s3 + padLeft(HintStyle.Render("Err"), c4w) + s3 + HintStyle.Render("Session")
-		lines = append(lines, h, sln)
-		m.recentTableBodyRow = len(lines)
-		for i, c := range m.recentCalls {
-			sel := m.focusPanel == focusStats && i == m.statsCursor
-			tn := padRight(truncate(c.Tool, rc1w-2), rc1w-2)
-			sn := padRight(truncate(c.SessionName, c5w), c5w)
-			if sel {
-				pd, pw, pe := padLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), padLeft(humanAgeTUI(c.CalledAt), c3w), padLeft("", c4w)
-				if !c.Success {
-					pe = padLeft("✗", c4w)
-				}
-				lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pd+s3+pw+s3+pe+s3+sn))
-			} else {
-				mk := OkStyle.Render("✓") + " "
-				if !c.Success {
-					mk = WarnStyle.Render("✗") + " "
-				}
-				c2, c3, c4 := padLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), c2w), padLeft(MutedStyle.Render(humanAgeTUI(c.CalledAt)), c3w), padLeft("", c4w)
-				if !c.Success {
-					c4 = padLeft(WarnStyle.Render("✗"), c4w)
-				}
-				c5 := padRight(MutedStyle.Render(truncate(c.SessionName, c5w)), c5w)
-				lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3+c5)
+	rlc := padRight(HintStyle.Render("Tool"), rc1w)
+	h := "  " + rlc + s3 + padLeft(HintStyle.Render("Dur"), c2w) + s3 + padLeft(HintStyle.Render("When"), c3w) + s3 + padLeft(HintStyle.Render("Err"), c4w) + s3 + HintStyle.Render("Session")
+	lines := []string{h, sln}
+	m.recentTableBodyRow = 2 // tab bar + blank = 2 rows before this content
+	for i, c := range m.recentCalls {
+		sel := m.focusPanel == focusStats && i == m.statsCursor
+		tn := padRight(truncate(c.Tool, rc1w-2), rc1w-2)
+		sn := padRight(truncate(c.SessionName, c5w), c5w)
+		if sel {
+			pd, pw, pe := padLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), padLeft(humanAgeTUI(c.CalledAt), c3w), padLeft("", c4w)
+			if !c.Success {
+				pe = padLeft("✗", c4w)
 			}
+			lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pd+s3+pw+s3+pe+s3+sn))
+		} else {
+			mk := OkStyle.Render("✓") + " "
+			if !c.Success {
+				mk = WarnStyle.Render("✗") + " "
+			}
+			c2, c3, c4 := padLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), c2w), padLeft(MutedStyle.Render(humanAgeTUI(c.CalledAt)), c3w), padLeft("", c4w)
+			if !c.Success {
+				c4 = padLeft(WarnStyle.Render("✗"), c4w)
+			}
+			c5 := padRight(MutedStyle.Render(truncate(c.SessionName, c5w)), c5w)
+			lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3+c5)
 		}
-	} else {
-		lines = append(lines, "")
-		lines = append(lines, "  "+HintStyle.Render("Recent Tools"))
-		lines = append(lines, "  "+MutedStyle.Render("No calls in this session yet."))
-		m.recentTableBodyRow = -1
+	}
+	return lines
+}
+
+func (m Model) rightLinesDiagnostics(_ int) []string {
+	if m.lastDiagnosticsOutput == "" {
+		return []string{
+			"",
+			"  " + MutedStyle.Render("No diagnostics recorded yet."),
+			"  " + MutedStyle.Render("Run the `diagnostics` tool in this session to populate this tab."),
+		}
+	}
+	var lines []string
+	lines = append(lines, "")
+	for _, line := range strings.Split(m.lastDiagnosticsOutput, "\n") {
+		if line == "" {
+			lines = append(lines, "")
+		} else {
+			lines = append(lines, "  "+DetailStyle.Render(line))
+		}
 	}
 	return lines
 }
@@ -1701,12 +1819,23 @@ func padRight(s string, w int) string {
 func (m Model) renderTopMenu(width int, dimmed bool) []string {
 	selector := m.renderSectionSelector(dimmed)
 	activityBox := m.renderActivityBox(dimmed)
+	daemonBox := m.renderDaemonMetricsBox(dimmed)
 	tokenBox := m.renderTokenSavingsBox(dimmed)
 	selectorWidth := lipgloss.Width(selector[0])
-	showTokenBox := width >= selectorWidth+1+30+1+lipgloss.Width(tokenBox[0])
+	daemonBoxWidth := lipgloss.Width(daemonBox[0])
+	showDaemonBox := width >= selectorWidth+1+daemonBoxWidth+1+30
+	currentWidth := selectorWidth + 1 + 30
+	if showDaemonBox {
+		currentWidth += 1 + daemonBoxWidth
+	}
+	showTokenBox := width >= currentWidth+1+lipgloss.Width(tokenBox[0])
 	out := make([]string, 0, len(selector))
 	for i := range selector {
-		line := selector[i] + " " + activityBox[i]
+		line := selector[i]
+		if showDaemonBox {
+			line += " " + daemonBox[i]
+		}
+		line += " " + activityBox[i]
 		if showTokenBox {
 			line += " " + tokenBox[i]
 		}
@@ -1717,6 +1846,42 @@ func (m Model) renderTopMenu(width int, dimmed bool) []string {
 		out = append(out, line+strings.Repeat(" ", pad))
 	}
 	return out
+}
+
+func (m Model) renderDaemonMetricsBox(dimmed bool) []string {
+	border := SepStyle
+	title := PanelHeaderFadedStyle
+	sparkStyle := SelectedStyle
+	if dimmed {
+		border = SepInactiveStyle
+		title = PanelHeaderInactiveStyle
+		sparkStyle = InactiveStyle
+	}
+
+	const (
+		boxWidth   = 24
+		innerWidth = boxWidth - 2
+		sparkWidth = innerWidth - 2
+	)
+
+	value := "n/a"
+	if m.daemonMetricsOK && m.daemonMetrics.CPUAvailable {
+		value = monitor.FormatCPU(m.daemonMetrics.CPUPercent)
+	}
+	titleText := " Daemon CPU (" + value + ") "
+	topFill := boxWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
+	if topFill < 0 {
+		topFill = 0
+	}
+
+	spark := cpuSparkline(m.daemonCPU, sparkWidth)
+	content := " " + sparkStyle.Render(spark) + " "
+
+	return []string{
+		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
+		border.Render("│") + content + border.Render("│"),
+		border.Render("╰" + strings.Repeat("─", innerWidth) + "╯"),
+	}
 }
 
 func (m Model) renderSectionSelector(dimmed bool) []string {
@@ -1892,6 +2057,44 @@ func activitySparkline(buckets []int64, width int) string {
 		out[i] = levels[levelIdx]
 	}
 	return string(out)
+}
+
+func cpuSparkline(samples []float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(samples) == 0 {
+		return strings.Repeat(" ", width)
+	}
+	out := make([]rune, width)
+	levels := []rune("⡀⡄⡆⡇⣇⣧⣷⣿")
+	for i := range width {
+		sampleIdx := i * len(samples) / width
+		v := clampPercent(samples[sampleIdx])
+		if v == 0 {
+			out[i] = ' '
+			continue
+		}
+		levelIdx := int((v*float64(len(levels)) - 0.001) / 100)
+		if levelIdx < 0 {
+			levelIdx = 0
+		}
+		if levelIdx >= len(levels) {
+			levelIdx = len(levels) - 1
+		}
+		out[i] = levels[levelIdx]
+	}
+	return string(out)
+}
+
+func clampPercent(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }
 
 func tokenSavingsBar(tokens int64, width int) (string, string) {
