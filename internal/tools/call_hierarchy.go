@@ -47,7 +47,9 @@ func NewCallHierarchy(client lsp.LSPClient) *CallHierarchy {
 func (t *CallHierarchy) Name() string             { return "call_hierarchy" }
 func (t *CallHierarchy) InputSchema() json.RawMessage { return callHierarchySchema }
 func (t *CallHierarchy) Description() string {
-	return "Show the call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing). Useful for understanding control flow and impact of changes."
+	return "No native Claude Code equivalent. " +
+		"Show the call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing). " +
+		"Useful for understanding control flow and assessing the impact of changes."
 }
 
 type callHierarchyArgs struct {

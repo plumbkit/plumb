@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -92,12 +94,14 @@ func NewSearchInFiles() *SearchInFiles { return &SearchInFiles{} }
 func (t *SearchInFiles) Name() string                 { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
 func (t *SearchInFiles) Description() string {
-	return "Workspace-scoped regex content search. Prefer this over shelling out to grep/rg: " +
+	return "Workspace-scoped regex content search across file contents. " +
+		"For symbol name lookups (finding a function, type, or variable by name), prefer workspace_symbols — " +
+		"it uses the LSP index and returns results instantly. " +
+		"Use search_in_files for content patterns, string literals, comments, or arbitrary text. " +
+		"Prefer this over shelling out to grep/rg: " +
 		"results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
 		"binary files are skipped (null-byte sniff of the first 8 KB), files larger than max_file_bytes (50 MiB default) are skipped before opening, " +
-		"globs with a literal directory prefix (e.g. \"src/**/*.go\") prune sibling directories from the walk, " +
-		"every call is recorded in the project's stats so you can see what's been searched, " +
-		"and the cache layer dedupes repeat queries within a session. " +
+		"globs with a literal directory prefix (e.g. \"src/**/*.go\") prune sibling directories from the walk. " +
 		"Smart-case (case-insensitive when the pattern is all lowercase), supports context lines and glob file filters."
 }
 
@@ -250,7 +254,9 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		return nil
 	})
 
-	// Phase 2: scan candidate files in parallel.
+	// Phase 2: scan candidate files in parallel. Each file is streamed
+	// line-by-line via bufio.Scanner so we never materialise the whole file
+	// in memory — the previous bytes.Buffer approach was O(file_size) per worker.
 	scan := func(p pathPair) *fileMatch {
 		f, err := os.Open(p.abs)
 		if err != nil {
@@ -264,20 +270,65 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		if bytes.IndexByte(sniff[:n], 0) >= 0 {
 			return nil
 		}
-		var buf bytes.Buffer
-		buf.Write(sniff[:n])
-		if _, err := buf.ReadFrom(f); err != nil {
-			return nil
+
+		// Prepend the sniffed bytes via MultiReader to avoid seeking.
+		// Use a custom split function (closure) so oversized lines are skipped
+		// in-place rather than aborting the scan via ErrTooLong.
+		var hitLineIdxs []int
+		var lines []searchLine
+		lineNo := 1
+		skippedLines := 0
+
+		scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(sniff[:n]), f))
+		scanner.Buffer(make([]byte, 64*1024), 2*searchMaxLineBytes)
+		scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+			if atEOF && len(data) == 0 {
+				return 0, nil, nil
+			}
+			if i := bytes.IndexByte(data, '\n'); i >= 0 {
+				line := data[:i]
+				if len(line) > 0 && line[len(line)-1] == '\r' {
+					line = line[:len(line)-1]
+				}
+				if len(line) > searchMaxLineBytes {
+					skippedLines++ // oversized: advance past the newline, return no token
+					lineNo++
+					return i + 1, nil, nil
+				}
+				return i + 1, line, nil
+			}
+			if atEOF {
+				line := data
+				if len(line) > 0 && line[len(line)-1] == '\r' {
+					line = line[:len(line)-1]
+				}
+				if len(line) > searchMaxLineBytes {
+					skippedLines++
+					return len(data), nil, nil
+				}
+				return len(data), line, nil
+			}
+			return 0, nil, nil
+		})
+
+		for scanner.Scan() {
+			data := scanner.Bytes()
+			cp := make([]byte, len(data))
+			copy(cp, data)
+			idx := len(lines)
+			lines = append(lines, searchLine{number: lineNo, data: cp})
+			if re.Match(cp) {
+				hitLineIdxs = append(hitLineIdxs, idx)
+			}
+			lineNo++
+		}
+		if scanner.Err() != nil {
+			// A line exceeded 2*searchMaxLineBytes; everything up to it has been
+			// processed; count the scanner abort as one more skipped line.
+			skippedLines++
 		}
 
-		lines, skippedLines := splitLines(buf.Bytes())
-		var hitLines []int
-		for i, line := range lines {
-			if re.Match(line.data) {
-				hitLines = append(hitLines, i)
-			}
-		}
-		if len(hitLines) == 0 {
+		if len(hitLineIdxs) == 0 {
 			if skippedLines > 0 {
 				return &fileMatch{relPath: p.rel, skippedLines: skippedLines}
 			}
@@ -287,7 +338,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		// Format hits with optional context, merging overlapping windows.
 		var formatted []string
 		shown := make(map[int]bool)
-		for _, h := range hitLines {
+		for _, h := range hitLineIdxs {
 			lo := max(0, h-a.ContextLines)
 			hi := min(len(lines)-1, h+a.ContextLines)
 			for i := lo; i <= hi; i++ {
@@ -303,7 +354,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 					fmt.Sprintf("  %d:%s%s", lines[i].number, prefix, strings.TrimRight(string(lines[i].data), "\r")))
 			}
 		}
-		return &fileMatch{relPath: p.rel, lines: formatted, hits: len(hitLines), skippedLines: skippedLines}
+		return &fileMatch{relPath: p.rel, lines: formatted, hits: len(hitLineIdxs), skippedLines: skippedLines}
 	}
 
 	wctx, cancel := context.WithCancel(ctx)
@@ -423,35 +474,6 @@ func allLower(s string) bool {
 type searchLine struct {
 	number int
 	data   []byte
-}
-
-// splitLines splits b into searchable lines. Lines over searchMaxLineBytes are
-// skipped without aborting the rest of the file.
-func splitLines(b []byte) ([]searchLine, int) {
-	var lines []searchLine
-	skipped := 0
-	lineNo := 1
-	for len(b) > 0 {
-		next := bytes.IndexByte(b, '\n')
-		var line []byte
-		if next < 0 {
-			line = b
-			b = nil
-		} else {
-			line = b[:next]
-			b = b[next+1:]
-		}
-		if len(line) > searchMaxLineBytes {
-			skipped++
-			lineNo++
-			continue
-		}
-		cp := make([]byte, len(line))
-		copy(cp, line)
-		lines = append(lines, searchLine{number: lineNo, data: cp})
-		lineNo++
-	}
-	return lines, skipped
 }
 
 // doubleStarMatchFile matches a glob that may contain ** against a slash-separated path.

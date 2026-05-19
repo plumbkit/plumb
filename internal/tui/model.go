@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/golimpio/plumb/internal/monitor"
@@ -477,6 +478,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setLeftWidthFromMouse(mouse.X)
 			} else if m.onSessionsPanel(mouse.X, mouse.Y) {
 				m.selectSessionAtBodyRow(mouse.Y - bodyStartRow)
+			} else if mouse.Y == bodyStartRow && mouse.X > m.leftWidth+1 {
+				// Click on right panel tabs
+				relX := mouse.X - m.leftWidth - 3
+				if relX >= 0 {
+					if relX < 13 {
+						m.rightTab = 0
+						m.focusPanel = focusDetails
+					} else if relX < 23 {
+						m.rightTab = 1
+						m.focusPanel = focusToolStats
+					} else if relX < 35 {
+						m.rightTab = 2
+						m.focusPanel = focusStats
+					} else if relX < 51 {
+						m.rightTab = 3
+						m.focusPanel = focusDiagnostics
+					}
+				}
+			} else if mouse.Y > bodyStartRow && mouse.X > m.leftWidth+1 {
+				// Click on right panel body
+				m.handleRightPanelClick(mouse.Y - bodyStartRow + m.rightScroll)
 			}
 		}
 
@@ -1102,7 +1124,7 @@ func (m Model) render() string {
 			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
 			sb.WriteString(line + "\n")
 		} else {
-			sb.WriteString(lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar + "\n")
+			sb.WriteString(lBar + leftCell + SepStyle.Render(" ") + rightCell + rBar + "\n")
 		}
 	}
 
@@ -1155,38 +1177,20 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 }
 
 func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
-	var leftTitle string
-	var leftStyle lipgloss.Style
 	sepStyle := SepStyle
 
 	if dimmed {
 		sepStyle = SepInactiveStyle
-		leftStyle = PanelHeaderInactiveStyle
-	} else {
-		if m.focusPanel == focusSessions {
-			leftStyle = PanelHeaderStyle
-		} else {
-			leftStyle = PanelHeaderFadedStyle
-		}
 	}
-
-	leftTitle = fmt.Sprintf(" Sessions (%d) ", len(m.sessions))
-
-	leftPart := sepStyle.Render("╭─") + leftStyle.Render(leftTitle)
-	leftFill := m.leftWidth - 1 - len(leftTitle)
-	if leftFill < 0 {
-		leftFill = 0
-	}
-	midPart := sepStyle.Render(strings.Repeat("─", leftFill) + "┬")
 
 	logoBottom := strings.Split(LogoText, "\n")[3]
-	currentW := lipgloss.Width(leftPart) + lipgloss.Width(midPart)
-	fillerW := m.width - currentW - LogoWidth
+	
+	fillerW := m.width - LogoWidth - 1
 	if fillerW < 0 {
 		fillerW = 0
 	}
 
-	return leftPart + midPart + sepStyle.Render(strings.Repeat("─", fillerW)) + sepStyle.Render(logoBottom)
+	return sepStyle.Render("╭" + strings.Repeat("─", fillerW)) + sepStyle.Render(logoBottom)
 }
 
 func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
@@ -1194,7 +1198,7 @@ func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
 	if dimmed {
 		sepStyle = SepInactiveStyle
 	}
-	return sepStyle.Render("╰" + strings.Repeat("─", m.leftWidth) + "┴" + strings.Repeat("─", rightWidth) + "╯")
+	return sepStyle.Render("╰" + strings.Repeat("─", m.width-2) + "╯")
 }
 
 func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
@@ -1247,7 +1251,23 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 		lines = append(lines, lb+lCell+SepStyle.Render("┆")+rCell+rb)
 	}
 	lines = append(lines, m.renderBottomBorderPopup(pLW, pRW))
-	return spliceOverlay(bg, strings.Join(lines, "\n"), m.width, m.height)
+	
+	overlayText := strings.Join(lines, "\n")
+	
+	// The overlay should start on row 4 (line 5 visually)
+	// and end 1 row above the status bar (m.height - 2).
+	
+	ovLines := strings.Split(overlayText, "\n")
+	ovW := 0
+	for _, l := range ovLines {
+		if lw := lipgloss.Width(l); lw > ovW {
+			ovW = lw
+		}
+	}
+	sx := (m.width - ovW) / 2
+	sy := 4
+
+	return spliceOverlayAt(bg, overlayText, sx, sy)
 }
 
 func (m Model) renderHelp(bg string) string {
@@ -1342,7 +1362,7 @@ func (m Model) renderTopBorderPopup(pLW, pRW int) string {
 }
 
 func (m Model) renderBottomBorderPopup(pLW, pRW int) string {
-	return SepStyle.Render("╰" + strings.Repeat("─", pLW) + "┴" + strings.Repeat("─", pRW) + "╯")
+	return SepStyle.Render("╰" + strings.Repeat("─", pLW+pRW+1) + "╯")
 }
 
 func (m Model) popupLeftLines() []string {
@@ -1357,21 +1377,23 @@ func (m Model) popupLeftLines() []string {
 	}
 	for i, c := range m.popupCalls {
 		sel := !m.popupRightFocus && i == m.popupCallCursor
-		pre := "   "
-		if i == m.popupCallCursor {
-			pre = " > "
-		}
 		sc := "○"
 		if c.SessionID == currID {
 			sc = "●"
 		}
+		if i == m.popupCallCursor {
+			sc = "❯"
+		}
+		
 		ok := "✓"
 		if !c.Success {
 			ok = "✗"
 		}
 		ts := c.CalledAt.Format("01-02 15:04:05")
 		dur := fmt.Sprintf("%dms", c.DurationMs)
-		row := fmt.Sprintf("%s%s %s %s %s", pre, sc, ok, ts, dur)
+		
+		// We format it as "  ❯ ✓ 05-19 15:04:05 22ms"
+		row := fmt.Sprintf("  %s %s %s %s", sc, ok, ts, dur)
 		maxW := m.popupLeftWidth - 1
 		if maxW < 10 {
 			maxW = 10
@@ -1379,12 +1401,13 @@ func (m Model) popupLeftLines() []string {
 		if lipgloss.Width(row) > maxW {
 			row = string([]rune(row)[:maxW-1]) + "…"
 		}
+		
 		if sel {
 			lines = append(lines, SelectedStyle.Render(row))
 		} else if m.popupRightFocus {
 			lines = append(lines, TimestampFadedStyle.Render(row))
 		} else if !c.Success {
-			p1 := fmt.Sprintf("%s%s ", pre, sc)
+			p1 := fmt.Sprintf("  %s ", sc)
 			err := WarnStyle.Render("✗")
 			p2 := fmt.Sprintf(" %s %s", ts, dur)
 			lines = append(lines, TimestampActiveStyle.Render(p1)+err+TimestampActiveStyle.Render(p2))
@@ -1423,26 +1446,18 @@ func (m Model) popupRightAll(rw int) []string {
 		sessLabel = DetailStyle.Render(c.SessionName) + "  " + sID + "  " + sl
 	}
 	lines = append(lines, detailRow("Tool", DetailStyle.Render(c.Tool)), detailRow("Status", st), detailRow("Called at", DetailStyle.Render(c.CalledAt.Format("2006-01-02 15:04:05"))), detailRow("Session", sessLabel), detailRow("Duration", DetailStyle.Render(fmt.Sprintf("%d ms", c.DurationMs))), detailRow("Input", DetailStyle.Render(fmt.Sprintf("%d bytes", c.InputBytes))), detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))))
-	bx := func(label string, content []string) {
-		inner := rw - 4
-		if inner < 8 {
-			inner = 8
-		}
-		tl := " " + label + " "
-		tf := inner + 1 - len(tl)
-		if tf < 0 {
-			tf = 0
-		}
-		lines = append(lines, "", " "+SepStyle.Render("╭─")+PanelHeaderStyle.Render(tl)+SepStyle.Render(strings.Repeat("─", tf)+"╮"))
+	
+	gutterLine := func(label string, content []string) {
+		lines = append(lines, "", "  "+PanelHeaderStyle.Render(label))
+		gutterChar := MutedStyle.Render("│")
 		for _, cl := range content {
-			if lipgloss.Width(cl) > inner {
-				cl = string([]rune(cl)[:inner-1]) + "…"
+			if lipgloss.Width(cl) > rw-5 {
+				cl = string([]rune(cl)[:rw-6]) + "…"
 			}
-			p := lipgloss.NewStyle().Width(inner).Render(cl)
-			lines = append(lines, " "+SepStyle.Render("│")+" "+p+" "+SepStyle.Render("│"))
+			lines = append(lines, "  "+gutterChar+" "+cl)
 		}
-		lines = append(lines, " "+SepStyle.Render("╰"+strings.Repeat("─", inner+2)+"╯"))
 	}
+
 	if !c.Success {
 		var el []string
 		if c.ErrorMsg != "" {
@@ -1452,27 +1467,35 @@ func (m Model) popupRightAll(rw int) []string {
 		} else {
 			el = append(el, MutedStyle.Render("(no error message recorded)"))
 		}
-		bx("Error", el)
+		gutterLine("Error", el)
 	}
 	ij, ot := m.currentDetail()
 	if ij != "" {
 		var al []string
 		var pb bytes.Buffer
 		if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
-			for _, l := range strings.Split(strings.TrimRight(pb.String(), "\n"), "\n") {
-				al = append(al, DetailStyle.Render(l))
+			var highlighted bytes.Buffer
+			if err := quick.Highlight(&highlighted, pb.String(), "json", "terminal256", "monokai"); err == nil {
+				for _, l := range strings.Split(strings.TrimRight(highlighted.String(), "\n"), "\n") {
+					al = append(al, l) // Chroma adds its own ANSI styles
+				}
+			} else {
+				// Fallback if highlight fails
+				for _, l := range strings.Split(strings.TrimRight(pb.String(), "\n"), "\n") {
+					al = append(al, DetailStyle.Render(l))
+				}
 			}
 		} else {
 			al = append(al, DetailStyle.Render(ij))
 		}
-		bx("Args", al)
+		gutterLine("Args", al)
 	}
 	if ot != "" && c.Success {
 		var ol []string
 		for _, o := range strings.Split(strings.TrimRight(ot, "\n"), "\n") {
 			ol = append(ol, DetailStyle.Render(o))
 		}
-		bx("Output", ol)
+		gutterLine("Output", ol)
 	}
 	if m.popupRightFocus {
 		lines = append(lines, "", "  "+MutedStyle.Render("c copy · tab back"))
@@ -1524,7 +1547,16 @@ func (m Model) leftPanelHeader() string {
 
 func (m Model) leftLines() []string {
 	lf := m.focusPanel == focusSessions
-	lines := []string{""}
+
+	var titleStyle lipgloss.Style
+	if lf {
+		titleStyle = PanelHeaderStyle
+	} else {
+		titleStyle = PanelHeaderFadedStyle
+	}
+	titleText := fmt.Sprintf(" Sessions (%d)", len(m.sessions))
+
+	lines := []string{titleStyle.Render(titleText), ""}
 	if len(m.sessions) == 0 {
 		m1, m2 := " Daemon running.", " Call a tool to begin."
 		if !daemonRunning() {
@@ -1821,13 +1853,11 @@ func (m *Model) rightLinesHistory(rw int) []string {
 func (m Model) rightLinesDiagnostics(_ int) []string {
 	if m.lastDiagnosticsOutput == "" {
 		return []string{
-			"",
 			"  " + MutedStyle.Render("No diagnostics recorded yet."),
 			"  " + MutedStyle.Render("Run the `diagnostics` tool in this session to populate this tab."),
 		}
 	}
 	var lines []string
-	lines = append(lines, "")
 	for _, line := range strings.Split(m.lastDiagnosticsOutput, "\n") {
 		if line == "" {
 			lines = append(lines, "")
@@ -1916,14 +1946,17 @@ func (m Model) renderDaemonMetricsBox(dimmed bool) []string {
 
 func (m Model) renderSectionSelector(dimmed bool) []string {
 	border := SepStyle
+	title := PanelHeaderFadedStyle
 	textStyle := SelectedStyle
 	hintStyle := MutedStyle
 	if dimmed {
 		border = SepInactiveStyle
+		title = PanelHeaderInactiveStyle
 		textStyle = InactiveStyle
 		hintStyle = InactiveStyle
 	}
 
+	titleText := " Section "
 	current := "Sessions"
 	if m.currentSection >= 0 && m.currentSection < len(sectionMenuItems) {
 		current = sectionMenuItems[m.currentSection]
@@ -1939,9 +1972,13 @@ func (m Model) renderSectionSelector(dimmed bool) []string {
 		pad = 1
 	}
 	row := content + strings.Repeat(" ", pad) + arrow + " "
+	topFill := sectionMenuWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
+	if topFill < 0 {
+		topFill = 0
+	}
 
 	return []string{
-		border.Render("╭" + strings.Repeat("─", sectionMenuWidth-2) + "╮"),
+		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
 		border.Render("│") + row + border.Render("│"),
 		border.Render("╰" + strings.Repeat("─", sectionMenuWidth-2) + "╯"),
 	}
@@ -2069,7 +2106,7 @@ func activitySparkline(buckets []int64, width int) string {
 			max = v
 		}
 	}
-	levels := []rune("⡀⡄⡆⡇⣇⣧⣷⣿")
+	levels := []rune{' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 	for i := range width {
 		bucketIdx := i * len(buckets) / width
 		v := buckets[bucketIdx]
@@ -2077,7 +2114,11 @@ func activitySparkline(buckets []int64, width int) string {
 			out[i] = ' '
 			continue
 		}
-		levelIdx := int((v*int64(len(levels)) - 1) / max)
+		ratio := float64(v) / float64(max)
+		levelIdx := int(ratio * float64(len(levels)-1))
+		if v > 0 && levelIdx == 0 {
+			levelIdx = 1
+		}
 		if levelIdx < 0 {
 			levelIdx = 0
 		}
@@ -2097,7 +2138,7 @@ func cpuSparkline(samples []float64, width int) string {
 		return strings.Repeat(" ", width)
 	}
 	out := make([]rune, width)
-	levels := []rune("⡀⡄⡆⡇⣇⣧⣷⣿")
+	levels := []rune{' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 	for i := range width {
 		sampleIdx := i * len(samples) / width
 		v := clampPercent(samples[sampleIdx])
@@ -2105,7 +2146,11 @@ func cpuSparkline(samples []float64, width int) string {
 			out[i] = ' '
 			continue
 		}
-		levelIdx := int((v*float64(len(levels)) - 0.001) / 100)
+		ratio := v / 100.0
+		levelIdx := int(ratio * float64(len(levels)-1))
+		if v > 0 && levelIdx == 0 {
+			levelIdx = 1
+		}
 		if levelIdx < 0 {
 			levelIdx = 0
 		}
@@ -2132,17 +2177,39 @@ func tokenSavingsBar(tokens int64, width int) (string, string) {
 		return "", ""
 	}
 	const targetTokens = 1_500_000
-	filled := int(tokens * int64(width) / targetTokens)
-	if tokens > 0 && filled == 0 {
-		filled = 1
+	ratio := float64(tokens) / float64(targetTokens)
+	if ratio > 1 {
+		ratio = 1
 	}
-	if filled > width {
-		filled = width
+	if ratio < 0 {
+		ratio = 0
 	}
-	if filled < 0 {
-		filled = 0
+
+	totalSteps := width * 8
+	filledSteps := int(ratio * float64(totalSteps))
+
+	if tokens > 0 && filledSteps == 0 {
+		filledSteps = 1 // Show at least a sliver
 	}
-	return strings.Repeat("█", filled), strings.Repeat("░", width-filled)
+
+	fullBlocks := filledSteps / 8
+	remainder := filledSteps % 8
+
+	blocks := []rune{' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'}
+
+	filledStr := strings.Repeat("█", fullBlocks)
+	if remainder > 0 {
+		filledStr += string(blocks[remainder])
+	}
+
+	// Calculate the remaining visible width (number of character cells)
+	// lipgloss.Width correctly handles multi-byte runes like our blocks
+	unfilledLen := width - lipgloss.Width(filledStr)
+	if unfilledLen < 0 {
+		unfilledLen = 0
+	}
+
+	return filledStr, strings.Repeat("░", unfilledLen)
 }
 
 func formatActivityCalls(n int64) string {

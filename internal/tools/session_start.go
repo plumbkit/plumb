@@ -54,18 +54,21 @@ type RootsResolver func(ctx context.Context) string
 //  3. roots/list query to the MCP client (Claude Desktop's roots support)
 //  4. walk up from os.Getwd() looking for a project marker
 type SessionStart struct {
-	ws       WorkspaceFn
-	diag     diagnosticsSource // may be nil; diagnostics section skipped when nil
-	roots    RootsResolver     // may be nil; roots/list fallback skipped when nil
-	refuseFn func() bool       // may be nil; treated as false (no refusal)
+	ws           WorkspaceFn
+	diag         diagnosticsSource // may be nil; diagnostics section skipped when nil
+	roots        RootsResolver     // may be nil; roots/list fallback skipped when nil
+	refuseFn     func() bool       // may be nil; treated as false (no refusal)
+	clientNameFn func() string     // may be nil; returns current MCP client name
 }
 
 // NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted
 // before any directory walks under the resolved workspace — it should return
 // the current value of walk.refuse_home_roots so live config changes are
-// honoured. Pass nil to disable the guard.
-func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver, refuseHomeRoots func() bool) *SessionStart {
-	return &SessionStart{ws: ws, diag: diag, roots: roots, refuseFn: refuseHomeRoots}
+// honoured. Pass nil to disable the guard. clientName returns the MCP client
+// name negotiated during connection initialisation; pass nil to omit
+// client-specific guidance.
+func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver, refuseHomeRoots func() bool, clientName func() string) *SessionStart {
+	return &SessionStart{ws: ws, diag: diag, roots: roots, refuseFn: refuseHomeRoots, clientNameFn: clientName}
 }
 
 func (*SessionStart) Name() string { return "session_start" }
@@ -191,7 +194,21 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		}
 	}
 
-	// ── 7. Active diagnostics (errors + warnings only) ────────────────────
+	// ── 7. Tool guidance (Claude Code only) ──────────────────────────────
+	if t.clientNameFn != nil && strings.EqualFold(t.clientNameFn(), "claude-code") {
+		sb.WriteString("## Tool guidance (Claude Code)\n\n")
+		sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
+		sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
+		sb.WriteString("- **find_references** — all call sites for a symbol (LSP-semantic, not text search). Accepts name or position.\n")
+		sb.WriteString("- **get_definition** — jump to definition by name or position without reading files first.\n")
+		sb.WriteString("- **call_hierarchy** — callers and callees of a function.\n")
+		sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
+		sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
+		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
+		sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
+	}
+
+	// ── 8. Active diagnostics (errors + warnings only) ────────────────────
 	if t.diag != nil {
 		all := t.diag.AllDiagnostics()
 		filtered := make(map[string][]protocol.Diagnostic)

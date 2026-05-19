@@ -2,8 +2,9 @@ package protocol
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
@@ -364,8 +365,14 @@ func ProcessID() *int32 {
 }
 
 // FileURI converts an absolute path to a file:// URI.
+// Safe on Windows: backslashes are converted to forward slashes and a drive
+// letter (e.g. C:\path) is prefixed with an extra slash → file:///C:/path.
 func FileURI(path string) string {
-	return fmt.Sprintf("file://%s", path)
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return "file://" + path
 }
 
 // ─── Request / notification params ───────────────────────────────────────────

@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -66,6 +67,44 @@ func TestListSymbols_MissingURI(t *testing.T) {
 	_, err := tool.Execute(context.Background(), raw)
 	if err == nil {
 		t.Fatal("expected error for missing uri")
+	}
+}
+
+func TestListSymbols_IncludeSignatures(t *testing.T) {
+	f, err := os.CreateTemp("", "list_symbols_test_*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	content := "package p\n\nfunc Greet(name string) string {\n\treturn name\n}\n"
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{
+			{
+				Name: "Greet",
+				Kind: protocol.SKFunction,
+				Range: protocol.Range{
+					Start: protocol.Position{Line: 2},
+					End:   protocol.Position{Line: 4},
+				},
+			},
+		},
+	}
+	tool := tools.NewListSymbols(mock, nil, 0)
+	raw, _ := json.Marshal(map[string]any{
+		"uri":                "file://" + f.Name(),
+		"include_signatures": true,
+	})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("list_symbols: %v", err)
+	}
+	if !strings.Contains(out, "→ func Greet(name string) string {") {
+		t.Errorf("expected signature in output, got:\n%s", out)
 	}
 }
 

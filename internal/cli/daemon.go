@@ -432,7 +432,12 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewVersion())
 	srv.Register(tools.NewDaemonInfoFunc(sessID, nameFn, Version, daemonStartedAt))
 	srv.Register(tools.NewRenameSession(renameSessionFn))
-	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn, refuseHomeRootsFn))
+	clientNameFn := func() string {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		return clientName
+	}
+	srv.Register(tools.NewSessionStart(wsFn, sessionInv, rootsFn, refuseHomeRootsFn, clientNameFn))
 
 	// Edit tools — LSP-semantic refactoring + body replacement / inserts.
 	srv.Register(tools.NewRenameSymbol(sessionProxy))

@@ -362,96 +362,27 @@ Refinements to existing behaviour. No new contracts, no new infrastructure — j
 
 ---
 
-### `list_symbols` — include method signatures and parameter types
-
-**Priority:** high — agents routinely need to call a function they just found; without the signature they must read the file.
-**Effort:** Small. The LSP `textDocument/documentSymbol` response does not include signatures; the text must be extracted from the source file using the returned line range.
-**Status:** Not started.
-
-**The problem.**
-
-`list_symbols` returns names, kinds, and line ranges. It does not return the function or method signature. An agent that wants to call `refreshDashboard` must then read the file at the function's line to learn that the method takes no arguments, or read a different function to learn its parameter types. Each of these is an additional round-trip.
-
-For Go specifically, the first line of every function/method definition is the complete signature. Extracting it requires reading the source line at the symbol's `start_line`.
-
-**Desired output:**
-
-```
-Model.renderDashboard     method  L487–590  func (m Model) renderDashboard() string
-dashBox                   func    L592–605  func dashBox(titleText string, innerWidth int, contentLines []string) []string
-```
-
-**Definition of done:**
-
-1. `list_symbols` gains an optional `include_signatures bool` parameter (default false for backwards compatibility).
-2. When true, for each symbol of kind `function` or `method`, extract the first source line of the range and append it as a `signature` field in the output.
-3. For Go, the signature is the first non-blank non-comment line at `start_line`.
-4. For Python, include the full `def` line.
-5. Extraction requires one `read_file` for the file (already done for range resolution — no extra round-trip if cached).
-6. Unit-tested; `docs/mcp-tools.md` updated.
-
-**Watch out for:**
-
-- Multi-line signatures (Go interface methods with line-wrapped parameters, Python decorators). Extract only the first line for Phase 1 and document the limitation.
-- Performance: reading source lines for every symbol in a large file adds cost. Gate behind the `include_signatures` flag so callers opt in deliberately.
-
----
-
-### `search_in_files` — performance and first-call cold-start latency
-
-**Priority:** medium-high — first-call latency of 17 s+ disrupts agent flow, even though subsequent calls are faster.
-**Effort:** Small–medium. Mostly diagnosis + tuning the ripgrep invocation parameters and process warm-up.
-**Status:** Not started.
-
-**The problem.**
-
-First-call latency for `search_in_files` is consistently in the 17–22 second range on the plumb repository itself (a small Go codebase). Subsequent calls to the same or similar patterns are faster, suggesting the bottleneck is cold process startup or filesystem metadata fetching rather than the search itself.
-
-By comparison, `workspace_symbols` with an LSP that has already indexed the workspace answers queries in under 1 second for the same class of "find all uses of this type" question.
-
-**Investigation points:**
-
-1. Measure whether the latency is inside the ripgrep process spawn itself (`exec.CommandContext` overhead) or in the Go wrapper marshalling results.
-2. Check whether the daemon pre-spawns or caches the ripgrep path on first call; if not, consider a one-time lookup at daemon start.
-3. For known-type and known-symbol lookups, prefer `workspace_symbols` over `search_in_files` in the tool descriptions. Make the guidance explicit so agents understand when each tool is appropriate.
-4. Add a fast-path: if the query does not use regex and has no glob constraints, delegate to `workspace_symbols` instead of ripgrep.
-
-**Definition of done:**
-
-1. `search_in_files` first-call p95 latency drops to under 5 s on the plumb repo (or equivalent small Go workspace).
-2. Tool descriptions for `search_in_files` and `workspace_symbols` include a guidance note: prefer `workspace_symbols` for symbol name lookups in indexed workspaces; use `search_in_files` for pattern/regex searches across file content.
-3. Benchmarks in `internal/tools/search_in_files_test.go` measure first and warm call latency so regressions are visible.
-
-**Watch out for:**
-
-- ripgrep startup overhead is typically < 100 ms on warm systems. If the daemon is genuinely taking 17 s, the bottleneck may be outside ripgrep — check `.gitignore` traversal and whether the wrapper is walking the directory tree before spawning ripgrep, rather than passing the tree to ripgrep directly.
-- Do not remove `search_in_files`; it is irreplaceable for regex/pattern searches. Only optimise and re-steer agents towards `workspace_symbols` for name-based queries.
-
----
-
 ### `session_start` orientation — richer entry-point guidance for agents
 
 **Priority:** medium-high — first call shapes the entire session quality.
 **Effort:** Small. Additive changes to `session_start.go` response text; no new infrastructure.
-**Status:** Not started.
+**Status:** Partial. Item 2 (Claude Code tool guidance) is done. Items 1, 3, 4 remain.
 
 **The problem.**
 
-`session_start` currently returns: workspace, language, branch, recent commits, recently-modified files, memories, top-5 tool stats, and active diagnostics. That is a solid orientation packet, but it leaves several gaps that cause agents to fumble through redundant tool calls in the first few turns:
+`session_start` currently returns: workspace, language, branch, recent commits, recently-modified files, memories, top-5 tool stats, active diagnostics, and (for Claude Code) a tool guidance section. That is a solid orientation packet, but it leaves several gaps:
 
 1. **No suggested next tool.** An agent arriving at an unfamiliar codebase has no signal for "start with `workspace_symbols` to discover structure" vs "start with `list_symbols` on a specific file" vs "start with `search_in_files`". The session packet could include a short recommended-first-step suggestion based on what it knows: if recent commits modified specific files, suggest examining those files; if the language is resolved and LSP is up, suggest `workspace_symbols`; if LSP is unavailable, suggest `list_files`.
-2. **No tool-choice guidance for the session client.** The packet does not tell the agent which tools are uniquely valuable for its context. A Claude Code session should be told: "prefer `workspace_symbols` over `Bash: grep`, prefer `find_references` over `Bash: rg -n`" — because without that, the agent defaults to native tools it already knows.
 3. **No summary of available memory.** If the workspace has saved memories, the packet mentions them by name but does not surface their content. An agent that doesn't read memories in the first turn tends not to read them at all.
 4. **No workspace scale signal.** File count, rough codebase size, and primary language file count would help agents calibrate whether to do broad workspace searches or narrow file-level exploration.
 
 **Definition of done:**
 
 1. `session_start` response includes a `recommended_start` field: one sentence explaining the best first move given current workspace state.
-2. When `clientInfo.name == "claude-code"`, append a `tool_guidance` block listing: tools with no native equivalent (lead with these), tools where plumb adds value over the native equivalent, and tools that are redundant (skip these for Claude Code).
-3. If the workspace has memories, append a summary of each memory's description (not full body) to prompt the agent to read relevant ones.
-4. Add a `workspace_scale` field: approximate file count and primary-language file count (from `list_files` result or cached filesystem stat).
-5. All new fields are additive — existing callers that ignore unknown fields are unaffected.
-6. Unit-tested with mock workspace state; integration-tested against a real plumb session.
+2. If the workspace has memories, append a summary of each memory's description (not full body) to prompt the agent to read relevant ones.
+3. Add a `workspace_scale` field: approximate file count and primary-language file count (from `list_files` result or cached filesystem stat).
+4. All new fields are additive — existing callers that ignore unknown fields are unaffected.
+5. Unit-tested with mock workspace state; integration-tested against a real plumb session.
 
 **Watch out for:**
 
@@ -460,65 +391,25 @@ By comparison, `workspace_symbols` with an LSP that has already indexed the work
 
 ---
 
-### Claude Code integration — reduce tool overlap and choice paralysis
-
-**Priority:** medium — friction point unique to Claude Code contexts.
-**Effort:** Small. Primarily documentation and tool description wording.
-**Status:** Not started.
-
-**The problem.**
-
-When running inside Claude Code, the agent has access to both plumb's tools and Claude Code's native tools (`Read`, `Edit`, `Write`, `Bash`). Many tool capabilities overlap:
-
-| Task | Plumb tool | Claude Code native |
-|---|---|---|
-| Read a file | `read_file` | `Read` |
-| Search for text | `search_in_files` | `Bash: rg / grep` |
-| Git status/log | `git` | `Bash: git` |
-| Edit a file | `edit_file` | `Edit` |
-| List files | `list_files` | `Bash: find` |
-
-This creates **choice paralysis**: when both tools are available, the agent must decide which to use. Without clear guidance, it may choose inconsistently, or worse, choose the native tool when plumb's LSP-backed alternative would provide richer output (e.g., using `Bash: grep` instead of `workspace_symbols` to find a type, then needing two follow-up reads to understand the context).
-
-**Improvements needed:**
-
-1. **Tool descriptions should state explicitly when to prefer plumb over native.** For each tool that overlaps with Claude Code's native toolkit, the description should say "prefer this over `<alternative>` because <reason>". Example: `read_file` description should note that it records mtime for strict-mode compatibility and returns a binary-detection header; `search_in_files` should note it honours `.gitignore` and returns bounded structured output.
-2. **Session orientation.** `session_start` already returns tool stats. Consider adding a "tool choice guidance" section for Claude Code clients specifically (detected via `clientInfo.name == "claude-code"`), listing: "for this workspace, prefer X over Y because Z".
-3. **Uniquely-valuable tools should be prominent.** The tools with no native equivalent — `workspace_symbols`, `find_references`, `call_hierarchy`, `type_hierarchy`, `rename_symbol`, `replace_symbol_body`, `transaction_apply` — should have descriptions that open with "No native Claude Code equivalent." so agents learn to reach for them first.
-4. **Redundant tools for Claude Code may emit a friendly suggestion.** When `read_file` is called and the `clientInfo` indicates Claude Code, the response could include a one-line note: "Consider using the native `Read` tool for files you only need to read; `read_file` is most valuable when strict mode or mtime tracking is needed." (Configurable; off by default.)
-
-**Definition of done:**
-
-1. Tool descriptions updated in `internal/tools/*.go` for the overlap cases above.
-2. For tools with no native equivalent, descriptions lead with that fact.
-3. `session_start` response includes a one-liner per "prefer plumb for X" guidance when `clientInfo.name == "claude-code"`.
-4. No new code paths required; this is description text and one conditional block in `session_start.go`.
-
----
-
 ### Java adapter (jdtls) — multi-OS polish and CI hardening
 
 **Priority:** medium — validated first version, but still needs cross-platform polish.
-**Effort:** Small–medium. Mostly portability fixes and CI wiring.
-**Status:** Adapter works with a real jdtls binary and Java 21+. Remaining work is portability, CI coverage, and write-tool integration polish.
+**Effort:** Small–medium.
+**Status:** `rootURI` is now Windows-safe; CI jdtls integration step is wired. Remaining: cold-start tuning, binary naming docs, doctor version-check coverage, and write-tool DidOpen/DidClose.
 
 **Cross-platform note:** current real-binary validation has only been exercised on macOS. Linux and Windows coverage are expected pre-v1 hardening work, not a blocker for the first validated Java adapter version.
 
 Known gaps to address:
 
-1. **`rootURI` construction.** `internal/cli/pool.go` builds `rootURI := "file://" + root`. On Unix absolute paths this is correct (`/project` → `file:///project`). On Windows it produces the wrong form (`C:\project` → `file://C:\project`). The fix is a proper `pathToFileURI(path string) string` helper in `internal/lsp/protocol/types.go` that uses `filepath.ToSlash` and prepends a leading `/` for Windows drive paths. All three adapters (gopls, pyright, jdtls) use the same construction and would benefit from the fix.
+1. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test allows 5 minutes for ServiceReady and a further 2 minutes for diagnostics after DidOpen. In CI on a cold runner this may be tight — monitor and raise the deadline if needed, or pre-warm the JVM cache in the CI step. Set `JDTLS_FRESH_DATA=1` to force a hermetic per-test data directory (slower; default reuses `.testcache/jdtls-data` for warm-cache local runs).
 
-2. **CI integration test.** The `//go:build integration` test in `internal/lsp/adapters/jdtls/` skips silently in CI because no runner installs jdtls. Add a CI step (Ubuntu, using the Eclipse JDT LS release tarball or a package manager) and run `go test -tags=integration -timeout=3m ./internal/lsp/adapters/jdtls/`.
+2. **`jdtls` binary name on non-Homebrew installs.** The compiled default is `command = "jdtls"`. On Linux/Windows the launcher may be named differently (e.g. `jdtls.sh`, `jdtls.bat`, or a full path). Document this in `docs/adding-an-lsp.md` and consider a `command` override example in the config docs. Users can already override via `[lsp.java] command = "..."` in config.toml.
 
-3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test allows 5 minutes for ServiceReady and a further 2 minutes for diagnostics after DidOpen. In CI on a cold runner this may be tight — monitor and raise the deadline if needed, or pre-warm the JVM cache in the CI step. Set `JDTLS_FRESH_DATA=1` to force a hermetic per-test data directory (slower; default reuses `.testcache/jdtls-data` for warm-cache local runs).
+3. **`plumb doctor` Java runtime version check.** The check calls `java --version` and parses the first output line. This covers OpenJDK and GraalVM. Confirm it also handles Eclipse Temurin, Microsoft Build of OpenJDK, and Amazon Corretto version strings; add test cases in `doctor_test.go` once that file exists.
 
-4. **`jdtls` binary name on non-Homebrew installs.** The compiled default is `command = "jdtls"`. On Linux/Windows the launcher may be named differently (e.g. `jdtls.sh`, `jdtls.bat`, or a full path). Document this in `docs/adding-an-lsp.md` and consider a `command` override example in the config docs. Users can already override via `[lsp.java] command = "..."` in config.toml.
+4. **Write tools need `DidOpen`/`DidClose` for jdtls diagnostics.** Unlike gopls and pyright, jdtls only publishes diagnostics for open documents. When plumb's write tools call `DidChangeWatchedFiles` after modifying a Java file, jdtls updates its project model but may not emit diagnostics promptly. For the `diagnostics` tool to return up-to-date results after a Java write, the write path should call `DidOpen` (with the new content) + `DidClose` in addition to `DidChangeWatchedFiles`. This requires the write tools to know the current language server type, or a per-adapter hook in the LSP notification path.
 
-5. **`plumb doctor` Java runtime version check.** The check calls `java --version` and parses the first output line. This covers OpenJDK and GraalVM. Confirm it also handles Eclipse Temurin, Microsoft Build of OpenJDK, and Amazon Corretto version strings; add test cases in `doctor_test.go` once that file exists.
-
-6. **Write tools need `DidOpen`/`DidClose` for jdtls diagnostics.** Unlike gopls and pyright, jdtls only publishes diagnostics for open documents. When plumb's write tools call `DidChangeWatchedFiles` after modifying a Java file, jdtls updates its project model but may not emit diagnostics promptly. For the `diagnostics` tool to return up-to-date results after a Java write, the write path should call `DidOpen` (with the new content) + `DidClose` in addition to `DidChangeWatchedFiles`. This requires the write tools to know the current language server type, or a per-adapter hook in the LSP notification path.
-
-**Definition of done:** CI integration test passes on Linux; rootURI helper lands in `internal/lsp/protocol`; write-tool diagnostics path handles Java's `DidOpen`/`DidClose` requirement.
+**Definition of done:** write-tool diagnostics path handles Java's `DidOpen`/`DidClose` requirement; binary naming documented; doctor version-check covers major JDK distributions.
 
 ---
 

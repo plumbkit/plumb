@@ -23,7 +23,7 @@ func NewRenameSymbol(client lsp.LSPClient) *RenameSymbol { return &RenameSymbol{
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 
 func (*RenameSymbol) Description() string {
-	return `Rename a symbol throughout the workspace using LSP semantic refactoring.
+	return `No native Claude Code equivalent. Rename a symbol throughout the workspace using LSP semantic refactoring.
 
 The language server identifies every reference (across all files) and produces a precise edit set. Plumb applies the edits atomically. Safer than text-based find-and-replace because it understands scope, shadowing, and types — won't rename unrelated identifiers that happen to share the name.
 

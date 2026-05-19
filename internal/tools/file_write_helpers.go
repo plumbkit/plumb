@@ -496,7 +496,7 @@ func notifyLSP(ctx context.Context, client lsp.LSPClient, path string, changeTyp
 	}
 	return client.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{{
-			URI:  "file://" + path,
+			URI:  protocol.FileURI(path),
 			Type: changeType,
 		}},
 	})

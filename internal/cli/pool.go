@@ -221,7 +221,7 @@ func (p *workspacePool) acquireLang(ctx context.Context, root, language string) 
 		return nil, fmt.Errorf("language %q not configured or not enabled", language)
 	}
 
-	rootURI := "file://" + root
+	rootURI := protocol.FileURI(root)
 	c := cache.New(p.cacheTTL)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
