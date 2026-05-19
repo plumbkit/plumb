@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,23 +44,29 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// startJDTLS spawns jdtls with a fresh -data directory and returns a ready adapter.
-// The adapter and process are cleaned up via t.Cleanup.
+// startJDTLS spawns jdtls and returns a ready adapter. The process is killed
+// via t.Cleanup.
 //
 // jdtls requires a -data argument pointing to an Eclipse workspace storage
-// directory. A new temp dir is created for each test run to avoid stale state.
-// jdtls stderr is captured to a temp file and its path is logged via t.Logf so
-// it is visible in the test output when the test fails.
-func startJDTLS(t *testing.T, ws string) *jdtls.Adapter {
+// directory. By default a shared directory under .testcache/jdtls-data is
+// reused across runs to avoid the 60-120 s cold-start JVM penalty during local
+// iteration. Set JDTLS_FRESH_DATA=1 to use a per-test temp dir instead (fully
+// hermetic but slow on cold start).
+//
+// jdtls stderr is captured to a temp file; its path is logged via t.Logf and
+// visible in the test output when the test fails.
+func startJDTLS(t *testing.T) *jdtls.Adapter {
 	t.Helper()
 	jdtlsPath := requireJDTLS(t)
 
-	// Use a persistent data dir under .testcache so successive runs (within a
-	// single CI job or local iteration) can reuse the Eclipse workspace state and
-	// avoid the 60-120s cold-start penalty.
-	dataDir := filepath.Join(repoRoot(t), ".testcache", "jdtls-data")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		t.Fatal("create jdtls data dir:", err)
+	var dataDir string
+	if os.Getenv("JDTLS_FRESH_DATA") == "1" {
+		dataDir = t.TempDir()
+	} else {
+		dataDir = filepath.Join(repoRoot(t), ".testcache", "jdtls-data")
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			t.Fatal("create jdtls data dir:", err)
+		}
 	}
 
 	stderrFile, err := os.CreateTemp(t.TempDir(), "jdtls-stderr-*.log")
@@ -102,10 +109,10 @@ func startJDTLS(t *testing.T, ws string) *jdtls.Adapter {
 //  5. Send DidChangeWatchedFiles + DidOpen to register and open the new file.
 //  6. Wait up to 2 minutes for publishDiagnostics to fire with at least one error.
 //
-// DidOpen must be sent AFTER ServiceReady. Sending it earlier (before jdtls has
-// finished loading the project) causes jdtls to compile without routing results
-// to textDocument/publishDiagnostics — because jdtls blocks that path on the
-// client/registerCapability round-trip that arrives at ServiceReady.
+// DidOpen must be sent AFTER ServiceReady. Sending it earlier causes jdtls to
+// compile without routing results to textDocument/publishDiagnostics — because
+// jdtls blocks that path on the client/registerCapability round-trip that
+// arrives at ServiceReady time.
 //
 // The conn fix that makes this work: jdtls sends client/registerCapability with
 // a string ID ("1") rather than an integer ID. The JSON-RPC conn previously
@@ -115,7 +122,8 @@ func startJDTLS(t *testing.T, ws string) *jdtls.Adapter {
 //
 // jdtls starts a JVM and loads Eclipse plugins on each cold run; the 5-minute
 // budget covers cold-cache JVM startup on typical developer hardware. Subsequent
-// runs reuse the data dir under .testcache and are much faster.
+// runs reuse the data dir under .testcache and are much faster (set
+// JDTLS_FRESH_DATA=1 to force a hermetic per-test data dir).
 func TestIntegration_DidOpen(t *testing.T) {
 	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "java-fixture")
 
@@ -137,24 +145,16 @@ func TestIntegration_DidOpen(t *testing.T) {
 	wsURI := protocol.FileURI(realWS)
 	t.Logf("wsURI=%s brokenURI=%s", wsURI, brokenURI)
 
-	ad := startJDTLS(t, realWS)
+	ad := startJDTLS(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// readyCh is closed once jdtls sends ServiceReady.
+	// readyCh is closed once jdtls sends ServiceReady. sync.Once guards against
+	// the (unlikely but possible) case where two ServiceReady notifications race
+	// in separate goroutines and both try to close the channel.
 	readyCh := make(chan struct{})
-	var readyOnce func()
-	{
-		ch := readyCh
-		fired := false
-		readyOnce = func() {
-			if !fired {
-				fired = true
-				close(ch)
-			}
-		}
-	}
+	var readyOnce sync.Once
 
 	// Subscribe before Initialize so we don't miss notifications.
 	// All notifications are logged with full payload for post-mortem analysis.
@@ -169,7 +169,7 @@ func TestIntegration_DidOpen(t *testing.T) {
 				Type string `json:"type"`
 			}
 			if json.Unmarshal(raw, &status) == nil && status.Type == "ServiceReady" {
-				readyOnce()
+				readyOnce.Do(func() { close(readyCh) })
 			}
 			return
 		}

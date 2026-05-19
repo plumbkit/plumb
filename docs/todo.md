@@ -439,7 +439,7 @@ Known gaps to address before promoting from experimental to validated:
 
 2. **CI integration test.** The `//go:build integration` test in `internal/lsp/adapters/jdtls/` skips silently in CI because no runner installs jdtls. Add a CI step (Ubuntu, using the Eclipse JDT LS release tarball or a package manager) and run `go test -tags=integration -timeout=3m ./internal/lsp/adapters/jdtls/`. Promote the adapter to **validated** once this passes in CI.
 
-3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test uses a 90-second deadline with `DidOpen` to trigger immediate diagnostic analysis (jdtls requires both `DidChangeWatchedFiles` and `DidOpen` for timely diagnostics, unlike gopls/pyright). In CI this budget may still be tight on cold runners — monitor and raise if needed, or pre-warm the JVM cache in the CI step.
+3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test allows 5 minutes for ServiceReady and a further 2 minutes for diagnostics after DidOpen. In CI on a cold runner this may be tight — monitor and raise the deadline if needed, or pre-warm the JVM cache in the CI step. Set `JDTLS_FRESH_DATA=1` to force a hermetic per-test data directory (slower; default reuses `.testcache/jdtls-data` for warm-cache local runs).
 
 4. **`jdtls` binary name on non-Homebrew installs.** The compiled default is `command = "jdtls"`. On Linux/Windows the launcher may be named differently (e.g. `jdtls.sh`, `jdtls.bat`, or a full path). Document this in `docs/adding-an-lsp.md` and consider a `command` override example in the config docs. Users can already override via `[lsp.java] command = "..."` in config.toml.
 
