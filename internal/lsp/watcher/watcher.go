@@ -126,18 +126,78 @@ func matchesAny(patterns []string, filePath string) bool {
 }
 
 // matchGlob matches an LSP glob pattern against a file path.
-// Handles the ubiquitous **/<suffix> form used by gopls, pyright, and jdtls.
+//
+// LSP glob patterns differ from filepath.Match in two ways:
+//   - `{a,b,c}` means alternation: matches a, b, or c.
+//   - `**` matches zero or more path segments (not just one).
+//
+// We handle these by: (1) expanding alternation before matching, and
+// (2) splitting on `**` and matching prefix + suffix independently.
 func matchGlob(pattern, filePath, base string) bool {
+	// Expand {a,b,c} alternation — recurse on each alternative.
+	if alts := expandAlternation(pattern); len(alts) > 1 {
+		for _, alt := range alts {
+			if matchGlob(alt, filePath, base) {
+				return true
+			}
+		}
+		return false
+	}
+
 	if after, ok := strings.CutPrefix(pattern, "**/"); ok {
-		// Fast path: match suffix against the file's base name.
+		// **/<suffix>: match suffix against base name (fast path).
 		if matched, _ := filepath.Match(after, base); matched {
 			return true
 		}
-		// Fallback: match suffix against the full path for patterns that
-		// include additional directory segments (e.g. **/src/*.go).
-		matched, _ := filepath.Match(after, filePath)
-		return matched
+		// Also try against every path suffix (handles **/subdir/*.go).
+		parts := strings.SplitAfter(filePath, "/")
+		for i := range parts {
+			if matched, _ := filepath.Match(after, strings.Join(parts[i:], "")); matched {
+				return true
+			}
+		}
+		return false
 	}
+
+	// Pattern with ** in the middle (e.g. /abs/root/**/*.go).
+	if idx := strings.Index(pattern, "/**/"); idx >= 0 {
+		prefix := pattern[:idx+1]  // e.g. "/abs/root/"
+		suffix := pattern[idx+4:]  // e.g. "*.go"
+		if strings.HasPrefix(filePath, prefix) {
+			rest := filePath[len(prefix):]
+			// suffix must match the file's base or a relative sub-path.
+			if matched, _ := filepath.Match(suffix, filepath.Base(rest)); matched {
+				return true
+			}
+			if matched, _ := filepath.Match(suffix, rest); matched {
+				return true
+			}
+		}
+		return false
+	}
+
 	matched, _ := filepath.Match(pattern, filePath)
 	return matched
+}
+
+// expandAlternation expands the first {a,b,c} group in pattern into multiple
+// patterns. Returns a single-element slice when no braces are present.
+func expandAlternation(pattern string) []string {
+	start := strings.IndexByte(pattern, '{')
+	if start < 0 {
+		return []string{pattern}
+	}
+	end := strings.IndexByte(pattern[start:], '}')
+	if end < 0 {
+		return []string{pattern} // unbalanced — leave unchanged
+	}
+	end += start
+	prefix := pattern[:start]
+	suffix := pattern[end+1:]
+	alts := strings.Split(pattern[start+1:end], ",")
+	result := make([]string, 0, len(alts))
+	for _, alt := range alts {
+		result = append(result, prefix+strings.TrimSpace(alt)+suffix)
+	}
+	return result
 }

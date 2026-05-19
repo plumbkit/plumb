@@ -119,6 +119,7 @@ func TestFilter_GlobPatterns(t *testing.T) {
 		uri     string
 		want    bool
 	}{
+		// standard **/<ext> patterns
 		{"**/*.go", "file:///project/internal/foo.go", true},
 		{"**/*.go", "file:///project/main.go", true},
 		{"**/*.go", "file:///project/main.py", false},
@@ -127,6 +128,21 @@ func TestFilter_GlobPatterns(t *testing.T) {
 		{"**/*.py", "file:///project/src/app.py", true},
 		{"**/*.java", "file:///project/src/Main.java", true},
 		{"**/*.java", "file:///project/src/Main.go", false},
+		// {a,b} alternation (gopls v0.22+ sends these)
+		{"**/*.{go,mod,sum}", "file:///project/main.go", true},
+		{"**/*.{go,mod,sum}", "file:///project/go.mod", true},
+		{"**/*.{go,mod,sum}", "file:///project/go.sum", true},
+		{"**/*.{go,mod,sum}", "file:///project/main.py", false},
+		{"**/*.{mod,work}", "file:///project/go.mod", true},
+		{"**/*.{mod,work}", "file:///project/go.work", true},
+		{"**/*.{mod,work}", "file:///project/main.go", false},
+		// absolute path with **/ in the middle (gopls v0.22+ sends these too)
+		{"/ws/**/*.go", "file:///ws/main.go", true},
+		{"/ws/**/*.go", "file:///ws/sub/dir/pkg.go", true},
+		{"/ws/**/*.go", "file:///other/main.go", false},
+		{"/ws/**/*.{go,mod,sum,work}", "file:///ws/broken.go", true},
+		{"/ws/**/*.{go,mod,sum,work}", "file:///ws/go.mod", true},
+		{"/ws/**/*.{go,mod,sum,work}", "file:///ws/main.py", false},
 	}
 	for _, tc := range cases {
 		var f watcher.Filter
