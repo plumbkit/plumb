@@ -110,13 +110,13 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		case "down", "j":
 			m.logDetailScroll++
 		case "pgup":
-			pageSize := max(m.height-14, 1)
+			pageSize := max(m.height-10, 1)
 			m.logDetailScroll -= pageSize
 			if m.logDetailScroll < 0 {
 				m.logDetailScroll = 0
 			}
 		case "pgdown":
-			pageSize := max(m.height-14, 1)
+			pageSize := max(m.height-10, 1)
 			m.logDetailScroll += pageSize
 		}
 		return m, nil

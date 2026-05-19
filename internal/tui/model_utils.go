@@ -92,6 +92,32 @@ func padLeft(s string, w int) string {
 	return strings.Repeat(" ", w-v) + s
 }
 
+func overlayLogoBottom(line string, width int) string {
+	logoBottom := strings.Split(LogoText, "\n")[3]
+	logoW := lipgloss.Width(logoBottom)
+	if width <= logoW {
+		return line
+	}
+	line = padRight(line, width)
+
+	targetW := width - logoW
+	var b strings.Builder
+	used := 0
+	for _, r := range line {
+		rw := lipgloss.Width(string(r))
+		if used+rw > targetW {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	if used < targetW {
+		b.WriteString(strings.Repeat(" ", targetW-used))
+	}
+	b.WriteString(logoBottom)
+	return b.String()
+}
+
 func truncate(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {

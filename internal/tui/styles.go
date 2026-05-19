@@ -155,12 +155,12 @@ func RebuildStyles() {
 		Foreground(t.TextMuted)
 
 	LogStatusStyle = lipgloss.NewStyle().
-		Background(t.TextInactive).
+		Background(t.SelectionBackground).
 		Foreground(t.TextPrimary)
 
 	LogSelectedStyle = lipgloss.NewStyle().
-		Background(t.SelectionBackground).
-		Foreground(t.TextPrimary)
+		Bold(true).
+		Foreground(t.Accent)
 
 	LogDetailKeyStyle = lipgloss.NewStyle().
 		Foreground(t.Key)

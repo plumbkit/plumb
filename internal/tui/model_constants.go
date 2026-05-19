@@ -8,7 +8,7 @@ import (
 
 const (
 	defaultLeftWidth  = 30
-	minLeftWidth      = 20
+	minLeftWidth      = 26
 	minPopupLeftWidth = 28 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	sectionMenuWidth  = 22
 	pollInterval      = 2 * time.Second

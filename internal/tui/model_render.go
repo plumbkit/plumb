@@ -166,8 +166,6 @@ func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
 		sepStyle = SepInactiveStyle
 	}
 
-	logoBottom := strings.Split(LogoText, "\n")[3]
-
 	// The body divider ┆ is at index m.leftWidth + 1.
 	// We want ┬ to be at the same index.
 	// Total width before the logo should match the body's content width.
@@ -178,18 +176,7 @@ func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
 	}
 
 	line := "╭" + string(filler) + "╮"
-	// Ensure the line is at least m.width wide if the logo is present.
-	if m.width > len(line) {
-		line += strings.Repeat(" ", m.width-len(line))
-	}
-
-	// Overlay the logo bottom on the right edge of the frame.
-	logoW := lipgloss.Width(logoBottom)
-	if len(line) >= logoW {
-		line = line[:len(line)-logoW] + logoBottom
-	}
-
-	return sepStyle.Render(line)
+	return sepStyle.Render(overlayLogoBottom(line, m.width))
 }
 
 func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {

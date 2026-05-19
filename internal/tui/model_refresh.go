@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/golimpio/plumb/internal/monitor"
@@ -101,7 +102,14 @@ func (m *Model) refreshDiagnostics() {
 	if err != nil {
 		return
 	}
-	m.lastDiagnosticsOutput = string(b)
+	m.lastDiagnosticsOutput = diagnosticsControlOutput(string(b))
+}
+
+func diagnosticsControlOutput(out string) string {
+	if strings.HasPrefix(out, "error: unknown command \"diagnostics ") {
+		return "Live diagnostics require the current daemon.\nRun `plumb stop` and reopen the TUI so plumb serve starts the current build."
+	}
+	return out
 }
 
 func (m *Model) refreshActivity(db *stats.DB, now time.Time) {

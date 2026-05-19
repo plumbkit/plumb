@@ -31,13 +31,17 @@ func (m Model) filteredLogEntries() []logEntry {
 // characters. Structured JSON entries are rendered with a timestamp, level
 // badge, message, and key=val attributes; plain-text entries are shown as-is.
 func (m Model) renderLogEntry(e logEntry, width int, selected bool) string {
-	prefixMark := "  "
+	prefixMark := MutedStyle.Render("•")
 	if selected {
-		prefixMark = " ❯"
+		prefixMark = LogSelectedStyle.Render("❯")
 	}
 	if e.Msg == "" {
 		// Plain text line — just show raw content.
-		return prefixMark + " " + MutedStyle.Render(truncate(e.Raw, width-3))
+		line := prefixMark + " " + MutedStyle.Render(truncate(e.Raw, width-2))
+		if selected {
+			line = LogSelectedStyle.Render(ansi.Strip(line))
+		}
+		return line
 	}
 
 	// Timestamp: "15:04:05" (8 chars) or blank.
@@ -86,6 +90,9 @@ func (m Model) renderLogEntry(e logEntry, width int, selected bool) string {
 	if lipgloss.Width(line) > width-1 {
 		line = ansi.Truncate(line, width-2, "…")
 	}
+	if selected {
+		line = LogSelectedStyle.Render(ansi.Strip(line))
+	}
 	return line
 }
 
@@ -95,19 +102,11 @@ func (m Model) renderTopBorderLogs(dimmed bool) string {
 	if dimmed {
 		sep = SepInactiveStyle
 	}
-	logoBottom := strings.Split(LogoText, "\n")[3]
 
 	// Logs section is full-width, no divider.
 	innerW := m.width - 2
 	line := "╭" + strings.Repeat("─", innerW) + "╮"
-
-	// Overlay the logo bottom on the right edge of the frame.
-	logoW := lipgloss.Width(logoBottom)
-	if len(line) >= logoW {
-		line = line[:len(line)-logoW] + logoBottom
-	}
-
-	return sep.Render(line)
+	return sep.Render(overlayLogoBottom(line, m.width))
 }
 
 // logBodyScroll computes the clamped scroll offset for the log body given the
@@ -207,9 +206,6 @@ func (m Model) renderLogBodyLine(entry *logEntry, innerW int, selected bool, isO
 		return SepInactiveStyle.Render("│") + " " + InactiveStyle.Render(ansi.Strip(cell)) + " " + rBar
 	}
 	cell := lipgloss.NewStyle().Width(innerW - 2).Render(line)
-	if selected && entry != nil {
-		cell = LogSelectedStyle.Width(innerW - 2).Render(line)
-	}
 	return SepStyle.Render("│") + " " + cell + " " + rBar
 }
 
@@ -300,12 +296,12 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 		return bg
 	}
 	entry := filtered[m.selectedLogIndex(len(filtered))]
-	boxW := min(m.width-8, 96)
+	boxW := m.width
 	if boxW < 42 {
 		boxW = 42
 	}
 	innerW := boxW - 2
-	scrollH := max(m.height-14, 3)
+	scrollH := max(m.height-10, 3)
 
 	all := logDetailLines(entry, innerW-4)
 	maxScroll := max(len(all)-scrollH, 0)
@@ -339,7 +335,7 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 	lines = append(lines, m.renderLogDetailContentLine("", innerW, SepStyle.Render("│")))
 	lines = append(lines, m.renderLogDetailStatusBar(innerW))
 	lines = append(lines, SepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯"))
-	return spliceOverlayLower(dimAll(bg), strings.Join(lines, "\n"), m.width, m.height)
+	return spliceOverlayAt(dimAll(bg), strings.Join(lines, "\n"), 0, bodyStartRow)
 }
 
 func (m Model) renderLogDetailContentLine(text string, innerW int, rBar string) string {

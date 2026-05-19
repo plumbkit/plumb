@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -141,6 +142,21 @@ func TestMouseDragDividerResizesLeftPanel(t *testing.T) {
 	m = updated.(Model)
 	if m.draggingDivider {
 		t.Fatal("expected divider drag to stop")
+	}
+}
+
+func TestLeftPanelDoesNotShrinkBelowFullSessionRowWidth(t *testing.T) {
+	m := Model{leftWidth: minLeftWidth + 2, width: 100, height: 30}
+
+	updated, _ := m.Update(keyPress("["))
+	m = updated.(Model)
+	if m.leftWidth != minLeftWidth {
+		t.Fatalf("leftWidth after key resize = %d, want %d", m.leftWidth, minLeftWidth)
+	}
+
+	m.setLeftWidthFromMouse(1)
+	if m.leftWidth != minLeftWidth {
+		t.Fatalf("leftWidth after mouse resize = %d, want %d", m.leftWidth, minLeftWidth)
 	}
 }
 
@@ -423,16 +439,29 @@ func TestLogBodyLineKeepsPadBeforeRightBorder(t *testing.T) {
 	}
 }
 
-func TestSelectedLogBodyLineStylesFullInnerRow(t *testing.T) {
+func TestLogBodyLineUsesMarkersAndSelectedForegroundOnly(t *testing.T) {
 	RebuildStyles()
 	m := Model{}
 	entry := logEntry{Raw: "short"}
-	got := m.renderLogBodyLine(&entry, 30, true, false, SepStyle.Render("│"))
-	if strings.Count(got, "\x1b[48;2;46;52;64m") == 0 {
-		t.Fatalf("selected log row missing dark background escape: %q", got)
+
+	plain := ansiStripForTest(m.renderLogBodyLine(&entry, 30, false, false, SepStyle.Render("│")))
+	if !strings.HasPrefix(plain, "│ • short") {
+		t.Fatalf("log body line = %q, want bullet marker with one-cell left padding", plain)
 	}
-	if lipgloss.Width(got) != 32 {
-		t.Fatalf("selected log row width = %d, want 32", lipgloss.Width(got))
+
+	selected := m.renderLogBodyLine(&entry, 30, true, false, SepStyle.Render("│"))
+	selectedPlain := ansiStripForTest(selected)
+	if !strings.HasPrefix(selectedPlain, "│ ❯ short") {
+		t.Fatalf("selected log body line = %q, want selected marker with one-cell left padding", selectedPlain)
+	}
+	if strings.Contains(selected, "\x1b[48;") {
+		t.Fatalf("selected log row should not use a background escape: %q", selected)
+	}
+	if !strings.Contains(selected, "\x1b[") {
+		t.Fatalf("selected log row missing foreground styling: %q", selected)
+	}
+	if lipgloss.Width(selected) != 32 {
+		t.Fatalf("selected log row width = %d, want 32", lipgloss.Width(selected))
 	}
 }
 
@@ -467,6 +496,29 @@ func TestLogsTopBorderUsesPlainLogoIntegratedFrame(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "╭") {
 		t.Fatalf("logs top border = %q, want top-left corner", got)
+	}
+	if !utf8.ValidString(got) || strings.ContainsRune(got, '�') {
+		t.Fatalf("logs top border contains broken UTF-8: %q", got)
+	}
+}
+
+func TestDashboardTopBorderUsesPlainLogoIntegratedFrame(t *testing.T) {
+	RebuildStyles()
+	m := Model{currentSection: 0, width: 100, height: 12, ready: true}
+
+	lines := strings.Split(ansiStripForTest(m.renderDashboard()), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("dashboard rendered too few lines: %#v", lines)
+	}
+	got := lines[3]
+	if strings.Contains(got, "Dashboard") {
+		t.Fatalf("dashboard top border contains title text: %q", got)
+	}
+	if !strings.Contains(got, "╰╯ ╭") {
+		t.Fatalf("dashboard top border does not include logo bottom join: %q", got)
+	}
+	if !utf8.ValidString(got) || strings.ContainsRune(got, '�') {
+		t.Fatalf("dashboard top border contains broken UTF-8: %q", got)
 	}
 }
 
@@ -625,6 +677,12 @@ func TestLogDetailFrameHasStatusBarAndFixedBlankRows(t *testing.T) {
 			break
 		}
 	}
+	if !strings.HasPrefix(lines[bodyStartRow], "╭") || !strings.HasSuffix(lines[bodyStartRow], "╮") {
+		t.Fatalf("log detail top border is not full-width at row %d:\n%s", bodyStartRow, got)
+	}
+	if !strings.HasPrefix(lines[m.height-2], "╰") || !strings.HasSuffix(lines[m.height-2], "╯") {
+		t.Fatalf("log detail bottom border is not aligned with sessions popup:\n%s", got)
+	}
 }
 
 func TestLogDetailContentUsesTwoSpacePadding(t *testing.T) {
@@ -703,6 +761,18 @@ func TestTokenSavingsBar(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsControlOutputExplainsOldDaemon(t *testing.T) {
+	got := diagnosticsControlOutput("error: unknown command \"diagnostics /Users/gilberto/Projects/plumb\"\n")
+	for _, want := range []string{"current daemon", "plumb stop"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnosticsControlOutput missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "unknown command") {
+		t.Fatalf("diagnosticsControlOutput leaked raw control error: %q", got)
+	}
+}
+
 func keyPress(s string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Text: s, Code: []rune(s)[0]})
 }
@@ -717,7 +787,7 @@ func TestRender_AlignsBorders(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	m.ready = true
-	m.leftWidth = 20
+	m.leftWidth = minLeftWidth
 	m.sessions = []session.Info{
 		{ID: "s1", Name: "VERY-LONG-SESSION-NAME-THAT-EXCEEDS-WIDTH", Folder: "/tmp"},
 	}

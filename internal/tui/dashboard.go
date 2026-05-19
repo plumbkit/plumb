@@ -82,31 +82,9 @@ func (m Model) renderDashboard() string {
 		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
 
-	// Top border integrated with logo bottom line (same pattern as Logs section).
-	titleText := " Dashboard "
-	logoBottom := strings.Split(LogoText, "\n")[3]
-
-	leftPart := "╭─" + titleText
-	leftPartW := lipgloss.Width(leftPart)
-	topFill := max(innerW-leftPartW+1, 0)
-
-	line := leftPart + strings.Repeat("─", topFill) + "╮"
-	// Ensure the line is at least m.width wide.
-	if m.width > len(line) {
-		line += strings.Repeat(" ", m.width-len(line))
-	}
-
-	// Overlay the logo bottom on the right edge of the frame.
-	logoW = lipgloss.Width(logoBottom)
-	if len(line) >= logoW {
-		line = line[:len(line)-logoW] + logoBottom
-	}
-
-	sb.WriteString(
-		sepStyle.Render(line[:2]) +
-			PanelHeaderFadedStyle.Render(titleText) +
-			sepStyle.Render(line[leftPartW:]) + "\n",
-	)
+	// Top border integrated with the logo bottom line.
+	line := "╭" + strings.Repeat("─", innerW) + "╮"
+	sb.WriteString(sepStyle.Render(overlayLogoBottom(line, m.width)) + "\n")
 
 	// Body: scrollable widget grid.
 	// contentW is 6 chars narrower than innerW to leave 3-space margins on each side.
