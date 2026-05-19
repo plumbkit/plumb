@@ -2,8 +2,6 @@
 /plumb
 /dist/
 
-# Diagnostic tools (temporary, not for version control)
-/cmd/smoke/
 
 # Go build artifacts
 *.exe

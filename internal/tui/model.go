@@ -28,7 +28,7 @@ var Version string
 const (
 	defaultLeftWidth  = 30
 	minLeftWidth      = 20
-	minPopupLeftWidth = 30 // enough for " > ● ✓ 05-12 00:00:00 000ms"
+	minPopupLeftWidth = 28 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	sectionMenuWidth  = 22
 	pollInterval      = 2 * time.Second
 	activityInterval  = 10 * time.Second
@@ -53,8 +53,18 @@ const (
 	focusLogs                          // j/k scrolls the log viewer (Logs section)
 )
 
+type scrollBounds struct {
+	maxDash        int
+	maxLeft        int
+	maxRight       int
+	maxPopupLeft   int
+	maxPopupDetail int
+	maxLogDetail   int
+}
+
 // Model is the root Bubble Tea model for the sessions dashboard.
 type Model struct {
+	scrollBounds    *scrollBounds
 	sessions        []session.Info
 	globalDB        *stats.DB
 	toolStats       []stats.ToolStat
@@ -147,6 +157,7 @@ func NewModel(logPath string) Model {
 		logPath:           logPath,
 		logFollow:         true,
 		dashProjectFolder: detectWorkspaceFolder(),
+		scrollBounds:      &scrollBounds{},
 	}
 	m.refresh()
 	return m
@@ -433,6 +444,12 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	newM, cmd := m.updateInner(msg)
+	newM.enforceScrollBounds()
+	return newM, cmd
+}
+
+func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollMsg:
 		m.refresh()
@@ -531,7 +548,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.popupDetailScroll = 0
 				m.popupLeftScroll = 0
 				m.popupRightFocus = false
-			case "tab":
+			case "tab", "shift+tab":
 				m.popupRightFocus = !m.popupRightFocus
 				m.popupDetailScroll = 0
 			case "up", "k":
@@ -891,7 +908,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	
+	
 	return m, nil
+}
+
+func (m *Model) enforceScrollBounds() {
+	if m.scrollBounds == nil {
+		return
+	}
+	if m.dashScroll > m.scrollBounds.maxDash {
+		m.dashScroll = m.scrollBounds.maxDash
+	}
+	if m.dashScroll < 0 {
+		m.dashScroll = 0
+	}
+	if m.leftScroll > m.scrollBounds.maxLeft {
+		m.leftScroll = m.scrollBounds.maxLeft
+	}
+	if m.leftScroll < 0 {
+		m.leftScroll = 0
+	}
+	if m.rightScroll > m.scrollBounds.maxRight {
+		m.rightScroll = m.scrollBounds.maxRight
+	}
+	if m.rightScroll < 0 {
+		m.rightScroll = 0
+	}
+	if m.popupLeftScroll > m.scrollBounds.maxPopupLeft {
+		m.popupLeftScroll = m.scrollBounds.maxPopupLeft
+	}
+	if m.popupLeftScroll < 0 {
+		m.popupLeftScroll = 0
+	}
+	if m.popupDetailScroll > m.scrollBounds.maxPopupDetail {
+		m.popupDetailScroll = m.scrollBounds.maxPopupDetail
+	}
+	if m.popupDetailScroll < 0 {
+		m.popupDetailScroll = 0
+	}
+	if m.logDetailScroll > m.scrollBounds.maxLogDetail {
+		m.logDetailScroll = m.scrollBounds.maxLogDetail
+	}
+	if m.logDetailScroll < 0 {
+		m.logDetailScroll = 0
+	}
 }
 
 func (m Model) View() tea.View {
@@ -992,6 +1053,21 @@ func (m *Model) selectSection(idx int) {
 }
 
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
+	if m.showPopup {
+		pLW := m.popupLeftWidth
+		pRW := m.width - pLW - 3
+		if pRW < 10 {
+			pRW = 10
+		}
+		ovW := pLW + pRW + 3
+		sx := (m.width - ovW) / 2
+		if mouse.X <= sx+pLW+1 {
+			m.popupLeftScroll += delta
+		} else {
+			m.popupDetailScroll += delta
+		}
+		return
+	}
 	if m.currentSection == 0 && !m.sectionMenuOpen && !m.showHelp {
 		m.dashScroll += delta
 		if m.dashScroll < 0 {
@@ -1080,12 +1156,18 @@ func (m Model) render() string {
 	if maxLeftScroll < 0 {
 		maxLeftScroll = 0
 	}
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxLeft = maxLeftScroll
+	}
 	if m.leftScroll > maxLeftScroll {
 		m.leftScroll = maxLeftScroll
 	}
 	maxRightScroll := len(allRightLines) - bodyHeight
 	if maxRightScroll < 0 {
 		maxRightScroll = 0
+	}
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxRight = maxRightScroll
 	}
 	if m.rightScroll > maxRightScroll {
 		m.rightScroll = maxRightScroll
@@ -1133,7 +1215,7 @@ func (m Model) render() string {
 
 	final := sb.String()
 	if m.showPopup {
-		final = m.renderPopup(final, rightWidth, bodyHeight)
+		final = m.renderPopup(final, rightWidth, bodyHeight-1)
 	}
 	if m.showHelp {
 		final = m.renderHelp(final)
@@ -1213,12 +1295,25 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 	var lines []string
 	lines = append(lines, m.renderTopBorderPopup(pLW, pRW))
 	allLeft := m.popupLeftLines()
+	maxPL := len(allLeft) - bodyHeight
+	if maxPL < 0 {
+		maxPL = 0
+	}
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxPopupLeft = maxPL
+	}
+	if m.popupLeftScroll > maxPL {
+		m.popupLeftScroll = maxPL
+	}
 	visibleLeft := allLeft[m.popupLeftScroll:]
 	leftScrollbar := scrollbarCol(len(allLeft), bodyHeight, m.popupLeftScroll)
 	allRight := m.popupRightAll(pRW - 2)
 	maxDS := len(allRight) - bodyHeight
 	if maxDS < 0 {
 		maxDS = 0
+	}
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxPopupDetail = maxDS
 	}
 	if m.popupDetailScroll > maxDS {
 		m.popupDetailScroll = maxDS
@@ -1362,7 +1457,9 @@ func (m Model) renderTopBorderPopup(pLW, pRW int) string {
 }
 
 func (m Model) renderBottomBorderPopup(pLW, pRW int) string {
-	return SepStyle.Render("╰" + strings.Repeat("─", pLW+pRW+1) + "╯")
+	b := []rune("╰" + strings.Repeat("─", pLW+pRW+1) + "╯")
+	b[pLW+1] = '┴'
+	return SepStyle.Render(string(b))
 }
 
 func (m Model) popupLeftLines() []string {
@@ -1376,7 +1473,6 @@ func (m Model) popupLeftLines() []string {
 		currID = m.sessions[m.cursor].ID
 	}
 	for i, c := range m.popupCalls {
-		sel := !m.popupRightFocus && i == m.popupCallCursor
 		sc := "○"
 		if c.SessionID == currID {
 			sc = "●"
@@ -1402,9 +1498,11 @@ func (m Model) popupLeftLines() []string {
 			row = string([]rune(row)[:maxW-1]) + "…"
 		}
 		
-		if sel {
+		isSelectedRow := i == m.popupCallCursor
+
+		if isSelectedRow && !m.popupRightFocus {
 			lines = append(lines, SelectedStyle.Render(row))
-		} else if m.popupRightFocus {
+		} else if m.popupRightFocus && !isSelectedRow {
 			lines = append(lines, TimestampFadedStyle.Render(row))
 		} else if !c.Success {
 			p1 := fmt.Sprintf("  %s ", sc)
@@ -1449,7 +1547,7 @@ func (m Model) popupRightAll(rw int) []string {
 	
 	gutterLine := func(label string, content []string) {
 		lines = append(lines, "", "  "+PanelHeaderStyle.Render(label))
-		gutterChar := MutedStyle.Render("│")
+		gutterChar := SepStyle.Render("┊")
 		for _, cl := range content {
 			if lipgloss.Width(cl) > rw-5 {
 				cl = string([]rune(cl)[:rw-6]) + "…"
@@ -2767,6 +2865,9 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 	maxScroll := len(all) - scrollH
 	if maxScroll < 0 {
 		maxScroll = 0
+	}
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxLogDetail = maxScroll
 	}
 	scroll := m.logDetailScroll
 	if scroll > maxScroll {

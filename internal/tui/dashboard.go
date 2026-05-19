@@ -111,6 +111,9 @@ func (m Model) renderDashboard() string {
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxDash = maxScroll
+	}
 	if m.dashScroll > maxScroll {
 		m.dashScroll = maxScroll
 	}
