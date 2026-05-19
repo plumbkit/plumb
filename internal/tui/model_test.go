@@ -172,7 +172,7 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 		}
 	}
 	for i, want := range []string{
-		"╭────────────────────╮ ╭─ Activity (1m) ────────────╮",
+		"╭─ Section ──────────╮ ╭─ Activity (1m) ────────────╮",
 		"│ ❯ 2. Sessions    ▽ │ │ ",
 		"╰────────────────────╯ ╰────────────────────────────╯",
 	} {
