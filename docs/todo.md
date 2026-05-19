@@ -23,7 +23,7 @@ Topics:
 
 ## The next two hours
 
-Run the **Claude Desktop end-to-end smoke test** checklist in `docs/claude-desktop-smoke.md` (~30 min, no code). After that, plumb is *proven* (not just claimed) production-ready against both supported LSPs and the primary client.
+Run `go test -tags=integration -timeout=3m ./cmd/smoke/` to verify the smoke checklist passes against your local setup (~30 min cold, < 10 s warm). After that, plumb is *proven* (not just claimed) production-ready against the primary supported LSP and client.
 
 ---
 
