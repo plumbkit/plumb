@@ -326,9 +326,258 @@ Where:
 
 Net-new user-facing capabilities. Lower architectural risk than the Architecture section — these mostly compose existing primitives.
 
+---
+
+### `read_symbol` — read one named symbol's body without line numbers
+
+**Priority:** high — most common friction point when agents navigate code.
+**Effort:** Small. Combines `list_symbols` (to resolve the name to a range) + `read_file` (to extract the range) into one round-trip.
+**Status:** Not started.
+
+**The problem.**
+
+Agents navigating a codebase frequently want to read one specific function, method, or type by name — not the entire file. Today the only way to do that is:
+
+1. Call `list_symbols(uri)` to find the line range for the symbol.
+2. Call `read_file(path, start_line, end_line)` with those coordinates.
+
+That is two tool calls, two network round-trips, and additional context consumed by `list_symbols`'s full symbol list (which the agent only needed as a lookup). For a simple "show me `handleConn`" question, this overhead is disproportionate.
+
+A `read_symbol(path, name)` tool would collapse the two steps into one. The implementation is simple because both primitives already exist in the daemon.
+
+**Definition of done:**
+
+1. New tool `read_symbol` in `internal/tools/read_symbol.go` with inputs: `path` (file URI or absolute), `name` (exact symbol name or dotted path e.g. `Model.renderDashboard`).
+2. Tool calls `list_symbols` internally to resolve the name to a line range, then returns the extracted source lines, the resolved line range, and the file mtime (same header as `read_file`).
+3. Ambiguous names (multiple matches) return all matches plus a note, not an error.
+4. For method names, accept both `MethodName` and `ReceiverType.MethodName` formats.
+5. Registered in `handleConn`; documented in `docs/mcp-tools.md`; unit-tested.
+6. `session_start` should mention this tool in its orientation if it finds the session is doing a lot of `list_symbols → read_file` sequences (stretch goal; skip for Phase 1).
+
+**Watch out for:**
+
+- Symbol names are not unique across a file (multiple methods on different receivers, multiple functions in a package, etc.). `read_symbol` should return all matches with line ranges rather than failing or guessing.
+- Nested symbols (method on a struct defined locally) — the resolution path through `list_symbols` already returns a flat or hierarchical list. Map both.
+- Do not add a file-read side effect that triggers strict-mode mtime tracking unless the caller has explicitly read the file. `read_symbol` should record the mtime in `ReadTracker` exactly as `read_file` does.
+
+---
+
+### Name-based `find_references` — look up references by symbol name
+
+**Priority:** high — current interface requires a file position, which agents can only compute after reading the file.
+**Effort:** Small. Internally resolves the name to a position using `list_symbols`, then delegates to the existing LSP `textDocument/references` call.
+**Status:** Not started.
+
+**The problem.**
+
+`find_references` today requires a `uri` and a `line`/`character` position. To find all callers of `renderDashboard`, an agent must:
+
+1. `list_symbols(uri)` → find the position of `renderDashboard`.
+2. `find_references(uri, line, character)`.
+
+This is the same two-round-trip problem as `read_symbol`. Agents navigate code by name, not by coordinates.
+
+An optional `symbol_name` parameter would let `find_references` skip the position lookup when a name is provided. The positional form should remain the default so existing usage is unaffected.
+
+**Definition of done:**
+
+1. `find_references` gains an optional `symbol_name string` input parameter.
+2. When provided, the tool calls `list_symbols` to resolve the name to a position, then proceeds as today.
+3. Ambiguous names (overloaded or multiple files): return the union of references across all matches with a per-symbol header line.
+4. Unit tests: name-based path and existing position-based path both work; ambiguous-name case is covered.
+5. `docs/mcp-tools.md` updated.
+
+**Watch out for:**
+
+- `list_symbols` only covers the declared file. If the caller can supply only a name without a path, `workspace_symbols` is the right fallback — but it adds another round-trip. For Phase 1, require `path` + `symbol_name` together and skip the workspace-wide case.
+- `find_references` on a common name (e.g. `Error`, `String`) can return thousands of results and flood the context window. Keep the existing result cap; document that name-based lookups on generic names should be refined with path.
+
+---
+
+### Name-based `get_definition` — jump to definition by symbol name
+
+**Priority:** medium — same two-round-trip problem as `find_references`, slightly lower frequency.
+**Effort:** Small. Same resolution pattern: `list_symbols` → position → `textDocument/definition`.
+**Status:** Not started.
+
+**The problem.**
+
+`get_definition` requires a `uri` and a position. To find where `dashBox` is defined, an agent must first discover its position via `list_symbols`, then call `get_definition`. Name-based lookup would collapse this to one call.
+
+**Definition of done:**
+
+1. `get_definition` gains an optional `symbol_name string` input parameter.
+2. When provided, resolves the name via `list_symbols` and proceeds as today.
+3. Consistent with the name-based `find_references` design — same resolver path, same ambiguity handling.
+4. Unit-tested; `docs/mcp-tools.md` updated.
+
+---
+
+### Cross-file call graph by symbol name
+
+**Priority:** medium.
+**Effort:** Medium. `call_hierarchy` exists; the missing piece is stitching multiple callers recursively and returning a concise graph.
+**Status:** Idea only.
+
+**The problem.**
+
+`call_hierarchy` returns the immediate callers and callees of one symbol, one level at a time. Getting a deep picture of "who calls `readProcessMetrics` and who calls those callers" requires iterating `call_hierarchy` manually across potentially many symbols — each at the cost of one tool call.
+
+A `call_graph(path, symbol_name, depth)` tool would recursively expand the hierarchy up to `depth` levels and return a textual tree or adjacency representation.
+
+**Definition of done:**
+
+1. New tool `call_graph` in `internal/tools/call_graph.go`.
+2. Inputs: `path`, `symbol_name`, `direction` (`callers | callees | both`), `max_depth` (default 3, max 6).
+3. Output: indented tree with symbol names, files, and line numbers.
+4. Cycle detection: mark already-visited nodes with `(seen)` and do not recurse further.
+5. Result cap: if the expanded graph exceeds 200 nodes, truncate with a summary line and a recommendation to reduce depth.
+6. Unit-tested with a mock LSP transport; integration-tested with `//go:build integration`.
+
+**Watch out for:**
+
+- Each level of expansion is one `call_hierarchy` LSP call per unique symbol. Depth 6 on a widely-called function can trigger hundreds of LSP calls. Enforce the node cap and add per-run timeout (configurable, default 10 s).
+- The result must name source files, not just symbol names — callers in test files, generated code, or vendor paths may be noise. Consider an `exclude` option that mirrors `search_in_files`.
+
+---
+
 ## Improvements
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
+
+---
+
+### `list_symbols` — include method signatures and parameter types
+
+**Priority:** high — agents routinely need to call a function they just found; without the signature they must read the file.
+**Effort:** Small. The LSP `textDocument/documentSymbol` response does not include signatures; the text must be extracted from the source file using the returned line range.
+**Status:** Not started.
+
+**The problem.**
+
+`list_symbols` returns names, kinds, and line ranges. It does not return the function or method signature. An agent that wants to call `refreshDashboard` must then read the file at the function's line to learn that the method takes no arguments, or read a different function to learn its parameter types. Each of these is an additional round-trip.
+
+For Go specifically, the first line of every function/method definition is the complete signature. Extracting it requires reading the source line at the symbol's `start_line`.
+
+**Desired output:**
+
+```
+Model.renderDashboard     method  L487–590  func (m Model) renderDashboard() string
+dashBox                   func    L592–605  func dashBox(titleText string, innerWidth int, contentLines []string) []string
+```
+
+**Definition of done:**
+
+1. `list_symbols` gains an optional `include_signatures bool` parameter (default false for backwards compatibility).
+2. When true, for each symbol of kind `function` or `method`, extract the first source line of the range and append it as a `signature` field in the output.
+3. For Go, the signature is the first non-blank non-comment line at `start_line`.
+4. For Python, include the full `def` line.
+5. Extraction requires one `read_file` for the file (already done for range resolution — no extra round-trip if cached).
+6. Unit-tested; `docs/mcp-tools.md` updated.
+
+**Watch out for:**
+
+- Multi-line signatures (Go interface methods with line-wrapped parameters, Python decorators). Extract only the first line for Phase 1 and document the limitation.
+- Performance: reading source lines for every symbol in a large file adds cost. Gate behind the `include_signatures` flag so callers opt in deliberately.
+
+---
+
+### `search_in_files` — performance and first-call cold-start latency
+
+**Priority:** medium-high — first-call latency of 17 s+ disrupts agent flow, even though subsequent calls are faster.
+**Effort:** Small–medium. Mostly diagnosis + tuning the ripgrep invocation parameters and process warm-up.
+**Status:** Not started.
+
+**The problem.**
+
+First-call latency for `search_in_files` is consistently in the 17–22 second range on the plumb repository itself (a small Go codebase). Subsequent calls to the same or similar patterns are faster, suggesting the bottleneck is cold process startup or filesystem metadata fetching rather than the search itself.
+
+By comparison, `workspace_symbols` with an LSP that has already indexed the workspace answers queries in under 1 second for the same class of "find all uses of this type" question.
+
+**Investigation points:**
+
+1. Measure whether the latency is inside the ripgrep process spawn itself (`exec.CommandContext` overhead) or in the Go wrapper marshalling results.
+2. Check whether the daemon pre-spawns or caches the ripgrep path on first call; if not, consider a one-time lookup at daemon start.
+3. For known-type and known-symbol lookups, prefer `workspace_symbols` over `search_in_files` in the tool descriptions. Make the guidance explicit so agents understand when each tool is appropriate.
+4. Add a fast-path: if the query does not use regex and has no glob constraints, delegate to `workspace_symbols` instead of ripgrep.
+
+**Definition of done:**
+
+1. `search_in_files` first-call p95 latency drops to under 5 s on the plumb repo (or equivalent small Go workspace).
+2. Tool descriptions for `search_in_files` and `workspace_symbols` include a guidance note: prefer `workspace_symbols` for symbol name lookups in indexed workspaces; use `search_in_files` for pattern/regex searches across file content.
+3. Benchmarks in `internal/tools/search_in_files_test.go` measure first and warm call latency so regressions are visible.
+
+**Watch out for:**
+
+- ripgrep startup overhead is typically < 100 ms on warm systems. If the daemon is genuinely taking 17 s, the bottleneck may be outside ripgrep — check `.gitignore` traversal and whether the wrapper is walking the directory tree before spawning ripgrep, rather than passing the tree to ripgrep directly.
+- Do not remove `search_in_files`; it is irreplaceable for regex/pattern searches. Only optimise and re-steer agents towards `workspace_symbols` for name-based queries.
+
+---
+
+### `session_start` orientation — richer entry-point guidance for agents
+
+**Priority:** medium-high — first call shapes the entire session quality.
+**Effort:** Small. Additive changes to `session_start.go` response text; no new infrastructure.
+**Status:** Not started.
+
+**The problem.**
+
+`session_start` currently returns: workspace, language, branch, recent commits, recently-modified files, memories, top-5 tool stats, and active diagnostics. That is a solid orientation packet, but it leaves several gaps that cause agents to fumble through redundant tool calls in the first few turns:
+
+1. **No suggested next tool.** An agent arriving at an unfamiliar codebase has no signal for "start with `workspace_symbols` to discover structure" vs "start with `list_symbols` on a specific file" vs "start with `search_in_files`". The session packet could include a short recommended-first-step suggestion based on what it knows: if recent commits modified specific files, suggest examining those files; if the language is resolved and LSP is up, suggest `workspace_symbols`; if LSP is unavailable, suggest `list_files`.
+2. **No tool-choice guidance for the session client.** The packet does not tell the agent which tools are uniquely valuable for its context. A Claude Code session should be told: "prefer `workspace_symbols` over `Bash: grep`, prefer `find_references` over `Bash: rg -n`" — because without that, the agent defaults to native tools it already knows.
+3. **No summary of available memory.** If the workspace has saved memories, the packet mentions them by name but does not surface their content. An agent that doesn't read memories in the first turn tends not to read them at all.
+4. **No workspace scale signal.** File count, rough codebase size, and primary language file count would help agents calibrate whether to do broad workspace searches or narrow file-level exploration.
+
+**Definition of done:**
+
+1. `session_start` response includes a `recommended_start` field: one sentence explaining the best first move given current workspace state.
+2. When `clientInfo.name == "claude-code"`, append a `tool_guidance` block listing: tools with no native equivalent (lead with these), tools where plumb adds value over the native equivalent, and tools that are redundant (skip these for Claude Code).
+3. If the workspace has memories, append a summary of each memory's description (not full body) to prompt the agent to read relevant ones.
+4. Add a `workspace_scale` field: approximate file count and primary-language file count (from `list_files` result or cached filesystem stat).
+5. All new fields are additive — existing callers that ignore unknown fields are unaffected.
+6. Unit-tested with mock workspace state; integration-tested against a real plumb session.
+
+**Watch out for:**
+
+- `session_start` is already the largest response in a typical session. New fields must be concise — no prose paragraphs, no redundant explanations. Structured lists, not narrative.
+- The `tool_guidance` block should not be generated for every client type on every call — gate it behind `clientInfo.name` and make it suppressible via config for users who want a minimal response.
+
+---
+
+### Claude Code integration — reduce tool overlap and choice paralysis
+
+**Priority:** medium — friction point unique to Claude Code contexts.
+**Effort:** Small. Primarily documentation and tool description wording.
+**Status:** Not started.
+
+**The problem.**
+
+When running inside Claude Code, the agent has access to both plumb's tools and Claude Code's native tools (`Read`, `Edit`, `Write`, `Bash`). Many tool capabilities overlap:
+
+| Task | Plumb tool | Claude Code native |
+|---|---|---|
+| Read a file | `read_file` | `Read` |
+| Search for text | `search_in_files` | `Bash: rg / grep` |
+| Git status/log | `git` | `Bash: git` |
+| Edit a file | `edit_file` | `Edit` |
+| List files | `list_files` | `Bash: find` |
+
+This creates **choice paralysis**: when both tools are available, the agent must decide which to use. Without clear guidance, it may choose inconsistently, or worse, choose the native tool when plumb's LSP-backed alternative would provide richer output (e.g., using `Bash: grep` instead of `workspace_symbols` to find a type, then needing two follow-up reads to understand the context).
+
+**Improvements needed:**
+
+1. **Tool descriptions should state explicitly when to prefer plumb over native.** For each tool that overlaps with Claude Code's native toolkit, the description should say "prefer this over `<alternative>` because <reason>". Example: `read_file` description should note that it records mtime for strict-mode compatibility and returns a binary-detection header; `search_in_files` should note it honours `.gitignore` and returns bounded structured output.
+2. **Session orientation.** `session_start` already returns tool stats. Consider adding a "tool choice guidance" section for Claude Code clients specifically (detected via `clientInfo.name == "claude-code"`), listing: "for this workspace, prefer X over Y because Z".
+3. **Uniquely-valuable tools should be prominent.** The tools with no native equivalent — `workspace_symbols`, `find_references`, `call_hierarchy`, `type_hierarchy`, `rename_symbol`, `replace_symbol_body`, `transaction_apply` — should have descriptions that open with "No native Claude Code equivalent." so agents learn to reach for them first.
+4. **Redundant tools for Claude Code may emit a friendly suggestion.** When `read_file` is called and the `clientInfo` indicates Claude Code, the response could include a one-line note: "Consider using the native `Read` tool for files you only need to read; `read_file` is most valuable when strict mode or mtime tracking is needed." (Configurable; off by default.)
+
+**Definition of done:**
+
+1. Tool descriptions updated in `internal/tools/*.go` for the overlap cases above.
+2. For tools with no native equivalent, descriptions lead with that fact.
+3. `session_start` response includes a one-liner per "prefer plumb for X" guidance when `clientInfo.name == "claude-code"`.
+4. No new code paths required; this is description text and one conditional block in `session_start.go`.
 
 ---
 

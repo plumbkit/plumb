@@ -113,6 +113,19 @@ type Model struct {
 	logDetailOpen   bool
 	logDetailScroll int
 	logDetailCopied bool
+
+	// Dashboard section (section 0).
+	dashLifetimeCalls    int64
+	dashLifetimeSessions int64
+	dashLifetimeTokens   int64
+	dashLifetimeFirstAt  time.Time
+	dashLifetimeTopTools []stats.ToolStat
+	dashProjectFolder    string
+	dashProjectCalls     int64
+	dashProjectSessions  int64
+	dashProjectTokens    int64
+	dashProjectTopTools  []stats.ToolStat
+	dashScroll           int
 }
 
 type logDetailCopyResetMsg struct{}
@@ -132,6 +145,7 @@ func NewModel(logPath string) Model {
 		sectionMenuCursor: 1,
 		logPath:           logPath,
 		logFollow:         true,
+		dashProjectFolder: detectWorkspaceFolder(),
 	}
 	m.refresh()
 	return m
@@ -151,6 +165,7 @@ func (m *Model) refresh() {
 	}
 	m.refreshDaemonMetrics()
 	m.refreshStats()
+	m.refreshDashboard()
 }
 
 func (m *Model) refreshDaemonMetrics() {
@@ -576,6 +591,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Dashboard section intercepts j/k/pgup/pgdown for scroll.
+		if updated, cmd, handled := m.handleDashboardKey(msg); handled {
+			return updated, cmd
+		}
+
 		// Logs section intercepts keys when the menu/help overlay is not open.
 		if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
 			if m.logDetailOpen {
@@ -950,6 +970,13 @@ func (m *Model) selectSection(idx int) {
 }
 
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
+	if m.currentSection == 0 && !m.sectionMenuOpen && !m.showHelp {
+		m.dashScroll += delta
+		if m.dashScroll < 0 {
+			m.dashScroll = 0
+		}
+		return
+	}
 	if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
 		if m.logDetailOpen {
 			m.logDetailScroll += delta
@@ -982,7 +1009,10 @@ func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
 }
 
 func (m Model) render() string {
-	// Logs section uses a dedicated full-width renderer.
+	// Dashboard and Logs sections each use a dedicated full-width renderer.
+	if m.currentSection == 0 && !m.showPopup {
+		return m.renderDashboard()
+	}
 	if m.currentSection == 3 && !m.showPopup {
 		return m.renderLogsSection()
 	}
