@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.4** (2026-05-18).
+Last reviewed against: **0.6.5** (2026-05-20). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices).
 
 When you complete a TODO entry: **move its section to `docs/todo-to-review.md`** (do not just delete it), add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -15,6 +15,7 @@ Topics:
 - [Architecture](#architecture) — deep design changes, new contracts, new infrastructure
 - [Features](#features) — net-new user-facing capabilities
 - [Improvements](#improvements) — refinements to existing behaviour
+- [Code quality & engineering practices](#code-quality--engineering-practices) — file size, complexity, lint hygiene, security findings, enforcement
 - [Testing & verification](#testing--verification) — proving things actually work end-to-end
 - [Bugs & known limitations](#bugs--known-limitations) — existing footguns; behaviour to be aware of
 - [Considered and deferred](#considered-and-deferred) — items decided against or postponed
@@ -328,31 +329,17 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 
 ---
 
-### Cross-file call graph by symbol name
+### Implement Memory TUI section
 
-**Priority:** medium.
-**Effort:** Medium. `call_hierarchy` exists; the missing piece is stitching multiple callers recursively and returning a concise graph.
-**Status:** Idea only.
-
-**The problem.**
-
-`call_hierarchy` returns the immediate callers and callees of one symbol, one level at a time. Getting a deep picture of "who calls `readProcessMetrics` and who calls those callers" requires iterating `call_hierarchy` manually across potentially many symbols — each at the cost of one tool call.
-
-A `call_graph(path, symbol_name, depth)` tool would recursively expand the hierarchy up to `depth` levels and return a textual tree or adjacency representation.
-
-**Definition of done:**
-
-1. New tool `call_graph` in `internal/tools/call_graph.go`.
-2. Inputs: `path`, `symbol_name`, `direction` (`callers | callees | both`), `max_depth` (default 3, max 6).
-3. Output: indented tree with symbol names, files, and line numbers.
-4. Cycle detection: mark already-visited nodes with `(seen)` and do not recurse further.
-5. Result cap: if the expanded graph exceeds 200 nodes, truncate with a summary line and a recommendation to reduce depth.
-6. Unit-tested with a mock LSP transport; integration-tested with `//go:build integration`.
-
-**Watch out for:**
-
-- Each level of expansion is one `call_hierarchy` LSP call per unique symbol. Depth 6 on a widely-called function can trigger hundreds of LSP calls. Enforce the node cap and add per-run timeout (configurable, default 10 s).
-- The result must name source files, not just symbol names — callers in test files, generated code, or vendor paths may be noise. Consider an `exclude` option that mirrors `search_in_files`.
+**Priority:** Medium.
+**Effort:** Medium.
+**Status:** Planning.
+**Description:** Implement the Memory section in the TUI (index 2 in the section menu). 
+- **Layout:** Similar to the Sessions section (left panel: list of memories; right panel: details).
+- **Details Panel:** Show YAML frontmatter metadata (name, description, creation date, updated date), the memory body (markdown content), and a list of paths the memory is relevant to (from the frontmatter `paths` field).
+- **Navigation:** Support `j/k` to navigate the memory list, `tab` to switch panels, and enter to toggle detail/list view or search as in other sections.
+- **Tools:** Hook into existing memory tools (`list_memories`, `read_memory`).
+**Watch out for:** Ensure long memory content in the right panel is scrollable and handled consistently with the Log Detail and Call Detail panels.
 
 ---
 
@@ -490,6 +477,222 @@ Recommendation: **do not introduce workers yet**. First add measurement and idle
 - Maven/Gradle dependency resolution can make first-run measurements noisy. Record warm-cache and cold-cache numbers separately.
 - A short startup timeout that works for gopls may be wrong for jdtls. Make Java-specific timeouts explicit rather than raising global limits for every language.
 - Idle shutdown saves memory but can make the next Java query slow. Surface this state in `doctor`/TUI so users understand why the next request is warming up.
+
+---
+
+## Code quality & engineering practices
+
+This section is the authoritative plan for raising plumb's own code quality to the standard the project claims (AGENTS.md: "best code engineer", good Go practices, ~400 lines/file, gocyclo, gofumpt, lint-before-commit). It **supersedes** items 14 and 15 of [`docs/cli-and-core-review-plan.md`](cli-and-core-review-plan.md) (shared-helper extraction and large-file splitting) — track that work here.
+
+**Objective baseline (measured 2026-05-20, golangci-lint v2.12.2, the version CI pins):**
+
+```
+79 findings on ./...
+  gocyclo: 36   (functions over the configured min-complexity 15 gate)
+  gosec:   13   (SQL string concat, path traversal, int overflow, file perms, subprocess)
+  unused:   5   (dead code)
+  staticcheck: 8 (ST1005 error-string punctuation, SA4010 dead append, QF1003)
+  prealloc: 5
+  errcheck: 3
+  gofumpt:  3
+  unparam:  3
+  ineffassign: 2
+  revive:   1
+```
+
+8 non-test source files exceed the project's own ~400-line guidance: `internal/cli/daemon.go` (832), `internal/stats/db.go` (705), `internal/mcp/server.go` (600), `internal/cli/setup.go` (556), `internal/lsp/protocol/types.go` (535), `internal/tools/edit_file.go` (528), `internal/cli/doctor.go` (518), `internal/tui/dashboard.go` (508). Several more are 480–503.
+
+**Root cause (the engineering problem, not just the symptom).** The recurring anti-pattern is the monolithic `Tool.Execute()`: a single method that decodes raw args, validates them, performs LSP/filesystem work, formats output, and maps errors — all inline. That is why 36 functions blow the complexity gate and why the files are huge. The fix is a *structural standard*, not piecemeal nibbling. The local enforcement gap compounds it: `.git/hooks/` does not exist in this clone, so `make install-hooks` was never run and unlinted/non-compiling code has reached the tree.
+
+This section is ordered by priority. P0 items are mechanical, low-risk, and should land first to stop the bleeding; P1 is the real refactor; P2 makes regressions impossible.
+
+---
+
+### CQ-1 — Make `make lint` clean and enforce it (P0, foundational)
+
+**Priority:** ⭐ highest. Nothing else is trustworthy until the baseline is green and enforced.
+**Effort:** Medium. ~60 of the 79 findings are mechanical.
+**Status:** Not started.
+
+**Problem.** 79 outstanding golangci-lint findings. CI pins `v2.12.2` and the lint action would fail on a clean PR run today. Locally there is no pre-commit enforcement (`.git/hooks/` absent), so the contract in AGENTS.md ("golangci-lint v2.12.2 before every commit; CI enforces") is documented but not actually enforced — that is how a non-compiling test (`ansi.Strip` with no import) and unused imports reached `main`.
+
+**Definition of done.**
+
+1. Zero golangci-lint findings on `golangci-lint run ./...` at v2.12.2.
+2. Clear the mechanical linters first, grouped one commit per linter-or-package, **no behaviour change**, tests unchanged:
+   - `gofumpt` (3), `goimports` drift, `ineffassign` (2), `prealloc` (5), `revive` (1).
+   - `errcheck` (3) — handle or explicitly `_ =` with a reason.
+   - `staticcheck`: `ST1005` error strings ending in punctuation/newline (`internal/tools/edit_file.go:167,184,210`); `SA4010` never-used append (`internal/tools/transaction.go:310` — this one is a latent bug, investigate, don't just delete); `QF1003` tagged-switch (`internal/mcp/server.go:407`).
+   - `unparam` (3) — see CQ-2.
+3. Add a `make verify` target = `go build ./... && go vet ./... && go test ./... && golangci-lint run ./...`. Document it as the pre-commit gate in AGENTS.md.
+4. Install + harden the pre-commit hook: `scripts/pre-commit` must run `go build ./...`, `gofumpt -l` (fail if non-empty), and `golangci-lint run`. Make `make install-hooks` a documented mandatory step in AGENTS.md "Build commands" and in onboarding.
+5. Confirm the CI lint job is blocking (not advisory) on PRs to `main`.
+
+**Watch out for.** Do not silence findings with blanket `//nolint` to hit zero — that defeats the purpose. `SA4010` in `transaction.go` is likely a real rollback/URI-collection bug; treat it as a correctness item, not a lint nit.
+
+---
+
+### CQ-2 — Delete dead code (P0, quick win)
+
+**Priority:** high. This is exactly the "no dead code / delete unused source" the project owner asked for.
+**Effort:** Small (hours).
+**Status:** Not started. (TUI `leftPanelHeader`/`dbFor` and `site/patch*.py` scratch scripts were already removed during the 2026-05-20 TUI split close-out.)
+
+**Problem.** `golangci-lint unused`/`unparam` report concrete dead declarations and vestigial parameters.
+
+**Definition of done — remove (verify no reflection/build-tag use first):**
+
+1. `internal/cli/proxy.go` — `type invProxy` and its methods `Diagnostics`, `AllDiagnostics` (unused).
+2. `internal/memory/store.go` — `func parseFrontmatter` (unused; note `splitFrontmatter` is used — don't confuse them).
+3. `internal/tui/model_utils.go` — `func spliceOverlayLower` (unused).
+4. `unparam` vestigial signatures: `internal/lsp/supervisor.go:255` `setState`'s `conn` (always nil), `internal/memory/store.go:272` `splitFrontmatter`'s `delim` return (never used), `internal/tools/rate_limit.go:143` `defaultWriteRateLimit`'s `time.Duration` return (always constant). Simplify the signatures and their call sites.
+5. `golangci-lint run ./...` reports zero `unused` and zero `unparam` afterwards, with **no** `//nolint` suppressions.
+
+**Watch out for.** Confirm nothing is referenced only from `//go:build integration` files or via interface satisfaction before deleting. `invProxy` may have been a deliberate interface-conformance stub — check git blame for intent before removing.
+
+---
+
+### CQ-3 — Decompose the monolithic `Execute()` methods (P1, the core refactor)
+
+**Priority:** ⭐ this is the actual "good software engineering" ask. Discuss the standard, then execute per-tool.
+**Effort:** Significant. Phased, one tool per commit.
+**Status:** Not started. Needs the CQ-6 standard agreed first.
+
+**Problem.** 36 functions exceed gocyclo 15. The worst are tool `Execute()` methods that interleave five concerns:
+
+| Function | Cyclomatic complexity |
+|---|---|
+| `(*SearchInFiles).Execute` | **74** |
+| `(Model).handleMainKey` (TUI) | **59** |
+| `(*findReplaceTool).Execute` | **58** |
+| `(*TransactionApply).Execute` | 44 |
+| `(Model).updateInner` (TUI) | 41 |
+| `handleConn` (daemon) | 38 |
+| `(*FindFiles).Execute` | 35 |
+| `(*EditFile).Execute` | 33 |
+| `(*Server).Serve` | 32 |
+| `(*SessionStart).Execute` | 31 |
+| `(Model).handleLogSectionKey` | 30 |
+| `applyEnv` (config) | 28 |
+| `runStats` (cli) | 28 |
+| `computeEditScript` (diff) | 27 |
+| `(*WriteFile).Execute` | 26 |
+| …20 more between 16 and 24 | |
+
+**The standard to adopt (see CQ-6).** Every `Tool.Execute()` becomes a thin orchestrator over four named, individually testable steps:
+
+```go
+func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+    args, err := parseFooArgs(raw)        // decode + shape validation only
+    if err != nil { return "", err }
+    if err := args.validate(); err != nil { return "", err }
+    res, err := t.run(ctx, args)          // the actual domain logic, no formatting
+    if err != nil { return "", err }
+    return formatFooResult(res), nil      // presentation only
+}
+```
+
+**Definition of done.**
+
+1. Agree the decomposition pattern in AGENTS.md (CQ-6) with one worked before/after example.
+2. Refactor worst-first, **behaviour-preserving**, one function per commit, existing tests must stay green (strengthen them where the split exposes a seam): `SearchInFiles.Execute` → `findReplaceTool.Execute` → `TransactionApply.Execute` → `FindFiles.Execute` → `EditFile.Execute` → `WriteFile.Execute` → `SessionStart.Execute` → the remaining `internal/tools` Execute methods → `daemon.handleConn` → `mcp.Server.Serve` → `config.applyEnv` → `cli.runStats`/`runConfigShow`/`runDiagOnWorkspace`/`Discover`.
+3. TUI key handling (`handleMainKey` 59, `updateInner` 41, `handleLogSectionKey` 30, `handlePopupKey` 24, `handleMouseWheel` 17): replace the giant `switch msg.String()` chains with a table-driven keymap (`map[key]func(*Model) tea.Cmd` or a small dispatch slice) per focus context. This collapses complexity and makes keybindings self-documenting.
+4. After each refactor, the touched function passes gocyclo 15. End state: **zero gocyclo findings, zero exceptions list** for first-party code (test helpers may stay if justified).
+
+**Watch out for.** This is the high-value, high-risk item. Each commit must be a pure refactor with no observable change — diff the tool's response on representative inputs before/after. Do not bundle the split with bug fixes; if the split reveals a bug (likely in `transaction.go`/`find_replace.go` rollback paths), file it as a separate item and fix it in its own commit. Tool responses are an API contract for agents — exact output bytes matter.
+
+---
+
+### CQ-4 — Split oversized files by responsibility (P1)
+
+**Priority:** high — directly answers "I got source code with > 3000 lines". (The 2947-line `internal/tui/model.go` was split on 2026-05-20; this item finishes the job for the rest.)
+**Effort:** Medium. Mechanical extraction, separate commits, no behaviour change.
+**Status:** Not started.
+
+**Definition of done — split each by clear responsibility:**
+
+1. `internal/cli/daemon.go` (832) → daemon lifecycle / `handleConn` connection handler / control socket / spawn + singleton-lock logic.
+2. `internal/stats/db.go` (705) → schema + migrations / read queries / write path. (Coordinate with CQ-5's SQL-concat fix.)
+3. `internal/mcp/server.go` (600) → stdio transport+framing / request dispatch / lifecycle. (Coordinate with the `bufio.Scanner` limit item in cli-and-core-review-plan.md §7.)
+4. `internal/cli/setup.go` (556) → one file per client (claude-desktop, claude-code, codex, gemini) + shared config-merge helper.
+5. `internal/tools/edit_file.go` (528) and `internal/tools/file_write_helpers.go` (503) → naturally fall out of CQ-3.
+6. `internal/cli/doctor.go` (518), `internal/tui/dashboard.go` (508), `internal/tui/model_logs.go` (498), `internal/tools/search_in_files.go` (483) → split along the seams CQ-3 introduces.
+7. **Documented exception list** in AGENTS.md for files where a single unit is correct: `internal/lsp/protocol/types.go` (535) is a protocol type catalogue mirroring the LSP spec — splitting it harms readability. The ~400-line rule gets an explicit, short allowlist rather than being silently ignored.
+
+**Watch out for.** Pure file moves only — no logic edits in the same commit (those are CQ-3). Keep package-private symbols package-private; do not export something just to move it. One file per commit so `git log --follow` and bisect stay useful.
+
+---
+
+### CQ-5 — Triage and resolve the 13 gosec findings (P1, security)
+
+**Priority:** high — security posture is part of "good practices", and plumb is an agent-facing daemon (prompt-injection → tool-call is a real threat model).
+**Effort:** Medium — mostly analysis; a few are real fixes.
+**Status:** Not started.
+
+**Problem.** 13 gosec findings. Some are real, some are taint-analysis heuristics on already-validated paths. Each must end as *fixed* or *justified-and-annotated*, never unexplained.
+
+**Definition of done — per finding, decide fix vs. justified suppression:**
+
+1. **SQL string concatenation — `internal/stats/db.go:357, 428, 499` (G202).** Verify each concatenation interpolates only internal constants (column names, sort keys, bucket counts) and never a user/agent-supplied value. If constants only: replace with a small allowlisted column/order builder and add a comment explaining the invariant. **If any concatenates a filter value (workspace, session id, tool name): that is a real SQL-injection bug — fix with `?` placeholders.** This is the highest-priority gosec item; treat as a potential bug, not a nit.
+2. **File permissions G306 — `internal/memory/store.go:121`, `internal/session/session.go:128`, `internal/tools/edit_apply.go:85`.** `edit_apply` writes user source files where 0644 is correct (preserve perms). Memory/session files are plumb-owned metadata — decide whether 0600 is appropriate. Fix where it's metadata; document + annotate where 0644 is intentional.
+3. **Path traversal G703 — `internal/cli/setup.go:415`, `internal/tools/file_write_helpers.go:387`, `internal/tools/txlog/txlog.go:213`.** Plumb's entire write model is path validation + per-path locks + symlink resolution. Confirm each flagged path passes through the existing validation, then add a one-line `//nolint:gosec // path validated by <fn> — see safeWrite contract` referencing the guarantee. (Cross-check with cli-and-core-review-plan.md §6 symlink-lock-key item.)
+4. **Integer overflow G115 — `internal/lsp/protocol/types.go:363` (int→int32), `internal/tools/symbol_edits.go:67` (int→uint32).** LSP positions in pathological huge files. Add explicit bounds checks before conversion; return a clear error instead of silently wrapping. Small, real correctness fix.
+5. **G602 slice index — `internal/cli/setup.go:551`** and **G204 subprocess — `internal/lsp/supervisor.go:231`** (LSP command comes from resolved config, expected). Verify bounds / input provenance and annotate with justification.
+6. End state: `golangci-lint run ./...` shows zero unexplained gosec findings; every remaining suppression has a one-line reason pointing at the safety invariant.
+
+**Watch out for.** Do not bulk-`//nolint` the gosec linter. The whole point is that #1 might be a real injection bug hiding among heuristic noise — each one gets eyes.
+
+---
+
+### CQ-6 — Codify and enforce the engineering standard (P2, anti-regression)
+
+**Priority:** medium-high — without this, CQ-1…CQ-5 decay back.
+**Effort:** Small (documentation + hook), but it is the keystone.
+**Status:** Not started.
+
+**Problem.** AGENTS.md already states the policy (≈400 lines/file, gofumpt, lint-before-commit, no globals, context-first, error wrapping, comments only when non-obvious). The gap is **enforcement and a concrete pattern**, not policy text. New code keeps reproducing the monolithic-`Execute` anti-pattern because there is no documented blueprint and no local gate.
+
+**Definition of done.**
+
+1. AGENTS.md: add a "Tool implementation pattern" subsection with the `parseArgs / validate / run / format` blueprint from CQ-3 and one real before/after example. New tools must follow it; PRs/commits that add a monolithic `Execute` are non-conforming.
+2. AGENTS.md: state the gocyclo-15 contract explicitly and the file-size rule with its short exception allowlist (CQ-4).
+3. Pre-commit hook (`scripts/pre-commit`, installed via `make install-hooks`) runs `go build ./...`, `gofumpt -l` (fail if non-empty), `golangci-lint run`. Document `make install-hooks` as a **required** first step after clone in AGENTS.md "Build commands".
+4. Add `make verify` (CQ-1) and reference it as the definition of "ready to commit".
+5. Optional: a tiny CI check that fails if any non-test, non-allowlisted `.go` file exceeds N lines, so the size rule is mechanically enforced rather than honour-system.
+
+**Watch out for.** Keep the hook fast enough that contributors do not bypass it with `--no-verify`. If `golangci-lint` cold runs are slow, scope the hook to changed packages and leave the full `./...` sweep to `make verify`/CI.
+
+---
+
+### CQ-7 — De-duplicate CLI/TUI presentation helpers (P2)
+
+**Priority:** medium. Subsumes cli-and-core-review-plan.md §14.
+**Effort:** Medium.
+**Status:** Not started.
+
+**Problem.** Path contraction, age/duration formatting, padding, diagnostic-box rendering, and table styling are reimplemented across `internal/cli/{stats,config,sessions,diagnostics,doctor}.go` and partially duplicated in `internal/tui`. Divergent copies drift (e.g. age formatting already differs subtly between CLI and TUI).
+
+**Definition of done.**
+
+1. Introduce `internal/render` (or `internal/textui`) with the shared, pure helpers: path contraction, human-age, padding/truncation, diagnostic box, common table style.
+2. Migrate CLI commands first, then TUI, to the shared implementation. No behaviour change beyond intended unification; add snapshot tests where output stability matters (CLI is a UX contract).
+3. Do not couple CLI to TUI internals beyond shared style constants already intentionally shared.
+
+**Watch out for.** Respect the layering rule in AGENTS.md — presentation helpers must not pull domain/transport packages upward. Keep the new package leaf-level.
+
+---
+
+### Suggested sequencing
+
+1. **CQ-2** (delete dead code) and the mechanical half of **CQ-1** (gofumpt/ineffassign/prealloc/errcheck) — fast, stops the bleeding, makes diffs clean for everything after.
+2. **CQ-5 #1** (SQL concat) early — it may be a real injection bug.
+3. **CQ-6** (write the standard) before CQ-3 — the refactor needs an agreed target shape.
+4. **CQ-3** worst-first, one function per commit (search_in_files → find_replace → transaction → …).
+5. **CQ-4** file splits, falling naturally out of CQ-3's seams.
+6. Remaining **CQ-5** gosec triage; **CQ-1** finish (gocyclo reaches zero as CQ-3 lands); **CQ-7** dedup.
+7. Flip CI lint to blocking and the pre-commit hook to mandatory once `make verify` is green.
+
+**Whole-section definition of done:** `make verify` green on `./...`; zero gocyclo findings (no first-party exceptions); no non-test file over ~400 lines except the documented allowlist; every gosec finding fixed or justified; pre-commit hook installed and CI lint blocking. Each completed CQ item moves to `docs/todo-to-review.md` with a `CHANGELOG.md` entry, per the workflow at the bottom of this file.
 
 ---
 
