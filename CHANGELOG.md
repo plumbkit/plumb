@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.6 (2026-05-20)
+
+### Changed
+- **CQ-2: Delete dead code.** Removed unused declarations flagged by `golangci-lint unused`/`unparam`: `invProxy` struct and its `Diagnostics`/`AllDiagnostics` methods (`internal/cli/proxy.go`), `parseFrontmatter` wrapper function (`internal/memory/store.go`), `spliceOverlayLower` (`internal/tui/model_utils.go`). Simplified three vestigial signatures: `splitFrontmatter` no longer returns the delimiter byte slice (callers discarded it); `defaultWriteRateLimit` no longer returns a `time.Duration` (window is always `time.Minute`); `setState` in `internal/lsp/supervisor.go` had both `conn` and `proc` parameters always passed as nil — signature simplified to take only the new state. Zero `unused` and zero `unparam` findings remain.
+
 ## 0.6.4 (2026-05-18)
 
 ### Added

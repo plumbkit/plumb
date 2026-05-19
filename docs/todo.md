@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.5** (2026-05-20). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices).
+Last reviewed against: **0.6.6** (2026-05-20). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices).
 
 When you complete a TODO entry: **move its section to `docs/todo-to-review.md`** (do not just delete it), add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -551,26 +551,6 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 5. Confirm the CI lint job is blocking (not advisory) on PRs to `main`.
 
 **Watch out for.** Do not silence findings with blanket `//nolint` to hit zero — that defeats the purpose. `SA4010` in `transaction.go` is likely a real rollback/URI-collection bug; treat it as a correctness item, not a lint nit.
-
----
-
-### CQ-2 — Delete dead code (P0, quick win)
-
-**Priority:** high. This is exactly the "no dead code / delete unused source" the project owner asked for.
-**Effort:** Small (hours).
-**Status:** Not started. (TUI `leftPanelHeader`/`dbFor` and `site/patch*.py` scratch scripts were already removed during the 2026-05-20 TUI split close-out.)
-
-**Problem.** `golangci-lint unused`/`unparam` report concrete dead declarations and vestigial parameters.
-
-**Definition of done — remove (verify no reflection/build-tag use first):**
-
-1. `internal/cli/proxy.go` — `type invProxy` and its methods `Diagnostics`, `AllDiagnostics` (unused).
-2. `internal/memory/store.go` — `func parseFrontmatter` (unused; note `splitFrontmatter` is used — don't confuse them).
-3. `internal/tui/model_utils.go` — `func spliceOverlayLower` (unused).
-4. `unparam` vestigial signatures: `internal/lsp/supervisor.go:255` `setState`'s `conn` (always nil), `internal/memory/store.go:272` `splitFrontmatter`'s `delim` return (never used), `internal/tools/rate_limit.go:143` `defaultWriteRateLimit`'s `time.Duration` return (always constant). Simplify the signatures and their call sites.
-5. `golangci-lint run ./...` reports zero `unused` and zero `unparam` afterwards, with **no** `//nolint` suppressions.
-
-**Watch out for.** Confirm nothing is referenced only from `//go:build integration` files or via interface satisfaction before deleting. `invProxy` may have been a deliberate interface-conformance stub — check git blame for intent before removing.
 
 ---
 

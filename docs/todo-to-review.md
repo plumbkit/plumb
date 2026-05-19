@@ -180,3 +180,23 @@ The hard-coded `100ms` is now a named constant (`defaultConcurrentWriteSkew`) an
 Write tools (`write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply`) now send `textDocument/didOpen` + `textDocument/didClose` after the file-change notification when the workspace language is Java. Unlike gopls/pyright, jdtls requires the open-document lifecycle to trigger its reconcile pass and emit `publishDiagnostics` reliably after an external file write. CI jdtls integration step also wired.
 
 Remaining gaps from the parent todo (cold-start tuning, binary naming docs, doctor version-check coverage for JDK distributions) are still open in `todo.md`.
+
+---
+
+## Code quality & engineering practices
+
+### CQ-2 — Delete dead code
+
+**Completed in:** 0.6.6
+**Original priority:** P0 (quick win)
+
+Removed all unused declarations and simplified vestigial signatures flagged by `golangci-lint unused`/`unparam`:
+
+- `invProxy` struct + `Diagnostics` + `AllDiagnostics` methods deleted from `internal/cli/proxy.go`; `cache` import removed.
+- `parseFrontmatter` wrapper deleted from `internal/memory/store.go` (callers already used `parseFrontmatterFull` directly).
+- `spliceOverlayLower` deleted from `internal/tui/model_utils.go`.
+- `splitFrontmatter` `delim` return removed — both callers discarded it; function now returns `(fm, body []byte)`.
+- `defaultWriteRateLimit` `time.Duration` return removed — window is always `time.Minute`; caller now passes `time.Minute` directly.
+- `setState` in `internal/lsp/supervisor.go` had `conn *jsonrpc.Conn` and `proc *exec.Cmd` always passed as nil; both parameters removed, body now sets both fields to nil explicitly.
+
+Result: zero `unused`, zero `unparam` findings. All tests pass.

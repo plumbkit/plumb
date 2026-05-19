@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -205,31 +204,3 @@ func (p *clientProxy) Subscribe(handler func(string, json.RawMessage)) func() {
 
 // ensure clientProxy satisfies the interface at compile time.
 var _ lsp.LSPClient = (*clientProxy)(nil)
-
-// invProxy is a session-level indirection to a shared workspace Invalidator.
-// It starts nil (no workspace determined yet) and is set once the workspace root
-// is resolved, allowing tools registered before workspace discovery to work correctly.
-//
-// Concurrency: all methods are safe for concurrent use.
-type invProxy struct {
-	mu  sync.RWMutex
-	cur *cache.Invalidator
-}
-
-func (p *invProxy) Diagnostics(uri string) []protocol.Diagnostic {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.cur == nil {
-		return nil
-	}
-	return p.cur.Diagnostics(uri)
-}
-
-func (p *invProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.cur == nil {
-		return nil
-	}
-	return p.cur.AllDiagnostics()
-}

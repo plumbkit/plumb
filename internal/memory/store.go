@@ -105,7 +105,7 @@ func Write(workspace, name, content, description string) error {
 		return fmt.Errorf("creating memories dir: %w", err)
 	}
 	if description != "" {
-		_, _, body := splitFrontmatter([]byte(content))
+		_, body := splitFrontmatter([]byte(content))
 		var sb strings.Builder
 		sb.WriteString("---\n")
 		sb.WriteString("name: ")
@@ -217,12 +217,6 @@ func Delete(workspace, name string) error {
 	return nil
 }
 
-// parseFrontmatter returns (name, description) from YAML frontmatter, if any.
-func parseFrontmatter(data []byte) (name, description string) {
-	name, description, _ = parseFrontmatterFull(data)
-	return name, description
-}
-
 // parseFrontmatterFull also extracts `paths:` — a comma-separated or
 // flow-list style list of glob patterns indicating where this memory is
 // relevant. Examples:
@@ -230,7 +224,7 @@ func parseFrontmatter(data []byte) (name, description string) {
 //	paths: internal/auth/**, cmd/server/*.go
 //	paths: [internal/auth/**, cmd/server/*.go]
 func parseFrontmatterFull(data []byte) (name, description string, paths []string) {
-	_, fm, _ := splitFrontmatter(data)
+	fm, _ := splitFrontmatter(data)
 	if len(fm) == 0 {
 		return "", "", nil
 	}
@@ -267,16 +261,16 @@ func parseList(v string) []string {
 	return out
 }
 
-// splitFrontmatter returns (delimiter, frontmatter-body, body). If the file
+// splitFrontmatter returns (frontmatter-body, body). If the file
 // does not begin with `---\n`, frontmatter is empty and body is the full input.
-func splitFrontmatter(data []byte) (delim, fm, body []byte) {
+func splitFrontmatter(data []byte) (fm, body []byte) {
 	if !bytes.HasPrefix(data, []byte("---\n")) {
-		return nil, nil, data
+		return nil, data
 	}
 	rest := data[4:]
 	before, after, ok := bytes.Cut(rest, []byte("\n---\n"))
 	if !ok {
-		return nil, nil, data
+		return nil, data
 	}
-	return data[:4], before, after
+	return before, after
 }

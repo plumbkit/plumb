@@ -248,18 +248,6 @@ func spliceOverlay(bg, overlay string, w, h int) string {
 	return spliceOverlayAt(bg, overlay, sx, sy)
 }
 
-func spliceOverlayLower(bg, overlay string, w, h int) string {
-	ovLines := strings.Split(overlay, "\n")
-	ovH := len(ovLines)
-	ovW := 0
-	for _, l := range ovLines {
-		if lw := lipgloss.Width(l); lw > ovW {
-			ovW = lw
-		}
-	}
-	sy, sx := (h-ovH)/2+1, (w-ovW)/2
-	return spliceOverlayAt(bg, overlay, sx, sy)
-}
 
 func dimAll(s string) string {
 	lines := strings.Split(s, "\n")

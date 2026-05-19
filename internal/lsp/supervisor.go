@@ -171,7 +171,7 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 				readyCh <- fmt.Errorf("supervisor: spawn %q: %w", s.command, err)
 				return
 			}
-			s.setState(StateRestarting, nil, nil)
+			s.setState(StateRestarting)
 			if !s.sleep(ctx, backoff) {
 				return
 			}
@@ -195,7 +195,7 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 					readyCh <- fmt.Errorf("supervisor: OnStart: %w", err)
 					return
 				}
-				s.setState(StateRestarting, nil, nil)
+				s.setState(StateRestarting)
 				if !s.sleep(ctx, backoff) {
 					return
 				}
@@ -213,12 +213,12 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 		// Wait for the process to exit.
 		err = proc.Wait()
 		if ctx.Err() != nil {
-			s.setState(StateStopped, nil, nil)
+			s.setState(StateStopped)
 			return
 		}
 		slog.Warn("supervisor: process exited unexpectedly", "command", s.command, "err", err)
 		_ = conn.Close()
-		s.setState(StateRestarting, nil, nil)
+		s.setState(StateRestarting)
 		if !s.sleep(ctx, backoff) {
 			return
 		}
@@ -252,11 +252,11 @@ func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error
 	return conn, cmd, nil
 }
 
-func (s *Supervisor) setState(state State, conn *jsonrpc.Conn, proc *exec.Cmd) {
+func (s *Supervisor) setState(state State) {
 	s.mu.Lock()
 	s.state = state
-	s.conn = conn
-	s.proc = proc
+	s.conn = nil
+	s.proc = nil
 	s.mu.Unlock()
 }
 
