@@ -73,17 +73,19 @@ func validLogLevelCommand(level string) bool {
 
 // serveControlSocket accepts admin connections on ln and handles each in its
 // own goroutine. It returns when ln is closed (daemon shutdown).
-func serveControlSocket(ln net.Listener, configLevel, logFormat string) {
+// diagsFn returns live formatted diagnostics for the given workspace path;
+// pass nil if the daemon has no workspace pool (e.g. in tests that don't need it).
+func serveControlSocket(ln net.Listener, configLevel, logFormat string, diagsFn func(string) string) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go handleCtrlConn(conn, configLevel, logFormat)
+		go handleCtrlConn(conn, configLevel, logFormat, diagsFn)
 	}
 }
 
-func handleCtrlConn(conn net.Conn, configLevel, logFormat string) {
+func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(string) string) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -91,6 +93,13 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string) {
 		return
 	}
 	line := strings.TrimSpace(scanner.Text())
+
+	if workspace, ok := strings.CutPrefix(line, "diagnostics "); ok {
+		if diagsFn != nil {
+			fmt.Fprint(conn, diagsFn(workspace))
+		}
+		return
+	}
 
 	const prefix = "set-level "
 	if !strings.HasPrefix(line, prefix) {

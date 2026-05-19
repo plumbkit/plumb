@@ -261,7 +261,7 @@ func TestActivityBoxKeepsOneSpaceAfterCallCount(t *testing.T) {
 }
 
 func TestSectionSelectorKeyFlow(t *testing.T) {
-	m := NewModel("")
+	m := NewModel("", "")
 
 	updated, _ := m.Update(keyPress("/"))
 	m = updated.(Model)
@@ -329,7 +329,7 @@ func TestSectionSelectorMouseAndControlNumber(t *testing.T) {
 }
 
 func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
-	m := NewModel("")
+	m := NewModel("", "")
 
 	updated, cmd := m.Update(keyPress("h"))
 	m = updated.(Model)
@@ -363,7 +363,7 @@ func TestHelpAndQuitShortcutsUseControlKeys(t *testing.T) {
 func TestFooterShowsLiveSessionsAndDaemonMem(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	m := NewModel("")
+	m := NewModel("", "")
 	if m.globalDB != nil {
 		defer m.globalDB.Close()
 	}

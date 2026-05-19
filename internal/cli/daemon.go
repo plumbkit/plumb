@@ -118,6 +118,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	}
 	defer os.Remove(versionPath)
 
+	statsStore := newStatsStore()
+	defer statsStore.Close()
+
+	pool := newWorkspacePool(cfg)
+	defer pool.close()
+
 	ctrlPath := daemonCtrlSocketPath()
 	_ = os.Remove(ctrlPath)
 	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
@@ -130,7 +136,14 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			<-ctx.Done()
 			ctrlLn.Close()
 		}()
-		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat)
+		diagsFn := func(workspace string) string {
+			e := pool.lookup(workspace)
+			if e == nil {
+				return ""
+			}
+			return tools.FormatDiagnostics(e.inv.AllDiagnostics())
+		}
+		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn)
 	}
 
 	daemonStartedAt := time.Now()
@@ -142,12 +155,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// daemon's lifetime; ctx cancellation stops the sweep goroutine cleanly.
 	tools.StartPathLockSweep(ctx)
 	monitor.StartSnapshotWriter(ctx, monitor.SnapshotPath(), 2*time.Second)
-
-	statsStore := newStatsStore()
-	defer statsStore.Close()
-
-	pool := newWorkspacePool(cfg)
-	defer pool.close()
 
 	// clientLimiters holds one RateLimiter per MCP client identity
 	// (ClientName+"/"+ClientVersion). Connections from the same client share

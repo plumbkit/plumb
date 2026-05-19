@@ -75,6 +75,13 @@ func (t *Diagnostics) Execute(_ context.Context, raw json.RawMessage) (string, e
 	return formatDiagnostics(all), nil
 }
 
+// FormatDiagnostics renders a URI→diagnostics map as a human-readable string.
+// It is exported so the daemon's control-socket handler can produce live output
+// without going through the MCP tool layer.
+func FormatDiagnostics(byURI map[string][]protocol.Diagnostic) string {
+	return formatDiagnostics(byURI)
+}
+
 func formatDiagnostics(byURI map[string][]protocol.Diagnostic) string {
 	if len(byURI) == 0 {
 		return "No diagnostics received yet. The language server may still be indexing."

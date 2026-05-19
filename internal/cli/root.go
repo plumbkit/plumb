@@ -20,7 +20,7 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		tui.Version = Version
-		return tui.Run(daemonLogPath())
+		return tui.Run(daemonLogPath(), daemonCtrlSocketPath())
 	},
 }
 

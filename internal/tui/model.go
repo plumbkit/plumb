@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +113,9 @@ type Model struct {
 	recentTableBodyRow    int
 	lastDiagnosticsOutput string
 
+	// Control socket path for live daemon queries.
+	ctrlPath string
+
 	// Log viewer state (Logs section, index 3).
 	logPath    string
 	logEntries []logEntry
@@ -149,12 +154,13 @@ type popupDetailCache struct {
 	loaded     bool
 }
 
-func NewModel(logPath string) Model {
+func NewModel(logPath, ctrlPath string) Model {
 	m := Model{
 		leftWidth:         defaultLeftWidth,
 		currentSection:    1,
 		sectionMenuCursor: 1,
 		logPath:           logPath,
+		ctrlPath:          ctrlPath,
 		logFollow:         true,
 		dashProjectFolder: detectWorkspaceFolder(),
 		scrollBounds:      &scrollBounds{},
@@ -238,18 +244,27 @@ func (m *Model) refreshStats() {
 }
 
 func (m *Model) refreshDiagnostics() {
-	if m.globalDB == nil || len(m.sessions) == 0 {
-		m.lastDiagnosticsOutput = ""
+	if m.ctrlPath == "" || len(m.sessions) == 0 {
 		return
 	}
-	s := m.sessions[m.cursor]
-	calls, _ := m.globalDB.CallsForTool("diagnostics", s.Folder, 1)
-	if len(calls) == 0 {
-		m.lastDiagnosticsOutput = ""
+	workspace := m.sessions[m.cursor].Folder
+	if workspace == "" {
 		return
 	}
-	_, output := m.globalDB.CallDetail(calls[0].Workspace, calls[0].SessionID, calls[0].CalledAt)
-	m.lastDiagnosticsOutput = output
+	conn, err := net.DialTimeout("unix", m.ctrlPath, 500*time.Millisecond)
+	if err != nil {
+		return // daemon not running or ctrl socket unavailable; keep stale value
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, err := fmt.Fprintf(conn, "diagnostics %s\n", workspace); err != nil {
+		return
+	}
+	b, err := io.ReadAll(conn)
+	if err != nil {
+		return
+	}
+	m.lastDiagnosticsOutput = string(b)
 }
 
 func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
@@ -270,10 +285,7 @@ func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 	if start.IsZero() {
 		start = now.Add(-time.Minute)
 	}
-	window := now.Sub(start)
-	if window < time.Minute {
-		window = time.Minute
-	}
+	window := max(now.Sub(start), time.Minute)
 
 	// Pass an empty stats.Filter{} to get ALL calls, regardless of session or tool.
 	activity, err := db.Activity(window, activityBuckets, stats.Filter{})
@@ -388,20 +400,14 @@ func (m *Model) openPopup(tool string, preselect time.Time) {
 func (m *Model) ensurePopupCursorVisible() {
 	cursorLine := m.popupCallCursor + 1
 	totalLines := len(m.popupCalls) + 1
-	bodyHeight := m.height - 7
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
+	bodyHeight := max(m.height-7, 1)
 	if cursorLine >= m.popupLeftScroll+bodyHeight {
 		m.popupLeftScroll = cursorLine - bodyHeight + 1
 	}
 	if cursorLine < m.popupLeftScroll {
 		m.popupLeftScroll = cursorLine
 	}
-	maxScroll := totalLines - 1
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := max(totalLines-1, 0)
 	if m.popupLeftScroll > maxScroll {
 		m.popupLeftScroll = maxScroll
 	}
@@ -592,10 +598,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 					m.popupLeftWidth = maxPLeft
 				}
 			case "pgdown":
-				pageSize := m.height - 7
-				if pageSize < 1 {
-					pageSize = 1
-				}
+				pageSize := max(m.height-7, 1)
 				if m.popupRightFocus {
 					m.popupDetailScroll += pageSize
 				} else {
@@ -608,10 +611,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 					m.ensurePopupCursorVisible()
 				}
 			case "pgup":
-				pageSize := m.height - 7
-				if pageSize < 1 {
-					pageSize = 1
-				}
+				pageSize := max(m.height-7, 1)
 				if m.popupRightFocus {
 					m.popupDetailScroll -= pageSize
 					if m.popupDetailScroll < 0 {
@@ -659,19 +659,13 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 				case "down", "j":
 					m.logDetailScroll++
 				case "pgup":
-					pageSize := m.height - 14
-					if pageSize < 1 {
-						pageSize = 1
-					}
+					pageSize := max(m.height-14, 1)
 					m.logDetailScroll -= pageSize
 					if m.logDetailScroll < 0 {
 						m.logDetailScroll = 0
 					}
 				case "pgdown":
-					pageSize := m.height - 14
-					if pageSize < 1 {
-						pageSize = 1
-					}
+					pageSize := max(m.height-14, 1)
 					m.logDetailScroll += pageSize
 				}
 				return m, nil
@@ -852,10 +846,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 				m.leftWidth = maxLeft
 			}
 		case "pgdown":
-			pageSize := m.height - 6
-			if pageSize < 1 {
-				pageSize = 1
-			}
+			pageSize := max(m.height-6, 1)
 			switch m.focusPanel {
 			case focusToolStats:
 				m.toolStatsCursor += pageSize
@@ -879,10 +870,7 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 				m.refreshStats()
 			}
 		case "pgup":
-			pageSize := m.height - 6
-			if pageSize < 1 {
-				pageSize = 1
-			}
+			pageSize := max(m.height-6, 1)
 			switch m.focusPanel {
 			case focusToolStats:
 				m.toolStatsCursor -= pageSize
@@ -966,10 +954,7 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) logBodyHeight() int {
-	bodyHeight := m.height - 7
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
+	bodyHeight := max(m.height-7, 1)
 	return bodyHeight
 }
 
@@ -993,10 +978,7 @@ func (m Model) onSessionsPanel(x, y int) bool {
 }
 
 func (m *Model) setLeftWidthFromMouse(x int) {
-	next := x - 1
-	if next < minLeftWidth {
-		next = minLeftWidth
-	}
+	next := max(x-1, minLeftWidth)
 	if maxLeft := m.maxLeftWidth(); next > maxLeft {
 		next = maxLeft
 	}
@@ -1054,10 +1036,7 @@ func (m *Model) selectSection(idx int) {
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
 	if m.showPopup {
 		pLW := m.popupLeftWidth
-		pRW := m.width - pLW - 3
-		if pRW < 10 {
-			pRW = 10
-		}
+		pRW := max(m.width-pLW-3, 10)
 		ovW := pLW + pRW + 3
 		sx := (m.width - ovW) / 2
 		if mouse.X <= sx+pLW+1 {
@@ -1085,10 +1064,7 @@ func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
 		m.moveLogSelection(delta)
 		return
 	}
-	bodyHeight := m.height - 6
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
+	bodyHeight := max(m.height-6, 1)
 	if mouse.Y < bodyStartRow || mouse.Y >= bodyStartRow+bodyHeight {
 		return
 	}
@@ -1114,14 +1090,8 @@ func (m Model) render() string {
 		return m.renderLogsSection()
 	}
 
-	rightWidth := m.width - m.leftWidth - 3
-	if rightWidth < 10 {
-		rightWidth = 10
-	}
-	bodyHeight := m.height - 6
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
+	rightWidth := max(m.width-m.leftWidth-3, 10)
+	bodyHeight := max(m.height-6, 1)
 
 	var sb strings.Builder
 	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen
@@ -1140,7 +1110,7 @@ func (m Model) render() string {
 
 	menu := m.renderTopMenu(tabSpaceW, isOverlay)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		// Draw the menu on the left, then the logo piece on the right.
 		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
@@ -1151,20 +1121,14 @@ func (m Model) render() string {
 	allRightLines := (&m).rightLines(rightWidth)
 
 	// Clamp scroll offsets
-	maxLeftScroll := len(allLeftLines) - bodyHeight
-	if maxLeftScroll < 0 {
-		maxLeftScroll = 0
-	}
+	maxLeftScroll := max(len(allLeftLines)-bodyHeight, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxLeft = maxLeftScroll
 	}
 	if m.leftScroll > maxLeftScroll {
 		m.leftScroll = maxLeftScroll
 	}
-	maxRightScroll := len(allRightLines) - bodyHeight
-	if maxRightScroll < 0 {
-		maxRightScroll = 0
-	}
+	maxRightScroll := max(len(allRightLines)-bodyHeight, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxRight = maxRightScroll
 	}
@@ -1247,10 +1211,7 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 		memStr,
 	)
 	rightFooterPlain := "/ menu  ·  ^q quit  ·  ^h help "
-	footerGap := m.width - lipgloss.Width(leftFooter) - lipgloss.Width(rightFooterPlain)
-	if footerGap < 1 {
-		footerGap = 1
-	}
+	footerGap := max(m.width-lipgloss.Width(leftFooter)-lipgloss.Width(rightFooterPlain), 1)
 	rightFooter := keyStyle.Render("/") + style.Render(" menu  ·  ") +
 		keyStyle.Render("^q") + style.Render(" quit  ·  ") +
 		keyStyle.Render("^h") + style.Render(" help ")
@@ -1266,12 +1227,14 @@ func (m Model) renderTopBorder(rightWidth int, dimmed bool) string {
 
 	logoBottom := strings.Split(LogoText, "\n")[3]
 
-	fillerW := m.width - LogoWidth - 1
-	if fillerW < 0 {
-		fillerW = 0
+	fillerW := max(m.width-LogoWidth-1, 0)
+
+	filler := strings.Repeat("─", fillerW)
+	if m.leftWidth < fillerW {
+		filler = filler[:m.leftWidth] + "┬" + filler[m.leftWidth+1:]
 	}
 
-	return sepStyle.Render("╭"+strings.Repeat("─", fillerW)) + sepStyle.Render(logoBottom)
+	return sepStyle.Render("╭"+filler) + sepStyle.Render(logoBottom)
 }
 
 func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
@@ -1279,7 +1242,12 @@ func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
 	if dimmed {
 		sepStyle = SepInactiveStyle
 	}
-	return sepStyle.Render("╰" + strings.Repeat("─", m.width-2) + "╯")
+	fillerW := m.width - 2
+	filler := strings.Repeat("─", fillerW)
+	if m.leftWidth < fillerW {
+		filler = filler[:m.leftWidth] + "┴" + filler[m.leftWidth+1:]
+	}
+	return sepStyle.Render("╰" + filler + "╯")
 }
 
 func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
@@ -1294,10 +1262,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 	var lines []string
 	lines = append(lines, m.renderTopBorderPopup(pLW, pRW))
 	allLeft := m.popupLeftLines()
-	maxPL := len(allLeft) - bodyHeight
-	if maxPL < 0 {
-		maxPL = 0
-	}
+	maxPL := max(len(allLeft)-bodyHeight, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxPopupLeft = maxPL
 	}
@@ -1308,15 +1273,9 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 	leftScrollbar := scrollbarCol(len(allLeft), bodyHeight, m.popupLeftScroll)
 	allRight := m.popupRightAll(pRW - 2)
 
-	rightScrollH := bodyHeight - 2
-	if rightScrollH < 0 {
-		rightScrollH = 0
-	}
+	rightScrollH := max(bodyHeight-2, 0)
 
-	maxDS := len(allRight) - rightScrollH
-	if maxDS < 0 {
-		maxDS = 0
-	}
+	maxDS := max(len(allRight)-rightScrollH, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxPopupDetail = maxDS
 	}
@@ -1405,10 +1364,7 @@ func (m Model) renderHelp(bg string) string {
 	// Calculate dashes for the top border correctly
 	labelW := lipgloss.Width(topLabel)
 	leftDashes := 1
-	rightDashes := innerW - labelW - leftDashes
-	if rightDashes < 0 {
-		rightDashes = 0
-	}
+	rightDashes := max(innerW-labelW-leftDashes, 0)
 
 	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", rightDashes)+"╮")
 
@@ -1445,10 +1401,7 @@ func (m Model) renderSectionMenuOverlay(bg string) string {
 			style = selectedStyle
 		}
 		content := style.Render(fmt.Sprintf(" %s %d. %-11s  ", marker, i+1, item))
-		pad := innerW - lipgloss.Width(content)
-		if pad < 0 {
-			pad = 0
-		}
+		pad := max(innerW-lipgloss.Width(content), 0)
 		lines = append(lines, border.Render("│")+content+strings.Repeat(" ", pad)+border.Render("│"))
 	}
 	lines = append(lines, border.Render("╰"+strings.Repeat("─", innerW)+"╯"))
@@ -1464,14 +1417,8 @@ func (m Model) renderTopBorderPopup(pLW, pRW int) string {
 	} else {
 		lts, rts = PanelHeaderStyle, PanelHeaderFadedStyle
 	}
-	lf := pLW - 1 - len(lt)
-	if lf < 0 {
-		lf = 0
-	}
-	rf := pRW - 1 - len(rt)
-	if rf < 0 {
-		rf = 0
-	}
+	lf := max(pLW-1-len(lt), 0)
+	rf := max(pRW-1-len(rt), 0)
 	return SepStyle.Render("╭─") + lts.Render(lt) + SepStyle.Render(strings.Repeat("─", lf)+"┬─") + rts.Render(rt) + SepStyle.Render(strings.Repeat("─", rf)+"╮")
 }
 
@@ -1492,9 +1439,9 @@ func (m Model) popupLeftLines() []string {
 		currID = m.sessions[m.cursor].ID
 	}
 	for i, c := range m.popupCalls {
-		sc := "○"
+		sc := "·"
 		if c.SessionID == currID {
-			sc = "●"
+			sc = "•"
 		}
 		if i == m.popupCallCursor {
 			sc = "❯"
@@ -1509,10 +1456,7 @@ func (m Model) popupLeftLines() []string {
 
 		// We format it as "  ❯ ✓ 05-19 15:04:05 22ms"
 		row := fmt.Sprintf("  %s %s %s %s", sc, ok, ts, dur)
-		maxW := m.popupLeftWidth - 1
-		if maxW < 10 {
-			maxW = 10
-		}
+		maxW := max(m.popupLeftWidth-1, 10)
 		if lipgloss.Width(row) > maxW {
 			row = string([]rune(row)[:maxW-1]) + "…"
 		}
@@ -1591,7 +1535,7 @@ func (m Model) popupRightAll(rw int) []string {
 		var al []string
 		var pb bytes.Buffer
 		if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
-			for _, l := range strings.Split(strings.TrimRight(pb.String(), "\n"), "\n") {
+			for l := range strings.SplitSeq(strings.TrimRight(pb.String(), "\n"), "\n") {
 				al = append(al, DetailStyle.Render(l))
 			}
 		} else {
@@ -1601,7 +1545,7 @@ func (m Model) popupRightAll(rw int) []string {
 	}
 	if ot != "" && c.Success {
 		var ol []string
-		for _, o := range strings.Split(strings.TrimRight(ot, "\n"), "\n") {
+		for o := range strings.SplitSeq(strings.TrimRight(ot, "\n"), "\n") {
 			ol = append(ol, DetailStyle.Render(o))
 		}
 		gutterLine("Output", ol)
@@ -1613,14 +1557,8 @@ func scrollbarCol(total, visible, offset int) []string {
 	if total <= visible {
 		return nil
 	}
-	ts := visible * visible / total
-	if ts < 1 {
-		ts = 1
-	}
-	mo := total - visible
-	if mo < 1 {
-		mo = 1
-	}
+	ts := max(visible*visible/total, 1)
+	mo := max(total-visible, 1)
 	tst := offset * (visible - ts) / mo
 	col := make([]string, visible)
 	for i := range visible {
@@ -1700,21 +1638,13 @@ func (m Model) leftLines() []string {
 		}
 		path := "resolving…"
 		if s.Folder != "" {
-			mf := m.leftWidth - len([]rune("    ╰─ "))
-			if mf < 0 {
-				mf = 0
-			}
+			mf := max(m.leftWidth-len([]rune("    ╰─ ")), 0)
 			path = contractPath(s.Folder, mf)
 		}
 		secondLine := "    ╰─ " + path
 		if i == m.cursor {
-			if lf {
-				lines = append(lines, SelectedStyle.Render(firstLine))
-				lines = append(lines, SelectedStyle.Render(secondLine))
-			} else {
-				lines = append(lines, FadedStyle.Render(firstLine))
-				lines = append(lines, FadedStyle.Render(secondLine))
-			}
+			lines = append(lines, SelectedStyle.Render(firstLine))
+			lines = append(lines, SelectedStyle.Render(secondLine))
 		} else {
 			if lf {
 				lines = append(lines, ItemStyle.Render(firstLine))
@@ -1732,7 +1662,7 @@ func (m Model) leftLines() []string {
 func sessionLangBadge(language string, selected, focused bool) string {
 	badge := " " + language + " "
 	switch {
-	case selected && focused:
+	case selected:
 		return SessionLangSelectedStyle.Render(badge)
 	case focused:
 		return SessionLangStyle.Render(badge)
@@ -1820,10 +1750,7 @@ func (m *Model) rightLines(rw int) []string {
 
 func (m Model) rightLinesDetails(rw int) []string {
 	const kw = 14
-	mv := rw - kw
-	if mv < 8 {
-		mv = 8
-	}
+	mv := max(rw-kw, 8)
 	s := m.sessions[m.cursor]
 	fld := s.Folder
 	if fld == "" {
@@ -1859,6 +1786,20 @@ func (m Model) rightLinesDetails(rw int) []string {
 		cl = MutedStyle.Render("unknown")
 	}
 	lines = append(lines, detailRow("Client", cl))
+
+	lines = append(lines, "")
+	var totalCalls int64
+	for _, ts := range m.toolStats {
+		totalCalls += ts.Calls
+	}
+	var issues int
+	if m.lastDiagnosticsOutput != "" {
+		fmt.Sscanf(m.lastDiagnosticsOutput, "%d", &issues)
+	}
+	lines = append(lines, detailRow("Tools", fmt.Sprintf("%d", len(m.toolStats))))
+	lines = append(lines, detailRow("Calls", fmt.Sprintf("%d", totalCalls)))
+	lines = append(lines, detailRow("Issues", fmt.Sprintf("%d", issues)))
+
 	return lines
 }
 
@@ -1867,10 +1808,7 @@ func (m *Model) rightLinesTools(rw int) []string {
 		c2w, c3w, c4w = 8, 10, 6
 	)
 	s3 := "   "
-	c1w := rw - 2 - c2w - c3w - c4w - 12
-	if c1w < 10 {
-		c1w = 10
-	}
+	c1w := max(rw-2-c2w-c3w-c4w-12, 10)
 	sln := "  " + SepStyle.Render(strings.Repeat("─", rw-3))
 	roww := rw - 2
 
@@ -1909,14 +1847,8 @@ func (m *Model) rightLinesHistory(rw int) []string {
 		c2w, c3w, c4w, c5w = 8, 10, 6, 12
 	)
 	s3 := "   "
-	c1w := rw - 2 - c2w - c3w - c4w - 12
-	if c1w < 10 {
-		c1w = 10
-	}
-	rc1w := c1w - c5w - 3
-	if rc1w < 8 {
-		rc1w = 8
-	}
+	c1w := max(rw-2-c2w-c3w-c4w-12, 10)
+	rc1w := max(c1w-c5w-3, 8)
 	sln := "  " + SepStyle.Render(strings.Repeat("─", rw-3))
 	roww := rw - 2
 
@@ -1964,7 +1896,7 @@ func (m Model) rightLinesDiagnostics(_ int) []string {
 		}
 	}
 	var lines []string
-	for _, line := range strings.Split(m.lastDiagnosticsOutput, "\n") {
+	for line := range strings.SplitSeq(m.lastDiagnosticsOutput, "\n") {
 		if line == "" {
 			lines = append(lines, "")
 		} else {
@@ -2005,10 +1937,7 @@ func (m Model) renderTopMenu(width int, dimmed bool) []string {
 		if showTokenBox {
 			line += " " + tokenBox[i]
 		}
-		pad := width - lipgloss.Width(line)
-		if pad < 0 {
-			pad = 0
-		}
+		pad := max(width-lipgloss.Width(line), 0)
 		out = append(out, line+strings.Repeat(" ", pad))
 	}
 	return out
@@ -2035,10 +1964,7 @@ func (m Model) renderDaemonMetricsBox(dimmed bool) []string {
 		value = monitor.FormatCPU(m.daemonMetrics.CPUPercent)
 	}
 	titleText := " Daemon CPU (" + value + ") "
-	topFill := boxWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
-	if topFill < 0 {
-		topFill = 0
-	}
+	topFill := max(boxWidth-lipgloss.Width("╭─")-lipgloss.Width(titleText)-lipgloss.Width("╮"), 0)
 
 	spark := cpuSparkline(m.daemonCPU, sparkWidth)
 	content := " " + sparkStyle.Render(spark) + " "
@@ -2073,15 +1999,9 @@ func (m Model) renderSectionSelector(dimmed bool) []string {
 	}
 	content := fmt.Sprintf(" %s ", textStyle.Render(fmt.Sprintf("❯ %d. %s", sectionNum, current)))
 	arrow := hintStyle.Render("▽")
-	pad := sectionMenuWidth - 2 - lipgloss.Width(content) - lipgloss.Width(arrow) - 1
-	if pad < 1 {
-		pad = 1
-	}
+	pad := max(sectionMenuWidth-2-lipgloss.Width(content)-lipgloss.Width(arrow)-1, 1)
 	row := content + strings.Repeat(" ", pad) + arrow + " "
-	topFill := sectionMenuWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
-	if topFill < 0 {
-		topFill = 0
-	}
+	topFill := max(sectionMenuWidth-lipgloss.Width("╭─")-lipgloss.Width(titleText)-lipgloss.Width("╮"), 0)
 
 	return []string{
 		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
@@ -2115,10 +2035,7 @@ func (m Model) renderTokenSavingsBox(dimmed bool) []string {
 	if innerWidth < minInnerWidth {
 		innerWidth = minInnerWidth
 	}
-	topFill := innerWidth - lipgloss.Width("─") - lipgloss.Width(titleText)
-	if topFill < 0 {
-		topFill = 0
-	}
+	topFill := max(innerWidth-lipgloss.Width("─")-lipgloss.Width(titleText), 0)
 
 	return []string{
 		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
@@ -2170,25 +2087,18 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 	}
 	titleText := fmt.Sprintf(" Activity (%s) ", windowStr)
 
-	topFill := boxWidth - lipgloss.Width("╭─") - lipgloss.Width(titleText) - lipgloss.Width("╮")
-	if topFill < 0 {
-		topFill = 0
-	}
+	topFill := max(boxWidth-lipgloss.Width("╭─")-lipgloss.Width(titleText)-lipgloss.Width("╮"), 0)
 
 	count := formatActivityCalls(m.activity.Calls)
 	countWidth := lipgloss.Width(count)
-	sparkWidth := innerWidth - countWidth - 3 // left pad + gap + right pad
-	if sparkWidth > maxSparkWidth {
-		sparkWidth = maxSparkWidth
-	}
+	sparkWidth := min(
+		// left pad + gap + right pad
+		innerWidth-countWidth-3, maxSparkWidth)
 	if sparkWidth < 1 {
 		sparkWidth = 1
 	}
 	spark := activitySparkline(m.activity.Buckets, sparkWidth)
-	middlePad := innerWidth - lipgloss.Width(spark) - countWidth - 2
-	if middlePad < 1 {
-		middlePad = 1
-	}
+	middlePad := max(innerWidth-lipgloss.Width(spark)-countWidth-2, 1)
 	content := " " + sparkStyle.Render(spark) + strings.Repeat(" ", middlePad) + countStyle.Render(count) + " "
 
 	return []string{
@@ -2310,10 +2220,7 @@ func tokenSavingsBar(tokens int64, width int) (string, string) {
 
 	// Calculate the remaining visible width (number of character cells)
 	// lipgloss.Width correctly handles multi-byte runes like our blocks
-	unfilledLen := width - lipgloss.Width(filledStr)
-	if unfilledLen < 0 {
-		unfilledLen = 0
-	}
+	unfilledLen := max(width-lipgloss.Width(filledStr), 0)
 
 	return filledStr, strings.Repeat("░", unfilledLen)
 }
@@ -2529,7 +2436,7 @@ func spliceOverlayAt(bg, overlay string, sx, sy int) string {
 			ovW = lw
 		}
 	}
-	for i := 0; i < len(ovLines); i++ {
+	for i := range ovLines {
 		y := sy + i
 		if y < 0 || y >= len(bgLines) {
 			continue
@@ -2551,9 +2458,9 @@ func spliceOverlayAt(bg, overlay string, sx, sy int) string {
 	return strings.Join(bgLines, "\n")
 }
 
-func Run(logPath string) error {
+func Run(logPath, ctrlPath string) error {
 	RebuildStyles()
-	p := tea.NewProgram(NewModel(logPath))
+	p := tea.NewProgram(NewModel(logPath, ctrlPath))
 	_, err := p.Run()
 	return err
 }
@@ -2644,20 +2551,14 @@ func (m Model) renderTopBorderLogs(dimmed bool) string {
 		sep = SepInactiveStyle
 	}
 	logoBottom := strings.Split(LogoText, "\n")[3]
-	fill := m.width - LogoWidth - 1
-	if fill < 0 {
-		fill = 0
-	}
+	fill := max(m.width-LogoWidth-1, 0)
 	return sep.Render("╭"+strings.Repeat("─", fill)) + sep.Render(logoBottom)
 }
 
 // logBodyScroll computes the clamped scroll offset for the log body given the
 // total number of filtered entries and the available body height.
 func (m Model) logBodyScroll(total, bodyHeight int) int {
-	maxScroll := total - bodyHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := max(total-bodyHeight, 0)
 	if m.logFollow {
 		return maxScroll
 	}
@@ -2695,10 +2596,7 @@ func (m *Model) moveLogSelection(delta int) {
 		m.logFollow = false
 		return
 	}
-	m.logCursor = m.selectedLogIndex(len(filtered)) + delta
-	if m.logCursor < 0 {
-		m.logCursor = 0
-	}
+	m.logCursor = max(m.selectedLogIndex(len(filtered))+delta, 0)
 	if m.logCursor >= len(filtered) {
 		m.logCursor = len(filtered) - 1
 	}
@@ -2708,10 +2606,7 @@ func (m *Model) moveLogSelection(delta int) {
 
 func (m *Model) ensureLogCursorVisible(total int) {
 	bodyHeight := m.logBodyHeight()
-	maxScroll := total - bodyHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := max(total-bodyHeight, 0)
 	if m.logCursor < m.logScroll {
 		m.logScroll = m.logCursor
 	}
@@ -2835,14 +2730,8 @@ func (m Model) renderLogStatusBar(filtered []logEntry, innerW int, dimmed bool) 
 		}
 	}
 	right := fmt.Sprintf("enter details  ·  %d/%d lines", len(filtered), len(m.logEntries))
-	contentW := innerW - 2
-	if contentW < 1 {
-		contentW = 1
-	}
-	gap := contentW - 2 - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
+	contentW := max(innerW-2, 1)
+	gap := max(contentW-2-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	content := " " + left + strings.Repeat(" ", gap) + right + " "
 	content = lipgloss.NewStyle().Width(contentW).Render(content)
 	if dimmed {
@@ -2856,31 +2745,19 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 		return bg
 	}
 	entry := filtered[m.selectedLogIndex(len(filtered))]
-	boxW := m.width - 8
-	if boxW > 96 {
-		boxW = 96
-	}
+	boxW := min(m.width-8, 96)
 	if boxW < 42 {
 		boxW = 42
 	}
 	innerW := boxW - 2
-	scrollH := m.height - 14
-	if scrollH < 3 {
-		scrollH = 3
-	}
+	scrollH := max(m.height-14, 3)
 
 	all := logDetailLines(entry, innerW-4)
-	maxScroll := len(all) - scrollH
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := max(len(all)-scrollH, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxLogDetail = maxScroll
 	}
-	scroll := m.logDetailScroll
-	if scroll > maxScroll {
-		scroll = maxScroll
-	}
+	scroll := min(m.logDetailScroll, maxScroll)
 	if scroll < 0 {
 		scroll = 0
 	}
@@ -2888,10 +2765,7 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 	scrollbar := scrollbarCol(len(all), scrollH, scroll)
 
 	title := " Log Detail "
-	fill := innerW - lipgloss.Width(title) - 1
-	if fill < 0 {
-		fill = 0
-	}
+	fill := max(innerW-lipgloss.Width(title)-1, 0)
 	lines := []string{
 		SepStyle.Render("╭─") + PanelHeaderStyle.Render(title) + SepStyle.Render(strings.Repeat("─", fill)+"╮"),
 	}
@@ -2919,10 +2793,7 @@ func (m Model) renderLogDetailContentLine(text string, innerW int, rBar string) 
 }
 
 func (m Model) renderLogDetailStatusBar(innerW int) string {
-	contentW := innerW - 2
-	if contentW < 1 {
-		contentW = 1
-	}
+	contentW := max(innerW-2, 1)
 	if m.logDetailCopied {
 		content := StatusStyle.Render(padRight("Copied to the clipboard", contentW))
 		return SepStyle.Render("│") + " " + content + " " + SepStyle.Render("│")
@@ -2931,10 +2802,7 @@ func (m Model) renderLogDetailStatusBar(innerW int) string {
 	right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
 	sep := StatusStyle.Render("  ·  ")
 	plainW := lipgloss.Width("c copy  ·  esc close")
-	gap := contentW - plainW
-	if gap < 0 {
-		gap = 0
-	}
+	gap := max(contentW-plainW, 0)
 	content := left + sep + right + strings.Repeat(" ", gap)
 	return SepStyle.Render("│") + " " + content + " " + SepStyle.Render("│")
 }
@@ -2993,10 +2861,7 @@ func logDetailGutterLine(value string) string {
 }
 
 func logDetailGutterLines(value string, width int) []string {
-	wrapWidth := width - 2
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
+	wrapWidth := max(width-2, 1)
 	wrapped := wrapPlain(value, wrapWidth)
 	out := make([]string, 0, len(wrapped))
 	for _, line := range wrapped {
