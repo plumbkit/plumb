@@ -18,9 +18,10 @@ func (m Model) renderTopMenu(width int, dimmed bool) []string {
 	daemonBox := m.renderDaemonMetricsBox(dimmed)
 	tokenBox := m.renderTokenSavingsBox(dimmed)
 	selectorWidth := lipgloss.Width(selector[0])
+	activityBoxWidth := lipgloss.Width(activityBox[0])
 	daemonBoxWidth := lipgloss.Width(daemonBox[0])
-	showDaemonBox := width >= selectorWidth+1+daemonBoxWidth+1+30
-	currentWidth := selectorWidth + 1 + 30
+	showDaemonBox := width >= selectorWidth+1+daemonBoxWidth+1+activityBoxWidth
+	currentWidth := selectorWidth + 1 + activityBoxWidth
 	if showDaemonBox {
 		currentWidth += 1 + daemonBoxWidth
 	}
@@ -54,18 +55,20 @@ func (m Model) renderDaemonMetricsBox(dimmed bool) []string {
 	const (
 		boxWidth   = 24
 		innerWidth = boxWidth - 2
-		sparkWidth = innerWidth - 2
+		barWidth   = innerWidth - 2
 	)
 
 	value := "n/a"
+	percent := 0.0
 	if m.daemonMetricsOK && m.daemonMetrics.CPUAvailable {
-		value = monitor.FormatCPU(m.daemonMetrics.CPUPercent)
+		percent = clampPercent(m.daemonMetrics.CPUPercent)
+		value = monitor.FormatCPU(percent)
 	}
 	titleText := " Daemon CPU (" + value + ") "
 	topFill := max(boxWidth-lipgloss.Width("╭─")-lipgloss.Width(titleText)-lipgloss.Width("╮"), 0)
 
-	spark := cpuSparkline(m.daemonCPU, sparkWidth)
-	content := " " + sparkStyle.Render(spark) + " "
+	filledPart, unfilledPart := percentSegmentBar(percent, barWidth)
+	content := " " + sparkStyle.Render(filledPart) + border.Render(unfilledPart) + " "
 
 	return []string{
 		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
@@ -174,9 +177,7 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 	}
 
 	const (
-		boxWidth      = 30
-		innerWidth    = boxWidth - 2
-		maxSparkWidth = 16
+		sparkWidth = 16
 	)
 
 	windowStr := "1m"
@@ -185,19 +186,17 @@ func (m Model) renderActivityBox(dimmed bool) []string {
 	}
 	titleText := fmt.Sprintf(" Activity (%s) ", windowStr)
 
-	topFill := max(boxWidth-lipgloss.Width("╭─")-lipgloss.Width(titleText)-lipgloss.Width("╮"), 0)
-
-	count := formatActivityCalls(m.activity.Calls)
+	count := formatActivityCount(m.activity.Calls)
 	countWidth := lipgloss.Width(count)
-	sparkWidth := min(
-		// left pad + gap + right pad
-		innerWidth-countWidth-3, maxSparkWidth)
-	if sparkWidth < 1 {
-		sparkWidth = 1
-	}
 	spark := activitySparkline(m.activity.Buckets, sparkWidth)
-	middlePad := max(innerWidth-lipgloss.Width(spark)-countWidth-2, 1)
-	content := " " + sparkStyle.Render(spark) + strings.Repeat(" ", middlePad) + countStyle.Render(count) + " "
+	content := " " + renderActivityGraph(spark, sparkStyle, border) + " " + countStyle.Render(count) + " "
+	innerWidth := lipgloss.Width(content)
+	minInnerWidth := lipgloss.Width("─") + lipgloss.Width(titleText)
+	if innerWidth < minInnerWidth {
+		innerWidth = minInnerWidth
+		content = " " + renderActivityGraph(spark, sparkStyle, border) + strings.Repeat(" ", max(innerWidth-lipgloss.Width(spark)-countWidth-2, 1)) + countStyle.Render(count) + " "
+	}
+	topFill := max(innerWidth-lipgloss.Width("─")-lipgloss.Width(titleText), 0)
 
 	return []string{
 		border.Render("╭─") + title.Render(titleText) + border.Render(strings.Repeat("─", topFill)+"╮"),
@@ -235,6 +234,18 @@ func activitySparkline(buckets []int64, width int) string {
 	return string(out)
 }
 
+func renderActivityGraph(spark string, active, inactive lipgloss.Style) string {
+	var b strings.Builder
+	for _, r := range spark {
+		if r == ' ' {
+			b.WriteString(inactive.Render("⣀"))
+		} else {
+			b.WriteString(active.Render(string(r)))
+		}
+	}
+	return b.String()
+}
+
 func cpuSparkline(samples []float64, width int) string {
 	if width <= 0 {
 		return ""
@@ -256,6 +267,19 @@ func cpuSparkline(samples []float64, width int) string {
 		out[i] = levels[levelIdx]
 	}
 	return string(out)
+}
+
+func percentSegmentBar(percent float64, width int) (string, string) {
+	if width <= 0 {
+		return "", ""
+	}
+	percent = clampPercent(percent)
+	filledBlocks := int((percent / 100.0) * float64(width))
+	if percent > 0 && filledBlocks == 0 {
+		filledBlocks = 1
+	}
+	filledBlocks = min(filledBlocks, width)
+	return strings.Repeat("■", filledBlocks), strings.Repeat("■", width-filledBlocks)
 }
 
 func clampPercent(v float64) float64 {
@@ -312,6 +336,25 @@ func formatActivityCalls(n int64) string {
 		return "1 call"
 	default:
 		return fmt.Sprintf("%d calls", n)
+	}
+}
+
+func formatActivityCount(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		val := float64(n) / 1_000_000
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%.0fm", val)
+		}
+		return fmt.Sprintf("%.1fm", val)
+	case n >= 1000:
+		val := float64(n) / 1000
+		if val >= 100 || val == float64(int64(val)) {
+			return fmt.Sprintf("%.0fk", val)
+		}
+		return fmt.Sprintf("%.1fk", val)
+	default:
+		return fmt.Sprintf("%d", n)
 	}
 }
 

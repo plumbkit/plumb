@@ -189,16 +189,22 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 		}
 	}
 	for i, want := range []string{
-		"╭─ Section ──────────╮ ╭─ Activity (1m) ────────────╮",
+		"╭─ Section ──────────╮ ╭─ Activity (1m) ───────╮",
 		"│ ❯ 2. Sessions    ▽ │ │ ",
-		"╰────────────────────╯ ╰────────────────────────────╯",
+		"╰────────────────────╯ ╰───────────────────────╯",
 	} {
 		if !strings.HasPrefix(plain[i], want) {
 			t.Fatalf("line %d = %q, want prefix %q", i, plain[i], want)
 		}
 	}
-	if !strings.Contains(plain[1], "5.2k calls") {
+	if !strings.Contains(plain[1], "5.2k") {
 		t.Fatalf("activity row = %q, want call count", plain[1])
+	}
+	if strings.Contains(plain[1], "calls") {
+		t.Fatalf("activity row = %q, should not include calls label", plain[1])
+	}
+	if !strings.Contains(plain[1], "⣀") {
+		t.Fatalf("activity row = %q, want faded baseline dots", plain[1])
 	}
 
 	lines = m.renderTopMenu(96, false)
@@ -211,6 +217,9 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	}
 	if strings.Contains(plain[1], "RSS") || strings.Contains(plain[1], " H ") || strings.Contains(plain[1], " G ") {
 		t.Fatalf("daemon CPU row = %q, should not show memory or goroutine labels", plain[1])
+	}
+	if !strings.Contains(plain[1], "■■■■■■■■") {
+		t.Fatalf("daemon CPU row = %q, want segmented CPU bar", plain[1])
 	}
 	if !strings.Contains(plain[0], "42%") {
 		t.Fatalf("daemon CPU title = %q, want CPU value in title", plain[0])
@@ -265,13 +274,17 @@ func TestActivityBoxKeepsOneSpaceAfterCallCount(t *testing.T) {
 			}
 
 			row := ansiStripForTest(m.renderActivityBox(false)[1])
-			count := formatActivityCalls(calls)
-			wantSuffix := count + " │"
+			count := formatActivityCount(calls)
+			wantSuffix := " " + count + " │"
 			if !strings.HasSuffix(row, wantSuffix) {
 				t.Fatalf("activity row = %q, want suffix %q", row, wantSuffix)
 			}
-			if lipgloss.Width(row) != 30 {
-				t.Fatalf("activity row width = %d, want 30: %q", lipgloss.Width(row), row)
+			if strings.Contains(row, "  "+count+" │") {
+				t.Fatalf("activity row = %q, want one space before count", row)
+			}
+			boxWidth := lipgloss.Width(m.renderActivityBox(false)[0])
+			if lipgloss.Width(row) != boxWidth {
+				t.Fatalf("activity row width = %d, want box width %d: %q", lipgloss.Width(row), boxWidth, row)
 			}
 		})
 	}
@@ -729,6 +742,14 @@ func TestActivitySparklineAndCallFormatting(t *testing.T) {
 	if got != " ⡀⡄⡇" {
 		t.Fatalf("activitySparkline = %q, want %q", got, " ⡀⡄⡇")
 	}
+	rendered := ansiStripForTest(renderActivityGraph(got, SelectedStyle, SepStyle))
+	if rendered != "⣀⡀⡄⡇" {
+		t.Fatalf("renderActivityGraph = %q, want faded dot baseline", rendered)
+	}
+	blank := ansiStripForTest(renderActivityGraph(activitySparkline(nil, 4), SelectedStyle, SepStyle))
+	if blank != "⣀⣀⣀⣀" {
+		t.Fatalf("blank activity graph = %q, want faded baseline dots", blank)
+	}
 	for n, want := range map[int64]string{
 		0:       "0 calls",
 		1:       "1 call",
@@ -740,6 +761,22 @@ func TestActivitySparklineAndCallFormatting(t *testing.T) {
 			t.Fatalf("formatActivityCalls(%d) = %q, want %q", n, got, want)
 		}
 	}
+	for n, want := range map[int64]string{
+		0:       "0",
+		1:       "1",
+		123:     "123",
+		999:     "999",
+		1000:    "1k",
+		1200:    "1.2k",
+		5200:    "5.2k",
+		999000:  "999k",
+		1000000: "1m",
+		1200000: "1.2m",
+	} {
+		if got := formatActivityCount(n); got != want {
+			t.Fatalf("formatActivityCount(%d) = %q, want %q", n, got, want)
+		}
+	}
 }
 
 func TestCPUSparklineUsesFixedPercentScale(t *testing.T) {
@@ -749,6 +786,18 @@ func TestCPUSparklineUsesFixedPercentScale(t *testing.T) {
 	}
 	if got := cpuSparkline(nil, 4); got != "    " {
 		t.Fatalf("cpuSparkline(nil) = %q, want blank sparkline", got)
+	}
+}
+
+func TestPercentSegmentBar(t *testing.T) {
+	if filled, unfilled := percentSegmentBar(42.5, 20); filled != "■■■■■■■■" || unfilled != "■■■■■■■■■■■■" {
+		t.Fatalf("percentSegmentBar = %q+%q, want 8 filled and 12 unfilled", filled, unfilled)
+	}
+	if filled, unfilled := percentSegmentBar(0.1, 20); filled != "■" || unfilled != "■■■■■■■■■■■■■■■■■■■" {
+		t.Fatalf("percentSegmentBar tiny percent = %q+%q, want one visible segment", filled, unfilled)
+	}
+	if filled, unfilled := percentSegmentBar(0, 4); filled != "" || unfilled != "■■■■" {
+		t.Fatalf("percentSegmentBar zero = %q+%q, want empty bar", filled, unfilled)
 	}
 }
 

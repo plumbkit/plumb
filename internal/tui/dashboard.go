@@ -329,7 +329,7 @@ func (m Model) dashActivityWidget() []string {
 		windowStr = formatUptime(m.activity.Window)
 	}
 	spark := activitySparkline(m.activity.Buckets, spkW)
-	sparkLine := " " + SelectedStyle.Render(spark)
+	sparkLine := " " + renderActivityGraph(spark, SelectedStyle, SepStyle)
 
 	return dashBox(" Activity ", inner, []string{
 		sparkLine,
