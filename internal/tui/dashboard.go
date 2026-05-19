@@ -50,11 +50,19 @@ func (m *Model) refreshDashboard() {
 	m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
 	m.dashLifetimeTokens = m.globalDB.TotalTokensSaved(globalFilter)
 	m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
+	chartBuckets := max(m.dashChartWidth, activityBuckets)
 	if !m.dashLifetimeFirstAt.IsZero() {
 		lifetimeWindow := max(time.Since(m.dashLifetimeFirstAt), time.Minute)
-		if summary, err := m.globalDB.Activity(lifetimeWindow, activityBuckets, globalFilter); err == nil {
+		if summary, err := m.globalDB.Activity(lifetimeWindow, chartBuckets, globalFilter); err == nil {
 			m.dashLifetimeBuckets = summary.Buckets
 		}
+	}
+	if m.activity.Window > 0 {
+		if summary, err := m.globalDB.Activity(m.activity.Window, chartBuckets, globalFilter); err == nil {
+			m.dashDaemBuckets = summary.Buckets
+		}
+	} else {
+		m.dashDaemBuckets = m.activity.Buckets
 	}
 	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
 
@@ -525,7 +533,7 @@ func (m Model) dashActivityChart(width int) []string {
 	}
 
 	gridLife := buildGrid(m.dashLifetimeBuckets, false) // bottom-fill
-	gridDaem := buildGrid(m.activity.Buckets, true)     // top-fill
+	gridDaem := buildGrid(m.dashDaemBuckets, true)      // top-fill
 
 	lines := make([]string, 0, halfH*2+2)
 

@@ -47,6 +47,10 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 			m.leftWidth = maxLeft
 		}
 		m.ready = true
+		if newW := max(m.width-8, activityBuckets); newW != m.dashChartWidth {
+			m.dashChartWidth = newW
+			m.refreshDashboard()
+		}
 
 	case tea.MouseClickMsg:
 		mouse := msg.Mouse()
