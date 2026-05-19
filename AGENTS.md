@@ -171,7 +171,7 @@ Run `plumb init` in any project root to create a `.plumb/` marker directory (als
 |---|---|
 | `gopls` | **Validated** — unit-tested with mock transport; integration-tested against real gopls binary; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed |
 | `pyright` | **Validated** — unit-tested with mock transport; integration-tested against real pyright-langserver binary; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed |
-| `jdtls` | **Experimental** — unit-tested with mock transport; integration test exists (`//go:build integration`) but not yet run in CI; `client/registerCapability` answered. Enable with `[lsp.java] enabled = true` in config. Requires Java 21+ and jdtls on PATH. The pool automatically passes `-data <per-workspace-dir>` so no manual config is needed. `[lsp.java].env` overrides are merged on top of the daemon environment so SDKMAN/custom `JAVA_HOME` works without restarting the daemon. |
+| `jdtls` | **Experimental** — unit-tested with mock transport; integration test exists (`//go:build integration`) but not yet run in CI; `client/registerCapability` answered. Enable with `[lsp.java] enabled = true` in config. Requires Java 21+ and jdtls on PATH. The pool automatically passes `-data <per-workspace-dir>` so no manual config is needed. `[lsp.java].env` overrides are merged on top of the daemon environment so SDKMAN/custom `JAVA_HOME` works without restarting the daemon. **Note**: unlike gopls/pyright, jdtls requires both `DidChangeWatchedFiles` (project-model update) and `DidOpen` (to trigger immediate diagnostic analysis) for reliable diagnostics after external file writes. |
 
 ## How to add an LSP adapter
 
@@ -273,6 +273,7 @@ Pyright is the worked example.
 ## TUI conventions (Bubble Tea v2)
 
 - Import paths: `charm.land/bubbletea/v2`, `charm.land/lipgloss/v2`, `charm.land/bubbles/v2`.
+- Do not import or add `charm.land/bubbletea`, `charm.land/lipgloss`, or `charm.land/bubbles` v1 packages. Mixing Charm v1 and v2 packages causes type/API incompatibilities; keep every Charm dependency on the `/v2` module path.
 - `Model` is exported; `NewModel(logPath string)` is the constructor; `Run(logPath string)` is the entry point.
 - `View()` returns `tea.View`. Use `tea.NewView(content)` and set `v.AltScreen = true`.
 - Key handling: `tea.KeyPressMsg`, match via `msg.String()`.

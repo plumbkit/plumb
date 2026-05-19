@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
@@ -140,8 +141,20 @@ func startWorkingIndicator() func() {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			fmt.Fprint(os.Stdout, "  working...")
+			spin := spinner.MiniDot
+			ticker := time.NewTicker(spin.FPS)
+			defer ticker.Stop()
 			printed <- true
+			frame := 0
+			for {
+				fmt.Fprintf(os.Stdout, "\r  %s working...", tui.HintStyle.Render(spin.Frames[frame]))
+				frame = (frame + 1) % len(spin.Frames)
+				select {
+				case <-ticker.C:
+				case <-done:
+					return
+				}
+			}
 		case <-done:
 			printed <- false
 		}

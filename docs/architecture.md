@@ -45,6 +45,14 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/domain` | Pure types — no I/O (reserved for future shared domain types) |
 | `internal/workspace` | Language detection, adapter routing (reserved for future routing logic) |
 
+### Charm dependency rule
+
+Plumb's UI stack is Bubble Tea v2 only. Use `charm.land/bubbletea/v2`,
+`charm.land/lipgloss/v2`, and `charm.land/bubbles/v2` for all TUI and CLI
+presentation work. Do not add or import the v1 module paths (`charm.land/bubbletea`,
+`charm.land/lipgloss`, or `charm.land/bubbles`); mixing v1 and v2 Charm modules
+causes incompatible model, command, and style types.
+
 ## Data flow: MCP tool call
 
 ```
