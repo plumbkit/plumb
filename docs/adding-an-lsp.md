@@ -247,10 +247,13 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   set; otherwise jdtls uses its own JDK detection. Leave `JAVA_HOME` unset to
   let jdtls discover the JDK (recommended with SDKMAN).
 - **Sync**: supports full-document sync. Plumb sends full-document changes.
-- **Notifications**: emits `textDocument/publishDiagnostics` and sends
-  `client/registerCapability` during init to register file-watcher patterns.
-  The adapter responds `null` (OK) so jdtls's `DidChangeWatchedFiles` path
-  stays active.
+- **Diagnostics**: jdtls publishes `textDocument/publishDiagnostics` for open
+  documents. Unlike gopls and pyright, `DidChangeWatchedFiles` alone updates
+  the project model but does not reliably trigger immediate diagnostics — a
+  subsequent `DidOpen` is needed to request analysis of a specific file.
+- **Notifications**: sends `client/registerCapability` during init to register
+  file-watcher patterns. The adapter responds `null` (OK) so jdtls's project
+  model stays consistent with on-disk state.
 - **Enable in config**:
   ```toml
   [lsp.java]

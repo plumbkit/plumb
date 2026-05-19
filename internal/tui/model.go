@@ -1770,8 +1770,8 @@ func (m Model) renderTokenSavingsBox(dimmed bool) []string {
 
 	titleText := " Tokens Saved "
 	value := stats.FormatSavings(int(m.tokenSavings))
-	bar := tokenSavingsBar(m.tokenSavings, barWidth)
-	content := " " + barStyle.Render(bar) + " " + valueStyle.Render(value) + " "
+	filledPart, unfilledPart := tokenSavingsBar(m.tokenSavings, barWidth)
+	content := " " + barStyle.Render(filledPart) + border.Render(unfilledPart) + " " + valueStyle.Render(value) + " "
 	innerWidth := lipgloss.Width(content)
 	minInnerWidth := lipgloss.Width("─") + lipgloss.Width(titleText)
 	if innerWidth < minInnerWidth {
@@ -1894,9 +1894,9 @@ func activitySparkline(buckets []int64, width int) string {
 	return string(out)
 }
 
-func tokenSavingsBar(tokens int64, width int) string {
+func tokenSavingsBar(tokens int64, width int) (string, string) {
 	if width <= 0 {
-		return ""
+		return "", ""
 	}
 	const targetTokens = 1_500_000
 	filled := int(tokens * int64(width) / targetTokens)
@@ -1909,7 +1909,7 @@ func tokenSavingsBar(tokens int64, width int) string {
 	if filled < 0 {
 		filled = 0
 	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	return strings.Repeat("█", filled), strings.Repeat("░", width-filled)
 }
 
 func formatActivityCalls(n int64) string {

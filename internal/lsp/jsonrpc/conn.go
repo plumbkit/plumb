@@ -39,9 +39,15 @@ const (
 
 // ─── wire types ──────────────────────────────────────────────────────────────
 
+// wireMessage is a JSON-RPC 2.0 message on the wire.
+//
+// ID is json.RawMessage rather than *int64 because the spec allows string IDs
+// and some servers (jdtls sends "1" for client/registerCapability) use them.
+// We use the raw JSON bytes as a map key; our own Call() always sends integer
+// IDs so there is no ambiguity when matching responses to outbound calls.
 type wireMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id,omitempty"`
+	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
@@ -128,7 +134,8 @@ func (e *MethodNotFoundError) Error() string {
 // Call sends a request and blocks until a response arrives or ctx is cancelled.
 // result is JSON-decoded from the response; pass nil if not needed.
 func (c *Conn) Call(ctx context.Context, method string, params, result any) error {
-	id := c.nextID.Add(1)
+	rawID := json.RawMessage(strconv.FormatInt(c.nextID.Add(1), 10))
+	idKey := string(rawID)
 
 	encoded, err := json.Marshal(params)
 	if err != nil {
@@ -136,12 +143,12 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 	}
 
 	ch := make(chan wireMessage, 1)
-	c.pending.Store(id, &pending{ch: ch, ctx: ctx})
-	defer c.pending.Delete(id)
+	c.pending.Store(idKey, &pending{ch: ch, ctx: ctx})
+	defer c.pending.Delete(idKey)
 
 	if err := c.send(wireMessage{
 		JSONRPC: "2.0",
-		ID:      &id,
+		ID:      rawID,
 		Method:  method,
 		Params:  encoded,
 	}); err != nil {
@@ -224,9 +231,11 @@ func (c *Conn) readLoop(r *bufio.Reader) {
 }
 
 func (c *Conn) dispatch(msg wireMessage) {
-	if msg.ID != nil {
-		// Either a response to one of our calls, or a server-initiated request.
-		if v, ok := c.pending.Load(*msg.ID); ok {
+	// A message has an ID when it is either a response to one of our calls or a
+	// server-initiated request. The spec allows string or integer IDs; we store
+	// the raw JSON as the map key so both forms round-trip without conversion.
+	if len(msg.ID) > 0 && string(msg.ID) != "null" {
+		if v, ok := c.pending.Load(string(msg.ID)); ok {
 			p := v.(*pending)
 			select {
 			case p.ch <- msg:

@@ -677,11 +677,11 @@ func TestActivitySparklineAndCallFormatting(t *testing.T) {
 }
 
 func TestTokenSavingsBar(t *testing.T) {
-	if got := tokenSavingsBar(913000, 16); got != "█████████░░░░░░░" {
-		t.Fatalf("tokenSavingsBar = %q, want sample shape", got)
+	if filled, unfilled := tokenSavingsBar(913000, 16); filled+unfilled != "█████████░░░░░░░" {
+		t.Fatalf("tokenSavingsBar = %q+%q, want sample shape", filled, unfilled)
 	}
-	if got := tokenSavingsBar(0, 4); got != "░░░░" {
-		t.Fatalf("tokenSavingsBar(0) = %q, want empty bar", got)
+	if filled, unfilled := tokenSavingsBar(0, 4); filled+unfilled != "░░░░" {
+		t.Fatalf("tokenSavingsBar(0) = %q+%q, want empty bar", filled, unfilled)
 	}
 }
 

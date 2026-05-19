@@ -332,6 +332,101 @@ Refinements to existing behaviour. No new contracts, no new infrastructure — j
 
 ---
 
+### TUI daemon self-metrics (memory and CPU)
+
+**Priority:** medium — useful operational visibility for the singleton daemon.
+**Effort:** Small–medium. Needs platform-aware measurement and careful TUI wording.
+**Status:** Planning only. No implementation started.
+
+The goal is to show **only the plumb daemon process's own resource usage** in the TUI. Do not include child language-server processes in this widget. gopls, pyright, and jdtls can be tracked separately later, but this item is specifically about the Go daemon's memory and CPU footprint.
+
+**Why this matters.**
+
+Plumb is a long-lived singleton daemon shared across conversations. A TUI operator should be able to tell whether the daemon itself is growing, busy, or idle without leaving the TUI. This is especially useful when debugging session leaks, cache growth, stats writes, memory-store usage, or background features such as future quality analysis.
+
+**Metrics to expose.**
+
+1. **Go runtime memory** from `runtime.ReadMemStats` or `runtime/metrics`:
+   - `HeapAlloc` — live heap currently allocated.
+   - `HeapInuse` — heap pages in use.
+   - `HeapReleased` — memory returned to the OS.
+   - `Sys` — total bytes obtained from the OS by the Go runtime.
+   - `NumGC` and last GC time/pause summary.
+   - goroutine count via `runtime.NumGoroutine()`.
+2. **OS process memory** for the daemon process only:
+   - RSS/resident set size where available.
+   - virtual memory size only if it is clearly labelled; RSS is more useful for the compact TUI.
+3. **CPU usage** for the daemon process only:
+   - sample process CPU time over wall-clock delta.
+   - present as a percentage over the sample window, not as an instantaneous value.
+   - show `n/a` if the platform-specific implementation cannot read CPU time.
+
+**Design direction.**
+
+- Add a small package, probably `internal/monitor` or `internal/processstats`, with a narrow API:
+
+  ```go
+  type DaemonMetrics struct {
+      SampledAt      time.Time
+      RSSBytes       uint64
+      VMSBytes       uint64
+      CPUPercent     float64
+      HeapAllocBytes uint64
+      HeapInuseBytes uint64
+      HeapSysBytes   uint64
+      HeapReleasedBytes uint64
+      NumGC          uint32
+      Goroutines     int
+  }
+
+  type Sampler struct { ... }
+  func NewSampler(pid int) *Sampler
+  func (s *Sampler) Sample(ctx context.Context) (DaemonMetrics, error)
+  ```
+
+- Keep Go runtime metrics cross-platform and isolate OS process metrics behind per-OS files:
+  - `process_darwin.go`
+  - `process_linux.go`
+  - `process_windows.go`
+  - `process_unsupported.go`
+- Prefer standard-library or low-level OS APIs if they stay simple. If a dependency is introduced, it must be justified by multi-OS support and kept out of hot paths.
+- The sampler should be cheap and periodic. A 1–2 second interval is enough for the TUI; do not sample per rendered frame.
+- CPU percent requires state from the previous sample: `(processCPUTimeDelta / wallClockDelta) * 100`. Decide whether to report one-core percentage (100% = one full core) or host-normalised percentage (100% = all cores), document it, and keep it consistent.
+- The TUI should display compact values, for example:
+
+  ```text
+  Daemon
+    RSS  42 MB
+    Heap 9 MB
+    CPU  1.2%
+    Goroutines 38
+  ```
+
+**Where to surface it.**
+
+- First slice: add a compact daemon resource box to the Dashboard or Sessions right rail, near existing daemon activity.
+- Optional later slice: add details in Settings or a diagnostics/status panel with GC counters and runtime memory breakdown.
+- Avoid mixing this with language-server process metrics in the same compact widget. If LSP resource tracking is added later, give it a separate section named "Language servers" or similar.
+
+**Definition of done.**
+
+1. Implement a daemon-only metrics sampler with unit-testable formatting and platform-specific process readers.
+2. Add TUI display for RSS, Go heap, CPU percent, and goroutine count.
+3. Show `n/a` rather than failing when OS process metrics are unavailable.
+4. Add tests for CPU delta calculation and byte formatting.
+5. Verify the TUI updates periodically without increasing render churn or blocking UI input.
+6. Document clearly that the widget reports the plumb daemon process only, not gopls/pyright/jdtls child processes.
+
+**Watch out for.**
+
+- Do not use Go heap metrics as a proxy for total process memory. RSS and heap answer different questions; show both if space allows.
+- CPU percentage is meaningless without a sampling interval. Avoid one-shot CPU readings.
+- macOS, Linux, and Windows expose process stats differently. Keep platform code small and isolated.
+- The daemon may be launched by an MCP client rather than a terminal; metrics collection must not assume a TTY.
+- Avoid broad dependencies that pull in unrelated monitoring stacks unless the standard-library/platform-specific route becomes too costly.
+
+---
+
 ### Java adapter (jdtls) — multi-OS polish and validation
 
 **Priority:** medium — acceptable as experimental, needed before "validated".
@@ -344,11 +439,13 @@ Known gaps to address before promoting from experimental to validated:
 
 2. **CI integration test.** The `//go:build integration` test in `internal/lsp/adapters/jdtls/` skips silently in CI because no runner installs jdtls. Add a CI step (Ubuntu, using the Eclipse JDT LS release tarball or a package manager) and run `go test -tags=integration -timeout=3m ./internal/lsp/adapters/jdtls/`. Promote the adapter to **validated** once this passes in CI.
 
-3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test uses a 60-second deadline. In CI this may not be enough on cold runners. Monitor and raise the timeout if needed, or pre-warm the JVM cache in the CI step.
+3. **Cold-start latency.** jdtls starts a JVM and loads Eclipse plugins on first run; the integration test uses a 90-second deadline with `DidOpen` to trigger immediate diagnostic analysis (jdtls requires both `DidChangeWatchedFiles` and `DidOpen` for timely diagnostics, unlike gopls/pyright). In CI this budget may still be tight on cold runners — monitor and raise if needed, or pre-warm the JVM cache in the CI step.
 
 4. **`jdtls` binary name on non-Homebrew installs.** The compiled default is `command = "jdtls"`. On Linux/Windows the launcher may be named differently (e.g. `jdtls.sh`, `jdtls.bat`, or a full path). Document this in `docs/adding-an-lsp.md` and consider a `command` override example in the config docs. Users can already override via `[lsp.java] command = "..."` in config.toml.
 
 5. **`plumb doctor` Java runtime version check.** The check calls `java --version` and parses the first output line. This covers OpenJDK and GraalVM. Confirm it also handles Eclipse Temurin, Microsoft Build of OpenJDK, and Amazon Corretto version strings; add test cases in `doctor_test.go` once that file exists.
+
+6. **Write tools need `DidOpen`/`DidClose` for jdtls diagnostics.** Unlike gopls and pyright, jdtls only publishes diagnostics for open documents. When plumb's write tools call `DidChangeWatchedFiles` after modifying a Java file, jdtls updates its project model but may not emit diagnostics promptly. For the `diagnostics` tool to return up-to-date results after a Java write, the write path should call `DidOpen` (with the new content) + `DidClose` in addition to `DidChangeWatchedFiles`. This requires the write tools to know the current language server type, or a per-adapter hook in the LSP notification path.
 
 **Definition of done:** CI integration test passes on Linux; rootURI helper lands in `internal/lsp/protocol`; adapter doc.go says "Validated".
 

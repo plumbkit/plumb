@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,10 +48,26 @@ func repoRoot(t *testing.T) string {
 //
 // jdtls requires a -data argument pointing to an Eclipse workspace storage
 // directory. A new temp dir is created for each test run to avoid stale state.
-func startJDTLS(t *testing.T) *jdtls.Adapter {
+// jdtls stderr is captured to a temp file and its path is logged via t.Logf so
+// it is visible in the test output when the test fails.
+func startJDTLS(t *testing.T, ws string) *jdtls.Adapter {
 	t.Helper()
 	jdtlsPath := requireJDTLS(t)
-	dataDir := t.TempDir()
+
+	// Use a persistent data dir under .testcache so successive runs (within a
+	// single CI job or local iteration) can reuse the Eclipse workspace state and
+	// avoid the 60-120s cold-start penalty.
+	dataDir := filepath.Join(repoRoot(t), ".testcache", "jdtls-data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal("create jdtls data dir:", err)
+	}
+
+	stderrFile, err := os.CreateTemp(t.TempDir(), "jdtls-stderr-*.log")
+	if err != nil {
+		t.Fatal("create stderr log:", err)
+	}
+	t.Cleanup(func() { stderrFile.Close() })
+	t.Logf("jdtls stderr: %s", stderrFile.Name())
 
 	cmd := exec.Command(jdtlsPath, "-data", dataDir)
 	stdin, err := cmd.StdinPipe()
@@ -61,7 +78,7 @@ func startJDTLS(t *testing.T) *jdtls.Adapter {
 	if err != nil {
 		t.Fatal("stdout pipe:", err)
 	}
-	cmd.Stderr = nil
+	cmd.Stderr = stderrFile
 	if err := cmd.Start(); err != nil {
 		t.Fatal("start jdtls:", err)
 	}
@@ -75,42 +92,88 @@ func startJDTLS(t *testing.T) *jdtls.Adapter {
 	return jdtls.New(conn)
 }
 
-// TestIntegration_DidChangeWatchedFiles exercises the LSP-correct primitive for
-// telling jdtls about external file changes. The flow:
+// TestIntegration_DidOpen verifies that jdtls publishes error diagnostics for
+// a syntactically broken Java file opened via DidOpen. The flow:
 //
-//  1. Initialize against the java-fixture workspace.
-//  2. Write a syntactically broken .java file using ordinary os.WriteFile
-//     (simulating an external edit from plumb's write tools).
-//  3. Send DidChangeWatchedFiles{FileCreated}.
-//  4. Wait up to 60 seconds for publishDiagnostics to fire with at least one error.
+//  1. Copy the java-fixture workspace to a temp directory.
+//  2. Initialize jdtls against the workspace.
+//  3. Wait for jdtls to signal ServiceReady (fully initialised, project loaded).
+//  4. Write Broken.java to disk after ServiceReady so jdtls sees it fresh.
+//  5. Send DidChangeWatchedFiles + DidOpen to register and open the new file.
+//  6. Wait up to 2 minutes for publishDiagnostics to fire with at least one error.
 //
-// jdtls starts a JVM and loads Eclipse plugins on each run; the 60-second
-// budget covers cold-cache startup on typical developer hardware.
+// DidOpen must be sent AFTER ServiceReady. Sending it earlier (before jdtls has
+// finished loading the project) causes jdtls to compile without routing results
+// to textDocument/publishDiagnostics — because jdtls blocks that path on the
+// client/registerCapability round-trip that arrives at ServiceReady.
 //
-// This mirrors the same test in the gopls and pyright adapters and proves the
-// architectural guarantee: capability negotiation + DidChangeWatchedFiles is
-// the mechanism that keeps jdtls's view of the workspace fresh after
-// plumb-initiated writes.
-func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
-	ad := startJDTLS(t)
+// The conn fix that makes this work: jdtls sends client/registerCapability with
+// a string ID ("1") rather than an integer ID. The JSON-RPC conn previously
+// decoded ID as *int64, which failed for string values and killed the read
+// loop. With ID now decoded as json.RawMessage the round-trip completes and
+// jdtls proceeds to publish diagnostics.
+//
+// jdtls starts a JVM and loads Eclipse plugins on each cold run; the 5-minute
+// budget covers cold-cache JVM startup on typical developer hardware. Subsequent
+// runs reuse the data dir under .testcache and are much faster.
+func TestIntegration_DidOpen(t *testing.T) {
 	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "java-fixture")
 
-	// Copy the fixture into a temp workspace so we can mutate without dirtying
-	// the real testdata directory.
+	// Copy fixture to a temp workspace so mutations don't dirty the real testdata.
 	ws := t.TempDir()
 	if err := copyFixture(t, fixtureSrc, ws); err != nil {
 		t.Fatal("copy fixture:", err)
 	}
 
-	brokenPath := filepath.Join(ws, "src", "main", "java", "com", "example", "Broken.java")
-	brokenURI := protocol.FileURI(brokenPath)
+	// Resolve symlinks so jdtls (Java, which canonicalises paths) and our URI
+	// filter see the same path. On macOS /var/ → /private/var/.
+	realWS, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		realWS = ws
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	brokenPath := filepath.Join(realWS, "src", "main", "java", "com", "example", "Broken.java")
+	brokenURI := protocol.FileURI(brokenPath)
+	wsURI := protocol.FileURI(realWS)
+	t.Logf("wsURI=%s brokenURI=%s", wsURI, brokenURI)
+
+	ad := startJDTLS(t, realWS)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Subscribe before init so we don't miss early publishDiagnostics bursts.
+	// readyCh is closed once jdtls sends ServiceReady.
+	readyCh := make(chan struct{})
+	var readyOnce func()
+	{
+		ch := readyCh
+		fired := false
+		readyOnce = func() {
+			if !fired {
+				fired = true
+				close(ch)
+			}
+		}
+	}
+
+	// Subscribe before Initialize so we don't miss notifications.
+	// All notifications are logged with full payload for post-mortem analysis.
+	// publishDiagnostics for Broken.java are forwarded to diagCh regardless of
+	// exact URI format (jdtls internally uses file:/ while we send file:///).
 	diagCh := make(chan int, 16)
 	ad.Subscribe(func(method string, raw json.RawMessage) {
+		t.Logf("notification: method=%s payload=%s", method, string(raw))
+
+		if method == "language/status" {
+			var status struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(raw, &status) == nil && status.Type == "ServiceReady" {
+				readyOnce()
+			}
+			return
+		}
+
 		if method != "textDocument/publishDiagnostics" {
 			return
 		}
@@ -118,7 +181,7 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return
 		}
-		if p.URI != brokenURI {
+		if !strings.HasSuffix(p.URI, "Broken.java") {
 			return
 		}
 		errors := 0
@@ -133,14 +196,26 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 		}
 	})
 
-	if _, err := ad.Initialize(ctx, jdtls.DefaultInitParams(protocol.FileURI(ws))); err != nil {
+	if _, err := ad.Initialize(ctx, jdtls.DefaultInitParams(wsURI)); err != nil {
 		t.Fatal("initialize:", err)
 	}
 	if err := ad.Initialized(ctx); err != nil {
 		t.Fatal("initialized:", err)
 	}
 
-	// Write a syntactically broken Java file into the workspace.
+	// Wait for jdtls to finish loading the project before writing or opening the file.
+	// jdtls sends client/registerCapability at ServiceReady time; until that
+	// round-trip completes it does not route publishDiagnostics to the wire.
+	t.Log("waiting for jdtls ServiceReady...")
+	select {
+	case <-readyCh:
+		t.Log("jdtls ServiceReady")
+	case <-ctx.Done():
+		t.Fatal("context expired waiting for jdtls ServiceReady; see t.Logf notifications above and the jdtls stderr log for details")
+	}
+
+	// Write Broken.java now (after ServiceReady) so jdtls sees it fresh and is
+	// guaranteed to publish diagnostics rather than suppress a duplicate.
 	brokenDir := filepath.Dir(brokenPath)
 	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
 		t.Fatal("mkdir:", err)
@@ -150,7 +225,7 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Tell jdtls about it via the LSP-correct primitive.
+	// Inform jdtls the file was created on disk, then open it to trigger reconcile.
 	if err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{
 			{URI: brokenURI, Type: protocol.FileCreated},
@@ -158,20 +233,35 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatal("DidChangeWatchedFiles:", err)
 	}
+	if err := ad.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:        brokenURI,
+			LanguageID: "java",
+			Version:    1,
+			Text:       string(broken),
+		},
+	}); err != nil {
+		t.Fatal("DidOpen:", err)
+	}
+	defer func() {
+		_ = ad.DidClose(ctx, protocol.DidCloseTextDocumentParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: brokenURI},
+		})
+	}()
 
-	// Wait up to 60s for jdtls to publish diagnostics for the broken file.
-	// jdtls starts a JVM on first run; 60s gives headroom for cold caches.
-	deadline := time.After(60 * time.Second)
+	// Wait for jdtls to publish diagnostics for Broken.java.
+	deadline := time.After(2 * time.Minute)
 	for {
 		select {
 		case errs := <-diagCh:
 			if errs > 0 {
-				return // success: jdtls acted on our notification
+				return // success: jdtls reported errors for the broken file
 			}
+			t.Logf("publishDiagnostics for Broken.java received but had 0 errors — waiting for non-zero")
 		case <-deadline:
-			t.Fatal("jdtls did not publish error diagnostics for Broken.java within 60s — " +
-				"DidChangeWatchedFiles may not be reaching the server, or capability " +
-				"negotiation is broken")
+			t.Fatal("jdtls did not publish error diagnostics for Broken.java within 2 minutes of ServiceReady — " +
+				"check that DidOpen reaches the server; " +
+				"see t.Logf notifications above and the jdtls stderr log for details")
 		}
 	}
 }

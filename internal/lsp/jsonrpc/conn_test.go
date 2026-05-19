@@ -94,7 +94,7 @@ func TestConn_ConcurrentCalls(t *testing.T) {
 			resp := wireMessage{
 				JSONRPC: "2.0",
 				ID:      reqs[i].ID,
-				Result:  json.RawMessage(fmt.Sprintf(`%d`, *reqs[i].ID)),
+				Result:  reqs[i].ID, // echo the raw ID as the result value
 			}
 			_, _ = pw.Write([]byte(frame(resp)))
 		}
@@ -168,20 +168,63 @@ func TestConn_ServerRequest_OK(t *testing.T) {
 		}
 	}()
 
-	id := int64(7)
-	req := wireMessage{JSONRPC: "2.0", ID: &id, Method: "client/registerCapability", Params: json.RawMessage(`{}`)}
+	req := wireMessage{JSONRPC: "2.0", ID: json.RawMessage(`7`), Method: "client/registerCapability", Params: json.RawMessage(`{}`)}
 	_, _ = pw.Write([]byte(frame(req)))
 
 	select {
 	case resp := <-respCh:
-		if resp.ID == nil || *resp.ID != 7 {
-			t.Fatalf("response ID = %v, want 7", resp.ID)
+		if string(resp.ID) != "7" {
+			t.Fatalf("response ID = %q, want \"7\"", string(resp.ID))
 		}
 		if resp.Error != nil {
 			t.Fatalf("unexpected error response: %v", resp.Error)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for response")
+	}
+}
+
+// TestConn_ServerRequest_StringID verifies that server-initiated requests with
+// a string ID (e.g. jdtls sends client/registerCapability with "id":"1") are
+// handled correctly and do not break the read loop.
+// Regression: ID was decoded as *int64 which failed for string values, killing
+// the read loop and preventing any subsequent messages from being received.
+func TestConn_ServerRequest_StringID(t *testing.T) {
+	pr, pw := io.Pipe()
+	cr, cw := io.Pipe()
+
+	conn := NewConn(pr, cw)
+	defer conn.Close()
+
+	conn.SetRequestHandler(func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "client/registerCapability" {
+			return nil, nil
+		}
+		return nil, &MethodNotFoundError{Method: method}
+	})
+
+	respCh := make(chan wireMessage, 1)
+	go func() {
+		msg, err := readMessage(bufio.NewReader(cr))
+		if err == nil {
+			respCh <- msg
+		}
+	}()
+
+	// jdtls sends client/registerCapability with a string ID.
+	req := wireMessage{JSONRPC: "2.0", ID: json.RawMessage(`"1"`), Method: "client/registerCapability", Params: json.RawMessage(`{}`)}
+	_, _ = pw.Write([]byte(frame(req)))
+
+	select {
+	case resp := <-respCh:
+		if string(resp.ID) != `"1"` {
+			t.Fatalf("response ID = %q, want \"\\\"1\\\"\"", string(resp.ID))
+		}
+		if resp.Error != nil {
+			t.Fatalf("unexpected error response: %v", resp.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for response — read loop may have died on string ID")
 	}
 }
 
@@ -203,8 +246,7 @@ func TestConn_ServerRequest_MethodNotFound(t *testing.T) {
 		}
 	}()
 
-	id := int64(11)
-	req := wireMessage{JSONRPC: "2.0", ID: &id, Method: "weird/thing"}
+	req := wireMessage{JSONRPC: "2.0", ID: json.RawMessage(`11`), Method: "weird/thing"}
 	_, _ = pw.Write([]byte(frame(req)))
 
 	select {
