@@ -1124,7 +1124,7 @@ func (m Model) render() string {
 			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
 			sb.WriteString(line + "\n")
 		} else {
-			sb.WriteString(lBar + leftCell + SepStyle.Render(" ") + rightCell + rBar + "\n")
+			sb.WriteString(lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar + "\n")
 		}
 	}
 
