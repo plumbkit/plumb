@@ -33,6 +33,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -41,11 +42,43 @@ jobs:
           go-version: "1.26.2"
           cache: true
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Install gopls
         run: go install golang.org/x/tools/gopls@latest
 
       - name: Install pyright
         run: npm install -g pyright
 
+      - name: Install jdtls
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Resolve the latest stable release asset URL via the GitHub API.
+          ASSET_URL=$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/eclipse-jdtls/eclipse.jdt.ls/releases/latest \
+            | jq -r '[.assets[] | select(.name | test("jdt-language-server.*\\.tar\\.gz$"))] | first | .browser_download_url')
+          echo "Downloading jdtls from $ASSET_URL"
+          curl -fsSL "$ASSET_URL" -o jdtls.tar.gz
+          mkdir -p "$HOME/.local/jdtls" "$HOME/.local/bin"
+          tar -xzf jdtls.tar.gz -C "$HOME/.local/jdtls"
+          cat > "$HOME/.local/bin/jdtls" <<'SCRIPT'
+          #!/usr/bin/env bash
+          JDTLS_HOME="$HOME/.local/jdtls"
+          exec java \
+            -jar "$JDTLS_HOME/plugins"/org.eclipse.equinox.launcher_*.jar \
+            -configuration "$JDTLS_HOME/config_linux" \
+            "$@"
+          SCRIPT
+          chmod +x "$HOME/.local/bin/jdtls"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Integration tests
-        run: go test -tags=integration -timeout=2m ./...
+        env:
+          JDTLS_FRESH_DATA: "1"
+        run: go test -tags=integration -timeout=10m ./...
