@@ -1307,7 +1307,13 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 	visibleLeft := allLeft[m.popupLeftScroll:]
 	leftScrollbar := scrollbarCol(len(allLeft), bodyHeight, m.popupLeftScroll)
 	allRight := m.popupRightAll(pRW - 2)
-	maxDS := len(allRight) - bodyHeight
+
+	rightScrollH := bodyHeight - 2
+	if rightScrollH < 0 {
+		rightScrollH = 0
+	}
+
+	maxDS := len(allRight) - rightScrollH
 	if maxDS < 0 {
 		maxDS = 0
 	}
@@ -1318,7 +1324,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 		m.popupDetailScroll = maxDS
 	}
 	visibleRight := allRight[m.popupDetailScroll:]
-	scrollbar := scrollbarCol(len(allRight), bodyHeight, m.popupDetailScroll)
+	scrollbar := scrollbarCol(len(allRight), rightScrollH, m.popupDetailScroll)
 
 	for i := range bodyHeight {
 		var lCell string
@@ -1328,7 +1334,21 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 			lCell = lipgloss.NewStyle().Width(pLW).Render("")
 		}
 		var rStr string
-		if i < len(visibleRight) {
+		if i >= bodyHeight-2 {
+			if i == bodyHeight-1 {
+				sep := StatusStyle.Render("  ·  ")
+				if m.popupRightFocus {
+					left := StatusKeyStyle.Render("c") + StatusStyle.Render(" copy")
+					mid := StatusKeyStyle.Render("tab") + StatusStyle.Render(" back")
+					right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
+					rStr = "  " + left + sep + mid + sep + right
+				} else {
+					mid := StatusKeyStyle.Render("tab") + StatusStyle.Render(" detail")
+					right := StatusKeyStyle.Render("esc") + StatusStyle.Render(" close")
+					rStr = "  " + mid + sep + right
+				}
+			}
+		} else if i < len(visibleRight) {
 			rStr = visibleRight[i]
 		}
 		rCell := lipgloss.NewStyle().Width(pRW).Render(rStr)
@@ -1338,7 +1358,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 			lb = leftScrollbar[i]
 		}
 		rb := SepStyle.Render("│")
-		if scrollbar != nil && i < len(scrollbar) {
+		if scrollbar != nil && i < len(scrollbar) && i < rightScrollH {
 			rb = scrollbar[i]
 		}
 
@@ -1585,9 +1605,6 @@ func (m Model) popupRightAll(rw int) []string {
 			ol = append(ol, DetailStyle.Render(o))
 		}
 		gutterLine("Output", ol)
-	}
-	if m.popupRightFocus {
-		lines = append(lines, "", "  "+MutedStyle.Render("c copy · tab back"))
 	}
 	return lines
 }
