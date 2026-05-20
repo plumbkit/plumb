@@ -299,40 +299,68 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PLUMB_LOG_FILE"); v != "" {
 		cfg.LogFile = v
 	}
-	if v := os.Getenv("PLUMB_STRICT_EDITS"); v != "" {
-		cfg.Edits.Strict = v == "1" || v == "true" || v == "yes"
-	}
-	if v := os.Getenv("PLUMB_WRITE_RATE_LIMIT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.Edits.RateLimitPerMinute = n
-		}
-	}
-	if v := os.Getenv("PLUMB_REFUSE_HOME_ROOTS"); v != "" {
-		cfg.Walk.RefuseHomeRoots = v == "1" || v == "true" || v == "yes"
-	}
 	if v := os.Getenv("PLUMB_LOG_FORMAT"); v != "" {
 		cfg.LogFormat = v
 	}
-	if v := os.Getenv("PLUMB_POST_WRITE_DIAG_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.Edits.PostWriteDiagnosticsMs = n
-		}
+	if v, ok := envBool("PLUMB_STRICT_EDITS"); ok {
+		cfg.Edits.Strict = v
 	}
-	if v := os.Getenv("PLUMB_CONCURRENT_WRITE_SKEW_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.Edits.ConcurrentWriteSkewMs = n
-		}
+	if n, ok := envNonNegInt("PLUMB_WRITE_RATE_LIMIT"); ok {
+		cfg.Edits.RateLimitPerMinute = n
 	}
-	if v := os.Getenv("PLUMB_SHOW_WRITE_DIFF"); v != "" {
-		cfg.Edits.ShowWriteDiff = v != "0" && v != "false" && v != "no"
+	if n, ok := envNonNegInt("PLUMB_POST_WRITE_DIAG_MS"); ok {
+		cfg.Edits.PostWriteDiagnosticsMs = n
 	}
-	if v := os.Getenv("PLUMB_AUTO_ATTACH"); v != "" {
-		cfg.Workspace.AutoAttach = v == "1" || v == "true" || v == "yes"
+	if n, ok := envNonNegInt("PLUMB_CONCURRENT_WRITE_SKEW_MS"); ok {
+		cfg.Edits.ConcurrentWriteSkewMs = n
 	}
-	if v := os.Getenv("PLUMB_AUTO_ATTACH_PERSIST"); v != "" {
-		cfg.Workspace.AutoAttachPersist = v == "1" || v == "true" || v == "yes"
+	if v, ok := envBoolNeg("PLUMB_SHOW_WRITE_DIFF"); ok {
+		cfg.Edits.ShowWriteDiff = v
+	}
+	if v, ok := envBool("PLUMB_REFUSE_HOME_ROOTS"); ok {
+		cfg.Walk.RefuseHomeRoots = v
+	}
+	if v, ok := envBool("PLUMB_AUTO_ATTACH"); ok {
+		cfg.Workspace.AutoAttach = v
+	}
+	if v, ok := envBool("PLUMB_AUTO_ATTACH_PERSIST"); ok {
+		cfg.Workspace.AutoAttachPersist = v
 	}
 	normaliseConfig(cfg)
+}
+
+// envBool reads key from the environment. ok is true when the variable is
+// set; v reflects whether the value is a recognised truthy string.
+func envBool(key string) (v bool, ok bool) {
+	s := os.Getenv(key)
+	if s == "" {
+		return false, false
+	}
+	return s == "1" || s == "true" || s == "yes", true
+}
+
+// envBoolNeg reads key from the environment and returns the logical inverse
+// of recognised falsy strings ("0", "false", "no"). ok is true when set.
+func envBoolNeg(key string) (v bool, ok bool) {
+	s := os.Getenv(key)
+	if s == "" {
+		return false, false
+	}
+	return s != "0" && s != "false" && s != "no", true
+}
+
+// envNonNegInt reads key from the environment and parses it as a
+// non-negative integer. ok is false when unset, unparseable, or negative.
+func envNonNegInt(key string) (n int, ok bool) {
+	s := os.Getenv(key)
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func normaliseConfig(cfg *Config) {
