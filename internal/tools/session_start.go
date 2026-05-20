@@ -99,7 +99,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	writeSessionCommits(&sb, ws)
 	t.writeSessionRecentFiles(&sb, ws)
 	writeSessionMemories(&sb, ws)
-	writeSessionStats(&sb, ws)
+	clientName := ""
+	if t.clientNameFn != nil {
+		clientName = t.clientNameFn()
+	}
+	writeSessionStats(&sb, ws, clientName)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)
 	return sb.String(), nil
@@ -238,7 +242,7 @@ func writeSessionMemories(sb *strings.Builder, ws string) {
 	sb.WriteString("\nUse read_memory to load any of these.\n\n")
 }
 
-func writeSessionStats(sb *strings.Builder, ws string) {
+func writeSessionStats(sb *strings.Builder, ws, clientName string) {
 	db, err := stats.OpenReadOnly()
 	if err != nil || db == nil {
 		return
@@ -250,8 +254,13 @@ func writeSessionStats(sb *strings.Builder, ws string) {
 	}
 	sb.WriteString("## Most-used tools (this workspace)\n\n")
 	limit := min(len(toolStats), 5)
+	var totalSaved int64
 	for _, s := range toolStats[:limit] {
 		fmt.Fprintf(sb, "- %s: %d calls, avg %dms\n", s.Tool, s.Calls, int64(s.AvgMs))
+		totalSaved += s.TokensSaved
+	}
+	if totalSaved > 0 {
+		fmt.Fprintf(sb, "\n~%s %s\n", stats.FormatSavings(int(totalSaved)), stats.SavingsLabel(clientName))
 	}
 	sb.WriteString("\n")
 }

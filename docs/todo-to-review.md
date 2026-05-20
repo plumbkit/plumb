@@ -80,342 +80,6 @@ CI now runs `go test -tags=integration ./...` with gopls, pyright, and Java 21 +
 
 ---
 
-## Code quality & engineering practices
-
-### CQ-2 — Delete dead code
-
-**Completed in:** 0.6.6
-**Original priority:** P0 (quick win)
-
-Removed all unused declarations and simplified vestigial signatures flagged by `golangci-lint unused`/`unparam`:
-
-- `invProxy` struct + `Diagnostics` + `AllDiagnostics` methods deleted from `internal/cli/proxy.go`; `cache` import removed.
-- `parseFrontmatter` wrapper deleted from `internal/memory/store.go` (callers already used `parseFrontmatterFull` directly).
-- `spliceOverlayLower` deleted from `internal/tui/model_utils.go`.
-- `splitFrontmatter` `delim` return removed — both callers discarded it; function now returns `(fm, body []byte)`.
-- `defaultWriteRateLimit` `time.Duration` return removed — window is always `time.Minute`; caller now passes `time.Minute` directly.
-- `setState` in `internal/lsp/supervisor.go` had `conn *jsonrpc.Conn` and `proc *exec.Cmd` always passed as nil; both parameters removed, body now sets both fields to nil explicitly.
-
-Result: zero `unused`, zero `unparam` findings. All tests pass.
-
----
-
-### CQ-1 — Mechanical lint cleanup (P0)
-
-**Completed in:** 0.6.6
-**Original priority:** P0 (foundational)
-
-Cleared all non-gocyclo findings from 79 total down to 51 (only gocyclo 37 + gosec 14 remain, both deferred):
-
-- **gofumpt/goimports**: `golangci-lint run --fix ./...` applied the embedded formatter to 10+ files that the standalone `gofumpt` binary (v0.10.0) would not flag, revealing a version mismatch. All formatting issues resolved.
-- **ineffassign**: Dead `rootURI = "file://" + folder` assignment in `daemon.go` removed (value never read after reassignment). Intermediate `name := relPath` in `walk.go` removed (overwritten immediately or unused).
-- **prealloc**: 5 slice preallocations added in `diff.go`, `edit_apply.go`, and `model_render.go` (×3).
-- **revive** (stutter): `lsp.LSPClient` renamed to `lsp.Client` across 18 files. LSP semantic rename attempted first but failed due to stale position index (proxy.go had been edited); completed via `find_replace` on the qualified name + targeted edits for bare-name comments.
-- **errcheck**: `os.MkdirAll` calls in `stats_test.go` wrapped with `t.Fatal`; `io.Copy` drain goroutine in `conn_test.go` uses `_, _ =`.
-- **staticcheck**: `QF1008` embedded Duration field selectors simplified; `QF1001` De Morgan applied; `QF1003` if-else chain → tagged switch in `mcp/server.go`; `ST1005` trailing periods removed from 4 error strings in `edit_file.go` and `lsp_err.go`; `SA4010` dead `uris = append(uris, uri)` in `transaction.go` removed (confirmed not a rollback bug — per-file `notifyLSP` calls already handle LSP notification; the slice was never consumed).
-
-Notes: Items 3, 4, 5 (make verify, pre-commit hook, CI enforcement) from the original CQ-1 definition of done are **not** completed here — those belong to CQ-6 and are tracked there.
-
----
-
-### CQ-6 — Codify and enforce the engineering standard
-
-**Completed in:** 0.6.9
-**Original priority:** P2, anti-regression keystone
-
-All four required items delivered:
-
-1. **AGENTS.md: "Tool implementation pattern" subsection.** Documents the `parseArgs / validate / run / format` blueprint with a real before/after example for `FindFiles.Execute`. States that PRs adding a monolithic `Execute` are non-conforming.
-2. **AGENTS.md: gocyclo-15 contract + file-size exception allowlist.** Explicitly states no first-party non-test function may exceed cyclomatic complexity 15. File-size rule (~400 lines) now has a short exception allowlist: `internal/lsp/protocol/types.go` (LSP spec type catalogue — splitting harms readability).
-3. **Pre-commit hook updated** (`scripts/pre-commit`): now runs `go build ./...` then `golangci-lint run --fix ./...`. Dropped standalone `gofumpt -l -w .` call — standalone binary can disagree with the version embedded in golangci-lint, causing phantom diffs. `make install-hooks` documented as **required** after every fresh clone in AGENTS.md "Build commands".
-4. **`make verify` target added** to `Makefile` (`build + test + lint`). Referenced as the canonical "ready to commit" definition.
-
-Item 5 (CI file-size enforcement) was optional and not implemented.
-
----
-
-### CQ-5 #1 — SQL string concatenation (G202) — verified not a real injection bug
-
-**Completed in:** 0.6.9
-**Original priority:** Highest-priority gosec item (potential real bug)
-
-Triaged all three G202 findings in `internal/stats/db.go` (`Summary` at line 358, `ActivityAt` at line 429, `p95All` at line 500).
-
-Verdict: **false positives.** In all three cases the concatenated `where` clause is built exclusively by `filter.where()`, which uses `?` placeholders for all user-supplied values (workspace, session ID, session name, tool name). The only things ever concatenated into the SQL string are fixed structural keywords (`GROUP BY tool ORDER BY calls DESC`, `ORDER BY called_at`, etc.) — no user data is ever interpolated.
-
-Fix: extracted the static base query into a local variable and did the `where` concatenation on a single annotated line:
-```go
-// where is built by filter.where() using ? placeholders; no user values interpolated.
-q := summaryBase + where + " GROUP BY tool ORDER BY calls DESC" //nolint:gosec // G202: see comment above
-```
-
-Remaining gosec findings (G306 file perms, G703 path traversal, G115 integer overflow, G602 slice index, G204 subprocess) are tracked in CQ-5 items 2–6 in `docs/todo.md`.
-
----
-
-### CQ-5 (items 2–6) — remaining gosec findings resolved
-
-**Completed in:** 0.7.1 (2026-05-20)
-**Original priority:** P1, security
-
-All remaining gosec findings triaged and resolved — each finding either fixed or individually annotated with a one-line justification pointing at the safety invariant. Zero unexplained gosec findings remain.
-
-**#2 G306 file permissions.** Metadata files (`memory/store.go`, `session/session.go`, `cli/daemon.go` PID + version files) changed from 0644 to 0600. User-facing files (`tools/edit_apply.go`, `cli/init.go context.md`) retain 0644 with nolint annotations explaining the intent.
-
-**#3 G703 path traversal.** All three flagged paths (`setup_helpers.go backupFile`, `file_write_helpers.go safeWriteSibling`, `txlog.go rollbackDir`) confirmed to pass through existing validation before the write sink. Annotated at the `os.WriteFile` call (the taint sink) with the specific safety invariant for each site.
-
-**#4 G115 integer overflow.** Real bounds checks added in three places: `protocol.ProcessID()` returns nil when PID > MaxInt32 (null is valid per LSP spec); `docCommentStart` returns `symStart` on overflow; `enclosingSymbolAnnotations` skips hits on overflow. Braille conversion in `dashboard_activity.go` annotated (row[k] in [0,255], result 0x28FF is invariantly within rune range).
-
-**#5 G602/G204.** `stringSliceEqual` length guard (established three lines above the index) justifies the G602 annotation. Both subprocess launches (LSP adapter binary from config, formatter binary from hardcoded `LookPath` lookup) are annotated with their input provenance.
-
-**G202 nolint placement fix.** The prior `//nolint:gosec` annotations in `db_query.go` were on the last line of multi-line string concatenations; golangci-lint reports the issue at the first line of the statement. Moved each directive to the preceding line — the format golangci-lint v2 recognises.
-
----
-
-### CQ-3 — Decompose the monolithic `Execute()` methods
-
-**Completed in:** 0.7.0 (non-TUI) and 0.7.1 (TUI)
-**Original priority:** ⭐ P1
-
-39 commits, one per decomposed function, each a pure behaviour-preserving refactor following the `parseArgs / validate / run / format` blueprint codified in CQ-6. Every first-party non-test function now passes gocyclo 15; `golangci-lint run --enable-only gocyclo ./...` returns zero violations.
-
-Functions decomposed by version: **0.7.0** — `SearchInFiles.Execute` (74→≤15), `findReplaceTool.Execute` (58→≤15), `TransactionApply.Execute` (44→≤15), `handleConn` (38→1), `FindFiles.Execute` (35→≤15), `EditFile.Execute` (33→≤15), `(*Server).Serve` (32→6), `SessionStart.Execute` (31→≤15), `computeEditScript` (27→≤15), `(*WriteFile).Execute` (26→≤15), `applyEnv` (28→≤15), `runStats` (28→≤15), `Discover` (23→≤15), `runDiagOnWorkspace` (22→≤15), `ListFiles.Execute` (20→≤15), `ListDirectory.Execute` (20→≤15), `symbolKindName` (18→map), `ReadSymbol.Execute` (18→≤15), `executePartial` (18→≤15), `walkDir` (17→≤15), `runDaemon` (17→≤15), `RenameFile.Execute` (17→≤15), `runConfigShow` (17→≤15), `readContentMaybeRanged` (17→≤15), `groupHunks` (16→≤15), `(*CallHierarchy).Execute` (16→≤15), `(*RenameSymbol).Execute` (16→≤15), `(*TypeHierarchy).Execute` (16→≤15). **0.7.1** — `handleMainKey` (59→9), `updateInner` (41→14), `handleLogSectionKey` (31→14), `handlePopupKey` (25→15), `render` (24→12), `dashActivityGraphLines` (22→5), `renderPopup` (21→9), `popupRightAll` (18→13), `handleDashboardKey` (17→15), `handleMouseWheel` (17→14), `leftLines` (16→14).
-
----
-
-## Bugs & known limitations
-
-### `rename_symbol` stale LSP position index — clear error message
-
-**Completed in:** 0.6.7
-**Original priority:** medium
-
-`rename_symbol` now detects "out of range" position errors from `applyWorkspaceEdit` and wraps them with a clear explanation:
-
-> This usually means the LSP position index is stale after recent in-session edits. The language server computed edit positions against an older file version.
-
-The error message includes three recovery options: calling `diagnostics` to confirm re-indexing, falling back to `find_replace` for the qualified name, or restarting the daemon.
-
-Implementation: `internal/tools/rename_symbol.go` (`renameStaleIndexHint` constant + `strings.Contains` guard in `Execute`). Unit tests in `internal/tools/rename_symbol_test.go` cover the stale-index path and the empty-edit-set case.
-
-The optional `textDocument/didOpen`/`didClose` flush (definition of fix item 2) was not implemented — the clear error message and recovery guidance are sufficient for practical use.
-
----
-
-### `gofumpt` standalone vs `golangci-lint` embedded formatter mismatch documented
-
-**Completed in:** 0.6.7
-**Original priority:** low
-
-Added an explicit note to AGENTS.md under "Build commands":
-
-> `gofumpt -w` (standalone binary) may disagree with the `gofumpt` formatter embedded in `golangci-lint` v2.12.2 — the two can pin different versions. Always apply formatting via `golangci-lint run --fix ./...`, never via the standalone binary, to avoid phantom lint failures.
-
-CQ-6's pre-commit hook item (ensuring the hook invokes `golangci-lint run --fix` rather than `gofumpt -l`) is tracked separately under CQ-6.
-
----
-
-## Improvements
-
-### `copy_file` tool + `rename_file` move clarity
-
-**Completed in:** 0.7.1
-**Original priority:** Medium
-
-New `copy_file` tool in `internal/tools/copy_file.go`:
-- Parameters: `from`, `to` (required), `overwrite` (default false), `dirty_ok` (default false).
-- Preserves source file permissions (modes) on the copy.
-- Cross-device safe: uses `safeWrite` (tmpdir+rename+EXDEV fallback), no `os.Rename` on source→dest path.
-- Creates parent directories automatically.
-- Locks both paths in lexical order (same deadlock-safe pattern as `rename_file`).
-- Checks git dirty state on source (unless `dirty_ok`).
-- Notifies LSP with `FileCreated` for destination; invalidates symbol cache.
-- Consumes one rate-limit slot.
-- Registered in `internal/cli/conn.go` alongside other write tools.
-
-`rename_file` description updated: now explicitly says it is "the primary tool for moving files" and points to `copy_file` for duplicating without removing the source.
-
-Docs updated: `docs/mcp-tools.md`, `AGENTS.md` tool table (count 34→35) and Quick Reference section.
-
-Tests: `TestCopyFile_*` (8 cases) in `internal/tools/copy_file_test.go` — basic copy, permission preservation, nested parent creation, overwrite guard, overwrite flag, directory-source rejection, same-path error, missing-from error.
-
----
-
-### `plumb doctor --json` — machine-readable output
-
-**Completed in:** 0.7.1
-**Original priority:** Low
-
-`plumb doctor` now accepts a `--json` flag. When set:
-- `runDoctorJSON(ws)` is called instead of the ANSI display path.
-- All five check sections (Daemon, Language Servers, MCP Clients, Configuration, Data) run silently — no logo, no section headers, no working indicator (already suppressed by `stdoutIsTerminal()` when piped anyway).
-- Results are collected into `[]jsonCheckResult{Name, OK, Detail, Fix}` and written with `json.NewEncoder(os.Stdout).Encode`.
-- Exit code unchanged: non-nil error returned when any check fails.
-
-Implementation: `internal/cli/doctor.go` — `doctorJSON bool` flag, `jsonCheckResult` struct, `runDoctorJSON`.
-Test: `TestJsonCheckResultMarshaling` in `internal/cli/doctor_test.go` verifies round-trip marshal/unmarshal of passing and failing results.
-
-Usage: `plumb doctor --json | jq '.[] | select(.ok == false)'`
-
----
-
-### `session_start` orientation — recommended first step, workspace scale
-
-**Completed in:** 0.7.1
-**Original priority:** medium-high
-
-Three additive fields added to `session_start` output (`internal/tools/session_start.go`):
-
-1. **`workspace_scale`** — approximate total file count and primary-language file count added to the identity section (e.g. `Scale: ~342 files (287 Go)`). Computed by `countWorkspaceFiles` (same skip-dirs contract as `recentlyModifiedFiles`). Respects the `fsguard.RefuseWalk` guard so home-root sessions do not trigger TCC prompts. Language extensions derived from `langFileProfile` (nine language profiles).
-
-2. **`recommended_start`** — a one-sentence "best first move" hint emitted immediately after the identity section where agents see it first. Decision tree: active errors detected → `diagnostics`; LSP available (non-nil diagnostics source) with language resolved → `workspace_symbols`; language resolved but no LSP → `list_files` + `search_in_files`; default → `list_files`.
-
-3. **Memory descriptions** — already present in 0.6.5. Verified that `writeSessionMemories` surfaces each memory's frontmatter description inline so agents are nudged to read relevant ones without reading the full body.
-
-`Execute` now calls `detectLanguage` once and precomputes `hasActiveDiagnosticErrors` (errors only, not warnings) so both new sections share the same values without duplicate work. `writeSessionIdentity` signature changed to accept precomputed `lang`.
-
-Unit tests added: `TestSessionStart_RecommendedFirstStep` (5 sub-cases covering all hint branches, including warning-only diags hitting the LSP-available path) and `TestSessionStart_WorkspaceScale` (4-file workspace with 2 Go files, asserts `Scale:` and `Go` appear in output).
-
----
-
-### Claude Desktop: plumb as the *only* tool surface
-
-**Completed in:** 0.6.7
-**Original priority:** high
-
-Claude Desktop has no native filesystem or shell access. Plumb is its only interface to the codebase. Three concrete changes were made:
-
-1. **`session_start` tool guidance block for Claude Desktop** (`internal/tools/session_start.go`): the `if isClaudeCode(...)` block was refactored to a `switch` with a new `case isClaudeDesktop(...)` branch. Claude Desktop receives a focused guidance block that lists all file-operation and LSP-semantic tools with the note "there is no fallback — if a plumb tool fails, retry or check `daemon_info`." Detection via `clientInfo.name == "claude-desktop"` (case-insensitive, prefix-tolerant).
-
-2. **`delete_file` description** (`internal/tools/delete_file.go`): removed "use shell tools for recursive removal" — replaced with "to remove a directory tree, delete its files individually with repeated `delete_file` calls."
-
-3. **`docs/mcp-tools.md` client capabilities table**: added a "Client capabilities and fallback behaviour" section at the top of the tool catalogue. A table lists Claude Desktop (no native filesystem/shell/git), Claude Code (`Read`/`Edit`/`Write` + `Bash`), Codex, and Gemini CLI. Two implication notes follow: one for tool error messages (do not suggest native tools), one for token savings (Claude Desktop savings are better expressed as "capabilities enabled" than "tokens saved vs alternative").
-
-The savings-model profile for `claude-desktop` (Architecture item) was not implemented — that is part of the larger client-aware savings model tracked in the Architecture section.
-
----
-
-### `edit_file` — opt-in partial apply mode
-
-**Completed in:** 0.6.8
-**Original priority:** low
-
-`edit_file` now accepts `apply_partial: true`. When set, each edit in the `edits` array is applied independently in sequence. Failures are collected and reported per-edit rather than rolling back the entire batch. The response includes a per-edit result list with status (`applied` or `FAILED`), line range for successful edits, and the error message for failures. Post-write diagnostics are still appended at the end. If all edits fail, no file is written. LSP notification and cache invalidation only fire when at least one edit is applied.
-
-Implementation: `internal/tools/edit_file.go` — new `apply_partial` schema field, `executePartial` method, `tryEditPartial` method, and `partialEditResult` struct. Tests in `internal/tools/edit_file_test.go` cover: all succeed, partial success (middle edit fails), all fail.
-
-The atomicity guarantee is intentionally dropped when `apply_partial: true` is set — document clearly that this mode is incompatible with strict mode's "consistent state" assumption and is not valid inside `transaction_apply`.
-
----
-
-### `search_in_files` — LSP-backed enclosing symbol for each match
-
-**Completed in:** 0.6.8
-**Original priority:** medium
-
-`search_in_files` now accepts `include_enclosing_symbol: true`. When set and an LSP client is available, each actual match line (not context lines) is annotated with the deepest enclosing symbol from `textDocument/documentSymbol`:
-
-```
-internal/tools/transaction.go
-  123:> uris = append(uris, uri)
-  [in: Execute (method)]
-
-1 hit(s) across 1 file(s).
-```
-
-One `DocumentSymbols` query per distinct matched file; results are re-used from the session's symbol cache when available (`symCache`). If the LSP is unavailable or the query fails, the annotation is silently omitted — the call never fails because of this feature.
-
-Implementation: `internal/tools/search_in_files.go` — `include_enclosing_symbol` schema field and args struct field; `docSymbolsCached` method (LSP call with session cache); `deepestEnclosingSymbol` helper (recursive DFS, returns innermost symbol by range size); `fileMatch` struct extended with `absPath string` and `hitLineNums []int`; output loop injects `[in: Name (kind)]` line after each hit-line marker (`:> `). Constructor updated to accept `lsp.Client` and `*cache.Cache` alongside `WorkspaceFn`. Tests in `internal/tools/search_in_files_lsp_test.go`.
-
----
-
-### `find_replace` — opt-in post-write formatter hook
-
-**Completed in:** 0.6.8
-**Original priority:** low
-
-`find_replace` now accepts `format_after: true`. After writing all replacements (non-dry-run only), the appropriate source formatter is run on each modified file: `gofumpt` (falling back to `gofmt`) for `.go` files, `ruff format` (falling back to `black`) for `.py` files. If the formatter is not found the file is silently skipped. If the formatter errors, the failure is reported as a warning line in the response and does not fail the tool call. The response appends `formatted N file(s)` when any files were reformatted.
-
-Implementation: `internal/tools/find_replace.go` — `format_after` schema field and args struct field; `runFormatterOnFiles` and `formatterCmd` package-level helpers; `fileChange` struct elevated from local to package scope to allow the helpers to reference it. Tests in `internal/tools/find_replace_test.go` cover: `.txt` file (no formatter → no "formatted" line) and `formatterCmd` extension dispatch.
-
----
-
-### CQ-7 — De-duplicate CLI/TUI presentation helpers
-
-**Completed in:** 0.7.1 (2026-05-21)
-**Original priority:** P2, medium effort
-
-Introduced `internal/render` as a new leaf-level package with shared, pure helpers: `ContractPath` (home → `~` path contraction), `HumanAge` (concise age string; unified to `Jan 2` for dates older than 24 h), `PadRight`, `PadLeft`, `ContextBox`, and `DottedTableBase`.
-
-Migrated all CLI and TUI duplicates:
-- `internal/cli/stats.go` — removed local `padRight`, `humanAge`; replaced `table.New()/DottedBorder` setup with `render.DottedTableBase`.
-- `internal/cli/sessions.go` — removed `contractSessionPath` and inline table setup; uses `render.ContractPath`, `render.DottedTableBase`.
-- `internal/cli/diagnostics.go`, `init.go`, `setup.go` — replaced four inline `lipgloss.NewStyle().Border(ContextBorder, ...)` boxes with `render.ContextBox`.
-- `internal/cli/config.go` — `contractConfigPath` now delegates path-contraction to `render.ContractPath`.
-- `internal/cli/doctor.go` — replaced `contractSessionPath` calls with `render.ContractPath`.
-- `internal/tui/model_utils.go` — removed `padRight`, `padLeft`, `humanAgeTUI`; `overlayLogoBottom` uses `render.PadRight`.
-- `internal/tui/model_right.go`, `model_logs.go` — all call sites updated to `render.PadRight`, `render.PadLeft`, `render.HumanAge`.
-
-`internal/render` has unit tests covering all public functions.
-
----
-
-### CQ-8 — Post-CQ-7 lint findings (prealloc, unparam, unused, gocyclo in tests)
-
-**Completed in:** 0.7.2 (2026-05-21)
-**Original priority:** P0 (mechanical, zero-risk)
-
-11 findings surfaced after CQ-7 landed; all resolved.
-
-- **prealloc (4):** `dashActivityWidget` — pre-compute `graphLines` before allocating `out`; `dashProjectWidget` — pre-compute `tableLines` before allocating `content`; `popupGutterLines` — `make([]string, 0, 2+len(content))`; `TestDashTopToolsTablesRenderWidgets` — pre-compute table lines before `plain`.
-- **unparam (4):** `runDaemonAcceptLoop` — always returned nil; changed to no return value, caller updated. `(*EditFile).executePartial` — always returned nil error; changed to return `string` only, caller updated. `walkDir` — `root` parameter was passed but never used; removed from signature and all two call sites. `(Model).renderPopup` — `rightWidth` parameter was unused; removed from signature and the one call site.
-- **unused (1):** `dashRow` in `dashboard.go` — function was never called; deleted along with its doc comment.
-- **gocyclo (2):** Both findings were in test functions (`TestRenderTopMenuUsesRailAndActivityBox`, `TestDashTopToolsTablesRenderWidgets`). The gocyclo-15 contract covers non-test functions only; annotated with `//nolint:gocyclo`.
-
-Result: 0 findings on `./...`.
-
----
-
-### CQ-4 — Split oversized files by responsibility (P1)
-
-**Completed in:** 0.7.1 (2026-05-20)
-**Original priority:** high
-
-Six files over 400 lines split across six commits (one new file each). All first-party non-test files now sit at or below the 400-line limit. Pure moves — no logic changes.
-
-| New file | Extracted from | Lines moved |
-|---|---|---|
-| `internal/tui/dashboard_activity.go` | `dashboard.go` (892 → 318) | 201 |
-| `internal/tui/dashboard_alerts.go` | `dashboard.go` | 87 |
-| `internal/tui/dashboard_widgets.go` | `dashboard.go` | 372 |
-| `internal/stats/db_query.go` | `db.go` (719 → 295) | 431 |
-| `internal/mcp/server_handlers.go` | `server.go` (628 → 397) | 241 |
-| `internal/cli/setup_helpers.go` | `setup.go` (556 → 369) | 195 |
-
-`internal/cli/daemon.go` had already dropped to 390 lines through CQ-3 work — no split needed. `internal/lsp/protocol/types.go` remains on the documented exception list (protocol type catalogue mirroring the LSP spec).
-
----
-
-## Improvements
-
-### `diagnostics` tool — accept multiple URIs in a single call
-
-**Completed in:** 0.7.3
-**Original priority:** Medium
-
-The `diagnostics` tool now accepts `uris: []string` instead of a single scalar `uri`. Three call modes:
-- `uris` absent or `[]` → `AllDiagnostics()` — full workspace (existing zero-arg behaviour).
-- `uris` with one element → single-file query (existing single-arg behaviour).
-- `uris` with N elements → fan out over each URI, merge results, return as one formatted response.
-
-The old scalar `uri` field is kept in the schema as deprecated and handled transparently: if `uris` is absent and `uri` is present, it is treated as `uris:[uri]`.
-
-Implementation: `internal/tools/diagnostics.go` — updated schema, description, and `Execute`. Logic split into `singleURI` and `multiURI` helpers to stay under gocyclo 15. `docs/mcp-tools.md` updated.
-
-Tests: 5 new cases in `internal/tools/diagnostics_test.go` — single via `uris`, multi-file (3 files), multi-file with one untracked, all-clean multi-file, and scalar `uri` backward-compat.
-
----
-
 ## Architecture
 
 ### Client-aware token-savings model
@@ -461,3 +125,464 @@ Plumb write tools (`write_file`, `edit_file`, `transaction_apply`) now append a 
 Files added: `internal/quality/quality.go`, `internal/quality/runner.go`, `internal/quality/golangcilint/analyser.go`, `internal/quality/runner_test.go`, `internal/quality/golangcilint/analyser_test.go`.
 
 Files changed: `internal/config/config.go` (`QualityConfig` + `[quality]` defaults + validation), `internal/tools/write_deps.go` (`QualityReportFn` type + `QualityReport` field + `reportQuality` helper), `internal/tools/write_file.go`, `internal/tools/edit_file.go`, `internal/tools/transaction.go` (append quality report to response), `internal/cli/conn.go` (`qualityRunner` field + `startQualityRunner` + `buildAnalysers` + lifecycle wiring).
+
+---
+
+## Planning
+
+### Plumb Topology — Implementation Plan (Phase 1)
+
+**Status:** Planning (not yet implemented). Written 2026-05-21 against v0.7.5.
+**Source:** `docs/todo.md` → Architecture → "Plumb Topology: Persistent Semantic Indexing"
+
+---
+
+#### 0. Scope
+
+Covers **Phase 1** as defined in `docs/todo.md`: the SQLite/FTS5 schema, daemon-owned incremental indexer, Go and Python extractors, and three MCP tools (`topology_status`, `topology_search`, `topology_explore`). Phase 2 items (`topology_impact`, `topology_routes`, `topology_affected`, TypeScript extractor, LSP fallback) are not in scope here.
+
+---
+
+#### 1. Key Architectural Decisions
+
+**1.1 Tree-sitter vs. native extractors**
+
+The todo.md specifies "Go-native Tree-sitter integration." The official Go bindings (`github.com/tree-sitter/go-tree-sitter`) and the commonly used `github.com/smacker/go-tree-sitter` both require **CGo**. Adding CGo has non-trivial costs:
+
+- The current binary is pure-Go (`modernc.org/sqlite` was specifically chosen to avoid a system SQLite dependency). Adding CGo breaks that.
+- CI would need a C toolchain step.
+- Cross-compilation becomes harder.
+- Grammars must be vendored as C source and compiled.
+
+**Recommendation for Phase 1:** Use native Go parsers for Phase 1 extractors.
+
+| Language | Parser | Why |
+|---|---|---|
+| Go | `go/parser` + `go/ast` (stdlib) | Authoritative; used by gopls; no new deps; type-system-aware |
+| Python | Regex heuristics | Matches `def`/`class`/`import`/`from`; sufficient for symbol discovery |
+
+The Extractor interface is designed to accommodate a future Tree-sitter-backed implementation in Phase 2 without change. If the decision is to use Tree-sitter from the start, the project must accept CGo and the attendant build complexity — that is a valid choice but must be made deliberately before implementation begins.
+
+**1.2 Per-workspace, not per-connection**
+
+The `quality.Runner` is per-connection. Topology is fundamentally different: it is a persistent on-disk index shared across all connections to the same workspace. This follows the `workspacePool` pattern — the daemon owns one indexer per workspace root.
+
+A new `topologyPool` type in `internal/cli/` manages one `*topology.Store` (indexer + SQLite) per workspace root, keyed by absolute path. The first connection to attach to a workspace starts the indexer; the daemon-level pool holds the reference for its lifetime. This mirrors how `workspacePool` manages one `gopls` process per workspace.
+
+**1.3 Separate databases**
+
+`topology.db` is **derived and rebuildable** — it can be dropped and recreated if the schema changes or the index is stale. It must never live in `stats.db` (global, durable).
+
+Location: `<workspace>/.plumb/topology.db`. Project-scoped, gitignored, isolated per-workspace.
+
+**1.4 WAL and read/write separation**
+
+SQLite WAL mode (as in `stats.db`) is mandatory. MCP tool read queries must never block on the background indexer's write transactions. Short write transactions per file (not per full resync). `PRAGMA busy_timeout = 5000` on every connection open.
+
+---
+
+#### 2. New Dependencies
+
+None for Phase 1. `go/parser`, `go/ast`, `go/token` are stdlib. No new entries in `go.mod`. This is one of the few features that can be shipped with zero `go.mod` changes.
+
+`github.com/tree-sitter/go-tree-sitter` (CGo) is deferred to Phase 2.
+
+---
+
+#### 3. File and Package Structure
+
+```
+internal/topology/
+  topology.go                 -- package doc, public types (Node, Edge, Status, SearchResult, etc.)
+  db.go                       -- Open(), schema, WAL, FTS5 creation, close
+  indexer.go                  -- Indexer struct: background worker, debounce, file-change queue
+  extractor.go                -- Extractor interface + registry + dispatch
+  extractors/
+    go/
+      extractor.go            -- Go stdlib AST-based extractor
+    python/
+      extractor.go            -- Python regex-based extractor
+  search.go                   -- FTS5 query helpers for topology_search
+  explore.go                  -- neighbourhood traversal for topology_explore
+  status.go                   -- StatusReport(), DB size, file counts
+  store.go                    -- Store: wraps db + indexer, public API surface
+
+internal/tools/
+  topology_status.go
+  topology_search.go
+  topology_explore.go
+  topology_status_test.go
+  topology_search_test.go
+  topology_explore_test.go
+
+internal/cli/
+  topology_pool.go            -- topologyPool: daemon-level per-workspace Store registry
+  (conn.go modified)          -- startTopologyIndexer() added to attachWorkspace/attachSynthetic
+  (daemon.go modified)        -- topologyPool field + tool registration
+```
+
+Projected file sizes (all within the 600-line limit):
+
+| File | Estimated lines |
+|---|---|
+| `topology.go` | 80–120 |
+| `db.go` | 200–280 |
+| `indexer.go` | 200–260 |
+| `extractor.go` | 80–100 |
+| `extractors/go/extractor.go` | 200–260 |
+| `extractors/python/extractor.go` | 150–180 |
+| `search.go` | 150–200 |
+| `explore.go` | 180–220 |
+| `status.go` | 100–130 |
+| `store.go` | 120–160 |
+| Three MCP tools + tests | 150–200 each |
+| `topology_pool.go` | 100–140 |
+
+---
+
+#### 4. SQLite Schema
+
+```sql
+PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 5000;
+PRAGMA foreign_keys = ON;
+PRAGMA user_version = 1;
+
+CREATE TABLE IF NOT EXISTS topology_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS topology_files (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    path             TEXT    NOT NULL UNIQUE,   -- workspace-relative
+    language         TEXT    NOT NULL DEFAULT '',
+    mtime_ns         INTEGER NOT NULL DEFAULT 0,
+    content_hash     TEXT    NOT NULL DEFAULT '', -- sha256 hex
+    extractor_ver    TEXT    NOT NULL DEFAULT '',
+    indexed_at       INTEGER NOT NULL DEFAULT 0,  -- unix epoch ns
+    error_msg        TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tf_path ON topology_files(path);
+
+CREATE TABLE IF NOT EXISTS topology_nodes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id    INTEGER NOT NULL REFERENCES topology_files(id) ON DELETE CASCADE,
+    kind       TEXT    NOT NULL,  -- file, package, function, method, type, constant, variable, import, class, test
+    name       TEXT    NOT NULL,
+    qualified  TEXT    NOT NULL DEFAULT '',
+    signature  TEXT    NOT NULL DEFAULT '',
+    start_line INTEGER NOT NULL DEFAULT 0,
+    end_line   INTEGER NOT NULL DEFAULT 0,
+    docstring  TEXT    NOT NULL DEFAULT '',
+    language   TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_tn_file ON topology_nodes(file_id);
+CREATE INDEX IF NOT EXISTS idx_tn_kind ON topology_nodes(kind);
+CREATE INDEX IF NOT EXISTS idx_tn_name ON topology_nodes(name);
+CREATE INDEX IF NOT EXISTS idx_tn_qual ON topology_nodes(qualified);
+
+CREATE TABLE IF NOT EXISTS topology_edges (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id    INTEGER NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    to_id      INTEGER NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    kind       TEXT    NOT NULL, -- calls, imports, references, defines, contains, inherits, implements
+    confidence REAL    NOT NULL DEFAULT 1.0,
+    source     TEXT    NOT NULL DEFAULT 'extractor'
+);
+CREATE INDEX IF NOT EXISTS idx_te_from ON topology_edges(from_id);
+CREATE INDEX IF NOT EXISTS idx_te_to   ON topology_edges(to_id);
+CREATE INDEX IF NOT EXISTS idx_te_kind ON topology_edges(kind);
+
+-- FTS5 virtual table. name_tokens holds the camelCase/snake_case split form.
+CREATE VIRTUAL TABLE IF NOT EXISTS topology_fts USING fts5(
+    name,
+    name_tokens,
+    qualified,
+    signature,
+    docstring,
+    path,
+    kind,
+    content='topology_nodes',
+    content_rowid='id',
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Sync triggers on topology_nodes keep topology_fts current.
+CREATE TRIGGER IF NOT EXISTS topology_nodes_ai AFTER INSERT ON topology_nodes ...
+CREATE TRIGGER IF NOT EXISTS topology_nodes_ad AFTER DELETE ON topology_nodes ...
+CREATE TRIGGER IF NOT EXISTS topology_nodes_au AFTER UPDATE ON topology_nodes ...
+```
+
+**Code-aware tokenisation** is handled at insert time by a `splitIdentifier(s string) string` helper: `workspacePool → workspace pool`, `snake_case → snake case`, `kebab-case → kebab case`. The `name_tokens` column stores the split form. FTS5 queries match either column. Triggers keep both in sync automatically.
+
+---
+
+#### 5. Public Types (`topology.go`)
+
+```go
+type NodeKind string
+const (
+    KindFile, KindPackage, KindFunction, KindMethod, KindType,
+    KindConstant, KindVariable, KindImport, KindClass, KindTest NodeKind
+)
+
+type EdgeKind string
+const (
+    EdgeCalls, EdgeImports, EdgeContains, EdgeDefines,
+    EdgeInherits, EdgeImplements EdgeKind
+)
+
+type Node struct {
+    ID, FileID             int64
+    Kind                   NodeKind
+    Name, Qualified        string
+    Signature, Docstring   string
+    StartLine, EndLine     int
+    Language, Path         string
+}
+
+type Edge struct {
+    ID, FromID, ToID int64
+    Kind             EdgeKind
+    Confidence       float64
+    Source           string
+}
+
+type SearchResult struct {
+    Node    Node
+    Score   float64 // FTS5 bm25 rank
+    Field   string  // matched field name
+    Snippet string  // FTS5 snippet
+}
+
+type Neighbourhood struct {
+    Centre    Node
+    Nodes     []Node
+    Edges     []Edge
+    Truncated bool
+}
+
+type Status struct {
+    IndexedFiles, SkippedFiles, StaleFiles int
+    TotalNodes, TotalEdges                 int
+    DBSizeBytes                            int64
+    LastSync                               time.Time
+    IndexerState                           string // idle | running | error
+    Languages                              []string
+    LastError                              string
+}
+```
+
+---
+
+#### 6. Extractor Interface
+
+```go
+type Extractor interface {
+    Language()   string
+    Extensions() []string
+    // Extract parses src (file content at workspace-relative path).
+    // Returns (nil, nil) for files it cannot handle — never an error for normal skips.
+    Extract(ctx context.Context, path string, src []byte) ([]Node, []Edge, error)
+}
+```
+
+**Go extractor** uses `go/parser` with `ParseComments | SkipObjectResolution`. Extracts: package, imports, functions/methods (name, signature, doc, line range), types, constants/variables, tests (`Test*`, `Bench*`, `Example*`). Contains edges: file→package, package→symbol, type→method. No call-edge extraction in Phase 1 (requires go/types; too expensive for background indexing).
+
+**Python extractor** uses regex line-by-line scan. Extracts: `class`, `def`/`async def`, imports, docstrings (first triple-quoted string). Method vs. function distinguished by indentation depth. Containment edges by indentation. Confidence `0.8` for heuristically inferred containment.
+
+Both extractors wrap `Extract()` call sites in `defer recover()` inside the indexer — a malformed file must never panic the daemon.
+
+---
+
+#### 7. Background Indexer (`indexer.go`)
+
+Modelled on `quality.Runner`:
+
+```go
+type Indexer struct {
+    workspace  string
+    db         *sql.DB
+    extractors []Extractor
+    queue      chan indexOp   // capacity 256
+    done       chan struct{}
+    mu         sync.RWMutex
+    state      string        // "idle" | "running" | "error"
+    lastSync   time.Time
+    lastErr    string
+}
+
+type indexOp struct { kind opKind; path string }
+// opKind: opUpsert | opDelete | opResync
+```
+
+**Worker loop:** wait on queue or done → `drain()` to coalesce rapid writes → dispatch:
+- `opUpsert`: stat file, compare mtime+hash vs `topology_files`, skip if unchanged, extract, replace file's nodes/edges in one short transaction (DELETE old + INSERT new).
+- `opDelete`: delete from `topology_files` (CASCADE removes nodes, edges, FTS5 via triggers).
+- `opResync`: full workspace walk, enqueue `opUpsert` per source file, then delete rows for files that no longer exist.
+
+**File-change detection (Phase 1):** mtime+hash comparison at upsert time. Write tools call `Enqueue(path, opUpsert)` via `WriteDeps.TopologyNotify func(path string)` (nil-safe, added alongside `QualityReport`). Covers all daemon-driven changes. For external changes, the initial resync on attach covers the case; periodic resync is Phase 2.
+
+**One indexer per workspace:** enforced by `topologyPool`. Late-attaching connections get the existing shared instance.
+
+---
+
+#### 8. Config Section
+
+New `TopologyConfig` added to `internal/config/config.go` and `Config`:
+
+```go
+type TopologyConfig struct {
+    Enabled               bool     `toml:"enabled"`
+    ResyncOnAttach        bool     `toml:"resync_on_attach"`
+    ExcludePatterns       []string `toml:"exclude_patterns"`
+    MaxFileSizeBytes      int64    `toml:"max_file_size_bytes"`
+    ResyncIntervalMinutes int      `toml:"resync_interval_minutes"`
+}
+```
+
+Default: `Enabled = false`, `MaxFileSizeBytes = 512*1024`. Opt-in default matches `quality.Enabled = false` — Phase 1 is not production-default until performance on diverse workspaces is verified.
+
+---
+
+#### 9. Daemon Integration
+
+**`internal/cli/topology_pool.go`**
+
+```go
+type topologyPool struct {
+    mu     sync.Mutex
+    stores map[string]*topology.Store
+    cfg    config.TopologyConfig
+}
+func (p *topologyPool) Acquire(root string) *topology.Store { ... }
+func (p *topologyPool) StopAll() { ... }
+```
+
+**`internal/cli/daemon.go`** — add `topologyPool *topologyPool` field; start in `runDaemon`; `StopAll()` on shutdown.
+
+**`internal/cli/conn.go`** — add `topologyStore *topology.Store` to `connSession`. In `attachWorkspace` and `attachSynthetic`, call `startTopologyIndexer(root)` after `startQualityRunner(root)`:
+
+```go
+func (s *connSession) startTopologyIndexer(root string) {
+    if !s.cfg.Topology.Enabled { return }
+    s.stateMu.Lock()
+    s.topologyStore = s.pool.topologyPool.Acquire(root)
+    s.stateMu.Unlock()
+}
+```
+
+**`internal/tools/write_deps.go`** — add `TopologyNotify func(path string)`. Write tools call it after each successful write. Daemon sets it to `s.topologyStore.Enqueue(path, opUpsert)` (nil when topology is disabled).
+
+**Tool registration** — three topology tools receive a `topologyFn func() *topology.Store` from a closure over `s.topologyStore`.
+
+---
+
+#### 10. MCP Tools
+
+All three follow `parseArgs → validate → run → format`; all stay under gocyclo 15.
+
+**`topology_status`**
+- Input: `{ "workspace": string (optional) }`
+- Returns: index health, file counts, node/edge counts, DB size, last sync, indexer state, language coverage, last error.
+- Degrades clearly when topology is disabled or store is nil.
+
+**`topology_search`**
+- Input: `{ "query": string, "kinds": []string, "language": string, "limit": 20, "include_snippets": true }`
+- FTS5 MATCH on `name`, `name_tokens`, `qualified`, `signature`, `docstring`, `path`. BM25 ranking. Filters on kind/language post-query.
+- Output per result: path+line, kind, score, field matched, snippet, `source=topology | mode=ranked | index=fresh|stale`.
+- Always states index_status — agents must not mistake ranked discovery for exact proof.
+
+**`topology_explore`**
+- Input: `{ "name": string, "depth": 2, "max_nodes": 50, "max_bytes": 30000, "include_source": "signatures", "edge_kinds": []string }`
+- Resolves name to a node (exact → FTS5 fallback), BFS up to `depth` hops, stops at `max_nodes` or `max_bytes`. Reports truncation.
+- Output: tree-formatted neighbourhood with depth indentation, edge labels, path+line, `source=topology`, truncation notice.
+
+**Context-budget contract (enforced):**
+
+| Parameter | Default | Hard cap |
+|---|---|---|
+| `depth` | 2 | 4 |
+| `max_nodes` | 50 | 200 |
+| `max_bytes` | 30 000 | 100 000 |
+| `include_source` | `signatures` | `full` is opt-in |
+
+---
+
+#### 11. Testing Plan
+
+**Unit tests:**
+
+| File | Coverage |
+|---|---|
+| `db_test.go` | Schema creation, WAL, FTS5 table, busy_timeout |
+| `extractor_go_test.go` | Fixtures: empty file, functions, interface, struct+methods, tests, imports |
+| `extractor_python_test.go` | Fixtures: class+methods, bare functions, imports, async def |
+| `search_test.go` | Insert 3 nodes; exact name match; token-split match; docstring match; rank order |
+| `indexer_test.go` | Upsert+read-back; delete cascade; stale detection on mtime change; double-upsert idempotent |
+| `topology_status_test.go` | Disabled message when store nil; populated status otherwise |
+| `topology_search_test.go` | Token-split search; kind filter; stale index reported |
+| `topology_explore_test.go` | BFS to depth; max_nodes truncation; max_bytes truncation; unknown name error |
+
+**Integration test** (`//go:build integration`): creates a temp workspace with `internal/cli/` Go files, runs full resync, asserts `topology_search("workspacePool")` returns ≥1 result, records resync timing for the >5× benchmark.
+
+**Concurrency test:** goroutine enqueuing ops in a loop + goroutine running 100 FTS5 queries; assert no `SQLITE_BUSY` or data race. Run with `-race`.
+
+---
+
+#### 12. Phase 1 Definition of Done — Checklist
+
+From `docs/todo.md`:
+
+1. `internal/topology` package with SQLite schema for nodes, edges, FTS5, and index metadata → §4
+2. Daemon-owned incremental indexer with debounce, stale cleanup, delete handling, manual resync → §7, §9
+3. Go and Python extractors tested against fixtures → §6, §11
+4. `topology_status`, `topology_search`, `topology_explore` as MCP tools with source/freshness metadata → §10
+5. `topology_explore` enforces `max_nodes`/`max_bytes` and reports truncation → §10
+6. Benchmark: topology symbol listing >5× faster than LSP cold start → §11
+7. Concurrency test: MCP reads don't fail during indexing → §11
+
+---
+
+#### 13. Suggested Commit Sequence
+
+Each commit must leave `make verify` green.
+
+| # | Commit message | Contents |
+|---|---|---|
+| 1 | `feat(config): add [topology] config section` | `TopologyConfig`, defaults, validation, tests |
+| 2 | `feat(topology): SQLite schema, Open(), WAL, FTS5 setup` | `db.go`, `db_test.go` |
+| 3 | `feat(topology): public types and Store interface` | `topology.go`, `store.go` |
+| 4 | `feat(topology): Extractor interface and registry` | `extractor.go` |
+| 5 | `feat(topology/go): Go AST extractor` | `extractors/go/extractor.go` + fixture tests |
+| 6 | `feat(topology/python): Python regex extractor` | `extractors/python/extractor.go` + fixture tests |
+| 7 | `feat(topology): background Indexer with resync and coalescing` | `indexer.go`, `indexer_test.go` |
+| 8 | `feat(topology): FTS5 search queries` | `search.go`, `search_test.go` |
+| 9 | `feat(topology): BFS neighbourhood traversal with budget limits` | `explore.go`, `explore_test.go` |
+| 10 | `feat(topology): StatusReport()` | `status.go` |
+| 11 | `feat(cli): topologyPool — daemon-level per-workspace Store registry` | `topology_pool.go` |
+| 12 | `feat(cli): wire topology into attachWorkspace, WriteDeps.TopologyNotify` | `conn.go`, `write_deps.go`, daemon registration |
+| 13 | `feat(tools): topology_status MCP tool` | `topology_status.go` + tests |
+| 14 | `feat(tools): topology_search MCP tool` | `topology_search.go` + tests |
+| 15 | `feat(tools): topology_explore MCP tool` | `topology_explore.go` + tests |
+| 16 | `test(topology): integration benchmark against real Go workspace` | `//go:build integration` test |
+| 17 | `docs: topology in mcp-tools.md, AGENTS.md, CHANGELOG.md` | Docs + move todo.md section to todo-to-review.md |
+
+---
+
+#### 14. Risks and Watch-outs
+
+**SQLite `database is locked`** — WAL + `busy_timeout = 5000` handles most contention. Keep write transactions short: one transaction per file, not per full resync batch.
+
+**FTS5 is not regex** — `topology_search` descriptions must say "ranked indexed discovery — use `search_in_files` for exact verification." Never advertise it as exhaustive.
+
+**Go AST parser panics on malformed files** — `go/parser` can panic on pathological inputs. Wrap `Extract()` in `defer recover()` in the indexer. Record error in `topology_files.error_msg`; never let an extractor panic reach the daemon.
+
+**Resync on large workspaces** — a full walk of a monorepo is done entirely in the background. Report `state = "running"` in `topology_status`. Skip `vendor/`, `node_modules/`, `.git/`, `testdata/` in default exclude patterns.
+
+**DB size growth** — FTS5 index is typically 1–2× the raw text of indexed fields. On a 10,000-file Go workspace this can reach hundreds of MB. Surface DB size in `topology_status`. Limit indexed docstring length (first 500 chars). Phase 2 should add compaction/vacuum strategy.
+
+**`go/ast` is Go-only** — Python is heuristic; other languages are unsupported in Phase 1. Tool descriptions must state which languages are indexed. `topology_status` must list language coverage. Agents expecting TypeScript coverage will get empty results and must fall back to `search_in_files`.
+
+**Config opt-in** — `Enabled = false` is correct for Phase 1. `topology_status` and `plumb doctor` must both clearly state when topology is disabled and how to enable it (`[topology] enabled = true` in `.plumb/config.toml`).

@@ -8,6 +8,8 @@
 - **Memory TUI section.** Press `/` → Memory (or `ctrl+3`/`alt+3`) to open the new Memory section. Left panel lists all workspace memories with name and description; right panel shows metadata (name, description, size, paths) and the full scrollable body. `j/k`, `pgup/pgdn`, and `tab` navigate; mouse clicks select. Memories refresh on the standard 2-second poll cycle.
 
 ### Changed
+- **`SavingsLabel` — client-aware savings framing in `session_start`.** `stats.SavingsLabel(clientName string) string` is a new exported function that returns `"capabilities enabled"` for Claude Desktop clients and `"tokens saved"` for all others. `session_start`'s "Most-used tools" section now appends a savings summary line (`~4.5k capabilities enabled` / `~4.5k tokens saved`) when accumulated savings for the top-5 tools are non-zero. This surfaces the value of plumb to the AI agent at session start, with the correct framing for clients that have no native filesystem fallback.
+- **`docs/mcp-tools.md` — client capabilities and fallback behaviour table.** Added a "Client capabilities and fallback behaviour" section at the top of the tool catalogue with a four-client comparison table (Claude Desktop / Claude Code / Codex / Gemini CLI) and two implication notes: one on error messages (do not suggest native alternatives to Claude Desktop users) and one on savings framing (`capabilities enabled` vs `tokens saved`).
 - **File line-length guideline raised from ~400 to ~600 lines.** The previous limit was too tight for self-contained TUI sections and complex tool files. The gocyclo-15 and ~600 limits are now the enforced quality gates.
 
 ### Fixed

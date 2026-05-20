@@ -138,6 +138,17 @@ func TokensSavedForClient(tool, clientName string, outputBytes int) int {
 	return alt - plumbTokens
 }
 
+// SavingsLabel returns the user-facing label for a savings total given a
+// client name. Claude Desktop has no native filesystem or shell access, so
+// plumb's value is expressed as capabilities enabled rather than tokens saved
+// compared to a native alternative.
+func SavingsLabel(clientName string) string {
+	if normaliseClient(clientName) == clientClaudeDesktop {
+		return "capabilities enabled"
+	}
+	return "tokens saved"
+}
+
 // HasSavingsModel reports whether tool participates in savings accounting for
 // at least one client profile. Used as a fast skip in DB aggregation loops.
 func HasSavingsModel(tool string) bool {

@@ -91,6 +91,27 @@ func TestTokensSaved_BackwardCompatIsConservative(t *testing.T) {
 	}
 }
 
+func TestSavingsLabel(t *testing.T) {
+	cases := []struct {
+		clientName string
+		want       string
+	}{
+		{"claude-desktop", "capabilities enabled"},
+		{"claude-desktop/1.0", "capabilities enabled"},
+		{"claude", "capabilities enabled"},
+		{"claude-code", "tokens saved"},
+		{"codex", "tokens saved"},
+		{"gemini", "tokens saved"},
+		{"", "tokens saved"},
+		{"unknown-tool", "tokens saved"},
+	}
+	for _, tc := range cases {
+		if got := SavingsLabel(tc.clientName); got != tc.want {
+			t.Errorf("SavingsLabel(%q) = %q, want %q", tc.clientName, got, tc.want)
+		}
+	}
+}
+
 func TestTokensSavedForClient_CallHierarchyHighForAll(t *testing.T) {
 	// call_hierarchy is high-value for every client profile.
 	clients := []string{"claude-desktop", "claude-code", "codex", "gemini", "unknown"}

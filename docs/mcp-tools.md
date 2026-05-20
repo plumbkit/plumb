@@ -1,5 +1,20 @@
 # Available tools (37)
 
+## Client capabilities and fallback behaviour
+
+| Client | Native filesystem | Native shell/git | Notes |
+|---|---|---|---|
+| Claude Desktop | None | None | Plumb is the **only** interface — no fallback tools exist |
+| Claude Code | `Read` / `Edit` / `Write` | `Bash` | Plumb adds LSP-semantic tools with no native equivalent |
+| Codex | Shell (`shell` tool) | Yes | Plumb adds LSP-semantic layer and concurrency-safe writes |
+| Gemini CLI | Filesystem tools | Yes | Plumb adds LSP-semantic layer and concurrency-safe writes |
+
+**Implication for tool error messages:** When a plumb tool fails for a Claude Desktop user, the error must not suggest native alternatives (`cat`, `grep`, shell commands) — they are unavailable. Suggest retry or `daemon_info` instead.
+
+**Implication for token savings:** For Claude Desktop, plumb's value is better expressed as "capabilities enabled" rather than "tokens saved vs alternative" — there is no alternative to compare against.
+
+---
+
 Plumb exposes 34 structured tools to AI assistants. Every write tool is concurrency-safe, atomic, and LSP-notified.
 
 ## Session
