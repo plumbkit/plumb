@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.7.1 (unreleased)
+
+### Changed
+- **TUI quit safeguard.** Pressing `ctrl+c` or `ctrl+q` now requires a double confirmation to quit the TUI, preventing accidental exits. The first press displays a "Press ctrl+c again to quit" alert in the status bar (yellow foreground, no background) for 3 seconds. Pressing any other key immediately cancels the quit sequence and restores the normal status bar.
+- **TUI section menu usability.** The expanded section menu (`/`) now features a "Section" header to match its collapsed state. Clicking anywhere outside the menu bounds now correctly closes it, and clicking within the bounds reliably selects the section. The `/` key now acts as a toggle, closing the menu if it is already open. Added `alt+1-5` as alternative shortcuts to `ctrl+1-5` for jumping between sections, and updated the help screen to document them.
+
+## 0.7.0 (2026-05-20)
 
 ### Changed
 - **Dashboard actionable alerts.** The Dashboard alerts widget now stays sparse and only surfaces actionable daemon/workspace problems: daemon availability, stale metrics, session-load errors, stats DB open failures, unresolved or auto-attached workspaces, LSP-unavailable workspaces, daemon version mismatches, and recent uptime tool-error spikes.
