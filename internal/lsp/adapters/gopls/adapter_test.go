@@ -167,10 +167,10 @@ func TestIntegration_Definition(t *testing.T) {
 		TextDocument: protocol.TextDocumentItem{URI: uri, LanguageID: "go", Version: 1, Text: string(src)},
 	})
 
-	// Line 14 is `g := Greeter{...}` — jump to Greeter definition.
+	// Line 16 is `g := Greeter{...}` — jump to Greeter definition.
 	locs, err := ad.Definition(ctx, protocol.DefinitionParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 13, Character: 7},
+		Position:     protocol.Position{Line: 15, Character: 7},
 	})
 	if err != nil {
 		t.Fatal("definition:", err)
