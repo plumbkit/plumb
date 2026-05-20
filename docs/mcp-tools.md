@@ -1,4 +1,4 @@
-# Available tools (35)
+# Available tools (37)
 
 Plumb exposes 34 structured tools to AI assistants. Every write tool is concurrency-safe, atomic, and LSP-notified.
 
@@ -65,7 +65,9 @@ Plumb exposes 34 structured tools to AI assistants. Every write tool is concurre
 | Tool | Description |
 |---|---|
 | `git` | Read-only git subcommands. |
-| `git_commit` | Stage files and create a commit. |
+| `git_add` | Stage explicit file paths for the next commit. |
+| `git_commit` | Commit whatever is currently staged. |
+| `git_init` | Initialise a git repository. |
 | `file_diff` | Unified diff between any two files. |
 | `find_replace` | Dry-run search-and-replace with formatting. |
 | `version` | Plumb version and runtime info. |

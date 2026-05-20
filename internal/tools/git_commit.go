@@ -15,11 +15,6 @@ var gitCommitSchema = json.RawMessage(`{
       "type": "string",
       "description": "Commit message."
     },
-    "files": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "Absolute paths of files to stage before committing. If omitted or empty, all tracked modified files are staged (git add -u). Untracked files are never staged automatically — list them explicitly to include new files."
-    },
     "repo": {
       "type": "string",
       "description": "Path to any file or directory inside the repository. Omit to use the current working directory."
@@ -40,18 +35,15 @@ func NewGitCommit(deps WriteDeps) *GitCommit { return &GitCommit{deps: deps} }
 func (t *GitCommit) Name() string                 { return "git_commit" }
 func (t *GitCommit) InputSchema() json.RawMessage { return gitCommitSchema }
 func (t *GitCommit) Description() string {
-	return "Stage files and create a git commit. " +
-		"If files are specified, exactly those paths are staged (git add -- <files>); " +
-		"if files is omitted or empty, all tracked modifications are staged (git add -u) — " +
-		"untracked files are never staged automatically, so new files must be listed explicitly. " +
+	return "Create a git commit from whatever is currently staged in the index. " +
+		"Call git_add first to stage the files you want to include. " +
 		"Pre-commit hooks always run; there is no --no-verify escape hatch. " +
 		"Returns the new short commit hash and subject on success."
 }
 
 type gitCommitArgs struct {
-	Message string   `json:"message"`
-	Files   []string `json:"files"`
-	Repo    string   `json:"repo"`
+	Message string `json:"message"`
+	Repo    string `json:"repo"`
 }
 
 func (a gitCommitArgs) validate() error {
@@ -97,25 +89,7 @@ func (t *GitCommit) run(ctx context.Context, a gitCommitArgs) (gitCommitResult, 
 	if err != nil {
 		return gitCommitResult{}, fmt.Errorf("git_commit: %w", err)
 	}
-	if err := stageForCommit(ctx, repoRoot, a.Files); err != nil {
-		return gitCommitResult{}, err
-	}
 	return createCommit(ctx, repoRoot, a.Message)
-}
-
-func stageForCommit(ctx context.Context, repoRoot string, files []string) error {
-	var args []string
-	if len(files) > 0 {
-		args = append([]string{"add", "--"}, files...)
-	} else {
-		args = []string{"add", "-u"}
-	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoRoot
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git_commit: staging failed: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 func createCommit(ctx context.Context, repoRoot, message string) (gitCommitResult, error) {

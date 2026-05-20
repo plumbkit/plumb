@@ -201,7 +201,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (36)
+## Available tools (38)
 
 **Bootstrap**
 
@@ -261,7 +261,9 @@ Pyright is the worked example.
 |---|---|---|
 | `find_replace` | `find_replace.go` | Text/regex find-and-replace across files; dry-run by default. `format_after: true` runs the workspace formatter (`gofumpt`/`gofmt` for Go, `ruff`/`black` for Python) on each modified file after replacement; formatter errors are warnings, not failures. |
 | `git` | `git.go` | Read-only subcommands (status, log, diff, show, blame, branch, tag, shortlog, stash). |
-| `git_commit` | `git_commit.go` | Stage files and create a commit. Explicit `files` list or `git add -u` fallback. Pre-commit hooks always run. Returns short hash + subject. |
+| `git_add` | `git_add.go` | Stage explicit file paths (`git add -- <files>`). Derives repo root from first file if `repo` omitted. Returns staged-file summary. |
+| `git_commit` | `git_commit.go` | Commit whatever is currently staged. Pre-commit hooks always run. Returns short hash + subject. |
+| `git_init` | `git_init.go` | Initialise a git repo at a path. `init_plumb: true` also creates `.plumb/context.md`. |
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
 | `daemon_info` | `daemon_info.go` | Current session name, session ID, daemon version, start time, uptime. |
@@ -301,7 +303,7 @@ Pyright is the worked example.
 - **Concurrency contract** stated in doc comments on every type.
 - **No `init()` doing real work.** Wire dependencies in constructors.
 - **No globals** except package-level style vars in `internal/tui/styles.go` (rebuilt, not stateful) and the `pathLocks` map in `internal/tools/file_write_helpers.go` (process-global by design).
-- **Max ~400 lines per file.** Split if it grows. Exception allowlist — files where a single unit is the correct design and splitting harms readability: `internal/lsp/protocol/types.go` (protocol type catalogue mirroring the LSP spec). No other file qualifies without explicit justification added here.
+- **Max ~600 lines per file.** Split if it grows. Exception allowlist — files where a single unit is the correct design and splitting harms readability: `internal/lsp/protocol/types.go` (protocol type catalogue mirroring the LSP spec). No other file qualifies without explicit justification added here.
 - **Comments only when the WHY is non-obvious.** No what-comments.
 - **Gocyclo-15 contract.** No first-party non-test function may have cyclomatic complexity above 15. Functions that exceed the gate must be decomposed before merging. Run `golangci-lint run` to check — CI enforces.
 

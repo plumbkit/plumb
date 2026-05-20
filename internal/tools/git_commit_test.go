@@ -37,6 +37,15 @@ func callGitCommit(t *testing.T, args map[string]any) (string, error) {
 	return NewGitCommit(WriteDeps{}).Execute(context.Background(), raw)
 }
 
+func stageFile(t *testing.T, dir, path string) {
+	t.Helper()
+	cmd := exec.Command("git", "add", "--", path)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+}
+
 func TestGitCommit_MissingMessage(t *testing.T) {
 	requireGit(t)
 	_, err := callGitCommit(t, map[string]any{"repo": "."})
@@ -59,14 +68,14 @@ func TestGitCommit_BlankMessage(t *testing.T) {
 	}
 }
 
-func TestGitCommit_StageExplicitFile(t *testing.T) {
+func TestGitCommit_CommitsStagedFiles(t *testing.T) {
 	requireGit(t)
 	dir := initTestRepo(t)
 	newFile := filepath.Join(dir, "new.txt")
 	_ = os.WriteFile(newFile, []byte("content\n"), 0o644)
+	stageFile(t, dir, newFile)
 	out, err := callGitCommit(t, map[string]any{
 		"message": "add new.txt",
-		"files":   []string{newFile},
 		"repo":    dir,
 	})
 	if err != nil {
@@ -83,23 +92,7 @@ func TestGitCommit_StageExplicitFile(t *testing.T) {
 	}
 }
 
-func TestGitCommit_StageTrackedModification(t *testing.T) {
-	requireGit(t)
-	dir := initTestRepo(t)
-	_ = os.WriteFile(filepath.Join(dir, "init.txt"), []byte("modified\n"), 0o644)
-	out, err := callGitCommit(t, map[string]any{
-		"message": "modify init.txt",
-		"repo":    dir,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(out, "modify init.txt") {
-		t.Errorf("expected subject in output, got: %q", out)
-	}
-}
-
-func TestGitCommit_NothingToCommit(t *testing.T) {
+func TestGitCommit_NothingStaged(t *testing.T) {
 	requireGit(t)
 	dir := initTestRepo(t)
 	_, err := callGitCommit(t, map[string]any{
@@ -107,21 +100,7 @@ func TestGitCommit_NothingToCommit(t *testing.T) {
 		"repo":    dir,
 	})
 	if err == nil {
-		t.Fatal("expected error when nothing to commit")
-	}
-}
-
-func TestGitCommit_UntrackedNotAutoStaged(t *testing.T) {
-	requireGit(t)
-	dir := initTestRepo(t)
-	_ = os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("untracked\n"), 0o644)
-	// git add -u won't pick up the untracked file, so nothing to commit.
-	_, err := callGitCommit(t, map[string]any{
-		"message": "should fail",
-		"repo":    dir,
-	})
-	if err == nil {
-		t.Fatal("expected error: untracked file should not be auto-staged")
+		t.Fatal("expected error when nothing is staged")
 	}
 }
 
@@ -130,9 +109,9 @@ func TestGitCommit_ReturnsShortHash(t *testing.T) {
 	dir := initTestRepo(t)
 	newFile := filepath.Join(dir, "hash_test.txt")
 	_ = os.WriteFile(newFile, []byte("test\n"), 0o644)
+	stageFile(t, dir, newFile)
 	out, err := callGitCommit(t, map[string]any{
 		"message": "hash test",
-		"files":   []string{newFile},
 		"repo":    dir,
 	})
 	if err != nil {

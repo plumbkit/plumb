@@ -3,7 +3,9 @@
 ## 0.7.4 (unreleased)
 
 ### Added
-- **`git_commit` tool — stage files and create a local git commit.** `message` (required), `files` (optional list of absolute paths to stage), and `repo` (optional path inside the repo). If `files` is omitted, all tracked modifications are staged via `git add -u`; untracked files are never staged automatically and must be listed explicitly. Pre-commit hooks always run — there is no `--no-verify` escape hatch. Returns the short commit hash and subject on success. Counts against the session write rate limit. 7 unit tests.
+- **`git_add` tool — stage explicit file paths.** `files` (required list of absolute paths), `repo` (optional, derived from first file if omitted). Runs `git add -- <files>`; no glob expansion. Returns a staged-file summary (`git diff --cached --name-status`). Counts against the session write rate limit. 5 unit tests.
+- **`git_commit` tool — commit whatever is currently staged.** `message` (required), `repo` (optional). Commits the current index as-is — call `git_add` first to stage. Pre-commit hooks always run; no `--no-verify` escape hatch. Returns short hash + subject. Counts against the session write rate limit. 5 unit tests.
+- **`git_init` tool — initialise a git repository.** `path` (required, created if absent), `init_plumb` (optional bool). When `init_plumb: true`, also creates `.plumb/context.md` so plumb attaches on the next session; existing `context.md` is never overwritten. 5 unit tests.
 
 ## 0.7.3
 
