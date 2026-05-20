@@ -16,7 +16,7 @@ type Invalidator struct {
 	cache   *Cache
 	diagsMu sync.RWMutex
 	diags   map[string][]protocol.Diagnostic // keyed by document URI
-	subs    map[string][]chan struct{}         // WaitDiagnostics subscribers
+	subs    map[string][]chan struct{}       // WaitDiagnostics subscribers
 }
 
 // NewInvalidator creates an Invalidator backed by c.

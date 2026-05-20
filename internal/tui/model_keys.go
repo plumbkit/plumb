@@ -281,6 +281,15 @@ func (m Model) mainKeyEnter() Model {
 }
 
 func (m Model) mainKeyTab() Model {
+	if m.currentSection == 2 {
+		if m.focusPanel == focusSessions {
+			m.focusPanel = focusDetails
+		} else {
+			m.focusPanel = focusSessions
+		}
+		m.rightScroll = 0
+		return m
+	}
 	if m.focusPanel == focusSessions {
 		m.focusPanel = m.rightTabFocusPanel()
 	} else if m.rightTab < 3 {
@@ -295,6 +304,15 @@ func (m Model) mainKeyTab() Model {
 }
 
 func (m Model) mainKeyShiftTab() Model {
+	if m.currentSection == 2 {
+		if m.focusPanel == focusSessions {
+			m.focusPanel = focusDetails
+		} else {
+			m.focusPanel = focusSessions
+		}
+		m.rightScroll = 0
+		return m
+	}
 	if m.focusPanel == focusSessions {
 		m.rightTab = 3
 		m.focusPanel = m.rightTabFocusPanel()
@@ -329,7 +347,14 @@ func (m Model) mainKeyUp() Model {
 			m.rightScroll--
 		}
 	default:
-		if m.cursor > 0 {
+		if m.currentSection == 2 {
+			if m.memoryCursor > 0 {
+				m.memoryCursor--
+				m.rightScroll = 0
+				m.memoryBodyCache = ""
+				m.memoryBodyCacheName = ""
+			}
+		} else if m.cursor > 0 {
 			m.cursor--
 			m.leftScroll = 0
 			m.rightScroll = 0
@@ -358,7 +383,14 @@ func (m Model) mainKeyDown() Model {
 	case focusDetails, focusDiagnostics:
 		m.rightScroll++
 	default:
-		if m.cursor < len(m.sessions)-1 {
+		if m.currentSection == 2 {
+			if m.memoryCursor < len(m.memories)-1 {
+				m.memoryCursor++
+				m.rightScroll = 0
+				m.memoryBodyCache = ""
+				m.memoryBodyCacheName = ""
+			}
+		} else if m.cursor < len(m.sessions)-1 {
 			m.cursor++
 			m.leftScroll = 0
 			m.rightScroll = 0
@@ -384,13 +416,23 @@ func (m Model) mainKeyPageDown() Model {
 	case focusDetails, focusDiagnostics:
 		m.rightScroll += pageSize
 	default:
-		m.cursor += pageSize
-		if m.cursor >= len(m.sessions) {
-			m.cursor = len(m.sessions) - 1
+		if m.currentSection == 2 {
+			m.memoryCursor += pageSize
+			if m.memoryCursor >= len(m.memories) {
+				m.memoryCursor = max(len(m.memories)-1, 0)
+			}
+			m.rightScroll = 0
+			m.memoryBodyCache = ""
+			m.memoryBodyCacheName = ""
+		} else {
+			m.cursor += pageSize
+			if m.cursor >= len(m.sessions) {
+				m.cursor = len(m.sessions) - 1
+			}
+			m.leftScroll = 0
+			m.rightScroll = 0
+			m.refreshStats()
 		}
-		m.leftScroll = 0
-		m.rightScroll = 0
-		m.refreshStats()
 	}
 	return m
 }
@@ -414,11 +456,21 @@ func (m Model) mainKeyPageUp() Model {
 			m.rightScroll = 0
 		}
 	default:
-		m.cursor -= pageSize
-		if m.cursor < 0 {
-			m.cursor = 0
+		if m.currentSection == 2 {
+			m.memoryCursor -= pageSize
+			if m.memoryCursor < 0 {
+				m.memoryCursor = 0
+			}
+			m.rightScroll = 0
+			m.memoryBodyCache = ""
+			m.memoryBodyCacheName = ""
+		} else {
+			m.cursor -= pageSize
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			m.refreshStats()
 		}
-		m.refreshStats()
 	}
 	return m
 }

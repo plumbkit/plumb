@@ -7,15 +7,15 @@ import (
 )
 
 const (
-	defaultLeftWidth  = 30
-	minLeftWidth      = 26
-	minPopupLeftWidth = 28 // enough for " > ● ✓ 05-12 00:00:00 000ms"
-	sectionMenuWidth  = 22
-	pollInterval      = 2 * time.Second
-	activityInterval      = 10 * time.Second
+	defaultLeftWidth          = 30
+	minLeftWidth              = 26
+	minPopupLeftWidth         = 28 // enough for " > ● ✓ 05-12 00:00:00 000ms"
+	sectionMenuWidth          = 22
+	pollInterval              = 2 * time.Second
+	activityInterval          = 10 * time.Second
 	dashBucketRefreshInterval = 30 * time.Second
-	activityBuckets   = 16
-	bodyStartRow      = 4
+	activityBuckets           = 16
+	bodyStartRow              = 4
 )
 
 var sectionMenuItems = []string{"Dashboard", "Sessions", "Memory", "Logs", "Settings"}

@@ -58,8 +58,17 @@ func (m *Model) refreshDashboard() {
 	m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
 	m.dashLifetimeTokens = m.globalDB.TotalTokensSaved(globalFilter)
 	m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
-	chartBuckets := max(m.dashChartWidth, activityBuckets)
 	now := time.Now()
+	chartBuckets := max(m.dashChartWidth, activityBuckets)
+	if m.refreshDashboardBuckets(now, chartBuckets, globalFilter) {
+		m.dashLastBucketRefresh = now
+	}
+	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
+	m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(now)})
+	m.refreshDashboardProject()
+}
+
+func (m *Model) refreshDashboardBuckets(now time.Time, chartBuckets int, gf stats.Filter) bool {
 	chartWidthChanged := m.dashChartWidth != m.dashCachedChartWidth
 	timedRefresh := m.dashLastBucketRefresh.IsZero() || now.Sub(m.dashLastBucketRefresh) >= dashBucketRefreshInterval
 	if chartWidthChanged {
@@ -67,35 +76,38 @@ func (m *Model) refreshDashboard() {
 	}
 	if !m.dashLifetimeFirstAt.IsZero() && (m.dashLifetimeCalls != m.dashCachedLifetimeCalls || chartWidthChanged || timedRefresh) {
 		lifetimeWindow := max(time.Since(m.dashLifetimeFirstAt), time.Minute)
-		if summary, err := m.globalDB.Activity(lifetimeWindow, chartBuckets, globalFilter); err == nil {
+		if summary, err := m.globalDB.Activity(lifetimeWindow, chartBuckets, gf); err == nil {
 			m.dashLifetimeBuckets = summary.Buckets
 			m.dashCachedLifetimeCalls = m.dashLifetimeCalls
 		}
 	}
 	if m.activity.Calls != m.dashCachedDaemCalls || chartWidthChanged || timedRefresh {
-		if m.activity.Window > 0 {
-			if summary, err := m.globalDB.Activity(m.activity.Window, chartBuckets, globalFilter); err == nil {
-				m.dashDaemBuckets = summary.Buckets
-				m.dashCachedDaemCalls = m.activity.Calls
-			}
-		} else {
-			m.dashDaemBuckets = m.activity.Buckets
+		m.refreshDaemBuckets(chartBuckets, gf)
+	}
+	return timedRefresh
+}
+
+func (m *Model) refreshDaemBuckets(chartBuckets int, gf stats.Filter) {
+	if m.activity.Window > 0 {
+		if summary, err := m.globalDB.Activity(m.activity.Window, chartBuckets, gf); err == nil {
+			m.dashDaemBuckets = summary.Buckets
 			m.dashCachedDaemCalls = m.activity.Calls
 		}
+	} else {
+		m.dashDaemBuckets = m.activity.Buckets
+		m.dashCachedDaemCalls = m.activity.Calls
 	}
-	if timedRefresh {
-		m.dashLastBucketRefresh = now
-	}
-	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
-	m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(time.Now())})
+}
 
-	if m.dashProjectFolder != "" {
-		pf := stats.Filter{Workspace: m.dashProjectFolder}
-		m.dashProjectCalls = m.globalDB.TotalCalls(pf)
-		m.dashProjectSessions = m.globalDB.TotalSessions(pf)
-		m.dashProjectTokens = m.globalDB.TotalTokensSaved(pf)
-		m.dashProjectTopTools, _ = m.globalDB.Summary(pf)
+func (m *Model) refreshDashboardProject() {
+	if m.dashProjectFolder == "" {
+		return
 	}
+	pf := stats.Filter{Workspace: m.dashProjectFolder}
+	m.dashProjectCalls = m.globalDB.TotalCalls(pf)
+	m.dashProjectSessions = m.globalDB.TotalSessions(pf)
+	m.dashProjectTokens = m.globalDB.TotalTokensSaved(pf)
+	m.dashProjectTopTools, _ = m.globalDB.Summary(pf)
 }
 
 // renderDashboard renders the full-width Dashboard section (section 0).

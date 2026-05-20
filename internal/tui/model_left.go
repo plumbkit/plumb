@@ -7,6 +7,9 @@ import (
 )
 
 func (m Model) leftLines() []string {
+	if m.currentSection == 2 {
+		return m.memoryLeftLines()
+	}
 	lf := m.focusPanel == focusSessions
 
 	var titleStyle lipgloss.Style

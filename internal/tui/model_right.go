@@ -68,6 +68,9 @@ func (m Model) rightTabBar(_ int) string {
 }
 
 func (m *Model) rightLines(rw int) []string {
+	if m.currentSection == 2 {
+		return m.memoryRightLines(rw)
+	}
 	lines := []string{m.rightTabBar(rw), ""}
 	if len(m.sessions) == 0 {
 		lines = append(lines, "  "+MutedStyle.Render("Select a session to view details."))

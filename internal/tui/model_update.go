@@ -121,16 +121,28 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 		m.setLeftWidthFromMouse(mouse.X)
 		return
 	}
-	if m.onSessionsPanel(mouse.X, mouse.Y) {
-		m.selectSessionAtBodyRow(mouse.Y - bodyStartRow)
+	m.handleBodyAreaClick(mouse.X, mouse.Y)
+}
+
+func (m *Model) handleBodyAreaClick(x, y int) {
+	if m.currentSection == 2 && m.onLeftPanel(x, y) {
+		m.selectMemoryAtBodyRow(y - bodyStartRow)
 		return
 	}
-	if mouse.Y == bodyStartRow && mouse.X > m.leftWidth+1 {
-		m.handleTabBarClick(mouse.X)
+	if m.currentSection != 2 && m.onSessionsPanel(x, y) {
+		m.selectSessionAtBodyRow(y - bodyStartRow)
 		return
 	}
-	if mouse.Y > bodyStartRow && mouse.X > m.leftWidth+1 {
-		m.handleRightPanelClick(mouse.Y - bodyStartRow + m.rightScroll)
+	if y == bodyStartRow && x > m.leftWidth+1 {
+		if m.currentSection == 2 {
+			m.focusPanel = focusDetails
+		} else {
+			m.handleTabBarClick(x)
+		}
+		return
+	}
+	if y > bodyStartRow && x > m.leftWidth+1 {
+		m.handleRightPanelClick(y - bodyStartRow + m.rightScroll)
 	}
 }
 
@@ -236,6 +248,10 @@ func (m Model) onSessionsPanel(x, y int) bool {
 	return len(m.sessions) > 0
 }
 
+func (m Model) onLeftPanel(x, y int) bool {
+	return y >= bodyStartRow && x > 0 && x <= m.leftWidth
+}
+
 func (m *Model) setLeftWidthFromMouse(x int) {
 	next := max(x-1, minLeftWidth)
 	if maxLeft := m.maxLeftWidth(); next > maxLeft {
@@ -281,9 +297,17 @@ func (m *Model) selectSection(idx int) {
 	if idx < 0 || idx >= len(sectionMenuItems) {
 		return
 	}
+	prev := m.currentSection
 	m.currentSection = idx
 	m.sectionMenuCursor = idx
 	m.sectionMenuOpen = false
+	if m.currentSection == 2 && prev != 2 {
+		m.memoryCursor = 0
+		m.memoryBodyCache = ""
+		m.memoryBodyCacheName = ""
+		m.focusPanel = focusSessions
+		m.rightScroll = 0
+	}
 	if m.currentSection == 3 && !m.logInitd {
 		m.logEntries, m.logOffset = initLogTail(m.logPath)
 		m.logInitd = true

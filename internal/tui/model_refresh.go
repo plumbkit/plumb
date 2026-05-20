@@ -27,6 +27,7 @@ func (m *Model) refresh() {
 	m.refreshDaemonMetrics()
 	m.refreshStats()
 	m.refreshDashboard()
+	m.refreshMemories()
 }
 
 func (m *Model) refreshDaemonMetrics() {

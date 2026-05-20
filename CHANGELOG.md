@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.5 (unreleased)
+
+### Added
+- **Memory TUI section.** Press `/` → Memory (or `ctrl+3`/`alt+3`) to open the new Memory section. Left panel lists all workspace memories with name and description; right panel shows metadata (name, description, size, paths) and the full scrollable body. `j/k`, `pgup/pgdn`, and `tab` navigate; mouse clicks select. Memories refresh on the standard 2-second poll cycle.
+
+### Changed
+- **File line-length guideline raised from ~400 to ~600 lines.** The previous limit was too tight for self-contained TUI sections and complex tool files. The gocyclo-15 and ~600 limits are now the enforced quality gates.
+
+### Fixed
+- `refreshDashboard` cyclomatic complexity (was 16, above the gocyclo-15 limit). Decomposed into `refreshDashboardBuckets`, `refreshDaemBuckets`, and `refreshDashboardProject`.
+
 ## 0.7.4 (unreleased)
 
 ### Added

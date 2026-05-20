@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/golimpio/plumb/internal/memory"
 	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
@@ -94,28 +95,34 @@ type Model struct {
 	logDetailScroll int
 	logDetailCopied bool
 
+	// Memory section (section 2).
+	memories            []memory.Memory
+	memoryCursor        int
+	memoryBodyCache     string
+	memoryBodyCacheName string
+
 	// Dashboard section (section 0).
-	dashLifetimeCalls    int64
-	dashLifetimeSessions int64
-	dashLifetimeTokens   int64
-	dashLifetimeFirstAt  time.Time
-	dashLifetimeTopTools []stats.ToolStat
-	dashUptimeTopTools   []stats.ToolStat
-	dashLifetimeBuckets       []int64
-	dashDaemBuckets           []int64
-	dashChartWidth            int
-	dashCachedLifetimeCalls   int64
-	dashCachedDaemCalls       int64
-	dashCachedChartWidth      int
-	dashLastBucketRefresh     time.Time
-	dashProjectFolder    string
-	dashProjectCalls     int64
-	dashProjectSessions  int64
-	dashProjectTokens    int64
-	dashProjectTopTools  []stats.ToolStat
-	dashScroll           int
-	waitingForQuit       bool
-	quitMessageID        int
+	dashLifetimeCalls       int64
+	dashLifetimeSessions    int64
+	dashLifetimeTokens      int64
+	dashLifetimeFirstAt     time.Time
+	dashLifetimeTopTools    []stats.ToolStat
+	dashUptimeTopTools      []stats.ToolStat
+	dashLifetimeBuckets     []int64
+	dashDaemBuckets         []int64
+	dashChartWidth          int
+	dashCachedLifetimeCalls int64
+	dashCachedDaemCalls     int64
+	dashCachedChartWidth    int
+	dashLastBucketRefresh   time.Time
+	dashProjectFolder       string
+	dashProjectCalls        int64
+	dashProjectSessions     int64
+	dashProjectTokens       int64
+	dashProjectTopTools     []stats.ToolStat
+	dashScroll              int
+	waitingForQuit          bool
+	quitMessageID           int
 }
 
 func NewModel(logPath, ctrlPath string) Model {

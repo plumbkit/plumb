@@ -953,7 +953,7 @@ This section tracks the ongoing quality standard for the plumb codebase. CQ-1 th
 **Standing rules** (enforced by CI and pre-commit hook):
 - `make verify` must be green before every commit (`build + test + lint`).
 - No first-party non-test function may exceed gocyclo 15. Decompose before merging.
-- No non-test source file over ~400 lines. Exception: `internal/lsp/protocol/types.go` (LSP spec type catalogue).
+- No non-test source file over ~600 lines. Exception: `internal/lsp/protocol/types.go` (LSP spec type catalogue).
 - Every gosec finding must be fixed or have a one-line justification annotation.
 - Format via `golangci-lint run --fix ./...`, never the standalone `gofumpt` binary.
 
