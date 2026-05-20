@@ -502,24 +502,99 @@ Recommendation: **do not introduce workers yet**. First add measurement and idle
 
 ---
 
+### `edit_file` — opt-in partial apply mode
+
+**Priority:** low — the current all-or-nothing behaviour is correct for most cases.
+**Effort:** Small. New boolean parameter; separate apply-and-collect-errors loop.
+**Status:** Idea only.
+
+When an `edit_file` call includes multiple edits and one fails (`old_str` not found, or ambiguous), the entire batch is rolled back. This is the right default. However, for large refactor batches where most edits are independent, an agent may prefer to apply the successful edits and receive a per-edit error report, then retry only the failures.
+
+**Proposed API:** `apply_partial: true` on the `edit_file` input. When set:
+1. Apply each edit independently in sequence.
+2. On failure, record the error and continue with remaining edits.
+3. Return a per-edit result list: `{edit_index, status: "applied"|"failed", error?, line_range?}`.
+4. Still append post-write diagnostics at the end.
+
+**Watch out for:** partial application breaks the atomicity guarantee that makes `edit_file` safe for concurrent agents. Document clearly that `apply_partial` is incompatible with strict mode's "consistent state" assumption and is never valid inside `transaction_apply`.
+
+---
+
+### `find_replace` — opt-in post-write formatter hook
+
+**Priority:** low — most bulk replacements do not need formatting.
+**Effort:** Small. Run the workspace's configured formatter on modified files after replacement.
+**Status:** Idea only.
+
+`find_replace` rewrites files with raw text substitution. If the replacement changes indentation or import grouping (e.g. renaming `lsp.LSPClient` → `lsp.Client` affects gofumpt's import block layout), the modified files may fail subsequent lint checks. Today the agent must manually run `golangci-lint run --fix` after a bulk `find_replace`.
+
+**Proposed API:** `format_after: true` on the `find_replace` input. When set, run the workspace's configured formatter (`gofumpt` for Go, `ruff format` for Python, etc.) on each modified file. Append a "formatted N files" note to the response.
+
+**Watch out for:** detect the formatter from the workspace language config and `.golangci.yml` — do not hardcode `gofumpt`. If the formatter is not found or errors, report the formatting failure as a warning and still return the replacement results.
+
+---
+
+### `search_in_files` — LSP-backed enclosing symbol for each match
+
+**Priority:** medium — especially valuable for clients without native filesystem access (Claude Desktop).
+**Effort:** Medium. One LSP `textDocument/documentSymbol` query per matched file; cache per file per search call.
+**Status:** Idea — not started.
+
+When `search_in_files` returns a match inside a source file, it shows the matched line and surrounding context. That context is often insufficient to understand *where* the match sits — the agent must read further up to find which function contains it. For Claude Desktop, which has no native `Read` tool, that costs a full additional `read_file` round-trip.
+
+**Proposed API:** `include_enclosing_symbol: true` (default false) on the `search_in_files` input. When set, for each matched file, call `list_symbols` and find the deepest symbol whose range contains the match line. Include the symbol name and kind in the result:
+
+```
+internal/tools/transaction.go:123:  uris = append(uris, uri)
+  [in: func (*TransactionApply).Execute]
+```
+
+This is most valuable for:
+- **Claude Desktop** — no filesystem access; reading the file to find the enclosing method costs a full `read_file`.
+- **Any client** — understanding "this call is inside `handleConn`" without reading 832 lines of `daemon.go`.
+
+**Watch out for:** one LSP round-trip per distinct matched file — keep opt-in. If the LSP is unavailable, silently omit the enclosing symbol. Never re-query for multiple matches in the same file within one search call.
+
+---
+
+### Claude Desktop: model plumb as the *only* tool surface, not the best one
+
+**Priority:** high — affects documentation, the savings model, error messages, and `session_start` tool guidance.
+**Effort:** Small (documentation and session_start); medium (savings model update — see Architecture item).
+**Status:** Gap identified. Not started.
+
+Claude Desktop has no access to OS tools. It cannot run `grep`, `find`, `git`, `rg`, or any shell command. It has no native `Read`, `Edit`, or `Write` tools. For Claude Desktop, plumb tools are not a *better* alternative — they are the *only* interface to the filesystem and codebase.
+
+This has implications not yet reflected in documentation, the savings model, or error messages:
+
+1. **Savings model** (see Architecture): the current model computes "tokens saved vs alternative" but for Claude Desktop there is no alternative. For this client, savings are better expressed as **capabilities enabled** (zero capability without plumb, not expensive capability). The `claude-desktop` profile should be modelled accordingly.
+2. **`session_start` tool guidance**: the block generated for Claude Code should have a distinct Claude Desktop variant — simpler: "all file, search, git, and symbol operations must go through plumb; there are no native alternatives."
+3. **Error messages in write tools**: messages that suggest "use your native file tools" as a recovery path are wrong for Claude Desktop. Errors should guide the agent to retry, check the daemon, or use a different plumb tool.
+4. **Documentation**: `docs/mcp-tools.md` should note which clients have no native fallbacks. This helps tool authors reason correctly: if plumb is unavailable, Claude Desktop is completely blocked, not just slower.
+
+**Definition of done:**
+1. `session_start` generates a `tool_guidance` block for `claude-desktop` clients (detect via `clientInfo.name`).
+2. Write-tool error messages audited for "use your native tools" suggestions; replaced with daemon-focused recovery.
+3. `docs/mcp-tools.md` documents the Claude Desktop no-fallback constraint.
+4. The `claude-desktop` savings profile in the Architecture item is modelled as "capability enabled" rather than "tokens saved vs alternative."
+
+---
+
 ## Code quality & engineering practices
 
 This section is the authoritative plan for raising plumb's own code quality to the standard the project claims (AGENTS.md: "best code engineer", good Go practices, ~400 lines/file, gocyclo, gofumpt, lint-before-commit). It **supersedes** items 14 and 15 of [`docs/cli-and-core-review-plan.md`](cli-and-core-review-plan.md) (shared-helper extraction and large-file splitting) — track that work here.
 
-**Objective baseline (measured 2026-05-20, golangci-lint v2.12.2, the version CI pins):**
+**Objective baseline (golangci-lint v2.12.2). CQ-1 and CQ-2 shipped in 0.6.6 — see `docs/todo-to-review.md` for detail.**
 
 ```
-79 findings on ./...
-  gocyclo: 36   (functions over the configured min-complexity 15 gate)
-  gosec:   13   (SQL string concat, path traversal, int overflow, file perms, subprocess)
-  unused:   5   (dead code)
-  staticcheck: 8 (ST1005 error-string punctuation, SA4010 dead append, QF1003)
-  prealloc: 5
-  errcheck: 3
-  gofumpt:  3
-  unparam:  3
-  ineffassign: 2
-  revive:   1
+Post CQ-1 + CQ-2 (2026-05-20):
+  51 findings on ./...
+  gocyclo: 37   (functions over the configured min-complexity 15 gate — deferred to CQ-3)
+  gosec:   14   (SQL concat, path traversal, int overflow, file perms, subprocess — deferred to CQ-5)
+
+Original baseline (pre CQ-1/CQ-2, 2026-05-20):
+  79 total — gocyclo 36, gosec 13, unused 5, staticcheck 8, prealloc 5,
+             errcheck 3, gofumpt 3, unparam 3, ineffassign 2, revive 1
 ```
 
 8 non-test source files exceed the project's own ~400-line guidance: `internal/cli/daemon.go` (832), `internal/stats/db.go` (705), `internal/mcp/server.go` (600), `internal/cli/setup.go` (556), `internal/lsp/protocol/types.go` (535), `internal/tools/edit_file.go` (528), `internal/cli/doctor.go` (518), `internal/tui/dashboard.go` (508). Several more are 480–503.
@@ -715,6 +790,45 @@ After a `make build`, `plumb serve` reads `~/Library/Caches/plumb/plumb.version`
 **Why it's probably the right behaviour:** if the symlink target doesn't exist, the user's intent is likely to *create* the file (perhaps writing the target through the link's location). Treating the write as a new-file create is the most user-friendly outcome.
 
 **When this could surprise someone:** if they expected plumb to refuse to write to broken symlinks. It doesn't.
+
+---
+
+### `rename_symbol` fails with stale LSP position index after in-session edits
+
+**Priority:** medium — silent failure mode causes a confusing error and wastes a tool call; the fallback (manual `find_replace`) is slow.
+**Status:** Known; no fix attempted.
+
+When `rename_symbol` is called after earlier edits in the same session, the LSP's position index may be stale. The language server has received `workspace/didChangeWatchedFiles` but has not finished re-indexing. The tool fails with a cryptic message such as:
+
+```
+applying edits to foo.go: edit start position out of range: line N char M
+```
+
+The underlying cause (position drift due to unsynchronised edits) is not surfaced. The agent must fall back to `find_replace` for the qualified name plus manual fixes for bare-name references in comments.
+
+**Workaround:** after editing files that contain the symbol, wait for a `diagnostics` call to confirm the LSP has re-indexed before calling `rename_symbol`.
+
+**Definition of fix:**
+1. Detect "position out of range" results from `textDocument/rename` and return a clear error: "LSP position index may be stale after recent edits — check `diagnostics` to confirm re-indexing, then retry `rename_symbol`."
+2. Optionally: send a `textDocument/didOpen` + `textDocument/didClose` pair on the target file before the rename request to flush the LSP's in-memory position cache.
+3. Unit test: mock LSP returns an out-of-range edit after a prior edit; verify the error message is surfaced cleanly.
+
+---
+
+### `gofumpt` standalone binary and `golangci-lint` embedded formatter disagree silently
+
+**Priority:** low — only affects contributors who run `gofumpt -w` directly; CI and `golangci-lint run --fix` agree.
+**Status:** Known; documented here for future contributors.
+
+The standalone `gofumpt` binary (e.g. v0.10.0 from `go install`) and the `gofumpt` formatter embedded in `golangci-lint` v2.12.2 produce different output on the same files. Running `gofumpt -w <file>` on a file that `golangci-lint run` flags as unformatted does not resolve the finding; a subsequent `golangci-lint run` may flag a *different* set of files.
+
+**Root cause:** `golangci-lint` pins its own formatter version internally and the two can drift independently.
+
+**Workaround:** always use `golangci-lint run --fix ./...` to apply formatting — never the standalone `gofumpt -w`.
+
+**Definition of fix:**
+1. Add a note to AGENTS.md under "Build commands": "`gofumpt -w` may disagree with the formatter embedded in `golangci-lint` — use `golangci-lint run --fix ./...` to apply formatting reliably."
+2. CQ-6's pre-commit hook should invoke `golangci-lint run --fix` (not `gofumpt -l`) so contributors get the right formatter automatically.
 
 ---
 
