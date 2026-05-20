@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.7.2 (unreleased)
+## 0.7.3 (unreleased)
+
+### Fixed
+- **TUI Dashboard Activity Graph Height and Resolution.** The dashboard activity graph height is now capped at 8 pixels instead of 7, making full use of the braille character set. The horizontal resolution has also been doubled to utilize both dots in a braille character independently, providing a more detailed view of activity spikes.
+
+## 0.7.2
 
 ### Fixed
 - **gopls PATH augmentation for GUI-launched daemons.** When plumb is launched by a GUI application (Claude Desktop, Cursor) on macOS, it inherits launchd's stripped `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits `/usr/local/bin` and `/opt/homebrew/bin` — the typical Homebrew installation prefix for `go`, `gopls`, and other tools. Without `go` on PATH, gopls cannot locate the module cache and reports every import — including stdlib packages like `context` and `fmt` — as "could not import". The `envFor` helper in `internal/cli/pool.go` now always augments PATH before spawning the LSP subprocess: existing PATH entries are preserved first, then `/etc/paths` and all `/etc/paths.d/*` files are read (the same sources `path_helper(8)` uses), then `/usr/local/bin`, `/opt/homebrew/bin`, and `/opt/homebrew/sbin` are appended, deduplicating throughout. Per-language `[lsp.go] env` config overrides still apply on top, so explicit config wins.

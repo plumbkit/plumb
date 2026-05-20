@@ -142,7 +142,7 @@ func dashBuildGrid(buckets []int64, fillDown bool, width, halfH int, botL, botR,
 		if v <= 0 {
 			return 0
 		}
-		px := int(float64(v) / float64(maxV) * float64(pixH-1))
+		px := int(float64(v) / float64(maxV) * float64(pixH))
 		if px < 1 {
 			px = 1
 		}
