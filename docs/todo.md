@@ -158,6 +158,46 @@ Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspac
 
 ---
 
+### Plumb Topology: Persistent Semantic Indexing
+
+**Priority:** ⭐ top architectural priority.
+**Effort:** Significant (multi-week).
+**Status:** Planning.
+**Discussion:** Derived from the `codegraph` research. This feature adds a "structural map" layer to Plumb to solve the startup, language, and context gaps.
+
+**The pitch — speed, breadth, and instant context.**
+
+Plumb currently relies on live Language Servers (LSPs) for all semantic queries. While precise, LSPs are heavy, slow to boot, and limited to a few languages. **Plumb Topology** implements a persistent, disk-based semantic graph using **Tree-sitter**.
+
+Why this is a priority:
+- **Instant Discovery:** Agents can query the project structure immediately on attach, without waiting for LSP indexing.
+- **Universal Breadth:** Supports 19+ languages via lightweight Tree-sitter grammars, bridging the "Language Gap" for Rust, Swift, Ruby, etc.
+- **Efficiency (The "Outline" replacement):** Replace the current "outline" functionality (`list_symbols`, `find_symbol`) with Topology-based implementations. Tree-sitter provides file structure in milliseconds with zero LSP overhead.
+- **Context Density:** `topology_explore` can return a symbol's entire neighborhood (callers, callees, and source) in one tool call, saving 90% of discovery tokens.
+
+**The Balance: Speed vs. Reliability.**
+Topology must be fast and memory-efficient (SQLite + Tree-sitter), but **reliability is paramount**. It should not replace the LSP for surgical edits (renames, type-safe navigation), but it should be the primary engine for "Where am I?" and "How does this connect?".
+
+**Implementation Plan:**
+
+1. **Storage:** SQLite backend in `<workspace>/.plumb/topology.db` using FTS5 for fuzzy symbol search.
+2. **Extraction:** Go-native Tree-sitter integration (`github.com/smacker/go-tree-sitter`). Use `.scm` queries for extraction.
+3. **Resolution:** Pragmatic resolution engine (import tracing + name matching + framework-specific routes like Express/FastAPI).
+4. **Tools:** 
+   - `topology_explore`: Compound tool returning subgraph + source code.
+   - `topology_search`: Global fuzzy symbol search.
+   - `topology_impact`: Transitive closure (impact analysis).
+   - `topology_routes`: Framework-aware entry points.
+
+**Definition of done — Phase 1:**
+1. `internal/topology` package with SQLite schema for nodes and edges.
+2. Incremental background indexer in the daemon using file watchers.
+3. Go and Python extractors functional and tested.
+4. `topology_search` and `topology_explore` tools exposed and documented.
+5. Benchmark: Topology-based symbol listing must be >5x faster than LSP-based `list_symbols` on a cold start.
+
+---
+
 ### Client-aware token-savings model
 
 **Priority:** high for TUI/stats credibility.

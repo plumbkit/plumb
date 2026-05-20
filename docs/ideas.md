@@ -214,3 +214,5 @@ and make plumb feel worse. If the daemon runs analysis in the background and
 returns fresh, differential findings on a later response, it would make the
 agent better. The key question should be: "did this change make things worse?",
 not "what is every problem in the repository?"
+
+
