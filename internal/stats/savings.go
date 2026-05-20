@@ -2,49 +2,132 @@ package stats
 
 import "strings"
 
-// Per-tool token-savings model.
-//
-// Each tool's "alternative cost" is the approximate token count the LLM
-// would have spent to get the same answer without plumb (e.g. via
-// Read + grep). The savings for one call are:
-//
-//   tokens_saved = alternative_tokens - plumb_tokens
-//
-// where plumb_tokens = output_bytes / charsPerToken. The numbers below
-// come from the savings table at the top of site/index.html, measured
-// against the plumb codebase. They are estimates, not exact accounting —
-// good enough to convey "you saved roughly N tokens this week."
-//
-// Tools without an entry default to a 1:1 ratio (zero savings).
+// charsPerToken is a rough English/code average used to estimate how many
+// tokens a given byte count occupies. Basis: GPT-3 tokeniser average.
+const charsPerToken = 4
 
-const charsPerToken = 4 // rough English/code average
+// Normalised client name constants for profile lookup.
+const (
+	clientClaudeDesktop = "claude-desktop"
+	clientClaudeCode    = "claude-code"
+	clientCodex         = "codex"
+	clientGemini        = "gemini"
+	clientUnknown       = "unknown"
+)
 
-// altCost is the approximate alternative token count for one call of a given
-// tool. Negative tools (no benefit over filesystem) return 0.
-var altCost = map[string]int{
-	"find_symbol":       800,
-	"workspace_symbols": 600,
-	"get_definition":    250,
-	"explain_symbol":    800,
-	"list_symbols":      1600,
-	"find_references":   400,
-	"call_hierarchy":    1500,
-	"type_hierarchy":    800,
-	"diagnostics":       300,
-	// Filesystem & VCS tools roughly match their fallback cost — no savings.
-	"list_files":      0,
-	"find_files":      0,
-	"search_in_files": 0,
-	"file_diff":       0,
-	"git":             0,
-	// Edit and memory tools have no clear "filesystem alternative" — savings 0.
+// profiles maps normalised client name → tool → estimated alternative token
+// cost (the tokens the client would spend to obtain the same answer without
+// plumb). Zero means plumb provides no advantage over that client's native
+// capabilities for that tool. Values are conservative estimates — a lower,
+// defensible number is better than an inflated one users cannot trust.
+//
+//   - claude-desktop: weak filesystem/shell access; every plumb query saves context.
+//   - claude-code: strong local file/shell access; savings come from LSP semantics.
+//   - codex: same profile as claude-code (strong local file/shell access).
+//   - gemini: conservative fallback; profile data pending (same as claude-desktop).
+//   - unknown: conservative medium; assumes moderate local capabilities.
+var profiles = map[string]map[string]int{
+	clientClaudeDesktop: {
+		"find_symbol":       800,
+		"workspace_symbols": 600,
+		"get_definition":    250,
+		"explain_symbol":    800,
+		"list_symbols":      1600,
+		"find_references":   400,
+		"call_hierarchy":    1500,
+		"type_hierarchy":    800,
+		"diagnostics":       300,
+	},
+	clientClaudeCode: {
+		// LSP semantic tools are still high-value: the alternative is multiple
+		// Bash (grep/find) calls plus in-context reasoning over raw text.
+		"list_symbols":      800,
+		"find_symbol":       400,
+		"workspace_symbols": 800,
+		"get_definition":    250,
+		"explain_symbol":    400,
+		"find_references":   800,
+		"call_hierarchy":    1500,
+		"type_hierarchy":    800,
+		// Filesystem/shell tools: CC has native equivalents, so savings are low.
+		"diagnostics":     50,
+		"search_in_files": 100,
+	},
+	clientCodex: {
+		// Same profile as claude-code: Codex CLI has strong local file/shell access.
+		"list_symbols":      800,
+		"find_symbol":       400,
+		"workspace_symbols": 800,
+		"get_definition":    250,
+		"explain_symbol":    400,
+		"find_references":   800,
+		"call_hierarchy":    1500,
+		"type_hierarchy":    800,
+		"diagnostics":       50,
+		"search_in_files":   100,
+	},
+	clientGemini: {
+		// Conservative fallback; pending real profile data.
+		"find_symbol":       800,
+		"workspace_symbols": 600,
+		"get_definition":    250,
+		"explain_symbol":    800,
+		"list_symbols":      1600,
+		"find_references":   400,
+		"call_hierarchy":    1500,
+		"type_hierarchy":    800,
+		"diagnostics":       300,
+	},
+	clientUnknown: {
+		// Conservative medium: unknown clients may have varying local capabilities.
+		"list_symbols":      600,
+		"find_symbol":       300,
+		"workspace_symbols": 500,
+		"get_definition":    200,
+		"explain_symbol":    350,
+		"find_references":   500,
+		"call_hierarchy":    1000,
+		"type_hierarchy":    500,
+		"diagnostics":       150,
+		"search_in_files":   50,
+	},
 }
 
-// TokensSaved returns the estimated token savings for one tool invocation.
-// Returns 0 if the tool has no model entry or output_bytes already exceeds
-// the alternative.
+// normaliseClient maps a raw MCP clientInfo.name to a canonical profile key.
+// Matching is case-insensitive on the name prefix so versioned identifiers
+// (e.g. "claude-code/1.2.3") and minor naming variants are handled correctly.
+func normaliseClient(name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case strings.HasPrefix(n, "claude-code"):
+		return clientClaudeCode
+	case strings.HasPrefix(n, "claude"):
+		return clientClaudeDesktop
+	case strings.HasPrefix(n, "codex"):
+		return clientCodex
+	case strings.HasPrefix(n, "gemini"):
+		return clientGemini
+	default:
+		return clientUnknown
+	}
+}
+
+// TokensSaved returns estimated savings using the conservative unknown profile.
+// For client-aware accounting use TokensSavedForClient.
 func TokensSaved(tool string, outputBytes int) int {
-	alt, ok := altCost[tool]
+	return TokensSavedForClient(tool, clientUnknown, outputBytes)
+}
+
+// TokensSavedForClient returns the estimated token savings for one tool
+// invocation by a named MCP client. clientName is normalised via
+// normaliseClient before lookup. Returns 0 when no model exists for the
+// client+tool pair or when output bytes already exceed the alternative cost.
+func TokensSavedForClient(tool, clientName string, outputBytes int) int {
+	profile := profiles[normaliseClient(clientName)]
+	if profile == nil {
+		profile = profiles[clientUnknown]
+	}
+	alt, ok := profile[tool]
 	if !ok || alt == 0 {
 		return 0
 	}
@@ -55,10 +138,15 @@ func TokensSaved(tool string, outputBytes int) int {
 	return alt - plumbTokens
 }
 
-// HasSavingsModel reports whether a tool participates in savings accounting.
+// HasSavingsModel reports whether tool participates in savings accounting for
+// at least one client profile. Used as a fast skip in DB aggregation loops.
 func HasSavingsModel(tool string) bool {
-	v, ok := altCost[tool]
-	return ok && v > 0
+	for _, p := range profiles {
+		if v, ok := p[tool]; ok && v > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatSavings renders a token count as a short human string ("1.2k", "850").
@@ -69,7 +157,6 @@ func FormatSavings(tokens int) string {
 	thousands := float64(tokens) / 1000
 	s := strings.Builder{}
 	if thousands < 10 {
-		// one decimal
 		whole := int(thousands)
 		tenth := int(thousands*10) - whole*10
 		s.WriteString(itoa(whole))

@@ -413,3 +413,51 @@ The old scalar `uri` field is kept in the schema as deprecated and handled trans
 Implementation: `internal/tools/diagnostics.go` — updated schema, description, and `Execute`. Logic split into `singleURI` and `multiURI` helpers to stay under gocyclo 15. `docs/mcp-tools.md` updated.
 
 Tests: 5 new cases in `internal/tools/diagnostics_test.go` — single via `uris`, multi-file (3 files), multi-file with one untracked, all-clean multi-file, and scalar `uri` backward-compat.
+
+---
+
+## Architecture
+
+### Client-aware token-savings model
+
+**Completed in:** 0.7.6
+**Original priority:** High (stats credibility)
+
+Replaced the static `altCost` table in `internal/stats/savings.go` with per-client profiles for `claude-desktop`, `claude-code`, `codex`, `gemini`, and `unknown`. Each profile assigns conservative per-tool fallback token estimates based on the client's native capabilities (e.g. Claude Code can run `rg`/`grep` directly, so `search_in_files` scores near-zero savings for it; Claude Desktop has no filesystem access, so the same tool scores higher).
+
+**Key design decisions for reviewers:**
+
+- **`normaliseClient(name string) string`** — single canonicalisation point. Lowercases and prefix-matches so `"claude-code 0.2.48"` or `"claude-code-ide"` all resolve to `clientClaudeCode`. All future client aliases must go here; tests cover the known aliases.
+- **Codex profile = Claude Code profile** — both clients have full local file/shell access. Kept as separate map entries rather than aliased so the profiles can diverge if Codex adds or drops capabilities.
+- **`TokensSaved` (no-client) preserved** for callers that predate client identity; internally routes to `clientUnknown` profile.
+- **`HasSavingsModel(tool)` helper** — returns true when any profile has a non-zero estimate for a tool; used to suppress the savings widget for tools with universally zero estimates. Avoids adding UI conditionals at each call site.
+- **Schema migration v5→6→7** — two separate `ALTER TABLE ADD COLUMN` steps, each idempotent via `hasColumn` check. Avoids the "partially applied migration" footgun where a crash between the two steps left the schema in an unrecoverable state.
+- **`Call.ClientName` wired in `onAfterTool`** — captured under `stateMu` alongside the existing workspace/session fields. The guard ensures client identity is never read from a partially-initialised connection.
+- **Phase 1 only** — shape modifiers (output byte scaling, per-call result counts), user-configurable `[savings.<client>]` config block, and calibration reports are all deferred to Phase 2/3 as originally planned. The numbers are conservative by design; they should understate rather than overstate.
+
+Files changed: `internal/stats/savings.go` (rewritten), `internal/stats/db.go` (schema + Call struct + migrations), `internal/stats/db_query.go` (client-aware aggregation queries), `internal/cli/conn.go` (onAfterTool wiring), `internal/stats/savings_test.go` (new), `internal/stats/db_test.go` (schema columns + expected values updated).
+
+---
+
+### Code-quality differential after edits
+
+**Completed in:** 0.7.6
+**Original priority:** ⭐ Top architectural priority
+
+Plumb write tools (`write_file`, `edit_file`, `transaction_apply`) now append a compact "code quality" section to their response when golangci-lint finds issues in the written file. This closes the loop from "write → compile-error feedback" to "write → compile-error + style/quality feedback", letting agents self-correct lint regressions in the same turn without waiting for CI.
+
+**Key design decisions for reviewers:**
+
+- **`internal/quality` package** — language-agnostic `Analyser` interface with `Name()`, `Supports(path)`, `Analyse(ctx, files)`. Adding a new analyser (ruff, eslint) requires only a new sub-package; the runner and config are unchanged.
+- **`golangci-lint` subprocess, not library** — shells out to the binary so it picks up the workspace's checked-in `.golangci.yml` without plumb owning the config. The analyser silently returns `nil, nil` when `golangci-lint` is absent from PATH so writes always succeed.
+- **`Runner` per MCP connection, not per workspace** — each connection has an isolated `*quality.Runner` (started in `attachWorkspace`/`attachSynthetic`, stopped in `close()`). Per-connection isolation matches the existing session model and avoids cross-session finding bleed.
+- **Background mode default** — `golangci-lint` cold-start can exceed 30 s on large repos. Background mode enqueues the file and returns any already-cached findings immediately; the next write or tool call will surface fresh findings once the worker completes. Sync mode is opt-in via `[quality] mode = "sync"` for strict workflows where the response must include findings from the current write.
+- **mtime-based cache invalidation** — `cachedResult.mtime` is the file's `ModTime()` at analysis time. `stale(path, cachedAt)` returns true when the file has been modified since analysis, ensuring agents always see findings for the current file state.
+- **Queue coalescing (`drain`)** — the background worker reads the queue until empty before running the analyser. Rapid writes to the same file result in one lint run rather than N, bounding subprocess spawning.
+- **`WriteDeps.QualityReport func(ctx, path) string`** — nil-safe; tools call `t.deps.reportQuality(ctx, path)` which is a no-op when the runner is disabled or absent. No write tool has a conditional dependency on quality.
+- **`[quality] enabled = false` default** — opt-in until real-world performance on diverse repos is known. The daemon wires the runner only when `cfg.Quality.Enabled` is true; the zero value of `WriteDeps.QualityReport` silently produces empty strings.
+- **Phase 1 only (Go / golangci-lint)** — Python/ruff analyser, `analysers.Composite` parallel runner, per-finding "explain why", `quality_ok: true` suppression param, and severity filtering are all deferred to Phase 2/3 as planned.
+
+Files added: `internal/quality/quality.go`, `internal/quality/runner.go`, `internal/quality/golangcilint/analyser.go`, `internal/quality/runner_test.go`, `internal/quality/golangcilint/analyser_test.go`.
+
+Files changed: `internal/config/config.go` (`QualityConfig` + `[quality]` defaults + validation), `internal/tools/write_deps.go` (`QualityReportFn` type + `QualityReport` field + `reportQuality` helper), `internal/tools/write_file.go`, `internal/tools/edit_file.go`, `internal/tools/transaction.go` (append quality report to response), `internal/cli/conn.go` (`qualityRunner` field + `startQualityRunner` + `buildAnalysers` + lifecycle wiring).

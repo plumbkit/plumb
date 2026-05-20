@@ -192,10 +192,10 @@ func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
 	where, args := filter.where()
 	var q string
 	if where == "" {
-		q = `SELECT output_bytes FROM tool_calls WHERE tool=?`
+		q = `SELECT output_bytes, COALESCE(client_name, '') FROM tool_calls WHERE tool=?`
 		args = []any{tool}
 	} else {
-		q = `SELECT output_bytes FROM tool_calls` + where + ` AND tool=?`
+		q = `SELECT output_bytes, COALESCE(client_name, '') FROM tool_calls` + where + ` AND tool=?` //nolint:gosec // G202: where built from filter.where() using ? placeholders only
 		args = append(args, tool)
 	}
 	rows, err := d.db.Query(q, args...)
@@ -206,8 +206,9 @@ func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
 	var total int64
 	for rows.Next() {
 		var out int
-		if err := rows.Scan(&out); err == nil {
-			total += int64(TokensSaved(tool, out))
+		var clientName string
+		if err := rows.Scan(&out, &clientName); err == nil {
+			total += int64(TokensSavedForClient(tool, clientName, out))
 		}
 	}
 	return total
@@ -412,7 +413,7 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 		args = append(args, since.UnixMilli())
 	}
 	// where is built by filter.where() using ? placeholders; no user values interpolated.
-	q := `SELECT tool, output_bytes FROM tool_calls` + where //nolint:gosec // G202: see comment above
+	q := `SELECT tool, output_bytes, COALESCE(client_name, '') FROM tool_calls` + where //nolint:gosec // G202: see comment above
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
 		return 0
@@ -420,12 +421,12 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 	defer rows.Close()
 	var total int64
 	for rows.Next() {
-		var tool string
+		var tool, clientName string
 		var out int
-		if err := rows.Scan(&tool, &out); err != nil {
+		if err := rows.Scan(&tool, &out, &clientName); err != nil {
 			continue
 		}
-		total += int64(TokensSaved(tool, out))
+		total += int64(TokensSavedForClient(tool, clientName, out))
 	}
 	return total
 }

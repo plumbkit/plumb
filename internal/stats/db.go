@@ -26,19 +26,21 @@ import (
 // single daemon-owned store.
 const schema = `
 CREATE TABLE IF NOT EXISTS tool_calls (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id   TEXT    NOT NULL DEFAULT '',
-    session_name TEXT    NOT NULL DEFAULT '',
-    workspace    TEXT    NOT NULL DEFAULT '',
-    tool         TEXT    NOT NULL,
-    called_at    INTEGER NOT NULL,
-    duration_ms  INTEGER NOT NULL DEFAULT 0,
-    input_bytes  INTEGER NOT NULL DEFAULT 0,
-    output_bytes INTEGER NOT NULL DEFAULT 0,
-    success      INTEGER NOT NULL DEFAULT 1,
-    error_msg    TEXT    NOT NULL DEFAULT '',
-    input_json   TEXT    NOT NULL DEFAULT '',
-    output_text  TEXT    NOT NULL DEFAULT ''
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT    NOT NULL DEFAULT '',
+    session_name   TEXT    NOT NULL DEFAULT '',
+    workspace      TEXT    NOT NULL DEFAULT '',
+    tool           TEXT    NOT NULL,
+    called_at      INTEGER NOT NULL,
+    duration_ms    INTEGER NOT NULL DEFAULT 0,
+    input_bytes    INTEGER NOT NULL DEFAULT 0,
+    output_bytes   INTEGER NOT NULL DEFAULT 0,
+    success        INTEGER NOT NULL DEFAULT 1,
+    error_msg      TEXT    NOT NULL DEFAULT '',
+    input_json     TEXT    NOT NULL DEFAULT '',
+    output_text    TEXT    NOT NULL DEFAULT '',
+    client_name    TEXT    NOT NULL DEFAULT '',
+    client_version TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -64,6 +66,8 @@ var migrations = []migration{
 	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text  TEXT NOT NULL DEFAULT ''`},
 	{from: 3, to: 4, addColumn: "session_name", sql: `ALTER TABLE tool_calls ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
 	{from: 4, to: 5, addColumn: "workspace", sql: `ALTER TABLE tool_calls ADD COLUMN workspace    TEXT NOT NULL DEFAULT ''`},
+	{from: 5, to: 6, addColumn: "client_name", sql: `ALTER TABLE tool_calls ADD COLUMN client_name    TEXT NOT NULL DEFAULT ''`},
+	{from: 6, to: 7, addColumn: "client_version", sql: `ALTER TABLE tool_calls ADD COLUMN client_version TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -143,7 +147,9 @@ func DBPathFor() string {
 //	3 — added output_text column (0.5.12+)
 //	4 — added session_name column (0.5.30+)
 //	5 — added workspace column (0.5.31+)
-const SchemaVersion = 5
+//	6 — added client_name column (0.7.6+)
+//	7 — added client_version column (0.7.6+)
+const SchemaVersion = 7
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -218,18 +224,20 @@ func (d *DB) Close() {
 
 // Call holds one tool invocation record.
 type Call struct {
-	SessionID   string
-	SessionName string // human-readable name, e.g. "SWIFT-FALCON"
-	Workspace   string // absolute path to the project root
-	Tool        string
-	CalledAt    time.Time
-	DurationMs  int64
-	InputBytes  int
-	OutputBytes int
-	Success     bool
-	ErrorMsg    string
-	InputJSON   string // raw JSON args as sent to the tool (capped at 64 KiB)
-	OutputText  string // full tool output (capped at 64 KiB)
+	SessionID     string
+	SessionName   string // human-readable name, e.g. "SWIFT-FALCON"
+	Workspace     string // absolute path to the project root
+	Tool          string
+	CalledAt      time.Time
+	DurationMs    int64
+	InputBytes    int
+	OutputBytes   int
+	Success       bool
+	ErrorMsg      string
+	InputJSON     string // raw JSON args as sent to the tool (capped at 64 KiB)
+	OutputText    string // full tool output (capped at 64 KiB)
+	ClientName    string // MCP clientInfo.name (e.g. "claude-code")
+	ClientVersion string // MCP clientInfo.version
 }
 
 // maxStoredBytes caps the size of input_json and output_text stored per call.
@@ -267,13 +275,14 @@ func (d *DB) Record(c Call) error {
 	}
 	if _, err := d.db.Exec(
 		`INSERT INTO tool_calls
-		 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.SessionID, c.SessionName, c.Workspace, c.Tool,
 		c.CalledAt.UnixMilli(), c.DurationMs,
 		c.InputBytes, c.OutputBytes,
 		success, c.ErrorMsg,
 		capString(c.InputJSON), capString(c.OutputText),
+		c.ClientName, c.ClientVersion,
 	); err != nil {
 		return fmt.Errorf("stats: insert call: %w", err)
 	}

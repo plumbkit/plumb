@@ -160,9 +160,13 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	if a.ApplyPartial {
-		return t.executePartial(ctx, path, a.Edits, uri, preDiags), nil
+		return t.executePartial(ctx, path, a.Edits, uri, preDiags) + t.deps.reportQuality(ctx, path), nil
 	}
-	return t.editFileApply(ctx, path, a, uri, preDiags)
+	result, err := t.editFileApply(ctx, path, a, uri, preDiags)
+	if err != nil {
+		return "", err
+	}
+	return result + t.deps.reportQuality(ctx, path), nil
 }
 
 func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {

@@ -313,8 +313,10 @@ func TestTotalTokensSavedSinceScopesByTime(t *testing.T) {
 		}
 	}
 
-	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 800 {
-		t.Fatalf("TotalTokensSavedSince = %d, want 800", got)
+	// With empty client_name (legacy rows), the conservative unknown profile applies:
+	// find_symbol=300, search_in_files=50 → 350.
+	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 350 {
+		t.Fatalf("TotalTokensSavedSince = %d, want 350", got)
 	}
 }
 
@@ -335,7 +337,7 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	if v != SchemaVersion {
 		t.Errorf("user_version = %d, want %d", v, SchemaVersion)
 	}
-	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text"} {
+	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version"} {
 		has, err := hasColumn(db.db, "tool_calls", col)
 		if err != nil {
 			t.Fatalf("hasColumn(%s): %v", col, err)

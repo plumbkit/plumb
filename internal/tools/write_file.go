@@ -100,7 +100,8 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 
 	t.writeFilePostWrite(ctx, path, uri, isNew)
-	return t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, preDiags), nil
+	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, preDiags)
+	return result + t.deps.reportQuality(ctx, path), nil
 }
 
 func parseWriteFileArgs(raw json.RawMessage) (writeFileArgs, error) {

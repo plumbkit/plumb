@@ -121,6 +121,24 @@ type EditsConfig struct {
 	ShowWriteDiff bool `toml:"show_write_diff"`
 }
 
+// QualityConfig controls post-write offline code-quality analysis.
+// All fields can be overridden per-project via <workspace>/.plumb/config.toml.
+type QualityConfig struct {
+	// Enabled turns quality analysis on. Default false (opt-in until proven in use).
+	Enabled bool `toml:"enabled"`
+	// Mode is "background" (default) or "sync".
+	//   background — enqueue files; findings available on the next request.
+	//   sync       — block up to TimeoutMs and append findings inline.
+	Mode string `toml:"mode"`
+	// Analysers lists which analysers to run. Default ["golangci-lint"].
+	Analysers []string `toml:"analysers"`
+	// TimeoutMs caps each analyser run in milliseconds. Default 2000.
+	TimeoutMs int `toml:"timeout_ms"`
+	// MaxFindingsPerFile caps findings appended per file to keep responses
+	// bounded. Default 5.
+	MaxFindingsPerFile int `toml:"max_findings_per_file"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
@@ -131,6 +149,7 @@ type Config struct {
 	Edits     EditsConfig          `toml:"edits"`
 	Walk      WalkConfig           `toml:"walk"`
 	Workspace WorkspaceConfig      `toml:"workspace"`
+	Quality   QualityConfig        `toml:"quality"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
 }
 
@@ -150,6 +169,13 @@ var defaults = Config{
 	},
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,
+	},
+	Quality: QualityConfig{
+		Enabled:            false,
+		Mode:               "background",
+		Analysers:          []string{"golangci-lint"},
+		TimeoutMs:          2000,
+		MaxFindingsPerFile: 5,
 	},
 	LSP: map[string]LSPConfig{
 		"go": {
@@ -432,6 +458,17 @@ func validate(cfg Config) error {
 	}
 	if cfg.Edits.ConcurrentWriteSkewMs < 0 {
 		return fmt.Errorf("edits.concurrent_write_skew_ms must be non-negative")
+	}
+	switch cfg.Quality.Mode {
+	case "", "background", "sync":
+	default:
+		return fmt.Errorf("quality.mode must be \"background\" or \"sync\"; got %q", cfg.Quality.Mode)
+	}
+	if cfg.Quality.TimeoutMs < 0 {
+		return fmt.Errorf("quality.timeout_ms must be non-negative")
+	}
+	if cfg.Quality.MaxFindingsPerFile < 0 {
+		return fmt.Errorf("quality.max_findings_per_file must be non-negative")
 	}
 	for name, lsp := range cfg.LSP {
 		if lsp.Enabled && lsp.Command == "" {

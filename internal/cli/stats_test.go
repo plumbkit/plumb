@@ -61,6 +61,7 @@ func TestRunStats_ShowsRows(t *testing.T) {
 }
 
 func TestRunStats_NoStatsPrintsLogo(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	// Use os.TempDir() so the workspace is outside the plumb workspace tree.
 	ws, err := os.MkdirTemp(os.TempDir(), "plumb-test-ws-*")
 	if err != nil {

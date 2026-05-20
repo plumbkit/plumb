@@ -160,7 +160,11 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 
 	t.txPhase3Notify(ctx, written)
-	return formatTransactionResult(written), nil
+	result := formatTransactionResult(written)
+	for _, w := range written {
+		result += t.deps.reportQuality(ctx, w.path)
+	}
+	return result, nil
 }
 
 func parseTransactionArgs(raw json.RawMessage) (transactionApplyArgs, error) {

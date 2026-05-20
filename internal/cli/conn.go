@@ -23,6 +23,8 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 	"github.com/golimpio/plumb/internal/mcp"
 	"github.com/golimpio/plumb/internal/memory"
+	"github.com/golimpio/plumb/internal/quality"
+	"github.com/golimpio/plumb/internal/quality/golangcilint"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tools"
@@ -51,6 +53,8 @@ type connSession struct {
 	sessionCache *cache.Cache
 	readTracker  *tools.ReadTracker
 	ttl          time.Duration
+
+	qualityRunner *quality.Runner
 
 	writeLimiter *tools.RateLimiter
 	editsMu      sync.RWMutex
@@ -92,6 +96,9 @@ func newConnSession(pool *workspacePool, cfg config.Config, statsStore *statsSto
 // close releases per-session resources and unregisters the session.
 func (s *connSession) close() {
 	s.sessionCache.Close()
+	if s.qualityRunner != nil {
+		s.qualityRunner.Stop()
+	}
 	session.Unregister(s.sessID)
 }
 
@@ -198,6 +205,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 	}
 	s.acquiredRoot = folder
 	s.acquiredLanguage = language
+	s.startQualityRunner(folder)
 	recoverWorkspaceTxlog(folder, txlog.Scan)
 	cn, cv := s.clientName, s.clientVersion
 	session.Patch(s.sessID, func(info *session.Info) {
@@ -220,6 +228,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 		return
 	}
 	s.acquiredRoot = root
+	s.startQualityRunner(root)
 	recoverWorkspaceTxlog(root, txlog.Scan)
 	cn, cv := s.clientName, s.clientVersion
 	session.Patch(s.sessID, func(info *session.Info) {
@@ -339,6 +348,8 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	s.stateMu.Lock()
 	root := s.acquiredRoot
 	sessionName := s.sessName
+	clientName := s.clientName
+	clientVersion := s.clientVersion
 	s.stateMu.Unlock()
 	if w := workspaceFromArgs(s.pool, args); w != "" {
 		root = w
@@ -347,17 +358,19 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		return
 	}
 	s.statsStore.Record(root, stats.Call{
-		SessionID:   s.sessID,
-		SessionName: sessionName,
-		Tool:        toolName,
-		CalledAt:    time.Now(),
-		DurationMs:  dur.Milliseconds(),
-		InputBytes:  len(args),
-		OutputBytes: len(output),
-		Success:     !isError,
-		ErrorMsg:    errMsg,
-		InputJSON:   string(args),
-		OutputText:  output,
+		SessionID:     s.sessID,
+		SessionName:   sessionName,
+		Tool:          toolName,
+		CalledAt:      time.Now(),
+		DurationMs:    dur.Milliseconds(),
+		InputBytes:    len(args),
+		OutputBytes:   len(output),
+		Success:       !isError,
+		ErrorMsg:      errMsg,
+		InputJSON:     string(args),
+		OutputText:    output,
+		ClientName:    clientName,
+		ClientVersion: clientVersion,
 	})
 }
 
@@ -403,8 +416,48 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	s.applyProjectConfig(s.workspace())
 }
 
+// startQualityRunner creates and starts the quality runner when the [quality]
+// block is enabled. Must be called under stateMu (it is called only during
+// workspace attach while stateMu is held). No-op if already started.
+func (s *connSession) startQualityRunner(workspace string) {
+	if s.qualityRunner != nil {
+		return
+	}
+	q := s.cfg.Quality
+	if !q.Enabled {
+		return
+	}
+	timeout := time.Duration(q.TimeoutMs) * time.Millisecond
+	r := quality.NewRunner(quality.RunnerConfig{
+		Workspace:          workspace,
+		Analysers:          buildAnalysers(q.Analysers),
+		Mode:               q.Mode,
+		Timeout:            timeout,
+		MaxFindingsPerFile: q.MaxFindingsPerFile,
+	})
+	r.Start()
+	s.qualityRunner = r
+}
+
+// buildAnalysers constructs the Analyser list from the configured names.
+// Unknown names are silently skipped.
+func buildAnalysers(names []string) []quality.Analyser {
+	out := make([]quality.Analyser, 0, len(names))
+	for _, n := range names {
+		switch n {
+		case "golangci-lint":
+			out = append(out, golangcilint.New())
+		}
+	}
+	return out
+}
+
 // buildWriteDeps assembles the WriteDeps struct used by all write tools.
 func (s *connSession) buildWriteDeps() tools.WriteDeps {
+	var qualityReport tools.QualityReportFn
+	if r := s.qualityRunner; r != nil {
+		qualityReport = r.Report
+	}
 	return tools.WriteDeps{
 		Client:                s.sessionProxy,
 		Cache:                 s.sessionCache,
@@ -417,6 +470,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		WorkspaceFn:           s.workspace,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
+		QualityReport:         qualityReport,
 	}
 }
 

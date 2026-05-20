@@ -8,6 +8,13 @@ import (
 	"github.com/golimpio/plumb/internal/lsp"
 )
 
+// QualityReportFn is a function that runs post-write quality analysis on path
+// and returns a formatted findings section ("\ncode quality (...):\n  ...").
+// Returns "" when analysis is disabled, no analyser supports the file, or
+// there are no findings. nil is a no-op. Intended to be assigned to
+// WriteDeps.QualityReport.
+type QualityReportFn = func(ctx context.Context, path string) string
+
 // WriteDeps bundles the dependencies every file-mutating tool needs.
 // Pulling these into one struct stops the constructor signatures from
 // growing every time we add a cross-cutting concern (rate limit, strict
@@ -75,6 +82,11 @@ type WriteDeps struct {
 	// jdtls emits diagnostics for modified files (unlike gopls/pyright, jdtls
 	// only publishes diagnostics for open documents). nil is a no-op.
 	PostWriteNotifyFn func(ctx context.Context, path string) error
+	// QualityReport, when non-nil, is called after a successful write to run
+	// offline quality analysis on the written path. Returns a formatted
+	// findings section appended to the tool response, or "" if no findings
+	// or analysis is disabled for this session.
+	QualityReport QualityReportFn
 }
 
 func (d WriteDeps) postWriteDiagWindow() time.Duration {
@@ -96,4 +108,12 @@ func (d WriteDeps) showWriteDiff() bool {
 		return d.ShowWriteDiffFn()
 	}
 	return d.ShowWriteDiff
+}
+
+// reportQuality invokes QualityReport if set and returns its output.
+func (d WriteDeps) reportQuality(ctx context.Context, path string) string {
+	if d.QualityReport == nil {
+		return ""
+	}
+	return d.QualityReport(ctx, path)
 }
