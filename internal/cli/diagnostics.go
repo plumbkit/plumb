@@ -103,47 +103,13 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 		return fmt.Errorf("listing files: %w", err)
 	}
 
-	var goFiles []string
-	for line := range strings.SplitSeq(listOut, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") || strings.HasPrefix(line, "(") {
-			continue
-		}
-		// find_files prints relative paths from cwd.
-		abs := line
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(cwd, line)
-		}
-		goFiles = append(goFiles, abs)
-	}
-
+	goFiles := parseGoFileList(listOut, cwd)
 	if len(goFiles) == 0 {
 		fmt.Println("No Go files found in", cwd)
 		return nil
 	}
 
-	totalIssues := 0
-	totalUntracked := 0
-	totalClean := 0
-	var perFile []string
-
-	for i, f := range goFiles {
-		fmt.Printf("\r%s Scanning %d/%d files...", tui.HintStyle.Render("⟳"), i+1, len(goFiles))
-		uri := "file://" + f
-		out, err := cli.CallTool("diagnostics", map[string]any{"uri": uri})
-		if err != nil {
-			continue
-		}
-		switch {
-		case strings.Contains(out, "not yet tracked"):
-			totalUntracked++
-		case strings.Contains(out, "clean"):
-			totalClean++
-		case strings.Contains(out, "issue"):
-			totalIssues++
-			perFile = append(perFile, out)
-		}
-	}
+	totalClean, totalIssues, totalUntracked, perFile := scanWorkspaceDiags(cli, goFiles)
 	fmt.Printf("\r\033[K") // clear the progress line
 
 	summary := fmt.Sprintf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked",
@@ -161,14 +127,10 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 		fmt.Println()
 		fmt.Println(tui.OkStyle.Render("✓ All files clean."))
 	} else if totalIssues > 0 {
-		// The last issue printed handles its own trailing blank line,
-		// but we add one here if we're about to print the note to ensure separation
 		if totalUntracked > 0 {
 			fmt.Println()
 		}
 	} else if totalUntracked > 0 {
-		// No issues, but we have untracked files.
-		// We want 1 blank line between the summary and the note.
 		fmt.Println()
 	}
 
@@ -187,6 +149,44 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 		fmt.Println(noteBox)
 	}
 	return nil
+}
+
+func parseGoFileList(output, cwd string) []string {
+	var goFiles []string
+	for line := range strings.SplitSeq(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") || strings.HasPrefix(line, "(") {
+			continue
+		}
+		// find_files prints relative paths from cwd.
+		abs := line
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(cwd, line)
+		}
+		goFiles = append(goFiles, abs)
+	}
+	return goFiles
+}
+
+func scanWorkspaceDiags(cli *mcpCliClient, goFiles []string) (clean, issues, untracked int, perFile []string) {
+	for i, f := range goFiles {
+		fmt.Printf("\r%s Scanning %d/%d files...", tui.HintStyle.Render("⟳"), i+1, len(goFiles))
+		uri := "file://" + f
+		out, err := cli.CallTool("diagnostics", map[string]any{"uri": uri})
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.Contains(out, "not yet tracked"):
+			untracked++
+		case strings.Contains(out, "clean"):
+			clean++
+		case strings.Contains(out, "issue"):
+			issues++
+			perFile = append(perFile, out)
+		}
+	}
+	return clean, issues, untracked, perFile
 }
 
 func styleDiagnostics(raw string) string {
