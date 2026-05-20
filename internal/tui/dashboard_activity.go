@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -118,16 +119,36 @@ func (m Model) dashActivityGraphLines(width int) []string {
 	return lines
 }
 
+// dashP90MaxV returns the 90th-percentile value of non-zero buckets, with a
+// floor of 3. Using P90 instead of the absolute max prevents one outlier
+// session from compressing all other activity to a single pixel.
+func dashP90MaxV(buckets []int64) int64 {
+	const floor int64 = 3
+	var nonZero []int64
+	for _, v := range buckets {
+		if v > 0 {
+			nonZero = append(nonZero, v)
+		}
+	}
+	if len(nonZero) == 0 {
+		return floor
+	}
+	sort.Slice(nonZero, func(i, j int) bool { return nonZero[i] < nonZero[j] })
+	idx := (len(nonZero) * 90) / 100
+	if idx >= len(nonZero) {
+		idx = len(nonZero) - 1
+	}
+	if nonZero[idx] < floor {
+		return floor
+	}
+	return nonZero[idx]
+}
+
 // dashBuildGrid converts a slice of call counts into a halfH×width braille pixel grid.
 // fillDown=true fills from the top (daemon style); fillDown=false fills from the bottom (lifetime style).
 func dashBuildGrid(buckets []int64, fillDown bool, width, halfH int, botL, botR, topL, topR [5]int) [][]int {
 	pixH := halfH * 4
-	var maxV int64 = 3
-	for _, v := range buckets {
-		if v > maxV {
-			maxV = v
-		}
-	}
+	maxV := dashP90MaxV(buckets)
 	sample := func(i int) int64 {
 		if len(buckets) == 0 {
 			return 0
