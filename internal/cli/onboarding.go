@@ -47,41 +47,8 @@ func Discover(root string, refuseHomeRoots bool) (*Discovery, error) {
 	langs := map[string]struct{}{}
 	for _, e := range entries {
 		name := e.Name()
-		switch {
-		case name == "go.mod":
-			d.BuildSystems = append(d.BuildSystems, "Go modules")
-			langs["Go"] = struct{}{}
-		case name == "package.json":
-			d.BuildSystems = append(d.BuildSystems, "npm/yarn/pnpm")
-			langs["JavaScript/TypeScript"] = struct{}{}
-		case name == "Cargo.toml":
-			d.BuildSystems = append(d.BuildSystems, "Cargo")
-			langs["Rust"] = struct{}{}
-		case name == "pyproject.toml" || name == "requirements.txt" || name == "setup.py":
-			d.BuildSystems = append(d.BuildSystems, "Python")
-			langs["Python"] = struct{}{}
-		case name == "pom.xml":
-			d.BuildSystems = append(d.BuildSystems, "Maven")
-			langs["Java"] = struct{}{}
-		case name == "build.gradle" || name == "build.gradle.kts":
-			d.BuildSystems = append(d.BuildSystems, "Gradle")
-			langs["Java/Kotlin"] = struct{}{}
-		case name == "Gemfile":
-			d.BuildSystems = append(d.BuildSystems, "Bundler")
-			langs["Ruby"] = struct{}{}
-		case name == "Makefile" || name == "makefile":
-			d.HasMakefile = true
-		case name == "Dockerfile":
-			d.HasDockerfile = true
-		case strings.EqualFold(name, "README.md"), strings.EqualFold(name, "README.rst"), strings.EqualFold(name, "README"):
-			d.HasReadme = true
-		case name == ".github":
-			if info, err := os.Stat(filepath.Join(root, name, "workflows")); err == nil && info.IsDir() {
-				d.HasCI = true
-			}
-		case name == ".gitlab-ci.yml", name == ".circleci", name == ".travis.yml":
-			d.HasCI = true
-		}
+		classifyBuildSystem(d, langs, name)
+		classifyMetaFile(d, name)
 	}
 	for l := range langs {
 		d.Languages = append(d.Languages, l)
@@ -93,6 +60,49 @@ func Discover(root string, refuseHomeRoots bool) (*Discovery, error) {
 	d.TestDirs = findTestDirs(root)
 	d.GitRemote = readGitRemote(root)
 	return d, nil
+}
+
+func classifyBuildSystem(d *Discovery, langs map[string]struct{}, name string) {
+	switch {
+	case name == "go.mod":
+		d.BuildSystems = append(d.BuildSystems, "Go modules")
+		langs["Go"] = struct{}{}
+	case name == "package.json":
+		d.BuildSystems = append(d.BuildSystems, "npm/yarn/pnpm")
+		langs["JavaScript/TypeScript"] = struct{}{}
+	case name == "Cargo.toml":
+		d.BuildSystems = append(d.BuildSystems, "Cargo")
+		langs["Rust"] = struct{}{}
+	case name == "pyproject.toml" || name == "requirements.txt" || name == "setup.py":
+		d.BuildSystems = append(d.BuildSystems, "Python")
+		langs["Python"] = struct{}{}
+	case name == "pom.xml":
+		d.BuildSystems = append(d.BuildSystems, "Maven")
+		langs["Java"] = struct{}{}
+	case name == "build.gradle" || name == "build.gradle.kts":
+		d.BuildSystems = append(d.BuildSystems, "Gradle")
+		langs["Java/Kotlin"] = struct{}{}
+	case name == "Gemfile":
+		d.BuildSystems = append(d.BuildSystems, "Bundler")
+		langs["Ruby"] = struct{}{}
+	}
+}
+
+func classifyMetaFile(d *Discovery, name string) {
+	switch {
+	case name == "Makefile" || name == "makefile":
+		d.HasMakefile = true
+	case name == "Dockerfile":
+		d.HasDockerfile = true
+	case strings.EqualFold(name, "README.md"), strings.EqualFold(name, "README.rst"), strings.EqualFold(name, "README"):
+		d.HasReadme = true
+	case name == ".github":
+		if info, err := os.Stat(filepath.Join(d.Root, name, "workflows")); err == nil && info.IsDir() {
+			d.HasCI = true
+		}
+	case name == ".gitlab-ci.yml", name == ".circleci", name == ".travis.yml":
+		d.HasCI = true
+	}
 }
 
 // findEntryPoints does a bounded walk for common entry-point files.
