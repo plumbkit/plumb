@@ -12,7 +12,8 @@ const (
 	minPopupLeftWidth = 28 // enough for " > ● ✓ 05-12 00:00:00 000ms"
 	sectionMenuWidth  = 22
 	pollInterval      = 2 * time.Second
-	activityInterval  = 10 * time.Second
+	activityInterval      = 10 * time.Second
+	dashBucketRefreshInterval = 30 * time.Second
 	activityBuckets   = 16
 	bodyStartRow      = 4
 )

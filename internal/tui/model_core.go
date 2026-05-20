@@ -107,6 +107,7 @@ type Model struct {
 	dashCachedLifetimeCalls   int64
 	dashCachedDaemCalls       int64
 	dashCachedChartWidth      int
+	dashLastBucketRefresh     time.Time
 	dashProjectFolder    string
 	dashProjectCalls     int64
 	dashProjectSessions  int64
