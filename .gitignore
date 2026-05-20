@@ -63,6 +63,12 @@ coverage.html
 # Claude Code
 .claude/
 
+# Crush local session state
+.crush/
+
+# Gemini CLI local config
+.gemini/
+
 # Plumb workspace marker (commit if you want to share context with your team)
 .plumb/
 
