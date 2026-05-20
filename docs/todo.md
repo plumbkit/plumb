@@ -163,38 +163,98 @@ Plumb is not a one-shot CLI. The daemon is long-lived, already owns per-workspac
 **Priority:** ⭐ top architectural priority.
 **Effort:** Significant (multi-week).
 **Status:** Planning.
-**Discussion:** Derived from the `codegraph` research. This feature adds a "structural map" layer to Plumb to solve the startup, language, and context gaps.
+**Discussion:** Derived from `codegraph` research. This feature adds a "structural map" layer to Plumb to solve startup latency, language breadth, and context-density gaps.
 
 **The pitch — speed, breadth, and instant context.**
 
-Plumb currently relies on live Language Servers (LSPs) for all semantic queries. While precise, LSPs are heavy, slow to boot, and limited to a few languages. **Plumb Topology** implements a persistent, disk-based semantic graph using **Tree-sitter**.
+Plumb currently relies on live Language Servers (LSPs) for all semantic queries. While precise, LSPs are heavy, slow to boot, and limited to a few languages. **Plumb Topology** implements a persistent, disk-based semantic graph using **Tree-sitter + SQLite + FTS5**.
 
 Why this is a priority:
-- **Instant Discovery:** Agents can query the project structure immediately on attach, without waiting for LSP indexing.
-- **Universal Breadth:** Supports 19+ languages via lightweight Tree-sitter grammars, bridging the "Language Gap" for Rust, Swift, Ruby, etc.
-- **Efficiency (The "Outline" replacement):** Replace the current "outline" functionality (`list_symbols`, `find_symbol`) with Topology-based implementations. Tree-sitter provides file structure in milliseconds with zero LSP overhead.
-- **Context Density:** `topology_explore` can return a symbol's entire neighborhood (callers, callees, and source) in one tool call, saving 90% of discovery tokens.
+- **Instant discovery:** Agents can query the project structure immediately on attach, without waiting for LSP indexing.
+- **Universal breadth:** Tree-sitter grammars cover far more languages than Plumb's current validated LSP adapters.
+- **Efficient outline replacement:** `list_symbols`, `find_symbol`, and workspace symbol discovery can use Topology when LSP is unavailable or still warming up.
+- **Context density:** `topology_explore` can return a bounded symbol neighbourhood — callers, callees, imports, related tests, routes, and source snippets — in one tool call.
+- **Bridge to memory:** Topology gives memory a stable entity layer. Memories can attach to symbols/routes/tests, not only path globs.
 
-**The Balance: Speed vs. Reliability.**
-Topology must be fast and memory-efficient (SQLite + Tree-sitter), but **reliability is paramount**. It should not replace the LSP for surgical edits (renames, type-safe navigation), but it should be the primary engine for "Where am I?" and "How does this connect?".
+**The balance: speed vs. authority.**
 
-**Implementation Plan:**
+Topology must be fast and memory-efficient, but its contract is different from LSP:
 
-1. **Storage:** SQLite backend in `<workspace>/.plumb/topology.db` using FTS5 for fuzzy symbol search.
-2. **Extraction:** Go-native Tree-sitter integration (`github.com/smacker/go-tree-sitter`). Use `.scm` queries for extraction.
-3. **Resolution:** Pragmatic resolution engine (import tracing + name matching + framework-specific routes like Express/FastAPI).
-4. **Tools:** 
-   - `topology_explore`: Compound tool returning subgraph + source code.
-   - `topology_search`: Global fuzzy symbol search.
-   - `topology_impact`: Transitive closure (impact analysis).
-   - `topology_routes`: Framework-aware entry points.
+- Topology is broad, persistent, and approximate. It answers "what exists?", "how is it connected?", "what might be affected?", and "what context should I inspect first?"
+- LSP remains authoritative for surgical semantics: precise definitions, references, renames, type-aware edits, and diagnostics.
+- When both sources are available, tool responses should expose the source/confidence: `source=topology`, `source=lsp`, or `source=merged`.
+- Topology must degrade cleanly: if the index is absent, stale, or partial, return a clear status and a bounded partial answer rather than pretending to be complete.
 
-**Definition of done — Phase 1:**
-1. `internal/topology` package with SQLite schema for nodes and edges.
-2. Incremental background indexer in the daemon using file watchers.
-3. Go and Python extractors functional and tested.
-4. `topology_search` and `topology_explore` tools exposed and documented.
-5. Benchmark: Topology-based symbol listing must be >5x faster than LSP-based `list_symbols` on a cold start.
+**Implementation plan.**
+
+1. **Storage:** SQLite backend in `<workspace>/.plumb/topology.db`.
+   - `nodes`: files, packages/modules, symbols, routes, tests, config entry points.
+   - `edges`: defines, imports, calls, references, inherits/implements, contains, route-to-handler, test-covers.
+   - FTS5 virtual table for fuzzy symbol/path/search queries.
+   - Metadata table: schema version, index generation, indexed file hash/mtime, language, extractor version, last error.
+   - WAL mode and short write transactions so MCP read queries do not block on indexing.
+2. **Extraction:** Go-native Tree-sitter integration. Use checked-in `.scm` queries per language.
+   - Phase 1: Go and Python.
+   - Phase 2: TypeScript/JavaScript, Java, Rust, Ruby, Swift based on user demand.
+   - Store file content hash/mtime with extracted rows so stale data can be discarded.
+3. **Resolution:** Pragmatic, confidence-scored resolution.
+   - Import tracing + local name matching first.
+   - Framework-specific patterns later: Express/FastAPI routes, test naming conventions, CLI command registration, Cobra command trees.
+   - Every inferred edge carries a confidence/source marker so agents can distinguish "known" from "likely".
+4. **Incremental sync:** daemon-owned background indexer.
+   - Debounced file watcher queue.
+   - Handles create/update/delete/rename.
+   - Cleans stale nodes and edges when files disappear.
+   - Manual resync command/tool for recovery.
+   - Per-workspace one-indexer-at-a-time lock; coalesce repeated writes.
+5. **Tools:**
+   - `topology_status`: index health, indexed/skipped/stale file counts, DB size, last sync, watcher state, language coverage, last errors.
+   - `topology_search`: fuzzy global symbol/file/route search.
+   - `topology_explore`: bounded neighbourhood around a symbol/file/route/test.
+   - `topology_impact`: transitive dependency and reference closure.
+   - `topology_routes`: framework-aware entry points.
+   - `topology_affected`: given changed files/symbols, return likely affected files and tests.
+
+**Context-budget contract.**
+
+Topology tools must not accidentally dump a huge graph into the conversation. `topology_explore` and `topology_impact` should require or default these controls:
+
+```json
+{
+  "depth": 2,
+  "max_nodes": 50,
+  "max_bytes": 30000,
+  "include_source": "snippets",
+  "budget": "compact"
+}
+```
+
+Supported `include_source`: `none`, `signatures`, `snippets`, `full` (full should be opt-in and capped). Supported `budget`: `compact`, `normal`, `deep`. Responses should say when results were truncated and how to narrow.
+
+**Definition of done — Phase 1.**
+
+1. `internal/topology` package with SQLite schema for nodes, edges, FTS5 search, and index metadata.
+2. Daemon-owned incremental indexer with debounce, stale cleanup, delete/rename handling, and manual resync.
+3. Go and Python extractors functional and tested against fixtures.
+4. `topology_status`, `topology_search`, and `topology_explore` exposed as MCP tools and documented.
+5. `topology_explore` enforces `max_nodes`/`max_bytes` and reports truncation.
+6. Benchmark: Topology-based symbol listing is >5x faster than LSP-based `list_symbols` on cold start.
+7. Concurrency tests prove MCP read queries do not fail while indexing is active.
+
+**Phase 2.**
+
+1. Add `topology_impact`, `topology_routes`, and `topology_affected`.
+2. Add TypeScript/JavaScript extractor and route patterns.
+3. Add topology-backed fallbacks to `list_symbols`, `find_symbol`, and `workspace_symbols` when LSP is unavailable.
+4. Add status visibility in TUI/doctor: index health, stale state, and last indexing error.
+
+**Watch out for.**
+
+- SQLite write contention can show up as `database is locked` if index writes hold transactions too long. Use WAL mode, short writes, context timeouts, and retryable reads.
+- Tree-sitter resolution is not type checking. Do not use it for semantic rename or edit correctness.
+- Framework inference can become a swamp. Start with simple, confidence-scored patterns and keep them optional.
+- Keep extractors deterministic. Index output should not change unless source files or extractor versions change.
+- Index DBs can grow quietly. Track size in `topology_status` and plan retention/compaction before large workspaces become painful.
 
 ---
 
@@ -206,10 +266,12 @@ Topology must be fast and memory-efficient (SQLite + Tree-sitter), but **reliabi
 
 **The pitch — smarter memory retrieval without heavy infrastructure.**
 
-Plumb's current memory system is deterministic (grep/glob over markdown files). While reliable, it forces the agent to explicitly search and remember to check for context. We can implement a more "cognitive" memory engine using the tools Plumb already has (SQLite, stats tracking, and the tool intercept layer) without introducing vector databases or heavy background AI tasks.
+Plumb's current memory system is deterministic (grep/glob over markdown files). While reliable, it forces the agent to explicitly search and remember to check for context. We can implement a more useful memory engine using the tools Plumb already has — SQLite, stats tracking, tool intercept hooks, and, later, Topology — without introducing a heavy vector database or always-on AI summariser.
+
+The important distinction: memory must be **grounded, private, and budgeted**. An unbounded "remember everything" system will leak secrets, stale context, and noisy summaries into agent sessions. Plumb should stay conservative.
 
 1. **Episodic Summaries via `stats.db`:**
-   Currently, `session_start` gives generic repo orientation. Plumb already tracks every tool call in `stats.db`. When a session goes idle, the daemon should synthesize a lightweight "Episodic Summary" based on the modified files and tools used. 
+   Currently, `session_start` gives generic repo orientation. Plumb already tracks every tool call in `stats.db`. When a session goes idle, the daemon should synthesise a lightweight "Episodic Summary" based on modified files and tools used.
    - **Mechanism:** A background task in the daemon that runs after a session hasn't seen a tool call for N minutes. It queries the `tool_calls` table for that session, extracts the list of touched files and high-level tool types (Reads vs Writes), and persists a 1-2 sentence summary in a new `episodic_memories` table.
    - **Outcome:** `session_start` output appends: *"In your last session, you heavily modified `internal/auth/login.go` and used `find_references` on `UserSession`."*
 
@@ -224,11 +286,73 @@ Plumb's current memory system is deterministic (grep/glob over markdown files). 
    - **Triggers:** If an agent calls `read_file`, `edit_file`, or `find_symbol` on a path that matches a memory, append a `[Hint: ...]` block to the response.
    - **Outcome:** `[Hint: There is a relevant memory 'auth-gotchas' attached to this file. Use read_memory to view it.]`
 
-**Definition of done:**
-1. **FTS5 Implementation:** SQLite FTS5 virtual table added to `internal/memory/store.go`. `write_memory` and `delete_memory` trigger incremental index updates. `search_memories` updated to use `MATCH` queries with relevance ranking.
-2. **Episodic Logic:** New `episodic_memories` table in `stats.db`. Daemon implements an idle-session listener that generates summaries. `session_start` reads the most recent summary for the workspace and appends it to the orientation packet.
-3. **Context Injection:** `internal/mcp/server.go` or `internal/cli/daemon.go` Gains a hook to inject memory hints into tool responses. The hint logic must be cheap (cache the compiled glob patterns).
-4. **Tests:** Unit tests verify that FTS5 search handles stemming/ranking; integration tests verify that `read_file` on a tagged path includes the hint.
+4. **Privacy and redaction before storage:**
+   Any generated memory, episodic summary, or captured observation must pass a redaction layer before it is persisted.
+   - Strip likely API keys, tokens, private keys, credentials, auth headers, cookie values, and `.env`-style secrets.
+   - Do not store raw tool output by default; store compact, grounded summaries plus provenance.
+   - Add a config kill-switch for automatic summaries.
+
+5. **Deduplication and lifecycle:**
+   Memory needs lifecycle metadata so it does not become stale clutter.
+   - Content hash (`sha256`) for deduplication.
+   - `created_at`, `updated_at`, `last_used_at`.
+   - `source_session_id`, source tool call IDs, and touched file paths.
+   - `confidence`: generated, user-authored, imported, inferred.
+   - `supersedes` / `superseded_by` for replacing old decisions.
+   - Optional `stale_after` for memories tied to fast-moving code.
+
+6. **Budgeted injection:**
+   `session_start` and tool-response hints must have strict byte/token budgets.
+   - Default to short hints with memory names, not full memory bodies.
+   - Include at most N memories unless the caller explicitly requests more.
+   - Prefer high-confidence, recently-used, path/symbol-relevant memories.
+
+7. **Topology-backed memory retrieval:**
+   Once Plumb Topology exists, memory should attach to code entities, not only paths.
+   - A memory can reference files, symbols, routes, tests, or packages.
+   - `topology_explore` can include relevant memories for returned nodes.
+   - `read_file`/`edit_file` can hint at symbol-level memories when the edited region overlaps a known symbol.
+   - `session_start` can retrieve memories related to recently touched topology nodes.
+
+**Definition of done — Phase 1.**
+
+1. **FTS5 implementation:** SQLite FTS5 virtual table added to `internal/memory/store.go`. `write_memory` and `delete_memory` trigger incremental index updates. `search_memories` uses `MATCH` queries with relevance ranking and a grep fallback if FTS5 is unavailable.
+2. **Privacy/redaction:** Add a small redaction package used before writing generated episodic memories. Unit tests cover common secret shapes.
+3. **Episodic logic:** New `episodic_memories` table in `stats.db`. Daemon implements an idle-session listener that generates bounded summaries. `session_start` reads the most recent summary for the workspace and appends it only within a configured budget.
+4. **Provenance:** Generated memories store source session/tool-call IDs and touched file paths. `read_memory` displays provenance metadata.
+5. **Context injection:** `internal/mcp/server.go` or `internal/cli/daemon.go` gains a hook to inject memory hints into tool responses. Hint logic must be cheap: cache compiled glob patterns and memory metadata.
+6. **Tests:** Unit tests verify FTS5 ranking, redaction, deduplication, provenance formatting, and budget caps. Integration tests verify that `read_file` on a tagged path includes the hint.
+
+**Phase 2.**
+
+1. Hybrid retrieval: combine FTS5 rank, path-glob relevance, recency, confidence, and usage count. Keep embeddings optional; do not add a vector database unless FTS5 quality is clearly insufficient.
+2. Memory lifecycle commands/views: list stale memories, show unused memories, mark superseded, and prune generated memories older than a configured threshold.
+3. Topology-backed retrieval once Topology is available.
+4. TUI Memory section consumes the same store: memory list, details, provenance, source paths/symbols, and stale/superseded state.
+
+**Watch out for.**
+
+- Do not store secrets. Automatic memory is only acceptable if redaction and opt-out exist from day one.
+- Do not inject full memories into every session. Hints should point to memories; agents can call `read_memory` when needed.
+- Generated summaries must be visibly generated and lower-confidence than user-authored memories.
+- Summaries can become stale after refactors. Provenance and topology links make stale detection possible.
+- Keep memory retrieval deterministic and explainable. If an agent sees a memory, it should be able to tell why it was shown.
+
+**Shared Topology + Memory opportunity.**
+
+The best version of these two features is not two separate systems:
+
+- Topology knows code entities: files, symbols, routes, tests, packages.
+- Memory knows decisions and history: why something exists, what was tried, what failed, what the user prefers.
+- Joining them lets Plumb answer: "What code matters here, and what do we already know about it?"
+
+Concrete combined behaviours:
+
+1. `topology_explore(symbol)` returns related memories alongside code neighbours.
+2. `session_start` retrieves memories for recently edited topology nodes.
+3. `edit_file` hints at memories attached to the function/class being edited, not just the file path.
+4. `topology_affected(files)` can include memories about test strategy or known risky areas.
+5. Memory stale checks can use topology: if a referenced symbol disappears or moves, mark the memory as potentially stale.
 
 ---
 
