@@ -48,8 +48,11 @@ The default should be background-first:
 - The daemon coalesces rapid edits so one save storm does not spawn many lint
   processes.
 - If fresh findings are already available, the write response includes them.
-- If analysis is still running, the response says that quality feedback is
-  pending and later calls can surface the result.
+- If analysis is still running, the response includes a `quality: pending` marker.
+  Results are surfaced automatically on the **next** write response,
+  `session_start`, or `quality_report` tool call once analysis completes. The
+  agent does not need to poll explicitly; the pending marker is the signal to
+  check at a natural breakpoint.
 
 Synchronous analysis should exist, but as an opt-in mode for strict workflows.
 It is valuable before commits, in CI-like local checks, or when a user asks the
@@ -87,34 +90,79 @@ code quality:
   new findings from this edit:
     internal/foo.go:42 errcheck: unchecked error from Close
 
-  existing findings nearby:
+  existing findings in this file:
     internal/foo.go:18 gocyclo: function is complex
 
   analysis:
-    golangci-lint completed in 1.4s from warm cache
+    golangci-lint completed in 1.4s (warm cache); cold start ~20s
 ```
 
-That gives the agent enough context to fix what it caused while avoiding a
-side quest through unrelated repository debt.
+"Existing findings" means findings in the same file as the edit. Findings in
+other files are not surfaced in a normal write response; the agent must call
+`quality_report` to see them. "Nearby" as a concept is deliberately bounded to
+the same file to prevent noise from spreading across the workspace.
+
+### Finding Structure
+
+Before implementing multi-analyser support, the common finding type that all
+analysers emit must be defined. All adapters emit this structure; there are no
+per-analyser extensions at the surface layer.
+
+```go
+type Finding struct {
+    File     string   // absolute path
+    Line     int      // 1-based
+    Col      int      // 1-based; 0 if the analyser does not report a column
+    Rule     string   // analyser-specific rule ID, e.g. "errcheck", "gocyclo"
+    Severity Severity // error | warning | info | hint
+    Message  string   // short human-readable description
+    Analyser string   // "golangci-lint", "ruff", etc.
+    Revision string   // hex content hash of File at analysis time
+}
+```
+
+The `Revision` field drives staleness: before surfacing any cached finding,
+compare its `Revision` against the current content hash of the file. A mismatch
+means the file changed after analysis ran; discard the finding rather than act
+on it.
+
+**Dependency-aware invalidation:** File-level content hashing handles the
+directly edited file but not its dependents. If you change an interface in
+`internal/foo.go`, lint findings for `internal/bar.go` (which implements it)
+are now stale even though `bar.go` was not touched. The first implementation
+can accept this limitation — document it clearly — but the finding cache schema
+must include a `dependentOf []string` edge so package-level invalidation can be
+added without a schema migration.
 
 ### Background Daemon Work
 
 Because plumb runs as a daemon, it can do useful preparation before the agent
 asks for it:
 
-- Warm analyser caches shortly after a workspace attaches.
+- Warm analyser caches shortly after a workspace attaches. A cold
+  `golangci-lint` run on a medium Go project takes 15–30 seconds; the first
+  agent edit should not be the trigger for that cost.
 - Track changed files and run low-priority analysis after short debounce
   windows.
-- Cache findings by file content hash or mtime so stale results are discarded.
+- Cache findings by workspace, file, and content revision so stale results are
+  discarded automatically.
 - Keep the latest quality state available for the TUI and future status views.
 - Learn which commands are configured for a workspace by inspecting project
   files such as `.golangci.yml`, `pyproject.toml`, `package.json`, `Makefile`,
   or local plumb config.
-- Avoid concurrent analyser storms by allowing one active quality job per
-  workspace and coalescing new requests into the next job.
+- Allow one active quality job per workspace and coalesce new requests into the
+  next job to avoid analyser storms.
+
+**golangci-lint and gopls conflict:** `golangci-lint` runs its own internal
+type-checker, which can conflict with plumb's live gopls instance over the same
+workspace. Symptoms include stale type information or phantom errors in lint
+output. Run golangci-lint as a separate process with its own build cache
+directory (`GOCACHE`), and schedule it during idle windows rather than
+immediately after a write when gopls is most likely actively re-indexing. Never
+run them concurrently on the same package.
 
 The daemon should treat this as background assistance, not foreground control.
-Active MCP tool calls should stay responsive.
+Active MCP tool calls must stay responsive.
 
 ### Suggested Product Surface
 
@@ -138,9 +186,9 @@ Example config shape:
 enabled = false
 mode = "background"              # background | sync
 analysers = ["golangci-lint"]
-timeout_ms = 2000
+timeout_ms = 5000                # conservative default; cold golangci-lint can exceed 2000ms
 max_findings_per_response = 8
-include_existing_findings = "nearby" # none | nearby | all
+include_existing_findings = "same_file" # none | same_file | all
 ```
 
 Start disabled or conservative until the ergonomics are proven. The failure mode
@@ -154,8 +202,11 @@ The first implementation should be Go-only and project-config aware:
 1. Detect whether `golangci-lint` is available and whether the workspace has a
    config or Go module.
 2. After Go file writes, enqueue a package/file analysis job in the daemon.
-3. Parse `golangci-lint` JSON output into a small common finding structure.
-4. Cache findings by workspace, file, and content revision.
+3. Parse `golangci-lint` JSON output into the common `Finding` structure.
+4. Cache findings by workspace, file, and content hash. Accept that dependent
+   packages are not invalidated in the first version; document this as a known
+   limitation. Design the cache schema with a `dependentOf` edge so this can be
+   added later.
 5. Show only fresh, changed-file findings in write responses.
 6. Add a status/session summary for pending, clean, failed, and stale quality
    states.
@@ -166,19 +217,23 @@ already see?"
 
 ### Open Questions
 
-- Should the first version report only new findings, or also nearby existing
-  findings for context?
-- Should synchronous mode be per-call, per-session, or only config-driven?
+- Should the first version report only new findings, or also same-file existing
+  findings for context? The config supports both; the default needs a decision.
+- Should synchronous mode be per-call (a `quality_sync: true` tool param),
+  per-session, or only config-driven?
 - What is the right timeout for slow tools such as `golangci-lint` versus fast
-  tools such as `ruff`?
+  tools such as `ruff`? Should each analyser have its own timeout field?
 - How should plumb distinguish quality warnings from correctness errors in MCP
-  responses?
-- Should background findings ever trigger client notifications, or only appear
-  on the next user/tool interaction?
-- How does this interact with rate limits if analysis itself calls tools or
-  writes cache files?
+  responses so the agent treats them with appropriate urgency?
+- Should background findings ever trigger MCP client notifications, or only
+  appear on the next user/tool interaction?
+- How does this interact with rate limits if analysis itself uses system
+  resources shared with active tool calls?
 - Should project maintainers be able to define custom quality commands in
   `.plumb/config.toml`?
+- When an MCP session ends before background analysis completes, should findings
+  be preserved and surfaced in the next session, or discarded? If preserved,
+  what is the TTL before they are considered too stale to show?
 
 ### My Take
 
@@ -190,7 +245,8 @@ enough to keep the editing loop fluid.
 I would build it as a background quality service owned by the daemon, with
 synchronous checks reserved for explicit strict mode. I would start with
 `golangci-lint` because this repository already uses it, but I would design the
-finding model around multiple analysers from the beginning.
+`Finding` structure around multiple analysers from the beginning so the cache
+and surface layer do not need reworking when `ruff` or `tsc` are added.
 
 The feature succeeds if the agent can say, "I changed this, the compiler is
 fine, but lint now reports one new issue caused by my edit, so I fixed it before
@@ -204,7 +260,7 @@ The version I would want:
 
 - After an edit, tell me quickly if I introduced new findings.
 - Keep pre-existing lint debt separate.
-- Cache and coalesce work in the daemon.
+- Cache and coalesce work in the daemon, and warm the cache on workspace attach.
 - Show "analysis pending" instead of blocking when the tool is slow.
 - Let me opt into synchronous mode when I am finishing a change or preparing a
   commit.
@@ -224,59 +280,117 @@ macOS App Sandboxing.
 
 ### Why This Matters
 
-AI agents have full filesystem access through Plumb. While this is powerful, it
-creates a massive security surface. A hallucinating or malicious agent could:
+AI agents have full filesystem access through plumb. While this is powerful, it
+creates a large security surface. A hallucinating or misconfigured agent could:
 - Read `~/.ssh/id_rsa` or `~/.aws/credentials`.
 - Delete `~/Documents`.
 - Exfiltrate sensitive data from unrelated projects.
 
-OS-level sandboxing (Docker) solves this but at a high cost: it breaks LSP
-dependency resolution (LSPs need your host's build tools/keys), destroys I/O
-performance on macOS, and complicates the "one daemon" shared architecture.
+OS-level sandboxing (Docker) addresses this but at a high cost: it breaks LSP
+dependency resolution (LSPs need the host's build tools and credentials),
+destroys I/O performance on macOS, and complicates the single-daemon shared
+architecture. The right solution is to enforce boundaries at the tool call layer,
+not the process layer.
 
 ### The Solution: `restrict_to_workspace`
 
-Instead of isolating the entire process, Plumb can isolate the **tool calls**.
 When a session is attached to a workspace (e.g., `/Users/me/projects/plumb`),
-Plumb should be able to enforce that every file-based tool call targets a path
-within that boundary.
+plumb enforces that every file-based tool call targets a path within that root.
 
 #### Key Mechanisms
 
-1.  **Strict Path Resolution:** Every incoming path (relative or absolute) must
-    be cleaned and resolved against the workspace root.
-2.  **Prefix Enforcement:** Reject any operation where
-    `!strings.HasPrefix(target, workspaceRoot)`.
-3.  **Symlink Safety:** If a tool targets a symlink that points outside the
-    workspace, it must be rejected (or resolved and checked against the prefix).
-4.  **Opt-in vs. Enforcement:** This should likely be a config toggle
-    (`[edits].restrict_to_workspace = true`) that can be set globally or per-project.
+1. **Strict Path Resolution:** Every incoming path must be cleaned with
+   `filepath.Clean` and resolved to an absolute path before any boundary check.
+   Relative paths are resolved against the workspace root.
 
-### Implementation Nuances & Audit
+2. **Prefix Enforcement:** Reject any operation where the resolved target path
+   does not fall within the workspace root. Do not use
+   `strings.HasPrefix(target, workspaceRoot)` alone — this passes for
+   `/projects/plumb-extra` against a root of `/projects/plumb`. Instead, use
+   `filepath.Rel(workspaceRoot, target)` and reject if the result begins with
+   `..` or equals `..`.
 
-The current `[walk].refuse_home_roots` setting is a good first step, but it
-needs to be audited. It's easy for such checks to exist in "config intent" but
-drift in actual implementation.
+3. **Symlink Safety:** Symlinks that resolve outside the workspace must be
+   rejected. However, resolving via `filepath.EvalSymlinks` followed by a prefix
+   check is not atomic — a symlink can be retargeted between the check and the
+   actual `open()` call (TOCTOU race). For the first version, accept this
+   limitation and document it clearly. A fully hardened implementation requires
+   `O_NOFOLLOW` and manual path walking, which introduces platform-specific
+   complexity; treat that as a follow-up hardening item, not a blocker for the
+   initial feature.
 
-- **Audit Requirement:** We must ensure that the `refuse_home_roots` check is
-  actually enforced in the `list_files`, `find_files`, and `search_in_files`
-  implementation, not just in the config loader.
-- **Integration Testing:** We need a dedicated test suite that attempts to
-  "escape" the workspace using `../` traversal, absolute paths, and malicious
-  symlinks to verify the confinement.
+4. **Opt-in Configuration:** Off by default; enabled per-project or globally
+   via config.
+
+#### Scope: File Tools Only
+
+Confinement applies to the file-based tools: `read_file`, `write_file`,
+`edit_file`, `delete_file`, `rename_file`, `transaction_apply`,
+`list_directory`, `list_files`, `find_files`, `search_in_files`.
+
+LSP-derived results (`get_definition`, `find_references`, `call_hierarchy`,
+etc.) are **not** confined. The language server legitimately navigates to stdlib
+sources, `$GOPATH/pkg/mod/...`, and other dependencies outside the workspace.
+Blocking those results would break core navigation. Confinement means the agent
+cannot read or write arbitrary files via file tools; it does not prevent the LSP
+from reporting symbol locations in external paths.
+
+#### Edge Cases
+
+**Auto-attach sessions:** When `auto_attach = true` resolves the workspace root
+to `$HOME` or a broad ancestor directory, confining to that root is meaningless.
+The feature should refuse to activate — or emit an explicit warning — unless the
+session is attached to a real `.plumb/` marker workspace, not a synthetic root.
+
+**Multi-workspace pool:** The daemon manages a pool of workspaces. If the active
+session is attached to `/projects/foo`, a file tool targeting `/projects/bar`
+must be blocked even though the daemon manages that workspace too. Confinement
+is per-session, not per-daemon.
+
+**Missing `refuse_home_roots`:** The config schema documents a
+`[walk].refuse_home_roots` setting as a partial predecessor to this feature.
+Before treating it as a foundation, audit the actual tool implementations
+(`list_files.go`, `find_files.go`, `search_in_files.go`) to verify the check
+exists in code, not only in config intent. If it is missing, workspace
+confinement replaces and supersedes it.
 
 ### Suggested Configuration
 
+The confinement toggle belongs in `[workspace]`, not `[edits]`, because it
+applies to reads as well as writes:
+
 ```toml
-[edits]
-restrict_to_workspace = true   # Rejects all I/O outside the root
-allow_external_reads = false   # Optional: allow reading but not writing outside
+[workspace]
+restrict_to_workspace = true    # Rejects all file I/O outside the workspace root.
+                                # Has no effect on auto_attach synthetic roots (warns instead).
+allow_external_reads = false    # When true, permits reads outside the root but
+                                # not writes. Useful for shared config files
+                                # (e.g. a global .golangci.yml or shared schema)
+                                # that live outside any single project root.
 ```
+
+`allow_external_reads` exists because strict write confinement with unrestricted
+reads covers the most important threat (destructive or exfiltrating writes) while
+still allowing common patterns like reading a global config file or a vendored
+schema from a path the organisation standardises outside of individual project
+roots.
+
+### Integration Testing Requirements
+
+A dedicated test suite must attempt to escape the workspace boundary and verify
+each attempt is rejected:
+
+- `../` traversal: `/projects/plumb/../sensitive`
+- Absolute paths outside the root
+- Symlinks pointing outside the root
+- Paths that pass `strings.HasPrefix` but fail `filepath.Rel` (the
+  `/projects/plumb-extra` case)
+- Auto-attach session with root at `$HOME` — confinement should warn or refuse
+  to activate
 
 ### Recommendation
 
-This is a "high-impact, low-cost" feature. It provides the security guarantees
-users expect from a sandbox without the performance and dependency headaches of
-containers. It should be the primary security model for Plumb.
-
-
+This is a high-impact, low-cost feature. It provides the security guarantees
+users expect from a sandbox without the performance and dependency cost of
+containers. It should be the primary security model for plumb, and it is a
+better investment than OS-level isolation for this architecture.
