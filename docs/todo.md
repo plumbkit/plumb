@@ -502,38 +502,6 @@ Recommendation: **do not introduce workers yet**. First add measurement and idle
 
 ---
 
-### `edit_file` — opt-in partial apply mode
-
-**Priority:** low — the current all-or-nothing behaviour is correct for most cases.
-**Effort:** Small. New boolean parameter; separate apply-and-collect-errors loop.
-**Status:** Idea only.
-
-When an `edit_file` call includes multiple edits and one fails (`old_str` not found, or ambiguous), the entire batch is rolled back. This is the right default. However, for large refactor batches where most edits are independent, an agent may prefer to apply the successful edits and receive a per-edit error report, then retry only the failures.
-
-**Proposed API:** `apply_partial: true` on the `edit_file` input. When set:
-1. Apply each edit independently in sequence.
-2. On failure, record the error and continue with remaining edits.
-3. Return a per-edit result list: `{edit_index, status: "applied"|"failed", error?, line_range?}`.
-4. Still append post-write diagnostics at the end.
-
-**Watch out for:** partial application breaks the atomicity guarantee that makes `edit_file` safe for concurrent agents. Document clearly that `apply_partial` is incompatible with strict mode's "consistent state" assumption and is never valid inside `transaction_apply`.
-
----
-
-### `find_replace` — opt-in post-write formatter hook
-
-**Priority:** low — most bulk replacements do not need formatting.
-**Effort:** Small. Run the workspace's configured formatter on modified files after replacement.
-**Status:** Idea only.
-
-`find_replace` rewrites files with raw text substitution. If the replacement changes indentation or import grouping (e.g. renaming `lsp.LSPClient` → `lsp.Client` affects gofumpt's import block layout), the modified files may fail subsequent lint checks. Today the agent must manually run `golangci-lint run --fix` after a bulk `find_replace`.
-
-**Proposed API:** `format_after: true` on the `find_replace` input. When set, run the workspace's configured formatter (`gofumpt` for Go, `ruff format` for Python, etc.) on each modified file. Append a "formatted N files" note to the response.
-
-**Watch out for:** detect the formatter from the workspace language config and `.golangci.yml` — do not hardcode `gofumpt`. If the formatter is not found or errors, report the formatting failure as a warning and still return the replacement results.
-
----
-
 ### `search_in_files` — LSP-backed enclosing symbol for each match
 
 **Priority:** medium — especially valuable for clients without native filesystem access (Claude Desktop).

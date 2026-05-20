@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -23,6 +24,12 @@ import (
 
 type findReplaceTool struct {
 	deps WriteDeps
+}
+
+type fileChange struct {
+	path  string
+	count int
+	err   error
 }
 
 func NewFindReplace(deps ...WriteDeps) *findReplaceTool {
@@ -58,7 +65,8 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write files."},
 			"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing files that have uncommitted changes in their git repository. Default false — the replacement is refused if any target file is dirty. Pass true to proceed anyway."},
 			"max_files":{"type":"integer","default":100,"description":"Cap on number of files modified."},
-			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip files larger than this many bytes. Default 50 MiB."}
+			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip files larger than this many bytes. Default 50 MiB."},
+			"format_after":{"type":"boolean","default":false,"description":"After writing changes, run the workspace formatter (gofumpt for Go, ruff format for Python) on each modified file. Formatter errors are reported as warnings and do not fail the call."}
 		},
 		"required":["path","pattern","replacement"]
 	}`)
@@ -76,6 +84,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
 		DryRun        *bool  `json:"dry_run,omitempty"`
 		DirtyOk       bool   `json:"dirty_ok"`
+		FormatAfter   bool   `json:"format_after"`
 		MaxFiles      int    `json:"max_files"`
 		MaxFileBytes  int64  `json:"max_file_bytes"`
 	}
@@ -155,12 +164,6 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		})
 	} else {
 		files = []string{a.Path}
-	}
-
-	type fileChange struct {
-		path  string
-		count int
-		err   error
 	}
 
 	scan := func(path string) (int, []byte) {
@@ -322,9 +325,64 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	if dryRun && len(changes) > 0 {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
+
+	if !dryRun && a.FormatAfter && len(changes) > 0 {
+		formatted, formatErrs := runFormatterOnFiles(ctx, changes)
+		if formatted > 0 {
+			fmt.Fprintf(&sb, "\nformatted %d file(s)", formatted)
+		}
+		for _, fe := range formatErrs {
+			sb.WriteString("\nformat warning: ")
+			sb.WriteString(fe.Error())
+		}
+	}
+
 	if len(writeErrs) > 0 {
 		return sb.String(), errors.Join(writeErrs...)
 	}
 
 	return sb.String(), nil
+}
+
+// runFormatterOnFiles runs the appropriate source formatter on each changed
+// file. Returns the count of successfully formatted files and any warnings.
+func runFormatterOnFiles(ctx context.Context, changes []fileChange) (int, []error) {
+	formatted := 0
+	var errs []error
+	for _, c := range changes {
+		cmd, ok := formatterCmd(c.path)
+		if !ok {
+			continue
+		}
+		out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).CombinedOutput()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w: %s", filepath.Base(c.path), err, strings.TrimSpace(string(out))))
+			slog.Warn("find_replace: formatter failed", "path", c.path, "err", err)
+			continue
+		}
+		formatted++
+	}
+	return formatted, errs
+}
+
+// formatterCmd returns the command to format path based on its extension.
+// Returns (cmd, true) when a formatter is available, (nil, false) otherwise.
+func formatterCmd(path string) ([]string, bool) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		if _, err := exec.LookPath("gofumpt"); err == nil {
+			return []string{"gofumpt", "-w", path}, true
+		}
+		if _, err := exec.LookPath("gofmt"); err == nil {
+			return []string{"gofmt", "-w", path}, true
+		}
+	case ".py":
+		if _, err := exec.LookPath("ruff"); err == nil {
+			return []string{"ruff", "format", path}, true
+		}
+		if _, err := exec.LookPath("black"); err == nil {
+			return []string{"black", "--quiet", path}, true
+		}
+	}
+	return nil, false
 }

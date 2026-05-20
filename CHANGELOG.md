@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.8 (2026-05-20)
+
+### Added
+- **`edit_file` partial apply mode.** New `apply_partial: true` parameter. When set, each edit in the batch is applied independently — failures are collected per-edit rather than rolling back the whole batch. The response includes a per-edit status list (`applied`/`FAILED`) with line ranges for successful edits and error text for failures. Post-write diagnostics still appear at the end. LSP notification and cache invalidation only fire when at least one edit was applied. Useful for large refactor batches where most edits are independent and retrying only the failures is preferable to resubmitting the whole call. Not compatible with strict mode or `transaction_apply`.
+- **`find_replace` post-write formatter hook.** New `format_after: true` parameter. After writing all replacements (non-dry-run only), the workspace formatter is run on each modified file: `gofumpt`/`gofmt` for `.go`, `ruff format`/`black` for `.py`. Formatter not found → silently skipped. Formatter error → warning appended to response, call still succeeds. Response includes `formatted N file(s)` when any files were reformatted. Eliminates the need to manually run `golangci-lint run --fix` after bulk text replacements that affect import or indentation layout.
+
 ## 0.6.7 (2026-05-20)
 
 ### Fixed

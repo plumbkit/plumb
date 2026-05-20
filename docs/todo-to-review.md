@@ -269,3 +269,27 @@ Claude Desktop has no native filesystem or shell access. Plumb is its only inter
 3. **`docs/mcp-tools.md` client capabilities table**: added a "Client capabilities and fallback behaviour" section at the top of the tool catalogue. A table lists Claude Desktop (no native filesystem/shell/git), Claude Code (`Read`/`Edit`/`Write` + `Bash`), Codex, and Gemini CLI. Two implication notes follow: one for tool error messages (do not suggest native tools), one for token savings (Claude Desktop savings are better expressed as "capabilities enabled" than "tokens saved vs alternative").
 
 The savings-model profile for `claude-desktop` (Architecture item) was not implemented — that is part of the larger client-aware savings model tracked in the Architecture section.
+
+---
+
+### `edit_file` — opt-in partial apply mode
+
+**Completed in:** 0.6.8
+**Original priority:** low
+
+`edit_file` now accepts `apply_partial: true`. When set, each edit in the `edits` array is applied independently in sequence. Failures are collected and reported per-edit rather than rolling back the entire batch. The response includes a per-edit result list with status (`applied` or `FAILED`), line range for successful edits, and the error message for failures. Post-write diagnostics are still appended at the end. If all edits fail, no file is written. LSP notification and cache invalidation only fire when at least one edit is applied.
+
+Implementation: `internal/tools/edit_file.go` — new `apply_partial` schema field, `executePartial` method, `tryEditPartial` method, and `partialEditResult` struct. Tests in `internal/tools/edit_file_test.go` cover: all succeed, partial success (middle edit fails), all fail.
+
+The atomicity guarantee is intentionally dropped when `apply_partial: true` is set — document clearly that this mode is incompatible with strict mode's "consistent state" assumption and is not valid inside `transaction_apply`.
+
+---
+
+### `find_replace` — opt-in post-write formatter hook
+
+**Completed in:** 0.6.8
+**Original priority:** low
+
+`find_replace` now accepts `format_after: true`. After writing all replacements (non-dry-run only), the appropriate source formatter is run on each modified file: `gofumpt` (falling back to `gofmt`) for `.go` files, `ruff format` (falling back to `black`) for `.py` files. If the formatter is not found the file is silently skipped. If the formatter errors, the failure is reported as a warning line in the response and does not fail the tool call. The response appends `formatted N file(s)` when any files were reformatted.
+
+Implementation: `internal/tools/find_replace.go` — `format_after` schema field and args struct field; `runFormatterOnFiles` and `formatterCmd` package-level helpers; `fileChange` struct elevated from local to package scope to allow the helpers to reference it. Tests in `internal/tools/find_replace_test.go` cover: `.txt` file (no formatter → no "formatted" line) and `formatterCmd` extension dispatch.

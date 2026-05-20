@@ -357,3 +357,77 @@ func TestEditFile_ExpectedSHA_RejectsStale(t *testing.T) {
 		t.Errorf("expected 'content has changed' in error, got: %v", err)
 	}
 }
+
+func TestEditFile_ApplyPartial_AllSucceed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("aaa\nbbb\nccc\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"path":          path,
+		"apply_partial": true,
+		"edits": []map[string]string{
+			{"old_str": "aaa", "new_str": "AAA"},
+			{"old_str": "bbb", "new_str": "BBB"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "applied 2 of 2") {
+		t.Errorf("expected '2 of 2' in output; got: %s", out)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "AAA\nBBB\nccc\n" {
+		t.Errorf("unexpected file content: %q", got)
+	}
+}
+
+func TestEditFile_ApplyPartial_SomeFail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("aaa\nbbb\nccc\n"), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"path":          path,
+		"apply_partial": true,
+		"edits": []map[string]string{
+			{"old_str": "aaa", "new_str": "AAA"},    // succeeds
+			{"old_str": "MISSING", "new_str": "X"}, // fails
+			{"old_str": "ccc", "new_str": "CCC"},    // succeeds
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "applied 2 of 3") {
+		t.Errorf("expected '2 of 3' in output; got: %s", out)
+	}
+	if !strings.Contains(out, "[1] FAILED") {
+		t.Errorf("expected [1] FAILED in output; got: %s", out)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "AAA\nbbb\nCCC\n" {
+		t.Errorf("unexpected file content: %q", got)
+	}
+}
+
+func TestEditFile_ApplyPartial_AllFail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	content := "aaa\nbbb\n"
+	_ = os.WriteFile(path, []byte(content), 0o644)
+
+	out, err := callEditFile(t, map[string]any{
+		"path":          path,
+		"apply_partial": true,
+		"edits":         []map[string]string{{"old_str": "MISSING", "new_str": "X"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "all edits failed") {
+		t.Errorf("expected 'all edits failed' in output; got: %s", out)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != content {
+		t.Error("file should be unchanged when all edits fail")
+	}
+}

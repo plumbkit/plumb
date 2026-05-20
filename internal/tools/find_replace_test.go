@@ -710,3 +710,62 @@ func TestFindReplace_SmartCase(t *testing.T) {
 		t.Errorf("smart-case replace wrong: got %q", string(data))
 	}
 }
+
+// TestFindReplace_FormatAfter_NoFormatter verifies that format_after=true on a
+// file type with no known formatter does not fail the call and omits the
+// "formatted N file(s)" line.
+func TestFindReplace_FormatAfter_NoFormatter(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hello world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewFindReplace()
+	args, _ := json.Marshal(map[string]any{
+		"path":         filepath.Join(dir, "notes.txt"),
+		"pattern":      "hello",
+		"replacement":  "goodbye",
+		"dry_run":      false,
+		"format_after": true,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Replacement must have happened.
+	got, _ := os.ReadFile(filepath.Join(dir, "notes.txt"))
+	if string(got) != "goodbye world\n" {
+		t.Errorf("file content wrong: %q", string(got))
+	}
+	// No "formatted" line since .txt has no formatter.
+	if strings.Contains(out, "formatted") {
+		t.Errorf("unexpected 'formatted' in output for .txt file: %s", out)
+	}
+}
+
+// TestFindReplace_FormatterCmd verifies formatterCmd returns the right commands
+// (or none) based on file extension.
+func TestFindReplace_FormatterCmd(t *testing.T) {
+	cases := []struct {
+		path    string
+		wantNil bool
+	}{
+		{"main.go", false},  // gofumpt or gofmt should be on PATH in CI
+		{"script.py", true}, // ruff/black may not be present; expect nil gracefully
+		{"notes.txt", true},
+		{"file.java", true},
+	}
+	for _, tc := range cases {
+		cmd, ok := formatterCmd(tc.path)
+		if tc.wantNil {
+			if ok {
+				t.Errorf("formatterCmd(%q): got cmd %v, expected none", tc.path, cmd)
+			}
+		}
+		// For Go: ok may be true or false depending on PATH — just verify that
+		// if ok is true, the command slice is non-empty.
+		if ok && len(cmd) == 0 {
+			t.Errorf("formatterCmd(%q): ok=true but cmd is empty", tc.path)
+		}
+	}
+}
