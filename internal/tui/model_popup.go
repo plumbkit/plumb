@@ -97,17 +97,6 @@ func (m Model) popupRightAll(rw int) []string {
 		detailRow("Output", DetailStyle.Render(fmt.Sprintf("%d bytes", c.OutputBytes))),
 	)
 
-	gutterLine := func(label string, content []string) {
-		lines = append(lines, "", "  "+PanelHeaderStyle.Render(label))
-		gutterChar := SepStyle.Render("┊")
-		for _, cl := range content {
-			if lipgloss.Width(cl) > rw-5 {
-				cl = string([]rune(cl)[:rw-6]) + "…"
-			}
-			lines = append(lines, "  "+gutterChar+" "+cl)
-		}
-	}
-
 	if !c.Success {
 		var el []string
 		if c.ErrorMsg != "" {
@@ -117,27 +106,42 @@ func (m Model) popupRightAll(rw int) []string {
 		} else {
 			el = append(el, MutedStyle.Render("(no error message recorded)"))
 		}
-		gutterLine("Error", el)
+		lines = append(lines, popupGutterLines("Error", el, rw)...)
 	}
 	ij, ot := m.currentDetail()
 	if ij != "" {
-		var al []string
-		var pb bytes.Buffer
-		if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
-			for l := range strings.SplitSeq(strings.TrimRight(pb.String(), "\n"), "\n") {
-				al = append(al, DetailStyle.Render(l))
-			}
-		} else {
-			al = append(al, DetailStyle.Render(ij))
-		}
-		gutterLine("Args", al)
+		lines = append(lines, popupGutterLines("Args", popupFormatArgs(ij), rw)...)
 	}
 	if ot != "" && c.Success {
 		var ol []string
 		for o := range strings.SplitSeq(strings.TrimRight(ot, "\n"), "\n") {
 			ol = append(ol, DetailStyle.Render(o))
 		}
-		gutterLine("Output", ol)
+		lines = append(lines, popupGutterLines("Output", ol, rw)...)
 	}
 	return lines
+}
+
+func popupGutterLines(label string, content []string, rw int) []string {
+	lines := []string{"", "  " + PanelHeaderStyle.Render(label)}
+	gutterChar := SepStyle.Render("┊")
+	for _, cl := range content {
+		if lipgloss.Width(cl) > rw-5 {
+			cl = string([]rune(cl)[:rw-6]) + "…"
+		}
+		lines = append(lines, "  "+gutterChar+" "+cl)
+	}
+	return lines
+}
+
+func popupFormatArgs(ij string) []string {
+	var pb bytes.Buffer
+	if err := json.Indent(&pb, []byte(ij), "", "  "); err == nil {
+		var al []string
+		for l := range strings.SplitSeq(strings.TrimRight(pb.String(), "\n"), "\n") {
+			al = append(al, DetailStyle.Render(l))
+		}
+		return al
+	}
+	return []string{DetailStyle.Render(ij)}
 }
