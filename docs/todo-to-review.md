@@ -256,6 +256,25 @@ Remaining gosec findings (G306 file perms, G703 path traversal, G115 integer ove
 
 ---
 
+### CQ-5 (items 2–6) — remaining gosec findings resolved
+
+**Completed in:** 0.7.1 (2026-05-20)
+**Original priority:** P1, security
+
+All remaining gosec findings triaged and resolved — each finding either fixed or individually annotated with a one-line justification pointing at the safety invariant. Zero unexplained gosec findings remain.
+
+**#2 G306 file permissions.** Metadata files (`memory/store.go`, `session/session.go`, `cli/daemon.go` PID + version files) changed from 0644 to 0600. User-facing files (`tools/edit_apply.go`, `cli/init.go context.md`) retain 0644 with nolint annotations explaining the intent.
+
+**#3 G703 path traversal.** All three flagged paths (`setup_helpers.go backupFile`, `file_write_helpers.go safeWriteSibling`, `txlog.go rollbackDir`) confirmed to pass through existing validation before the write sink. Annotated at the `os.WriteFile` call (the taint sink) with the specific safety invariant for each site.
+
+**#4 G115 integer overflow.** Real bounds checks added in three places: `protocol.ProcessID()` returns nil when PID > MaxInt32 (null is valid per LSP spec); `docCommentStart` returns `symStart` on overflow; `enclosingSymbolAnnotations` skips hits on overflow. Braille conversion in `dashboard_activity.go` annotated (row[k] in [0,255], result 0x28FF is invariantly within rune range).
+
+**#5 G602/G204.** `stringSliceEqual` length guard (established three lines above the index) justifies the G602 annotation. Both subprocess launches (LSP adapter binary from config, formatter binary from hardcoded `LookPath` lookup) are annotated with their input provenance.
+
+**G202 nolint placement fix.** The prior `//nolint:gosec` annotations in `db_query.go` were on the last line of multi-line string concatenations; golangci-lint reports the issue at the first line of the statement. Moved each directive to the preceding line — the format golangci-lint v2 recognises.
+
+---
+
 ### CQ-3 — Decompose the monolithic `Execute()` methods
 
 **Completed in:** 0.7.0 (non-TUI) and 0.7.1 (TUI)

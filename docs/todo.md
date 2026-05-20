@@ -978,27 +978,6 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 ---
 
-### CQ-5 — Triage and resolve the 13 gosec findings (P1, security)
-
-**Priority:** high — security posture is part of "good practices", and plumb is an agent-facing daemon (prompt-injection → tool-call is a real threat model).
-**Effort:** Medium — mostly analysis; a few are real fixes.
-**Status:** Item 1 (G202 SQL concat) resolved in 0.6.9 — confirmed not a real injection bug, annotated with justification. Items 2–6 not started.
-
-**Problem.** 13 gosec findings (16 as of 0.6.8 due to new code). Some are real, some are taint-analysis heuristics on already-validated paths. Each must end as *fixed* or *justified-and-annotated*, never unexplained.
-
-**Definition of done — per finding, decide fix vs. justified suppression:**
-
-1. ~~**SQL string concatenation — `internal/stats/db.go:357, 428, 499` (G202).**~~ **RESOLVED in 0.6.9.** All three are false positives — `filter.where()` always uses `?` placeholders. Annotated with `//nolint:gosec` + explanatory comment.
-2. **File permissions G306 — `internal/memory/store.go:121`, `internal/session/session.go:128`, `internal/tools/edit_apply.go:85`.** `edit_apply` writes user source files where 0644 is correct (preserve perms). Memory/session files are plumb-owned metadata — decide whether 0600 is appropriate. Fix where it's metadata; document + annotate where 0644 is intentional.
-3. **Path traversal G703 — `internal/cli/setup.go:415`, `internal/tools/file_write_helpers.go:387`, `internal/tools/txlog/txlog.go:213`.** Plumb's entire write model is path validation + per-path locks + symlink resolution. Confirm each flagged path passes through the existing validation, then add a one-line `//nolint:gosec // path validated by <fn> — see safeWrite contract` referencing the guarantee. (Cross-check with cli-and-core-review-plan.md §6 symlink-lock-key item.)
-4. **Integer overflow G115 — `internal/lsp/protocol/types.go:363` (int→int32), `internal/tools/symbol_edits.go:67` (int→uint32), `internal/tools/search_in_files.go:471` (int→uint32), `internal/tui/dashboard.go:760` (int→rune).** LSP positions in pathological huge files. Add explicit bounds checks before conversion; return a clear error instead of silently wrapping. Small, real correctness fix.
-5. **G602 slice index — `internal/cli/setup.go:551`**, **G204 subprocess — `internal/lsp/supervisor.go:231`** and **`internal/tools/find_replace.go:357`** (LSP command and formatter cmd come from resolved config/extension lookup, expected). Verify bounds / input provenance and annotate with justification.
-6. End state: `golangci-lint run ./...` shows zero unexplained gosec findings; every remaining suppression has a one-line reason pointing at the safety invariant.
-
-**Watch out for.** Do not bulk-`//nolint` the gosec linter. The whole point is that #1 might be a real injection bug hiding among heuristic noise — each one gets eyes.
-
----
-
 ### CQ-7 — De-duplicate CLI/TUI presentation helpers (P2)
 
 **Priority:** medium. Subsumes cli-and-core-review-plan.md §14.
