@@ -20,9 +20,14 @@ type diagnosticsSource interface {
 var diagnosticsSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "uris": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "file:// URIs to fetch diagnostics for. Omit or pass [] to return diagnostics for all files that have issues. Pass one URI for a single-file query. Pass multiple URIs to check a specific set of files in one call."
+    },
     "uri": {
       "type": "string",
-      "description": "file:// URI to fetch diagnostics for. Omit to return all files that have issues."
+      "description": "Deprecated — use uris instead. Single file:// URI; equivalent to uris: [uri]."
     }
   }
 }`)
@@ -43,36 +48,58 @@ func NewDiagnostics(inv diagnosticsSource) *Diagnostics {
 func (t *Diagnostics) Name() string                 { return "diagnostics" }
 func (t *Diagnostics) InputSchema() json.RawMessage { return diagnosticsSchema }
 func (t *Diagnostics) Description() string {
-	return "Return LSP errors, warnings, and hints for a file or for all files in the workspace. " +
+	return "Return LSP errors, warnings, and hints for one file, several files, or the whole workspace. " +
+		"Pass uris (a list of file:// URIs) to check specific files — omit or pass [] to query all files. " +
+		"A single call with multiple URIs replaces multiple single-file calls. " +
 		"Results are pushed by the language server as it analyses code; they may be empty " +
 		"if the server has not yet sent any diagnostics."
 }
 
 func (t *Diagnostics) Execute(_ context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
-		URI string `json:"uri"`
+		URIs []string `json:"uris"`
+		URI  string   `json:"uri"` // backward-compat: treated as uris:[uri] when uris is absent
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("diagnostics: invalid arguments: %w", err)
 	}
 
-	if a.URI != "" {
-		diags := t.inv.Diagnostics(a.URI)
-		if len(diags) == 0 {
-			// Distinguish "analysed and clean" from "never reported on".
-			if _, tracked := t.inv.AllDiagnostics()[a.URI]; !tracked {
-				path := strings.TrimPrefix(a.URI, "file://")
-				return fmt.Sprintf("File %s is not yet tracked by the language server. "+
-					"Open it in your editor (or run a tool that touches it) so gopls receives a textDocument/didOpen, "+
-					"then retry.", path), nil
-			}
-			return "No issues found — file is tracked and clean.", nil
-		}
-		return formatDiagnostics(map[string][]protocol.Diagnostic{a.URI: diags}), nil
+	// Backward-compat: scalar uri field is treated as uris:[uri].
+	if len(a.URIs) == 0 && a.URI != "" {
+		a.URIs = []string{a.URI}
 	}
 
-	all := t.inv.AllDiagnostics()
-	return formatDiagnostics(all), nil
+	switch len(a.URIs) {
+	case 0:
+		return formatDiagnostics(t.inv.AllDiagnostics()), nil
+	case 1:
+		return t.singleURI(a.URIs[0]), nil
+	default:
+		return t.multiURI(a.URIs), nil
+	}
+}
+
+func (t *Diagnostics) singleURI(uri string) string {
+	diags := t.inv.Diagnostics(uri)
+	if len(diags) == 0 {
+		// Distinguish "analysed and clean" from "never reported on".
+		if _, tracked := t.inv.AllDiagnostics()[uri]; !tracked {
+			path := strings.TrimPrefix(uri, "file://")
+			return fmt.Sprintf("File %s is not yet tracked by the language server. "+
+				"Open it in your editor (or run a tool that touches it) so gopls receives a textDocument/didOpen, "+
+				"then retry.", path)
+		}
+		return "No issues found — file is tracked and clean."
+	}
+	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: diags})
+}
+
+func (t *Diagnostics) multiURI(uris []string) string {
+	merged := make(map[string][]protocol.Diagnostic, len(uris))
+	for _, uri := range uris {
+		merged[uri] = t.inv.Diagnostics(uri)
+	}
+	return formatDiagnostics(merged)
 }
 
 // FormatDiagnostics renders a URI→diagnostics map as a human-readable string.

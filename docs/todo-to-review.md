@@ -393,3 +393,23 @@ Six files over 400 lines split across six commits (one new file each). All first
 | `internal/cli/setup_helpers.go` | `setup.go` (556 → 369) | 195 |
 
 `internal/cli/daemon.go` had already dropped to 390 lines through CQ-3 work — no split needed. `internal/lsp/protocol/types.go` remains on the documented exception list (protocol type catalogue mirroring the LSP spec).
+
+---
+
+## Improvements
+
+### `diagnostics` tool — accept multiple URIs in a single call
+
+**Completed in:** 0.7.3
+**Original priority:** Medium
+
+The `diagnostics` tool now accepts `uris: []string` instead of a single scalar `uri`. Three call modes:
+- `uris` absent or `[]` → `AllDiagnostics()` — full workspace (existing zero-arg behaviour).
+- `uris` with one element → single-file query (existing single-arg behaviour).
+- `uris` with N elements → fan out over each URI, merge results, return as one formatted response.
+
+The old scalar `uri` field is kept in the schema as deprecated and handled transparently: if `uris` is absent and `uri` is present, it is treated as `uris:[uri]`.
+
+Implementation: `internal/tools/diagnostics.go` — updated schema, description, and `Execute`. Logic split into `singleURI` and `multiURI` helpers to stay under gocyclo 15. `docs/mcp-tools.md` updated.
+
+Tests: 5 new cases in `internal/tools/diagnostics_test.go` — single via `uris`, multi-file (3 files), multi-file with one untracked, all-clean multi-file, and scalar `uri` backward-compat.

@@ -2,6 +2,9 @@
 
 ## 0.7.3 (unreleased)
 
+### Changed
+- **`diagnostics` tool — accept multiple URIs in a single call.** The tool now accepts `uris: []string` alongside the old scalar `uri` (kept for backward compatibility — treated as `uris:[uri]`). Three call modes: omit `uris` or pass `[]` for all files; one URI for a single-file query; multiple URIs to fan out and merge results in one response. Description updated. `docs/mcp-tools.md` updated. 5 new unit tests cover: single via `uris`, multi-file, multi-file with one untracked, all-clean multi-file, and scalar `uri` backward-compat.
+
 ### Fixed
 - **TUI Dashboard Activity Graph Height and Resolution.** The dashboard activity graph height is now capped at 8 pixels instead of 7, making full use of the braille character set. The horizontal resolution has also been doubled to utilize both dots in a braille character independently, providing a more detailed view of activity spikes.
 

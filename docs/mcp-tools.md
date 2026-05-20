@@ -20,7 +20,7 @@ Plumb exposes 34 structured tools to AI assistants. Every write tool is concurre
 | `find_references` | All usages of a symbol across the workspace. |
 | `call_hierarchy` | Incoming and outgoing call graphs. |
 | `type_hierarchy` | Supertypes and subtypes. |
-| `diagnostics` | Errors, warnings, and hints from the language server. |
+| `diagnostics` | Errors, warnings, and hints from the language server. Pass `uris` (array) to check specific files; omit for all files. A single call replaces multiple per-file calls. |
 
 ## LSP Semantic Edits
 | Tool | Description |
