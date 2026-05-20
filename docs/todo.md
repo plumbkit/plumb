@@ -543,7 +543,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 | `(*findReplaceTool).Execute` | ~~58~~ **done (0.7.0)** |
 | `(*TransactionApply).Execute` | ~~44~~ **done (0.7.0)** |
 | `(Model).updateInner` (TUI) | 41 |
-| `handleConn` (daemon) | 38 |
+| `handleConn` (daemon) | ~~38~~ **done (0.7.0)** |
 | `(*FindFiles).Execute` | ~~35~~ **done (0.7.0)** |
 | `(*EditFile).Execute` | ~~33~~ **done (0.7.0)** |
 | `(*Server).Serve` | 32 |

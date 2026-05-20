@@ -3,6 +3,7 @@
 ## 0.7.0 (unreleased)
 
 ### Changed
+- **CQ-3 #21: Decompose `handleConn` (complexity 38 → 1).** Introduced `connSession` struct in `internal/cli/conn.go` that holds all per-connection mutable state and hosts the bodies of the previous anonymous closures as named methods: `attachWorkspace`, `attachSynthetic`, `applyProjectConfig`, `javaPostWriteNotify`, `rootFromClient`, `onClientInfo`, `onAfterTool`, `onBeforeTool`, `buildWriteDeps`, `registerAllTools`, `registerHooks`. `handleConn` in `daemon.go` becomes a 9-line thin orchestrator; six imports no longer needed in `daemon.go` are removed. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #20: Decompose `walkDir` (complexity 17 → ≤15).** Extracted `shouldVisitEntry` (hidden-file and gitignore filter predicate); the two separate `if !includeHidden && isHidden` / `if respectIgnore && isIgnored` guards in the entry loop collapse into one call, removing three branch points from `walkDir`. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #19: Decompose `(*TypeHierarchy).Execute` (complexity 16 → ≤15).** Extracted `parseTypeHierarchyArgs` (JSON decode, URI validation, direction default). Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #18: Decompose `(*RenameSymbol).Execute` (complexity 16 → ≤15).** Promoted the inline anonymous args struct to `renameSymbolArgs`. Extracted `parseRenameSymbolArgs` (JSON decode, URI/newName validation, DryRun bool resolution from `*bool`). Pure refactor — all tests pass, behaviour identical.
