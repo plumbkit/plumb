@@ -3,6 +3,7 @@
 ## 0.7.0 (unreleased)
 
 ### Changed
+- **CQ-3 #11: Decompose `ListDirectory.Execute` (complexity 20 → ≤15).** Extracted `parseListDirectoryArgs`, `collectDirEntries` (stat + ReadDir), `filterDirEntries` (hidden/pattern/info filter loop), `sortDirEntries` (sort-by switch with closures), `formatDirResult`. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #10: Decompose `ListFiles.Execute` (complexity 20 → ≤15).** The walk callback closure is replaced with a `listFilesWalker` struct whose `visit`, `visitDir`, and `visitFile` methods handle each concern separately. Added `parseListFilesArgs`, `listFilesWalk`, `formatListFilesResult`. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #9: Decompose `groupHunks` (complexity 16 → ≤15).** Extracted `collectHunkBody` (inner collect-changed-region loop with trailing-context stop condition) and `countTrailingCommon` (count trailing space-kind lines). `groupHunks` becomes a thin loop that advances past common lines, builds the context prefix, then delegates body collection. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #8: Decompose `computeEditScript` (complexity 27 → ≤15).** Split the Myers O(ND) algorithm into `myersForward` (greedy forward pass — returns trace snapshots, edit distance `endD`, and `found` flag) and `myersBacktrack` (reconstructs edit script from snapshots). The local `type snap []int` alias is replaced with `[][]int` directly. `computeEditScript` becomes a three-line orchestrator. Pure refactor — all tests pass, behaviour identical.

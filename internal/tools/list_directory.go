@@ -69,29 +69,46 @@ type dirEntry struct {
 }
 
 func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+	a, err := parseListDirectoryArgs(raw)
+	if err != nil {
+		return "", err
+	}
+	dir := resolvePath(a.Path, t.ws)
+	entries, err := collectDirEntries(dir, a)
+	if err != nil {
+		return "", err
+	}
+	sortDirEntries(entries, a.SortBy)
+	return formatDirResult(dir, entries), nil
+}
+
+func parseListDirectoryArgs(raw json.RawMessage) (listDirectoryArgs, error) {
 	var a listDirectoryArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("list_directory: invalid arguments: %w", err)
+		return a, fmt.Errorf("list_directory: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return "", fmt.Errorf("list_directory: path is required")
+		return a, fmt.Errorf("list_directory: path is required")
 	}
+	return a, nil
+}
 
-	dir := resolvePath(a.Path, t.ws)
-
+func collectDirEntries(dir string, a listDirectoryArgs) ([]dirEntry, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
-		return "", fmt.Errorf("list_directory: %w", err)
+		return nil, fmt.Errorf("list_directory: %w", err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("list_directory: %q is not a directory — use read_file to read a file", dir)
+		return nil, fmt.Errorf("list_directory: %q is not a directory — use read_file to read a file", dir)
 	}
-
 	rawEntries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", fmt.Errorf("list_directory: reading %q: %w", dir, err)
+		return nil, fmt.Errorf("list_directory: reading %q: %w", dir, err)
 	}
+	return filterDirEntries(rawEntries, a)
+}
 
+func filterDirEntries(rawEntries []os.DirEntry, a listDirectoryArgs) ([]dirEntry, error) {
 	var entries []dirEntry
 	for _, e := range rawEntries {
 		if !a.IncludeHidden && strings.HasPrefix(e.Name(), ".") {
@@ -100,7 +117,7 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 		if a.Pattern != "" {
 			ok, err := filepath.Match(a.Pattern, e.Name())
 			if err != nil {
-				return "", fmt.Errorf("list_directory: bad pattern %q: %w", a.Pattern, err)
+				return nil, fmt.Errorf("list_directory: bad pattern %q: %w", a.Pattern, err)
 			}
 			if !ok {
 				continue
@@ -117,8 +134,11 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 			modified: fi.ModTime().UnixNano(),
 		})
 	}
+	return entries, nil
+}
 
-	switch a.SortBy {
+func sortDirEntries(entries []dirEntry, sortBy string) {
+	switch sortBy {
 	case "size":
 		sort.Slice(entries, func(i, j int) bool {
 			if entries[i].isDir != entries[j].isDir {
@@ -138,10 +158,11 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 			return entries[i].name < entries[j].name
 		})
 	}
+}
 
+func formatDirResult(dir string, entries []dirEntry) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s\n\n", dir)
-
 	dirs, files := 0, 0
 	for _, e := range entries {
 		mt := time.Unix(0, e.modified).Format("2006-01-02 15:04")
@@ -153,7 +174,6 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 			fmt.Fprintf(&sb, "[FILE] %-40s  %12s  %s\n", e.name, formatSize(e.size), mt)
 		}
 	}
-
 	if len(entries) == 0 {
 		sb.WriteString("(empty)\n")
 	} else {
@@ -162,7 +182,7 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 			files, plural(files, "", "s"),
 		)
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 func formatSize(n int64) string {
