@@ -76,6 +76,16 @@ LSP uses heavy, compiler-backed servers (like `gopls` or `pyright`) to provide 1
 
 By combining the **Speed and Breadth of Topology** with the **Precision and Safety of LSP**, Plumb provides agents with the optimal balance of token efficiency and operational reliability.
 
+## Tooling Ecosystem Integration
+
+While Plumb focuses on providing the **Map** (Topology) and the **GPS** (LSP), it is designed to work within a broader ecosystem of language-specific tooling. This ecosystem ensures code quality, consistency, and correctness through several key categories:
+
+1. **Formatters (fmt)**: These tools (e.g., `gofumpt`, `ruff format`, `prettier`) automatically adjust code layout. Plumb integrates with formatters via the `format_after: true` flag in tools like `find_replace`, ensuring that any text-based changes adhere to the project's style guide.
+2. **Linters (lint)**: Linters (e.g., `golangci-lint`, `ruff check`, `eslint`) analyze code for bugs and convention violations. While LSP provides real-time feedback, linters often perform deeper or more opinionated checks that complement the LSP's diagnostics.
+3. **Type Checkers**: For dynamic languages, type checkers (e.g., `mypy`, `pyright`, `tsc`) provide static guarantees. Plumb surfaces these guarantees by proxying the diagnostics emitted by the underlying language server.
+4. **Test Runners**: Automated tests (e.g., `go test`, `pytest`, `jest`) validate the semantic correctness of changes. Plumb currently delegates test execution to the user or the MCP client, but the changes it makes are intended to be verified by these runners.
+5. **Build Tools**: Orchestrators (e.g., `go build`, `maven`, `npm`) manage dependencies and compilation. The LSP relies on these tools to maintain an accurate internal project model, and Plumb ensures that filesystem writes are atomic and visible to the build system.
+
 ## Data flow: MCP tool call
 
 ```
