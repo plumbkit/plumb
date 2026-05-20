@@ -821,6 +821,36 @@ The `internal/stats/db.go` file contains a hand-rolled SQLite migration system (
 
 ---
 
+### Add copy file support and move/rename clarification
+
+**Priority:** Medium.
+**Effort:** Small.
+**Status:** Planning.
+**Description:** Plumb currently lacks a dedicated `copy_file` tool, forcing agents to `read_file` then `write_file`. Additionally, `rename_file`'s role as a move tool is not always clear to agents.
+- **Goal:** Add `copy_file` and clarify move semantics.
+- **Action:** 
+  - Implement `copy_file(from, to, dirty_ok)`. Must preserve file permissions (modes) and support cross-device copying.
+  - Update `rename_file` description to explicitly highlight it as the primary tool for "moving" files, or add a `move_file` alias to simplify agent tool selection.
+- **Definition of done:** New tool(s) implemented, tested (including cross-directory moves/copies and parent directory creation), and documented in `docs/mcp-tools.md` and `AGENTS.md`.
+
+### Security: Tool path restrictions (Jailing) and temp aliases
+
+**Priority:** High.
+**Effort:** Medium.
+**Status:** Planning.
+**Description:** To improve security for LLM-driven environments, all MCP tools should be restricted to a safe set of directories. This prevents the agent from reading or writing sensitive system files (e.g., `/etc/passwd`) while still allowing legitimate workspace and configuration management.
+- **Goal:** Implement a "Safe Path" allowlist for all filesystem tools.
+- **Action:**
+  - Update filesystem tools (`read`, `write`, `edit`, `delete`, `rename`, `copy`) to validate paths against an **Allowlist**:
+    1. The resolved workspace root and its subdirectories.
+    2. The system temporary directory.
+    3. Plumb's own configuration and cache directories (`~/.config/plumb`, `~/.cache/plumb`).
+    4. Optional: Global personal memory locations (e.g., `~/.gemini/`).
+  - Support temporary directory expansion safely using `os.ExpandEnv` or a dedicated pseudo-prefix (like `@temp/` or `temp://`) to resolve `$TEMP`, `$TMP`, `%TEMP%`, or `%TMP%` correctly across platforms.
+- **Definition of done:** Shared path-validation helper implemented. Tests verify that attempts to access unauthorized paths return a clear error (e.g., *"Access denied: path is outside allowed directories"*), while workspace and temp operations proceed normally. TUI remains unaffected as it bypasses the MCP tool layer for its internal data.
+
+---
+
 ### `session_start` orientation — richer entry-point guidance for agents
 
 **Priority:** medium-high — first call shapes the entire session quality.
