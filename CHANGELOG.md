@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.1 (unreleased)
+## 0.7.2 (unreleased)
 
 ### Changed
 - **`copy_file` tool + `rename_file` move clarity.** New `copy_file(from, to, overwrite, dirty_ok)` tool: preserves source permissions, cross-device safe (safeWrite), two-path deadlock-safe locks, `FileCreated` LSP notification. `rename_file` description updated to say it is the primary move tool and points to `copy_file` for duplication. Docs updated: `mcp-tools.md`, `AGENTS.md` (count 34→35). 8 unit tests.
