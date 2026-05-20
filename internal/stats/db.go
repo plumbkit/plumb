@@ -318,9 +318,10 @@ type ActivitySummary struct {
 // Filter narrows a stats query. Empty fields are not constrained.
 type Filter struct {
 	SessionID   string
-	SessionName string // when set, restricts to calls for this session name
-	Workspace   string // absolute path; when set, restricts to calls for this workspace
-	Tool        string // when set, restricts to calls for this exact tool name
+	SessionName string    // when set, restricts to calls for this session name
+	Workspace   string    // absolute path; when set, restricts to calls for this workspace
+	Tool        string    // when set, restricts to calls for this exact tool name
+	Since       time.Time // when set, restricts to calls at or after this time
 }
 
 func (f Filter) where() (string, []any) {
@@ -341,6 +342,10 @@ func (f Filter) where() (string, []any) {
 	if f.Tool != "" {
 		conds = append(conds, "tool = ?")
 		args = append(args, f.Tool)
+	}
+	if !f.Since.IsZero() {
+		conds = append(conds, "called_at >= ?")
+		args = append(args, f.Since.UnixMilli())
 	}
 	if len(conds) == 0 {
 		return "", nil

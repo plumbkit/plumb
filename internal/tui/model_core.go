@@ -99,6 +99,7 @@ type Model struct {
 	dashLifetimeTokens   int64
 	dashLifetimeFirstAt  time.Time
 	dashLifetimeTopTools []stats.ToolStat
+	dashUptimeTopTools   []stats.ToolStat
 	dashLifetimeBuckets  []int64
 	dashDaemBuckets      []int64
 	dashChartWidth       int

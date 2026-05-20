@@ -44,7 +44,7 @@ func renderCLIDiagnostic(d cliDiagnostic, width int) string {
 
 	title := diagnosticTitle(d)
 	lines := []string{title}
-	lines = append(lines, diagnosticBorderedLines(d.Body, contentWidth)...)
+	lines = append(lines, diagnosticBorderedLines(strings.TrimRight(d.Body, "\n"), contentWidth)...)
 	if len(d.Suggestions) > 0 {
 		lines = append(lines, diagnosticBorderedLines("", contentWidth)...)
 		lines = append(lines, diagnosticBorderedLines("Try:", contentWidth)...)

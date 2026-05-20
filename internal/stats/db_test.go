@@ -194,6 +194,35 @@ func TestActivityAtBucketsRecentCalls(t *testing.T) {
 	}
 }
 
+func TestSummaryScopesBySince(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	calls := []Call{
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "read_file", CalledAt: now.Add(-2 * time.Hour), DurationMs: 100, OutputBytes: 400, Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "edit_file", CalledAt: now.Add(-time.Minute), DurationMs: 200, OutputBytes: 800, Success: true},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record %s: %v", c.Tool, err)
+		}
+	}
+
+	got, err := db.Summary(Filter{Since: now.Add(-10 * time.Minute)})
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if len(got) != 1 || got[0].Tool != "edit_file" {
+		t.Fatalf("Summary since = %#v, want only edit_file", got)
+	}
+}
+
 func TestFilterScopesSessionInsideWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)

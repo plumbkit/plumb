@@ -38,6 +38,17 @@ func detectWorkspaceFolder() string {
 	return ""
 }
 
+func (m Model) dashboardUptimeStart(now time.Time) time.Time {
+	var start time.Time
+	if len(m.sessions) > 0 {
+		start = m.sessions[0].StartedAt
+	}
+	if start.IsZero() {
+		start = now.Add(-time.Minute)
+	}
+	return start
+}
+
 func (m *Model) refreshDashboard() {
 	if m.globalDB == nil {
 		m.globalDB, _ = stats.OpenReadOnly()
@@ -65,6 +76,7 @@ func (m *Model) refreshDashboard() {
 		m.dashDaemBuckets = m.activity.Buckets
 	}
 	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
+	m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(time.Now())})
 
 	if m.dashProjectFolder != "" {
 		pf := stats.Filter{Workspace: m.dashProjectFolder}
@@ -164,7 +176,7 @@ func (m Model) dashboardBodyLines(width int) []string {
 	lines = append(lines, m.dashStatsRow(width)...)
 	lines = append(lines, "")
 
-	lines = append(lines, m.dashTopToolsWidget(width)...)
+	lines = append(lines, m.dashTopToolsTables(width)...)
 
 	if m.dashProjectFolder != "" && m.dashProjectCalls > 0 {
 		lines = append(lines, "")
@@ -229,10 +241,10 @@ func (m Model) dashAlertsWidget(width int) []string {
 
 	var content []string
 	if len(alerts) == 0 {
-		content = []string{" " + OkStyle.Render("✓") + " " + MutedStyle.Render("No issues detected")}
+		content = []string{"   " + OkStyle.Render("✓") + " " + MutedStyle.Render("No issues detected") + "   "}
 	} else {
 		for _, a := range alerts {
-			content = append(content, " "+WarnStyle.Render("✗")+" "+WarnStyle.Render(a.msg))
+			content = append(content, "   "+WarnStyle.Render("✗")+" "+WarnStyle.Render(a.msg)+"   ")
 		}
 	}
 	return dashBox(" Alerts ", inner, content)
@@ -241,8 +253,18 @@ func (m Model) dashAlertsWidget(width int) []string {
 // dashStatsRow places the Daemon and Tokens Saved widgets side by side
 // if the terminal is wide enough, stacking them vertically otherwise.
 func (m Model) dashStatsRow(width int) []string {
-	daemon := m.dashDaemonWidget()
-	tokens := m.dashTokensWidget()
+	daemonInner := dashDaemonMinInner
+	tokenInner := dashTokensMinInner
+	minRowW := daemonInner + 2 + dashWidgetGap + tokenInner + 2
+	if width >= minRowW {
+		extra := width - minRowW
+		desiredTokenInner := tokenInner + extra
+		tokenInner = dashTokenInnerForGroups(dashTokenGroupsForInner(desiredTokenInner))
+		daemonInner += desiredTokenInner - tokenInner
+	}
+
+	daemon := m.dashDaemonWidget(daemonInner)
+	tokens := m.dashTokensWidget(tokenInner)
 	widgets := [][]string{daemon, tokens}
 
 	totalW := 0
@@ -251,7 +273,7 @@ func (m Model) dashStatsRow(width int) []string {
 			totalW += lipgloss.Width(w[0])
 		}
 	}
-	totalW += len(widgets) - 1 // one-space gaps
+	totalW += (len(widgets) - 1) * dashWidgetGap
 
 	if width >= totalW {
 		return joinWidgetRow(widgets)
@@ -267,14 +289,13 @@ func (m Model) dashStatsRow(width int) []string {
 	return out
 }
 
-// dashDaemonWidget renders current daemon process metrics.
-func (m Model) dashDaemonWidget() []string {
-	const (
-		boxW  = 46
-		inner = boxW - 2
-		spkW  = 14
-	)
-	na := MutedStyle.Render("n/a")
+const dashDaemonMinInner = 44
+
+// dashDaemonWidget renders current daemon memory metrics.
+func (m Model) dashDaemonWidget(inner int) []string {
+	inner = max(inner, dashDaemonMinInner)
+
+	na := "n/a"
 	pidStr := na
 	memStr := na
 	allocStr := na
@@ -282,7 +303,6 @@ func (m Model) dashDaemonWidget() []string {
 	sysStr := na
 	gcStr := na
 	gorStr := na
-	cpuStr := na
 
 	if m.daemonMetricsOK {
 		d := m.daemonMetrics
@@ -295,79 +315,148 @@ func (m Model) dashDaemonWidget() []string {
 		sysStr = monitor.FormatBytes(d.HeapSysBytes)
 		gcStr = fmt.Sprintf("%d cycles", d.NumGC)
 		gorStr = fmt.Sprintf("%d", d.Goroutines)
-		if d.CPUAvailable {
-			cpuStr = monitor.FormatCPU(d.CPUPercent)
-		}
 	}
 
-	spark := cpuSparkline(m.daemonCPU, spkW)
-	cpuLine := " " + KeyStyle.Width(dashKW).Render("CPU") +
-		SelectedStyle.Render(spark) + " " + DetailStyle.Render(cpuStr)
-
-	titleText := " Daemon "
+	titleText := " Daemon Memory "
 	if pidStr != na {
-		titleText = fmt.Sprintf(" Daemon (PID %s) ", pidStr)
+		titleText = fmt.Sprintf(" Daemon Memory (PID %s) ", pidStr)
 	}
 
 	return dashBox(titleText, inner, []string{
-		dashRow("Peak RSS", memStr),
-		dashRow("Heap Alloc", allocStr),
-		dashRow("Heap Inuse", inuseStr),
-		dashRow("Heap Sys", sysStr),
-		dashRow("GC", gcStr),
-		dashRow("Goroutines", gorStr),
-		cpuLine,
+		dashMemoryRow("Peak RSS", memStr, inner),
+		dashMemoryRow("Heap Alloc", allocStr, inner),
+		dashMemoryRow("Heap In Use", inuseStr, inner),
+		dashMemoryRow("Heap Sys", sysStr, inner),
+		dashMemoryRow("GC", gcStr, inner),
+		dashMemoryRow("Goroutines", gorStr, inner),
 	})
 }
+
+func dashMemoryRow(label, value string, inner int) string {
+	const margin = 3
+	leaderW := max(inner-margin-lipgloss.Width(label)-1-1-lipgloss.Width(value)-margin, 1)
+	labelStyle := lipgloss.NewStyle().Foreground(ActiveTheme.Key)
+	return strings.Repeat(" ", margin) +
+		labelStyle.Render(label) + " " +
+		SepStyle.Render(strings.Repeat("⣀", leaderW)) + " " +
+		DetailStyle.Render(value) + strings.Repeat(" ", margin)
+}
+
+func dashTokenGroupsForInner(inner int) int {
+	const (
+		margin = 3
+		gap    = 3
+	)
+	return max(((inner-margin*2-gap)/2+1)/3, 1)
+}
+
+func dashTokenInnerForGroups(groups int) int {
+	const (
+		margin = 3
+		gap    = 3
+	)
+	blockW := groups*2 + groups - 1
+	return margin*2 + gap + blockW*2
+}
+
+const dashTokensMinInner = 55
 
 // dashTokensWidget renders both all-time and current-daemon token savings.
-func (m Model) dashTokensWidget() []string {
+func (m Model) dashTokensWidget(inner int) []string {
 	const (
-		boxW  = 34
-		inner = boxW - 2
-		barW  = 12
+		margin = 3
+		gap    = 3
+		blockH = 4
 	)
+	inner = max(inner, dashTokensMinInner)
+	groups := dashTokenGroupsForInner(inner)
+	inner = dashTokenInnerForGroups(groups)
+	blockW := groups*2 + groups - 1
 
-	// Uptime row: " ■■■■■■■■■■■■ 1.6k (uptime) "
-	uVal := stats.FormatSavings(int(m.tokenSavings))
-	uFill, uUnfill := tokenSavingsBar(m.tokenSavings, barW)
-	uLine := " " + SelectedStyle.Render(uFill) + SepStyle.Render(uUnfill) + " " + DetailStyle.Render(uVal) + MutedStyle.Render(" (uptime)")
+	uptimeLabel := "uptime " + stats.FormatSavings(int(m.tokenSavings))
+	if m.activity.Window > 0 {
+		uptimeLabel += " (" + formatUptime(m.activity.Window) + ")"
+	}
+	totalLabel := "total " + stats.FormatSavings(int(m.dashLifetimeTokens))
+	if !m.dashLifetimeFirstAt.IsZero() {
+		totalLabel += " (" + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt)) + ")"
+	}
 
-	// All-time row: " ■■■■■■■■■■■■ 518k (all) "
-	aVal := stats.FormatSavings(int(m.dashLifetimeTokens))
-	aFill, aUnfill := tokenSavingsBar(m.dashLifetimeTokens, barW)
-	aLine := " " + SelectedStyle.Render(aFill) + SepStyle.Render(aUnfill) + " " + DetailStyle.Render(aVal) + MutedStyle.Render(" (all time)")
+	leftBlocks := tokenSavingsBlockRow(m.tokenSavings, groups)
+	rightBlocks := tokenSavingsBlockRow(m.dashLifetimeTokens, groups)
+	blockLine := strings.Repeat(" ", margin) + leftBlocks + strings.Repeat(" ", gap) + rightBlocks + strings.Repeat(" ", margin)
+	labelGap := max(blockW+gap-lipgloss.Width(uptimeLabel), 1)
+	labelLine := strings.Repeat(" ", margin) + DetailStyle.Render(uptimeLabel) + strings.Repeat(" ", labelGap) + DetailStyle.Render(totalLabel)
 
-	return dashBox(" Tokens Saved ", inner, []string{
-		uLine,
-		aLine,
-	})
+	content := make([]string, 0, blockH+2)
+	for range blockH {
+		content = append(content, blockLine)
+	}
+	content = append(content, "", labelLine)
+
+	return dashBox(" Tokens Saved ", inner, content)
 }
 
-// dashTopToolsWidget renders an all-time tool statistics table (full width).
-func (m Model) dashTopToolsWidget(width int) []string {
-	inner := width - 2
+func tokenSavingsBlockRow(tokens int64, groups int) string {
+	filled, _ := tokenSavingsBar(tokens, groups)
+	filledGroups := lipgloss.Width(filled)
+	parts := make([]string, 0, groups)
+	for i := range groups {
+		block := "▆▆"
+		if i < filledGroups {
+			parts = append(parts, SelectedStyle.Render(block))
+		} else {
+			parts = append(parts, SepStyle.Render(block))
+		}
+	}
+	return strings.Join(parts, " ")
+}
 
+// dashTopToolsTables renders all-time and uptime tool statistics as full-width tables.
+func (m Model) dashTopToolsTables(width int) []string {
+	lines := dashTopToolsTable("Top Tools (all time)", width, m.dashLifetimeTopTools)
+	if hasToolStats(m.dashUptimeTopTools) {
+		lines = append(lines, "")
+		lines = append(lines, dashTopToolsTable("Top Tools (uptime)", width, m.dashUptimeTopTools)...)
+	}
+	return lines
+}
+
+func hasToolStats(tools []stats.ToolStat) bool {
+	for _, t := range tools {
+		if t.Calls > 0 || t.AvgMs > 0 || t.P95Ms > 0 || t.Errors > 0 || t.TokensSaved > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func dashTopToolsTable(title string, width int, tools []stats.ToolStat) []string {
 	const (
-		cTool  = 22
-		cCalls = 9
-		cAvg   = 9
-		cP95   = 9
-		cErr   = 9
+		minTool   = 18
+		minNumber = 7
+		minTokens = 14
 	)
+	cTool := max(width*40/100, minTool)
+	remaining := max(width-cTool, minNumber*4+minTokens)
+	cCalls := max(remaining*12/60, minNumber)
+	cAvg := max(remaining*12/60, minNumber)
+	cP95 := max(remaining*12/60, minNumber)
+	cErr := max(remaining*12/60, minNumber)
+	cTokens := max(width-cTool-cCalls-cAvg-cP95-cErr, minTokens)
+	cTool = max(width-cCalls-cAvg-cP95-cErr-cTokens, minTool)
 
-	tools := m.dashLifetimeTopTools
 	if len(tools) > 10 {
 		tools = tools[:10]
 	}
 
-	header := " " + HintStyle.Width(cTool).Render("Tool") +
-		HintStyle.Width(cCalls).Render("Calls") +
-		HintStyle.Width(cAvg).Render("Avg ms") +
-		HintStyle.Width(cP95).Render("P95 ms") +
-		HintStyle.Width(cErr).Render("Errors") +
-		HintStyle.Render("Tokens Saved")
-	sep := " " + SepStyle.Render(strings.Repeat("╌", inner-2))
+	header := HintStyle.Width(cTool).Render(title) +
+		HintStyle.Width(cCalls).Align(lipgloss.Right).Render("Calls") +
+		HintStyle.Width(cAvg).Align(lipgloss.Right).Render("Avg ms") +
+		HintStyle.Width(cP95).Align(lipgloss.Right).Render("P95 ms") +
+		HintStyle.Width(cErr).Align(lipgloss.Right).Render("Errors") +
+		HintStyle.Width(cTokens).Align(lipgloss.Right).Render("Tokens")
+	sep := SepStyle.Render(strings.Repeat("╌", max(width, lipgloss.Width(ansi.Strip(header)))))
 
 	content := []string{header, sep}
 	for _, t := range tools {
@@ -379,19 +468,18 @@ func (m Model) dashTopToolsWidget(width int) []string {
 		if t.TokensSaved > 0 {
 			tokStr = DetailStyle.Render("~" + stats.FormatSavings(int(t.TokensSaved)))
 		}
-		line := " " + KeyStyle.Width(cTool).Render(truncate(t.Tool, cTool-1)) +
-			DetailStyle.Width(cCalls).Render(formatLargeInt(t.Calls)) +
-			DetailStyle.Width(cAvg).Render(fmt.Sprintf("%.0f", t.AvgMs)) +
-			DetailStyle.Width(cP95).Render(fmt.Sprintf("%d", t.P95Ms)) +
-			lipgloss.NewStyle().Width(cErr).Render(errStr) +
-			tokStr
+		line := KeyStyle.Width(cTool).Render(truncate(t.Tool, cTool-1)) +
+			DetailStyle.Width(cCalls).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
+			DetailStyle.Width(cAvg).Align(lipgloss.Right).Render(fmt.Sprintf("%.0f", t.AvgMs)) +
+			DetailStyle.Width(cP95).Align(lipgloss.Right).Render(fmt.Sprintf("%d", t.P95Ms)) +
+			lipgloss.NewStyle().Width(cErr).Align(lipgloss.Right).Render(errStr) +
+			lipgloss.NewStyle().Width(cTokens).Align(lipgloss.Right).Render(tokStr)
 		content = append(content, line)
 	}
 	if len(tools) == 0 {
-		content = append(content, " "+MutedStyle.Render("No tool calls recorded yet"))
+		content = append(content, MutedStyle.Render("No tool calls recorded yet"))
 	}
-
-	return dashBox(" Top Tools (all time) ", inner, content)
+	return content
 }
 
 // dashProjectWidget renders stats for the detected current project (conditional).
@@ -403,22 +491,54 @@ func (m Model) dashProjectWidget(width int) []string {
 		name = m.dashProjectFolder
 	}
 
-	topN := min(len(m.dashProjectTopTools), 3)
-	toolNames := make([]string, 0, topN)
-	for _, t := range m.dashProjectTopTools[:topN] {
-		toolNames = append(toolNames, t.Tool)
+	content := []string{
+		dashProjectMetricRow("Sessions", formatLargeInt(m.dashProjectSessions), m.dashProjectSessions, m.dashLifetimeSessions, inner),
+		dashProjectMetricRow("Tool Calls", formatLargeInt(m.dashProjectCalls), m.dashProjectCalls, m.dashLifetimeCalls, inner),
+		dashProjectMetricRow("Tokens Saved", "~"+stats.FormatSavings(int(m.dashProjectTokens)), m.dashProjectTokens, m.dashLifetimeTokens, inner),
+		"",
 	}
-	topStr := strings.Join(toolNames, " · ")
-	if topStr == "" {
-		topStr = "—"
+	for _, line := range dashTopToolsTable("Top Tools", max(inner-6, 20), m.dashProjectTopTools) {
+		content = append(content, "   "+line+"   ")
 	}
 
-	return dashBox(" Project: "+name+" ", inner, []string{
-		dashRow("Sessions", formatLargeInt(m.dashProjectSessions)),
-		dashRow("Tool Calls", formatLargeInt(m.dashProjectCalls)),
-		dashRow("Tokens Saved", "~"+stats.FormatSavings(int(m.dashProjectTokens))),
-		dashRow("Top Tools", topStr),
-	})
+	return dashBox(" Project: "+name+" ", inner, content)
+}
+
+func dashProjectMetricRow(label, value string, numerator, denominator int64, inner int) string {
+	const (
+		margin = 3
+		labelW = dashKW
+		valueW = 14
+	)
+	pct := ratioPercent(numerator, denominator)
+	barW := max(inner-margin*2-labelW-valueW-2, 1)
+	fill, empty := ratioBar(pct, barW)
+	valueText := fmt.Sprintf("%s (%d%%)", value, pct)
+	return strings.Repeat(" ", margin) +
+		KeyStyle.Width(labelW).Render(label) + " " +
+		SelectedStyle.Render(fill) + SepStyle.Render(empty) + " " +
+		DetailStyle.Width(valueW).Align(lipgloss.Right).Render(valueText) +
+		strings.Repeat(" ", margin)
+}
+
+func ratioPercent(numerator, denominator int64) int {
+	if numerator <= 0 || denominator <= 0 {
+		return 0
+	}
+	pct := int((numerator*100 + denominator/2) / denominator)
+	return min(max(pct, 0), 100)
+}
+
+func ratioBar(percent, width int) (string, string) {
+	if width <= 0 {
+		return "", ""
+	}
+	filled := percent * width / 100
+	if percent > 0 && filled == 0 {
+		filled = 1
+	}
+	filled = min(max(filled, 0), width)
+	return strings.Repeat("■", filled), strings.Repeat("■", width-filled)
 }
 
 // dashActivityChart renders a 4-row borderless braille area chart of tool-call
@@ -573,7 +693,9 @@ func (m Model) dashActivityChart(width int) []string {
 	return lines
 }
 
-// joinWidgetRow joins widget []string slices horizontally with a one-space gap.
+const dashWidgetGap = 3
+
+// joinWidgetRow joins widget []string slices horizontally with a fixed gap.
 // Shorter widgets are padded with blank lines to match the tallest.
 func joinWidgetRow(widgets [][]string) []string {
 	maxH := 0
@@ -593,7 +715,7 @@ func joinWidgetRow(widgets [][]string) []string {
 		var sb strings.Builder
 		for wi, w := range widgets {
 			if wi > 0 {
-				sb.WriteString(" ")
+				sb.WriteString(strings.Repeat(" ", dashWidgetGap))
 			}
 			if row < len(w) {
 				sb.WriteString(w[row])

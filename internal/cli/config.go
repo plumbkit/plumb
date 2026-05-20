@@ -90,16 +90,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 	PrintLogo()
 
-	tableBase := func() *table.Table {
-		return table.New().
-			Border(DottedBorder).
-			BorderStyle(tui.SepStyle).
-			BorderRow(true).
-			BorderColumn(true).
-			StyleFunc(func(row, col int) lipgloss.Style {
-				return lipgloss.NewStyle().Padding(0, 1)
-			})
-	}
+	tableBase := configShowTableBase
 
 	// 1. Workspace Context
 	fmt.Printf("Workspace Context\n")
@@ -114,16 +105,12 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		ctxTable.Row("requested workspace", tui.OkStyle.Render("✓"), contractConfigPath(requestedWorkspace))
 	}
 	ctxTable.Row("workspace", tui.OkStyle.Render("✓"), contractConfigPath(ws))
-	fmt.Println(ctxTable.Render())
+	fmt.Println(renderConfigShowTable(ctxTable))
 
 	// 2. MCP Integration Status
 	fmt.Printf("\nMCP Integration Status\n")
 
-	mcpTable := table.New().
-		Border(DottedBorder).
-		BorderStyle(tui.SepStyle).
-		BorderRow(true).
-		BorderColumn(true).
+	mcpTable := configShowTableBase().
 		Headers("Client", "Exists", "Registered", "Path").
 		StyleFunc(func(row, col int) lipgloss.Style {
 			s := lipgloss.NewStyle().Padding(0, 1)
@@ -142,7 +129,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	mcpTable.Row("Claude Desktop", existsIcon(claudeDesktopPath), registeredIcon(claudeDesktopPath), contractConfigPath(claudeDesktopPath))
 	mcpTable.Row("Codex", existsIcon(codexPath), registeredIcon(codexPath), contractConfigPath(codexPath))
 	mcpTable.Row("Gemini CLI", existsIcon(geminiPath), registeredIcon(geminiPath), contractConfigPath(geminiPath))
-	fmt.Println(mcpTable.Render())
+	fmt.Println(renderConfigShowTable(mcpTable))
 
 	// 3. Plumb Configuration
 	fmt.Printf("\nPlumb Configuration\n")
@@ -228,10 +215,46 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		})
 	}
 
-	fmt.Println(cfgTable.Render())
+	fmt.Println(renderConfigShowTable(cfgTable))
 	fmt.Println()
 
 	return nil
+}
+
+var configShowBorder = lipgloss.Border{
+	Top:          "─",
+	Bottom:       "╌",
+	Left:         "│",
+	Right:        "│",
+	TopLeft:      "╭",
+	TopRight:     "╮",
+	BottomLeft:   "╰",
+	BottomRight:  "╯",
+	Middle:       "┼",
+	MiddleTop:    "┬",
+	MiddleBottom: "┴",
+	MiddleLeft:   "├",
+	MiddleRight:  "┤",
+}
+
+func configShowTableBase() *table.Table {
+	return table.New().
+		Border(configShowBorder).
+		BorderStyle(tui.SepStyle).
+		BorderRow(true).
+		BorderColumn(true).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			return lipgloss.NewStyle().Padding(0, 1)
+		})
+}
+
+func renderConfigShowTable(t *table.Table) string {
+	lines := strings.Split(t.Render(), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	lines[len(lines)-1] = strings.ReplaceAll(lines[len(lines)-1], "╌", "─")
+	return strings.Join(lines, "\n")
 }
 
 func existsIcon(path string) string {

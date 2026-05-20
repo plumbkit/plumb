@@ -822,6 +822,272 @@ func TestTokenSavingsBar(t *testing.T) {
 	}
 }
 
+func TestDashDaemonWidgetUsesMemoryRows(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		daemonMetricsOK: true,
+		daemonMetrics: monitor.DaemonMetrics{
+			PID:            38247,
+			RSSAvailable:   true,
+			RSSBytes:       33 * 1024 * 1024,
+			HeapAllocBytes: 5 * 1024 * 1024,
+			HeapInuseBytes: 9 * 1024 * 1024,
+			HeapSysBytes:   15 * 1024 * 1024,
+			NumGC:          20,
+			Goroutines:     20,
+			CPUAvailable:   true,
+			CPUPercent:     99,
+		},
+	}
+
+	lines := m.dashDaemonWidget(dashDaemonMinInner)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+
+	if !strings.Contains(plain[0], "Daemon Memory (PID 38247)") {
+		t.Fatalf("daemon title = %q, want memory title with pid", plain[0])
+	}
+	for _, line := range plain {
+		if strings.Contains(line, "CPU") || strings.Contains(line, "99") {
+			t.Fatalf("daemon memory widget should not render CPU data: %q", line)
+		}
+	}
+	wantPeak := "│   Peak RSS ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 33 MB   │"
+	if plain[2] != wantPeak {
+		t.Fatalf("daemon peak row = %q, want %q", plain[2], wantPeak)
+	}
+	wantHeapInUse := "│   Heap In Use ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 9 MB   │"
+	if plain[4] != wantHeapInUse {
+		t.Fatalf("daemon heap in use row = %q, want %q", plain[4], wantHeapInUse)
+	}
+	wantHeapSys := "│   Heap Sys ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 15 MB   │"
+	if plain[5] != wantHeapSys {
+		t.Fatalf("daemon heap sys row = %q, want %q", plain[5], wantHeapSys)
+	}
+	wantGC := "│   GC ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 20 cycles   │"
+	if plain[6] != wantGC {
+		t.Fatalf("daemon GC row = %q, want %q", plain[6], wantGC)
+	}
+}
+
+func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		activity: stats.ActivitySummary{
+			Window: 12 * time.Minute,
+		},
+		dashLifetimeFirstAt: time.Now().Add(-9 * 24 * time.Hour),
+		dashLifetimeTokens:  518000,
+	}
+
+	lines := m.dashTokensWidget(dashTokensMinInner)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+
+	wantBlock := "│   ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆   ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆ ▆▆   │"
+	for _, idx := range []int{2, 3, 4, 5} {
+		if plain[idx] != wantBlock {
+			t.Fatalf("tokens block row %d = %q, want %q", idx, plain[idx], wantBlock)
+		}
+	}
+	wantLabels := "│   uptime 0 (12m+)           total 518k (9d+)"
+	if !strings.HasPrefix(plain[7], wantLabels) {
+		t.Fatalf("tokens label row = %q, want prefix %q", plain[7], wantLabels)
+	}
+}
+
+func TestDashTopToolsTablesRenderUnboxedAllTimeAndUptime(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		dashLifetimeTopTools: []stats.ToolStat{
+			{Tool: "diagnostics", Calls: 1800, AvgMs: 0, P95Ms: 0, TokensSaved: 442000},
+		},
+		dashUptimeTopTools: []stats.ToolStat{
+			{Tool: "read_file", Calls: 12, AvgMs: 1, P95Ms: 2, Errors: 1},
+		},
+	}
+
+	plain := make([]string, 0)
+	for _, line := range m.dashTopToolsTables(80) {
+		plain = append(plain, ansiStripForTest(line))
+	}
+	if strings.HasPrefix(plain[0], "╭") || strings.HasPrefix(plain[0], "│") {
+		t.Fatalf("top tools table should be unboxed: %q", plain[0])
+	}
+	if !strings.HasPrefix(plain[0], "Top Tools (all time)") || !strings.Contains(plain[0], "Tokens") {
+		t.Fatalf("all-time header = %q, want title and columns", plain[0])
+	}
+	if !strings.Contains(plain[2], "diagnostics") || !strings.Contains(plain[2], "~442k") {
+		t.Fatalf("all-time row = %q, want diagnostics savings", plain[2])
+	}
+	callsHeaderEnd := strings.Index(plain[0], "Calls") + len("Calls")
+	callsValueEnd := strings.Index(plain[2], "1.8k") + len("1.8k")
+	if callsValueEnd != callsHeaderEnd {
+		t.Fatalf("calls column is not right-aligned with header:\n%s\n%s", plain[0], plain[2])
+	}
+	if !strings.HasPrefix(plain[4], "Top Tools (uptime)") {
+		t.Fatalf("uptime header = %q, want uptime table after blank line", plain[4])
+	}
+	if !strings.Contains(plain[6], "read_file") || !strings.Contains(plain[6], "12") || !strings.Contains(plain[6], "1") {
+		t.Fatalf("uptime row = %q, want read_file stats", plain[6])
+	}
+}
+
+func TestDashProjectWidgetRendersTopToolsTableInsideWidget(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		dashProjectFolder:    "/Users/gilberto/Projects/plumb",
+		dashLifetimeSessions: 8,
+		dashLifetimeCalls:    200,
+		dashLifetimeTokens:   64000,
+		dashProjectSessions:  4,
+		dashProjectCalls:     120,
+		dashProjectTokens:    32000,
+		dashProjectTopTools: []stats.ToolStat{
+			{Tool: "read_file", Calls: 12, AvgMs: 1, P95Ms: 2, TokensSaved: 4800},
+		},
+	}
+
+	lines := m.dashProjectWidget(90)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+	if !strings.Contains(plain[0], "Project: plumb") {
+		t.Fatalf("project title = %q, want project title", plain[0])
+	}
+	if !strings.Contains(plain[2], "Sessions") || !strings.Contains(plain[2], "4 (50%)") || !strings.Contains(plain[2], "■") {
+		t.Fatalf("project sessions ratio row = %q, want proportional summary", plain[2])
+	}
+	if !strings.Contains(plain[4], "Tokens") || !strings.Contains(plain[4], "~32k (50%)") || !strings.Contains(plain[4], "■") {
+		t.Fatalf("project tokens ratio row = %q, want proportional summary", plain[4])
+	}
+	if !strings.Contains(plain[6], "Top Tools") || !strings.Contains(plain[6], "Tokens") {
+		t.Fatalf("project top tools header = %q, want embedded table header", plain[6])
+	}
+	if !strings.Contains(plain[8], "read_file") || !strings.Contains(plain[8], "~4.8k") {
+		t.Fatalf("project top tools row = %q, want project tool stats", plain[8])
+	}
+	callsHeaderEnd := strings.Index(plain[6], "Calls") + len("Calls")
+	callsValueEnd := strings.Index(plain[8], "12") + len("12")
+	if callsValueEnd != callsHeaderEnd {
+		t.Fatalf("project calls column is not right-aligned with header:\n%s\n%s", plain[6], plain[8])
+	}
+}
+
+func TestDashTopToolsTablesHideEmptyUptime(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		dashLifetimeTopTools: []stats.ToolStat{{Tool: "diagnostics", Calls: 1}},
+		dashUptimeTopTools:   []stats.ToolStat{{Tool: "read_file"}},
+	}
+
+	plain := strings.Join(m.dashTopToolsTables(80), "\n")
+	plain = ansiStripForTest(plain)
+	if strings.Contains(plain, "Top Tools (uptime)") {
+		t.Fatalf("empty uptime table should be hidden:\n%s", plain)
+	}
+}
+
+func TestDashDaemonWidgetExpandsLeaderWithWidth(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		daemonMetricsOK: true,
+		daemonMetrics: monitor.DaemonMetrics{
+			PID:            38247,
+			RSSAvailable:   true,
+			RSSBytes:       33 * 1024 * 1024,
+			HeapAllocBytes: 5 * 1024 * 1024,
+			HeapInuseBytes: 9 * 1024 * 1024,
+			HeapSysBytes:   15 * 1024 * 1024,
+			NumGC:          20,
+			Goroutines:     20,
+		},
+	}
+
+	plainMin := ansiStripForTest(m.dashDaemonWidget(dashDaemonMinInner)[2])
+	plainWide := ansiStripForTest(m.dashDaemonWidget(dashDaemonMinInner + 2)[2])
+	if strings.Count(plainWide, "⣀") != strings.Count(plainMin, "⣀")+2 {
+		t.Fatalf("wide daemon widget did not add leader cells:\nmin:  %s\nwide: %s", plainMin, plainWide)
+	}
+}
+
+func TestDashTokensWidgetExpandsBlockGroupsWithWidth(t *testing.T) {
+	RebuildStyles()
+	m := Model{dashLifetimeTokens: 518000}
+
+	plainMin := ansiStripForTest(m.dashTokensWidget(dashTokensMinInner)[2])
+	plainWide := ansiStripForTest(m.dashTokensWidget(dashTokensMinInner + 12)[2])
+	if strings.Count(plainWide, "▆▆") <= strings.Count(plainMin, "▆▆") {
+		t.Fatalf("wide token widget did not add block groups:\nmin:  %s\nwide: %s", plainMin, plainWide)
+	}
+}
+
+func TestDashStatsRowAllocatesTokenRemainderToDaemon(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		dashLifetimeTokens: 518000,
+		daemonMetricsOK:    true,
+		daemonMetrics: monitor.DaemonMetrics{
+			PID:            38247,
+			RSSAvailable:   true,
+			RSSBytes:       33 * 1024 * 1024,
+			HeapAllocBytes: 5 * 1024 * 1024,
+			HeapInuseBytes: 9 * 1024 * 1024,
+			HeapSysBytes:   15 * 1024 * 1024,
+			NumGC:          20,
+			Goroutines:     20,
+		},
+	}
+	minRowW := dashDaemonMinInner + 2 + dashWidgetGap + dashTokensMinInner + 2
+
+	row := ansiStripForTest(m.dashStatsRow(minRowW + 2)[2])
+	runes := []rune(row)
+	daemonOuterW := dashDaemonMinInner + 2 + 2
+	if len(runes) < daemonOuterW+dashWidgetGap {
+		t.Fatalf("dashboard stats row too short: %q", row)
+	}
+	daemonPart := string(runes[:daemonOuterW])
+	tokenPart := string(runes[daemonOuterW+dashWidgetGap:])
+	if got := strings.Count(daemonPart, "⣀"); got != strings.Count(ansiStripForTest(m.dashDaemonWidget(dashDaemonMinInner)[2]), "⣀")+2 {
+		t.Fatalf("daemon widget did not absorb token remainder: %q", daemonPart)
+	}
+	if got := strings.Count(tokenPart, "▆▆"); got != 16 {
+		t.Fatalf("token widget should stay at minimum groups for two-column remainder, got %d blocks in %q", got, tokenPart)
+	}
+}
+
+func TestDashStatsRowUsesThreeSpaceWidgetGap(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		activity: stats.ActivitySummary{
+			Window: 12 * time.Minute,
+		},
+		dashLifetimeFirstAt: time.Now().Add(-9 * 24 * time.Hour),
+		dashLifetimeTokens:  518000,
+		daemonMetricsOK:     true,
+		daemonMetrics: monitor.DaemonMetrics{
+			PID:            38247,
+			RSSAvailable:   true,
+			RSSBytes:       33 * 1024 * 1024,
+			HeapAllocBytes: 5 * 1024 * 1024,
+			HeapInuseBytes: 9 * 1024 * 1024,
+			HeapSysBytes:   15 * 1024 * 1024,
+			NumGC:          20,
+			Goroutines:     20,
+		},
+	}
+
+	plainTop := ansiStripForTest(m.dashStatsRow(120)[0])
+	if !strings.Contains(plainTop, "╮   ╭─ Tokens Saved") {
+		t.Fatalf("dashboard stats row = %q, want three-space widget gap", plainTop)
+	}
+}
+
 func TestDiagnosticsControlOutputExplainsOldDaemon(t *testing.T) {
 	got := diagnosticsControlOutput("error: unknown command \"diagnostics /Users/gilberto/Projects/plumb\"\n")
 	for _, want := range []string{"current daemon", "plumb stop"} {

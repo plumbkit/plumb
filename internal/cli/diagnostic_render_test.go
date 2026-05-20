@@ -33,6 +33,24 @@ func TestRenderCLIDiagnosticExpandedShape(t *testing.T) {
 	}
 }
 
+func TestRenderCLIDiagnosticUnknownCommandSpacing(t *testing.T) {
+	body := "unknown command \"show\" for \"plumb\"\n\nDid you mean this?\n    stop\n\n"
+	out := renderCLIDiagnostic(cliDiagnostic{
+		Kind:        "error",
+		Title:       "error",
+		Body:        body,
+		Suggestions: []string{"plumb --help"},
+	}, 80)
+	plain := stripANSI(out)
+
+	if strings.Contains(plain, "    ┊    stop\n    ┊\n    ┊\n    ┊ Try:") {
+		t.Fatalf("expected one blank line between suggestion and Try, got:\n%s", plain)
+	}
+	if !strings.Contains(plain, "    ┊    stop\n    ┊\n    ┊ Try:") {
+		t.Fatalf("missing single blank line between suggestion and Try:\n%s", plain)
+	}
+}
+
 func TestRenderCLIDiagnosticInfoShape(t *testing.T) {
 	out := stripANSI(renderCLIDiagnostic(cliDiagnostic{
 		Kind:  "info",
