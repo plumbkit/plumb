@@ -430,7 +430,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl))
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy))
-	srv.Register(tools.NewDiagnostics(s.sessionInv))
+	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy))
 	srv.Register(tools.NewListFiles(s.workspace))
 	srv.Register(tools.NewListDirectory(s.workspace))
 	srv.Register(tools.NewReadFile(s.readTracker))

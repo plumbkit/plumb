@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -15,6 +17,18 @@ import (
 type diagnosticsSource interface {
 	Diagnostics(uri string) []protocol.Diagnostic
 	AllDiagnostics() map[string][]protocol.Diagnostic
+}
+
+// waitableDiagnosticsSource extends diagnosticsSource with on-demand analysis.
+type waitableDiagnosticsSource interface {
+	diagnosticsSource
+	WaitDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error)
+}
+
+// fileOpener triggers language-server analysis for a single file.
+type fileOpener interface {
+	DidOpen(ctx context.Context, params protocol.DidOpenTextDocumentParams) error
+	DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error
 }
 
 var diagnosticsSchema = json.RawMessage(`{
@@ -36,13 +50,22 @@ var diagnosticsSchema = json.RawMessage(`{
 // that gopls pushes as files are analysed. Results reflect the last snapshot
 // received; they may be empty until gopls has finished indexing.
 //
+// When opener is non-nil and a requested URI is not yet tracked, the tool
+// sends textDocument/didOpen to trigger analysis and waits up to 10 s for
+// gopls to push publishDiagnostics before returning.
+//
 // Concurrency: Execute is safe for concurrent use.
 type Diagnostics struct {
-	inv diagnosticsSource
+	inv    waitableDiagnosticsSource
+	opener fileOpener // nil when no LSP client is available
 }
 
-func NewDiagnostics(inv diagnosticsSource) *Diagnostics {
+func NewDiagnostics(inv waitableDiagnosticsSource) *Diagnostics {
 	return &Diagnostics{inv: inv}
+}
+
+func NewDiagnosticsWithOpener(inv waitableDiagnosticsSource, opener fileOpener) *Diagnostics {
+	return &Diagnostics{inv: inv, opener: opener}
 }
 
 func (t *Diagnostics) Name() string                 { return "diagnostics" }
@@ -55,7 +78,7 @@ func (t *Diagnostics) Description() string {
 		"if the server has not yet sent any diagnostics."
 }
 
-func (t *Diagnostics) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		URIs []string `json:"uris"`
 		URI  string   `json:"uri"` // backward-compat: treated as uris:[uri] when uris is absent
@@ -73,25 +96,71 @@ func (t *Diagnostics) Execute(_ context.Context, raw json.RawMessage) (string, e
 	case 0:
 		return formatDiagnostics(t.inv.AllDiagnostics()), nil
 	case 1:
-		return t.singleURI(a.URIs[0]), nil
+		return t.singleURI(ctx, a.URIs[0]), nil
 	default:
 		return t.multiURI(a.URIs), nil
 	}
 }
 
-func (t *Diagnostics) singleURI(uri string) string {
+func (t *Diagnostics) singleURI(ctx context.Context, uri string) string {
 	diags := t.inv.Diagnostics(uri)
 	if len(diags) == 0 {
 		// Distinguish "analysed and clean" from "never reported on".
 		if _, tracked := t.inv.AllDiagnostics()[uri]; !tracked {
+			if t.opener != nil {
+				return t.openAndWait(ctx, uri)
+			}
 			path := strings.TrimPrefix(uri, "file://")
 			return fmt.Sprintf("File %s is not yet tracked by the language server. "+
-				"Open it in your editor (or run a tool that touches it) so gopls receives a textDocument/didOpen, "+
-				"then retry.", path)
+				"No LSP client is available to trigger analysis.", path)
 		}
 		return "No issues found — file is tracked and clean."
 	}
 	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: diags})
+}
+
+// openAndWait sends textDocument/didOpen for uri, waits up to 10 s for gopls
+// to push publishDiagnostics, then sends didClose and returns the result.
+func (t *Diagnostics) openAndWait(ctx context.Context, uri string) string {
+	path := strings.TrimPrefix(uri, "file://")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("cannot read %s: %v", path, err)
+	}
+	if openErr := t.opener.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:        uri,
+			LanguageID: languageIDFromURI(uri),
+			Version:    1,
+			Text:       string(content),
+		},
+	}); openErr != nil {
+		return fmt.Sprintf("DidOpen failed for %s: %v", path, openErr)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	diags, waitErr := t.inv.WaitDiagnostics(waitCtx, uri)
+	_ = t.opener.DidClose(ctx, protocol.DidCloseTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	})
+	if waitErr != nil {
+		return fmt.Sprintf("timed out waiting for diagnostics for %s (gopls may still be indexing)", path)
+	}
+	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: diags})
+}
+
+func languageIDFromURI(uri string) string {
+	lower := strings.ToLower(uri)
+	switch {
+	case strings.HasSuffix(lower, ".go"):
+		return "go"
+	case strings.HasSuffix(lower, ".py"):
+		return "python"
+	case strings.HasSuffix(lower, ".java"):
+		return "java"
+	default:
+		return "plaintext"
+	}
 }
 
 func (t *Diagnostics) multiURI(uris []string) string {

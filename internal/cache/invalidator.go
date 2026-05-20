@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 
@@ -15,6 +16,7 @@ type Invalidator struct {
 	cache   *Cache
 	diagsMu sync.RWMutex
 	diags   map[string][]protocol.Diagnostic // keyed by document URI
+	subs    map[string][]chan struct{}         // WaitDiagnostics subscribers
 }
 
 // NewInvalidator creates an Invalidator backed by c.
@@ -44,6 +46,13 @@ func (inv *Invalidator) Handle(method string, params json.RawMessage) {
 
 	inv.diagsMu.Lock()
 	inv.diags[p.URI] = p.Diagnostics
+	for _, ch := range inv.subs[p.URI] {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	delete(inv.subs, p.URI)
 	inv.diagsMu.Unlock()
 }
 
@@ -59,6 +68,52 @@ func (inv *Invalidator) Diagnostics(uri string) []protocol.Diagnostic {
 	out := make([]protocol.Diagnostic, len(d))
 	copy(out, d)
 	return out
+}
+
+// WaitDiagnostics blocks until the language server publishes diagnostics for
+// uri, then returns a copy. Returns immediately if uri is already tracked.
+// Returns (nil, ctx.Err()) when the context is cancelled or times out.
+//
+// The subscriber channel is registered while diagsMu is held, so no
+// publishDiagnostics notification can be missed between the "not tracked"
+// check and the channel registration.
+func (inv *Invalidator) WaitDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	ch := make(chan struct{}, 1)
+
+	inv.diagsMu.Lock()
+	if d, ok := inv.diags[uri]; ok {
+		out := make([]protocol.Diagnostic, len(d))
+		copy(out, d)
+		inv.diagsMu.Unlock()
+		return out, nil
+	}
+	if inv.subs == nil {
+		inv.subs = make(map[string][]chan struct{})
+	}
+	inv.subs[uri] = append(inv.subs[uri], ch)
+	inv.diagsMu.Unlock()
+
+	defer func() {
+		inv.diagsMu.Lock()
+		chans := inv.subs[uri]
+		for i, c := range chans {
+			if c == ch {
+				inv.subs[uri] = append(chans[:i], chans[i+1:]...)
+				break
+			}
+		}
+		if len(inv.subs[uri]) == 0 {
+			delete(inv.subs, uri)
+		}
+		inv.diagsMu.Unlock()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-ch:
+		return inv.Diagnostics(uri), nil
+	}
 }
 
 // AllDiagnostics returns a copy of every URI → diagnostics entry received so far.

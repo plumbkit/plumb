@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -55,6 +56,63 @@ func TestInvalidator_MalformedParams_noEviction(t *testing.T) {
 
 	if _, ok := c.Get("key"); !ok {
 		t.Fatal("malformed params should not evict cache")
+	}
+}
+
+func TestInvalidator_WaitDiagnostics_AlreadyTracked(t *testing.T) {
+	c := cache.New(time.Hour)
+	defer c.Close()
+	inv := cache.NewInvalidator(c)
+
+	uri := "file:///p/main.go"
+	want := protocol.Diagnostic{Severity: protocol.SevError, Message: "already here"}
+	params, _ := json.Marshal(protocol.PublishDiagnosticsParams{URI: uri, Diagnostics: []protocol.Diagnostic{want}})
+	inv.Handle(protocol.MethodPublishDiagnostics, params)
+
+	diags, err := inv.WaitDiagnostics(context.Background(), uri)
+	if err != nil {
+		t.Fatalf("WaitDiagnostics: %v", err)
+	}
+	if len(diags) != 1 || diags[0].Message != want.Message {
+		t.Fatalf("got %v, want %v", diags, want)
+	}
+}
+
+func TestInvalidator_WaitDiagnostics_BlocksUntilPush(t *testing.T) {
+	c := cache.New(time.Hour)
+	defer c.Close()
+	inv := cache.NewInvalidator(c)
+
+	uri := "file:///p/other.go"
+	want := protocol.Diagnostic{Severity: protocol.SevWarning, Message: "late arrival"}
+
+	// Push diagnostics from a separate goroutine after a short delay.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		p, _ := json.Marshal(protocol.PublishDiagnosticsParams{URI: uri, Diagnostics: []protocol.Diagnostic{want}})
+		inv.Handle(protocol.MethodPublishDiagnostics, p)
+	}()
+
+	diags, err := inv.WaitDiagnostics(context.Background(), uri)
+	if err != nil {
+		t.Fatalf("WaitDiagnostics: %v", err)
+	}
+	if len(diags) != 1 || diags[0].Message != want.Message {
+		t.Fatalf("got %v, want %v", diags, want)
+	}
+}
+
+func TestInvalidator_WaitDiagnostics_ContextCancelled(t *testing.T) {
+	c := cache.New(time.Hour)
+	defer c.Close()
+	inv := cache.NewInvalidator(c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := inv.WaitDiagnostics(ctx, "file:///p/never.go")
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
 	}
 }
 
