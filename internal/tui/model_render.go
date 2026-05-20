@@ -52,14 +52,35 @@ func (m Model) render() string {
 	menu := m.renderTopMenu(tabSpaceW, isOverlay)
 
 	for i := range 3 {
-		// Draw the menu on the left, then the logo piece on the right.
 		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
 	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
 
-	// Body content
 	allLeftLines := m.leftLines()
 	allRightLines := (&m).rightLines(rightWidth)
+	sb.WriteString(m.renderBodySection(allLeftLines, allRightLines, bodyHeight, rightWidth, isOverlay))
+
+	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
+	sb.WriteString(m.renderMainStatusBar(isOverlay))
+
+	final := sb.String()
+	if m.showPopup {
+		final = m.renderPopup(final, rightWidth, bodyHeight-1)
+	}
+	if m.showHelp {
+		final = m.renderHelp(final)
+	}
+	if m.sectionMenuOpen {
+		final = m.renderSectionMenuOverlay(final)
+	}
+	return final
+}
+
+func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeight, rightWidth int, isOverlay bool) string {
+	sepStyle := SepStyle
+	if isOverlay {
+		sepStyle = SepInactiveStyle
+	}
 
 	// Clamp scroll offsets
 	maxLeftScroll := max(len(allLeftLines)-bodyHeight, 0)
@@ -83,6 +104,7 @@ func (m Model) render() string {
 	leftScrollbar := scrollbarCol(len(allLeftLines), bodyHeight, m.leftScroll, isOverlay)
 	rightScrollbar := scrollbarCol(len(allRightLines), bodyHeight, m.rightScroll, isOverlay)
 
+	var sb strings.Builder
 	for i := range bodyHeight {
 		l, r := "", ""
 		if i < len(leftLines) {
@@ -113,21 +135,7 @@ func (m Model) render() string {
 			sb.WriteString(lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar + "\n")
 		}
 	}
-
-	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
-	sb.WriteString(m.renderMainStatusBar(isOverlay))
-
-	final := sb.String()
-	if m.showPopup {
-		final = m.renderPopup(final, rightWidth, bodyHeight-1)
-	}
-	if m.showHelp {
-		final = m.renderHelp(final)
-	}
-	if m.sectionMenuOpen {
-		final = m.renderSectionMenuOverlay(final)
-	}
-	return final
+	return sb.String()
 }
 
 func (m Model) renderMainStatusBar(dimmed bool) string {
