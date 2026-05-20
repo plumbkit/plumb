@@ -113,8 +113,7 @@ func (a *topologyExploreArgs) validate() error {
 
 func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topologyExploreArgs) (*topology.Neighbourhood, error) {
 	if store == nil {
-		return nil, fmt.Errorf("topology_explore: topology indexing is disabled for this session — " +
-			"set [topology] enabled = true in .plumb/config.toml to enable")
+		return nil, nil // nil signals "disabled" to the formatter; not an error
 	}
 	opts := topology.ExploreOpts{
 		Depth:         a.Depth,
@@ -127,6 +126,10 @@ func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topo
 }
 
 func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreArgs) string {
+	if nb == nil {
+		return "topology indexing is disabled for this session\n" +
+			"Set [topology] enabled = true in .plumb/config.toml to enable."
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "topology explore: %s %q (source=topology)\n", string(nb.Centre.Kind), nb.Centre.Name)
 	fmt.Fprintf(&sb, "  path: %s", nb.Centre.Path)

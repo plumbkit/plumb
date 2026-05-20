@@ -237,6 +237,26 @@ func TestDefaults_WorkspaceAutoAttachDisabled(t *testing.T) {
 	}
 }
 
+func TestDefaults_TopologyDisabledAndMaxFileSize(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Topology.Enabled {
+		t.Error("topology must be disabled by default (opt-in)")
+	}
+	const wantMaxSize = 512 * 1024
+	if cfg.Topology.MaxFileSizeBytes != wantMaxSize {
+		t.Errorf("MaxFileSizeBytes = %d, want %d", cfg.Topology.MaxFileSizeBytes, wantMaxSize)
+	}
+}
+
+func TestDefaults_TopologyExcludePatternsIsolated(t *testing.T) {
+	cfg := Defaults()
+	cfg.Topology.ExcludePatterns = []string{"vendor/"}
+	cfg2 := Defaults()
+	if len(cfg2.Topology.ExcludePatterns) > 0 {
+		t.Errorf("mutating ExcludePatterns leaked into next Defaults() call: %v", cfg2.Topology.ExcludePatterns)
+	}
+}
+
 func TestApplyEnv_AutoAttach(t *testing.T) {
 	for _, val := range []string{"1", "true", "yes"} {
 		t.Run(val, func(t *testing.T) {

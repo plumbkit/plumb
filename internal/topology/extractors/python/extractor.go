@@ -54,6 +54,9 @@ func scanLines(scanner *bufio.Scanner, relPath string) ([]topology.Node, []topol
 }
 
 func (st *pyState) processLine(trimmed string, indent int, relPath string) {
+	if trimmed == "" {
+		return // blank lines do not end a class body
+	}
 	if st.classIdx >= 0 && indent <= st.classIndent {
 		st.classIdx = -1
 	}

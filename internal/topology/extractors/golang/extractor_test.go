@@ -1,0 +1,144 @@
+package golang
+
+import (
+	"context"
+	"testing"
+
+	"github.com/golimpio/plumb/internal/topology"
+)
+
+var goSrc = []byte(`package mypackage
+
+import "fmt"
+
+// Greet says hello.
+func Greet(name string) string {
+	return fmt.Sprintf("hello, %s", name)
+}
+
+type Server struct{}
+
+func (s *Server) Start() error { return nil }
+
+func TestGreet(t interface{}) {}
+
+const MaxConns = 100
+
+var defaultTimeout = 30
+`)
+
+func TestExtract_FunctionsMethodsTests(t *testing.T) {
+	ext := New()
+	nodes, edges, err := ext.Extract(context.Background(), "internal/foo/foo.go", goSrc)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	if len(edges) == 0 {
+		t.Error("expected edges, got 0")
+	}
+
+	byKind := map[string][]string{}
+	for _, n := range nodes {
+		byKind[string(n.Kind)] = append(byKind[string(n.Kind)], n.Name)
+	}
+
+	cases := []struct{ kind, name string }{
+		{"package", "mypackage"},
+		{"import", "fmt"},
+		{"function", "Greet"},
+		{"type", "Server"},
+		{"method", "Start"},
+		{"test", "TestGreet"},
+		{"constant", "MaxConns"},
+		{"variable", "defaultTimeout"},
+	}
+	for _, c := range cases {
+		found := false
+		for _, name := range byKind[c.kind] {
+			if name == c.name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("kind=%q name=%q not found; got %v", c.kind, c.name, byKind[c.kind])
+		}
+	}
+}
+
+func TestExtract_DocComment(t *testing.T) {
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "foo.go", goSrc)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Name == "Greet" {
+			if n.Docstring == "" {
+				t.Error("Greet should have a docstring")
+			}
+			return
+		}
+	}
+	t.Error("Greet node not found")
+}
+
+func TestExtract_EmptyFile(t *testing.T) {
+	ext := New()
+	nodes, edges, err := ext.Extract(context.Background(), "empty.go", []byte("package empty"))
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	// Only a package node expected
+	if len(nodes) != 1 {
+		t.Errorf("expected 1 node (package), got %d", len(nodes))
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for empty file, got %d", len(edges))
+	}
+}
+
+func TestExtract_MalformedFile_NoPanic(t *testing.T) {
+	ext := New()
+	// Malformed Go that triggers a parse error — should not panic, should return nil
+	nodes, edges, err := ext.Extract(context.Background(), "bad.go", []byte("this is not go code @@@"))
+	if err != nil {
+		t.Fatalf("unexpected error on malformed input: %v", err)
+	}
+	_ = nodes
+	_ = edges
+}
+
+func TestExtract_LanguageAndPath(t *testing.T) {
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "pkg/foo.go", goSrc)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Language != "go" {
+			t.Errorf("node %q has language=%q, want go", n.Name, n.Language)
+		}
+		if n.Path != "pkg/foo.go" {
+			t.Errorf("node %q has path=%q, want pkg/foo.go", n.Name, n.Path)
+		}
+	}
+}
+
+func TestExtract_LineRanges(t *testing.T) {
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "foo.go", goSrc)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Kind == topology.KindFunction || n.Kind == topology.KindMethod {
+			if n.StartLine <= 0 {
+				t.Errorf("node %q has StartLine=%d, want > 0", n.Name, n.StartLine)
+			}
+			if n.EndLine < n.StartLine {
+				t.Errorf("node %q EndLine %d < StartLine %d", n.Name, n.EndLine, n.StartLine)
+			}
+		}
+	}
+}

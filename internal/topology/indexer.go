@@ -25,6 +25,7 @@ type Indexer struct {
 
 	queue chan indexOp
 	done  chan struct{}
+	wg    sync.WaitGroup
 
 	mu       sync.RWMutex
 	state    string
@@ -50,17 +51,24 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64) *
 
 // Start launches the background worker and enqueues an initial full resync.
 func (idx *Indexer) Start() {
-	go idx.backgroundWorker()
+	idx.wg.Add(1)
+	go func() {
+		defer idx.wg.Done()
+		idx.backgroundWorker()
+	}()
 	idx.Enqueue("", opResync)
 }
 
-// Stop shuts down the background worker. Safe to call more than once.
+// Stop signals the background worker to exit and waits for it to finish.
+// Safe to call more than once; subsequent calls are no-ops that return
+// immediately because the worker goroutine has already exited.
 func (idx *Indexer) Stop() {
 	select {
 	case <-idx.done:
 	default:
 		close(idx.done)
 	}
+	idx.wg.Wait()
 }
 
 // Enqueue adds a file operation to the background queue. Non-blocking; drops

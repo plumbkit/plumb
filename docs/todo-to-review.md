@@ -27,6 +27,10 @@ Phase 1 ships a SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`, 
 - `internal/tools/topology_status.go`, `topology_search.go`, `topology_explore.go` — three new MCP tools following `parseArgs → validate → run → format` pattern; nil-store graceful degradation.
 - Tests: `internal/topology/db_test.go` (schema, WAL, FTS5), `internal/topology/search_test.go` (ranking, kind/language filters), `internal/tools/topology_*_test.go` (nil-store degradation).
 
+**Design decisions (intentional divergences from the original plan):**
+
+- **FTS5 standalone table, not a content table.** The original plan described `content='topology_nodes'` with `content_rowid='id'` and SQL triggers to keep the FTS index in sync. The shipped implementation uses a plain FTS5 virtual table (`topology_fts`) with Go managing all inserts and deletes explicitly inside the per-file all-or-nothing transaction. Reasons: (1) no hidden trigger behaviour — the indexer controls exactly when and what is written; (2) no content-table sync hazards when rows are deleted or updated out of order; (3) simpler schema migration path. The rowid correspondence (`topology_fts.rowid = topology_nodes.id`) is maintained correctly by the indexer. This is not a bug or an omission — it is a deliberate simplification.
+
 **What is NOT in Phase 1 (deferred to Phase 2):**
 
 - `topology_impact`, `topology_routes`, `topology_affected` tools.
@@ -35,6 +39,8 @@ Phase 1 ships a SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`, 
 - Topology-backed fallbacks to `list_symbols`, `find_symbol`, `workspace_symbols`.
 - TUI/doctor topology health section.
 - Formal benchmark (DoD item 6) and concurrency stress test (DoD item 7).
+- `drain()` coalescing retains only the last enqueued op, discarding intermediate ops for different files (see Phase 2 item 8 in `docs/todo.md`).
+- `isStale` uses mtime only; content-hash comparison deferred (see Phase 2 item 9 in `docs/todo.md`).
 
 ---
 
