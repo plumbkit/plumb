@@ -215,4 +215,68 @@ returns fresh, differential findings on a later response, it would make the
 agent better. The key question should be: "did this change make things worse?",
 not "what is every problem in the repository?"
 
+## Workspace Confinement (Programmatic Sandboxing)
+
+The idea: prevent AI agents from accessing files outside the detected project
+root by enforcing path boundaries at the application layer. This serves as a
+lightweight, high-performance alternative to OS-level containers (Docker) or
+macOS App Sandboxing.
+
+### Why This Matters
+
+AI agents have full filesystem access through Plumb. While this is powerful, it
+creates a massive security surface. A hallucinating or malicious agent could:
+- Read `~/.ssh/id_rsa` or `~/.aws/credentials`.
+- Delete `~/Documents`.
+- Exfiltrate sensitive data from unrelated projects.
+
+OS-level sandboxing (Docker) solves this but at a high cost: it breaks LSP
+dependency resolution (LSPs need your host's build tools/keys), destroys I/O
+performance on macOS, and complicates the "one daemon" shared architecture.
+
+### The Solution: `restrict_to_workspace`
+
+Instead of isolating the entire process, Plumb can isolate the **tool calls**.
+When a session is attached to a workspace (e.g., `/Users/me/projects/plumb`),
+Plumb should be able to enforce that every file-based tool call targets a path
+within that boundary.
+
+#### Key Mechanisms
+
+1.  **Strict Path Resolution:** Every incoming path (relative or absolute) must
+    be cleaned and resolved against the workspace root.
+2.  **Prefix Enforcement:** Reject any operation where
+    `!strings.HasPrefix(target, workspaceRoot)`.
+3.  **Symlink Safety:** If a tool targets a symlink that points outside the
+    workspace, it must be rejected (or resolved and checked against the prefix).
+4.  **Opt-in vs. Enforcement:** This should likely be a config toggle
+    (`[edits].restrict_to_workspace = true`) that can be set globally or per-project.
+
+### Implementation Nuances & Audit
+
+The current `[walk].refuse_home_roots` setting is a good first step, but it
+needs to be audited. It's easy for such checks to exist in "config intent" but
+drift in actual implementation.
+
+- **Audit Requirement:** We must ensure that the `refuse_home_roots` check is
+  actually enforced in the `list_files`, `find_files`, and `search_in_files`
+  implementation, not just in the config loader.
+- **Integration Testing:** We need a dedicated test suite that attempts to
+  "escape" the workspace using `../` traversal, absolute paths, and malicious
+  symlinks to verify the confinement.
+
+### Suggested Configuration
+
+```toml
+[edits]
+restrict_to_workspace = true   # Rejects all I/O outside the root
+allow_external_reads = false   # Optional: allow reading but not writing outside
+```
+
+### Recommendation
+
+This is a "high-impact, low-cost" feature. It provides the security guarantees
+users expect from a sandbox without the performance and dependency headaches of
+containers. It should be the primary security model for Plumb.
+
 
