@@ -31,8 +31,8 @@ func augmentedEnv() []string {
 
 func currentEnvPATH(env []string) string {
 	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			return strings.TrimPrefix(e, "PATH=")
+		if v, ok := strings.CutPrefix(e, "PATH="); ok {
+			return v
 		}
 	}
 	return ""
