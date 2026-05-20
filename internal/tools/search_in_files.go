@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -520,7 +521,11 @@ func (t *SearchInFiles) annotateWithSymbols(ctx context.Context, a searchInFiles
 		}
 		m := make(map[int]string, len(fm.hitLineNums))
 		for _, lineNo := range fm.hitLineNums {
-			if sym := deepestEnclosingSymbol(syms, uint32(lineNo-1)); sym != "" {
+			ln := lineNo - 1
+			if ln < 0 || ln > math.MaxUint32 {
+				continue
+			}
+			if sym := deepestEnclosingSymbol(syms, uint32(ln)); sym != "" {
 				m[lineNo] = sym
 			}
 		}

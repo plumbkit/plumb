@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,9 +360,14 @@ type InitializeResult struct {
 }
 
 // ProcessID returns the current process ID as an *int32 for InitializeParams.
+// Returns nil when the PID exceeds int32 range (null is valid per LSP spec).
 func ProcessID() *int32 {
-	pid := int32(os.Getpid())
-	return &pid
+	pid := os.Getpid()
+	if pid > math.MaxInt32 {
+		return nil
+	}
+	p := int32(pid) //nolint:gosec // G115: pid <= math.MaxInt32 is asserted by the guard above
+	return &p
 }
 
 // FileURI converts an absolute path to a file:// URI.

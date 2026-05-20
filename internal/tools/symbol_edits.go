@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -62,6 +63,9 @@ func docCommentStart(path string, symStart protocol.Position) protocol.Position 
 		first = i
 	}
 	if first == int(symStart.Line) {
+		return symStart
+	}
+	if first < 0 || first > math.MaxUint32 {
 		return symStart
 	}
 	return protocol.Position{Line: uint32(first), Character: 0}

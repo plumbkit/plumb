@@ -187,7 +187,7 @@ func dashRenderRow(row []int, bgRune rune, width int) string {
 			if faded {
 				run.WriteRune(bgRune)
 			} else {
-				run.WriteRune(rune(0x2800 + row[k]))
+				run.WriteRune(rune(0x2800 + row[k])) //nolint:gosec // G115: row[k] is a braille pixel code in [0,255]; 0x2800+255=0x28FF is within rune range
 			}
 		}
 		if faded {
