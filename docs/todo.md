@@ -272,14 +272,21 @@ Plumb's current memory system is deterministic (grep/glob over markdown files). 
 
 The important distinction: memory must be **grounded, private, and budgeted**. An unbounded "remember everything" system will leak secrets, stale context, and noisy summaries into agent sessions. Plumb should stay conservative.
 
-1. **Episodic Summaries via `stats.db`:**
-   Currently, `session_start` gives generic repo orientation. Plumb already tracks every tool call in `stats.db`. When a session goes idle, the daemon should synthesise a lightweight "Episodic Summary" based on modified files and tools used.
-   - **Mechanism:** A background task in the daemon that runs after a session hasn't seen a tool call for N minutes. It queries the `tool_calls` table for that session, extracts the list of touched files and high-level tool types (Reads vs Writes), and persists a 1-2 sentence summary in a new `episodic_memories` table.
+1. **Episodic Summaries via `stats.db` (Rule-based):**
+   Currently, `session_start` gives generic repo orientation. Plumb already tracks every tool call in `stats.db`. When a session goes idle, the daemon should generate a lightweight "Episodic Summary" based on modified files and tools used.
+   - **Mechanism:** A background task in the daemon that runs after a session hasn't seen a tool call for N minutes. It queries the `tool_calls` table for that session, extracts the list of touched files and high-level tool types (Reads vs Writes), and persists a 1-2 sentence summary using rule-based templates.
    - **Outcome:** `session_start` output appends: *"In your last session, you heavily modified `internal/auth/login.go` and used `find_references` on `UserSession`."*
+   - **No LLM required:** This is strictly deterministic in 1.0; LLM-based "compression" of memories is a 2.0 research item.
 
-2. **FTS5 Semantic Search & Background Indexing:**
+2. **Association Memory (Co-occurrence):**
+   Track temporal associations between files and symbols to surface implicit relationships that static analysis (LSP) might miss.
+   - **Mechanism:** When a session touches file X and then file Y within a short window, or reads file X and then searches for symbol S, increment an association score in a new `associations` table.
+   - **Outcome:** `read_file` on X can hint: *"Note: Working on this file often involves symbol S in `internal/utils`."* This provides "procedural memory" based on actual usage patterns.
+
+3. **FTS5 Semantic Search & Background Indexing:**
    `search_memories` is currently a basic grep. We should index the Markdown memories into a SQLite table using the **FTS5** (Full-Text Search) extension.
    - **Mechanism:** The `internal/memory` package maintains an `fts_index` virtual table. On `write_memory`, `delete_memory`, or daemon start, a background worker crawls `.plumb/memories/*.md` and keeps the index in sync.
+   - **Code-Aware Tokenisation:** Use a custom tokeniser (or regex-based preprocessing) to split `CamelCase`, `snake_case`, and `kebab-case` so `UserSession` matches `user` and `session`. This significantly improves relevance without needing embeddings.
    - **Indexed fields:** memory name, description/frontmatter, body, path globs, source paths/symbols, provenance labels, and generated-vs-user-authored confidence.
    - **Benefit:** Gives us ranking (relevance), stemming (matches "running" to "run"), prefix/phrase/proximity matching, and snippets/highlights out-of-the-box, making memory retrieval more resilient to exact keyword misses.
    - **Dependency:** this is the memory backend for [Workspace Search Engine](#workspace-search-engine-exact-scan--indexed-discovery). Memory FTS should feed ranked discovery, while `search_memories` must keep a deterministic grep fallback when FTS5 is unavailable or stale.
@@ -363,6 +370,7 @@ What it lacks as a discovery engine:
 - No unified corpus: source files, symbols, docs, memories, comments, routes, tests, and paths are searched through different tools.
 - No first-class snippets/highlights or field labels that say *why* a result matched.
 - Broad grep output is token-expensive and often forces follow-up `read_file` calls.
+- Literal search is not explicit in the MCP API: `pattern` is currently compiled as a Go/RE2 regular expression, so clients must escape regex metacharacters themselves to search for a literal like `foo.bar`.
 
 **Design rule — two lanes, not one overloaded tool.**
 
@@ -370,7 +378,7 @@ Do **not** replace `search_in_files` with FTS5. Keep two explicit mechanisms wit
 
 | Tool | Contract | Use when |
 |---|---|---|
-| `search_in_files` | Exact scan of current filesystem contents. Regex/literal matching, context lines, exhaustive-ish result set bounded by `max_results`. | The agent needs every occurrence, exact verification, audits, or safe replacement prep. |
+| `search_in_files` | Exact scan of current filesystem contents. Literal or regex matching, context lines, exhaustive-ish result set bounded by `max_results`. | The agent needs every occurrence, exact verification, audits, or safe replacement prep. |
 | `workspace_search` | Ranked indexed discovery across code, docs, symbols, paths, routes, tests, and memories. FTS5-backed, freshness-aware, approximate by design. | The agent asks conceptual questions like "where is daemon locking handled?" or needs likely starting points. |
 | `topology_search` | Code-structure search over Topology entities only. | Internal/advanced code-map queries, and as one backend feeding `workspace_search`. |
 | `search_memories` | Memory-only search. | Direct memory lookup, with FTS5 ranking plus deterministic grep fallback. |
@@ -381,6 +389,31 @@ MCP tool descriptions must include the decision rule in plain language:
 Use search_in_files for exact literal or regex matches from current file contents.
 Use workspace_search for ranked discovery across indexed code, docs, symbols, and memories.
 ```
+
+**Exact search API alignment.**
+
+Before building indexed discovery, align `search_in_files` with `find_replace` so MCP clients have one mental model for text patterns:
+
+```json
+{
+  "pattern": "foo.bar",
+  "use_regex": false
+}
+```
+
+Target contract:
+
+- Add `use_regex` to `search_in_files`, matching `find_replace`'s parameter name and semantics.
+- `use_regex: false` means literal text search; internally it should use a fast literal path (`bytes.Contains`/literal counting) rather than compiling a regex.
+- `use_regex: true` means Go/RE2 regex search; document that RE2 does not support lookbehind or backreferences in the pattern.
+- Keep smart-case behaviour for both literal and regex searches unless `case_sensitive` is set.
+- For compatibility, decide the default deliberately:
+  - safest short-term default: keep current behaviour by treating an omitted `use_regex` as `true`, then let clients opt into literal search with `false`;
+  - cleaner long-term pre-1.0 default: match `find_replace` by making plain text the default and regex opt-in with `use_regex: true`.
+- If the default changes, call it out in `CHANGELOG.md`, `AGENTS.md`, `README.md`, and `docs/mcp-tools.md`; because plumb is pre-1.0 this is acceptable if the migration is explicit.
+- Error messages should distinguish regex compile failures from literal searches; literal patterns should never fail because of regex syntax.
+
+Agent-facing guidance should be blunt: agents usually want literal search unless they are intentionally using regex operators. This is better for MCP clients because `foo.bar`, `internal/cli`, `plumb.daemon.lock`, and `workspacePool` behave the way users expect without manual escaping.
 
 **User-facing output contract.**
 
@@ -413,16 +446,17 @@ Document the recommended order clearly in `AGENTS.md`, `README.md`, and `docs/mc
 
 **Implementation plan.**
 
-1. Keep `search_in_files` behaviour-preserving. Do not route regex searches through FTS5.
-2. Add `workspace_search` only after at least one indexed backend exists. Minimum viable backend can be memory-only FTS5 or topology-only FTS5, but the response must say which corpus was searched.
-3. Add a small search broker package that queries available backends in parallel with per-backend timeouts and merges ranked results:
+1. First align `search_in_files` and `find_replace` around `use_regex`, literal-vs-regex semantics, smart-case behaviour, and docs. This can ship independently of Topology/FTS5.
+2. Keep `search_in_files` behaviour-preserving for regex mode. Do not route regex searches through FTS5.
+3. Add `workspace_search` only after at least one indexed backend exists. Minimum viable backend can be memory-only FTS5 or topology-only FTS5, but the response must say which corpus was searched.
+4. Add a small search broker package that queries available backends in parallel with per-backend timeouts and merges ranked results:
    - topology FTS: symbols, paths, routes, tests, signatures, comments/docstrings.
    - memory FTS: memory name, description, body, path/symbol refs, provenance.
    - docs/source text FTS: markdown docs and optionally source-file body/comment chunks.
-4. Use daemon-owned background indexing. Index updates are triggered by attach, file writes, deletes, renames, memory writes, and manual resync.
-5. Track freshness per result: indexed file hash/mtime, backend generation, extractor version, last error.
-6. Use continuation handles for large result sets. `workspace_search` should return top N plus `next_page_token`, not dump the full ranked list.
-7. Add query options:
+5. Use daemon-owned background indexing. Index updates are triggered by attach, file writes, deletes, renames, memory writes, and manual resync.
+6. Track freshness per result: indexed file hash/mtime, backend generation, extractor version, last error.
+7. Use continuation handles for large result sets. `workspace_search` should return top N plus `next_page_token`, not dump the full ranked list.
+8. Add query options:
    ```json
    {
      "query": "daemon lock",
@@ -433,20 +467,23 @@ Document the recommended order clearly in `AGENTS.md`, `README.md`, and `docs/mc
      "freshness": "allow_stale"
    }
    ```
-8. Add exact-search handoff hints: when `workspace_search` returns a high-confidence source-code hit, include a compact suggestion for the exact verification call, e.g. `search_in_files(pattern="plumb.daemon.lock", path="internal/cli")`.
+9. Add exact-search handoff hints: when `workspace_search` returns a high-confidence source-code hit, include a compact suggestion for the exact verification call, e.g. `search_in_files(pattern="plumb.daemon.lock", path="internal/cli", use_regex=false)`.
 
 **Definition of done — Phase 1.**
 
-1. Tool naming and descriptions make the exact-vs-ranked distinction unambiguous.
-2. `workspace_search` exists with at least one FTS5-backed corpus and reports corpus coverage/freshness in every response.
-3. `search_in_files` remains the exact filesystem scanner and its docs explicitly say it is not ranked discovery.
-4. Indexed results include field labels, score/rank, source, freshness, and snippet/why metadata.
-5. Missing/stale/building index states degrade clearly and suggest `search_in_files` when exact current contents matter.
-6. Tests cover ranking order, stale-index reporting, fallback behaviour, and MCP descriptions so tool selection stays clear for agents.
+1. `search_in_files` and `find_replace` expose aligned `use_regex` semantics, smart-case handling, and docs.
+2. `search_in_files` has tests for literal patterns containing regex metacharacters (`foo.bar`, `a+b`, `path/to/file.go`, `plumb.daemon.lock`) and regex patterns when `use_regex=true`.
+3. Tool naming and descriptions make the exact-vs-ranked distinction unambiguous.
+4. `workspace_search` exists with at least one FTS5-backed corpus and reports corpus coverage/freshness in every response.
+5. `search_in_files` remains the exact filesystem scanner and its docs explicitly say it is not ranked discovery.
+6. Indexed results include field labels, score/rank, source, freshness, and snippet/why metadata.
+7. Missing/stale/building index states degrade clearly and suggest `search_in_files` when exact current contents matter.
+8. Tests cover ranking order, stale-index reporting, fallback behaviour, and MCP descriptions so tool selection stays clear for agents.
 
 **Watch out for.**
 
 - FTS5 is not regex. Do not promise exhaustive exact matching from indexed search.
+- Literal-vs-regex defaults are an agent UX decision, not just an implementation detail. Prefer the API that avoids accidental regex for common user strings, while documenting any compatibility transition clearly.
 - FTS5 can be stale. Exact edits and replacement prep must verify against current files.
 - Tool naming matters. Avoid a vague tool named just `search`; it will blur semantics for MCP clients.
 - Code tokenisation is product-critical. If names are not split and preserved correctly, ranked search will feel worse than grep.
