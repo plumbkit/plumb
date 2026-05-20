@@ -949,7 +949,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 **Priority:** ⭐ this is the actual "good software engineering" ask. Discuss the standard, then execute per-tool.
 **Effort:** Significant. Phased, one tool per commit.
-**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20). `TransactionApply.Execute` decomposed (2026-05-20). `FindFiles.Execute` decomposed (2026-05-20). `EditFile.Execute` decomposed (2026-05-20). `WriteFile.Execute` decomposed (2026-05-20). `SessionStart.Execute` decomposed (2026-05-20). `computeEditScript` + `groupHunks` in diff.go decomposed (2026-05-20). `ListFiles.Execute` decomposed (2026-05-20). `ListDirectory.Execute` decomposed (2026-05-20). `symbolKindName` map lookup (2026-05-20). `ReadSymbol.Execute` decomposed (2026-05-20). `executePartial` in edit_file.go decomposed (2026-05-20). `readContentMaybeRanged` in read_file.go decomposed (2026-05-20). `RenameFile.Execute` decomposed (2026-05-20). `(*CallHierarchy).Execute` decomposed (2026-05-20). `(*RenameSymbol).Execute` decomposed (2026-05-20). `(*TypeHierarchy).Execute` decomposed (2026-05-20). `walkDir` decomposed (2026-05-20). All `internal/tools` violations resolved — zero gocyclo findings in that package. `(*Server).Serve` decomposed (2026-05-20). `applyEnv` decomposed (2026-05-20).
+**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20). `TransactionApply.Execute` decomposed (2026-05-20). `FindFiles.Execute` decomposed (2026-05-20). `EditFile.Execute` decomposed (2026-05-20). `WriteFile.Execute` decomposed (2026-05-20). `SessionStart.Execute` decomposed (2026-05-20). `computeEditScript` + `groupHunks` in diff.go decomposed (2026-05-20). `ListFiles.Execute` decomposed (2026-05-20). `ListDirectory.Execute` decomposed (2026-05-20). `symbolKindName` map lookup (2026-05-20). `ReadSymbol.Execute` decomposed (2026-05-20). `executePartial` in edit_file.go decomposed (2026-05-20). `readContentMaybeRanged` in read_file.go decomposed (2026-05-20). `RenameFile.Execute` decomposed (2026-05-20). `(*CallHierarchy).Execute` decomposed (2026-05-20). `(*RenameSymbol).Execute` decomposed (2026-05-20). `(*TypeHierarchy).Execute` decomposed (2026-05-20). `walkDir` decomposed (2026-05-20). All `internal/tools` violations resolved — zero gocyclo findings in that package. `(*Server).Serve` decomposed (2026-05-20). `applyEnv` decomposed (2026-05-20). `runStats` decomposed (2026-05-20).
 
 **Problem.** 36 functions exceed gocyclo 15. The worst are tool `Execute()` methods that interleave five concerns:
 
@@ -967,7 +967,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 | `(*SessionStart).Execute` | ~~31~~ **done (0.7.0)** |
 | `(Model).handleLogSectionKey` | 30 |
 | `applyEnv` (config) | ~~28~~ **done (0.7.0)** |
-| `runStats` (cli) | 28 |
+| `runStats` (cli) | ~~28~~ **done (0.7.0)** |
 | `computeEditScript` (diff) | ~~27~~ **done (0.7.0)** |
 | `(*WriteFile).Execute` | ~~26~~ **done (0.7.0)** |
 | `groupHunks` (diff) | ~~16~~ **done (0.7.0)** |

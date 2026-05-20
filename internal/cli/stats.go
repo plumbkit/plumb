@@ -94,12 +94,58 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	// Tool summary table
-	summary, err := db.Summary(filter)
+	fmt.Println("Tool Call Summary")
+	summaryTable, err := statsToolSummaryTable(db, filter)
 	if err != nil {
-		return fmt.Errorf("querying summary: %w", err)
+		return err
+	}
+	fmt.Println(summaryTable)
+
+	// Recent calls
+	recent, err := db.Recent(statsFlagLimit, filter)
+	if err != nil {
+		return fmt.Errorf("querying recent calls: %w", err)
 	}
 
-	fmt.Println("Tool Call Summary")
+	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
+
+	const (
+		wSessID = 10 // 8 hex chars + 2 padding
+		wStatus = 8  // "Status" (6) padded to 8; ✓/✗ centred within
+		wMs     = 3  // duration digits min width
+	)
+	wWhen, wTool, wName := calcRecentWidths(recent)
+
+	headerWidth := wWhen + wTool + wMs + 2 + wStatus + 2 + wSessID + 2 + wName
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
+	fmt.Printf("%s%s%s  %s  %s  %s\n",
+		padRight(tui.HintStyle.Render("When"), wWhen),
+		padRight(tui.HintStyle.Render("Tool"), wTool),
+		padRight(tui.HintStyle.Render("ms"), wMs),
+		padRight(tui.HintStyle.Render("Status"), wStatus),
+		padRight(tui.HintStyle.Render("Session"), wSessID),
+		tui.HintStyle.Render("Name"),
+	)
+	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
+
+	termWidth := 80
+	if w, _, err := term.GetSize(uintptr(os.Stdout.Fd())); err == nil && w > 0 {
+		termWidth = w
+	}
+	errMaxWidth := max(termWidth-wWhen-2, 40)
+
+	for _, c := range recent {
+		renderRecentCallRow(c, wWhen, wTool, wMs, wStatus, wSessID, wName, errMaxWidth)
+	}
+
+	return nil
+}
+
+func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {
+	summary, err := db.Summary(filter)
+	if err != nil {
+		return "", fmt.Errorf("querying summary: %w", err)
+	}
 
 	t1 := table.New().
 		Border(DottedBorder).
@@ -124,7 +170,6 @@ func runStats(_ *cobra.Command, _ []string) error {
 		if s.TokensSaved > 0 {
 			savedStr = "~" + stats.FormatSavings(int(s.TokensSaved)) + " tok"
 		}
-
 		t1.Row(
 			s.Tool,
 			fmt.Sprintf("%d", s.Calls),
@@ -136,24 +181,13 @@ func runStats(_ *cobra.Command, _ []string) error {
 			savedStr,
 		)
 	}
-	fmt.Println(t1.Render())
+	return t1.Render(), nil
+}
 
-	// Recent calls
-	recent, err := db.Recent(statsFlagLimit, filter)
-	if err != nil {
-		return fmt.Errorf("querying recent calls: %w", err)
-	}
-
-	fmt.Printf("\nRecent Calls (last %d)\n", statsFlagLimit)
-
-	const (
-		wSessID = 10 // 8 hex chars + 2 padding
-		wStatus = 8  // "Status" (6) padded to 8; ✓/✗ centred within
-		wMs     = 3  // duration digits min width
-	)
-	wWhen := 8 // "When"
-	wTool := 4 // "Tool"
-	wName := 7 // "Name" (session human name)
+func calcRecentWidths(recent []stats.RecentCall) (wWhen, wTool, wName int) {
+	wWhen = 8 // "When"
+	wTool = 4 // "Tool"
+	wName = 7 // "Name" (session human name)
 	for _, c := range recent {
 		if l := len(humanAge(c.CalledAt)); l > wWhen {
 			wWhen = l
@@ -165,74 +199,45 @@ func runStats(_ *cobra.Command, _ []string) error {
 			wName = l
 		}
 	}
+	return wWhen + 2, wTool + 2, wName
+}
 
-	wWhen += 2
-	wTool += 2
-
-	// wMs + "  " + wStatus + "  " + wSessID + "  " + wName
-	headerWidth := wWhen + wTool + wMs + 2 + wStatus + 2 + wSessID + 2 + wName
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
-	fmt.Printf("%s%s%s  %s  %s  %s\n",
-		padRight(tui.HintStyle.Render("When"), wWhen),
-		padRight(tui.HintStyle.Render("Tool"), wTool),
-		padRight(tui.HintStyle.Render("ms"), wMs),
-		padRight(tui.HintStyle.Render("Status"), wStatus),
-		padRight(tui.HintStyle.Render("Session"), wSessID),
-		tui.HintStyle.Render("Name"),
-	)
-	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
-
-	// Calculate terminal width for error wrapping
-	termWidth := 80
-	if w, _, err := term.GetSize(uintptr(os.Stdout.Fd())); err == nil && w > 0 {
-		termWidth = w
+func renderRecentCallRow(c stats.RecentCall, wWhen, wTool, wMs, wStatus, wSessID, wName, errMaxWidth int) {
+	ok := tui.OkStyle.Render("✓")
+	if !c.Success {
+		ok = tui.WarnStyle.Render("✗")
 	}
-	errMaxWidth := max(termWidth-wWhen-2, 40)
+	sessID := padRight(shortSessionID(c.SessionID), wSessID)
+	name := tui.MutedStyle.Render(c.SessionName)
+	when := padRight(humanAge(c.CalledAt), wWhen)
+	tool := padRight(c.Tool, wTool)
+	ms := padRight(fmt.Sprintf("%d", c.DurationMs), wMs)
+	status := centerStr(ok, wStatus)
 
-	for _, c := range recent {
-		ok := tui.OkStyle.Render("✓")
-		if !c.Success {
-			ok = tui.WarnStyle.Render("✗")
-		}
-		sessID := padRight(shortSessionID(c.SessionID), wSessID)
-		name := tui.MutedStyle.Render(c.SessionName)
+	if !c.Success {
+		fmt.Println(tui.WarnStyle.Render(when+tool+ms) + "  " + status + "  " + tui.MutedStyle.Render(sessID) + "  " + name)
+	} else {
+		fmt.Println(when + tool + ms + "  " + status + "  " + tui.MutedStyle.Render(sessID) + "  " + name)
+	}
 
-		when := padRight(humanAge(c.CalledAt), wWhen)
-		tool := padRight(c.Tool, wTool)
-		ms := padRight(fmt.Sprintf("%d", c.DurationMs), wMs)
-		status := centerStr(ok, wStatus)
-
-		if !c.Success {
-			fmt.Println(tui.WarnStyle.Render(when+tool+ms) + "  " + status + "  " + tui.MutedStyle.Render(sessID) + "  " + name)
-		} else {
-			fmt.Println(when + tool + ms + "  " + status + "  " + tui.MutedStyle.Render(sessID) + "  " + name)
-		}
-
-		if !c.Success && c.ErrorMsg != "" {
-			lines := strings.Split(c.ErrorMsg, "\n")
-			for i, line := range lines {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
+	if !c.Success && c.ErrorMsg != "" {
+		lines := strings.Split(c.ErrorMsg, "\n")
+		for i, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			wrapped := wordwrap.String(line, errMaxWidth)
+			wrappedLines := strings.Split(wrapped, "\n")
+			for j, wl := range wrappedLines {
+				prefix := "  "
+				if i == 0 && j == 0 {
+					prefix = "↳ "
 				}
-
-				// Apply wordwrap to long lines
-				wrapped := wordwrap.String(line, errMaxWidth)
-				wrappedLines := strings.Split(wrapped, "\n")
-
-				for j, wl := range wrappedLines {
-					prefix := "  "
-					// Only use the arrow for the very first line of the entire error message
-					if i == 0 && j == 0 {
-						prefix = "↳ "
-					}
-					fmt.Printf("%*s%s\n", wWhen, "", tui.WarnStyle.Render(prefix+wl))
-				}
+				fmt.Printf("%*s%s\n", wWhen, "", tui.WarnStyle.Render(prefix+wl))
 			}
 		}
 	}
-
-	return nil
 }
 
 // shortSessionID returns the first 8 characters of a session ID for compact display.
