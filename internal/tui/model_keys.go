@@ -22,25 +22,9 @@ func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.popupRightFocus = !m.popupRightFocus
 		m.popupDetailScroll = 0
 	case "up", "k":
-		if m.popupRightFocus {
-			if m.popupDetailScroll > 0 {
-				m.popupDetailScroll--
-			}
-		} else if m.popupCallCursor > 0 {
-			m.popupCallCursor--
-			m.popupDetailScroll = 0
-			m.popupDetail = popupDetailCache{}
-			m.ensurePopupCursorVisible()
-		}
+		m = m.popupKeyUp()
 	case "down", "j":
-		if m.popupRightFocus {
-			m.popupDetailScroll++
-		} else if m.popupCallCursor < len(m.popupCalls)-1 {
-			m.popupCallCursor++
-			m.popupDetailScroll = 0
-			m.popupDetail = popupDetailCache{}
-			m.ensurePopupCursorVisible()
-		}
+		m = m.popupKeyDown()
 	case "c":
 		if len(m.popupCalls) > 0 {
 			inputJSON, outputText := m.currentDetail()
@@ -57,36 +41,76 @@ func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.popupLeftWidth = maxPLeft
 		}
 	case "pgdown":
-		pageSize := max(m.height-7, 1)
-		if m.popupRightFocus {
-			m.popupDetailScroll += pageSize
-		} else {
-			m.popupCallCursor += pageSize
-			if m.popupCallCursor >= len(m.popupCalls) {
-				m.popupCallCursor = len(m.popupCalls) - 1
-			}
-			m.popupDetailScroll = 0
-			m.popupDetail = popupDetailCache{}
-			m.ensurePopupCursorVisible()
-		}
+		m = m.popupKeyPageDown()
 	case "pgup":
-		pageSize := max(m.height-7, 1)
-		if m.popupRightFocus {
-			m.popupDetailScroll -= pageSize
-			if m.popupDetailScroll < 0 {
-				m.popupDetailScroll = 0
-			}
-		} else {
-			m.popupCallCursor -= pageSize
-			if m.popupCallCursor < 0 {
-				m.popupCallCursor = 0
-			}
-			m.popupDetailScroll = 0
-			m.popupDetail = popupDetailCache{}
-			m.ensurePopupCursorVisible()
-		}
+		m = m.popupKeyPageUp()
 	}
 	return m, nil
+}
+
+func (m Model) popupKeyUp() Model {
+	if m.popupRightFocus {
+		if m.popupDetailScroll > 0 {
+			m.popupDetailScroll--
+		}
+		return m
+	}
+	if m.popupCallCursor > 0 {
+		m.popupCallCursor--
+		m.popupDetailScroll = 0
+		m.popupDetail = popupDetailCache{}
+		m.ensurePopupCursorVisible()
+	}
+	return m
+}
+
+func (m Model) popupKeyDown() Model {
+	if m.popupRightFocus {
+		m.popupDetailScroll++
+		return m
+	}
+	if m.popupCallCursor < len(m.popupCalls)-1 {
+		m.popupCallCursor++
+		m.popupDetailScroll = 0
+		m.popupDetail = popupDetailCache{}
+		m.ensurePopupCursorVisible()
+	}
+	return m
+}
+
+func (m Model) popupKeyPageDown() Model {
+	pageSize := max(m.height-7, 1)
+	if m.popupRightFocus {
+		m.popupDetailScroll += pageSize
+		return m
+	}
+	m.popupCallCursor += pageSize
+	if m.popupCallCursor >= len(m.popupCalls) {
+		m.popupCallCursor = len(m.popupCalls) - 1
+	}
+	m.popupDetailScroll = 0
+	m.popupDetail = popupDetailCache{}
+	m.ensurePopupCursorVisible()
+	return m
+}
+
+func (m Model) popupKeyPageUp() Model {
+	pageSize := max(m.height-7, 1)
+	if m.popupRightFocus {
+		m.popupDetailScroll -= pageSize
+		if m.popupDetailScroll < 0 {
+			m.popupDetailScroll = 0
+		}
+		return m
+	}
+	m.popupCallCursor -= pageSize
+	if m.popupCallCursor < 0 {
+		m.popupCallCursor = 0
+	}
+	m.popupDetailScroll = 0
+	m.popupDetail = popupDetailCache{}
+	m.ensurePopupCursorVisible()
+	return m
 }
 
 func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
