@@ -1110,23 +1110,43 @@ func TestFormatFriendlySinceDate(t *testing.T) {
 	}
 }
 
-func TestDashActivityChartMovesSinceDateIntoLeftCaption(t *testing.T) {
+func TestDashActivityWidgetFramesCaptionsInBorder(t *testing.T) {
 	RebuildStyles()
 	now := time.Now()
 	first := now.AddDate(0, 0, -9)
 	m := Model{
+		activity: stats.ActivitySummary{
+			Calls:  281,
+			Window: 2 * time.Hour,
+		},
+		sessions: []session.Info{
+			{ID: "sess-1"},
+			{ID: "sess-2"},
+		},
 		dashLifetimeCalls:    4200,
 		dashLifetimeSessions: 96,
 		dashLifetimeFirstAt:  first,
 	}
 
-	caption := ansiStripForTest(m.dashActivityChart(120)[0])
-	want := "↓ 4.2k calls (since " + formatFriendlySinceDate(first, now) + ")  ·  96 sessions"
-	if !strings.Contains(caption, want) {
-		t.Fatalf("dashboard lifetime caption missing %q:\n%s", want, caption)
+	lines := m.dashActivityWidget(120)
+	plainTop := ansiStripForTest(lines[0])
+	plainBottom := ansiStripForTest(lines[len(lines)-1])
+	wantTop := "↓ 4.2k calls (since " + formatFriendlySinceDate(first, now) + ") · 96 sessions"
+	if !strings.Contains(plainTop, wantTop) || !strings.HasPrefix(plainTop, "╭─") || !strings.HasSuffix(plainTop, "─╮") {
+		t.Fatalf("dashboard activity top border missing %q:\n%s", wantTop, plainTop)
 	}
-	if strings.Index(caption, "since ") > strings.Index(caption, "sessions") {
-		t.Fatalf("dashboard since date is still on the right side:\n%s", caption)
+	if strings.Index(plainTop, "since ") > strings.Index(plainTop, "sessions") {
+		t.Fatalf("dashboard since date is still on the right side:\n%s", plainTop)
+	}
+	wantBottom := "↑ 281 calls (uptime) · 2 active sessions"
+	if !strings.Contains(plainBottom, wantBottom) || !strings.Contains(plainBottom, "2h+") || !strings.HasPrefix(plainBottom, "╰─") || !strings.HasSuffix(plainBottom, "─╯") {
+		t.Fatalf("dashboard activity bottom border missing uptime caption:\n%s", plainBottom)
+	}
+	for _, idx := range []int{2, 3, 4, 5} {
+		plain := ansiStripForTest(lines[idx])
+		if !strings.HasPrefix(plain, "│   ") || !strings.HasSuffix(plain, "│") {
+			t.Fatalf("chart body line %d is not padded inside widget border: %q", idx, plain)
+		}
 	}
 }
 

@@ -170,7 +170,7 @@ func (m Model) dashboardBodyLines(width int) []string {
 	lines = append(lines, m.dashAlertsWidget(width)...)
 	lines = append(lines, "")
 
-	lines = append(lines, m.dashActivityChart(width)...)
+	lines = append(lines, m.dashActivityWidget(width)...)
 	lines = append(lines, "")
 
 	lines = append(lines, m.dashStatsRow(width)...)
@@ -541,11 +541,6 @@ func ratioBar(percent, width int) (string, string) {
 	return strings.Repeat("■", filled), strings.Repeat("■", width-filled)
 }
 
-// dashActivityChart renders a 4-row borderless braille area chart of tool-call
-// activity with captions above and below. Top 2 rows show lifetime history
-// (bottom-fill, ⣀ idle background). Bottom 2 rows show daemon history
-// (top-fill, ⠉ idle background). Together they form a dotted centre-line when
-// the chart has no activity.
 func formatFriendlySinceDate(t, now time.Time) string {
 	if t.Year() == now.Year() {
 		return t.Format("2 Jan")
@@ -553,7 +548,69 @@ func formatFriendlySinceDate(t, now time.Time) string {
 	return t.Format("2 Jan 2006")
 }
 
-func (m Model) dashActivityChart(width int) []string {
+// dashActivityWidget renders the activity chart as a full-width dashboard widget.
+func (m Model) dashActivityWidget(width int) []string {
+	inner := max(width-2, 1)
+	chartW := max(inner-6, 1)
+	topL, topR, botL, botR := m.dashActivityCaptions(time.Now())
+
+	out := []string{
+		dashActivityBorder("╭", "╮", inner, topL, topR),
+		SepStyle.Render("│") + strings.Repeat(" ", inner) + SepStyle.Render("│"),
+	}
+	for _, line := range m.dashActivityGraphLines(chartW) {
+		padW := max(inner-3-lipgloss.Width(line), 0)
+		out = append(out, SepStyle.Render("│")+"   "+line+strings.Repeat(" ", padW)+SepStyle.Render("│"))
+	}
+	out = append(out,
+		SepStyle.Render("│")+strings.Repeat(" ", inner)+SepStyle.Render("│"),
+		dashActivityBorder("╰", "╯", inner, botL, botR),
+	)
+	return out
+}
+
+func (m Model) dashActivityCaptions(now time.Time) (string, string, string, string) {
+	callScope := "all time"
+	topRight := ""
+	if !m.dashLifetimeFirstAt.IsZero() {
+		callScope = "since " + formatFriendlySinceDate(m.dashLifetimeFirstAt, now)
+		topRight = formatUptimePrecise(now.Sub(m.dashLifetimeFirstAt))
+	}
+	topLeft := "↓ " + formatLargeInt(m.dashLifetimeCalls) + " calls (" + callScope + ") · " + formatSessionCount(m.dashLifetimeSessions)
+
+	bottomLeft := "↑ " + formatActivityCalls(m.activity.Calls) + " (uptime) · " + formatActiveSessionCount(int64(len(m.sessions)))
+	bottomRight := ""
+	if m.activity.Window > 0 {
+		bottomRight = formatUptime(m.activity.Window)
+	}
+	return topLeft, topRight, bottomLeft, bottomRight
+}
+
+func dashActivityBorder(leftCorner, rightCorner string, inner int, leftTitle, rightTitle string) string {
+	border := SepStyle
+	title := PanelHeaderFadedStyle
+	rightText := ""
+	if rightTitle != "" {
+		rightText = " " + rightTitle + " "
+	}
+	availableLeft := max(inner-2-lipgloss.Width(rightText)-2, 0)
+	if lipgloss.Width(leftTitle) > availableLeft {
+		leftTitle = ansi.Truncate(leftTitle, availableLeft, "…")
+	}
+	leftText := " " + leftTitle + " "
+	fillW := max(inner-2-lipgloss.Width(leftText)-lipgloss.Width(rightText), 0)
+	return border.Render(leftCorner+"─") +
+		title.Render(leftText) +
+		border.Render(strings.Repeat("─", fillW)) +
+		title.Render(rightText) +
+		border.Render("─"+rightCorner)
+}
+
+// dashActivityGraphLines renders a 4-row borderless braille area chart of tool-call
+// activity. Top 2 rows show lifetime history (bottom-fill, ⣀ idle background).
+// Bottom 2 rows show daemon history (top-fill, ⠉ idle background). Together they
+// form a dotted centre-line when the chart has no activity.
+func (m Model) dashActivityGraphLines(width int) []string {
 	const halfH = 2 // chart rows per half
 
 	// Braille bottom-fill patterns: left/right column filled upward.
@@ -648,18 +705,7 @@ func (m Model) dashActivityChart(width int) []string {
 	gridLife := buildGrid(m.dashLifetimeBuckets, false) // bottom-fill
 	gridDaem := buildGrid(m.dashDaemBuckets, true)      // top-fill
 
-	lines := make([]string, 0, halfH*2+2)
-
-	// Top caption: lifetime totals.
-	callScope := "all time"
-	capTopR := ""
-	if !m.dashLifetimeFirstAt.IsZero() {
-		callScope = "since " + formatFriendlySinceDate(m.dashLifetimeFirstAt, time.Now())
-		capTopR = formatUptimePrecise(time.Since(m.dashLifetimeFirstAt))
-	}
-	capTopL := "↓ " + formatLargeInt(m.dashLifetimeCalls) + " calls (" + callScope + ")  ·  " + formatSessionCount(m.dashLifetimeSessions)
-	pad := max(width-lipgloss.Width(capTopL)-lipgloss.Width(capTopR), 1)
-	lines = append(lines, MutedStyle.Render(capTopL)+strings.Repeat(" ", pad)+MutedStyle.Render(capTopR))
+	lines := make([]string, 0, halfH*2)
 
 	// Top half: lifetime data, bottom-fill.
 	// Only the innermost row (r == halfH-1) shows ⣀ when idle; the outer row is blank.
@@ -680,15 +726,6 @@ func (m Model) dashActivityChart(width int) []string {
 		}
 		lines = append(lines, renderRow(gridDaem[r], bg))
 	}
-
-	// Bottom caption: daemon window.
-	capBotL := "↑ " + formatActivityCalls(m.activity.Calls) + " (uptime)  ·  " + formatActiveSessionCount(int64(len(m.sessions)))
-	capBotR := ""
-	if m.activity.Window > 0 {
-		capBotR = formatUptime(m.activity.Window)
-	}
-	pad = max(width-lipgloss.Width(capBotL)-lipgloss.Width(capBotR), 1)
-	lines = append(lines, MutedStyle.Render(capBotL)+strings.Repeat(" ", pad)+MutedStyle.Render(capBotR))
 
 	return lines
 }
