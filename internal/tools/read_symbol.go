@@ -61,61 +61,77 @@ type readSymbolArgs struct {
 }
 
 func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	var a readSymbolArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("read_symbol: invalid arguments: %w", err)
+	a, err := parseReadSymbolArgs(raw)
+	if err != nil {
+		return "", err
 	}
-	if a.Path == "" {
-		return "", fmt.Errorf("read_symbol: path is required")
+	fpath, uri := resolveReadSymbolPaths(a.Path)
+	syms, err := t.fetchReadSymbolSymbols(ctx, uri)
+	if err != nil {
+		return "", err
 	}
-	if a.Name == "" {
-		return "", fmt.Errorf("read_symbol: name is required")
-	}
-
-	fpath := strings.TrimPrefix(a.Path, "file://")
-	uri := a.Path
-	if !strings.HasPrefix(uri, "file://") {
-		uri = "file://" + uri
-	}
-
-	key := uri + ":docSymbols"
-	var syms []protocol.DocumentSymbol
-	if t.cache != nil {
-		if v, ok := t.cache.Get(key); ok {
-			syms = v.([]protocol.DocumentSymbol)
-		}
-	}
-	if syms == nil {
-		var err error
-		syms, err = t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		})
-		if err != nil {
-			return "", fmt.Errorf("read_symbol: %w", err)
-		}
-		if t.cache != nil {
-			t.cache.Set(key, syms, t.ttl)
-		}
-	}
-
 	matches := resolveSymbolsByName(syms, a.Name)
 	if len(matches) == 0 {
 		return fmt.Sprintf("No symbol named %q in %s.", a.Name, fpath), nil
 	}
+	return t.formatReadSymbolResult(fpath, a.Name, matches)
+}
 
+func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {
+	var a readSymbolArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return a, fmt.Errorf("read_symbol: invalid arguments: %w", err)
+	}
+	if a.Path == "" {
+		return a, fmt.Errorf("read_symbol: path is required")
+	}
+	if a.Name == "" {
+		return a, fmt.Errorf("read_symbol: name is required")
+	}
+	return a, nil
+}
+
+func resolveReadSymbolPaths(path string) (fpath, uri string) {
+	fpath = strings.TrimPrefix(path, "file://")
+	uri = path
+	if !strings.HasPrefix(uri, "file://") {
+		uri = "file://" + uri
+	}
+	return fpath, uri
+}
+
+func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {
+	key := uri + ":docSymbols"
+	if t.cache != nil {
+		if v, ok := t.cache.Get(key); ok {
+			return v.([]protocol.DocumentSymbol), nil
+		}
+	}
+	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read_symbol: %w", err)
+	}
+	if t.cache != nil {
+		t.cache.Set(key, syms, t.ttl)
+	}
+	return syms, nil
+}
+
+func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protocol.DocumentSymbol) (string, error) {
 	info, err := os.Stat(fpath)
 	if err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
 	mtime := info.ModTime()
 	t.tracker.Record(fpath, mtime)
-
 	sha, _ := fileSHA256(fpath)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s\n", mtime.Format(time.RFC3339Nano), sha)
 	if len(matches) > 1 {
-		fmt.Fprintf(&sb, "# %d matches for %q\n", len(matches), a.Name)
+		fmt.Fprintf(&sb, "# %d matches for %q\n", len(matches), name)
 	}
 
 	for i, sym := range matches {
@@ -126,7 +142,6 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		} else {
 			fmt.Fprintf(&sb, "# symbol: %s (%s) lines %d–%d\n\n", sym.Name, symbolKindName(sym.Kind), start, end)
 		}
-
 		f, ferr := os.Open(fpath)
 		if ferr != nil {
 			fmt.Fprintf(&sb, "(error reading lines: %v)\n", ferr)
@@ -143,6 +158,5 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 			sb.WriteByte('\n')
 		}
 	}
-
 	return sb.String(), nil
 }

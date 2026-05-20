@@ -150,43 +150,29 @@ func flatFilterSymbols(syms []protocol.DocumentSymbol, query string) []protocol.
 	return out
 }
 
+var symbolKindNames = map[protocol.SymbolKind]string{
+	protocol.SKFile:          "File",
+	protocol.SKModule:        "Module",
+	protocol.SKNamespace:     "Namespace",
+	protocol.SKPackage:       "Package",
+	protocol.SKClass:         "Class",
+	protocol.SKMethod:        "Method",
+	protocol.SKProperty:      "Property",
+	protocol.SKField:         "Field",
+	protocol.SKConstructor:   "Constructor",
+	protocol.SKEnum:          "Enum",
+	protocol.SKInterface:     "Interface",
+	protocol.SKFunction:      "Function",
+	protocol.SKVariable:      "Variable",
+	protocol.SKConstant:      "Constant",
+	protocol.SKStruct:        "Struct",
+	protocol.SKEnumMember:    "EnumMember",
+	protocol.SKTypeParameter: "TypeParameter",
+}
+
 func symbolKindName(k protocol.SymbolKind) string {
-	switch k {
-	case protocol.SKFile:
-		return "File"
-	case protocol.SKModule:
-		return "Module"
-	case protocol.SKNamespace:
-		return "Namespace"
-	case protocol.SKPackage:
-		return "Package"
-	case protocol.SKClass:
-		return "Class"
-	case protocol.SKMethod:
-		return "Method"
-	case protocol.SKProperty:
-		return "Property"
-	case protocol.SKField:
-		return "Field"
-	case protocol.SKConstructor:
-		return "Constructor"
-	case protocol.SKEnum:
-		return "Enum"
-	case protocol.SKInterface:
-		return "Interface"
-	case protocol.SKFunction:
-		return "Function"
-	case protocol.SKVariable:
-		return "Variable"
-	case protocol.SKConstant:
-		return "Constant"
-	case protocol.SKStruct:
-		return "Struct"
-	case protocol.SKEnumMember:
-		return "EnumMember"
-	case protocol.SKTypeParameter:
-		return "TypeParameter"
-	default:
-		return fmt.Sprintf("Kind(%d)", int(k))
+	if name, ok := symbolKindNames[k]; ok {
+		return name
 	}
+	return fmt.Sprintf("Kind(%d)", int(k))
 }

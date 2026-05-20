@@ -3,6 +3,8 @@
 ## 0.7.0 (unreleased)
 
 ### Changed
+- **CQ-3 #13: Decompose `ReadSymbol.Execute` (complexity 18 → ≤15).** Extracted `parseReadSymbolArgs`, `resolveReadSymbolPaths` (fpath/URI normalisation), `fetchReadSymbolSymbols` (cache-or-LSP pattern), `formatReadSymbolResult` (mtime header + symbol bodies loop). Pure refactor — all tests pass, behaviour identical.
+- **CQ-3 #12: Replace `symbolKindName` switch with map lookup (complexity 18 → ≤15).** Promoted the 17-case switch to a package-level `symbolKindNames map[protocol.SymbolKind]string`; the function body becomes a two-line map lookup with fallback. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #11: Decompose `ListDirectory.Execute` (complexity 20 → ≤15).** Extracted `parseListDirectoryArgs`, `collectDirEntries` (stat + ReadDir), `filterDirEntries` (hidden/pattern/info filter loop), `sortDirEntries` (sort-by switch with closures), `formatDirResult`. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #10: Decompose `ListFiles.Execute` (complexity 20 → ≤15).** The walk callback closure is replaced with a `listFilesWalker` struct whose `visit`, `visitDir`, and `visitFile` methods handle each concern separately. Added `parseListFilesArgs`, `listFilesWalk`, `formatListFilesResult`. Pure refactor — all tests pass, behaviour identical.
 - **CQ-3 #9: Decompose `groupHunks` (complexity 16 → ≤15).** Extracted `collectHunkBody` (inner collect-changed-region loop with trailing-context stop condition) and `countTrailingCommon` (count trailing space-kind lines). `groupHunks` becomes a thin loop that advances past common lines, builds the context prefix, then delegates body collection. Pure refactor — all tests pass, behaviour identical.
