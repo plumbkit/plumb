@@ -29,6 +29,7 @@ Strict layered architecture — lower layers must never import higher ones:
 
 ```
 Transport (MCP/LSP) → Domain (symbols, edits, capabilities)
+                    → Intelligence (topology) [PLANNED]
                     → Application (composite tools, caching, rate-limiting)
                     → Presentation (TUI, CLI)
 ```
@@ -42,6 +43,7 @@ Key packages:
 | `internal/lsp/adapters/gopls/` | Validated Go adapter |
 | `internal/lsp/adapters/pyright/` | Validated Python adapter |
 | `internal/lsp/adapters/jdtls/` | Experimental Java adapter (jdtls); enabled via `[lsp.java] enabled = true` |
+| `internal/topology/` | *(Planned)* Tree-sitter SQLite semantic graph for high-speed discovery |
 | `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool dependencies |
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |

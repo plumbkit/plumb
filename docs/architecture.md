@@ -16,6 +16,8 @@ answers from a real language server running under the hood.
 ├──────────────────────────────────────────────────────────────┤
 │  Domain         internal/domain   internal/workspace         │
 ├──────────────────────────────────────────────────────────────┤
+│  Intelligence   internal/topology (Tree-sitter SQLite index) │
+├──────────────────────────────────────────────────────────────┤
 │  Transport      internal/mcp      internal/lsp               │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -35,6 +37,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/session` | Per-connection session registry with client identity tracking |
 | `internal/stats` | SQLite-backed tool call statistics (WAL mode, per-tool summary, P95) |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
+| `internal/topology` | *(Not Implemented Yet)* Tree-sitter powered SQLite semantic graph for fast discovery |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
 | `internal/lsp` | `LSPClient` interface, process supervisor |
 | `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio; mock for testing |
@@ -52,6 +55,26 @@ Plumb's UI stack is Bubble Tea v2 only. Use `charm.land/bubbletea/v2`,
 presentation work. Do not add or import the v1 module paths (`charm.land/bubbletea`,
 `charm.land/lipgloss`, or `charm.land/bubbles`); mixing v1 and v2 Charm modules
 causes incompatible model, command, and style types.
+
+## Plumb Topology vs. LSP (The Dual-Engine Architecture)
+
+*(Note: Plumb Topology is currently in planning and is not yet implemented)*
+
+Plumb's ultimate design pairs two very different technologies to solve the context efficiency problem for AI agents: **Tree-sitter** (via Plumb Topology) and **LSP**. They do not compete; they handle different phases of the agent's workflow.
+
+### 1. Plumb Topology (The Map)
+Topology uses **Tree-sitter** and a local **SQLite** database to maintain a persistent, multi-language graph of the codebase (symbols, calls, imports).
+*   **Strengths:** Instant availability (no boot time), minimal memory footprint, handles broken code gracefully, and supports 19+ languages out of the box.
+*   **Role in Plumb:** It acts as the "discovery engine". When an agent asks "Where is the routing logic?" or needs to see an outline of a file, Topology handles it. A single `topology_explore` call can return a symbol's entire neighborhood (callers, callees, and contiguous source code).
+*   **Trade-offs:** It uses heuristic resolution (import tracing and name matching) rather than true type-checking. It is "broad" but not perfectly "deep".
+
+### 2. Language Server Protocol (The GPS)
+LSP uses heavy, compiler-backed servers (like `gopls` or `pyright`) to provide 100% accurate semantic truth.
+*   **Strengths:** Perfect type awareness, safe cross-file refactoring, real-time diagnostics, and compiler-level guarantees.
+*   **Role in Plumb:** It acts as the "precision engine". Once Topology has helped the agent find *where* to work, the agent uses LSP tools (`rename_symbol`, `diagnostics`) to safely manipulate the code and verify the change.
+*   **Trade-offs:** Heavy resource usage, slow indexing times on large codebases ("startup gap"), and strictly limited to languages where the user has a validated LSP installed.
+
+By combining the **Speed and Breadth of Topology** with the **Precision and Safety of LSP**, Plumb provides agents with the optimal balance of token efficiency and operational reliability.
 
 ## Data flow: MCP tool call
 
