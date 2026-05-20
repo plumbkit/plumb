@@ -290,6 +290,17 @@ func (m *Model) selectSection(idx int) {
 	}
 }
 
+func (m *Model) handleMouseWheelDash(delta int) bool {
+	if m.currentSection != 0 || m.sectionMenuOpen || m.showHelp {
+		return false
+	}
+	m.dashScroll += delta
+	if m.dashScroll < 0 {
+		m.dashScroll = 0
+	}
+	return true
+}
+
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
 	if m.showPopup {
 		pLW := m.popupLeftWidth
@@ -303,11 +314,7 @@ func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
 		}
 		return
 	}
-	if m.currentSection == 0 && !m.sectionMenuOpen && !m.showHelp {
-		m.dashScroll += delta
-		if m.dashScroll < 0 {
-			m.dashScroll = 0
-		}
+	if m.handleMouseWheelDash(delta) {
 		return
 	}
 	if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
