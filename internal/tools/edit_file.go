@@ -111,7 +111,9 @@ func (*EditFile) Description() string {
 	return "Apply one or more str_replace edits to an existing file. Each edit specifies " +
 		"an old_str that must appear EXACTLY ONCE in the file — if it is absent or " +
 		"ambiguous the edit is rejected. CRLF differences between old_str and the file " +
-		"are tolerated automatically. All edits are applied sequentially in memory, then " +
+		"are tolerated automatically — detection uses the first CRLF found in the file; " +
+		"files with mixed line endings have undefined matching behaviour (normalise with " +
+		"dos2unix or unix2dos first). All edits are applied sequentially in memory, then " +
 		"written atomically (temp file + rename). A per-path lock serialises " +
 		"concurrent edits to the same file from any session. Optionally pass " +
 		"expected_mtime (from a prior read_file header) to guarantee the file hasn't " +

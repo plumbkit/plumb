@@ -80,58 +80,6 @@ CI now runs `go test -tags=integration ./...` with gopls, pyright, and Java 21 +
 
 ---
 
-## Bugs & known limitations (resolved)
-
-### `pathLocks` unbounded memory growth
-
-**Resolved in:** commit `ba82949` — `feat(tools): add LRU sweep to pathLocks — prevent unbounded memory growth`
-
-An LRU sweep now runs every 5 minutes and evicts entries from the `sync.Map` that have been idle for more than an hour. Each entry tracks `lastUsed time.Time`; the sweep calls `TryLock` before deletion to avoid racing with in-flight locks.
-
----
-
-### Rate limiter was per-connection, not per-agent
-
-**Resolved in:** commit `8769fba` — `feat(tools): key rate limiter by client identity to prevent multi-connection bypass`
-
-The rate limiter is now keyed by `clientName + clientVersion` at daemon scope (a shared `sync.Map[string]*RateLimiter]`), preventing a client from bypassing the per-minute write cap by opening multiple MCP connections simultaneously.
-
----
-
-### CRLF normalisation limitation documented
-
-**Resolved in:** docs update to `docs/mcp-tools.md`
-
-The `edit_file` section now explicitly documents the mixed-line-ending limitation: "detection looks for the first CRLF in the file; files with mixed line endings have undefined matching behaviour — normalise with `dos2unix` or `unix2dos` before editing." This closes the documentation gap that implied CRLF tolerance was comprehensive.
-
----
-
-### `client/registerCapability` globs now tracked
-
-**Resolved in:** commit `218f76b` — `fix(lsp): track registerCapability globs; language-aware DidOpen`
-
-Plumb no longer responds `null` to `client/registerCapability` and ignores the registered watchers. The watcher `Filter` now stores registered glob patterns by registration ID and `FilterEvents` passes only matching events. This was the root cause of post-write diagnostics never arriving with gopls v0.22+ (which registers `{a,b,c}` and absolute-path `/**/` patterns — also fixed in `53da915`).
-
----
-
-### 100 ms concurrent-write skew constant made configurable
-
-**Partially resolved:** constant renamed `defaultConcurrentWriteSkew`; `concurrentWriteDetected` now takes the skew as a parameter
-
-The hard-coded `100ms` is now a named constant (`defaultConcurrentWriteSkew`) and the detection function accepts a `skew time.Duration` parameter (zero value falls back to the default). This makes the value injectable in tests and overridable by future config without touching the detection logic. A fully user-configurable version would pair with the `[edits]` config block; that extension is not yet implemented.
-
----
-
-### Java adapter (jdtls) — write-tool `DidOpen`/`DidClose` and CI wiring
-
-**Completed in:** commits `5e959b5`, `b905c03`, `218f76b`
-
-Write tools (`write_file`, `edit_file`, `delete_file`, `rename_file`, `transaction_apply`) now send `textDocument/didOpen` + `textDocument/didClose` after the file-change notification when the workspace language is Java. Unlike gopls/pyright, jdtls requires the open-document lifecycle to trigger its reconcile pass and emit `publishDiagnostics` reliably after an external file write. CI jdtls integration step also wired.
-
-Remaining gaps from the parent todo (cold-start tuning, binary naming docs, doctor version-check coverage for JDK distributions) are still open in `todo.md`.
-
----
-
 ## Code quality & engineering practices
 
 ### CQ-2 — Delete dead code
