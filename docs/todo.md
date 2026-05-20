@@ -346,6 +346,51 @@ The best version of these two features is not two separate systems:
 - Memory knows decisions and history: why something exists, what was tried, what failed, what the user prefers.
 - Joining them lets Plumb answer: "What code matters here, and what do we already know about it?"
 
+**Storage and relationship model.**
+
+Memory and Topology should be related, but they do **not** need to share one database. They have different lifecycles and failure modes:
+
+- `topology.db` is a derived, rebuildable, high-churn code index. It can be dropped and recreated if the schema changes or the index becomes stale.
+- `memory.db` / the memory index is durable project knowledge: user-authored notes, generated summaries, provenance, stale/superseded state, and redaction-sensitive history. Migration failure must never silently destroy it.
+- Keeping them separate reduces lock contention and corruption blast radius. Topology indexing should not block memory reads, and memory writes should not depend on a topology rebuild being healthy.
+- Both should live under the project `.plumb/` directory because both are project-scoped. A plausible layout is:
+
+  ```text
+  <workspace>/.plumb/
+    memories/
+      *.md              # existing user-authored memory source
+    memory.db           # FTS/provenance/generated-memory index
+    topology.db         # rebuildable semantic graph
+  ```
+
+The relationship should be a shared reference contract, not shared storage. Memory may reference topology entities using stable `CodeRef` fields such as file path, package/module, symbol name, kind, signature hash, and optional content hash/range. Do **not** store topology row IDs inside memory: topology is rebuildable, and row IDs can change after reindexing.
+
+Example resolver shape:
+
+```go
+type CodeRef struct {
+    Kind          string
+    File          string
+    SymbolName    string
+    Package       string
+    SignatureHash string
+}
+
+type MemoryResolver interface {
+    MemoriesForRefs(ctx context.Context, refs []CodeRef) ([]MemoryHit, error)
+}
+```
+
+The join happens in Go code: `topology_explore` resolves current code nodes from `topology.db`, turns them into stable `CodeRef`s, asks memory for matching notes from `memory.db`, and merges the results in the response. Architectural rule: **memory may reference topology, but topology should not depend on memory**. Topology remains a clean derived code index; Memory remains the higher-level knowledge layer.
+
+What to watch for:
+
+- Generated episodic memory will use data from the global `stats.db`, but the resulting memory should be written to the project-local memory store. The flow is: global stats -> bounded project/session summary -> project `.plumb` memory.
+- If a daemon session touches multiple workspaces, generated summaries must be partitioned by workspace so one project's context never leaks into another project's memory DB.
+- Project-local DBs make backup/export simple, but also make accidental commits more dangerous if `.plumb/` is ever unignored. Keep generated/private data clearly marked and redacted.
+- Topology schema and extractor versions need rebuild policy; memory schema migrations need preservation and backup behaviour.
+- Expose user controls: disable generated memory, prune generated memory, rebuild topology, show DB size/status, and exclude paths from indexing.
+
 Concrete combined behaviours:
 
 1. `topology_explore(symbol)` returns related memories alongside code neighbours.
