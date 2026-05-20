@@ -163,6 +163,10 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// write rate.
 	var clientLimiters sync.Map // map[string]*tools.RateLimiter
 
+	return runDaemonAcceptLoop(ctx, ln, pool, cfg, statsStore, daemonStartedAt, &clientLimiters)
+}
+
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) error {
 	var wg sync.WaitGroup
 	go func() {
 		<-ctx.Done()
@@ -189,7 +193,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, cfg, statsStore, daemonStartedAt, &clientLimiters)
+			handleConn(ctx, conn, pool, cfg, statsStore, daemonStartedAt, clientLimiters)
 		})
 	}
 }
