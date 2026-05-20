@@ -74,34 +74,74 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 
 const defaultMaxFileBytes int64 = 50 * 1024 * 1024
 
+type findReplaceArgs struct {
+	Path          string `json:"path"`
+	Pattern       string `json:"pattern"`
+	Replacement   string `json:"replacement"`
+	UseRegex      bool   `json:"use_regex"`
+	Glob          string `json:"glob"`
+	CaseSensitive *bool  `json:"case_sensitive,omitempty"`
+	DryRun        *bool  `json:"dry_run,omitempty"`
+	DirtyOk       bool   `json:"dirty_ok"`
+	FormatAfter   bool   `json:"format_after"`
+	MaxFiles      int    `json:"max_files"`
+	MaxFileBytes  int64  `json:"max_file_bytes"`
+	// Resolved fields set by applyFindReplaceDefaults (not from JSON).
+	dryRun        bool
+	caseSensitive bool
+}
+
 func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	var a struct {
-		Path          string `json:"path"`
-		Pattern       string `json:"pattern"`
-		Replacement   string `json:"replacement"`
-		UseRegex      bool   `json:"use_regex"`
-		Glob          string `json:"glob"`
-		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
-		DryRun        *bool  `json:"dry_run,omitempty"`
-		DirtyOk       bool   `json:"dirty_ok"`
-		FormatAfter   bool   `json:"format_after"`
-		MaxFiles      int    `json:"max_files"`
-		MaxFileBytes  int64  `json:"max_file_bytes"`
+	a, err := parseFindReplaceArgs(args)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(args, &a); err != nil {
-		return "", fmt.Errorf("invalid args: %w", err)
-	}
-	if a.Path == "" || a.Pattern == "" {
-		return "", fmt.Errorf("`path` and `pattern` are required")
+	applyFindReplaceDefaults(&a)
+
+	re, err := compileFindReplaceRegex(a)
+	if err != nil {
+		return "", err
 	}
 
-	dryRun := true
-	if a.DryRun != nil {
-		dryRun = *a.DryRun
+	files, err := findReplaceCollectFiles(ctx, a)
+	if err != nil {
+		return "", err
 	}
-	caseSensitive := !allLower(a.Pattern)
+
+	changes, writeErrs, totalReplacements := t.findReplaceRunWorkers(ctx, files, a, re)
+
+	var formatted int
+	var formatErrs []error
+	if !a.dryRun && a.FormatAfter && len(changes) > 0 {
+		formatted, formatErrs = runFormatterOnFiles(ctx, changes)
+	}
+
+	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs)
+	if len(writeErrs) > 0 {
+		return out, errors.Join(writeErrs...)
+	}
+	return out, nil
+}
+
+func parseFindReplaceArgs(raw json.RawMessage) (findReplaceArgs, error) {
+	var a findReplaceArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return a, fmt.Errorf("invalid args: %w", err)
+	}
+	if a.Path == "" || a.Pattern == "" {
+		return a, fmt.Errorf("`path` and `pattern` are required")
+	}
+	return a, nil
+}
+
+func applyFindReplaceDefaults(a *findReplaceArgs) {
+	a.dryRun = true
+	if a.DryRun != nil {
+		a.dryRun = *a.DryRun
+	}
+	a.caseSensitive = !allLower(a.Pattern)
 	if a.CaseSensitive != nil {
-		caseSensitive = *a.CaseSensitive
+		a.caseSensitive = *a.CaseSensitive
 	}
 	if a.MaxFiles == 0 {
 		a.MaxFiles = 100
@@ -109,115 +149,139 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	if a.MaxFileBytes == 0 {
 		a.MaxFileBytes = defaultMaxFileBytes
 	}
+}
 
-	// Build the matcher up front so we fail fast on bad regex.
-	var re *regexp.Regexp
+func compileFindReplaceRegex(a findReplaceArgs) (*regexp.Regexp, error) {
 	if a.UseRegex {
 		flags := ""
-		if !caseSensitive {
+		if !a.caseSensitive {
 			flags = "(?i)"
 		}
-		var err error
-		re, err = regexp.Compile(flags + a.Pattern)
+		re, err := regexp.Compile(flags + a.Pattern)
 		if err != nil {
-			return "", fmt.Errorf("invalid regex %q: %w", a.Pattern, err)
+			return nil, fmt.Errorf("invalid regex %q: %w", a.Pattern, err)
 		}
-	} else if !caseSensitive {
-		re = regexp.MustCompile("(?i)" + regexp.QuoteMeta(a.Pattern))
+		return re, nil
 	}
+	if !a.caseSensitive {
+		return regexp.MustCompile("(?i)" + regexp.QuoteMeta(a.Pattern)), nil
+	}
+	return nil, nil
+}
 
+func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs) ([]string, error) {
 	info, err := os.Stat(a.Path)
 	if err != nil {
-		return "", fmt.Errorf("stat %s: %w", a.Path, err)
+		return nil, fmt.Errorf("stat %s: %w", a.Path, err)
 	}
-
+	if !info.IsDir() {
+		return []string{a.Path}, nil
+	}
 	globPrefix := globLiteralPrefix(a.Glob)
-
 	var files []string
-	if info.IsDir() {
-		opts := walkOptions{root: a.Path, respectIgnore: true}
-		_ = walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if globPrefix != "" && path != a.Path {
-					rel, _ := filepath.Rel(a.Path, path)
-					if !dirCompatibleWithPrefix(filepath.ToSlash(rel), globPrefix) {
-						return fs.SkipDir
-					}
-				}
-				return nil
-			}
-			if a.Glob != "" {
-				matched, _ := filepath.Match(a.Glob, d.Name())
-				if !matched {
-					rel, _ := filepath.Rel(a.Path, path)
-					matched2, _ := doubleStarMatchFile(a.Glob, filepath.ToSlash(rel))
-					if !matched2 {
-						return nil
-					}
+	opts := walkOptions{root: a.Path, respectIgnore: true}
+	_ = walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if globPrefix != "" && path != a.Path {
+				rel, _ := filepath.Rel(a.Path, path)
+				if !dirCompatibleWithPrefix(filepath.ToSlash(rel), globPrefix) {
+					return fs.SkipDir
 				}
 			}
-			files = append(files, path)
 			return nil
-		})
-	} else {
-		files = []string{a.Path}
-	}
+		}
+		if a.Glob != "" {
+			matched, _ := filepath.Match(a.Glob, d.Name())
+			if !matched {
+				rel, _ := filepath.Rel(a.Path, path)
+				if m, _ := doubleStarMatchFile(a.Glob, filepath.ToSlash(rel)); !m {
+					return nil
+				}
+			}
+		}
+		files = append(files, path)
+		return nil
+	})
+	return files, nil
+}
 
-	scan := func(path string) (int, []byte) {
-		// Size guard before reading: huge files (logs, dumps, generated code)
-		// can stall a 4 min MCP timeout even if they're plain text.
-		if fi, err := os.Stat(path); err != nil || fi.Size() > a.MaxFileBytes {
-			return 0, nil
-		}
-		// Sniff first so we don't buffer huge binary files just to discard them.
-		f, err := os.Open(path)
-		if err != nil {
-			return 0, nil
-		}
-		head := make([]byte, binarySniffBytes)
-		n, _ := io.ReadFull(f, head)
-		head = head[:n]
-		if bytes.IndexByte(head, 0) >= 0 {
-			f.Close()
-			return 0, nil
-		}
-		rest, err := io.ReadAll(f)
+// findReplaceScanFile reads path, applies the pattern, and returns the match
+// count and replacement bytes. Returns (0, nil) for binary, oversized, or
+// zero-match files.
+func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp) (int, []byte) {
+	if fi, err := os.Stat(path); err != nil || fi.Size() > a.MaxFileBytes {
+		return 0, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, nil
+	}
+	head := make([]byte, binarySniffBytes)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+	if bytes.IndexByte(head, 0) >= 0 {
 		f.Close()
-		if err != nil {
+		return 0, nil
+	}
+	rest, err := io.ReadAll(f)
+	f.Close()
+	if err != nil {
+		return 0, nil
+	}
+	data := append(head, rest...)
+	switch {
+	case a.UseRegex:
+		count := len(re.FindAll(data, -1))
+		if count == 0 {
 			return 0, nil
 		}
-		data := append(head, rest...)
-
-		switch {
-		case a.UseRegex:
-			count := len(re.FindAll(data, -1))
-			if count == 0 {
-				return 0, nil
-			}
-			return count, re.ReplaceAll(data, []byte(a.Replacement))
-		case !caseSensitive:
-			count := len(re.FindAll(data, -1))
-			if count == 0 {
-				return 0, nil
-			}
-			return count, re.ReplaceAllLiteral(data, []byte(a.Replacement))
-		default:
-			count := strings.Count(string(data), a.Pattern)
-			if count == 0 {
-				return 0, nil
-			}
-			return count, []byte(strings.ReplaceAll(string(data), a.Pattern, a.Replacement))
+		return count, re.ReplaceAll(data, []byte(a.Replacement))
+	case !a.caseSensitive:
+		count := len(re.FindAll(data, -1))
+		if count == 0 {
+			return 0, nil
 		}
+		return count, re.ReplaceAllLiteral(data, []byte(a.Replacement))
+	default:
+		count := strings.Count(string(data), a.Pattern)
+		if count == 0 {
+			return 0, nil
+		}
+		return count, []byte(strings.ReplaceAll(string(data), a.Pattern, a.Replacement))
 	}
+}
 
+// findReplaceProcessFile writes newData to path, checking the rate limiter,
+// dirty state, and notifying the LSP after a successful write.
+func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path string, newData []byte, a findReplaceArgs) error {
+	if !t.deps.Limiter.Allow() {
+		return rateLimitError("find_replace", t.deps.Limiter)
+	}
+	unlock := lockPath(path)
+	if !a.DirtyOk && pathIsDirty(ctx, path) {
+		unlock()
+		return fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
+	}
+	_, writeErr := safeWrite(path, newData, 0o644)
+	unlock()
+	if writeErr != nil {
+		return fmt.Errorf("find_replace: writing %s: %w", path, writeErr)
+	}
+	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
+		slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
+	}
+	invalidateCache(t.deps.Cache, "file://"+path)
+	return nil
+}
+
+func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []string, a findReplaceArgs, re *regexp.Regexp) ([]fileChange, []error, int) {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	workers := max(1, min(runtime.NumCPU(), len(files)))
-
 	paths := make(chan string)
 	results := make(chan fileChange, workers)
 	var claimed atomic.Int64
@@ -228,9 +292,9 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		wg.Go(func() {
 			for path := range paths {
 				if wctx.Err() != nil {
-					continue // drain remaining sends so the dispatcher unblocks
+					continue
 				}
-				count, newData := scan(path)
+				count, newData := findReplaceScanFile(path, a, re)
 				if count == 0 {
 					continue
 				}
@@ -238,30 +302,12 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 					cancel()
 					continue
 				}
-				if !dryRun {
-					if !t.deps.Limiter.Allow() {
-						results <- fileChange{path: path, count: count, err: rateLimitError("find_replace", t.deps.Limiter)}
+				if !a.dryRun {
+					if err := t.findReplaceProcessFile(wctx, path, newData, a); err != nil {
+						results <- fileChange{path: path, count: count, err: err}
 						cancel()
 						continue
 					}
-					unlock := lockPath(path)
-					if !a.DirtyOk && pathIsDirty(ctx, path) {
-						unlock()
-						results <- fileChange{path: path, count: count, err: fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)}
-						cancel()
-						continue
-					}
-					_, err := safeWrite(path, newData, 0o644)
-					unlock()
-					if err != nil {
-						results <- fileChange{path: path, count: count, err: fmt.Errorf("find_replace: writing %s: %w", path, err)}
-						cancel()
-						continue
-					}
-					if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
-						slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
-					}
-					invalidateCache(t.deps.Cache, "file://"+path)
 				}
 				select {
 				case results <- fileChange{path: path, count: count}:
@@ -298,22 +344,20 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		changes = append(changes, r)
 		totalReplacements += r.count
 	}
+	sort.Slice(changes, func(i, j int) bool { return changes[i].path < changes[j].path })
+	return changes, writeErrs, totalReplacements
+}
 
-	sort.Slice(changes, func(i, j int) bool {
-		return changes[i].path < changes[j].path
-	})
-
+func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error) string {
 	var sb strings.Builder
-	if dryRun {
+	if a.dryRun {
 		sb.WriteString("DRY RUN — no files modified.\n\n")
 	}
 	verb := "would change"
-	if !dryRun {
+	if !a.dryRun {
 		verb = "changed"
 	}
-	fmt.Fprintf(&sb, "%d file(s), %d replacement(s) %s\n\n",
-		len(changes), totalReplacements, verb)
-
+	fmt.Fprintf(&sb, "%d file(s), %d replacement(s) %s\n\n", len(changes), totalReplacements, verb)
 	for _, c := range changes {
 		rel := c.path
 		if r, err := filepath.Rel(a.Path, c.path); err == nil && !strings.HasPrefix(r, "..") {
@@ -321,27 +365,17 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		}
 		fmt.Fprintf(&sb, "  %s  (%d)\n", rel, c.count)
 	}
-
-	if dryRun && len(changes) > 0 {
+	if a.dryRun && len(changes) > 0 {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
-
-	if !dryRun && a.FormatAfter && len(changes) > 0 {
-		formatted, formatErrs := runFormatterOnFiles(ctx, changes)
-		if formatted > 0 {
-			fmt.Fprintf(&sb, "\nformatted %d file(s)", formatted)
-		}
-		for _, fe := range formatErrs {
-			sb.WriteString("\nformat warning: ")
-			sb.WriteString(fe.Error())
-		}
+	if formatted > 0 {
+		fmt.Fprintf(&sb, "\nformatted %d file(s)", formatted)
 	}
-
-	if len(writeErrs) > 0 {
-		return sb.String(), errors.Join(writeErrs...)
+	for _, fe := range formatErrs {
+		sb.WriteString("\nformat warning: ")
+		sb.WriteString(fe.Error())
 	}
-
-	return sb.String(), nil
+	return sb.String()
 }
 
 // runFormatterOnFiles runs the appropriate source formatter on each changed

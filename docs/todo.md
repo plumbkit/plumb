@@ -532,7 +532,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 **Priority:** ⭐ this is the actual "good software engineering" ask. Discuss the standard, then execute per-tool.
 **Effort:** Significant. Phased, one tool per commit.
-**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (first commit, 2026-05-20).
+**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20).
 
 **Problem.** 36 functions exceed gocyclo 15. The worst are tool `Execute()` methods that interleave five concerns:
 
@@ -540,7 +540,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 |---|---|
 | `(*SearchInFiles).Execute` | ~~74~~ **done (0.7.0)** |
 | `(Model).handleMainKey` (TUI) | **59** |
-| `(*findReplaceTool).Execute` | **58** |
+| `(*findReplaceTool).Execute` | ~~58~~ **done (0.7.0)** |
 | `(*TransactionApply).Execute` | 44 |
 | `(Model).updateInner` (TUI) | 41 |
 | `handleConn` (daemon) | 38 |
