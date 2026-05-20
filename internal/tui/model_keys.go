@@ -9,13 +9,7 @@ import (
 func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
-		if m.waitingForQuit {
-			return m, tea.Quit
-		}
-		m.waitingForQuit = true
-		m.quitMessageID++
-		id := m.quitMessageID
-		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
+		return m.mainKeyQuit()
 	case "esc":
 		m.showPopup = false
 		m.popupCalls = nil
@@ -97,13 +91,7 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.logDetailOpen {
 		switch msg.String() {
 		case "ctrl+q", "ctrl+c":
-			if m.waitingForQuit {
-				return m, tea.Quit
-			}
-			m.waitingForQuit = true
-			m.quitMessageID++
-			id := m.quitMessageID
-			return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
+			return m.mainKeyQuit()
 		case "esc":
 			m.logDetailOpen = false
 			m.logDetailScroll = 0
@@ -136,13 +124,7 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
-		if m.waitingForQuit {
-			return m, tea.Quit
-		}
-		m.waitingForQuit = true
-		m.quitMessageID++
-		id := m.quitMessageID
-		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
+		return m.mainKeyQuit()
 	case "esc":
 		if m.logFilter != "" {
 			m.logFilter = ""
@@ -196,6 +178,202 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
+	case "ctrl+q", "ctrl+c":
+		return m.mainKeyQuit()
+	case "enter":
+		m = m.mainKeyEnter()
+	case "tab":
+		m = m.mainKeyTab()
+	case "shift+tab":
+		m = m.mainKeyShiftTab()
+	case "up", "k":
+		m = m.mainKeyUp()
+	case "down", "j":
+		m = m.mainKeyDown()
+	case "pgdown":
+		m = m.mainKeyPageDown()
+	case "pgup":
+		m = m.mainKeyPageUp()
+	default:
+		m = m.handleMainKeySimple(msg.String())
+	}
+	return m, nil
+}
+
+func (m Model) mainKeyQuit() (Model, tea.Cmd) {
+	if m.waitingForQuit {
+		return m, tea.Quit
+	}
+	m.waitingForQuit = true
+	m.quitMessageID++
+	id := m.quitMessageID
+	return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
+}
+
+func (m Model) mainKeyEnter() Model {
+	if m.sectionMenuOpen {
+		m.selectSection(m.sectionMenuCursor)
+		return m
+	}
+	switch m.focusPanel {
+	case focusToolStats:
+		if len(m.toolStats) > 0 {
+			m.openPopup(m.toolStats[m.toolStatsCursor].Tool, time.Time{})
+		}
+	case focusStats:
+		if len(m.recentCalls) > 0 {
+			rc := m.recentCalls[m.statsCursor]
+			m.openPopup(rc.Tool, rc.CalledAt)
+		}
+	}
+	return m
+}
+
+func (m Model) mainKeyTab() Model {
+	if m.focusPanel == focusSessions {
+		m.focusPanel = m.rightTabFocusPanel()
+	} else if m.rightTab < 3 {
+		m.rightTab++
+		m.focusPanel = m.rightTabFocusPanel()
+		m.rightScroll = 0
+	} else {
+		m.rightTab = 0
+		m.focusPanel = focusSessions
+	}
+	return m
+}
+
+func (m Model) mainKeyShiftTab() Model {
+	if m.focusPanel == focusSessions {
+		m.rightTab = 3
+		m.focusPanel = m.rightTabFocusPanel()
+	} else if m.rightTab > 0 {
+		m.rightTab--
+		m.focusPanel = m.rightTabFocusPanel()
+		m.rightScroll = 0
+	} else {
+		m.focusPanel = focusSessions
+	}
+	return m
+}
+
+func (m Model) mainKeyUp() Model {
+	if m.sectionMenuOpen {
+		if m.sectionMenuCursor > 0 {
+			m.sectionMenuCursor--
+		}
+		return m
+	}
+	switch m.focusPanel {
+	case focusToolStats:
+		if m.toolStatsCursor > 0 {
+			m.toolStatsCursor--
+		}
+	case focusStats:
+		if m.statsCursor > 0 {
+			m.statsCursor--
+		}
+	case focusDetails, focusDiagnostics:
+		if m.rightScroll > 0 {
+			m.rightScroll--
+		}
+	default:
+		if m.cursor > 0 {
+			m.cursor--
+			m.leftScroll = 0
+			m.rightScroll = 0
+			m.refreshStats()
+		}
+	}
+	return m
+}
+
+func (m Model) mainKeyDown() Model {
+	if m.sectionMenuOpen {
+		if m.sectionMenuCursor < len(sectionMenuItems)-1 {
+			m.sectionMenuCursor++
+		}
+		return m
+	}
+	switch m.focusPanel {
+	case focusToolStats:
+		if m.toolStatsCursor < len(m.toolStats)-1 {
+			m.toolStatsCursor++
+		}
+	case focusStats:
+		if m.statsCursor < len(m.recentCalls)-1 {
+			m.statsCursor++
+		}
+	case focusDetails, focusDiagnostics:
+		m.rightScroll++
+	default:
+		if m.cursor < len(m.sessions)-1 {
+			m.cursor++
+			m.leftScroll = 0
+			m.rightScroll = 0
+			m.refreshStats()
+		}
+	}
+	return m
+}
+
+func (m Model) mainKeyPageDown() Model {
+	pageSize := max(m.height-6, 1)
+	switch m.focusPanel {
+	case focusToolStats:
+		m.toolStatsCursor += pageSize
+		if m.toolStatsCursor >= len(m.toolStats) {
+			m.toolStatsCursor = len(m.toolStats) - 1
+		}
+	case focusStats:
+		m.statsCursor += pageSize
+		if m.statsCursor >= len(m.recentCalls) {
+			m.statsCursor = len(m.recentCalls) - 1
+		}
+	case focusDetails, focusDiagnostics:
+		m.rightScroll += pageSize
+	default:
+		m.cursor += pageSize
+		if m.cursor >= len(m.sessions) {
+			m.cursor = len(m.sessions) - 1
+		}
+		m.leftScroll = 0
+		m.rightScroll = 0
+		m.refreshStats()
+	}
+	return m
+}
+
+func (m Model) mainKeyPageUp() Model {
+	pageSize := max(m.height-6, 1)
+	switch m.focusPanel {
+	case focusToolStats:
+		m.toolStatsCursor -= pageSize
+		if m.toolStatsCursor < 0 {
+			m.toolStatsCursor = 0
+		}
+	case focusStats:
+		m.statsCursor -= pageSize
+		if m.statsCursor < 0 {
+			m.statsCursor = 0
+		}
+	case focusDetails, focusDiagnostics:
+		m.rightScroll -= pageSize
+		if m.rightScroll < 0 {
+			m.rightScroll = 0
+		}
+	default:
+		m.cursor -= pageSize
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.refreshStats()
+	}
+	return m
+}
+
+func (m Model) handleMainKeySimple(key string) Model {
+	switch key {
 	case "/":
 		if m.sectionMenuOpen {
 			m.sectionMenuOpen = false
@@ -204,116 +382,16 @@ func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.sectionMenuCursor = m.currentSection
 		}
 	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5", "alt+1", "alt+2", "alt+3", "alt+4", "alt+5":
-		m.selectSectionShortcut(msg.String())
+		m.selectSectionShortcut(key)
 	case "ctrl+h":
 		m.sectionMenuOpen = false
 		m.showHelp = true
-	case "ctrl+q", "ctrl+c":
-		if m.waitingForQuit {
-			return m, tea.Quit
-		}
-		m.waitingForQuit = true
-		m.quitMessageID++
-		id := m.quitMessageID
-		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
 	case "esc":
 		m.sectionMenuOpen = false
 		m.showHelp = false
-	case "enter":
-		if m.sectionMenuOpen {
-			m.selectSection(m.sectionMenuCursor)
-			break
-		}
-		switch m.focusPanel {
-		case focusToolStats:
-			if len(m.toolStats) > 0 {
-				m.openPopup(m.toolStats[m.toolStatsCursor].Tool, time.Time{})
-			}
-		case focusStats:
-			if len(m.recentCalls) > 0 {
-				rc := m.recentCalls[m.statsCursor]
-				m.openPopup(rc.Tool, rc.CalledAt)
-			}
-		}
-	case "tab":
-		if m.focusPanel == focusSessions {
-			m.focusPanel = m.rightTabFocusPanel()
-		} else if m.rightTab < 3 {
-			m.rightTab++
-			m.focusPanel = m.rightTabFocusPanel()
-			m.rightScroll = 0
-		} else {
-			m.rightTab = 0
-			m.focusPanel = focusSessions
-		}
-	case "shift+tab":
-		if m.focusPanel == focusSessions {
-			m.rightTab = 3
-			m.focusPanel = m.rightTabFocusPanel()
-		} else if m.rightTab > 0 {
-			m.rightTab--
-			m.focusPanel = m.rightTabFocusPanel()
-			m.rightScroll = 0
-		} else {
-			m.focusPanel = focusSessions
-		}
-	case "up", "k":
-		if m.sectionMenuOpen {
-			if m.sectionMenuCursor > 0 {
-				m.sectionMenuCursor--
-			}
-			break
-		}
-		switch m.focusPanel {
-		case focusToolStats:
-			if m.toolStatsCursor > 0 {
-				m.toolStatsCursor--
-			}
-		case focusStats:
-			if m.statsCursor > 0 {
-				m.statsCursor--
-			}
-		case focusDetails, focusDiagnostics:
-			if m.rightScroll > 0 {
-				m.rightScroll--
-			}
-		default:
-			if m.cursor > 0 {
-				m.cursor--
-				m.leftScroll = 0
-				m.rightScroll = 0
-				m.refreshStats()
-			}
-		}
-	case "down", "j":
-		if m.sectionMenuOpen {
-			if m.sectionMenuCursor < len(sectionMenuItems)-1 {
-				m.sectionMenuCursor++
-			}
-			break
-		}
-		switch m.focusPanel {
-		case focusToolStats:
-			if m.toolStatsCursor < len(m.toolStats)-1 {
-				m.toolStatsCursor++
-			}
-		case focusStats:
-			if m.statsCursor < len(m.recentCalls)-1 {
-				m.statsCursor++
-			}
-		case focusDetails, focusDiagnostics:
-			m.rightScroll++
-		default:
-			if m.cursor < len(m.sessions)-1 {
-				m.cursor++
-				m.leftScroll = 0
-				m.rightScroll = 0
-				m.refreshStats()
-			}
-		}
 	case "1", "2", "3", "4", "5":
 		if m.sectionMenuOpen {
-			m.selectSection(int(msg.String()[0] - '1'))
+			m.selectSection(int(key[0] - '1'))
 		}
 	case "a":
 		m.refresh()
@@ -327,55 +405,6 @@ func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if maxLeft := m.maxLeftWidth(); m.leftWidth > maxLeft {
 			m.leftWidth = maxLeft
 		}
-	case "pgdown":
-		pageSize := max(m.height-6, 1)
-		switch m.focusPanel {
-		case focusToolStats:
-			m.toolStatsCursor += pageSize
-			if m.toolStatsCursor >= len(m.toolStats) {
-				m.toolStatsCursor = len(m.toolStats) - 1
-			}
-		case focusStats:
-			m.statsCursor += pageSize
-			if m.statsCursor >= len(m.recentCalls) {
-				m.statsCursor = len(m.recentCalls) - 1
-			}
-		case focusDetails, focusDiagnostics:
-			m.rightScroll += pageSize
-		default:
-			m.cursor += pageSize
-			if m.cursor >= len(m.sessions) {
-				m.cursor = len(m.sessions) - 1
-			}
-			m.leftScroll = 0
-			m.rightScroll = 0
-			m.refreshStats()
-		}
-	case "pgup":
-		pageSize := max(m.height-6, 1)
-		switch m.focusPanel {
-		case focusToolStats:
-			m.toolStatsCursor -= pageSize
-			if m.toolStatsCursor < 0 {
-				m.toolStatsCursor = 0
-			}
-		case focusStats:
-			m.statsCursor -= pageSize
-			if m.statsCursor < 0 {
-				m.statsCursor = 0
-			}
-		case focusDetails, focusDiagnostics:
-			m.rightScroll -= pageSize
-			if m.rightScroll < 0 {
-				m.rightScroll = 0
-			}
-		default:
-			m.cursor -= pageSize
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			m.refreshStats()
-		}
 	}
-	return m, nil
+	return m
 }

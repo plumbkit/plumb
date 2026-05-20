@@ -3,6 +3,7 @@
 ## 0.7.1 (unreleased)
 
 ### Changed
+- **CQ-3 #29: Decompose `handleMainKey` + extract `mainKeyQuit` (complexity 60 → 9).** `handleMainKey` becomes a flat 8-case dispatcher (`ctrl+q/c`, `enter`, `tab`, `shift+tab`, `up/k`, `down/j`, `pgdown`, `pgup`, `default`). Extracted nine helpers: `mainKeyQuit` (quit-confirmation flow, eliminating the three duplicate inline copies across `handlePopupKey`, `handleLogSectionKey` detail branch, and `handleLogSectionKey` list branch), `mainKeyEnter`, `mainKeyTab`, `mainKeyShiftTab`, `mainKeyUp`, `mainKeyDown`, `mainKeyPageDown`, `mainKeyPageUp`, and `handleMainKeySimple` (remaining simple-mutation keys). Pure refactor — all tests pass, behaviour identical.
 - **TUI quit safeguard.** Pressing `ctrl+c` or `ctrl+q` now requires a double confirmation to quit the TUI, preventing accidental exits. The first press displays a "Press ctrl+c again to quit" alert in the status bar (yellow foreground, no background) for 3 seconds. Pressing any other key immediately cancels the quit sequence and restores the normal status bar.
 - **TUI section menu usability.** The expanded section menu (`/`) now features a "Section" header to match its collapsed state. Clicking anywhere outside the menu bounds now correctly closes it, and clicking within the bounds reliably selects the section. The `/` key now acts as a toggle, closing the menu if it is already open. Added `alt+1-5` as alternative shortcuts to `ctrl+1-5` for jumping between sections, and updated the help screen to document them.
 
