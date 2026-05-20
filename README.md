@@ -296,36 +296,9 @@ gopls initialisation is lazy — workspace resolves on first tool call.
 
 ## Monitoring
 
-The `plumb` command (alias: `plumb status`) opens a live TUI dashboard showing active sessions, tool call statistics, recent edits, and recent calls per session. Use `/` to open the section selector, `ctrl+h` for help, and `ctrl+q` to quit.
+The `plumb` command (alias: `plumb status`) opens a live Bubble Tea TUI. The Dashboard section shows daemon health, activity history, tokens saved, top tools, alerts, and project-scoped stats as compact widgets. Other sections cover sessions, workspace memory, live daemon logs, and settings.
 
-```
-plumb 0.5.4
-╭─ Sessions (1) ──────────────┬─ Session + Stats ──────────────────────────
-│                             ┆
-│▸ go: ~/Projects/myapp       ┆  ID          abc123-def456
-│                             ┆  Language    go
-│                             ┆  Folder      ~/Projects/myapp
-│                             ┆  Adapter     gopls
-│                             ┆  PID         12345
-│                             ┆  Daemon      0.5.4
-│                             ┆  Started     2026-05-11 14:00:00
-│                             ┆  Client      claude-ai 0.1.0
-│                             ┆
-│                             ┆  ── Tool Statistics ──
-│                             ┆  edit_file            6 calls  12ms avg
-│                             ┆  write_file           4 calls   8ms avg
-│                             ┆  search_in_files      9 calls  16ms avg
-│                             ┆  workspace_symbols    3 calls  38ms avg
-│                             ┆  diagnostics          2 calls   0ms avg
-│                             ┆
-│                             ┆  ── Recent Edits ──
-│                             ┆  ✓  edit_file       12ms  4s ago
-│                             ┆  ✓  write_file       8ms  9s ago
-│                             ┆  ✓  edit_file       11ms 22s ago
-╰─────────────────────────────┴────────────────────────────────────────────
-```
-
-Navigation: `↑↓`/`jk` moves sessions, `tab` focuses the recent-calls panel (then `j`/`k` to scroll; selecting a failed call expands its error inline), `a` shows hidden sessions, `[`/`]` resizes the left panel, `q` quits.
+Use `/` to open the section selector, `ctrl+h` for help, and `ctrl+q` to quit. In the Sessions section, `↑↓`/`j k` moves through sessions and calls, `tab` cycles focus, and selecting a failed call expands its error details.
 
 ## File-write safety model
 

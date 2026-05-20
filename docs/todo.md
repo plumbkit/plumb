@@ -560,7 +560,7 @@ Original baseline (pre CQ-1/CQ-2, 2026-05-20):
              errcheck 3, gofumpt 3, unparam 3, ineffassign 2, revive 1
 ```
 
-8 non-test source files exceed the project's own ~400-line guidance: `internal/cli/daemon.go` (832), `internal/stats/db.go` (705), `internal/mcp/server.go` (600), `internal/cli/setup.go` (556), `internal/lsp/protocol/types.go` (535), `internal/tools/edit_file.go` (528), `internal/cli/doctor.go` (518), `internal/tui/dashboard.go` (508). Several more are 480–503.
+8 non-test source files exceed the project's own ~400-line guidance: `internal/tui/dashboard.go` (892), `internal/cli/daemon.go` (832), `internal/stats/db.go` (705), `internal/mcp/server.go` (600), `internal/cli/setup.go` (556), `internal/lsp/protocol/types.go` (535), `internal/tools/edit_file.go` (528), `internal/cli/doctor.go` (518). Several more are 480–503.
 
 **Root cause (the engineering problem, not just the symptom).** The recurring anti-pattern is the monolithic `Tool.Execute()`: a single method that decodes raw args, validates them, performs LSP/filesystem work, formats output, and maps errors — all inline. That is why 36 functions blow the complexity gate and why the files are huge. The fix is a *structural standard*, not piecemeal nibbling. The local enforcement gap compounds it: `.git/hooks/` does not exist in this clone, so `make install-hooks` was never run and unlinted/non-compiling code has reached the tree.
 
@@ -643,7 +643,7 @@ func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 3. `internal/mcp/server.go` (600) → stdio transport+framing / request dispatch / lifecycle. (Coordinate with the `bufio.Scanner` limit item in cli-and-core-review-plan.md §7.)
 4. `internal/cli/setup.go` (556) → one file per client (claude-desktop, claude-code, codex, gemini) + shared config-merge helper.
 5. `internal/tools/edit_file.go` (528) and `internal/tools/file_write_helpers.go` (503) → naturally fall out of CQ-3.
-6. `internal/cli/doctor.go` (518), `internal/tui/dashboard.go` (508), `internal/tui/model_logs.go` (498), `internal/tools/search_in_files.go` (483) → split along the seams CQ-3 introduces.
+6. `internal/tui/dashboard.go` (892), `internal/cli/doctor.go` (518), `internal/tui/model_logs.go` (498), `internal/tools/search_in_files.go` (483) → split along the seams CQ-3 introduces.
 7. **Documented exception list** in AGENTS.md for files where a single unit is correct: `internal/lsp/protocol/types.go` (535) is a protocol type catalogue mirroring the LSP spec — splitting it harms readability. The ~400-line rule gets an explicit, short allowlist rather than being silently ignored.
 
 **Watch out for.** Pure file moves only — no logic edits in the same commit (those are CQ-3). Keep package-private symbols package-private; do not export something just to move it. One file per commit so `git log --follow` and bisect stay useful.
@@ -663,7 +663,7 @@ func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 1. ~~**SQL string concatenation — `internal/stats/db.go:357, 428, 499` (G202).**~~ **RESOLVED in 0.6.9.** All three are false positives — `filter.where()` always uses `?` placeholders. Annotated with `//nolint:gosec` + explanatory comment.
 2. **File permissions G306 — `internal/memory/store.go:121`, `internal/session/session.go:128`, `internal/tools/edit_apply.go:85`.** `edit_apply` writes user source files where 0644 is correct (preserve perms). Memory/session files are plumb-owned metadata — decide whether 0600 is appropriate. Fix where it's metadata; document + annotate where 0644 is intentional.
 3. **Path traversal G703 — `internal/cli/setup.go:415`, `internal/tools/file_write_helpers.go:387`, `internal/tools/txlog/txlog.go:213`.** Plumb's entire write model is path validation + per-path locks + symlink resolution. Confirm each flagged path passes through the existing validation, then add a one-line `//nolint:gosec // path validated by <fn> — see safeWrite contract` referencing the guarantee. (Cross-check with cli-and-core-review-plan.md §6 symlink-lock-key item.)
-4. **Integer overflow G115 — `internal/lsp/protocol/types.go:363` (int→int32), `internal/tools/symbol_edits.go:67` (int→uint32), `internal/tools/search_in_files.go:471` (int→uint32), `internal/tui/dashboard.go:508` (int→rune).** LSP positions in pathological huge files. Add explicit bounds checks before conversion; return a clear error instead of silently wrapping. Small, real correctness fix.
+4. **Integer overflow G115 — `internal/lsp/protocol/types.go:363` (int→int32), `internal/tools/symbol_edits.go:67` (int→uint32), `internal/tools/search_in_files.go:471` (int→uint32), `internal/tui/dashboard.go:760` (int→rune).** LSP positions in pathological huge files. Add explicit bounds checks before conversion; return a clear error instead of silently wrapping. Small, real correctness fix.
 5. **G602 slice index — `internal/cli/setup.go:551`**, **G204 subprocess — `internal/lsp/supervisor.go:231`** and **`internal/tools/find_replace.go:357`** (LSP command and formatter cmd come from resolved config/extension lookup, expected). Verify bounds / input provenance and annotate with justification.
 6. End state: `golangci-lint run ./...` shows zero unexplained gosec findings; every remaining suppression has a one-line reason pointing at the safety invariant.
 

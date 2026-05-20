@@ -31,7 +31,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 |---|---|
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `status`, `setup`, `sessions`, `stats`, `init`, `config`, `version` |
-| `internal/tui` | Bubble Tea v2 live dashboard (sessions + tool stats + recent calls) |
+| `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
 | `internal/tools` | MCP tool implementations (15 tools — see `docs/mcp-tools.md`) |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
