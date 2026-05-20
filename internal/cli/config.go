@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -135,78 +136,43 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	fmt.Printf("\nPlumb Configuration\n")
 	cfgTable := tableBase()
 
-	formatVal := func(val string) string {
-		if val == "" {
-			return tui.MutedStyle.Render("(none)")
-		}
-		return tui.ValStyle.Render(val)
-	}
-
-	addSection := func(name string, items [][]string) {
-		var keys, vals, provs strings.Builder
-		for i, item := range items {
-			if i > 0 {
-				keys.WriteString("\n")
-				vals.WriteString("\n")
-				provs.WriteString("\n")
-			}
-			keys.WriteString(item[0])
-			vals.WriteString(formatVal(item[1]))
-			provs.WriteString(tui.MutedStyle.Render(item[2]))
-		}
-		cfgTable.Row(tui.KeyStyle.Render(name), keys.String(), vals.String(), provs.String())
-	}
-
 	logFileDisplay := projectCfg.LogFile
 	if logFileDisplay == "" {
 		logFileDisplay = contractConfigPath(daemonLogPath())
 	}
 
-	addSection("core", [][]string{
+	addConfigSection(cfgTable, "core", [][]string{
 		{"log_level", projectCfg.LogLevel, sourceFor("log_level", defaultsCfg.LogLevel, globalCfg.LogLevel, projectCfg.LogLevel)},
 		{"log_format", projectCfg.LogFormat, sourceFor("log_format", defaultsCfg.LogFormat, globalCfg.LogFormat, projectCfg.LogFormat)},
 		{"log_file", logFileDisplay, sourceFor("log_file", defaultsCfg.LogFile, globalCfg.LogFile, projectCfg.LogFile)},
 	})
 
-	addSection("cache", [][]string{
+	addConfigSection(cfgTable, "cache", [][]string{
 		{"ttl", projectCfg.Cache.TTL.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL)},
 		{"max_size", fmt.Sprintf("%d", projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
 	})
 
-	addSection("edits", [][]string{
+	addConfigSection(cfgTable, "edits", [][]string{
 		{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
 		{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
 		{"post_write_diagnostics_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteDiagnosticsMs), sourceFor("post_write_diagnostics_ms", defaultsCfg.Edits.PostWriteDiagnosticsMs, globalCfg.Edits.PostWriteDiagnosticsMs, projectCfg.Edits.PostWriteDiagnosticsMs)},
 	})
 
-	addSection("walk", [][]string{
+	addConfigSection(cfgTable, "walk", [][]string{
 		{"refuse_home_roots", fmt.Sprintf("%v", projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
 	})
 
-	addSection("workspace", [][]string{
+	addConfigSection(cfgTable, "workspace", [][]string{
 		{"auto_attach", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttach), sourceFor("auto_attach", defaultsCfg.Workspace.AutoAttach, globalCfg.Workspace.AutoAttach, projectCfg.Workspace.AutoAttach)},
 		{"auto_attach_persist", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttachPersist), sourceFor("auto_attach_persist", defaultsCfg.Workspace.AutoAttachPersist, globalCfg.Workspace.AutoAttachPersist, projectCfg.Workspace.AutoAttachPersist)},
 	})
 
-	// Collect and sort LSP adapters
-	var lspLangs []string
-	for lang := range projectCfg.LSP {
-		lspLangs = append(lspLangs, lang)
-	}
-	for i := 0; i < len(lspLangs)-1; i++ {
-		for j := i + 1; j < len(lspLangs); j++ {
-			if lspLangs[i] > lspLangs[j] {
-				lspLangs[i], lspLangs[j] = lspLangs[j], lspLangs[i]
-			}
-		}
-	}
-
-	for _, lang := range lspLangs {
+	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]
 		defCfg := defaultsCfg.LSP[lang]
 
-		addSection("lsp."+lang, [][]string{
+		addConfigSection(cfgTable, "lsp."+lang, [][]string{
 			{"enabled", fmt.Sprintf("%v", cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
 			{"command", cfg.Command, sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command)},
 			{"args", fmt.Sprintf("%v", cfg.Args), sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args)},
@@ -219,6 +185,37 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	return nil
+}
+
+func formatConfigVal(val string) string {
+	if val == "" {
+		return tui.MutedStyle.Render("(none)")
+	}
+	return tui.ValStyle.Render(val)
+}
+
+func addConfigSection(t *table.Table, name string, items [][]string) {
+	var keys, vals, provs strings.Builder
+	for i, item := range items {
+		if i > 0 {
+			keys.WriteString("\n")
+			vals.WriteString("\n")
+			provs.WriteString("\n")
+		}
+		keys.WriteString(item[0])
+		vals.WriteString(formatConfigVal(item[1]))
+		provs.WriteString(tui.MutedStyle.Render(item[2]))
+	}
+	t.Row(tui.KeyStyle.Render(name), keys.String(), vals.String(), provs.String())
+}
+
+func sortedLSPKeys(m map[string]config.LSPConfig) []string {
+	keys := make([]string, 0, len(m))
+	for lang := range m {
+		keys = append(keys, lang)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 var configShowBorder = lipgloss.Border{
