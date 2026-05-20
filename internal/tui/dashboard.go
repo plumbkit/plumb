@@ -66,11 +66,7 @@ func (m *Model) refreshDashboard() {
 		}
 	}
 	if m.activity.Window > 0 {
-		// Scale bucket count to ~1 bucket per minute of uptime so short sessions
-		// don't produce a near-flat chart (17 calls across 130+ buckets → invisible).
-		uptimeMins := int(m.activity.Window.Minutes())
-		uptimeBuckets := max(activityBuckets, min(chartBuckets, uptimeMins))
-		if summary, err := m.globalDB.Activity(m.activity.Window, uptimeBuckets, globalFilter); err == nil {
+		if summary, err := m.globalDB.Activity(m.activity.Window, chartBuckets, globalFilter); err == nil {
 			m.dashDaemBuckets = summary.Buckets
 		}
 	} else {

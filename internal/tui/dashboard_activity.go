@@ -122,7 +122,7 @@ func (m Model) dashActivityGraphLines(width int) []string {
 // fillDown=true fills from the top (daemon style); fillDown=false fills from the bottom (lifetime style).
 func dashBuildGrid(buckets []int64, fillDown bool, width, halfH int, botL, botR, topL, topR [5]int) [][]int {
 	pixH := halfH * 4
-	var maxV int64 = 10
+	var maxV int64 = 3
 	for _, v := range buckets {
 		if v > maxV {
 			maxV = v
