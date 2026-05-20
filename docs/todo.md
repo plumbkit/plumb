@@ -398,6 +398,26 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
 
+### Dashboard alerts — telemetry-backed follow-ups
+
+**Priority:** Low-medium.
+**Effort:** Medium. Requires daemon/stat telemetry changes before the TUI can present this accurately.
+**Status:** Deferred follow-up. The Dashboard already ships sparse actionable alerts for daemon availability, stale metrics, session-load errors, stats DB open failures, unresolved or auto-attached workspaces, LSP-unavailable workspaces, daemon version mismatches, and recent uptime tool-error spikes.
+
+**Remaining ideas:**
+
+1. Surface config parse/load errors only when the daemon records the exact failing config source and error.
+2. Surface write-safety warnings for strict-mode friction, rate-limit exhaustion, and recent write rejections once those events are counted in stats or daemon metrics.
+3. Keep these alerts thresholded and actionable; do not warn merely because strict mode or rate limiting is enabled.
+
+**Definition of done:**
+
+1. Daemon or stats telemetry records config-load failures and write-safety rejection counts with enough context for a concise Dashboard message.
+2. Dashboard alerts show only non-zero, recent, actionable conditions with a clear next step.
+3. Tests cover quiet/default state and each alert threshold.
+
+---
+
 ### Review and Sanitise Color Schemes
 
 **Priority:** Medium.
