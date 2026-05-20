@@ -110,6 +110,8 @@ type Model struct {
 	dashProjectTokens    int64
 	dashProjectTopTools  []stats.ToolStat
 	dashScroll           int
+	waitingForQuit       bool
+	quitMessageID        int
 }
 
 func NewModel(logPath, ctrlPath string) Model {

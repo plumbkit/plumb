@@ -127,7 +127,7 @@ func (m Model) renderDashboard() string {
 		m.dashScroll = 0
 	}
 	visible := allLines[m.dashScroll:]
-	rBar := scrollbarCol(len(allLines), bodyHeight, m.dashScroll)
+	rBar := scrollbarCol(len(allLines), bodyHeight, m.dashScroll, isOverlay)
 
 	for i := range bodyHeight {
 		line := ""
@@ -915,7 +915,13 @@ func (m Model) handleDashboardKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 	pageSize := max(m.height-6, 1)
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
-		return m, tea.Quit, true
+		if m.waitingForQuit {
+			return m, tea.Quit, true
+		}
+		m.waitingForQuit = true
+		m.quitMessageID++
+		id := m.quitMessageID
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} }), true
 	case "esc":
 		// nothing to dismiss in dashboard
 	case "/":

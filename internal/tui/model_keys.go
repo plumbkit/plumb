@@ -9,7 +9,13 @@ import (
 func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
-		return m, tea.Quit
+		if m.waitingForQuit {
+			return m, tea.Quit
+		}
+		m.waitingForQuit = true
+		m.quitMessageID++
+		id := m.quitMessageID
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
 	case "esc":
 		m.showPopup = false
 		m.popupCalls = nil
@@ -91,7 +97,13 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.logDetailOpen {
 		switch msg.String() {
 		case "ctrl+q", "ctrl+c":
-			return m, tea.Quit
+			if m.waitingForQuit {
+				return m, tea.Quit
+			}
+			m.waitingForQuit = true
+			m.quitMessageID++
+			id := m.quitMessageID
+			return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
 		case "esc":
 			m.logDetailOpen = false
 			m.logDetailScroll = 0
@@ -124,7 +136,13 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
-		return m, tea.Quit
+		if m.waitingForQuit {
+			return m, tea.Quit
+		}
+		m.waitingForQuit = true
+		m.quitMessageID++
+		id := m.quitMessageID
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
 	case "esc":
 		if m.logFilter != "" {
 			m.logFilter = ""
@@ -134,9 +152,13 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.sectionMenuCursor = m.currentSection
 		}
 	case "/":
-		m.sectionMenuOpen = true
-		m.sectionMenuCursor = m.currentSection
-	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5":
+		if m.sectionMenuOpen {
+			m.sectionMenuOpen = false
+		} else {
+			m.sectionMenuOpen = true
+			m.sectionMenuCursor = m.currentSection
+		}
+	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5", "alt+1", "alt+2", "alt+3", "alt+4", "alt+5":
 		m.selectSectionShortcut(msg.String())
 	case "ctrl+h":
 		m.showHelp = true
@@ -175,15 +197,25 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "/":
-		m.sectionMenuOpen = true
-		m.sectionMenuCursor = m.currentSection
-	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5":
+		if m.sectionMenuOpen {
+			m.sectionMenuOpen = false
+		} else {
+			m.sectionMenuOpen = true
+			m.sectionMenuCursor = m.currentSection
+		}
+	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5", "alt+1", "alt+2", "alt+3", "alt+4", "alt+5":
 		m.selectSectionShortcut(msg.String())
 	case "ctrl+h":
 		m.sectionMenuOpen = false
 		m.showHelp = true
 	case "ctrl+q", "ctrl+c":
-		return m, tea.Quit
+		if m.waitingForQuit {
+			return m, tea.Quit
+		}
+		m.waitingForQuit = true
+		m.quitMessageID++
+		id := m.quitMessageID
+		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
 	case "esc":
 		m.sectionMenuOpen = false
 		m.showHelp = false

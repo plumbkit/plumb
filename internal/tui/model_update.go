@@ -7,6 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+type clearQuitMessageMsg struct{ id int }
+
 func (m Model) Init() tea.Cmd {
 	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
 }
@@ -36,6 +38,12 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
 
+	case clearQuitMessageMsg:
+		if m.waitingForQuit && m.quitMessageID == msg.id {
+			m.waitingForQuit = false
+		}
+		return m, nil
+
 	case logDetailCopyResetMsg:
 		m.logDetailCopied = false
 		return m, nil
@@ -58,11 +66,15 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 			if m.logDetailOpen {
 				return m, nil
 			}
-			if m.onSectionSelector(mouse.X, mouse.Y) {
+			if m.sectionMenuOpen {
+				if mouse.X >= 0 && mouse.X < sectionMenuWidth {
+					m.selectSectionMenuAtRow(mouse.Y)
+				} else {
+					m.sectionMenuOpen = false
+				}
+			} else if m.onSectionSelector(mouse.X, mouse.Y) {
 				m.sectionMenuOpen = true
 				m.sectionMenuCursor = m.currentSection
-			} else if m.sectionMenuOpen {
-				m.selectSectionMenuAtRow(mouse.Y)
 			} else if m.currentSection == 3 && !m.showHelp {
 				m.selectLogAtBodyRow(mouse.Y - bodyStartRow)
 			} else if m.onDivider(mouse.X) {
@@ -224,14 +236,12 @@ func (m *Model) selectSectionMenuAtRow(y int) {
 }
 
 func (m *Model) selectSectionShortcut(key string) {
-	if !strings.HasPrefix(key, "ctrl+") || len(key) != len("ctrl+1") {
-		return
+	if (strings.HasPrefix(key, "ctrl+") || strings.HasPrefix(key, "alt+")) && len(key) >= 5 {
+		idx := int(key[len(key)-1] - '1')
+		if idx >= 0 && idx < len(sectionMenuItems) {
+			m.selectSection(idx)
+		}
 	}
-	idx := int(key[len(key)-1] - '1')
-	if idx < 0 || idx >= len(sectionMenuItems) {
-		return
-	}
-	m.selectSection(idx)
 }
 
 func (m *Model) selectSection(idx int) {

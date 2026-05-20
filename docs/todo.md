@@ -755,6 +755,14 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
 
+### Configurable TUI Shortcuts
+
+**Priority:** Medium.
+**Effort:** Medium.
+**Status:** Planning.
+**Description:** Allow users to define custom keyboard shortcuts for the TUI within `config.toml` (e.g., mapping navigation or section switching to different keys). This will improve accessibility and support custom user workflows.
+**Watch out for:** Ensure key conflicts are detected and reported clearly, and that the default bindings remain intuitive if no configuration is provided.
+
 ### Dashboard alerts — telemetry-backed follow-ups
 
 **Priority:** Low-medium.

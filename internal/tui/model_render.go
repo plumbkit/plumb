@@ -80,8 +80,8 @@ func (m Model) render() string {
 	leftLines := allLeftLines[m.leftScroll:]
 	rightLines := allRightLines[m.rightScroll:]
 
-	leftScrollbar := scrollbarCol(len(allLeftLines), bodyHeight, m.leftScroll)
-	rightScrollbar := scrollbarCol(len(allRightLines), bodyHeight, m.rightScroll)
+	leftScrollbar := scrollbarCol(len(allLeftLines), bodyHeight, m.leftScroll, isOverlay)
+	rightScrollbar := scrollbarCol(len(allRightLines), bodyHeight, m.rightScroll, isOverlay)
 
 	for i := range bodyHeight {
 		l, r := "", ""
@@ -137,6 +137,26 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 		style = InactiveStyle
 		keyStyle = InactiveStyle
 	}
+	rightFooterPlain := "/ menu  ·  ^q quit  ·  ^h help "
+
+	if m.waitingForQuit {
+		msg := " Press ctrl+c again to quit "
+		msgStyle := lipgloss.NewStyle().Foreground(ActiveTheme.TextPrimary).Background(ActiveTheme.Warning)
+		if dimmed {
+			msgStyle = InactiveStyle
+		}
+		
+		leftFooter := msgStyle.Render(msg)
+		// fill until 3 columns before the right footer
+		fillW := max(m.width - lipgloss.Width(msg) - lipgloss.Width(rightFooterPlain) - 3, 0)
+		
+		rightFooter := keyStyle.Render("/") + style.Render(" menu  ·  ") +
+			keyStyle.Render("^q") + style.Render(" quit  ·  ") +
+			keyStyle.Render("^h") + style.Render(" help ")
+			
+		return leftFooter + strings.Repeat(" ", fillW) + "   " + rightFooter
+	}
+
 	vStr := Version
 	if vStr == "" {
 		vStr = "dev"
@@ -152,7 +172,6 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 		formatSessionCount(sessCount),
 		memStr,
 	)
-	rightFooterPlain := "/ menu  ·  ^q quit  ·  ^h help "
 	footerGap := max(m.width-lipgloss.Width(leftFooter)-lipgloss.Width(rightFooterPlain), 1)
 	rightFooter := keyStyle.Render("/") + style.Render(" menu  ·  ") +
 		keyStyle.Render("^q") + style.Render(" quit  ·  ") +
@@ -212,7 +231,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 		m.popupLeftScroll = maxPL
 	}
 	visibleLeft := allLeft[m.popupLeftScroll:]
-	leftScrollbar := scrollbarCol(len(allLeft), bodyHeight, m.popupLeftScroll)
+	leftScrollbar := scrollbarCol(len(allLeft), bodyHeight, m.popupLeftScroll, false)
 	allRight := m.popupRightAll(pRW - 2)
 
 	rightScrollH := max(bodyHeight-2, 0)
@@ -225,7 +244,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 		m.popupDetailScroll = maxDS
 	}
 	visibleRight := allRight[m.popupDetailScroll:]
-	scrollbar := scrollbarCol(len(allRight), rightScrollH, m.popupDetailScroll)
+	scrollbar := scrollbarCol(len(allRight), rightScrollH, m.popupDetailScroll, false)
 
 	for i := range bodyHeight {
 		var lCell string
@@ -306,7 +325,7 @@ func (m Model) renderHelp(bg string) string {
 			title: "Sections",
 			items: []helpItem{
 				{key: "/", desc: "Open section selector"},
-				{key: "ctrl+1-5", desc: "Jump to Dashboard, Sessions, Memory, Logs, Settings"},
+				{key: "ctrl+1-5, alt+1-5", desc: "Jump to Dashboard, Sessions, Memory, Logs, Settings"},
 			},
 		},
 		{
@@ -382,7 +401,9 @@ func (m Model) renderSectionMenuOverlay(bg string) string {
 
 	innerW := sectionMenuWidth - 2
 	lines := make([]string, 0, 2+len(sectionMenuItems))
-	lines = append(lines, border.Render("╭"+strings.Repeat("─", innerW)+"╮"))
+	title := " Section "
+	topFill := max(sectionMenuWidth-lipgloss.Width("╭─")-lipgloss.Width(title)-lipgloss.Width("╮"), 0)
+	lines = append(lines, border.Render("╭─")+PanelHeaderStyle.Render(title)+border.Render(strings.Repeat("─", topFill)+"╮"))
 	for i, item := range sectionMenuItems {
 		marker := " "
 		style := textStyle
