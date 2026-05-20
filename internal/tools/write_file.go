@@ -101,6 +101,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 
 	t.writeFilePostWrite(ctx, path, uri, isNew)
 	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, preDiags)
+	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
 }
 

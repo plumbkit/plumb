@@ -162,6 +162,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	t.txPhase3Notify(ctx, written)
 	result := formatTransactionResult(written)
 	for _, w := range written {
+		t.deps.notifyTopology(w.path)
 		result += t.deps.reportQuality(ctx, w.path)
 	}
 	return result, nil

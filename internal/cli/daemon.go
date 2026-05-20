@@ -125,6 +125,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	pool := newWorkspacePool(cfg)
 	defer pool.close()
 
+	topoPool := newTopologyPool(cfg.Topology)
+	defer topoPool.StopAll()
+
 	ctrlPath := daemonCtrlSocketPath()
 	_ = os.Remove(ctrlPath)
 	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
@@ -163,11 +166,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// write rate.
 	var clientLimiters sync.Map // map[string]*tools.RateLimiter
 
-	runDaemonAcceptLoop(ctx, ln, pool, cfg, statsStore, daemonStartedAt, &clientLimiters)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, cfg, statsStore, daemonStartedAt, &clientLimiters)
 	return nil
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	var wg sync.WaitGroup
 	go func() {
 		<-ctx.Done()
@@ -194,16 +197,16 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, cfg, statsStore, daemonStartedAt, clientLimiters)
+			handleConn(ctx, conn, pool, topoPool, cfg, statsStore, daemonStartedAt, clientLimiters)
 		})
 	}
 }
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	defer conn.Close()
-	s := newConnSession(pool, cfg, statsStore, clientLimiters)
+	s := newConnSession(pool, topoPool, cfg, statsStore, clientLimiters)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	s.registerAllTools(srv, daemonStartedAt)

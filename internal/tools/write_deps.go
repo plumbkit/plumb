@@ -15,6 +15,11 @@ import (
 // WriteDeps.QualityReport.
 type QualityReportFn = func(ctx context.Context, path string) string
 
+// TopologyNotifyFn is called after a successful write to enqueue the written
+// path for topology re-indexing. path is the absolute path to the written file.
+// nil is a no-op.
+type TopologyNotifyFn = func(path string)
+
 // WriteDeps bundles the dependencies every file-mutating tool needs.
 // Pulling these into one struct stops the constructor signatures from
 // growing every time we add a cross-cutting concern (rate limit, strict
@@ -87,6 +92,10 @@ type WriteDeps struct {
 	// findings section appended to the tool response, or "" if no findings
 	// or analysis is disabled for this session.
 	QualityReport QualityReportFn
+	// TopologyNotify, when non-nil, is called after a successful write to
+	// enqueue the written path for topology re-indexing. path is the absolute
+	// path to the written file. nil is a no-op.
+	TopologyNotify TopologyNotifyFn
 }
 
 func (d WriteDeps) postWriteDiagWindow() time.Duration {
@@ -116,4 +125,11 @@ func (d WriteDeps) reportQuality(ctx context.Context, path string) string {
 		return ""
 	}
 	return d.QualityReport(ctx, path)
+}
+
+// notifyTopology enqueues path for topology re-indexing when TopologyNotify is wired.
+func (d WriteDeps) notifyTopology(path string) {
+	if d.TopologyNotify != nil {
+		d.TopologyNotify(path)
+	}
 }

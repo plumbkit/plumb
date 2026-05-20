@@ -29,6 +29,7 @@ import (
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tools"
 	"github.com/golimpio/plumb/internal/tools/txlog"
+	"github.com/golimpio/plumb/internal/topology"
 )
 
 // connSession holds all mutable per-connection state for an MCP session.
@@ -55,6 +56,8 @@ type connSession struct {
 	ttl          time.Duration
 
 	qualityRunner *quality.Runner
+	topologyPool  *topologyPool
+	topologyStore *topology.Store
 
 	writeLimiter *tools.RateLimiter
 	editsMu      sync.RWMutex
@@ -68,7 +71,7 @@ type connSession struct {
 
 // newConnSession initialises a connSession and registers a new MCP session.
 // Call close() when the connection ends.
-func newConnSession(pool *workspacePool, cfg config.Config, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
+func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Config, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
 	ttl := cfg.Cache.TTL.Duration
 	sessName := session.GenerateName()
 	sessID, _ := session.Register(session.Info{
@@ -77,6 +80,7 @@ func newConnSession(pool *workspacePool, cfg config.Config, statsStore *statsSto
 	})
 	return &connSession{
 		pool:           pool,
+		topologyPool:   topoPool,
 		cfg:            cfg,
 		statsStore:     statsStore,
 		clientLimiters: clientLimiters,
@@ -206,6 +210,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 	s.acquiredRoot = folder
 	s.acquiredLanguage = language
 	s.startQualityRunner(folder)
+	s.startTopologyIndexer(folder)
 	recoverWorkspaceTxlog(folder, txlog.Scan)
 	cn, cv := s.clientName, s.clientVersion
 	session.Patch(s.sessID, func(info *session.Info) {
@@ -229,6 +234,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 	}
 	s.acquiredRoot = root
 	s.startQualityRunner(root)
+	s.startTopologyIndexer(root)
 	recoverWorkspaceTxlog(root, txlog.Scan)
 	cn, cv := s.clientName, s.clientVersion
 	session.Patch(s.sessID, func(info *session.Info) {
@@ -416,6 +422,21 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	s.applyProjectConfig(s.workspace())
 }
 
+// startTopologyIndexer acquires the topology store for the workspace when
+// topology is enabled. Must be called under stateMu. No-op if already started.
+func (s *connSession) startTopologyIndexer(workspace string) {
+	if s.topologyStore != nil {
+		return
+	}
+	if !s.cfg.Topology.Enabled {
+		return
+	}
+	if s.topologyPool == nil {
+		return
+	}
+	s.topologyStore = s.topologyPool.Acquire(workspace)
+}
+
 // startQualityRunner creates and starts the quality runner when the [quality]
 // block is enabled. Must be called under stateMu (it is called only during
 // workspace attach while stateMu is held). No-op if already started.
@@ -458,6 +479,10 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 	if r := s.qualityRunner; r != nil {
 		qualityReport = r.Report
 	}
+	var topologyNotify tools.TopologyNotifyFn
+	if store := s.topologyStore; store != nil {
+		topologyNotify = func(path string) { store.Enqueue(path) }
+	}
 	return tools.WriteDeps{
 		Client:                s.sessionProxy,
 		Cache:                 s.sessionCache,
@@ -471,6 +496,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
 		QualityReport:         qualityReport,
+		TopologyNotify:        topologyNotify,
 	}
 }
 
@@ -524,6 +550,14 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.RegisterPrompt(mcp.NewOrientPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewWhatsBrokenPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewRecentChangesPrompt(s.workspace))
+	topoFn := func() *topology.Store {
+		s.stateMu.Lock()
+		defer s.stateMu.Unlock()
+		return s.topologyStore
+	}
+	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace))
+	srv.Register(tools.NewTopologySearch(topoFn))
+	srv.Register(tools.NewTopologyExplore(topoFn))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.
