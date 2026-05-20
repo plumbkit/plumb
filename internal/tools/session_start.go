@@ -266,9 +266,47 @@ func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
 	if len(filtered) == 0 {
 		return
 	}
+
+	// Gopls emits "not in your go.mod file" at go.mod:1:1 when the module cache
+	// is cold — packages declared in go.mod but not yet downloaded. Collapse
+	// these to a single advisory line so real errors are not buried.
+	real, coldCount := partitionColdCacheGoMod(filtered)
+
 	sb.WriteString("## Active diagnostics (errors and warnings)\n\n")
-	sb.WriteString(formatDiagnostics(filtered))
+	if len(real) > 0 {
+		sb.WriteString(formatDiagnostics(real))
+	}
+	if coldCount > 0 {
+		fmt.Fprintf(sb, "\nNote: %d go.mod package(s) flagged \"not in your go.mod file\" at 1:1 — "+
+			"likely a cold module cache; run `go mod tidy`.\n", coldCount)
+	}
 	sb.WriteString("\n")
+}
+
+// partitionColdCacheGoMod splits diagnostics into real issues and cold-cache
+// false positives. Cold-cache entries match: URI ends with /go.mod, position
+// is 1:1 (0-indexed line 0 col 0), and message ends with "is not in your go.mod file".
+func partitionColdCacheGoMod(byURI map[string][]protocol.Diagnostic) (real map[string][]protocol.Diagnostic, coldCount int) {
+	real = make(map[string][]protocol.Diagnostic)
+	for uri, diags := range byURI {
+		if !strings.HasSuffix(uri, "/go.mod") {
+			real[uri] = diags
+			continue
+		}
+		var kept []protocol.Diagnostic
+		for _, d := range diags {
+			if d.Range.Start.Line == 0 && d.Range.Start.Character == 0 &&
+				strings.HasSuffix(d.Message, "is not in your go.mod file") {
+				coldCount++
+			} else {
+				kept = append(kept, d)
+			}
+		}
+		if len(kept) > 0 {
+			real[uri] = kept
+		}
+	}
+	return real, coldCount
 }
 
 // detectLanguage returns a human-readable language label by probing for
