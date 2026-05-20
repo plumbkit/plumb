@@ -55,23 +55,45 @@ func (*RenameSymbol) InputSchema() json.RawMessage {
 	}`)
 }
 
-func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	var a struct {
+type renameSymbolArgs struct {
+	URI       string
+	Line      uint32
+	Character uint32
+	NewName   string
+	DryRun    bool
+}
+
+func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
+	var input struct {
 		URI       string `json:"uri"`
 		Line      uint32 `json:"line"`
 		Character uint32 `json:"character"`
 		NewName   string `json:"new_name"`
 		DryRun    *bool  `json:"dry_run,omitempty"`
 	}
-	if err := json.Unmarshal(args, &a); err != nil {
-		return "", fmt.Errorf("invalid args: %w", err)
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return renameSymbolArgs{}, fmt.Errorf("invalid args: %w", err)
 	}
-	if a.URI == "" || a.NewName == "" {
-		return "", fmt.Errorf("`uri` and `new_name` are required")
+	if input.URI == "" || input.NewName == "" {
+		return renameSymbolArgs{}, fmt.Errorf("`uri` and `new_name` are required")
 	}
 	dryRun := true
-	if a.DryRun != nil {
-		dryRun = *a.DryRun
+	if input.DryRun != nil {
+		dryRun = *input.DryRun
+	}
+	return renameSymbolArgs{
+		URI:       input.URI,
+		Line:      input.Line,
+		Character: input.Character,
+		NewName:   input.NewName,
+		DryRun:    dryRun,
+	}, nil
+}
+
+func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	a, err := parseRenameSymbolArgs(args)
+	if err != nil {
+		return "", err
 	}
 
 	we, err := t.client.Rename(ctx, protocol.RenameParams{
@@ -100,7 +122,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 
 	var sb strings.Builder
 	verb := "would change"
-	if !dryRun {
+	if !a.DryRun {
 		modified, applyErr := applyWorkspaceEdit(we)
 		if applyErr != nil {
 			if strings.Contains(applyErr.Error(), "out of range") {
@@ -118,7 +140,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	for _, f := range files {
 		fmt.Fprintf(&sb, "  %s\n", f)
 	}
-	if dryRun {
+	if a.DryRun {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
 	return sb.String(), nil

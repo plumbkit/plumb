@@ -59,16 +59,24 @@ type callHierarchyArgs struct {
 	Direction string `json:"direction,omitempty"`
 }
 
-func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
 	var a callHierarchyArgs
-	if err := json.Unmarshal(args, &a); err != nil {
-		return "", fmt.Errorf("call_hierarchy: invalid arguments: %w", err)
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return a, fmt.Errorf("call_hierarchy: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return "", fmt.Errorf("call_hierarchy: uri must not be empty")
+		return a, fmt.Errorf("call_hierarchy: uri must not be empty")
 	}
 	if a.Direction == "" {
 		a.Direction = "both"
+	}
+	return a, nil
+}
+
+func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	a, err := parseCallHierarchyArgs(args)
+	if err != nil {
+		return "", err
 	}
 
 	items, err := t.client.PrepareCallHierarchy(ctx, protocol.PrepareCallHierarchyParams{
