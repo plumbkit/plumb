@@ -755,6 +755,31 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
 
+### Clean up legacy database migration logic
+
+**Priority:** Low (Cleanup for v0.9)
+**Effort:** Small
+**Status:** Planning.
+
+**The problem.**
+The `internal/stats/db.go` file contains a hand-rolled SQLite migration system (the `migration` struct, `migrations` slice, `migrate` function, and `hasColumn` check) that walks older schemas forward from `user_version` 1 up to the current version. Since backward compatibility with these older database versions is not required until version 0.9, this logic is obsolete and adds unnecessary complexity.
+
+**Definition of done:**
+1. **Remove migration logic in `internal/stats/db.go`**:
+   - Delete the `migration` struct and `migrations` slice.
+   - Delete the `migrate` function.
+   - Delete the `hasColumn` function.
+   - Delete `ErrReadOnlySchemaUpgradeRequired`.
+   - Update `Open()` to execute the base `CREATE TABLE` schema and stamp `PRAGMA user_version = SchemaVersion`, removing the conditional migration check.
+   - Update or remove `checkReadOnlySchema` and simplify `OpenReadOnly()`.
+2. **Remove migration tests in `internal/stats/db_test.go`**:
+   - Delete `TestOpenReadOnlyOldSchemaTellsUserToDeleteDB`.
+   - Update `TestOpenCreatesCurrentGlobalSchema` to remove `hasColumn` assertions (since the function is gone).
+   - Remove any other tests specifically asserting migration from v1/v2/v3/v4 to v5.
+3. **Update Documentation**:
+   - Remove or simplify references to schema migrations and `user_version` logic in `docs/architecture.md`.
+   - Review `AGENTS.md` (and symlinks) and remove details about how migrations are applied if they exist outside of historical logs.
+
 ### Configurable TUI Shortcuts
 
 **Priority:** Medium.
