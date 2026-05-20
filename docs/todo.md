@@ -755,6 +755,47 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
 
+### `diagnostics` tool — accept multiple URIs in a single call
+
+**Priority:** Medium.
+**Effort:** Small.
+**Status:** Not started.
+
+**The problem.**
+The `diagnostics` tool accepts at most one `uri` (string). An agent checking N files must make N separate tool calls, each adding a full request/response pair to the context window and costing tokens on every subsequent turn. The fix is to replace `uri: string` with `uris: []string`, keeping full backward-compatible semantics so existing zero-arg and single-arg callers are unaffected.
+
+**Proposed schema:**
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "uris": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "file:// URIs to fetch diagnostics for. Omit or pass [] to return diagnostics for all files that have issues. Pass one URI for a single-file query. Pass multiple URIs to check a specific set of files in one call."
+    }
+  }
+}
+```
+
+**Behaviour contract:**
+- `uris` absent or `[]` → `AllDiagnostics()` — full workspace (existing zero-arg behaviour).
+- `uris` with one element → `Diagnostics(uri)` — single-file query (existing single-arg behaviour).
+- `uris` with N elements → fan out over each URI, merge results, return as one formatted response.
+
+**Backward compatibility:** also accept the old scalar `uri` field; treat it as `uris: [uri]` if `uris` is absent.
+
+**Definition of done:**
+1. Update `diagnosticsSchema` in `internal/tools/diagnostics.go` to use the `uris` array field.
+2. Update `Description()` to clearly describe all three call modes so MCP clients know a single call suffices for any number of files.
+3. Update `Execute` to handle 0, 1, and N URIs per the contract above. Fan out over `t.inv.Diagnostics(uri)` for each entry and merge.
+4. Keep backward-compat: if old scalar `uri` is present and `uris` is absent, treat as `uris: [uri]`.
+5. Update `docs/mcp-tools.md` tool table entry.
+6. Unit tests: 0-URI (all), 1-URI (single file), N-URI (multi), N-URI with one untracked, backward-compat scalar `uri`.
+
+---
+
 ### Clean up legacy database migration logic
 
 **Priority:** Low (Cleanup for v0.9)

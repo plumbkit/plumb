@@ -2,6 +2,9 @@
 
 ## 0.7.2 (unreleased)
 
+### Fixed
+- **gopls PATH augmentation for GUI-launched daemons.** When plumb is launched by a GUI application (Claude Desktop, Cursor) on macOS, it inherits launchd's stripped `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits `/usr/local/bin` and `/opt/homebrew/bin` — the typical Homebrew installation prefix for `go`, `gopls`, and other tools. Without `go` on PATH, gopls cannot locate the module cache and reports every import — including stdlib packages like `context` and `fmt` — as "could not import". The `envFor` helper in `internal/cli/pool.go` now always augments PATH before spawning the LSP subprocess: existing PATH entries are preserved first, then `/etc/paths` and all `/etc/paths.d/*` files are read (the same sources `path_helper(8)` uses), then `/usr/local/bin`, `/opt/homebrew/bin`, and `/opt/homebrew/sbin` are appended, deduplicating throughout. Per-language `[lsp.go] env` config overrides still apply on top, so explicit config wins.
+
 ### Changed
 - **`copy_file` tool + `rename_file` move clarity.** New `copy_file(from, to, overwrite, dirty_ok)` tool: preserves source permissions, cross-device safe (safeWrite), two-path deadlock-safe locks, `FileCreated` LSP notification. `rename_file` description updated to say it is the primary move tool and points to `copy_file` for duplication. Docs updated: `mcp-tools.md`, `AGENTS.md` (count 34→35). 8 unit tests.
 - **`plumb doctor --json`** — new flag emits check results as a JSON array (`[{"name":"...","ok":true,"detail":"...","fix":"..."}]`). All five check sections run silently (no logo, headers, or spinner). Exit code unchanged. Usage: `plumb doctor --json | jq '.[] | select(.ok == false)'`. Implementation: `runDoctorJSON` in `internal/cli/doctor.go`; `TestJsonCheckResultMarshaling` covers round-trip.

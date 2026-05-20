@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -317,37 +316,6 @@ func argsFor(language, root string, lspCfg config.LSPConfig) []string {
 func jdtlsDataDir(root string) string {
 	sum := sha256.Sum256([]byte(root))
 	return filepath.Join(config.CacheDir(), "jdtls-data", fmt.Sprintf("%x", sum[:8]))
-}
-
-// envFor builds the environment slice for the LSP supervisor process.
-// When lspCfg.Env is empty, nil is returned so the child process inherits
-// the daemon's environment unchanged. When overrides are present, the daemon's
-// environment is copied and the per-key overrides are applied on top — the
-// child process still sees PATH, HOME, JAVA_HOME, etc., with only the
-// configured keys changed. This is important for SDKMAN and other version
-// managers that rely on PATH being set correctly in the daemon's environment.
-func envFor(lspCfg config.LSPConfig) []string {
-	if len(lspCfg.Env) == 0 {
-		return nil
-	}
-	env := os.Environ()
-	for k, v := range lspCfg.Env {
-		env = setEnvVar(env, k, v)
-	}
-	return env
-}
-
-// setEnvVar replaces the value of key in env if it is already present,
-// otherwise appends "key=value". The input slice is modified in place.
-func setEnvVar(env []string, key, val string) []string {
-	prefix := key + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			env[i] = prefix + val
-			return env
-		}
-	}
-	return append(env, prefix+val)
 }
 
 // lookup returns the entry for root if it has already been acquired, or nil

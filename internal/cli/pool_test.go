@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/golimpio/plumb/internal/config"
@@ -196,6 +197,106 @@ func TestSynthesiseRoot_NoGitFallsBackToSeed(t *testing.T) {
 	// The seed is sub; no .git anywhere above it in the temp tree.
 	if got != sub {
 		t.Errorf("SynthesiseRoot: got %s, want %s (seed fallback)", got, sub)
+	}
+}
+
+func TestCurrentEnvPATH(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"present", []string{"HOME=/root", "PATH=/usr/bin:/bin", "USER=x"}, "/usr/bin:/bin"},
+		{"absent", []string{"HOME=/root", "USER=x"}, ""},
+		{"empty value", []string{"PATH="}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := currentEnvPATH(tc.env); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAugmentedPATH_PreservesExistingOrder(t *testing.T) {
+	current := "/custom/bin:/usr/bin:/bin"
+	result := augmentedPATH(current)
+	entries := filepath.SplitList(result)
+	if len(entries) < 3 {
+		t.Fatalf("expected at least 3 entries, got %d: %v", len(entries), entries)
+	}
+	if entries[0] != "/custom/bin" {
+		t.Errorf("first entry: got %q, want /custom/bin", entries[0])
+	}
+	if entries[1] != "/usr/bin" {
+		t.Errorf("second entry: got %q, want /usr/bin", entries[1])
+	}
+}
+
+func TestAugmentedPATH_DeduplicatesEntries(t *testing.T) {
+	current := "/usr/local/bin:/usr/bin"
+	result := augmentedPATH(current)
+	entries := filepath.SplitList(result)
+	seen := make(map[string]int)
+	for _, e := range entries {
+		seen[e]++
+	}
+	for p, count := range seen {
+		if count > 1 {
+			t.Errorf("duplicate entry %q appears %d times", p, count)
+		}
+	}
+}
+
+func TestAugmentedPATH_AppendsHomebrewPaths(t *testing.T) {
+	// Start from a PATH that lacks Homebrew dirs entirely.
+	result := augmentedPATH("/usr/bin:/bin")
+	entries := filepath.SplitList(result)
+	set := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		set[e] = true
+	}
+	for _, want := range []string{"/usr/local/bin", "/opt/homebrew/bin"} {
+		if !set[want] {
+			t.Errorf("expected %q in augmented PATH, got %v", want, entries)
+		}
+	}
+}
+
+func TestAugmentedPATH_EmptyInput(t *testing.T) {
+	result := augmentedPATH("")
+	if result == "" {
+		t.Error("augmentedPATH(\"\") returned empty string; expected at least Homebrew paths")
+	}
+	if !strings.Contains(result, "/usr/local/bin") {
+		t.Errorf("expected /usr/local/bin in result, got %q", result)
+	}
+}
+
+func TestEnvFor_AlwaysSetsPATH(t *testing.T) {
+	cfg := config.LSPConfig{} // no overrides
+	env := envFor(cfg)
+	if env == nil {
+		t.Fatal("envFor returned nil; expected explicit env slice with PATH set")
+	}
+	path := currentEnvPATH(env)
+	if path == "" {
+		t.Error("PATH not set in envFor result")
+	}
+	if !strings.Contains(path, "/usr/local/bin") {
+		t.Errorf("PATH does not contain /usr/local/bin: %q", path)
+	}
+}
+
+func TestEnvFor_ConfigOverrideWins(t *testing.T) {
+	cfg := config.LSPConfig{
+		Env: map[string]string{"PATH": "/my/custom/bin"},
+	}
+	env := envFor(cfg)
+	path := currentEnvPATH(env)
+	if path != "/my/custom/bin" {
+		t.Errorf("PATH: got %q, want /my/custom/bin", path)
 	}
 }
 
