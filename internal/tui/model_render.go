@@ -286,20 +286,48 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 }
 
 func (m Model) renderHelp(bg string) string {
-	helpLines := []string{
-		" ↑/↓ or j/k      Navigate sessions/calls/scroll details",
-		" /               Open section selector",
-		" ^1-^5           Open Dashboard/Sessions/Memory/Logs/Settings",
-		" pgup/pgdown     Page through lists",
-		" tab/shift+tab   Switch panel focus (sessions → details → tools → recent)",
-		" enter           Open detail / select menu item",
-		" [ and ]         Resize columns",
-		" ^h              Open help",
-		" ^q              Quit",
-		" esc             Close popup/menu",
+	type helpItem struct {
+		key  string
+		desc string
+	}
+	type helpGroup struct {
+		title string
+		items []helpItem
+	}
+	groups := []helpGroup{
+		{
+			title: "Navigation",
+			items: []helpItem{
+				{key: "↑/↓  j/k", desc: "Move through lists and scroll details"},
+				{key: "pgup/pgdown", desc: "Page through lists"},
+			},
+		},
+		{
+			title: "Sections",
+			items: []helpItem{
+				{key: "/", desc: "Open section selector"},
+				{key: "ctrl+1-5", desc: "Jump to Dashboard, Sessions, Memory, Logs, Settings"},
+			},
+		},
+		{
+			title: "Panels",
+			items: []helpItem{
+				{key: "tab / shift+tab", desc: "Switch focus: sessions, details, tools, recent"},
+				{key: "[  ]", desc: "Resize columns"},
+			},
+		},
+		{
+			title: "Actions",
+			items: []helpItem{
+				{key: "enter", desc: "Open detail or select menu item"},
+				{key: "esc", desc: "Close popup or menu"},
+				{key: "ctrl+h", desc: "Open help"},
+				{key: "ctrl+q", desc: "Quit"},
+			},
+		},
 	}
 
-	boxW := 76
+	boxW := 84
 	innerW := boxW - 2
 	topLabel := " Help & Navigation "
 
@@ -310,13 +338,18 @@ func (m Model) renderHelp(bg string) string {
 
 	top := SepStyle.Render("╭─") + PanelHeaderStyle.Render(topLabel) + SepStyle.Render(strings.Repeat("─", rightDashes)+"╮")
 
-	bodyLines := make([]string, 0, 2+len(helpLines))
+	bodyLines := make([]string, 0, 18)
 	// Empty row top
 	bodyLines = append(bodyLines, SepStyle.Render("│")+strings.Repeat(" ", innerW)+SepStyle.Render("│"))
 
-	for _, l := range helpLines {
-		content := "  " + padRight(l, innerW-4) + "  "
-		bodyLines = append(bodyLines, SepStyle.Render("│")+content+SepStyle.Render("│"))
+	for gi, group := range groups {
+		if gi > 0 {
+			bodyLines = append(bodyLines, SepStyle.Render("│")+strings.Repeat(" ", innerW)+SepStyle.Render("│"))
+		}
+		bodyLines = append(bodyLines, renderHelpContentLine(innerW, "   "+PanelHeaderFadedStyle.Render(group.title)))
+		for _, item := range group.items {
+			bodyLines = append(bodyLines, renderHelpRow(innerW, item.key, item.desc))
+		}
 	}
 
 	// Empty row bottom
@@ -326,6 +359,20 @@ func (m Model) renderHelp(bg string) string {
 
 	popup := top + "\n" + strings.Join(bodyLines, "\n") + "\n" + bottom
 	return spliceOverlay(bg, popup, m.width, m.height)
+}
+
+func renderHelpRow(innerW int, key, desc string) string {
+	keyW := 17
+	content := "   " +
+		SelectedStyle.Width(keyW).Render(key) +
+		"  " +
+		DetailStyle.Render(desc)
+	return renderHelpContentLine(innerW, content)
+}
+
+func renderHelpContentLine(innerW int, content string) string {
+	pad := max(innerW-lipgloss.Width(content)-3, 0)
+	return SepStyle.Render("│") + content + strings.Repeat(" ", pad) + "   " + SepStyle.Render("│")
 }
 
 func (m Model) renderSectionMenuOverlay(bg string) string {

@@ -292,20 +292,23 @@ func TestActivityBoxKeepsOneSpaceAfterCallCount(t *testing.T) {
 
 func TestSectionSelectorKeyFlow(t *testing.T) {
 	m := NewModel("", "")
+	if m.currentSection != 0 {
+		t.Fatalf("NewModel currentSection = %d, want Dashboard index", m.currentSection)
+	}
 
 	updated, _ := m.Update(keyPress("/"))
 	m = updated.(Model)
 	if !m.sectionMenuOpen {
 		t.Fatal("section menu did not open")
 	}
-	if m.sectionMenuCursor != 1 {
-		t.Fatalf("sectionMenuCursor = %d, want Sessions index", m.sectionMenuCursor)
+	if m.sectionMenuCursor != 0 {
+		t.Fatalf("sectionMenuCursor = %d, want Dashboard index", m.sectionMenuCursor)
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	m = updated.(Model)
-	if m.sectionMenuCursor != 2 {
-		t.Fatalf("sectionMenuCursor after down = %d, want Memory index", m.sectionMenuCursor)
+	if m.sectionMenuCursor != 1 {
+		t.Fatalf("sectionMenuCursor after down = %d, want Sessions index", m.sectionMenuCursor)
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -313,8 +316,8 @@ func TestSectionSelectorKeyFlow(t *testing.T) {
 	if m.sectionMenuOpen {
 		t.Fatal("section menu stayed open after enter")
 	}
-	if m.currentSection != 2 {
-		t.Fatalf("currentSection = %d, want Memory index", m.currentSection)
+	if m.currentSection != 1 {
+		t.Fatalf("currentSection = %d, want Sessions index", m.currentSection)
 	}
 
 	updated, _ = m.Update(keyPress("/"))
@@ -558,6 +561,45 @@ func TestLogsSectionKeepsUniversalStatusBar(t *testing.T) {
 	}
 	if got := len(strings.Split(plain, "\n")); got != m.height {
 		t.Fatalf("logs section rendered %d rows, want %d:\n%s", got, m.height, plain)
+	}
+}
+
+func TestRenderHelpGroupsShortcutsAndKeepsBorders(t *testing.T) {
+	RebuildStyles()
+	m := Model{width: 110, height: 28}
+	bgLine := strings.Repeat(" ", m.width)
+	bg := strings.TrimSuffix(strings.Repeat(bgLine+"\n", m.height), "\n")
+
+	plain := ansiStripForTest(m.renderHelp(bg))
+	for _, want := range []string{
+		"Help & Navigation",
+		"Navigation",
+		"Sections",
+		"Panels",
+		"Actions",
+		"ctrl+1-5",
+		"tab / shift+tab",
+		"Switch focus: sessions, details, tools, recent",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("help overlay missing %q in:\n%s", want, plain)
+		}
+	}
+
+	for _, line := range strings.Split(plain, "\n") {
+		if !strings.Contains(line, "shift+tab") && !strings.Contains(line, "ctrl+1-5") {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "│   ") {
+			t.Fatalf("help row left padding = %q, want three spaces after border", line)
+		}
+		if !strings.HasSuffix(strings.TrimRight(line, " "), "│") {
+			t.Fatalf("help row is missing right border: %q", line)
+		}
+		if !strings.HasSuffix(strings.TrimRight(line, "│"), "   ") {
+			t.Fatalf("help row right padding = %q, want three spaces before border", line)
+		}
 	}
 }
 
@@ -1226,6 +1268,7 @@ func TestRender_AlignsBorders(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	m.ready = true
+	m.currentSection = 1
 	m.leftWidth = minLeftWidth
 	m.sessions = []session.Info{
 		{ID: "s1", Name: "VERY-LONG-SESSION-NAME-THAT-EXCEEDS-WIDTH", Folder: "/tmp"},

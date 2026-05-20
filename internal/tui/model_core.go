@@ -115,8 +115,8 @@ type Model struct {
 func NewModel(logPath, ctrlPath string) Model {
 	m := Model{
 		leftWidth:         defaultLeftWidth,
-		currentSection:    1,
-		sectionMenuCursor: 1,
+		currentSection:    0,
+		sectionMenuCursor: 0,
 		logPath:           logPath,
 		ctrlPath:          ctrlPath,
 		logFollow:         true,
