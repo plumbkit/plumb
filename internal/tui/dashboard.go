@@ -920,13 +920,8 @@ func (m Model) handleDashboardKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 	case "ctrl+q":
 		return m, tea.Quit, true
 	case "ctrl+c":
-		if m.waitingForQuit {
-			return m, tea.Quit, true
-		}
-		m.waitingForQuit = true
-		m.quitMessageID++
-		id := m.quitMessageID
-		return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} }), true
+		m, cmd := m.mainKeyQuit()
+		return m, cmd, true
 	case "esc":
 		// nothing to dismiss in dashboard
 	case "/":
@@ -943,14 +938,19 @@ func (m Model) handleDashboardKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 	case "down", "j":
 		m.dashScroll++
 	case "pgup":
-		m.dashScroll -= pageSize
-		if m.dashScroll < 0 {
-			m.dashScroll = 0
-		}
+		m = m.dashKeyPageUp(pageSize)
 	case "pgdown":
 		m.dashScroll += pageSize
 	default:
 		return m, nil, false
 	}
 	return m, nil, true
+}
+
+func (m Model) dashKeyPageUp(pageSize int) Model {
+	m.dashScroll -= pageSize
+	if m.dashScroll < 0 {
+		m.dashScroll = 0
+	}
+	return m
 }
