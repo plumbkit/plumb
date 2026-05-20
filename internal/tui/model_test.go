@@ -761,6 +761,18 @@ func TestActivitySparklineAndCallFormatting(t *testing.T) {
 			t.Fatalf("formatActivityCalls(%d) = %q, want %q", n, got, want)
 		}
 	}
+	for d, want := range map[time.Duration]string{
+		45 * time.Second:          "< 1m",
+		12 * time.Minute:          "12m+",
+		3*time.Hour + time.Minute: "3h+",
+		11 * 24 * time.Hour:       "11d+",
+		45 * 24 * time.Hour:       "1mo 15d+",
+		18 * 30 * 24 * time.Hour:  "1y 6mo+",
+	} {
+		if got := formatUptimePrecise(d); got != want {
+			t.Fatalf("formatUptimePrecise(%s) = %q, want %q", d, got, want)
+		}
+	}
 	for n, want := range map[int64]string{
 		0:       "0",
 		1:       "1",

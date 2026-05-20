@@ -164,6 +164,39 @@ func formatUptime(d time.Duration) string {
 	return fmt.Sprintf("%dy+", int(d.Hours()/(24*365)))
 }
 
+func formatUptimePrecise(d time.Duration) string {
+	if d < time.Minute {
+		return "< 1m"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm+", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh+", int(d.Hours()))
+	}
+
+	days := int(d.Hours() / 24)
+	if days < 30 {
+		return fmt.Sprintf("%dd+", days)
+	}
+
+	months := days / 30
+	days %= 30
+	if months < 12 {
+		if days > 0 {
+			return fmt.Sprintf("%dmo %dd+", months, days)
+		}
+		return fmt.Sprintf("%dmo+", months)
+	}
+
+	years := months / 12
+	months %= 12
+	if months > 0 {
+		return fmt.Sprintf("%dy %dmo+", years, months)
+	}
+	return fmt.Sprintf("%dy+", years)
+}
+
 func (m Model) renderActivityBox(dimmed bool) []string {
 	border := SepStyle
 	title := PanelHeaderFadedStyle
@@ -366,6 +399,17 @@ func formatSessionCount(n int64) string {
 		return "1 session"
 	default:
 		return fmt.Sprintf("%d sessions", n)
+	}
+}
+
+func formatActiveSessionCount(n int64) string {
+	switch n {
+	case 0:
+		return "no active sessions"
+	case 1:
+		return "1 active session"
+	default:
+		return fmt.Sprintf("%d active sessions", n)
 	}
 }
 

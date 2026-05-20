@@ -238,13 +238,12 @@ func (m Model) dashAlertsWidget(width int) []string {
 	return dashBox(" Alerts ", inner, content)
 }
 
-// dashStatsRow places the Lifetime, Daemon, and Activity widgets side by side
+// dashStatsRow places the Daemon and Tokens Saved widgets side by side
 // if the terminal is wide enough, stacking them vertically otherwise.
 func (m Model) dashStatsRow(width int) []string {
-	lifetime := m.dashLifetimeWidget()
 	daemon := m.dashDaemonWidget()
-	activity := m.dashActivityWidget()
-	widgets := [][]string{lifetime, daemon, activity}
+	tokens := m.dashTokensWidget()
+	widgets := [][]string{daemon, tokens}
 
 	totalW := 0
 	for _, w := range widgets {
@@ -266,24 +265,6 @@ func (m Model) dashStatsRow(width int) []string {
 		out = append(out, w...)
 	}
 	return out
-}
-
-// dashLifetimeWidget renders the all-time global statistics box.
-func (m Model) dashLifetimeWidget() []string {
-	const (
-		boxW  = 32
-		inner = boxW - 2
-	)
-	sinceStr := "—"
-	if !m.dashLifetimeFirstAt.IsZero() {
-		sinceStr = m.dashLifetimeFirstAt.Format("2006-01-02")
-	}
-	return dashBox(" Lifetime ", inner, []string{
-		dashRow("Tool Calls", formatLargeInt(m.dashLifetimeCalls)),
-		dashRow("Sessions", formatLargeInt(m.dashLifetimeSessions)),
-		dashRow("Tokens Saved", "~"+stats.FormatSavings(int(m.dashLifetimeTokens))),
-		dashRow("Since", sinceStr),
-	})
 }
 
 // dashDaemonWidget renders current daemon process metrics.
@@ -323,8 +304,12 @@ func (m Model) dashDaemonWidget() []string {
 	cpuLine := " " + KeyStyle.Width(dashKW).Render("CPU") +
 		SelectedStyle.Render(spark) + " " + DetailStyle.Render(cpuStr)
 
-	return dashBox(" Daemon ", inner, []string{
-		dashRow("PID", pidStr),
+	titleText := " Daemon "
+	if pidStr != na {
+		titleText = fmt.Sprintf(" Daemon (PID %s) ", pidStr)
+	}
+
+	return dashBox(titleText, inner, []string{
 		dashRow("Peak RSS", memStr),
 		dashRow("Heap Alloc", allocStr),
 		dashRow("Heap Inuse", inuseStr),
@@ -335,26 +320,27 @@ func (m Model) dashDaemonWidget() []string {
 	})
 }
 
-// dashActivityWidget renders the current session activity sparkline and totals.
-func (m Model) dashActivityWidget() []string {
+// dashTokensWidget renders both all-time and current-daemon token savings.
+func (m Model) dashTokensWidget() []string {
 	const (
-		boxW  = 32
+		boxW  = 34
 		inner = boxW - 2
-		spkW  = 18
+		barW  = 12
 	)
-	windowStr := "—"
-	if m.activity.Window > 0 {
-		windowStr = formatUptime(m.activity.Window)
-	}
-	spark := activitySparkline(m.activity.Buckets, spkW)
-	sparkLine := " " + renderActivityGraph(spark, SelectedStyle, SepStyle)
 
-	return dashBox(" Activity ", inner, []string{
-		sparkLine,
-		dashRow("Window", windowStr),
-		dashRow("Calls", formatActivityCalls(m.activity.Calls)),
-		dashRow("Sessions", fmt.Sprintf("%d active", len(m.sessions))),
-		dashRow("Tokens (now)", "~"+stats.FormatSavings(int(m.tokenSavings))),
+	// Uptime row: " ■■■■■■■■■■■■ 1.6k (uptime) "
+	uVal := stats.FormatSavings(int(m.tokenSavings))
+	uFill, uUnfill := tokenSavingsBar(m.tokenSavings, barW)
+	uLine := " " + SelectedStyle.Render(uFill) + SepStyle.Render(uUnfill) + " " + DetailStyle.Render(uVal) + MutedStyle.Render(" (uptime)")
+
+	// All-time row: " ■■■■■■■■■■■■ 518k (all) "
+	aVal := stats.FormatSavings(int(m.dashLifetimeTokens))
+	aFill, aUnfill := tokenSavingsBar(m.dashLifetimeTokens, barW)
+	aLine := " " + SelectedStyle.Render(aFill) + SepStyle.Render(aUnfill) + " " + DetailStyle.Render(aVal) + MutedStyle.Render(" (all time)")
+
+	return dashBox(" Tokens Saved ", inner, []string{
+		uLine,
+		aLine,
 	})
 }
 
@@ -538,10 +524,10 @@ func (m Model) dashActivityChart(width int) []string {
 	lines := make([]string, 0, halfH*2+2)
 
 	// Top caption: lifetime totals.
-	capTopL := formatLargeInt(m.dashLifetimeCalls) + " calls (all time)"
+	capTopL := "↓ " + formatLargeInt(m.dashLifetimeCalls) + " calls (all time)  ·  " + formatSessionCount(m.dashLifetimeSessions)
 	capTopR := ""
 	if !m.dashLifetimeFirstAt.IsZero() {
-		capTopR = formatUptime(time.Since(m.dashLifetimeFirstAt))
+		capTopR = "since " + m.dashLifetimeFirstAt.Format("2006-01-02") + "  ·  " + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt))
 	}
 	pad := max(width-lipgloss.Width(capTopL)-lipgloss.Width(capTopR), 1)
 	lines = append(lines, MutedStyle.Render(capTopL)+strings.Repeat(" ", pad)+MutedStyle.Render(capTopR))
@@ -567,7 +553,7 @@ func (m Model) dashActivityChart(width int) []string {
 	}
 
 	// Bottom caption: daemon window.
-	capBotL := formatActivityCalls(m.activity.Calls) + " (uptime)"
+	capBotL := "↑ " + formatActivityCalls(m.activity.Calls) + " (uptime)  ·  " + formatActiveSessionCount(int64(len(m.sessions)))
 	capBotR := ""
 	if m.activity.Window > 0 {
 		capBotR = formatUptime(m.activity.Window)
