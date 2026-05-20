@@ -101,9 +101,12 @@ type Model struct {
 	dashLifetimeFirstAt  time.Time
 	dashLifetimeTopTools []stats.ToolStat
 	dashUptimeTopTools   []stats.ToolStat
-	dashLifetimeBuckets  []int64
-	dashDaemBuckets      []int64
-	dashChartWidth       int
+	dashLifetimeBuckets       []int64
+	dashDaemBuckets           []int64
+	dashChartWidth            int
+	dashCachedLifetimeCalls   int64
+	dashCachedDaemCalls       int64
+	dashCachedChartWidth      int
 	dashProjectFolder    string
 	dashProjectCalls     int64
 	dashProjectSessions  int64

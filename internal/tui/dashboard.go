@@ -59,18 +59,27 @@ func (m *Model) refreshDashboard() {
 	m.dashLifetimeTokens = m.globalDB.TotalTokensSaved(globalFilter)
 	m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
 	chartBuckets := max(m.dashChartWidth, activityBuckets)
-	if !m.dashLifetimeFirstAt.IsZero() {
+	chartWidthChanged := m.dashChartWidth != m.dashCachedChartWidth
+	if chartWidthChanged {
+		m.dashCachedChartWidth = m.dashChartWidth
+	}
+	if !m.dashLifetimeFirstAt.IsZero() && (m.dashLifetimeCalls != m.dashCachedLifetimeCalls || chartWidthChanged) {
 		lifetimeWindow := max(time.Since(m.dashLifetimeFirstAt), time.Minute)
 		if summary, err := m.globalDB.Activity(lifetimeWindow, chartBuckets, globalFilter); err == nil {
 			m.dashLifetimeBuckets = summary.Buckets
+			m.dashCachedLifetimeCalls = m.dashLifetimeCalls
 		}
 	}
-	if m.activity.Window > 0 {
-		if summary, err := m.globalDB.Activity(m.activity.Window, chartBuckets, globalFilter); err == nil {
-			m.dashDaemBuckets = summary.Buckets
+	if m.activity.Calls != m.dashCachedDaemCalls || chartWidthChanged {
+		if m.activity.Window > 0 {
+			if summary, err := m.globalDB.Activity(m.activity.Window, chartBuckets, globalFilter); err == nil {
+				m.dashDaemBuckets = summary.Buckets
+				m.dashCachedDaemCalls = m.activity.Calls
+			}
+		} else {
+			m.dashDaemBuckets = m.activity.Buckets
+			m.dashCachedDaemCalls = m.activity.Calls
 		}
-	} else {
-		m.dashDaemBuckets = m.activity.Buckets
 	}
 	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
 	m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(time.Now())})
