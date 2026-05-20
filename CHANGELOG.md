@@ -1,11 +1,14 @@
 # Changelog
 
-## 0.7.3 (unreleased)
+## 0.7.4 (unreleased)
+
+## 0.7.3
 
 ### Changed
 - **`diagnostics` tool — accept multiple URIs in a single call.** The tool now accepts `uris: []string` alongside the old scalar `uri` (kept for backward compatibility — treated as `uris:[uri]`). Three call modes: omit `uris` or pass `[]` for all files; one URI for a single-file query; multiple URIs to fan out and merge results in one response. Description updated. `docs/mcp-tools.md` updated. 5 new unit tests cover: single via `uris`, multi-file, multi-file with one untracked, all-clean multi-file, and scalar `uri` backward-compat.
 
 ### Fixed
+- **TUI Dashboard uptime graph near-flat on short sessions.** The dashboard activity chart's bottom half (daemon uptime) used the same wide bucket count as the all-time top half (≈ terminal width, e.g. 130+). For a 17-minute uptime with 17 calls, that spread calls across 130+ buckets (~8 s each), leaving most buckets empty and the graph nearly invisible. The bucket count for the uptime graph is now scaled to ~1 bucket per minute of uptime, clamped between `activityBuckets` (16) and `chartBuckets`. A 17-minute session now uses 17 buckets (matching the Activity widget resolution); long uptimes still use the full chart width.
 - **TUI Dashboard Activity Graph Height and Resolution.** The dashboard activity graph height is now capped at 8 pixels instead of 7, making full use of the braille character set. The horizontal resolution has also been doubled to utilize both dots in a braille character independently, providing a more detailed view of activity spikes.
 
 ## 0.7.2
