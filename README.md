@@ -366,6 +366,15 @@ git tag v0.5.4
 make build
 ```
 
+## Similar tools
+
+If Plumb isn't quite what you're looking for, check out these excellent alternatives:
+
+- **[CodeGraph](https://github.com/colbymchenry/codegraph)**: Instead of using live LSPs, CodeGraph uses `tree-sitter` to build a pre-indexed SQLite graph of your codebase. It excels at rapid exploration, impact analysis, and minimizing agent tool calls by returning bundled semantic chunks.
+- **[Serena](https://github.com/oraios/serena)**: An MCP toolkit backed by either standard LSPs or a JetBrains IDE plugin. It offers similar symbol-level editing to Plumb, but when paired with JetBrains, it adds deep IDE features like interactive debugging and execution control.
+
+*(By comparison, **Plumb** focuses strictly on live LSP integration for real-time diagnostics, concurrency-safe file writes, and atomic cross-file transactions).*
+
 ## Contributing
 
 See [`AGENTS.md`](AGENTS.md) for architecture details, code style rules, and the checklist for adding new tools or LSP adapters. AGENTS.md is the canonical brief for AI agents working in the codebase and is kept current with every release.
