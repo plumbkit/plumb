@@ -121,6 +121,22 @@ type EditsConfig struct {
 	ShowWriteDiff bool `toml:"show_write_diff"`
 }
 
+// TopologyConfig controls the persistent semantic index.
+// All fields can be overridden per-project via <workspace>/.plumb/config.toml.
+type TopologyConfig struct {
+	// Enabled turns topology indexing on. Default false (opt-in).
+	Enabled bool `toml:"enabled"`
+	// ResyncOnAttach triggers a full resync whenever the workspace attaches.
+	ResyncOnAttach bool `toml:"resync_on_attach"`
+	// ExcludePatterns is an optional list of path glob patterns to skip during indexing.
+	ExcludePatterns []string `toml:"exclude_patterns"`
+	// MaxFileSizeBytes caps the file size considered for extraction.
+	// Default 512 KiB. 0 means use the default.
+	MaxFileSizeBytes int64 `toml:"max_file_size_bytes"`
+	// ResyncIntervalMinutes is the interval between full resyncs. 0 disables periodic resync.
+	ResyncIntervalMinutes int `toml:"resync_interval_minutes"`
+}
+
 // QualityConfig controls post-write offline code-quality analysis.
 // All fields can be overridden per-project via <workspace>/.plumb/config.toml.
 type QualityConfig struct {
@@ -150,6 +166,7 @@ type Config struct {
 	Walk      WalkConfig           `toml:"walk"`
 	Workspace WorkspaceConfig      `toml:"workspace"`
 	Quality   QualityConfig        `toml:"quality"`
+	Topology  TopologyConfig       `toml:"topology"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
 }
 
@@ -176,6 +193,10 @@ var defaults = Config{
 		Analysers:          []string{"golangci-lint"},
 		TimeoutMs:          2000,
 		MaxFindingsPerFile: 5,
+	},
+	Topology: TopologyConfig{
+		Enabled:          false,
+		MaxFileSizeBytes: 512 * 1024,
 	},
 	LSP: map[string]LSPConfig{
 		"go": {
@@ -207,6 +228,9 @@ func Defaults() Config {
 
 func cloneConfig(cfg Config) Config {
 	out := cfg
+	if cfg.Topology.ExcludePatterns != nil {
+		out.Topology.ExcludePatterns = append([]string(nil), cfg.Topology.ExcludePatterns...)
+	}
 	if cfg.LSP != nil {
 		out.LSP = make(map[string]LSPConfig, len(cfg.LSP))
 		for name, lspCfg := range cfg.LSP {
