@@ -103,8 +103,8 @@ func TestLeftLines_RenderSessionsAsTwoLineRows(t *testing.T) {
 	m := Model{
 		leftWidth: 42,
 		sessions: []session.Info{
-			{Name: "CRAZY-PLUMB", Language: "go", Folder: "/Users/gilberto/Projects/plumb"},
-			{Name: "SUPER-FRIEND", Language: "go", Folder: "/Users/gilberto/Projects/plumb"},
+			{Name: "CRAZY-PLUMB", Language: "go", Folder: "."},
+			{Name: "SUPER-FRIEND", Language: "go", Folder: "."},
 		},
 	}
 
@@ -116,7 +116,7 @@ func TestLeftLines_RenderSessionsAsTwoLineRows(t *testing.T) {
 	joined := strings.Join(plain, "\n")
 	for _, want := range []string{
 		" ❯ CRAZY-PLUMB  go ",
-		"    ╰─ ~/Projects/plumb",
+		"    ╰─ .",
 		" ○ SUPER-FRIEND  go ",
 	} {
 		if !strings.Contains(joined, want) {
@@ -767,7 +767,7 @@ func TestLogDetailStatusShowsCopiedMessage(t *testing.T) {
 
 func TestLogDetailRawWrapsWithoutEllipsis(t *testing.T) {
 	RebuildStyles()
-	raw := `time=2026-05-18T08:36:55.028+10:00 level=WARN msg="mcp: tool error" tool=read_file err="read_file: stat /Users/gilberto/Projects/plumb/site/index.html: no such file or directory"`
+	raw := `time=2026-05-18T08:36:55.028+10:00 level=WARN msg="mcp: tool error" tool=read_file err="read_file: stat site/index.html: no such file or directory"`
 	lines := ansiStripForTest(strings.Join(logDetailLines(logEntry{Raw: raw}, 64), "\n"))
 	if strings.Contains(lines, "…") {
 		t.Fatalf("raw log detail should wrap without ellipsis:\n%s", lines)
@@ -1044,7 +1044,7 @@ func TestDashTopToolsTablesRenderSideBySideWhenWide(t *testing.T) {
 func TestDashProjectWidgetRendersTopToolsTableInsideWidget(t *testing.T) {
 	RebuildStyles()
 	m := Model{
-		dashProjectFolder:    "/Users/gilberto/Projects/plumb",
+		dashProjectFolder:    "plumb",
 		dashLifetimeSessions: 8,
 		dashLifetimeCalls:    200,
 		dashLifetimeTokens:   64000,
@@ -1193,7 +1193,7 @@ func TestDashStatsRowUsesThreeSpaceWidgetGap(t *testing.T) {
 }
 
 func TestDiagnosticsControlOutputExplainsOldDaemon(t *testing.T) {
-	got := diagnosticsControlOutput("error: unknown command \"diagnostics /Users/gilberto/Projects/plumb\"\n")
+	got := diagnosticsControlOutput("error: unknown command \"diagnostics .\"\n")
 	for _, want := range []string{"current daemon", "plumb stop"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("diagnosticsControlOutput missing %q in %q", want, got)

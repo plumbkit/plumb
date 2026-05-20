@@ -2,15 +2,15 @@
 
 > Source of truth: edit `AGENTS.md` only.
 >
-> `CLAUDE.md`, `GEMINI.md`, and `CHATGPT.md` are local symlinks to this file for client compatibility. Do not replace, unlink, rewrite, or edit those symlink paths directly. If an instruction change is needed, update `AGENTS.md`; the linked files will reflect it automatically.
+> `CLAUDE.md`, `GEMINI.md`, and `CHATGPT.md` are repository symlinks to this file for client compatibility. Do not replace, unlink, rewrite, or edit those symlink paths directly. If an instruction change is needed, update `AGENTS.md`; the linked files will reflect it automatically.
 >
-> These agent-context files are intentionally ignored by git in this workspace.
+> These agent-context files are tracked in git to ensure a consistent, high-quality experience for AI assistants.
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
 > **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
 
-Current version: **0.6.8** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.7.0** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -72,17 +72,17 @@ Claude Desktop / Claude Code / Codex / Gemini CLI
                           └── sessionCache       (per-connection symbol cache)
 ```
 
-On daemon start the binary writes:
+On daemon start the binary writes the following files under the system cache directory (`os.UserCacheDir()/plumb`, e.g., `~/Library/Caches/plumb/` on macOS or `~/.cache/plumb/` on Linux):
 
 | File | Purpose |
 |---|---|
-| `~/Library/Caches/plumb/plumb.sock` | Unix socket — MCP wire |
-| `~/Library/Caches/plumb/plumb.pid` | PID for `plumb stop` |
-| `~/Library/Caches/plumb/plumb.version` | Build version; `plumb serve` warns on mismatch |
-| `~/Library/Caches/plumb/plumb.spawn.lock` | `flock`'d briefly by `plumb serve` to serialise daemon spawn decisions (see "Singleton enforcement" below) |
-| `~/Library/Caches/plumb/plumb.daemon.lock` | `flock`'d by `plumb daemon` for its lifetime; a second daemon sees `EWOULDBLOCK` and exits |
-| `~/Library/Caches/plumb/plumb.ctrl.sock` | Admin Unix socket; accepts line-based `set-level <level>` commands from `plumb log-level` |
-| `~/Library/Caches/plumb/daemon.log` | All daemon logs |
+| `plumb.sock` | Unix socket — MCP wire |
+| `plumb.pid` | PID for `plumb stop` |
+| `plumb.version` | Build version; `plumb serve` warns on mismatch |
+| `plumb.spawn.lock` | `flock`'d briefly by `plumb serve` to serialise daemon spawn decisions (see "Singleton enforcement" below) |
+| `plumb.daemon.lock` | `flock`'d by `plumb daemon` for its lifetime; a second daemon sees `EWOULDBLOCK` and exits |
+| `plumb.ctrl.sock` | Admin Unix socket; accepts line-based `set-level <level>` commands from `plumb log-level` |
+| `daemon.log` | All daemon logs |
 
 Stats live in one persistent global database at `config.DataDir()/stats.db`
 (for example `~/.local/share/plumb/stats.db` on Linux). This follows the

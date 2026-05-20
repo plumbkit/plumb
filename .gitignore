@@ -66,15 +66,8 @@ coverage.html
 # Plumb workspace marker (commit if you want to share context with your team)
 .plumb/
 
-# AI assistant context files
-CHATGPT.md
-GEMINI.md
-CLAUDE.md
-AGENTS.md
-
 .serena/
 
 # macOS
 .DS_Store
 **/.DS_Store
-.plumb

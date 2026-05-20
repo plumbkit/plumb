@@ -377,4 +377,8 @@ If Plumb isn't quite what you're looking for, check out these excellent alternat
 
 ## Contributing
 
-See [`AGENTS.md`](AGENTS.md) for architecture details, code style rules, and the checklist for adding new tools or LSP adapters. AGENTS.md is the canonical brief for AI agents working in the codebase and is kept current with every release.
+See [`AGENTS.md`](AGENTS.md) for architecture details, code style rules, and the checklist for adding new tools or LSP adapters. `AGENTS.md` is the canonical brief for AI agents working in the codebase and is intentionally tracked in git. For client compatibility, `CLAUDE.md`, `GEMINI.md`, and `CHATGPT.md` are repository symlinks pointing to this file — this ensures a consistent experience regardless of which assistant you use.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
