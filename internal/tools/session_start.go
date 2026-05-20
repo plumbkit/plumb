@@ -314,8 +314,12 @@ func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
 		sb.WriteString(formatDiagnostics(real))
 	}
 	if coldCount > 0 {
-		fmt.Fprintf(sb, "\nNote: %d go.mod package(s) flagged \"not in your go.mod file\" at 1:1 — "+
-			"likely a cold module cache; run `go mod tidy`.\n", coldCount)
+		sep := ""
+		if len(real) > 0 {
+			sep = "\n"
+		}
+		fmt.Fprintf(sb, "%sNote: %d go.mod package(s) flagged \"not in your go.mod file\" at 1:1 — "+
+			"likely a cold module cache; run `go mod tidy`.\n", sep, coldCount)
 	}
 	sb.WriteString("\n")
 }

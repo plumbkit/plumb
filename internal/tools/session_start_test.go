@@ -110,6 +110,114 @@ func TestSessionStart_ColdCacheGoModDiagnostics(t *testing.T) {
 	}
 }
 
+func TestPartitionColdCacheGoMod(t *testing.T) {
+	cold := func(pkg string) protocol.Diagnostic {
+		return makeDiag(0, 0, pkg+" is not in your go.mod file", protocol.SevError)
+	}
+	realDiag := makeDiag(5, 0, "syntax error", protocol.SevError)
+
+	tests := []struct {
+		name          string
+		input         map[string][]protocol.Diagnostic
+		wantColdCount int
+		wantRealURIs  []string
+	}{
+		{
+			name:          "empty input",
+			input:         map[string][]protocol.Diagnostic{},
+			wantColdCount: 0,
+			wantRealURIs:  nil,
+		},
+		{
+			name: "no go.mod URIs pass through unchanged",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/main.go": {realDiag},
+			},
+			wantColdCount: 0,
+			wantRealURIs:  []string{"file:///ws/main.go"},
+		},
+		{
+			name: "all cold entries removed, count returned",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/go.mod": {cold("github.com/a/b"), cold("github.com/c/d")},
+			},
+			wantColdCount: 2,
+			wantRealURIs:  nil,
+		},
+		{
+			name: "go.mod URI with only real diagnostic kept",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/go.mod": {realDiag},
+			},
+			wantColdCount: 0,
+			wantRealURIs:  []string{"file:///ws/go.mod"},
+		},
+		{
+			name: "mixed go.mod: cold removed, real kept, count correct",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/go.mod": {cold("github.com/a/b"), realDiag},
+			},
+			wantColdCount: 1,
+			wantRealURIs:  []string{"file:///ws/go.mod"},
+		},
+		{
+			name: "cold match requires position 0,0 — non-zero line not matched",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/go.mod": {makeDiag(1, 0, "github.com/a/b is not in your go.mod file", protocol.SevError)},
+			},
+			wantColdCount: 0,
+			wantRealURIs:  []string{"file:///ws/go.mod"},
+		},
+		{
+			name: "cold match requires position 0,0 — non-zero col not matched",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/go.mod": {makeDiag(0, 1, "github.com/a/b is not in your go.mod file", protocol.SevError)},
+			},
+			wantColdCount: 0,
+			wantRealURIs:  []string{"file:///ws/go.mod"},
+		},
+		{
+			name: "nested go.mod in submodule matched correctly",
+			input: map[string][]protocol.Diagnostic{
+				"file:///ws/sub/go.mod": {cold("github.com/a/b")},
+			},
+			wantColdCount: 1,
+			wantRealURIs:  nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			real, coldCount := partitionColdCacheGoMod(tc.input)
+			if coldCount != tc.wantColdCount {
+				t.Errorf("coldCount: want %d got %d", tc.wantColdCount, coldCount)
+			}
+			if len(tc.wantRealURIs) == 0 {
+				if len(real) != 0 {
+					t.Errorf("want empty real map, got %v", real)
+				}
+				return
+			}
+			for _, uri := range tc.wantRealURIs {
+				if _, ok := real[uri]; !ok {
+					t.Errorf("want URI %q in real map, got keys %v", uri, mapKeys(real))
+				}
+			}
+			if len(real) != len(tc.wantRealURIs) {
+				t.Errorf("real map len: want %d got %d (keys %v)", len(tc.wantRealURIs), len(real), mapKeys(real))
+			}
+		})
+	}
+}
+
+func mapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	// writes a minimal go.mod so detectLanguage returns "Go" for the temp workspace.
 	makeGoWorkspace := func(t *testing.T) string {
