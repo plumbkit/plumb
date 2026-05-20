@@ -109,7 +109,7 @@ Plumb determines the workspace root using this precedence:
 
 | Tool | Description |
 |---|---|
-| `session_start` | Bootstrap tool — call first in every session. Returns workspace info, language, git branch, recent commits, recently-modified files, memories, top-5 tool usage, and active diagnostics in one call. Cold-start fallback chain: explicit → daemon-resolved → `roots/list` → cwd walk. |
+| `session_start` | Bootstrap tool — call first in every session. Returns workspace info, language, git branch, recent commits, recently-modified files, memories, top-5 tool usage, and active diagnostics in one call. Cold-start fallback chain: explicit → daemon-resolved → `roots/list` → cwd walk. Includes client-specific tool guidance: Claude Code gets the LSP tools with no native CC equivalent; Claude Desktop gets a full listing noting plumb is its only code interface. |
 | `daemon_info` | Current session name and ID, daemon version, daemon start timestamp, and uptime. |
 | `rename_session` | Rename the current MCP session. Names are stored uppercase, may contain only letters and `-`, and are capped at 16 characters. |
 
@@ -136,7 +136,7 @@ Plumb determines the workspace root using this precedence:
 | `list_directory` | Immediate children with `[FILE]`/`[DIR]` prefixes, sizes, mtimes. Glob `pattern` filter. Sort by name/size/modified. |
 | `list_files` | Recursively walk a directory tree with glob filtering and depth control. |
 | `find_files` | fd-style file finder — glob or regex, extension filter, type filter, depth limit. |
-| `search_in_files` | ripgrep-style content search — regex, smart-case, context lines, glob filter. |
+| `search_in_files` | ripgrep-style content search — regex, smart-case, context lines, glob filter. `include_enclosing_symbol: true` annotates each match with the deepest LSP symbol containing it. |
 
 ### Filesystem writes
 
@@ -145,7 +145,7 @@ All write tools share these properties: per-path locks across the daemon (concur
 | Tool | Description |
 |---|---|
 | `write_file` | Create or overwrite a file atomically. Content staged in `os.TempDir()` and renamed into place — never a partial write. Preserves existing permissions. Sends `FileCreated`/`FileChanged` per situation. Appends fresh diagnostics if gopls/pyright republishes within 300ms. |
-| `edit_file` | Apply str_replace edits to an existing file. Each `old_str` must appear exactly once (uniqueness lock — rejects ambiguous matches). CRLF/LF differences tolerated automatically. All edits applied in memory first, then a single atomic write. Optional `expected_mtime` for optimistic concurrency. Retries up to 3 times on detected concurrent writes. Response includes line-range summary and post-write diagnostics. |
+| `edit_file` | Apply str_replace edits to an existing file. Each `old_str` must appear exactly once (uniqueness lock — rejects ambiguous matches). CRLF/LF differences tolerated automatically. All edits applied in memory first, then a single atomic write. Optional `expected_mtime` for optimistic concurrency. Retries up to 3 times on detected concurrent writes. Response includes line-range summary and post-write diagnostics. `apply_partial: true` applies edits independently and returns per-edit pass/fail results instead of rolling back on first failure. |
 | `delete_file` | Atomic delete with `FileDeleted` notification. Refuses directories. |
 | `rename_file` | Atomic move/rename. Distinct from `rename_symbol` (LSP-semantic identifier rename). Two-path locks acquired in lexical order (deadlock-safe). |
 | `transaction_apply` | Apply str_replace edits across multiple files atomically. Up to 50 operations. Phase 1 validates everything in memory — if any old_str is missing/ambiguous or expected_mtime mismatches, no writes happen. Phase 2 writes each file under locks; on partial failure, already-written files are rolled back to their pre-transaction content. Phase 3 fires `didChangeWatchedFiles` and invalidates the symbol cache per file. Use for cross-file refactors that must land as one unit. |
@@ -154,7 +154,7 @@ All write tools share these properties: per-path locks across the daemon (concur
 
 | Tool | Description |
 |---|---|
-| `rename_symbol` | Workspace-wide rename via LSP — scope- and type-aware |
+| `rename_symbol` | Workspace-wide rename via LSP — scope- and type-aware. Detects stale LSP position index errors and returns a clear message with recovery options. |
 | `replace_symbol_body` | Replace a symbol's entire declaration |
 | `insert_before_symbol` | Insert text immediately before a symbol's declaration |
 | `insert_after_symbol` | Insert text immediately after a symbol's declaration |
@@ -183,7 +183,7 @@ Memories are also exposed as MCP **resources** (`plumb-memory://` URI scheme) so
 |---|---|
 | `git` | Read-only git subcommands: diff, log, show, blame, status, branch, tag, shortlog, stash |
 | `file_diff` | Unified diff between any two files — no git required |
-| `find_replace` | Text/regex search-and-replace across files (dry-run by default) |
+| `find_replace` | Text/regex search-and-replace across files (dry-run by default). `format_after: true` runs the workspace formatter on each modified file after replacement. |
 
 ### Info
 

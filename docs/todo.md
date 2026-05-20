@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.6** (2026-05-20). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices).
+Last reviewed against: **0.6.8** (2026-05-20). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices).
 
 When you complete a TODO entry: **move its section to `docs/todo-to-review.md`** (do not just delete it), add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 

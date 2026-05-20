@@ -579,6 +579,7 @@ Apply one or more str_replace edits to an existing file.
 | `edits` | yes | Array of `{old_str, new_str}` objects, applied sequentially |
 | `expected_mtime` | no | RFC3339Nano mtime previously emitted by `read_file`'s header. If present, the edit is rejected when the file's current mtime differs — opt-in optimistic concurrency. |
 | `dirty_ok` | no | Allow editing a file that has uncommitted changes. Default `false`. |
+| `apply_partial` | no | When `true`, apply each edit independently. Failures are collected per-edit rather than rolling back the whole batch. The response includes a per-edit status list (`applied`/`FAILED`) with line ranges for successful edits. Incompatible with strict mode and `transaction_apply`. Default `false` (all-or-nothing). |
 
 Each `old_str` must appear **exactly once** in the file at the time the edit is evaluated. Absent or ambiguous strings are rejected with a clear error.
 
@@ -597,7 +598,7 @@ Each `old_str` must appear **exactly once** in the file at the time the edit is 
 
 ### `delete_file`
 
-Delete a single file. Refuses directories — use shell tools for recursive removal.
+Delete a single file. Refuses directories — to remove a directory tree, delete its files individually with repeated `delete_file` calls.
 
 **Source**: `internal/tools/delete_file.go`
 
@@ -685,6 +686,19 @@ Ripgrep-style content search — regex, smart-case, context lines, glob filter. 
 
 **Source**: `internal/tools/search_in_files.go`
 
+| Field | Required | Description |
+|---|---|---|
+| `pattern` | yes | Regex or literal string to search for |
+| `path` | no | Directory or file; defaults to workspace root |
+| `glob` | no | File glob filter, e.g. `*.go` or `**/*_test.go` |
+| `exclude` | no | Array of glob patterns to prune from the walk |
+| `case_sensitive` | no | Force case-sensitive. Default: smart-case (insensitive when pattern is all lowercase). |
+| `context_lines` | no | Lines of context before/after each match (default 0, max 10) |
+| `max_results` | no | Maximum matching lines (default 200, max 2000) |
+| `include_hidden` | no | Include hidden files/directories (default false) |
+| `max_file_bytes` | no | Skip files larger than this (default 50 MiB) |
+| `include_enclosing_symbol` | no | When `true` and an LSP is available, annotate each match line with the deepest enclosing symbol from `textDocument/documentSymbol`: `[in: Name (kind)]`. One LSP call per matched file; results cached in the session symbol cache. Silently omitted when LSP unavailable. Especially useful for Claude Desktop to avoid a follow-up `read_file` to find which function a match belongs to. |
+
 **Performance guards**
 
 - **Binary detection**: null-byte sniff on the first 8 KB; matched binaries are closed without reading the rest.
@@ -724,6 +738,8 @@ Text/regex search-and-replace across files. Defaults to `dry_run=true`.
 | `dry_run` | no | Default `true` — preview only; set `false` to write |
 | `max_files` | no | Cap on files modified. Default `100`; enforced exactly even under parallel scheduling |
 | `max_file_bytes` | no | Skip files larger than this. Default `52428800` (50 MiB). Guards against scanning huge logs/dumps that would blow past MCP timeouts |
+| `format_after` | no | After writing replacements (non-dry-run only), run the workspace formatter on each modified file: `gofumpt`/`gofmt` for `.go`, `ruff format`/`black` for `.py`. Formatter not on PATH → silently skipped. Formatter error → warning appended to response; call still succeeds. Appends `formatted N file(s)` to the response. |
+| `dirty_ok` | no | Allow editing files with uncommitted changes. Default `false`. |
 
 **Behaviour**
 
@@ -761,6 +777,12 @@ Returns in one round-trip:
 - Active LSP errors and warnings
 
 Designed for Claude Desktop where no filesystem access is available without tool calls. Idempotent.
+
+**Client-specific tool guidance** is appended at the end of the response:
+
+- **Claude Desktop** (`clientInfo.name == "claude-desktop"`): receives a complete listing of all file-operation and LSP-semantic tools, with the explicit note that plumb is the only interface — there are no native fallbacks. Do not suggest shell commands or native file tools; they are unavailable.
+- **Claude Code** (`clientInfo.name` prefix `"claude-code"`): receives a focused list of the 8 LSP-backed tools that have no native Claude Code equivalent (`workspace_symbols`, `find_references`, `get_definition`, `call_hierarchy`, `type_hierarchy`, `rename_symbol`, `list_symbols`, `diagnostics`).
+- Other clients: no guidance section appended.
 
 **Cold-start fallback chain** when the daemon hasn't resolved a workspace yet:
 

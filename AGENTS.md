@@ -10,7 +10,7 @@ This file is the canonical brief for AI agents working in the plumb codebase. Ke
 
 > **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
 
-Current version: **0.6.4** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.6.8** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -205,7 +205,7 @@ Pyright is the worked example.
 
 | Tool | File | LSP method | Notes |
 |---|---|---|---|
-| `session_start` | `session_start.go` | — | Call FIRST in every session. Returns workspace, language, branch, recent commits, recently-modified files, memories, top-5 tool stats, active diagnostics. Cold-start chain: explicit → daemon-resolved → `roots/list` → cwd walk. |
+| `session_start` | `session_start.go` | — | Call FIRST in every session. Returns workspace, language, branch, recent commits, recently-modified files, memories, top-5 tool stats, active diagnostics. Cold-start chain: explicit → daemon-resolved → `roots/list` → cwd walk. Appends a client-specific tool guidance section: Claude Code gets LSP tools that have no native CC equivalent; Claude Desktop gets a full tool listing with the note that plumb is the only interface (no native fallbacks). |
 
 **LSP queries**
 
@@ -225,7 +225,7 @@ Pyright is the worked example.
 
 | Tool | File | Notes |
 |---|---|---|
-| `rename_symbol` | `rename_symbol.go` | Atomic workspace-edit application (`textDocument/rename`). |
+| `rename_symbol` | `rename_symbol.go` | Atomic workspace-edit application (`textDocument/rename`). Detects "out of range" position errors (stale LSP index after in-session edits) and wraps them with a clear explanation and three recovery options. |
 | `replace_symbol_body` | `symbol_edits.go` | `include_doc_comment` optional. |
 | `insert_before_symbol` | `symbol_edits.go` | `include_doc_comment` optional. |
 | `insert_after_symbol` | `symbol_edits.go` | No doc-comment ambiguity. |
@@ -240,14 +240,14 @@ Pyright is the worked example.
 | `list_directory` | `list_directory.go` | Immediate children, `[FILE]`/`[DIR]` prefixes, sizes, mtimes. Glob `pattern`. Sort by name/size/modified. |
 | `list_files` | `list_files.go` | Recursive; glob filter; depth control; respects `.gitignore`. |
 | `find_files` | `find_files.go` | Glob/regex finder; honours `.gitignore`. |
-| `search_in_files` | `search_in_files.go` | ripgrep-style; smart-case; honours `.gitignore`; `exclude` glob patterns prune directories and files. |
+| `search_in_files` | `search_in_files.go` | ripgrep-style; smart-case; honours `.gitignore`; `exclude` glob patterns prune directories and files. `include_enclosing_symbol: true` annotates each match with the deepest LSP symbol containing it (`[in: Name (kind)]`); one `DocumentSymbols` call per matched file, results cached. Requires LSP; silently omitted when unavailable. |
 
 **Filesystem writes** (all take `WriteDeps`; all hold per-path locks; all check git dirty state; all notify LSP via `didChangeWatchedFiles`; all invalidate the symbol cache; all consume one rate-limit slot)
 
 | Tool | File | Notes |
 |---|---|---|
 | `write_file` | `write_file.go` | Atomic (tmpdir + rename + EXDEV-fallback). Symlink-aware. Permissions preserved. Post-write diagnostics appended to response. `FileCreated`/`FileChanged` notification. `dirty_ok` param (default false) — refused if target has uncommitted changes. |
-| `edit_file` | `edit_file.go` | str_replace; uniqueness lock; CRLF tolerance; in-memory application (all-or-nothing); pre-rename mtime check; post-rename concurrent-write retry (max 3); optional `expected_mtime` opt-in concurrency check; strict-mode requires-read check; line-range summary + post-write diagnostics in response. `dirty_ok` param. |
+| `edit_file` | `edit_file.go` | str_replace; uniqueness lock; CRLF tolerance; in-memory application (all-or-nothing); pre-rename mtime check; post-rename concurrent-write retry (max 3); optional `expected_mtime` opt-in concurrency check; strict-mode requires-read check; line-range summary + post-write diagnostics in response. `dirty_ok` param. `apply_partial: true` applies each edit independently — failures collected per-edit rather than rolling back the whole batch (not compatible with strict mode or `transaction_apply`). |
 | `delete_file` | `delete_file.go` | Refuses directories. `FileDeleted` notification. `dirty_ok` param. |
 | `rename_file` | `rename_file.go` | Atomic. Two-path locks (lexical order, deadlock-safe). `FileDeleted` + `FileCreated` notifications. Refuses to overwrite without `overwrite=true`. `dirty_ok` param (checks source). |
 | `transaction_apply` | `transaction.go` | Multi-file atomic edits. Up to 50 ops. Phase 1 validates everything in memory; phase 2 writes under locks; phase 3 rolls back successful writes on partial failure. Each op consumes one rate-limit slot. Use for cross-file refactors. `dirty_ok` param — batched check per directory, all dirty files reported at once. |
@@ -256,7 +256,7 @@ Pyright is the worked example.
 
 | Tool | File | Notes |
 |---|---|---|
-| `find_replace` | `find_replace.go` | Text/regex find-and-replace across files; dry-run by default. |
+| `find_replace` | `find_replace.go` | Text/regex find-and-replace across files; dry-run by default. `format_after: true` runs the workspace formatter (`gofumpt`/`gofmt` for Go, `ruff`/`black` for Python) on each modified file after replacement; formatter errors are warnings, not failures. |
 | `git` | `git.go` | Read-only subcommands (status, log, diff, show, blame, branch, tag, shortlog, stash). |
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
