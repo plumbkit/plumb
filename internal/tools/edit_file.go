@@ -136,15 +136,9 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if !t.deps.Limiter.Allow() {
 		return "", rateLimitError("edit_file", t.deps.Limiter)
 	}
-	var a editFileArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("edit_file: invalid arguments: %w", err)
-	}
-	if a.Path == "" {
-		return "", fmt.Errorf("edit_file: path is required")
-	}
-	if len(a.Edits) == 0 {
-		return "", fmt.Errorf("edit_file: at least one edit is required")
+	a, err := parseEditFileArgs(raw)
+	if err != nil {
+		return "", err
 	}
 
 	path := strings.TrimPrefix(a.Path, "file://")
@@ -153,74 +147,8 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	unlock := lockPath(path)
 	defer unlock()
 
-	if !a.DirtyOk && pathIsDirty(ctx, path) {
-		return "", &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
-			"review and commit first, or pass dirty_ok: true to proceed", path)}
-	}
-
-	// expected_mtime gate (optimistic concurrency).
-	if a.ExpectedMtime != "" {
-		want, err := time.Parse(time.RFC3339Nano, a.ExpectedMtime)
-		if err != nil {
-			return "", &editLogicErr{fmt.Errorf("edit_file: expected_mtime is not RFC3339Nano: %w", err)}
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
-		}
-		if !info.ModTime().Equal(want) {
-			return "", &editLogicErr{fmt.Errorf(
-				"edit_file: file %q was modified since you read it\n"+
-					"  expected_mtime: %s\n"+
-					"  current mtime:  %s\n"+
-					"  Re-read the file and try again",
-				path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-			)}
-		}
-	}
-
-	// expected_sha gate — content-hash check, stronger than mtime.
-	if a.ExpectedSha != "" {
-		current, err := fileSHA256(path)
-		if err != nil {
-			return "", &editLogicErr{fmt.Errorf("edit_file: computing sha256 of %q: %w", path, err)}
-		}
-		if current != a.ExpectedSha {
-			return "", &editLogicErr{fmt.Errorf(
-				"edit_file: file %q content has changed since you read it\n"+
-					"  expected sha256: %s\n"+
-					"  current  sha256: %s\n"+
-					"  Re-read the file and try again",
-				path, a.ExpectedSha, current,
-			)}
-		}
-	}
-
-	// Strict mode: every edit requires a prior read with matching mtime.
-	// Opt-in via config [edits] strict = true, or PLUMB_STRICT_EDITS=1.
-	// expected_mtime above is the more precise signal when an agent threads
-	// it through; strict mode catches the case where the agent forgot.
-	if t.isStrict() {
-		recorded := t.deps.Reads.Mtime(path)
-		if recorded.IsZero() {
-			return "", &editLogicErr{fmt.Errorf(
-				"edit_file: strict mode: %q has not been read in this daemon session — call read_file first",
-				path,
-			)}
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
-		}
-		if !info.ModTime().Equal(recorded) {
-			return "", &editLogicErr{fmt.Errorf(
-				"edit_file: strict mode: %q has changed since you read it\n"+
-					"  recorded mtime: %s\n"+
-					"  current mtime:  %s\n"+
-					"  Re-read the file and try again",
-				path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-			)}
-		}
+	if err := t.editFilePreconditions(ctx, path, a); err != nil {
+		return "", err
 	}
 
 	uri := "file://" + path
@@ -232,7 +160,93 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if a.ApplyPartial {
 		return t.executePartial(ctx, path, a.Edits, uri, preDiags)
 	}
+	return t.editFileApply(ctx, path, a, uri, preDiags)
+}
 
+func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
+	var a editFileArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return a, fmt.Errorf("edit_file: invalid arguments: %w", err)
+	}
+	if a.Path == "" {
+		return a, fmt.Errorf("edit_file: path is required")
+	}
+	if len(a.Edits) == 0 {
+		return a, fmt.Errorf("edit_file: at least one edit is required")
+	}
+	return a, nil
+}
+
+// editFilePreconditions runs the dirty-check, optimistic-concurrency, and
+// strict-mode gates before any read or write.
+func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a editFileArgs) error {
+	if !a.DirtyOk && pathIsDirty(ctx, path) {
+		return &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
+			"review and commit first, or pass dirty_ok: true to proceed", path)}
+	}
+	if a.ExpectedMtime != "" {
+		want, err := time.Parse(time.RFC3339Nano, a.ExpectedMtime)
+		if err != nil {
+			return &editLogicErr{fmt.Errorf("edit_file: expected_mtime is not RFC3339Nano: %w", err)}
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
+		}
+		if !info.ModTime().Equal(want) {
+			return &editLogicErr{fmt.Errorf(
+				"edit_file: file %q was modified since you read it\n"+
+					"  expected_mtime: %s\n"+
+					"  current mtime:  %s\n"+
+					"  Re-read the file and try again",
+				path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
+			)}
+		}
+	}
+	if a.ExpectedSha != "" {
+		current, err := fileSHA256(path)
+		if err != nil {
+			return &editLogicErr{fmt.Errorf("edit_file: computing sha256 of %q: %w", path, err)}
+		}
+		if current != a.ExpectedSha {
+			return &editLogicErr{fmt.Errorf(
+				"edit_file: file %q content has changed since you read it\n"+
+					"  expected sha256: %s\n"+
+					"  current  sha256: %s\n"+
+					"  Re-read the file and try again",
+				path, a.ExpectedSha, current,
+			)}
+		}
+	}
+	if !t.isStrict() {
+		return nil
+	}
+	recorded := t.deps.Reads.Mtime(path)
+	if recorded.IsZero() {
+		return &editLogicErr{fmt.Errorf(
+			"edit_file: strict mode: %q has not been read in this daemon session — call read_file first",
+			path,
+		)}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
+	}
+	if !info.ModTime().Equal(recorded) {
+		return &editLogicErr{fmt.Errorf(
+			"edit_file: strict mode: %q has changed since you read it\n"+
+				"  recorded mtime: %s\n"+
+				"  current mtime:  %s\n"+
+				"  Re-read the file and try again",
+			path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
+		)}
+	}
+	return nil
+}
+
+// editFileApply runs the retry loop, notifies the LSP on success, and
+// delegates response formatting to formatEditFileSuccess.
+func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArgs, uri string, preDiags []protocol.Diagnostic) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, err := t.tryEdit(ctx, path, a.Edits)
@@ -244,7 +258,6 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			slog.Warn("edit_file: attempt failed", "path", path, "attempt", attempt, "err", err)
 			continue
 		}
-
 		if concurrentWriteDetected(path, result, t.deps.concurrentWriteSkew()) {
 			slog.Warn("edit_file: concurrent write detected after rename, retrying",
 				"path", path, "attempt", attempt)
@@ -254,7 +267,6 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			)
 			continue
 		}
-
 		if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 		}
@@ -264,38 +276,40 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-
-		noun := "edit"
-		if len(a.Edits) > 1 {
-			noun = "edits"
-		}
-		summary := summariseLineChanges(before, content)
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "applied %d %s to %s (%d bytes)", len(a.Edits), noun, path, len(content))
-		if attempt > 1 {
-			fmt.Fprintf(&sb, " (succeeded on attempt %d)", attempt)
-		}
-		if info, err := os.Stat(path); err == nil {
-			fmt.Fprintf(&sb, "\nmtime: %s", info.ModTime().Format(time.RFC3339Nano))
-		}
-		if summary != "" {
-			sb.WriteString("\n")
-			sb.WriteString(summary)
-		}
-		if t.deps.showWriteDiff() {
-			if d := unifiedDiff(path, before, content); d != "" {
-				sb.WriteString("\n")
-				sb.WriteString(d)
-			}
-		}
-		if t.deps.Diag != nil {
-			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
-			sb.WriteString(formatPostWriteDiagnostics(fresh))
-		}
-		return sb.String(), nil
+		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, preDiags), nil
 	}
-
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
+}
+
+func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string, preDiags []protocol.Diagnostic) string {
+	noun := "edit"
+	if len(edits) > 1 {
+		noun = "edits"
+	}
+	summary := summariseLineChanges(before, content)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "applied %d %s to %s (%d bytes)", len(edits), noun, path, len(content))
+	if attempt > 1 {
+		fmt.Fprintf(&sb, " (succeeded on attempt %d)", attempt)
+	}
+	if info, err := os.Stat(path); err == nil {
+		fmt.Fprintf(&sb, "\nmtime: %s", info.ModTime().Format(time.RFC3339Nano))
+	}
+	if summary != "" {
+		sb.WriteString("\n")
+		sb.WriteString(summary)
+	}
+	if t.deps.showWriteDiff() {
+		if d := unifiedDiff(path, before, content); d != "" {
+			sb.WriteString("\n")
+			sb.WriteString(d)
+		}
+	}
+	if t.deps.Diag != nil {
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
+		sb.WriteString(formatPostWriteDiagnostics(fresh))
+	}
+	return sb.String()
 }
 
 // tryEdit reads the file, applies all edits in memory, and writes the result.
