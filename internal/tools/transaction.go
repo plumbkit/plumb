@@ -121,37 +121,20 @@ type txPrepared struct {
 }
 
 func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	var a transactionApplyArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("transaction_apply: invalid arguments: %w", err)
+	a, err := parseTransactionArgs(raw)
+	if err != nil {
+		return "", err
 	}
-	if len(a.Operations) == 0 {
-		return "", fmt.Errorf("transaction_apply: at least one operation required")
-	}
-	if len(a.Operations) > 50 {
-		return "", fmt.Errorf("transaction_apply: at most 50 operations per call, got %d", len(a.Operations))
+	if err := t.txCheckRateLimits(a); err != nil {
+		return "", err
 	}
 
-	// Rate-limit: one slot per operation.
-	for i := range a.Operations {
-		if !t.deps.Limiter.Allow() {
-			return "", rateLimitError(fmt.Sprintf("transaction_apply (op %d/%d)", i+1, len(a.Operations)), t.deps.Limiter)
-		}
+	paths, err := txCanonicalPaths(a.Operations)
+	if err != nil {
+		return "", err
 	}
 
-	// Canonicalise + dedupe paths; build the lock order.
-	paths := make([]string, 0, len(a.Operations))
-	pathSet := make(map[string]struct{}, len(a.Operations))
-	for _, op := range a.Operations {
-		p := strings.TrimPrefix(op.Path, "file://")
-		if _, dup := pathSet[p]; dup {
-			return "", &editLogicErr{fmt.Errorf("transaction_apply: path %q appears in multiple operations — combine them into one operation with multiple edits", p)}
-		}
-		pathSet[p] = struct{}{}
-		paths = append(paths, p)
-	}
-	sort.Strings(paths) // lexical lock order to avoid deadlock with parallel txs
-
+	// Acquire per-path locks in lexical order (deadlock-safe with parallel txs).
 	unlocks := make([]func(), 0, len(paths))
 	for _, p := range paths {
 		unlocks = append(unlocks, lockPath(p))
@@ -162,116 +145,189 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		}
 	}()
 
-	// Dirty check: group paths by directory so we spawn one git process per
-	// directory instead of one per file. This is especially important for
-	// transactions that touch many files in the same project.
-	if !a.DirtyOk {
-		type dirBatch struct {
-			bases []string
-			fulls []string
+	if err := txDirtyCheck(ctx, paths, a.DirtyOk); err != nil {
+		return "", err
+	}
+
+	prepared, err := txPhase1Validate(a.Operations)
+	if err != nil {
+		return "", err
+	}
+
+	written, err := t.txPhase2Write(prepared)
+	if err != nil {
+		return "", err
+	}
+
+	t.txPhase3Notify(ctx, written)
+	return formatTransactionResult(written), nil
+}
+
+func parseTransactionArgs(raw json.RawMessage) (transactionApplyArgs, error) {
+	var a transactionApplyArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return a, fmt.Errorf("transaction_apply: invalid arguments: %w", err)
+	}
+	if len(a.Operations) == 0 {
+		return a, fmt.Errorf("transaction_apply: at least one operation required")
+	}
+	if len(a.Operations) > 50 {
+		return a, fmt.Errorf("transaction_apply: at most 50 operations per call, got %d", len(a.Operations))
+	}
+	return a, nil
+}
+
+func (t *TransactionApply) txCheckRateLimits(a transactionApplyArgs) error {
+	for i := range a.Operations {
+		if !t.deps.Limiter.Allow() {
+			return rateLimitError(fmt.Sprintf("transaction_apply (op %d/%d)", i+1, len(a.Operations)), t.deps.Limiter)
 		}
-		batches := make(map[string]*dirBatch, len(paths))
-		for _, p := range paths {
-			dir := filepath.Dir(p)
-			if batches[dir] == nil {
-				batches[dir] = &dirBatch{}
+	}
+	return nil
+}
+
+// txCanonicalPaths deduplicates and lexically sorts the operation paths.
+func txCanonicalPaths(ops []txOperation) ([]string, error) {
+	paths := make([]string, 0, len(ops))
+	seen := make(map[string]struct{}, len(ops))
+	for _, op := range ops {
+		p := strings.TrimPrefix(op.Path, "file://")
+		if _, dup := seen[p]; dup {
+			return nil, &editLogicErr{fmt.Errorf(
+				"transaction_apply: path %q appears in multiple operations — combine them into one operation with multiple edits", p,
+			)}
+		}
+		seen[p] = struct{}{}
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// txDirtyCheck batches paths by directory and refuses if any are dirty.
+func txDirtyCheck(ctx context.Context, paths []string, dirtyOk bool) error {
+	if dirtyOk {
+		return nil
+	}
+	type dirBatch struct {
+		bases []string
+		fulls []string
+	}
+	batches := make(map[string]*dirBatch, len(paths))
+	for _, p := range paths {
+		dir := filepath.Dir(p)
+		if batches[dir] == nil {
+			batches[dir] = &dirBatch{}
+		}
+		batches[dir].bases = append(batches[dir].bases, filepath.Base(p))
+		batches[dir].fulls = append(batches[dir].fulls, p)
+	}
+	var dirtyPaths []string
+	for dir, batch := range batches {
+		dirty := dirtyBasenamesInDir(ctx, dir, batch.bases)
+		for i, base := range batch.bases {
+			if dirty[base] {
+				dirtyPaths = append(dirtyPaths, batch.fulls[i])
 			}
-			batches[dir].bases = append(batches[dir].bases, filepath.Base(p))
-			batches[dir].fulls = append(batches[dir].fulls, p)
 		}
-		var dirtyPaths []string
-		for dir, batch := range batches {
-			dirty := dirtyBasenamesInDir(ctx, dir, batch.bases)
-			for i, base := range batch.bases {
-				if dirty[base] {
-					dirtyPaths = append(dirtyPaths, batch.fulls[i])
-				}
-			}
+	}
+	if len(dirtyPaths) > 0 {
+		sort.Strings(dirtyPaths)
+		return &editLogicErr{fmt.Errorf(
+			"transaction_apply: %d file(s) have uncommitted changes; "+
+				"review and commit first, or pass dirty_ok: true to overwrite:\n  %s",
+			len(dirtyPaths), strings.Join(dirtyPaths, "\n  "),
+		)}
+	}
+	return nil
+}
+
+// txPhase1Validate validates every operation in memory. No writes happen.
+func txPhase1Validate(ops []txOperation) ([]txPrepared, error) {
+	prepared := make([]txPrepared, 0, len(ops))
+	for i, op := range ops {
+		p, err := txValidateOp(i, op, strings.TrimPrefix(op.Path, "file://"))
+		if err != nil {
+			return nil, err
 		}
-		if len(dirtyPaths) > 0 {
-			sort.Strings(dirtyPaths)
-			return "", &editLogicErr{fmt.Errorf(
-				"transaction_apply: %d file(s) have uncommitted changes; "+
-					"review and commit first, or pass dirty_ok: true to overwrite:\n  %s",
-				len(dirtyPaths), strings.Join(dirtyPaths, "\n  "),
+		prepared = append(prepared, p)
+	}
+	return prepared, nil
+}
+
+// txValidateOp validates a single operation against the current on-disk state
+// and returns the prepared in-memory result.
+func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: stat %q: %w", i, path, err)}
+	}
+	if op.ExpectedMtime != "" {
+		want, perr := time.Parse(time.RFC3339Nano, op.ExpectedMtime)
+		if perr != nil {
+			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: expected_mtime not RFC3339Nano: %w", i, perr)}
+		}
+		if !info.ModTime().Equal(want) {
+			return txPrepared{}, &editLogicErr{fmt.Errorf(
+				"transaction_apply: op[%d]: %q changed since you read it (expected %s, got %s)",
+				i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
 			)}
 		}
 	}
-
-	// Phase 1: validate every operation in memory. No writes yet.
-	prepared := make([]txPrepared, 0, len(a.Operations))
-	for i, op := range a.Operations {
-		path := strings.TrimPrefix(op.Path, "file://")
-		info, err := os.Stat(path)
+	if op.ExpectedSha != "" {
+		current, err := fileSHA256(path)
 		if err != nil {
-			return "", &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: stat %q: %w", i, path, err)}
+			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: computing sha256 of %q: %w", i, path, err)}
 		}
-		if op.ExpectedMtime != "" {
-			want, perr := time.Parse(time.RFC3339Nano, op.ExpectedMtime)
-			if perr != nil {
-				return "", &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: expected_mtime not RFC3339Nano: %w", i, perr)}
-			}
-			if !info.ModTime().Equal(want) {
-				return "", &editLogicErr{fmt.Errorf(
-					"transaction_apply: op[%d]: %q changed since you read it (expected %s, got %s)",
-					i, path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-				)}
-			}
+		if current != op.ExpectedSha {
+			return txPrepared{}, &editLogicErr{fmt.Errorf(
+				"transaction_apply: op[%d]: %q content has changed since you read it\n"+
+					"  expected sha256: %s\n"+
+					"  current  sha256: %s",
+				i, path, op.ExpectedSha, current,
+			)}
 		}
-		if op.ExpectedSha != "" {
-			current, err := fileSHA256(path)
-			if err != nil {
-				return "", &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: computing sha256 of %q: %w", i, path, err)}
-			}
-			if current != op.ExpectedSha {
-				return "", &editLogicErr{fmt.Errorf(
-					"transaction_apply: op[%d]: %q content has changed since you read it\n"+
-						"  expected sha256: %s\n"+
-						"  current  sha256: %s",
-					i, path, op.ExpectedSha, current,
-				)}
-			}
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: read %q: %w", i, path, err)}
-		}
-		before := string(data)
-		content := before
-		for j, edit := range op.Edits {
-			if edit.OldStr == "" {
-				return "", &editLogicErr{fmt.Errorf("transaction_apply: op[%d].edits[%d]: old_str must not be empty", i, j)}
-			}
-			oldStr := matchLineEndings(edit.OldStr, content)
-			newStr := matchLineEndings(edit.NewStr, content)
-			count := strings.Count(content, oldStr)
-			switch count {
-			case 0:
-				return "", &editLogicErr{fmt.Errorf(
-					"transaction_apply: op[%d].edits[%d]: old_str not found in %q",
-					i, j, path,
-				)}
-			case 1:
-				content = strings.Replace(content, oldStr, newStr, 1)
-			default:
-				return "", &editLogicErr{fmt.Errorf(
-					"transaction_apply: op[%d].edits[%d]: old_str appears %d times in %q — must be unique",
-					i, j, count, path,
-				)}
-			}
-		}
-		prepared = append(prepared, txPrepared{
-			path:     path,
-			before:   before,
-			after:    content,
-			preMtime: info.ModTime(),
-			perm:     info.Mode().Perm(),
-		})
 	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d]: read %q: %w", i, path, err)}
+	}
+	before := string(data)
+	content := before
+	for j, edit := range op.Edits {
+		if edit.OldStr == "" {
+			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d].edits[%d]: old_str must not be empty", i, j)}
+		}
+		oldStr := matchLineEndings(edit.OldStr, content)
+		newStr := matchLineEndings(edit.NewStr, content)
+		count := strings.Count(content, oldStr)
+		switch count {
+		case 0:
+			return txPrepared{}, &editLogicErr{fmt.Errorf(
+				"transaction_apply: op[%d].edits[%d]: old_str not found in %q",
+				i, j, path,
+			)}
+		case 1:
+			content = strings.Replace(content, oldStr, newStr, 1)
+		default:
+			return txPrepared{}, &editLogicErr{fmt.Errorf(
+				"transaction_apply: op[%d].edits[%d]: old_str appears %d times in %q — must be unique",
+				i, j, count, path,
+			)}
+		}
+	}
+	return txPrepared{
+		path:     path,
+		before:   before,
+		after:    content,
+		preMtime: info.ModTime(),
+		perm:     info.Mode().Perm(),
+	}, nil
+}
 
-	// Phase 2: write. On failure mid-stream, restore everything already written.
-	// The durable rollback log records pre-write content before each write so
-	// a daemon crash can be recovered on the next workspace attach via txlog.Scan.
+// txPhase2Write writes all prepared operations with an in-memory mtime guard
+// and a durable rollback log. Rolls back already-written files on failure.
+func (t *TransactionApply) txPhase2Write(prepared []txPrepared) ([]txPrepared, error) {
 	workspace := ""
 	if t.deps.WorkspaceFn != nil {
 		workspace = t.deps.WorkspaceFn()
@@ -279,17 +335,16 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	txl, txErr := txlog.Begin(workspace)
 	if txErr != nil {
 		slog.Warn("transaction_apply: txlog unavailable — rollback not durable", "err", txErr)
-		txl, _ = txlog.Begin("") // returns no-op log
+		txl, _ = txlog.Begin("")
 	}
 
 	written := make([]txPrepared, 0, len(prepared))
 	for _, p := range prepared {
-		// Pre-rename mtime guard: did anything change between phase 1 and now?
 		if info, err := os.Stat(p.path); err == nil {
 			if !info.ModTime().Equal(p.preMtime) {
 				rollback(written)
 				txl.Rollback()
-				return "", fmt.Errorf(
+				return nil, fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
 					p.path, len(written),
 				)
@@ -302,14 +357,18 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		if _, err := safeWrite(p.path, []byte(p.after), p.perm); err != nil {
 			rollback(written)
 			txl.Rollback()
-			return "", fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
+			return nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
 				p.path, err, len(written))
 		}
 		written = append(written, p)
 	}
 	txl.Commit()
+	return written, nil
+}
 
-	// Phase 3: notifications + cache invalidation per file.
+// txPhase3Notify sends LSP notifications and invalidates the symbol cache for
+// every successfully written file.
+func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepared) {
 	for _, p := range written {
 		uri := "file://" + p.path
 		if err := notifyLSP(ctx, t.deps.Client, p.path, protocol.FileChanged); err != nil {
@@ -322,14 +381,15 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		}
 		invalidateCache(t.deps.Cache, uri)
 	}
+}
 
+func formatTransactionResult(written []txPrepared) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "transaction applied: %d files updated", len(written))
 	totalBytes := 0
 	for _, p := range written {
 		totalBytes += len(p.after)
 	}
-	fmt.Fprintf(&sb, " (%d bytes total)\n", totalBytes)
+	fmt.Fprintf(&sb, "transaction applied: %d files updated (%d bytes total)\n", len(written), totalBytes)
 	for _, p := range written {
 		summary := summariseLineChanges(p.before, p.after)
 		fmt.Fprintf(&sb, "  %s", p.path)
@@ -338,7 +398,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		}
 		sb.WriteByte('\n')
 	}
-	return strings.TrimRight(sb.String(), "\n"), nil
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // rollback restores each entry in written to its pre-transaction content.
