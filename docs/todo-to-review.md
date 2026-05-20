@@ -285,6 +285,27 @@ The atomicity guarantee is intentionally dropped when `apply_partial: true` is s
 
 ---
 
+### `search_in_files` — LSP-backed enclosing symbol for each match
+
+**Completed in:** 0.6.8
+**Original priority:** medium
+
+`search_in_files` now accepts `include_enclosing_symbol: true`. When set and an LSP client is available, each actual match line (not context lines) is annotated with the deepest enclosing symbol from `textDocument/documentSymbol`:
+
+```
+internal/tools/transaction.go
+  123:> uris = append(uris, uri)
+  [in: Execute (method)]
+
+1 hit(s) across 1 file(s).
+```
+
+One `DocumentSymbols` query per distinct matched file; results are re-used from the session's symbol cache when available (`symCache`). If the LSP is unavailable or the query fails, the annotation is silently omitted — the call never fails because of this feature.
+
+Implementation: `internal/tools/search_in_files.go` — `include_enclosing_symbol` schema field and args struct field; `docSymbolsCached` method (LSP call with session cache); `deepestEnclosingSymbol` helper (recursive DFS, returns innermost symbol by range size); `fileMatch` struct extended with `absPath string` and `hitLineNums []int`; output loop injects `[in: Name (kind)]` line after each hit-line marker (`:> `). Constructor updated to accept `lsp.Client` and `*cache.Cache` alongside `WorkspaceFn`. Tests in `internal/tools/search_in_files_lsp_test.go`.
+
+---
+
 ### `find_replace` — opt-in post-write formatter hook
 
 **Completed in:** 0.6.8

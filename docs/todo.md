@@ -502,28 +502,6 @@ Recommendation: **do not introduce workers yet**. First add measurement and idle
 
 ---
 
-### `search_in_files` — LSP-backed enclosing symbol for each match
-
-**Priority:** medium — especially valuable for clients without native filesystem access (Claude Desktop).
-**Effort:** Medium. One LSP `textDocument/documentSymbol` query per matched file; cache per file per search call.
-**Status:** Idea — not started.
-
-When `search_in_files` returns a match inside a source file, it shows the matched line and surrounding context. That context is often insufficient to understand *where* the match sits — the agent must read further up to find which function contains it. For Claude Desktop, which has no native `Read` tool, that costs a full additional `read_file` round-trip.
-
-**Proposed API:** `include_enclosing_symbol: true` (default false) on the `search_in_files` input. When set, for each matched file, call `list_symbols` and find the deepest symbol whose range contains the match line. Include the symbol name and kind in the result:
-
-```
-internal/tools/transaction.go:123:  uris = append(uris, uri)
-  [in: func (*TransactionApply).Execute]
-```
-
-This is most valuable for:
-- **Claude Desktop** — no filesystem access; reading the file to find the enclosing method costs a full `read_file`.
-- **Any client** — understanding "this call is inside `handleConn`" without reading 832 lines of `daemon.go`.
-
-**Watch out for:** one LSP round-trip per distinct matched file — keep opt-in. If the LSP is unavailable, silently omit the enclosing symbol. Never re-query for multiple matches in the same file within one search call.
-
----
 
 ## Code quality & engineering practices
 

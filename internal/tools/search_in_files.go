@@ -18,6 +18,10 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/golimpio/plumb/internal/cache"
+	"github.com/golimpio/plumb/internal/lsp"
+	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
 // searchDefaultDeadline caps any single search_in_files call when the parent
@@ -81,15 +85,28 @@ var searchInFilesSchema = json.RawMessage(`{
       "type": "integer",
       "description": "Skip files larger than this many bytes. Default 52428800 (50 MiB).",
       "minimum": 1
+    },
+    "include_enclosing_symbol": {
+      "type": "boolean",
+      "description": "When true and an LSP is available, annotate each match with the deepest enclosing symbol (function, method, type, etc.) from the language server. One LSP query per distinct matched file; results cached within the call. Silently omitted when the LSP is unavailable."
     }
   },
   "required": ["pattern"]
 }`)
 
 // SearchInFiles implements grep-like search across workspace files.
-type SearchInFiles struct{ ws WorkspaceFn }
+//
+// Concurrency: Execute is safe for concurrent use.
+type SearchInFiles struct {
+	ws       WorkspaceFn
+	client   lsp.Client
+	symCache *cache.Cache
+	cacheTTL time.Duration
+}
 
-func NewSearchInFiles(ws WorkspaceFn) *SearchInFiles { return &SearchInFiles{ws: ws} }
+func NewSearchInFiles(ws WorkspaceFn, client lsp.Client, c *cache.Cache, ttl time.Duration) *SearchInFiles {
+	return &SearchInFiles{ws: ws, client: client, symCache: c, cacheTTL: ttl}
+}
 
 func (t *SearchInFiles) Name() string                 { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
@@ -106,15 +123,16 @@ func (t *SearchInFiles) Description() string {
 }
 
 type searchInFilesArgs struct {
-	Pattern       string   `json:"pattern"`
-	Path          string   `json:"path"`
-	Glob          string   `json:"glob"`
-	Exclude       []string `json:"exclude"`
-	CaseSensitive *bool    `json:"case_sensitive"`
-	ContextLines  int      `json:"context_lines"`
-	MaxResults    int      `json:"max_results"`
-	IncludeHidden bool     `json:"include_hidden"`
-	MaxFileBytes  int64    `json:"max_file_bytes"`
+	Pattern                string   `json:"pattern"`
+	Path                   string   `json:"path"`
+	Glob                   string   `json:"glob"`
+	Exclude                []string `json:"exclude"`
+	CaseSensitive          *bool    `json:"case_sensitive"`
+	ContextLines           int      `json:"context_lines"`
+	MaxResults             int      `json:"max_results"`
+	IncludeHidden          bool     `json:"include_hidden"`
+	MaxFileBytes           int64    `json:"max_file_bytes"`
+	IncludeEnclosingSymbol bool     `json:"include_enclosing_symbol"`
 }
 
 func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -172,7 +190,9 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 
 	type fileMatch struct {
 		relPath      string
+		absPath      string   // absolute path, used for LSP URI when include_enclosing_symbol is set
 		lines        []string // formatted "LINE: content" entries
+		hitLineNums  []int    // 1-based line numbers of actual match lines (parallel to hits)
 		hits         int      // raw hit count, used for max_results truncation
 		skippedLines int
 	}
@@ -347,7 +367,15 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 					fmt.Sprintf("  %d:%s%s", lines[i].number, prefix, strings.TrimRight(string(lines[i].data), "\r")))
 			}
 		}
-		return &fileMatch{relPath: p.rel, lines: formatted, hits: len(hitLineIdxs), skippedLines: skippedLines}
+		hitNums := make([]int, len(hitLineIdxs))
+		for i, h := range hitLineIdxs {
+			hitNums[i] = lines[h].number
+		}
+		return &fileMatch{
+			relPath: p.rel, absPath: p.abs,
+			lines: formatted, hitLineNums: hitNums,
+			hits: len(hitLineIdxs), skippedLines: skippedLines,
+		}
 	}
 
 	wctx, cancel := context.WithCancel(ctx)
@@ -427,13 +455,46 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		return fmt.Sprintf("No matches for %q.", a.Pattern), nil
 	}
 
+	// Phase 3: optional per-file symbol annotation via LSP.
+	// One DocumentSymbols call per distinct matched file; results cached.
+	var fileAnnotations map[string]map[int]string // absPath → (1-based line → symbol name)
+	if a.IncludeEnclosingSymbol && t.client != nil {
+		fileAnnotations = make(map[string]map[int]string)
+		for _, fm := range results {
+			uri := protocol.FileURI(fm.absPath)
+			syms := t.docSymbolsCached(ctx, uri)
+			if len(syms) == 0 {
+				continue
+			}
+			m := make(map[int]string, len(fm.hitLineNums))
+			for _, lineNo := range fm.hitLineNums {
+				if sym := deepestEnclosingSymbol(syms, uint32(lineNo-1)); sym != "" {
+					m[lineNo] = sym
+				}
+			}
+			if len(m) > 0 {
+				fileAnnotations[fm.absPath] = m
+			}
+		}
+	}
+
 	var sb strings.Builder
 	for _, fm := range results {
 		sb.WriteString(fm.relPath)
 		sb.WriteByte('\n')
+		ann := fileAnnotations[fm.absPath] // nil when feature off or no symbols
+		hitIdx := 0
 		for _, l := range fm.lines {
 			sb.WriteString(l)
 			sb.WriteByte('\n')
+			// After a hit line (marker ":> "), append the enclosing symbol.
+			if ann != nil && strings.Contains(l, ":> ") && hitIdx < len(fm.hitLineNums) {
+				lineNo := fm.hitLineNums[hitIdx]
+				hitIdx++
+				if name, ok := ann[lineNo]; ok {
+					fmt.Fprintf(&sb, "  [in: %s]\n", name)
+				}
+			}
 		}
 		sb.WriteByte('\n')
 	}
@@ -480,4 +541,48 @@ func doubleStarMatchFile(glob, path string) (bool, error) {
 		return m, err
 	}
 	return doubleStarMatch(glob, path), nil
+}
+
+// docSymbolsCached returns DocumentSymbols for uri, consulting t.symCache first.
+// Returns nil when the LSP call fails; callers treat nil as "no annotation".
+func (t *SearchInFiles) docSymbolsCached(ctx context.Context, uri string) []protocol.DocumentSymbol {
+	key := uri + ":docSymbols"
+	if t.symCache != nil {
+		if v, ok := t.symCache.Get(key); ok {
+			return v.([]protocol.DocumentSymbol)
+		}
+	}
+	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	})
+	if err != nil {
+		return nil
+	}
+	if t.symCache != nil {
+		t.symCache.Set(key, syms, t.cacheTTL)
+	}
+	return syms
+}
+
+// deepestEnclosingSymbol returns "Name (kind)" for the innermost symbol whose
+// range contains the given 0-based line number, or "" when none matches.
+func deepestEnclosingSymbol(syms []protocol.DocumentSymbol, line uint32) string {
+	best := ""
+	bestSize := uint32(0)
+	var walk func([]protocol.DocumentSymbol, uint32)
+	walk = func(ss []protocol.DocumentSymbol, depth uint32) {
+		for _, s := range ss {
+			if s.Range.Start.Line > line || s.Range.End.Line < line {
+				continue
+			}
+			size := s.Range.End.Line - s.Range.Start.Line
+			if best == "" || size < bestSize || (size == bestSize && depth > 0) {
+				best = fmt.Sprintf("%s (%s)", s.Name, symbolKindName(s.Kind))
+				bestSize = size
+			}
+			walk(s.Children, depth+1)
+		}
+	}
+	walk(syms, 0)
+	return best
 }

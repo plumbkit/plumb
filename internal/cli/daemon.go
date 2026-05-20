@@ -470,7 +470,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, cfg con
 	srv.Register(tools.NewDeleteFile(writeDeps))
 	srv.Register(tools.NewRenameFile(writeDeps))
 	srv.Register(tools.NewTransactionApply(writeDeps))
-	srv.Register(tools.NewSearchInFiles(wsFn))
+	srv.Register(tools.NewSearchInFiles(wsFn, sessionProxy, sessionCache, ttl))
 	srv.Register(tools.NewFindFiles(wsFn))
 	srv.Register(tools.NewGit())
 	srv.Register(tools.NewFileDiff())
