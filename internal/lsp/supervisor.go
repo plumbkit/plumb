@@ -228,7 +228,7 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 
 // spawn starts the subprocess and returns a Conn wired to its stdio.
 func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, s.command, s.args...)
+	cmd := exec.CommandContext(ctx, s.command, s.args...) //nolint:gosec // G204: s.command and s.args are set from adapter config (gopls/pyright binary), not from user input
 	if len(s.env) > 0 {
 		cmd.Env = s.env
 	}

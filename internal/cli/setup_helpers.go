@@ -187,7 +187,7 @@ func stringSliceEqual(got any, want []string) bool {
 		return false
 	}
 	for i, gotItem := range gotSlice {
-		if gotItem != want[i] {
+		if gotItem != want[i] { //nolint:gosec // G602: len(gotSlice)==len(want) is asserted by the length guard above
 			return false
 		}
 	}

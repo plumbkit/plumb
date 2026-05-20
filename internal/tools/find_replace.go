@@ -388,7 +388,7 @@ func runFormatterOnFiles(ctx context.Context, changes []fileChange) (int, []erro
 		if !ok {
 			continue
 		}
-		out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).CombinedOutput()
+		out, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).CombinedOutput() //nolint:gosec // G204: cmd[0] is a hardcoded formatter binary name (gofumpt/gofmt/ruff/black) resolved via LookPath; path arg is workspace-validated
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w: %s", filepath.Base(c.path), err, strings.TrimSpace(string(out))))
 			slog.Warn("find_replace: formatter failed", "path", c.path, "err", err)
