@@ -123,7 +123,8 @@ func (m Model) popupRightAll(rw int) []string {
 }
 
 func popupGutterLines(label string, content []string, rw int) []string {
-	lines := []string{"", "  " + PanelHeaderStyle.Render(label)}
+	lines := make([]string, 0, 2+len(content))
+	lines = append(lines, "", "  "+PanelHeaderStyle.Render(label))
 	gutterChar := SepStyle.Render("┊")
 	for _, cl := range content {
 		if lipgloss.Width(cl) > rw-5 {

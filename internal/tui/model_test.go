@@ -160,7 +160,7 @@ func TestLeftPanelDoesNotShrinkBelowFullSessionRowWidth(t *testing.T) {
 	}
 }
 
-func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
+func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) { //nolint:gocyclo
 	RebuildStyles()
 	m := Model{
 		currentSection: 1,
@@ -985,7 +985,7 @@ func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 	}
 }
 
-func TestDashTopToolsTablesRenderWidgets(t *testing.T) {
+func TestDashTopToolsTablesRenderWidgets(t *testing.T) { //nolint:gocyclo
 	RebuildStyles()
 	m := Model{
 		dashLifetimeTopTools: []stats.ToolStat{
@@ -996,8 +996,9 @@ func TestDashTopToolsTablesRenderWidgets(t *testing.T) {
 		},
 	}
 
-	plain := make([]string, 0)
-	for _, line := range m.dashTopToolsTables(80) {
+	tableLines := m.dashTopToolsTables(80)
+	plain := make([]string, 0, len(tableLines))
+	for _, line := range tableLines {
 		plain = append(plain, ansiStripForTest(line))
 	}
 	if !strings.Contains(plain[0], "Top Tools (all time)") || !strings.HasPrefix(plain[0], "╭─") {

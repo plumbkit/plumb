@@ -321,13 +321,15 @@ func (m Model) dashProjectWidget(width int) []string {
 		name = m.dashProjectFolder
 	}
 
-	content := []string{
+	tableLines := dashTopToolsTable("Top Tools", max(inner-6, 20), m.dashProjectTopTools)
+	content := make([]string, 0, 4+len(tableLines))
+	content = append(content,
 		dashProjectMetricRow("Sessions", formatLargeInt(m.dashProjectSessions), m.dashProjectSessions, m.dashLifetimeSessions, inner),
 		dashProjectMetricRow("Tool Calls", formatLargeInt(m.dashProjectCalls), m.dashProjectCalls, m.dashLifetimeCalls, inner),
 		dashProjectMetricRow("Tokens Saved", "~"+stats.FormatSavings(int(m.dashProjectTokens)), m.dashProjectTokens, m.dashLifetimeTokens, inner),
 		"",
-	}
-	for _, line := range dashTopToolsTable("Top Tools", max(inner-6, 20), m.dashProjectTopTools) {
+	)
+	for _, line := range tableLines {
 		content = append(content, "   "+line+"   ")
 	}
 

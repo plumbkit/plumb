@@ -1001,40 +1001,22 @@ Recommendation: **do not introduce workers yet**. First add measurement and idle
 
 ## Code quality & engineering practices
 
-This section is the authoritative plan for raising plumb's own code quality to the standard the project claims (AGENTS.md: "best code engineer", good Go practices, ~400 lines/file, gocyclo, gofumpt, lint-before-commit). It **supersedes** items 14 and 15 of [`docs/cli-and-core-review-plan.md`](cli-and-core-review-plan.md) (shared-helper extraction and large-file splitting) — track that work here.
+This section tracks the ongoing quality standard for the plumb codebase. CQ-1 through CQ-8 are all complete — see `docs/todo-to-review.md` for history.
 
-**Objective baseline (golangci-lint v2.12.2). CQ-1 and CQ-2 shipped in 0.6.6 — see `docs/todo-to-review.md` for detail.**
+**Current baseline (golangci-lint v2.12.2, post CQ-8, 2026-05-21):**
 
 ```
-Post CQ-1 + CQ-2 (2026-05-20):
-  51 findings on ./...
-  gocyclo: 37   (functions over the configured min-complexity 15 gate — deferred to CQ-3)
-  gosec:   14   (SQL concat, path traversal, int overflow, file perms, subprocess — deferred to CQ-5)
-
-Original baseline (pre CQ-1/CQ-2, 2026-05-20):
-  79 total — gocyclo 36, gosec 13, unused 5, staticcheck 8, prealloc 5,
-             errcheck 3, gofumpt 3, unparam 3, ineffassign 2, revive 1
+0 issues on ./...
 ```
 
-8 non-test source files exceed the project's own ~400-line guidance: `internal/tui/dashboard.go` (892), `internal/cli/daemon.go` (832), `internal/stats/db.go` (705), `internal/mcp/server.go` (600), `internal/cli/setup.go` (556), `internal/lsp/protocol/types.go` (535), `internal/tools/edit_file.go` (528), `internal/cli/doctor.go` (518). Several more are 480–503.
+**Standing rules** (enforced by CI and pre-commit hook):
+- `make verify` must be green before every commit (`build + test + lint`).
+- No first-party non-test function may exceed gocyclo 15. Decompose before merging.
+- No non-test source file over ~400 lines. Exception: `internal/lsp/protocol/types.go` (LSP spec type catalogue).
+- Every gosec finding must be fixed or have a one-line justification annotation.
+- Format via `golangci-lint run --fix ./...`, never the standalone `gofumpt` binary.
 
-**Root cause (the engineering problem, not just the symptom).** The recurring anti-pattern is the monolithic `Tool.Execute()`: a single method that decodes raw args, validates them, performs LSP/filesystem work, formats output, and maps errors — all inline. That is why 36 functions blow the complexity gate and why the files are huge. The fix is a *structural standard*, not piecemeal nibbling. The local enforcement gap compounds it: `.git/hooks/` does not exist in this clone, so `make install-hooks` was never run and unlinted/non-compiling code has reached the tree.
-
-This section is ordered by priority. P0 items are mechanical, low-risk, and should land first to stop the bleeding; P1 is the real refactor; P2 makes regressions impossible.
-
----
-
-### Suggested sequencing
-
-1. **CQ-2** (delete dead code) and the mechanical half of **CQ-1** (gofumpt/ineffassign/prealloc/errcheck) — fast, stops the bleeding, makes diffs clean for everything after.
-2. **CQ-5 #1** (SQL concat) early — it may be a real injection bug.
-3. **CQ-6** (write the standard) before CQ-3 — the refactor needs an agreed target shape.
-4. **CQ-3** worst-first, one function per commit (search_in_files → find_replace → transaction → …).
-5. **CQ-4** file splits, falling naturally out of CQ-3's seams.
-6. Remaining **CQ-5** gosec triage; **CQ-1** finish (gocyclo reaches zero as CQ-3 lands); **CQ-7** dedup.
-7. Flip CI lint to blocking and the pre-commit hook to mandatory once `make verify` is green.
-
-**Whole-section definition of done:** `make verify` green on `./...`; zero gocyclo findings (no first-party exceptions); no non-test file over ~400 lines except the documented allowlist; every gosec finding fixed or justified; pre-commit hook installed and CI lint blocking. Each completed CQ item moves to `docs/todo-to-review.md` with a `CHANGELOG.md` entry, per the workflow at the bottom of this file.
+When new findings appear, add them as a numbered CQ item here, fix them, then move the item to `docs/todo-to-review.md` with a `CHANGELOG.md` entry.
 
 ---
 

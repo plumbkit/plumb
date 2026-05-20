@@ -160,7 +160,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	if a.ApplyPartial {
-		return t.executePartial(ctx, path, a.Edits, uri, preDiags)
+		return t.executePartial(ctx, path, a.Edits, uri, preDiags), nil
 	}
 	return t.editFileApply(ctx, path, a, uri, preDiags)
 }
@@ -410,7 +410,7 @@ func (t *EditFile) executePartial(
 	edits []strEdit,
 	uri string,
 	preDiags []protocol.Diagnostic,
-) (string, error) {
+) string {
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
 	var sb strings.Builder
@@ -420,7 +420,7 @@ func (t *EditFile) executePartial(
 		_ = res
 		t.executePartialPostWrite(ctx, path, uri, preDiags, &sb)
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 func countApplied(results []partialEditResult) int {

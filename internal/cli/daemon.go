@@ -163,10 +163,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// write rate.
 	var clientLimiters sync.Map // map[string]*tools.RateLimiter
 
-	return runDaemonAcceptLoop(ctx, ln, pool, cfg, statsStore, daemonStartedAt, &clientLimiters)
+	runDaemonAcceptLoop(ctx, ln, pool, cfg, statsStore, daemonStartedAt, &clientLimiters)
+	return nil
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) error {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	var wg sync.WaitGroup
 	go func() {
 		<-ctx.Done()
@@ -179,7 +180,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 			select {
 			case <-ctx.Done():
 				wg.Wait()
-				return nil
+				return
 			default:
 				slog.Error("daemon: accept", "err", err)
 				continue

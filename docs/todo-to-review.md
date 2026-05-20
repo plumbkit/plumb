@@ -299,6 +299,22 @@ Migrated all CLI and TUI duplicates:
 
 ---
 
+### CQ-8 — Post-CQ-7 lint findings (prealloc, unparam, unused, gocyclo in tests)
+
+**Completed in:** 0.7.2 (2026-05-21)
+**Original priority:** P0 (mechanical, zero-risk)
+
+11 findings surfaced after CQ-7 landed; all resolved.
+
+- **prealloc (4):** `dashActivityWidget` — pre-compute `graphLines` before allocating `out`; `dashProjectWidget` — pre-compute `tableLines` before allocating `content`; `popupGutterLines` — `make([]string, 0, 2+len(content))`; `TestDashTopToolsTablesRenderWidgets` — pre-compute table lines before `plain`.
+- **unparam (4):** `runDaemonAcceptLoop` — always returned nil; changed to no return value, caller updated. `(*EditFile).executePartial` — always returned nil error; changed to return `string` only, caller updated. `walkDir` — `root` parameter was passed but never used; removed from signature and all two call sites. `(Model).renderPopup` — `rightWidth` parameter was unused; removed from signature and the one call site.
+- **unused (1):** `dashRow` in `dashboard.go` — function was never called; deleted along with its doc comment.
+- **gocyclo (2):** Both findings were in test functions (`TestRenderTopMenuUsesRailAndActivityBox`, `TestDashTopToolsTablesRenderWidgets`). The gocyclo-15 contract covers non-test functions only; annotated with `//nolint:gocyclo`.
+
+Result: 0 findings on `./...`.
+
+---
+
 ### CQ-4 — Split oversized files by responsibility (P1)
 
 **Completed in:** 0.7.1 (2026-05-20)

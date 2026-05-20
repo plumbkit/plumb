@@ -212,11 +212,6 @@ func dashBox(titleText string, innerWidth int, contentLines []string) []string {
 
 const dashKW = 13 // key column width inside widget rows
 
-// dashRow builds a single key-value content line for use inside dashBox.
-func dashRow(key, value string) string {
-	return " " + KeyStyle.Width(dashKW).Render(key) + DetailStyle.Render(value)
-}
-
 const dashWidgetGap = 3
 
 // joinWidgetRow joins widget []string slices horizontally with a fixed gap.

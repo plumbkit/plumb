@@ -65,7 +65,7 @@ func (m Model) render() string {
 
 	final := sb.String()
 	if m.showPopup {
-		final = m.renderPopup(final, rightWidth, bodyHeight-1)
+		final = m.renderPopup(final, bodyHeight-1)
 	}
 	if m.showHelp {
 		final = m.renderHelp(final)
@@ -219,7 +219,7 @@ func (m Model) renderBottomBorder(rightWidth int, dimmed bool) string {
 	return sepStyle.Render("╰" + string(filler) + "╯")
 }
 
-func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
+func (m Model) renderPopup(bg string, bodyHeight int) string {
 	if m.popupLeftWidth == 0 {
 		m.popupLeftWidth = minPopupLeftWidth
 	}

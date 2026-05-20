@@ -250,7 +250,7 @@ func walk(ctx context.Context, opts walkOptions, fn walkFn) error {
 	if opts.respectIgnore {
 		st = st.load(opts.root)
 	}
-	return walkDir(ctx, opts.root, opts.root, 0, st, opts, fn)
+	return walkDir(ctx, opts.root, 0, st, opts, fn)
 }
 
 // shouldVisitEntry reports whether an entry passes the hidden-file and gitignore filters.
@@ -264,7 +264,7 @@ func shouldVisitEntry(name, absPath string, isDir bool, opts walkOptions, st ign
 	return true
 }
 
-func walkDir(ctx context.Context, root, dir string, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
+func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -298,7 +298,7 @@ func walkDir(ctx context.Context, root, dir string, depth int, st ignoreStack, o
 			if err := fn(absPath, d, relDepth); err == fs.SkipDir {
 				continue
 			}
-			if err := walkDir(ctx, root, absPath, depth+1, st, opts, fn); err != nil {
+			if err := walkDir(ctx, absPath, depth+1, st, opts, fn); err != nil {
 				return err
 			}
 		} else {

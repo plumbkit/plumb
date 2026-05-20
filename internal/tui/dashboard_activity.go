@@ -21,11 +21,13 @@ func (m Model) dashActivityWidget(width int) []string {
 	chartW := max(inner-6, 1)
 	topL, topR, botL, botR := m.dashActivityCaptions(time.Now())
 
-	out := []string{
+	graphLines := m.dashActivityGraphLines(chartW)
+	out := make([]string, 0, 4+len(graphLines))
+	out = append(out,
 		dashActivityBorder("╭", "╮", inner, topL, topR),
-		SepStyle.Render("│") + strings.Repeat(" ", inner) + SepStyle.Render("│"),
-	}
-	for _, line := range m.dashActivityGraphLines(chartW) {
+		SepStyle.Render("│")+strings.Repeat(" ", inner)+SepStyle.Render("│"),
+	)
+	for _, line := range graphLines {
 		padW := max(inner-3-lipgloss.Width(line), 0)
 		out = append(out, SepStyle.Render("│")+"   "+line+strings.Repeat(" ", padW)+SepStyle.Render("│"))
 	}
