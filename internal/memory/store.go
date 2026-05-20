@@ -118,7 +118,7 @@ func Write(workspace, name, content, description string) error {
 		content = sb.String()
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("writing memory: %w", err)
 	}
 	return os.Rename(tmp, path)

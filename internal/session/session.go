@@ -125,7 +125,7 @@ func Patch(id string, fn func(*Info)) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, append(out, '\n'), 0o644)
+	_ = os.WriteFile(path, append(out, '\n'), 0o600)
 }
 
 // SetClient updates the ClientName and ClientVersion fields of the session

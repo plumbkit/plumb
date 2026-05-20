@@ -106,7 +106,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer ln.Close()
 
 	pidPath := daemonPIDPath()
-	if err := os.WriteFile(pidPath, fmt.Appendf(nil, "%d", os.Getpid()), 0o644); err != nil {
+	if err := os.WriteFile(pidPath, fmt.Appendf(nil, "%d", os.Getpid()), 0o600); err != nil {
 		slog.Warn("daemon: could not write PID file", "path", pidPath, "err", err)
 	}
 	defer os.Remove(pidPath)
@@ -114,7 +114,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// Publish our build version next to the PID so `plumb serve` can detect a
 	// version mismatch (running daemon older than the binary that's launching).
 	versionPath := daemonVersionPath()
-	if err := os.WriteFile(versionPath, []byte(Version), 0o644); err != nil {
+	if err := os.WriteFile(versionPath, []byte(Version), 0o600); err != nil {
 		slog.Warn("daemon: could not write version file", "path", versionPath, "err", err)
 	}
 	defer os.Remove(versionPath)

@@ -93,7 +93,7 @@ func runInit(_ *cobra.Command, args []string) error {
 	}
 
 	contextPath := filepath.Join(plumbDir, "context.md")
-	if err := os.WriteFile(contextPath, []byte(contextBody), 0o644); err != nil {
+	if err := os.WriteFile(contextPath, []byte(contextBody), 0o644); err != nil { //nolint:gosec // G306: context.md is a user-edited project file; 0644 is intentional
 		return fmt.Errorf("writing context.md: %w", err)
 	}
 

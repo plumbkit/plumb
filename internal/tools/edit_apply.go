@@ -82,7 +82,7 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	}
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil { //nolint:gosec // G306: user source files are world-readable by convention; 0644 is intentional
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
