@@ -900,7 +900,7 @@ func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 	}
 }
 
-func TestDashTopToolsTablesRenderUnboxedAllTimeAndUptime(t *testing.T) {
+func TestDashTopToolsTablesRenderWidgets(t *testing.T) {
 	RebuildStyles()
 	m := Model{
 		dashLifetimeTopTools: []stats.ToolStat{
@@ -915,25 +915,44 @@ func TestDashTopToolsTablesRenderUnboxedAllTimeAndUptime(t *testing.T) {
 	for _, line := range m.dashTopToolsTables(80) {
 		plain = append(plain, ansiStripForTest(line))
 	}
-	if strings.HasPrefix(plain[0], "╭") || strings.HasPrefix(plain[0], "│") {
-		t.Fatalf("top tools table should be unboxed: %q", plain[0])
+	if !strings.Contains(plain[0], "Top Tools (all time)") || !strings.HasPrefix(plain[0], "╭─") {
+		t.Fatalf("all-time widget top = %q, want framed title", plain[0])
 	}
-	if !strings.HasPrefix(plain[0], "Top Tools (all time)") || !strings.Contains(plain[0], "Tokens") {
-		t.Fatalf("all-time header = %q, want title and columns", plain[0])
+	if !strings.Contains(plain[2], "Tool") || !strings.Contains(plain[2], "Calls") || !strings.Contains(plain[2], "Tokens") {
+		t.Fatalf("all-time header = %q, want compact columns", plain[2])
 	}
-	if !strings.Contains(plain[2], "diagnostics") || !strings.Contains(plain[2], "~442k") {
-		t.Fatalf("all-time row = %q, want diagnostics savings", plain[2])
+	if strings.Contains(plain[2], "Avg ms") || strings.Contains(plain[2], "P95 ms") || strings.Contains(plain[2], "Errors") {
+		t.Fatalf("all-time header kept dense table columns: %q", plain[2])
 	}
-	callsHeaderEnd := strings.Index(plain[0], "Calls") + len("Calls")
-	callsValueEnd := strings.Index(plain[2], "1.8k") + len("1.8k")
+	if !strings.Contains(plain[4], "diagnostics") || !strings.Contains(plain[4], "1.8k") || !strings.Contains(plain[4], "~442k") {
+		t.Fatalf("all-time row = %q, want diagnostics calls and savings", plain[4])
+	}
+	callsHeaderEnd := strings.Index(plain[2], "Calls") + len("Calls")
+	callsValueEnd := strings.Index(plain[4], "1.8k") + len("1.8k")
 	if callsValueEnd != callsHeaderEnd {
-		t.Fatalf("calls column is not right-aligned with header:\n%s\n%s", plain[0], plain[2])
+		t.Fatalf("calls column is not right-aligned with header:\n%s\n%s", plain[2], plain[4])
 	}
-	if !strings.HasPrefix(plain[4], "Top Tools (uptime)") {
-		t.Fatalf("uptime header = %q, want uptime table after blank line", plain[4])
+	if !strings.Contains(plain[8], "Top Tools (uptime)") || !strings.HasPrefix(plain[8], "╭─") {
+		t.Fatalf("uptime widget top = %q, want second framed widget", plain[8])
 	}
-	if !strings.Contains(plain[6], "read_file") || !strings.Contains(plain[6], "12") || !strings.Contains(plain[6], "1") {
-		t.Fatalf("uptime row = %q, want read_file stats", plain[6])
+	if !strings.Contains(plain[10], "Tool") || !strings.Contains(plain[10], "Calls") || !strings.Contains(plain[10], "Errors") {
+		t.Fatalf("uptime header = %q, want compact current-state columns", plain[10])
+	}
+	if !strings.Contains(plain[12], "read_file") || !strings.Contains(plain[12], "12") || !strings.Contains(plain[12], "1") {
+		t.Fatalf("uptime row = %q, want read_file calls and errors", plain[12])
+	}
+}
+
+func TestDashTopToolsTablesRenderSideBySideWhenWide(t *testing.T) {
+	RebuildStyles()
+	m := Model{
+		dashLifetimeTopTools: []stats.ToolStat{{Tool: "diagnostics", Calls: 1800, TokensSaved: 442000}},
+		dashUptimeTopTools:   []stats.ToolStat{{Tool: "read_file", Calls: 12, Errors: 1}},
+	}
+
+	plainTop := ansiStripForTest(m.dashTopToolsTables(140)[0])
+	if !strings.Contains(plainTop, "Top Tools (all time)") || !strings.Contains(plainTop, "╮   ╭─ Top Tools (uptime)") {
+		t.Fatalf("wide top tools should render side by side with three-space gap:\n%s", plainTop)
 	}
 }
 

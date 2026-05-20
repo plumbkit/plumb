@@ -412,14 +412,83 @@ func tokenSavingsBlockRow(tokens int64, groups int) string {
 	return strings.Join(parts, " ")
 }
 
-// dashTopToolsTables renders all-time and uptime tool statistics as full-width tables.
+// dashTopToolsTables renders all-time and uptime tool statistics as dashboard widgets.
 func (m Model) dashTopToolsTables(width int) []string {
-	lines := dashTopToolsTable("Top Tools (all time)", width, m.dashLifetimeTopTools)
-	if hasToolStats(m.dashUptimeTopTools) {
-		lines = append(lines, "")
-		lines = append(lines, dashTopToolsTable("Top Tools (uptime)", width, m.dashUptimeTopTools)...)
+	allTime := dashTopToolsWidget(" Top Tools (all time) ", width-2, m.dashLifetimeTopTools, dashTopToolsAllTime)
+	if !hasToolStats(m.dashUptimeTopTools) {
+		return allTime
 	}
+
+	uptime := dashTopToolsWidget(" Top Tools (uptime) ", width-2, m.dashUptimeTopTools, dashTopToolsUptime)
+	if width >= 112 {
+		outer := (width - dashWidgetGap) / 2
+		leftInner := max(outer-2, 40)
+		rightInner := max(width-dashWidgetGap-outer-2, 40)
+		return joinWidgetRow([][]string{
+			dashTopToolsWidget(" Top Tools (all time) ", leftInner, m.dashLifetimeTopTools, dashTopToolsAllTime),
+			dashTopToolsWidget(" Top Tools (uptime) ", rightInner, m.dashUptimeTopTools, dashTopToolsUptime),
+		})
+	}
+
+	lines := allTime
+	lines = append(lines, "")
+	lines = append(lines, uptime...)
 	return lines
+}
+
+type dashTopToolsWidgetKind int
+
+const (
+	dashTopToolsAllTime dashTopToolsWidgetKind = iota
+	dashTopToolsUptime
+)
+
+func dashTopToolsWidget(title string, inner int, tools []stats.ToolStat, kind dashTopToolsWidgetKind) []string {
+	inner = max(inner, 40)
+	content := dashCompactTopToolsTable(max(inner-6, 20), tools, kind)
+	for i, line := range content {
+		content[i] = "   " + line + "   "
+	}
+	return dashBox(title, inner, content)
+}
+
+func dashCompactTopToolsTable(width int, tools []stats.ToolStat, kind dashTopToolsWidgetKind) []string {
+	const (
+		callsW  = 9
+		metricW = 12
+	)
+	toolW := max(width-callsW-metricW, 12)
+	metricHeader := "Tokens"
+	if kind == dashTopToolsUptime {
+		metricHeader = "Errors"
+	}
+	if len(tools) > 10 {
+		tools = tools[:10]
+	}
+
+	header := HintStyle.Width(toolW).Render("Tool") +
+		HintStyle.Width(callsW).Align(lipgloss.Right).Render("Calls") +
+		HintStyle.Width(metricW).Align(lipgloss.Right).Render(metricHeader)
+	sep := SepStyle.Render(strings.Repeat("╌", width))
+
+	content := []string{header, sep}
+	for _, t := range tools {
+		metric := MutedStyle.Render("—")
+		if kind == dashTopToolsAllTime && t.TokensSaved > 0 {
+			metric = DetailStyle.Render("~" + stats.FormatSavings(int(t.TokensSaved)))
+		}
+		if kind == dashTopToolsUptime && t.Errors > 0 {
+			metric = WarnStyle.Render(fmt.Sprintf("%d", t.Errors))
+		}
+		line := KeyStyle.Width(toolW).Render(truncate(t.Tool, toolW-1)) +
+			DetailStyle.Width(callsW).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
+			lipgloss.NewStyle().Width(metricW).Align(lipgloss.Right).Render(metric)
+		content = append(content, line)
+	}
+	if len(tools) == 0 {
+		content = append(content, MutedStyle.Render("No tool calls recorded yet"))
+	}
+	return content
 }
 
 func hasToolStats(tools []stats.ToolStat) bool {
