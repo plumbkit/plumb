@@ -22,88 +22,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollMsg:
-		m.refresh()
-		if m.showPopup {
-			m.refreshPopupCalls()
-		}
-		if m.currentSection == 3 && m.logInitd {
-			newEntries, newOffset := readNewLogLines(m.logPath, m.logOffset)
-			if len(newEntries) > 0 {
-				m.logOffset = newOffset
-				m.logEntries = append(m.logEntries, newEntries...)
-				if len(m.logEntries) > maxLogEntries {
-					m.logEntries = m.logEntries[len(m.logEntries)-maxLogEntries:]
-				}
-			}
-		}
-		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
-
+		return m.handlePollMsg()
 	case clearQuitMessageMsg:
-		if m.waitingForQuit && m.quitMessageID == msg.id {
-			m.waitingForQuit = false
-		}
-		return m, nil
-
+		return m.handleClearQuitMsg(msg), nil
 	case logDetailCopyResetMsg:
 		m.logDetailCopied = false
 		return m, nil
-
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		if maxLeft := m.maxLeftWidth(); m.leftWidth > maxLeft {
-			m.leftWidth = maxLeft
-		}
-		m.ready = true
-		if newW := max(m.width-8, activityBuckets); newW != m.dashChartWidth {
-			m.dashChartWidth = newW
-			m.refreshDashboard()
-		}
-
+		m = m.handleWindowSizeMsg(msg)
 	case tea.MouseClickMsg:
-		mouse := msg.Mouse()
-		if mouse.Button == tea.MouseLeft {
-			if m.logDetailOpen {
-				return m, nil
-			}
-			if m.sectionMenuOpen {
-				if mouse.X >= 0 && mouse.X < sectionMenuWidth {
-					m.selectSectionMenuAtRow(mouse.Y)
-				} else {
-					m.sectionMenuOpen = false
-				}
-			} else if m.onSectionSelector(mouse.X, mouse.Y) {
-				m.sectionMenuOpen = true
-				m.sectionMenuCursor = m.currentSection
-			} else if m.currentSection == 3 && !m.showHelp {
-				m.selectLogAtBodyRow(mouse.Y - bodyStartRow)
-			} else if m.onDivider(mouse.X) {
-				m.draggingDivider = true
-				m.setLeftWidthFromMouse(mouse.X)
-			} else if m.onSessionsPanel(mouse.X, mouse.Y) {
-				m.selectSessionAtBodyRow(mouse.Y - bodyStartRow)
-			} else if mouse.Y == bodyStartRow && mouse.X > m.leftWidth+1 {
-				relX := mouse.X - m.leftWidth - 3
-				if relX >= 0 {
-					if relX < 13 {
-						m.rightTab = 0
-						m.focusPanel = focusDetails
-					} else if relX < 23 {
-						m.rightTab = 1
-						m.focusPanel = focusToolStats
-					} else if relX < 35 {
-						m.rightTab = 2
-						m.focusPanel = focusStats
-					} else if relX < 51 {
-						m.rightTab = 3
-						m.focusPanel = focusDiagnostics
-					}
-				}
-			} else if mouse.Y > bodyStartRow && mouse.X > m.leftWidth+1 {
-				m.handleRightPanelClick(mouse.Y - bodyStartRow + m.rightScroll)
-			}
-		}
-
+		m.handleLeftMouseClick(msg.Mouse())
 	case tea.MouseWheelMsg:
 		mouse := msg.Mouse()
 		switch mouse.Button {
@@ -112,30 +40,131 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 		case tea.MouseWheelDown:
 			m.handleMouseWheel(mouse, 3)
 		}
-
 	case tea.MouseMotionMsg:
 		mouse := msg.Mouse()
 		if m.draggingDivider && mouse.Button == tea.MouseLeft {
 			m.setLeftWidthFromMouse(mouse.X)
 		}
-
 	case tea.MouseReleaseMsg:
 		m.draggingDivider = false
-
 	case tea.KeyPressMsg:
-		if m.showPopup {
-			return m.handlePopupKey(msg)
-		}
-		if updated, cmd, handled := m.handleDashboardKey(msg); handled {
-			return updated, cmd
-		}
-		if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
-			return m.handleLogSectionKey(msg)
-		}
-		return m.handleMainKey(msg)
+		return m.handleKeyMsg(msg)
 	}
-
 	return m, nil
+}
+
+func (m Model) handlePollMsg() (Model, tea.Cmd) {
+	m.refresh()
+	if m.showPopup {
+		m.refreshPopupCalls()
+	}
+	if m.currentSection == 3 && m.logInitd {
+		newEntries, newOffset := readNewLogLines(m.logPath, m.logOffset)
+		if len(newEntries) > 0 {
+			m.logOffset = newOffset
+			m.logEntries = append(m.logEntries, newEntries...)
+			if len(m.logEntries) > maxLogEntries {
+				m.logEntries = m.logEntries[len(m.logEntries)-maxLogEntries:]
+			}
+		}
+	}
+	return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return pollMsg{} })
+}
+
+func (m Model) handleClearQuitMsg(msg clearQuitMessageMsg) Model {
+	if m.waitingForQuit && m.quitMessageID == msg.id {
+		m.waitingForQuit = false
+	}
+	return m
+}
+
+func (m Model) handleWindowSizeMsg(msg tea.WindowSizeMsg) Model {
+	m.width = msg.Width
+	m.height = msg.Height
+	if maxLeft := m.maxLeftWidth(); m.leftWidth > maxLeft {
+		m.leftWidth = maxLeft
+	}
+	m.ready = true
+	if newW := max(m.width-8, activityBuckets); newW != m.dashChartWidth {
+		m.dashChartWidth = newW
+		m.refreshDashboard()
+	}
+	return m
+}
+
+func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
+	if mouse.Button != tea.MouseLeft {
+		return
+	}
+	if m.logDetailOpen {
+		return
+	}
+	if m.sectionMenuOpen {
+		if mouse.X >= 0 && mouse.X < sectionMenuWidth {
+			m.selectSectionMenuAtRow(mouse.Y)
+		} else {
+			m.sectionMenuOpen = false
+		}
+		return
+	}
+	if m.onSectionSelector(mouse.X, mouse.Y) {
+		m.sectionMenuOpen = true
+		m.sectionMenuCursor = m.currentSection
+		return
+	}
+	if m.currentSection == 3 && !m.showHelp {
+		m.selectLogAtBodyRow(mouse.Y - bodyStartRow)
+		return
+	}
+	if m.onDivider(mouse.X) {
+		m.draggingDivider = true
+		m.setLeftWidthFromMouse(mouse.X)
+		return
+	}
+	if m.onSessionsPanel(mouse.X, mouse.Y) {
+		m.selectSessionAtBodyRow(mouse.Y - bodyStartRow)
+		return
+	}
+	if mouse.Y == bodyStartRow && mouse.X > m.leftWidth+1 {
+		m.handleTabBarClick(mouse.X)
+		return
+	}
+	if mouse.Y > bodyStartRow && mouse.X > m.leftWidth+1 {
+		m.handleRightPanelClick(mouse.Y - bodyStartRow + m.rightScroll)
+	}
+}
+
+func (m *Model) handleTabBarClick(x int) {
+	relX := x - m.leftWidth - 3
+	if relX < 0 {
+		return
+	}
+	if relX < 13 {
+		m.rightTab = 0
+		m.focusPanel = focusDetails
+	} else if relX < 23 {
+		m.rightTab = 1
+		m.focusPanel = focusToolStats
+	} else if relX < 35 {
+		m.rightTab = 2
+		m.focusPanel = focusStats
+	} else if relX < 51 {
+		m.rightTab = 3
+		m.focusPanel = focusDiagnostics
+	}
+}
+
+func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.showPopup {
+		return m.handlePopupKey(msg)
+	}
+	if updated, cmd, handled := m.handleDashboardKey(msg); handled {
+		return updated, cmd
+	}
+	if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
+		return m.handleLogSectionKey(msg)
+	}
+	return m.handleMainKey(msg)
 }
 
 func (m *Model) enforceScrollBounds() {
