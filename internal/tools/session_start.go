@@ -86,112 +86,140 @@ func (*SessionStart) Description() string {
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
 func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	ws, err := t.resolveSessionWorkspace(ctx, raw)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	t.writeSessionIdentity(&sb, ws)
+	writeSessionContext(&sb, ws)
+	writeSessionCommits(&sb, ws)
+	t.writeSessionRecentFiles(&sb, ws)
+	writeSessionMemories(&sb, ws)
+	writeSessionStats(&sb, ws)
+	t.writeSessionGuidance(&sb)
+	t.writeSessionDiagnostics(&sb)
+	return sb.String(), nil
+}
+
+func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Workspace string `json:"workspace"`
 	}
 	_ = json.Unmarshal(raw, &a)
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" && t.roots != nil {
-		// Roots/list fallback: ask the MCP client for its workspace roots.
 		ws = t.roots(ctx)
 	}
 	if ws == "" {
-		// Last-resort fallback: walk up from cwd looking for a project marker.
 		ws = coldStartWorkspace()
 	}
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
+	return ws, nil
+}
 
-	var sb strings.Builder
-
-	// ── 1. Workspace identity ─────────────────────────────────────────────
-	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws string) {
+	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
 	if lang := detectLanguage(ws); lang != "" {
-		fmt.Fprintf(&sb, "Language: %s\n", lang)
+		fmt.Fprintf(sb, "Language: %s\n", lang)
 	}
 	if branch := gitBranch(ws); branch != "" {
-		fmt.Fprintf(&sb, "Branch:   %s\n", branch)
+		fmt.Fprintf(sb, "Branch:   %s\n", branch)
 	}
 	sb.WriteString("\n")
+}
 
-	// ── 2. context.md (first N lines) ─────────────────────────────────────
-	ctxPath := filepath.Join(ws, ".plumb", "context.md")
-	if data, err := os.ReadFile(ctxPath); err == nil {
-		lines := strings.Split(string(data), "\n")
-		truncated := false
-		if len(lines) > contextMDLines {
-			lines = lines[:contextMDLines]
-			truncated = true
-		}
-		sb.WriteString("## Project context (.plumb/context.md)\n\n")
-		sb.WriteString(strings.Join(lines, "\n"))
-		if truncated {
-			fmt.Fprintf(&sb, "\n… (truncated at %d lines — use read_file to see the rest)\n", contextMDLines)
-		}
-		sb.WriteString("\n\n")
+func writeSessionContext(sb *strings.Builder, ws string) {
+	data, err := os.ReadFile(filepath.Join(ws, ".plumb", "context.md"))
+	if err != nil {
+		return
 	}
+	lines := strings.Split(string(data), "\n")
+	truncated := len(lines) > contextMDLines
+	if truncated {
+		lines = lines[:contextMDLines]
+	}
+	sb.WriteString("## Project context (.plumb/context.md)\n\n")
+	sb.WriteString(strings.Join(lines, "\n"))
+	if truncated {
+		fmt.Fprintf(sb, "\n… (truncated at %d lines — use read_file to see the rest)\n", contextMDLines)
+	}
+	sb.WriteString("\n\n")
+}
 
-	// ── 3. Recent commits ─────────────────────────────────────────────────
-	if commits := gitRecentCommits(ws, 3); len(commits) > 0 {
-		sb.WriteString("## Recent commits\n\n")
-		for _, c := range commits {
-			fmt.Fprintf(&sb, "- %s\n", c)
-		}
-		sb.WriteString("\n")
+func writeSessionCommits(sb *strings.Builder, ws string) {
+	commits := gitRecentCommits(ws, 3)
+	if len(commits) == 0 {
+		return
 	}
+	sb.WriteString("## Recent commits\n\n")
+	for _, c := range commits {
+		fmt.Fprintf(sb, "- %s\n", c)
+	}
+	sb.WriteString("\n")
+}
 
-	// ── 4. Recently-modified files ────────────────────────────────────────
-	// fsguard skips the walk if ws is a macOS-protected root (e.g. $HOME,
-	// $HOME/Documents) — touching one of those would surface a TCC prompt
-	// attributed to plumb. The rest of session_start still works without
-	// this section.
-	refuse := false
-	if t.refuseFn != nil {
-		refuse = t.refuseFn()
-	}
+// writeSessionRecentFiles lists the 5 most recently modified files.
+// Skips the walk if fsguard identifies ws as a protected macOS root (e.g.
+// $HOME) — touching those would surface a TCC prompt attributed to plumb.
+func (t *SessionStart) writeSessionRecentFiles(sb *strings.Builder, ws string) {
+	refuse := t.refuseFn != nil && t.refuseFn()
 	if skip, reason := fsguard.RefuseWalk(ws, refuse); skip {
 		slog.Info("session_start: skipping recent-files walk", "workspace", ws, "reason", reason)
-	} else if files := recentlyModifiedFiles(ws, 5); len(files) > 0 {
-		sb.WriteString("## Recently modified files\n\n")
-		for _, f := range files {
-			fmt.Fprintf(&sb, "- %s\n", f)
-		}
-		sb.WriteString("\n")
+		return
 	}
-
-	// ── 5. Memories ───────────────────────────────────────────────────────
-	if mems, err := memory.List(ws); err == nil {
-		if len(mems) == 0 {
-			sb.WriteString("## Memories\n\nNone yet. Use write_memory to save project notes.\n\n")
-		} else {
-			fmt.Fprintf(&sb, "## Memories (%d)\n\n", len(mems))
-			for _, m := range mems {
-				fmt.Fprintf(&sb, "- **%s**", m.Name)
-				if m.Description != "" {
-					fmt.Fprintf(&sb, " — %s", m.Description)
-				}
-				fmt.Fprintf(&sb, " (%d bytes)\n", m.SizeBytes)
-			}
-			sb.WriteString("\nUse read_memory to load any of these.\n\n")
-		}
+	files := recentlyModifiedFiles(ws, 5)
+	if len(files) == 0 {
+		return
 	}
-
-	// ── 6. Recent tool usage stats ────────────────────────────────────────
-	// Use global stats DB filtered by workspace.
-	if db, err := stats.OpenReadOnly(); err == nil && db != nil {
-		defer db.Close()
-		if toolStats, err := db.Summary(stats.Filter{Workspace: ws}); err == nil && len(toolStats) > 0 {
-			sb.WriteString("## Most-used tools (this workspace)\n\n")
-			limit := min(len(toolStats), 5)
-			for _, s := range toolStats[:limit] {
-				fmt.Fprintf(&sb, "- %s: %d calls, avg %dms\n", s.Tool, s.Calls, int64(s.AvgMs))
-			}
-			sb.WriteString("\n")
-		}
+	sb.WriteString("## Recently modified files\n\n")
+	for _, f := range files {
+		fmt.Fprintf(sb, "- %s\n", f)
 	}
+	sb.WriteString("\n")
+}
 
-	// ── 7. Tool guidance (client-specific) ──────────────────────────────
+func writeSessionMemories(sb *strings.Builder, ws string) {
+	mems, err := memory.List(ws)
+	if err != nil {
+		return
+	}
+	if len(mems) == 0 {
+		sb.WriteString("## Memories\n\nNone yet. Use write_memory to save project notes.\n\n")
+		return
+	}
+	fmt.Fprintf(sb, "## Memories (%d)\n\n", len(mems))
+	for _, m := range mems {
+		fmt.Fprintf(sb, "- **%s**", m.Name)
+		if m.Description != "" {
+			fmt.Fprintf(sb, " — %s", m.Description)
+		}
+		fmt.Fprintf(sb, " (%d bytes)\n", m.SizeBytes)
+	}
+	sb.WriteString("\nUse read_memory to load any of these.\n\n")
+}
+
+func writeSessionStats(sb *strings.Builder, ws string) {
+	db, err := stats.OpenReadOnly()
+	if err != nil || db == nil {
+		return
+	}
+	defer db.Close()
+	toolStats, err := db.Summary(stats.Filter{Workspace: ws})
+	if err != nil || len(toolStats) == 0 {
+		return
+	}
+	sb.WriteString("## Most-used tools (this workspace)\n\n")
+	limit := min(len(toolStats), 5)
+	for _, s := range toolStats[:limit] {
+		fmt.Fprintf(sb, "- %s: %d calls, avg %dms\n", s.Tool, s.Calls, int64(s.AvgMs))
+	}
+	sb.WriteString("\n")
+}
+
+func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 	switch {
 	case isClaudeCode(t.clientNameFn):
 		sb.WriteString("## Tool guidance (Claude Code)\n\n")
@@ -220,26 +248,27 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		sb.WriteString("- **diagnostics** — live compile errors and warnings from the language server.\n\n")
 		sb.WriteString("If a plumb tool fails, retry or check `daemon_info`. Do not attempt native shell commands — they are unavailable.\n\n")
 	}
+}
 
-	// ── 8. Active diagnostics (errors + warnings only) ────────────────────
-	if t.diag != nil {
-		all := t.diag.AllDiagnostics()
-		filtered := make(map[string][]protocol.Diagnostic)
-		for uri, diags := range all {
-			for _, d := range diags {
-				if d.Severity <= protocol.SevWarning {
-					filtered[uri] = append(filtered[uri], d)
-				}
+func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
+	if t.diag == nil {
+		return
+	}
+	all := t.diag.AllDiagnostics()
+	filtered := make(map[string][]protocol.Diagnostic)
+	for uri, diags := range all {
+		for _, d := range diags {
+			if d.Severity <= protocol.SevWarning {
+				filtered[uri] = append(filtered[uri], d)
 			}
 		}
-		if len(filtered) > 0 {
-			sb.WriteString("## Active diagnostics (errors and warnings)\n\n")
-			sb.WriteString(formatDiagnostics(filtered))
-			sb.WriteString("\n")
-		}
 	}
-
-	return sb.String(), nil
+	if len(filtered) == 0 {
+		return
+	}
+	sb.WriteString("## Active diagnostics (errors and warnings)\n\n")
+	sb.WriteString(formatDiagnostics(filtered))
+	sb.WriteString("\n")
 }
 
 // detectLanguage returns a human-readable language label by probing for
