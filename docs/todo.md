@@ -177,6 +177,42 @@ Add `ResyncIntervalMinutes` config support (the field already exists in `Topolog
 
 ---
 
+**8. Indexer: drain coalesces across different files (known trade-off).**
+
+`drain()` discards all queued ops and returns only the last one. Within the same file this is correct (only the latest write matters). Across different files it is an unintentional drop — if three different files are written in rapid succession, only the last file's upsert is processed; the other two wait until the next write to those files or the next attach-time resync.
+
+Fix: replace `drain` with a per-path coalescing map that keeps the last op per unique path, then processes all of them before returning:
+
+```go
+func (idx *Indexer) drain(initial indexOp) []indexOp {
+    seen := map[string]indexOp{initial.path: initial}
+    for {
+        select {
+        case op := <-idx.queue:
+            seen[op.path] = op // last write per path wins
+        default:
+            ops := make([]indexOp, 0, len(seen))
+            for _, op := range seen {
+                ops = append(ops, op)
+            }
+            return ops
+        }
+    }
+}
+```
+
+`backgroundWorker` then iterates the returned slice. Phase 2 item — not urgent because the on-attach resync recovers the index, and the current coalescing is correct for the common single-file write case.
+
+**9. isStale: uses mtime only, not hash (known trade-off).**
+
+`isStale` compares `mtime_ns` but ignores `content_hash` despite it being stored. A file restored from backup with an earlier mtime and different content won't be re-indexed until its mtime changes.
+
+Fix: change the staleness check to `dbMtime != info.ModTime().UnixNano() || dbHash != hash`. This requires computing the hash before the staleness check (currently it's computed after). Restructure `processUpsert` to: `stat → read → hash → isStale(mtime || hash) → extract → persist`.
+
+Phase 2 item — low impact for typical developer workflows where mtime is a reliable proxy for content changes.
+
+---
+
 **Definition of done — Phase 2.**
 
 1. DoD-6 and DoD-7 benchmarks/stress tests pass under `-race`.
@@ -186,7 +222,9 @@ Add `ResyncIntervalMinutes` config support (the field already exists in `Topolog
 5. LSP fallback wired for `list_symbols`, `find_symbol`, `workspace_symbols`; fallback is explicit in response.
 6. TUI sessions panel shows topology state row; `plumb doctor` topology check passes.
 7. Periodic resync wired when `resync_interval_minutes > 0`.
-8. `make verify` stays green; golangci-lint 0 issues; all extractor packages have `_test.go` files.
+8. `drain` coalescing fixed to retain the last op per unique path across all queued files.
+9. `isStale` extended to compare content hash in addition to mtime.
+10. `make verify` stays green; golangci-lint 0 issues; all extractor packages have `_test.go` files.
 
 **Watch out for.**
 

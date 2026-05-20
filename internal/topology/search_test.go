@@ -124,6 +124,72 @@ func TestSearch_KindFilter(t *testing.T) {
 	}
 }
 
+func TestSearch_PopulatesStartLine(t *testing.T) {
+	// Verifies the JOIN query populates StartLine/EndLine without a separate nodeByID call.
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "sl.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "lines.go")
+	insertNodeWithFTS(t, db, fileID, "lines.go", Node{
+		Kind: KindFunction, Name: "MyFunc", Language: "go", StartLine: 42, EndLine: 55,
+	})
+
+	results, err := Search(context.Background(), db, "MyFunc", SearchOpts{Limit: 5})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if results[0].Node.StartLine != 42 {
+		t.Errorf("StartLine = %d, want 42", results[0].Node.StartLine)
+	}
+	if results[0].Node.EndLine != 55 {
+		t.Errorf("EndLine = %d, want 55", results[0].Node.EndLine)
+	}
+}
+
+func TestMatchField_Name(t *testing.T) {
+	got := matchField("HandleRequest", "HandleRequest", "handle request", "", "", "")
+	if got != "name" {
+		t.Errorf("matchField = %q, want %q", got, "name")
+	}
+}
+
+func TestMatchField_Signature(t *testing.T) {
+	// Query term appears only in signature, not in name.
+	got := matchField("context.Context", "Run", "run", "", "func Run(ctx context.Context) error", "")
+	if got != "signature" {
+		t.Errorf("matchField = %q, want %q", got, "signature")
+	}
+}
+
+func TestMatchField_Docstring(t *testing.T) {
+	// Query term appears only in docstring, not in name or signature.
+	got := matchField("manages concurrent", "Pool", "pool", "", "", "Pool manages concurrent access to workspace stores")
+	if got != "docstring" {
+		t.Errorf("matchField = %q, want %q", got, "docstring")
+	}
+}
+
+func TestMatchField_Qualified(t *testing.T) {
+	// "topology.Store" as one term doesn't appear in name ("store") or tokens ("store"),
+	// but does appear in qualified ("topology.Store") — should return "qualified".
+	got := matchField("topology.Store", "Store", "store", "topology.Store", "", "")
+	if got != "qualified" {
+		t.Errorf("matchField = %q, want %q", got, "qualified")
+	}
+	// Single token "topology" is absent from name/tokens but present in qualified.
+	got2 := matchField("topology", "Store", "store", "topology.Store", "", "")
+	if got2 != "qualified" {
+		t.Errorf("matchField = %q, want %q", got2, "qualified")
+	}
+}
+
 func TestSearch_RankOrder(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "rank.db"))
