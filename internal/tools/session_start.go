@@ -90,8 +90,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	lang := detectLanguage(ws)
+	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws)
+	t.writeSessionIdentity(&sb, ws, lang)
+	t.writeSessionRecommendedStart(&sb, hasErrors, lang)
 	writeSessionContext(&sb, ws)
 	writeSessionCommits(&sb, ws)
 	t.writeSessionRecentFiles(&sb, ws)
@@ -120,15 +123,49 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	return ws, nil
 }
 
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws string) {
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
-	if lang := detectLanguage(ws); lang != "" {
+	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)
 	}
 	if branch := gitBranch(ws); branch != "" {
 		fmt.Fprintf(sb, "Branch:   %s\n", branch)
 	}
+	refuse := t.refuseFn != nil && t.refuseFn()
+	if skip, _ := fsguard.RefuseWalk(ws, refuse); !skip {
+		if scale := workspaceScale(ws, lang); scale != "" {
+			fmt.Fprintf(sb, "Scale:    %s\n", scale)
+		}
+	}
 	sb.WriteString("\n")
+}
+
+func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErrors bool, lang string) {
+	sb.WriteString("## Recommended first step\n\n")
+	switch {
+	case hasErrors:
+		sb.WriteString("Active errors detected — start with `diagnostics` to review them.\n\n")
+	case t.diag != nil && lang != "":
+		sb.WriteString("LSP is available — use `workspace_symbols` to survey the codebase.\n\n")
+	case lang != "":
+		sb.WriteString("No language server attached — use `list_files` to explore, then `search_in_files` to find relevant code.\n\n")
+	default:
+		sb.WriteString("Use `list_files` to explore the codebase.\n\n")
+	}
+}
+
+func (t *SessionStart) hasActiveDiagnosticErrors() bool {
+	if t.diag == nil {
+		return false
+	}
+	for _, diags := range t.diag.AllDiagnostics() {
+		for _, d := range diags {
+			if d.Severity == protocol.SevError {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func writeSessionContext(sb *strings.Builder, ws string) {
@@ -307,6 +344,78 @@ func partitionColdCacheGoMod(byURI map[string][]protocol.Diagnostic) (real map[s
 		}
 	}
 	return real, coldCount
+}
+
+// workspaceScale returns a human-readable file-count summary for the workspace
+// identity section, e.g. "~342 files (287 Go)".
+func workspaceScale(ws, lang string) string {
+	exts, label := langFileProfile(lang)
+	total, langCount := countWorkspaceFiles(ws, exts)
+	if total == 0 {
+		return ""
+	}
+	if label != "" && langCount > 0 {
+		return fmt.Sprintf("~%d files (%d %s)", total, langCount, label)
+	}
+	return fmt.Sprintf("~%d files", total)
+}
+
+// langFileProfile returns the primary source-file extensions and a short
+// display label for a detected language name.
+func langFileProfile(lang string) (exts []string, label string) {
+	switch lang {
+	case "Go":
+		return []string{".go"}, "Go"
+	case "Python":
+		return []string{".py"}, "Python"
+	case "JavaScript/TypeScript":
+		return []string{".ts", ".js", ".tsx", ".jsx"}, "JS/TS"
+	case "Rust":
+		return []string{".rs"}, "Rust"
+	case "Java (Maven)":
+		return []string{".java"}, "Java"
+	case "Java/Kotlin (Gradle)":
+		return []string{".java", ".kt"}, "Java/Kotlin"
+	case "C/C++ (CMake)":
+		return []string{".c", ".cpp", ".cc", ".h", ".hpp"}, "C/C++"
+	case "Elixir":
+		return []string{".ex", ".exs"}, "Elixir"
+	case "Ruby":
+		return []string{".rb"}, "Ruby"
+	default:
+		return nil, ""
+	}
+}
+
+// countWorkspaceFiles walks ws and returns the total file count and the count
+// of files matching the given extensions. Skips .git, node_modules, vendor,
+// dist, build, and hidden directories.
+func countWorkspaceFiles(ws string, exts []string) (total, langCount int) {
+	extSet := make(map[string]bool, len(exts))
+	for _, e := range exts {
+		extSet[e] = true
+	}
+	skipDirs := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
+	}
+	_ = filepath.Walk(ws, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			n := info.Name()
+			if skipDirs[n] || (strings.HasPrefix(n, ".") && path != ws) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		total++
+		if extSet[filepath.Ext(path)] {
+			langCount++
+		}
+		return nil
+	})
+	return total, langCount
 }
 
 // detectLanguage returns a human-readable language label by probing for

@@ -217,6 +217,25 @@ CQ-6's pre-commit hook item (ensuring the hook invokes `golangci-lint run --fix`
 
 ## Improvements
 
+### `session_start` orientation — recommended first step, workspace scale
+
+**Completed in:** 0.7.1
+**Original priority:** medium-high
+
+Three additive fields added to `session_start` output (`internal/tools/session_start.go`):
+
+1. **`workspace_scale`** — approximate total file count and primary-language file count added to the identity section (e.g. `Scale: ~342 files (287 Go)`). Computed by `countWorkspaceFiles` (same skip-dirs contract as `recentlyModifiedFiles`). Respects the `fsguard.RefuseWalk` guard so home-root sessions do not trigger TCC prompts. Language extensions derived from `langFileProfile` (nine language profiles).
+
+2. **`recommended_start`** — a one-sentence "best first move" hint emitted immediately after the identity section where agents see it first. Decision tree: active errors detected → `diagnostics`; LSP available (non-nil diagnostics source) with language resolved → `workspace_symbols`; language resolved but no LSP → `list_files` + `search_in_files`; default → `list_files`.
+
+3. **Memory descriptions** — already present in 0.6.5. Verified that `writeSessionMemories` surfaces each memory's frontmatter description inline so agents are nudged to read relevant ones without reading the full body.
+
+`Execute` now calls `detectLanguage` once and precomputes `hasActiveDiagnosticErrors` (errors only, not warnings) so both new sections share the same values without duplicate work. `writeSessionIdentity` signature changed to accept precomputed `lang`.
+
+Unit tests added: `TestSessionStart_RecommendedFirstStep` (5 sub-cases covering all hint branches, including warning-only diags hitting the LSP-available path) and `TestSessionStart_WorkspaceScale` (4-file workspace with 2 Go files, asserts `Scale:` and `Go` appear in output).
+
+---
+
 ### Claude Desktop: plumb as the *only* tool surface
 
 **Completed in:** 0.6.7

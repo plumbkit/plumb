@@ -867,35 +867,6 @@ The `internal/stats/db.go` file contains a hand-rolled SQLite migration system (
 
 ---
 
-### `session_start` orientation — richer entry-point guidance for agents
-
-**Priority:** medium-high — first call shapes the entire session quality.
-**Effort:** Small. Additive changes to `session_start.go` response text; no new infrastructure.
-**Status:** Partial. Items 1, 3, 4 remain. (Item 2 — Claude Code tool guidance — shipped in 0.6.5; see `docs/todo-to-review.md`.)
-
-**The problem.**
-
-`session_start` currently returns: workspace, language, branch, recent commits, recently-modified files, memories, top-5 tool stats, active diagnostics, and (for Claude Code) a tool guidance section. That is a solid orientation packet, but it leaves several gaps:
-
-1. **No suggested next tool.** An agent arriving at an unfamiliar codebase has no signal for "start with `workspace_symbols` to discover structure" vs "start with `list_symbols` on a specific file" vs "start with `search_in_files`". The session packet could include a short recommended-first-step suggestion based on what it knows: if recent commits modified specific files, suggest examining those files; if the language is resolved and LSP is up, suggest `workspace_symbols`; if LSP is unavailable, suggest `list_files`.
-3. **No summary of available memory.** If the workspace has saved memories, the packet mentions them by name but does not surface their content. An agent that doesn't read memories in the first turn tends not to read them at all.
-4. **No workspace scale signal.** File count, rough codebase size, and primary language file count would help agents calibrate whether to do broad workspace searches or narrow file-level exploration.
-
-**Definition of done:**
-
-1. `session_start` response includes a `recommended_start` field: one sentence explaining the best first move given current workspace state.
-2. If the workspace has memories, append a summary of each memory's description (not full body) to prompt the agent to read relevant ones.
-3. Add a `workspace_scale` field: approximate file count and primary-language file count (from `list_files` result or cached filesystem stat).
-4. All new fields are additive — existing callers that ignore unknown fields are unaffected.
-5. Unit-tested with mock workspace state; integration-tested against a real plumb session.
-
-**Watch out for:**
-
-- `session_start` is already the largest response in a typical session. New fields must be concise — no prose paragraphs, no redundant explanations. Structured lists, not narrative.
-- The `tool_guidance` block should not be generated for every client type on every call — gate it behind `clientInfo.name` and make it suppressible via config for users who want a minimal response.
-
----
-
 ### Java adapter (jdtls) — multi-OS polish and CI hardening
 
 **Priority:** medium — validated first version, but still needs cross-platform polish.

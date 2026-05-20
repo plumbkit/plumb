@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -105,6 +107,114 @@ func TestSessionStart_ColdCacheGoModDiagnostics(t *testing.T) {
 				t.Errorf("wantReal=%v got=%v\noutput:\n%s", tc.wantReal, hasReal, out)
 			}
 		})
+	}
+}
+
+func TestSessionStart_RecommendedFirstStep(t *testing.T) {
+	// writes a minimal go.mod so detectLanguage returns "Go" for the temp workspace.
+	makeGoWorkspace := func(t *testing.T) string {
+		t.Helper()
+		ws := t.TempDir()
+		if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module test\ngo 1.21\n"), 0o644); err != nil {
+			t.Fatalf("write go.mod: %v", err)
+		}
+		return ws
+	}
+
+	t.Run("active errors suggest diagnostics", func(t *testing.T) {
+		ws := makeGoWorkspace(t)
+		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
+			"file:///ws/main.go": {makeDiag(0, 0, "undefined: foo", protocol.SevError)},
+		}}
+		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "Active errors detected") {
+			t.Errorf("want 'Active errors detected' in output\n%s", out)
+		}
+	})
+
+	t.Run("LSP available no errors suggests workspace_symbols", func(t *testing.T) {
+		ws := makeGoWorkspace(t)
+		diag := &stubDiagnostics{all: nil}
+		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "workspace_symbols") {
+			t.Errorf("want 'workspace_symbols' in output\n%s", out)
+		}
+	})
+
+	t.Run("no LSP with language suggests list_files", func(t *testing.T) {
+		ws := makeGoWorkspace(t)
+		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "list_files") {
+			t.Errorf("want 'list_files' in output\n%s", out)
+		}
+	})
+
+	t.Run("no LSP no language uses default", func(t *testing.T) {
+		ws := t.TempDir()
+		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "list_files") {
+			t.Errorf("want 'list_files' in output\n%s", out)
+		}
+	})
+
+	t.Run("warning-only diags still suggest workspace_symbols", func(t *testing.T) {
+		ws := makeGoWorkspace(t)
+		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
+			"file:///ws/main.go": {makeDiag(1, 0, "unused variable", protocol.SevWarning)},
+		}}
+		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "workspace_symbols") {
+			t.Errorf("want 'workspace_symbols' (not error path) in output\n%s", out)
+		}
+	})
+}
+
+func TestSessionStart_WorkspaceScale(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module test\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "util.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write util.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" })
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// 4 files total, 2 Go (.go) — go.mod is not a .go file
+	if !strings.Contains(out, "Scale:") {
+		t.Errorf("want 'Scale:' in output\n%s", out)
+	}
+	if !strings.Contains(out, "Go") {
+		t.Errorf("want 'Go' in Scale line\n%s", out)
 	}
 }
 
