@@ -68,73 +68,99 @@ type listFilesArgs struct {
 }
 
 func (t *ListFiles) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+	a, err := parseListFilesArgs(raw)
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Clean(resolvePath(a.Root, t.ws))
+	paths, err := listFilesWalk(root, a)
+	if err != nil {
+		return "", err
+	}
+	return formatListFilesResult(paths, root, a), nil
+}
+
+func parseListFilesArgs(raw json.RawMessage) (listFilesArgs, error) {
 	var a listFilesArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("list_files: invalid arguments: %w", err)
+		return a, fmt.Errorf("list_files: invalid arguments: %w", err)
 	}
+	return a, nil
+}
 
-	root := filepath.Clean(resolvePath(a.Root, t.ws))
-
+func listFilesWalk(root string, a listFilesArgs) ([]string, error) {
 	maxDepth := 8
 	if a.MaxDepth != nil {
 		maxDepth = *a.MaxDepth
 	}
-
-	var paths []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-
-		name := d.Name()
-		rel, _ := filepath.Rel(root, path)
-		depth := strings.Count(rel, string(filepath.Separator))
-
-		if d.IsDir() {
-			if path == root {
-				return nil
-			}
-			if !a.IncludeHidden && strings.HasPrefix(name, ".") {
-				return filepath.SkipDir
-			}
-			if excludedDirs[name] {
-				return filepath.SkipDir
-			}
-			if depth+1 >= maxDepth {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if !a.IncludeHidden && strings.HasPrefix(name, ".") {
-			return nil
-		}
-
-		if a.Pattern != "" {
-			matched, err := filepath.Match(a.Pattern, name)
-			if err != nil {
-				return fmt.Errorf("invalid pattern %q: %w", a.Pattern, err)
-			}
-			if !matched {
-				return nil
-			}
-		}
-
-		paths = append(paths, rel)
-		return nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("list_files: walking %s: %w", root, err)
+	w := &listFilesWalker{root: root, maxDepth: maxDepth, a: a}
+	if err := filepath.WalkDir(root, w.visit); err != nil {
+		return nil, fmt.Errorf("list_files: walking %s: %w", root, err)
 	}
+	return w.paths, nil
+}
 
+type listFilesWalker struct {
+	root     string
+	maxDepth int
+	a        listFilesArgs
+	paths    []string
+}
+
+func (w *listFilesWalker) visit(path string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return nil // skip unreadable entries
+	}
+	name := d.Name()
+	rel, _ := filepath.Rel(w.root, path)
+	depth := strings.Count(rel, string(filepath.Separator))
+	if d.IsDir() {
+		return w.visitDir(path, name, depth)
+	}
+	return w.visitFile(name, rel)
+}
+
+func (w *listFilesWalker) visitDir(path, name string, depth int) error {
+	if path == w.root {
+		return nil
+	}
+	if !w.a.IncludeHidden && strings.HasPrefix(name, ".") {
+		return filepath.SkipDir
+	}
+	if excludedDirs[name] {
+		return filepath.SkipDir
+	}
+	if depth+1 >= w.maxDepth {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func (w *listFilesWalker) visitFile(name, rel string) error {
+	if !w.a.IncludeHidden && strings.HasPrefix(name, ".") {
+		return nil
+	}
+	if w.a.Pattern != "" {
+		matched, err := filepath.Match(w.a.Pattern, name)
+		if err != nil {
+			return fmt.Errorf("invalid pattern %q: %w", w.a.Pattern, err)
+		}
+		if !matched {
+			return nil
+		}
+	}
+	w.paths = append(w.paths, rel)
+	return nil
+}
+
+func formatListFilesResult(paths []string, root string, a listFilesArgs) string {
 	if len(paths) == 0 {
 		msg := fmt.Sprintf("No files found under %s", root)
 		if a.Pattern != "" {
 			msg += fmt.Sprintf(" matching %q", a.Pattern)
 		}
-		return msg + ".", nil
+		return msg + "."
 	}
-
 	var sb strings.Builder
 	label := fmt.Sprintf("%d file(s)", len(paths))
 	if a.Pattern != "" {
@@ -144,5 +170,5 @@ func (t *ListFiles) Execute(_ context.Context, raw json.RawMessage) (string, err
 	for _, p := range paths {
 		sb.WriteString(p + "\n")
 	}
-	return sb.String(), nil
+	return sb.String()
 }
