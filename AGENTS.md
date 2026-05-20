@@ -297,8 +297,50 @@ Pyright is the worked example.
 - **Concurrency contract** stated in doc comments on every type.
 - **No `init()` doing real work.** Wire dependencies in constructors.
 - **No globals** except package-level style vars in `internal/tui/styles.go` (rebuilt, not stateful) and the `pathLocks` map in `internal/tools/file_write_helpers.go` (process-global by design).
-- **Max ~400 lines per file.** Split if it grows.
+- **Max ~400 lines per file.** Split if it grows. Exception allowlist — files where a single unit is the correct design and splitting harms readability: `internal/lsp/protocol/types.go` (protocol type catalogue mirroring the LSP spec). No other file qualifies without explicit justification added here.
 - **Comments only when the WHY is non-obvious.** No what-comments.
+- **Gocyclo-15 contract.** No first-party non-test function may have cyclomatic complexity above 15. Functions that exceed the gate must be decomposed before merging. Run `golangci-lint run` to check — CI enforces.
+
+## Tool implementation pattern
+
+Every `Tool.Execute()` must be a thin orchestrator over four named, individually-testable steps. This is the required pattern — PRs that add a monolithic `Execute()` are non-conforming.
+
+```go
+func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+    args, err := parseFooArgs(raw)        // JSON decode + shape validation only
+    if err != nil { return "", err }
+    if err := args.validate(); err != nil { return "", err }
+    res, err := t.run(ctx, args)          // domain logic — no formatting
+    if err != nil { return "", err }
+    return formatFooResult(res), nil      // presentation — no logic
+}
+```
+
+**Before (monolithic):**
+
+```go
+func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+    var a struct { Pattern string; Path string; MaxResults int /* ... */ }
+    json.Unmarshal(raw, &a)
+    if a.Pattern == "" { return "", fmt.Errorf("pattern required") }
+    if a.MaxResults == 0 { a.MaxResults = 500 }
+    root := resolvePath(a.Path, t.ws)
+    // 80 lines of walk, match, format all inlined …
+}
+```
+
+**After (decomposed):**
+
+```go
+func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+    a, err := parseFindFilesArgs(raw)
+    if err != nil { return "", err }
+    hits, walkErr := t.collectFiles(ctx, a)
+    return formatFindFilesResult(hits, a.MaxResults, walkErr), nil
+}
+```
+
+Each inner function stays under gocyclo 15; each is independently unit-testable.
 
 ## Testing requirements
 
@@ -347,10 +389,13 @@ make build       # compile to ./plumb, version stamped from git/VERSION
 make test        # go test ./...
 make test-race   # go test -race ./...
 make lint        # golangci-lint run
+make verify      # build + test + lint — definition of "ready to commit"
 make tidy        # go mod tidy
 make clean       # remove ./plumb
-make install-hooks  # install pre-commit hook
+make install-hooks  # install pre-commit hook (required after every fresh clone)
 ```
+
+**`make install-hooks` is required after every fresh clone.** The pre-commit hook runs `golangci-lint run --fix ./...` so formatting and lint issues are caught before commit. Without the hook, unlinted code can reach the tree.
 
 **Formatting note:** `gofumpt -w` (standalone binary) may disagree with the `gofumpt` formatter embedded in `golangci-lint` v2.12.2 — the two can pin different versions. Always apply formatting via `golangci-lint run --fix ./...`, never via the standalone binary, to avoid phantom lint failures.
 

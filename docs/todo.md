@@ -603,40 +603,20 @@ func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 
 **Priority:** high — security posture is part of "good practices", and plumb is an agent-facing daemon (prompt-injection → tool-call is a real threat model).
 **Effort:** Medium — mostly analysis; a few are real fixes.
-**Status:** Not started.
+**Status:** Item 1 (G202 SQL concat) resolved in 0.6.9 — confirmed not a real injection bug, annotated with justification. Items 2–6 not started.
 
-**Problem.** 13 gosec findings. Some are real, some are taint-analysis heuristics on already-validated paths. Each must end as *fixed* or *justified-and-annotated*, never unexplained.
+**Problem.** 13 gosec findings (16 as of 0.6.8 due to new code). Some are real, some are taint-analysis heuristics on already-validated paths. Each must end as *fixed* or *justified-and-annotated*, never unexplained.
 
 **Definition of done — per finding, decide fix vs. justified suppression:**
 
-1. **SQL string concatenation — `internal/stats/db.go:357, 428, 499` (G202).** Verify each concatenation interpolates only internal constants (column names, sort keys, bucket counts) and never a user/agent-supplied value. If constants only: replace with a small allowlisted column/order builder and add a comment explaining the invariant. **If any concatenates a filter value (workspace, session id, tool name): that is a real SQL-injection bug — fix with `?` placeholders.** This is the highest-priority gosec item; treat as a potential bug, not a nit.
+1. ~~**SQL string concatenation — `internal/stats/db.go:357, 428, 499` (G202).**~~ **RESOLVED in 0.6.9.** All three are false positives — `filter.where()` always uses `?` placeholders. Annotated with `//nolint:gosec` + explanatory comment.
 2. **File permissions G306 — `internal/memory/store.go:121`, `internal/session/session.go:128`, `internal/tools/edit_apply.go:85`.** `edit_apply` writes user source files where 0644 is correct (preserve perms). Memory/session files are plumb-owned metadata — decide whether 0600 is appropriate. Fix where it's metadata; document + annotate where 0644 is intentional.
 3. **Path traversal G703 — `internal/cli/setup.go:415`, `internal/tools/file_write_helpers.go:387`, `internal/tools/txlog/txlog.go:213`.** Plumb's entire write model is path validation + per-path locks + symlink resolution. Confirm each flagged path passes through the existing validation, then add a one-line `//nolint:gosec // path validated by <fn> — see safeWrite contract` referencing the guarantee. (Cross-check with cli-and-core-review-plan.md §6 symlink-lock-key item.)
-4. **Integer overflow G115 — `internal/lsp/protocol/types.go:363` (int→int32), `internal/tools/symbol_edits.go:67` (int→uint32).** LSP positions in pathological huge files. Add explicit bounds checks before conversion; return a clear error instead of silently wrapping. Small, real correctness fix.
-5. **G602 slice index — `internal/cli/setup.go:551`** and **G204 subprocess — `internal/lsp/supervisor.go:231`** (LSP command comes from resolved config, expected). Verify bounds / input provenance and annotate with justification.
+4. **Integer overflow G115 — `internal/lsp/protocol/types.go:363` (int→int32), `internal/tools/symbol_edits.go:67` (int→uint32), `internal/tools/search_in_files.go:471` (int→uint32), `internal/tui/dashboard.go:508` (int→rune).** LSP positions in pathological huge files. Add explicit bounds checks before conversion; return a clear error instead of silently wrapping. Small, real correctness fix.
+5. **G602 slice index — `internal/cli/setup.go:551`**, **G204 subprocess — `internal/lsp/supervisor.go:231`** and **`internal/tools/find_replace.go:357`** (LSP command and formatter cmd come from resolved config/extension lookup, expected). Verify bounds / input provenance and annotate with justification.
 6. End state: `golangci-lint run ./...` shows zero unexplained gosec findings; every remaining suppression has a one-line reason pointing at the safety invariant.
 
 **Watch out for.** Do not bulk-`//nolint` the gosec linter. The whole point is that #1 might be a real injection bug hiding among heuristic noise — each one gets eyes.
-
----
-
-### CQ-6 — Codify and enforce the engineering standard (P2, anti-regression)
-
-**Priority:** medium-high — without this, CQ-1…CQ-5 decay back.
-**Effort:** Small (documentation + hook), but it is the keystone.
-**Status:** Not started.
-
-**Problem.** AGENTS.md already states the policy (≈400 lines/file, gofumpt, lint-before-commit, no globals, context-first, error wrapping, comments only when non-obvious). The gap is **enforcement and a concrete pattern**, not policy text. New code keeps reproducing the monolithic-`Execute` anti-pattern because there is no documented blueprint and no local gate.
-
-**Definition of done.**
-
-1. AGENTS.md: add a "Tool implementation pattern" subsection with the `parseArgs / validate / run / format` blueprint from CQ-3 and one real before/after example. New tools must follow it; PRs/commits that add a monolithic `Execute` are non-conforming.
-2. AGENTS.md: state the gocyclo-15 contract explicitly and the file-size rule with its short exception allowlist (CQ-4).
-3. Pre-commit hook (`scripts/pre-commit`, installed via `make install-hooks`) runs `go build ./...`, `gofumpt -l` (fail if non-empty), `golangci-lint run`. Document `make install-hooks` as a **required** first step after clone in AGENTS.md "Build commands".
-4. Add `make verify` (CQ-1) and reference it as the definition of "ready to commit".
-5. Optional: a tiny CI check that fails if any non-test, non-allowlisted `.go` file exceeds N lines, so the size rule is mechanically enforced rather than honour-system.
-
-**Watch out for.** Keep the hook fast enough that contributors do not bypass it with `--no-verify`. If `golangci-lint` cold runs are slow, scope the hook to changed packages and leave the full `./...` sweep to `make verify`/CI.
 
 ---
 

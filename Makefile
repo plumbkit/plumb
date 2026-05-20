@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.golimpio.plumb
 
-.PHONY: build test test-race integration-test lint run clean tidy install-hooks codesign
+.PHONY: build test test-race integration-test lint verify run clean tidy install-hooks codesign
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -69,6 +69,10 @@ clean:
 tidy:
 	go mod tidy
 
+# verify is the definition of "ready to commit": build + test + lint in one target.
+verify: build test lint
+
 install-hooks:
 	cp scripts/pre-commit .git/hooks/pre-commit
 	chmod +x .git/hooks/pre-commit
+	@echo "Pre-commit hook installed. Run 'make verify' before every push."

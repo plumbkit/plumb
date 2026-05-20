@@ -221,6 +221,41 @@ Notes: Items 3, 4, 5 (make verify, pre-commit hook, CI enforcement) from the ori
 
 ---
 
+### CQ-6 — Codify and enforce the engineering standard
+
+**Completed in:** 0.6.9
+**Original priority:** P2, anti-regression keystone
+
+All four required items delivered:
+
+1. **AGENTS.md: "Tool implementation pattern" subsection.** Documents the `parseArgs / validate / run / format` blueprint with a real before/after example for `FindFiles.Execute`. States that PRs adding a monolithic `Execute` are non-conforming.
+2. **AGENTS.md: gocyclo-15 contract + file-size exception allowlist.** Explicitly states no first-party non-test function may exceed cyclomatic complexity 15. File-size rule (~400 lines) now has a short exception allowlist: `internal/lsp/protocol/types.go` (LSP spec type catalogue — splitting harms readability).
+3. **Pre-commit hook updated** (`scripts/pre-commit`): now runs `go build ./...` then `golangci-lint run --fix ./...`. Dropped standalone `gofumpt -l -w .` call — standalone binary can disagree with the version embedded in golangci-lint, causing phantom diffs. `make install-hooks` documented as **required** after every fresh clone in AGENTS.md "Build commands".
+4. **`make verify` target added** to `Makefile` (`build + test + lint`). Referenced as the canonical "ready to commit" definition.
+
+Item 5 (CI file-size enforcement) was optional and not implemented.
+
+---
+
+### CQ-5 #1 — SQL string concatenation (G202) — verified not a real injection bug
+
+**Completed in:** 0.6.9
+**Original priority:** Highest-priority gosec item (potential real bug)
+
+Triaged all three G202 findings in `internal/stats/db.go` (`Summary` at line 358, `ActivityAt` at line 429, `p95All` at line 500).
+
+Verdict: **false positives.** In all three cases the concatenated `where` clause is built exclusively by `filter.where()`, which uses `?` placeholders for all user-supplied values (workspace, session ID, session name, tool name). The only things ever concatenated into the SQL string are fixed structural keywords (`GROUP BY tool ORDER BY calls DESC`, `ORDER BY called_at`, etc.) — no user data is ever interpolated.
+
+Fix: extracted the static base query into a local variable and did the `where` concatenation on a single annotated line:
+```go
+// where is built by filter.where() using ? placeholders; no user values interpolated.
+q := summaryBase + where + " GROUP BY tool ORDER BY calls DESC" //nolint:gosec // G202: see comment above
+```
+
+Remaining gosec findings (G306 file perms, G703 path traversal, G115 integer overflow, G602 slice index, G204 subprocess) are tracked in CQ-5 items 2–6 in `docs/todo.md`.
+
+---
+
 ## Bugs & known limitations
 
 ### `rename_symbol` stale LSP position index — clear error message

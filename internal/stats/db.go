@@ -355,14 +355,17 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		return nil, nil
 	}
 	where, args := filter.where()
-	q := `SELECT tool,
+	// summaryBase is a compile-time constant; where is built by filter.where() using
+	// ? placeholders only — no user values are ever interpolated into the SQL string.
+	summaryBase := `SELECT tool,
 		         COUNT(*) AS calls,
 		         COALESCE(AVG(duration_ms), 0) AS avg_ms,
 		         COALESCE(SUM(input_bytes), 0) AS total_in,
 		         COALESCE(SUM(output_bytes), 0) AS total_out,
 		         SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) AS errors,
 		         MAX(called_at) AS last_called
-		  FROM tool_calls` + where + " GROUP BY tool ORDER BY calls DESC"
+		  FROM tool_calls`
+	q := summaryBase + where + " GROUP BY tool ORDER BY calls DESC" //nolint:gosec // G202: see comment above
 
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
@@ -426,7 +429,8 @@ func (d *DB) ActivityAt(now time.Time, window time.Duration, bucketCount int, fi
 		where += " AND called_at >= ? AND called_at <= ?"
 	}
 	args = append(args, start.UnixMilli(), now.UnixMilli())
-	q := `SELECT called_at FROM tool_calls` + where + ` ORDER BY called_at`
+	// where is built by filter.where() using ? placeholders; no user values interpolated.
+	q := `SELECT called_at FROM tool_calls` + where + ` ORDER BY called_at` //nolint:gosec // G202: see comment above
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
 		return summary, fmt.Errorf("stats: activity: %w", err)
@@ -497,7 +501,8 @@ func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
 // distinct tools exist — replaces the old per-tool p95() loop.
 func (d *DB) p95All(filter Filter) map[string]int64 {
 	where, args := filter.where()
-	q := `SELECT tool, duration_ms FROM tool_calls` + where + ` ORDER BY tool, duration_ms`
+	// where is built by filter.where() using ? placeholders; no user values interpolated.
+	q := `SELECT tool, duration_ms FROM tool_calls` + where + ` ORDER BY tool, duration_ms` //nolint:gosec // G202: see comment above
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
 		return nil
@@ -557,9 +562,10 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		return nil, nil
 	}
 	where, args := filter.where()
+	// where is built by filter.where() using ? placeholders; no user values interpolated.
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json, output_text
-	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
+	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?` //nolint:gosec // G202: see comment above
 	args = append(args, n)
 
 	rows, err := d.db.Query(q, args...)
@@ -599,9 +605,10 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 	}
 	f := Filter{Tool: tool, Workspace: workspace}
 	where, args := f.where()
+	// where is built by filter.where() using ? placeholders; no user values interpolated.
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes
-	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
+	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?` //nolint:gosec // G202: see comment above
 	args = append(args, limit)
 
 	rows, err := d.db.Query(q, args...)
@@ -687,7 +694,8 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 		}
 		args = append(args, since.UnixMilli())
 	}
-	q := `SELECT tool, output_bytes FROM tool_calls` + where
+	// where is built by filter.where() using ? placeholders; no user values interpolated.
+	q := `SELECT tool, output_bytes FROM tool_calls` + where //nolint:gosec // G202: see comment above
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
 		return 0

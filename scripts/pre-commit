@@ -1,4 +1,8 @@
 #!/bin/sh
+# Pre-commit: build + format + lint.
+# For the full sweep (including tests) run: make verify
 set -e
-gofumpt -l -w .
-golangci-lint run --fix
+go build ./...
+# Use golangci-lint's embedded gofumpt, not the standalone binary.
+# The two can pin different versions and produce phantom diffs.
+golangci-lint run --fix ./...

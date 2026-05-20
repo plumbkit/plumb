@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.9 (2026-05-20)
+
+### Changed
+- **CQ-6: Engineering standard codified.** AGENTS.md gains a "Tool implementation pattern" subsection with the `parseArgs / validate / run / format` blueprint and a real before/after example for `FindFiles`. The gocyclo-15 contract is now explicit: no first-party non-test function may exceed cyclomatic complexity 15; functions that blow the gate must be decomposed before merging. The file-size rule (~400 lines) now carries an explicit exception allowlist (`internal/lsp/protocol/types.go`). `make verify` target added to `Makefile` (`build + test + lint`) as the canonical definition of "ready to commit". Pre-commit hook at `scripts/pre-commit` updated: drops standalone `gofumpt` (which can disagree with the version embedded in `golangci-lint`), now runs `go build ./...` then `golangci-lint run --fix ./...`. `make install-hooks` is documented as a required post-clone step in AGENTS.md.
+- **CQ-5 #1: SQL string concatenation (G202) — verified not a real injection bug.** Six `golangci-lint gosec` G202 findings in `internal/stats/db.go` (`Summary`, `ActivityAt`, `p95All`, `Recent`, `CallsForTool`, `tokensSavedSince`) were triaged: the concatenated `where` clause in all six cases is built exclusively by `filter.where()`, which uses `?` placeholders for all user-supplied values (workspace, session ID, tool name). No user data is ever interpolated into the SQL string. Each site is now annotated with an explanatory `//nolint:gosec // G202: where is built by filter.where() using ? placeholders` comment pointing at the safety invariant. Remaining gosec findings deferred to the CQ-5 triage pass.
+
 ## 0.6.8 (2026-05-20)
 
 ### Added
