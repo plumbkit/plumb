@@ -22,7 +22,13 @@ func TestRunStats_ShowsRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open DB: %v", err)
 	}
-	ws := t.TempDir() // Must be a real dir for resolveCLIWorkspace
+	// Use os.TempDir() directly so the path is outside the plumb workspace tree;
+	// t.TempDir() lands under GOTMPDIR (.testcache/) which Detect() walks up through.
+	ws, err := os.MkdirTemp(os.TempDir(), "plumb-test-ws-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(ws) })
 	if err := db.Record(stats.Call{
 		SessionID: "sess-1",
 		Workspace: ws,
@@ -55,8 +61,14 @@ func TestRunStats_ShowsRows(t *testing.T) {
 }
 
 func TestRunStats_NoStatsPrintsLogo(t *testing.T) {
+	// Use os.TempDir() so the workspace is outside the plumb workspace tree.
+	ws, err := os.MkdirTemp(os.TempDir(), "plumb-test-ws-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(ws) })
 	oldWorkspaceFlag, oldLimit := statsFlagWorkspace, statsFlagLimit
-	statsFlagWorkspace, statsFlagLimit = t.TempDir(), 5
+	statsFlagWorkspace, statsFlagLimit = ws, 5
 	defer func() {
 		statsFlagWorkspace, statsFlagLimit = oldWorkspaceFlag, oldLimit
 	}()
@@ -95,7 +107,13 @@ func TestResolveCLIWorkspace_NestedDirectoryUsesProjectRoot(t *testing.T) {
 }
 
 func TestResolveCLIWorkspace_NonProjectDirectoryPreserved(t *testing.T) {
-	dir := t.TempDir()
+	// Use os.TempDir() so the path is outside the plumb workspace tree;
+	// t.TempDir() lands under GOTMPDIR (.testcache/) which Detect() walks up through.
+	dir, err := os.MkdirTemp(os.TempDir(), "plumb-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	got, err := resolveCLIWorkspace(dir, config.Defaults())
 	if err != nil {
 		t.Fatal(err)
