@@ -25,7 +25,15 @@ Phase 1 ships a SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`, 
 - `internal/tools/write_deps.go` — `TopologyNotifyFn` type alias; `TopologyNotify` field on `WriteDeps`; `notifyTopology` nil-safe helper.
 - `internal/tools/write_file.go`, `edit_file.go`, `transaction.go` — call `notifyTopology(path)` after each successful write.
 - `internal/tools/topology_status.go`, `topology_search.go`, `topology_explore.go` — three new MCP tools following `parseArgs → validate → run → format` pattern; nil-store graceful degradation.
-- Tests: `internal/topology/db_test.go` (schema, WAL, FTS5), `internal/topology/search_test.go` (ranking, kind/language filters), `internal/tools/topology_*_test.go` (nil-store degradation).
+- Tests: `internal/topology/db_test.go` (schema, WAL, FTS5), `internal/topology/search_test.go` (ranking, kind/language filters), `internal/tools/topology_*_test.go` (nil-store degradation), `internal/topology/explore_test.go` (BFS depth, truncation, clampOpts), `internal/topology/indexer_e2e_test.go` (end-to-end resync + FTS search), `internal/topology/extractors/golang/extractor_test.go`, `internal/topology/extractors/python/extractor_test.go`.
+
+**Bugs found and fixed during review (commit `659adce`):**
+
+- **Python extractor — blank lines reset class context.** Empty lines inside a class body have indent=0, which satisfied `indent <= classIndent (0)`, causing `classIdx` to reset to -1. Methods after any blank line were classified as functions. Fixed by skipping blank lines before the indent check.
+- **`topology_explore` nil-store returned an error, not a message.** `topology_status` and `topology_search` return a human-readable "disabled" message when topology is off; `topology_explore` was inconsistently returning an error. Fixed to return a message via `formatTopologyNeighbourhood(nil, a)`.
+- **`Indexer.Stop()` was non-blocking.** It closed the `done` channel but did not wait for the background goroutine to exit. When `Store.Close()` or test teardown called `db.Close()` immediately after `Stop()`, the goroutine was still mid-resync and received "database is closed". Fixed by adding `sync.WaitGroup` to `Indexer`; `Stop()` now blocks until the worker goroutine exits.
+- **`search.go` N+1 queries.** `collectSearchResults` called `nodeByID` for each FTS result row. Fixed by joining `topology_nodes` in the FTS query (commit from prior review pass).
+- **`matchField` always returned "name".** Since every node has a non-empty name, the field heuristic was always "name" regardless of which column matched. Fixed by checking query-term substring presence against each field in priority order (commit from prior review pass).
 
 **Design decisions (intentional divergences from the original plan):**
 
