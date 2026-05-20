@@ -557,29 +557,6 @@ This is most valuable for:
 
 ---
 
-### Claude Desktop: model plumb as the *only* tool surface, not the best one
-
-**Priority:** high — affects documentation, the savings model, error messages, and `session_start` tool guidance.
-**Effort:** Small (documentation and session_start); medium (savings model update — see Architecture item).
-**Status:** Gap identified. Not started.
-
-Claude Desktop has no access to OS tools. It cannot run `grep`, `find`, `git`, `rg`, or any shell command. It has no native `Read`, `Edit`, or `Write` tools. For Claude Desktop, plumb tools are not a *better* alternative — they are the *only* interface to the filesystem and codebase.
-
-This has implications not yet reflected in documentation, the savings model, or error messages:
-
-1. **Savings model** (see Architecture): the current model computes "tokens saved vs alternative" but for Claude Desktop there is no alternative. For this client, savings are better expressed as **capabilities enabled** (zero capability without plumb, not expensive capability). The `claude-desktop` profile should be modelled accordingly.
-2. **`session_start` tool guidance**: the block generated for Claude Code should have a distinct Claude Desktop variant — simpler: "all file, search, git, and symbol operations must go through plumb; there are no native alternatives."
-3. **Error messages in write tools**: messages that suggest "use your native file tools" as a recovery path are wrong for Claude Desktop. Errors should guide the agent to retry, check the daemon, or use a different plumb tool.
-4. **Documentation**: `docs/mcp-tools.md` should note which clients have no native fallbacks. This helps tool authors reason correctly: if plumb is unavailable, Claude Desktop is completely blocked, not just slower.
-
-**Definition of done:**
-1. `session_start` generates a `tool_guidance` block for `claude-desktop` clients (detect via `clientInfo.name`).
-2. Write-tool error messages audited for "use your native tools" suggestions; replaced with daemon-focused recovery.
-3. `docs/mcp-tools.md` documents the Claude Desktop no-fallback constraint.
-4. The `claude-desktop` savings profile in the Architecture item is modelled as "capability enabled" rather than "tokens saved vs alternative."
-
----
-
 ## Code quality & engineering practices
 
 This section is the authoritative plan for raising plumb's own code quality to the standard the project claims (AGENTS.md: "best code engineer", good Go practices, ~400 lines/file, gocyclo, gofumpt, lint-before-commit). It **supersedes** items 14 and 15 of [`docs/cli-and-core-review-plan.md`](cli-and-core-review-plan.md) (shared-helper extraction and large-file splitting) — track that work here.
@@ -790,45 +767,6 @@ After a `make build`, `plumb serve` reads `~/Library/Caches/plumb/plumb.version`
 **Why it's probably the right behaviour:** if the symlink target doesn't exist, the user's intent is likely to *create* the file (perhaps writing the target through the link's location). Treating the write as a new-file create is the most user-friendly outcome.
 
 **When this could surprise someone:** if they expected plumb to refuse to write to broken symlinks. It doesn't.
-
----
-
-### `rename_symbol` fails with stale LSP position index after in-session edits
-
-**Priority:** medium — silent failure mode causes a confusing error and wastes a tool call; the fallback (manual `find_replace`) is slow.
-**Status:** Known; no fix attempted.
-
-When `rename_symbol` is called after earlier edits in the same session, the LSP's position index may be stale. The language server has received `workspace/didChangeWatchedFiles` but has not finished re-indexing. The tool fails with a cryptic message such as:
-
-```
-applying edits to foo.go: edit start position out of range: line N char M
-```
-
-The underlying cause (position drift due to unsynchronised edits) is not surfaced. The agent must fall back to `find_replace` for the qualified name plus manual fixes for bare-name references in comments.
-
-**Workaround:** after editing files that contain the symbol, wait for a `diagnostics` call to confirm the LSP has re-indexed before calling `rename_symbol`.
-
-**Definition of fix:**
-1. Detect "position out of range" results from `textDocument/rename` and return a clear error: "LSP position index may be stale after recent edits — check `diagnostics` to confirm re-indexing, then retry `rename_symbol`."
-2. Optionally: send a `textDocument/didOpen` + `textDocument/didClose` pair on the target file before the rename request to flush the LSP's in-memory position cache.
-3. Unit test: mock LSP returns an out-of-range edit after a prior edit; verify the error message is surfaced cleanly.
-
----
-
-### `gofumpt` standalone binary and `golangci-lint` embedded formatter disagree silently
-
-**Priority:** low — only affects contributors who run `gofumpt -w` directly; CI and `golangci-lint run --fix` agree.
-**Status:** Known; documented here for future contributors.
-
-The standalone `gofumpt` binary (e.g. v0.10.0 from `go install`) and the `gofumpt` formatter embedded in `golangci-lint` v2.12.2 produce different output on the same files. Running `gofumpt -w <file>` on a file that `golangci-lint run` flags as unformatted does not resolve the finding; a subsequent `golangci-lint run` may flag a *different* set of files.
-
-**Root cause:** `golangci-lint` pins its own formatter version internally and the two can drift independently.
-
-**Workaround:** always use `golangci-lint run --fix ./...` to apply formatting — never the standalone `gofumpt -w`.
-
-**Definition of fix:**
-1. Add a note to AGENTS.md under "Build commands": "`gofumpt -w` may disagree with the formatter embedded in `golangci-lint` — use `golangci-lint run --fix ./...` to apply formatting reliably."
-2. CQ-6's pre-commit hook should invoke `golangci-lint run --fix` (not `gofumpt -l`) so contributors get the right formatter automatically.
 
 ---
 

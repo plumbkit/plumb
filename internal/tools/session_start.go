@@ -191,10 +191,9 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		}
 	}
 
-	// ── 7. Tool guidance (Claude Code only) ──────────────────────────────
-	// Match "claude-code" exactly or "claude-code/…" (version-qualified).
-	// A bare HasPrefix would incorrectly match "claude-codegen" etc.
-	if isClaudeCode(t.clientNameFn) {
+	// ── 7. Tool guidance (client-specific) ──────────────────────────────
+	switch {
+	case isClaudeCode(t.clientNameFn):
 		sb.WriteString("## Tool guidance (Claude Code)\n\n")
 		sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
 		sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
@@ -205,6 +204,21 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
 		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
 		sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
+	case isClaudeDesktop(t.clientNameFn):
+		sb.WriteString("## Tool guidance (Claude Desktop)\n\n")
+		sb.WriteString("Claude Desktop has no native filesystem or shell tools. Plumb is your only interface to the codebase.\n\n")
+		sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
+		sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
+		sb.WriteString("- **write_file** / **edit_file** — create or modify files atomically.\n")
+		sb.WriteString("- **list_files** / **find_files** / **search_in_files** — discover and search the codebase.\n")
+		sb.WriteString("- **git** — read-only git queries (status, log, diff, blame).\n\n")
+		sb.WriteString("**LSP-semantic tools** (no equivalent without a language server):\n\n")
+		sb.WriteString("- **workspace_symbols** — find any symbol by name across the workspace instantly.\n")
+		sb.WriteString("- **find_references** — all call sites for a symbol (scope-aware, not text search).\n")
+		sb.WriteString("- **get_definition** — jump to definition without reading the file first.\n")
+		sb.WriteString("- **rename_symbol** — workspace-wide semantic rename across all files.\n")
+		sb.WriteString("- **diagnostics** — live compile errors and warnings from the language server.\n\n")
+		sb.WriteString("If a plumb tool fails, retry or check `daemon_info`. Do not attempt native shell commands — they are unavailable.\n\n")
 	}
 
 	// ── 8. Active diagnostics (errors + warnings only) ────────────────────
@@ -354,4 +368,13 @@ func isClaudeCode(fn func() string) bool {
 	}
 	n := strings.ToLower(fn())
 	return n == "claude-code" || strings.HasPrefix(n, "claude-code/")
+}
+
+// isClaudeDesktop reports whether fn identifies the MCP client as Claude Desktop.
+func isClaudeDesktop(fn func() string) bool {
+	if fn == nil {
+		return false
+	}
+	n := strings.ToLower(fn())
+	return n == "claude-desktop" || strings.HasPrefix(n, "claude-desktop/")
 }

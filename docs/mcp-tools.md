@@ -12,6 +12,23 @@ The full tool surface (including LSP-edit tools, memory tools, and VCS tools not
 
 ---
 
+## Client capabilities and fallback behaviour
+
+Plumb clients differ in what native tools they have access to outside of plumb. This affects how tool authors should reason about error messages and fallback guidance.
+
+| Client | Native filesystem | Native shell/grep | Native git | Notes |
+|---|---|---|---|---|
+| **Claude Desktop** | ✗ None | ✗ None | ✗ None | Plumb is the **only** interface. If a plumb tool fails, Claude Desktop cannot fall back to any other method. Error messages must guide the agent to retry or use a different plumb tool. |
+| **Claude Code** | ✓ `Read`/`Edit`/`Write` | ✓ `Bash` (grep, find, git, rg, …) | ✓ `Bash: git` | Plumb adds LSP-semantic tools and concurrency-safe writes. Shell fallback exists but costs extra round-trips. |
+| **Codex** | ✓ Limited | ✓ Bash (sandboxed) | ✓ Bash: git | Similar to Claude Code but with a stricter execution sandbox. |
+| **Gemini CLI** | ✓ Limited | ✓ Shell | ✓ Shell: git | Plumb adds LSP tools. |
+
+**Implication for tool error messages:** do not suggest "use your native file tools" or "run grep locally" as recovery paths — these instructions are meaningless to Claude Desktop and misleading to users who assume all clients are equal. Instead, guide the agent to retry the plumb tool, call `daemon_info` to verify the daemon is healthy, or use a different plumb tool to achieve the same goal.
+
+**Implication for token savings:** for Claude Desktop, plumb tools are not a *better* alternative to shell commands — they are the only alternative. The savings metric for Claude Desktop is better expressed as "capabilities enabled" rather than "tokens saved versus an alternative approach."
+
+---
+
 ## Tool catalogue
 
 ### `find_symbol`

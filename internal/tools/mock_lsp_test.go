@@ -10,12 +10,13 @@ import (
 // mockLSP implements lsp.Client for tool unit tests.
 // Set the relevant field before each test; err applies to every method.
 type mockLSP struct {
-	wsSymbols  []protocol.SymbolInformation
-	docSymbols []protocol.DocumentSymbol
-	locations  []protocol.Location
-	hover      *protocol.Hover
-	caps       *protocol.ServerCapabilities
-	err        error
+	wsSymbols    []protocol.SymbolInformation
+	docSymbols   []protocol.DocumentSymbol
+	locations    []protocol.Location
+	hover        *protocol.Hover
+	caps         *protocol.ServerCapabilities
+	err          error
+	renameResult *protocol.WorkspaceEdit // returned by Rename when non-nil
 }
 
 func (m *mockLSP) Initialize(_ context.Context, _ protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -65,7 +66,7 @@ func (m *mockLSP) PrepareRename(_ context.Context, _ protocol.PrepareRenameParam
 }
 
 func (m *mockLSP) Rename(_ context.Context, _ protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
-	return nil, m.err
+	return m.renameResult, m.err
 }
 
 func (m *mockLSP) PrepareCallHierarchy(_ context.Context, _ protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {

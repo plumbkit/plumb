@@ -218,3 +218,54 @@ Cleared all non-gocyclo findings from 79 total down to 51 (only gocyclo 37 + gos
 - **staticcheck**: `QF1008` embedded Duration field selectors simplified; `QF1001` De Morgan applied; `QF1003` if-else chain → tagged switch in `mcp/server.go`; `ST1005` trailing periods removed from 4 error strings in `edit_file.go` and `lsp_err.go`; `SA4010` dead `uris = append(uris, uri)` in `transaction.go` removed (confirmed not a rollback bug — per-file `notifyLSP` calls already handle LSP notification; the slice was never consumed).
 
 Notes: Items 3, 4, 5 (make verify, pre-commit hook, CI enforcement) from the original CQ-1 definition of done are **not** completed here — those belong to CQ-6 and are tracked there.
+
+---
+
+## Bugs & known limitations
+
+### `rename_symbol` stale LSP position index — clear error message
+
+**Completed in:** 0.6.7
+**Original priority:** medium
+
+`rename_symbol` now detects "out of range" position errors from `applyWorkspaceEdit` and wraps them with a clear explanation:
+
+> This usually means the LSP position index is stale after recent in-session edits. The language server computed edit positions against an older file version.
+
+The error message includes three recovery options: calling `diagnostics` to confirm re-indexing, falling back to `find_replace` for the qualified name, or restarting the daemon.
+
+Implementation: `internal/tools/rename_symbol.go` (`renameStaleIndexHint` constant + `strings.Contains` guard in `Execute`). Unit tests in `internal/tools/rename_symbol_test.go` cover the stale-index path and the empty-edit-set case.
+
+The optional `textDocument/didOpen`/`didClose` flush (definition of fix item 2) was not implemented — the clear error message and recovery guidance are sufficient for practical use.
+
+---
+
+### `gofumpt` standalone vs `golangci-lint` embedded formatter mismatch documented
+
+**Completed in:** 0.6.7
+**Original priority:** low
+
+Added an explicit note to AGENTS.md under "Build commands":
+
+> `gofumpt -w` (standalone binary) may disagree with the `gofumpt` formatter embedded in `golangci-lint` v2.12.2 — the two can pin different versions. Always apply formatting via `golangci-lint run --fix ./...`, never via the standalone binary, to avoid phantom lint failures.
+
+CQ-6's pre-commit hook item (ensuring the hook invokes `golangci-lint run --fix` rather than `gofumpt -l`) is tracked separately under CQ-6.
+
+---
+
+## Improvements
+
+### Claude Desktop: plumb as the *only* tool surface
+
+**Completed in:** 0.6.7
+**Original priority:** high
+
+Claude Desktop has no native filesystem or shell access. Plumb is its only interface to the codebase. Three concrete changes were made:
+
+1. **`session_start` tool guidance block for Claude Desktop** (`internal/tools/session_start.go`): the `if isClaudeCode(...)` block was refactored to a `switch` with a new `case isClaudeDesktop(...)` branch. Claude Desktop receives a focused guidance block that lists all file-operation and LSP-semantic tools with the note "there is no fallback — if a plumb tool fails, retry or check `daemon_info`." Detection via `clientInfo.name == "claude-desktop"` (case-insensitive, prefix-tolerant).
+
+2. **`delete_file` description** (`internal/tools/delete_file.go`): removed "use shell tools for recursive removal" — replaced with "to remove a directory tree, delete its files individually with repeated `delete_file` calls."
+
+3. **`docs/mcp-tools.md` client capabilities table**: added a "Client capabilities and fallback behaviour" section at the top of the tool catalogue. A table lists Claude Desktop (no native filesystem/shell/git), Claude Code (`Read`/`Edit`/`Write` + `Bash`), Codex, and Gemini CLI. Two implication notes follow: one for tool error messages (do not suggest native tools), one for token savings (Claude Desktop savings are better expressed as "capabilities enabled" than "tokens saved vs alternative").
+
+The savings-model profile for `claude-desktop` (Architecture item) was not implemented — that is part of the larger client-aware savings model tracked in the Architecture section.

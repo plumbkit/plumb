@@ -38,9 +38,9 @@ func NewDeleteFile(deps WriteDeps) *DeleteFile { return &DeleteFile{deps: deps} 
 func (*DeleteFile) Name() string                 { return "delete_file" }
 func (*DeleteFile) InputSchema() json.RawMessage { return deleteFileSchema }
 func (*DeleteFile) Description() string {
-	return "Delete a single file. Refuses to delete directories — use shell tools " +
-		"for recursive removal. The LSP server is notified with FileDeleted so " +
-		"symbol indexes and diagnostics update immediately. Per-path locking " +
+	return "Delete a single file. Refuses to delete directories — to remove a directory tree, " +
+		"delete its files individually with repeated delete_file calls. The LSP server is notified " +
+		"with FileDeleted so symbol indexes and diagnostics update immediately. Per-path locking " +
 		"serialises against any concurrent write_file/edit_file targeting the same path."
 }
 

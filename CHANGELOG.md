@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.7 (2026-05-20)
+
+### Fixed
+- **`rename_symbol` stale LSP index — clear error message.** When `applyWorkspaceEdit` returns an "out of range" position error (caused by the LSP computing edits against a stale file version after in-session edits), `rename_symbol` now wraps the error with a plain-English explanation and three recovery options: call `diagnostics` to confirm re-indexing, fall back to `find_replace` for the qualified name, or restart the daemon. Unit tests in `internal/tools/rename_symbol_test.go` verify the stale-index path and the empty-edit-set case.
+- **`delete_file` description.** Removed the suggestion to "use shell tools for recursive removal", which is not actionable for Claude Desktop (no shell access). Replaced with "delete its files individually with repeated `delete_file` calls."
+
+### Changed
+- **`session_start` Claude Desktop guidance block.** The `if isClaudeCode` block is now a `switch` with a new `case isClaudeDesktop` branch. Claude Desktop receives a focused tool guidance section explaining that plumb is the only interface to the codebase — all file, search, git, and LSP-semantic operations go through plumb tools with no native fallbacks. Detection via `clientInfo.name == "claude-desktop"` (case-insensitive, prefix-tolerant).
+- **`docs/mcp-tools.md` client capabilities table.** New "Client capabilities and fallback behaviour" section documents which clients have native filesystem/shell/git access (Claude Code, Codex, Gemini CLI) vs none at all (Claude Desktop). Includes authoring guidelines for tool error messages and savings-model implications.
+- **AGENTS.md formatting note.** Added a note under "Build commands" warning that the standalone `gofumpt` binary may disagree with the formatter embedded in `golangci-lint` — always use `golangci-lint run --fix ./...`.
+
 ## 0.6.6 (2026-05-20)
 
 ### Changed

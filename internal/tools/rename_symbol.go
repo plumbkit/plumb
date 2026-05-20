@@ -11,6 +11,17 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
 
+const renameStaleIndexHint = `
+
+This usually means the LSP position index is stale after recent in-session edits.
+The language server computed edit positions against an older file version.
+
+Recovery options:
+  1. Call diagnostics to confirm the language server has re-indexed, then retry rename_symbol.
+  2. Fall back to find_replace for the fully-qualified name (e.g. "pkg.OldName"), then fix
+     bare-name references in comments and doc strings manually.
+  3. Restart the daemon with "plumb stop" if re-indexing does not resolve the issue.`
+
 // RenameSymbol performs a workspace-wide rename via LSP. The language server
 // computes all call-site updates safely (across files, respecting scope and
 // types). Plumb applies the resulting WorkspaceEdit atomically to disk.
@@ -92,6 +103,9 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if !dryRun {
 		modified, applyErr := applyWorkspaceEdit(we)
 		if applyErr != nil {
+			if strings.Contains(applyErr.Error(), "out of range") {
+				return "", fmt.Errorf("applying rename: %w%s", applyErr, renameStaleIndexHint)
+			}
 			return "", fmt.Errorf("applying rename: %w", applyErr)
 		}
 		files = modified

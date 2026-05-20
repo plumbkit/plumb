@@ -352,6 +352,8 @@ make clean       # remove ./plumb
 make install-hooks  # install pre-commit hook
 ```
 
+**Formatting note:** `gofumpt -w` (standalone binary) may disagree with the `gofumpt` formatter embedded in `golangci-lint` v2.12.2 — the two can pin different versions. Always apply formatting via `golangci-lint run --fix ./...`, never via the standalone binary, to avoid phantom lint failures.
+
 ## Known limitations and pending work
 
 Outstanding items, footguns, and "subtle things to be aware of" live in [`docs/todo.md`](docs/todo.md). Always check it before adding a feature that touches concurrency, the rate limiter, the read tracker, or the stats schema — there are known limitations in each of those that any new work needs to either respect or address.
