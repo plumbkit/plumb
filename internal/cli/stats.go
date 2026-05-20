@@ -4,15 +4,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/reflow/wordwrap"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tui"
 )
@@ -72,7 +71,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 		printCLIDiagnostic(os.Stdout, cliDiagnostic{
 			Kind:  "info",
 			Title: "No statistics recorded yet",
-			Body:  fmt.Sprintf("No statistics for workspace %s.", contractSessionPath(ws)),
+			Body:  fmt.Sprintf("No statistics for workspace %s.", render.ContractPath(ws)),
 		})
 		return nil
 	}
@@ -82,15 +81,13 @@ func runStats(_ *cobra.Command, _ []string) error {
 	saved := db.TotalTokensSaved(filter)
 
 	// Structured Context Block
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(fmt.Sprintf("%s\n%s",
-			contractSessionPath(ws),
+	fmt.Println(render.ContextBox(
+		fmt.Sprintf("%s\n%s",
+			render.ContractPath(ws),
 			tui.MutedStyle.Render(fmt.Sprintf("↳ %d total calls · ~%s tokens saved", total, stats.FormatSavings(int(saved)))),
-		))
-	fmt.Println(ctxBox)
+		),
+		tui.SepStyle,
+	))
 	fmt.Println()
 
 	// Tool summary table
@@ -119,11 +116,11 @@ func runStats(_ *cobra.Command, _ []string) error {
 	headerWidth := wWhen + wTool + wMs + 2 + wStatus + 2 + wSessID + 2 + wName
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
 	fmt.Printf("%s%s%s  %s  %s  %s\n",
-		padRight(tui.HintStyle.Render("When"), wWhen),
-		padRight(tui.HintStyle.Render("Tool"), wTool),
-		padRight(tui.HintStyle.Render("ms"), wMs),
-		padRight(tui.HintStyle.Render("Status"), wStatus),
-		padRight(tui.HintStyle.Render("Session"), wSessID),
+		render.PadRight(tui.HintStyle.Render("When"), wWhen),
+		render.PadRight(tui.HintStyle.Render("Tool"), wTool),
+		render.PadRight(tui.HintStyle.Render("ms"), wMs),
+		render.PadRight(tui.HintStyle.Render("Status"), wStatus),
+		render.PadRight(tui.HintStyle.Render("Session"), wSessID),
 		tui.HintStyle.Render("Name"),
 	)
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
@@ -135,7 +132,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	errMaxWidth := max(termWidth-wWhen-2, 40)
 
 	for _, c := range recent {
-		renderRecentCallRow(c, wWhen, wTool, wMs, wStatus, wSessID, wName, errMaxWidth)
+		renderRecentCallRow(c, wWhen, wTool, wMs, wStatus, wSessID, errMaxWidth)
 	}
 
 	return nil
@@ -147,23 +144,8 @@ func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {
 		return "", fmt.Errorf("querying summary: %w", err)
 	}
 
-	t1 := table.New().
-		Border(DottedBorder).
-		BorderRow(false).
-		BorderColumn(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderTop(true).
-		BorderBottom(false).
-		BorderStyle(tui.SepStyle).
-		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors", "Saved").
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().PaddingRight(2)
-			if row == table.HeaderRow {
-				return s.Inherit(tui.HintStyle)
-			}
-			return s
-		})
+	t1 := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
+		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors", "Saved")
 
 	for _, s := range summary {
 		savedStr := "—"
@@ -189,7 +171,7 @@ func calcRecentWidths(recent []stats.RecentCall) (wWhen, wTool, wName int) {
 	wTool = 4 // "Tool"
 	wName = 7 // "Name" (session human name)
 	for _, c := range recent {
-		if l := len(humanAge(c.CalledAt)); l > wWhen {
+		if l := len(render.HumanAge(c.CalledAt)); l > wWhen {
 			wWhen = l
 		}
 		if l := len(c.Tool); l > wTool {
@@ -202,16 +184,16 @@ func calcRecentWidths(recent []stats.RecentCall) (wWhen, wTool, wName int) {
 	return wWhen + 2, wTool + 2, wName
 }
 
-func renderRecentCallRow(c stats.RecentCall, wWhen, wTool, wMs, wStatus, wSessID, wName, errMaxWidth int) {
+func renderRecentCallRow(c stats.RecentCall, wWhen, wTool, wMs, wStatus, wSessID, errMaxWidth int) {
 	ok := tui.OkStyle.Render("✓")
 	if !c.Success {
 		ok = tui.WarnStyle.Render("✗")
 	}
-	sessID := padRight(shortSessionID(c.SessionID), wSessID)
+	sessID := render.PadRight(shortSessionID(c.SessionID), wSessID)
 	name := tui.MutedStyle.Render(c.SessionName)
-	when := padRight(humanAge(c.CalledAt), wWhen)
-	tool := padRight(c.Tool, wTool)
-	ms := padRight(fmt.Sprintf("%d", c.DurationMs), wMs)
+	when := render.PadRight(render.HumanAge(c.CalledAt), wWhen)
+	tool := render.PadRight(c.Tool, wTool)
+	ms := render.PadRight(fmt.Sprintf("%d", c.DurationMs), wMs)
 	status := centerStr(ok, wStatus)
 
 	if !c.Success {
@@ -248,15 +230,6 @@ func shortSessionID(id string) string {
 	return id[:8]
 }
 
-// padRight pads a string with spaces on the right up to a given visual width (ignoring ANSI codes).
-func padRight(s string, width int) string {
-	vis := lipgloss.Width(s)
-	if vis >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-vis)
-}
-
 // centerStr centres a string within the given visual width (ignoring ANSI codes).
 func centerStr(s string, width int) string {
 	vis := lipgloss.Width(s)
@@ -266,19 +239,4 @@ func centerStr(s string, width int) string {
 	left := (width - vis) / 2
 	right := width - vis - left
 	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
-}
-
-// humanAge formats a past time as a human-readable age string.
-func humanAge(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return t.Format("2006-01-02")
-	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/tui"
 )
 
@@ -285,11 +286,7 @@ func contractConfigPath(p string) string {
 	if p == "" {
 		return tui.MutedStyle.Render("(none)")
 	}
-	home, err := os.UserHomeDir()
-	if err == nil && strings.HasPrefix(p, home) {
-		p = "~" + p[len(home):]
-	}
-	return p
+	return render.ContractPath(p)
 }
 
 // sourceFor returns a short label naming the layer that supplied the

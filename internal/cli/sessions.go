@@ -2,13 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"strings"
 
-	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/table"
 	"github.com/spf13/cobra"
 
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/tui"
 )
@@ -65,26 +62,11 @@ func renderSessions(sessions []session.Info, hidden int) error {
 
 	tui.RebuildStyles()
 
-	t := table.New().
-		Border(DottedBorder).
-		BorderRow(false).
-		BorderColumn(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderTop(true).
-		BorderBottom(false).
-		BorderStyle(tui.SepStyle).
-		Headers("ID", "Name", "Language", "Folder", "Adapter", "PID", "Started").
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().PaddingRight(2)
-			if row == table.HeaderRow {
-				return s.Inherit(tui.HintStyle)
-			}
-			return s
-		})
+	t := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
+		Headers("ID", "Name", "Language", "Folder", "Adapter", "PID", "Started")
 
 	for _, s := range sessions {
-		folder := contractSessionPath(s.Folder)
+		folder := render.ContractPath(s.Folder)
 		if folder == "" {
 			folder = "(resolving…)"
 		}
@@ -104,13 +86,4 @@ func renderSessions(sessions []session.Info, hidden int) error {
 		fmt.Printf("\n(%d session(s) hidden — pending workspace; use --all to show)\n", hidden)
 	}
 	return nil
-}
-
-// contractSessionPath shortens a path for terminal display.
-func contractSessionPath(p string) string {
-	home, err := os.UserHomeDir()
-	if err == nil && strings.HasPrefix(p, home) {
-		p = "~" + p[len(home):]
-	}
-	return p
 }

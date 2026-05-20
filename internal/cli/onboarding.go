@@ -63,26 +63,26 @@ func Discover(root string, refuseHomeRoots bool) (*Discovery, error) {
 }
 
 func classifyBuildSystem(d *Discovery, langs map[string]struct{}, name string) {
-	switch {
-	case name == "go.mod":
+	switch name {
+	case "go.mod":
 		d.BuildSystems = append(d.BuildSystems, "Go modules")
 		langs["Go"] = struct{}{}
-	case name == "package.json":
+	case "package.json":
 		d.BuildSystems = append(d.BuildSystems, "npm/yarn/pnpm")
 		langs["JavaScript/TypeScript"] = struct{}{}
-	case name == "Cargo.toml":
+	case "Cargo.toml":
 		d.BuildSystems = append(d.BuildSystems, "Cargo")
 		langs["Rust"] = struct{}{}
-	case name == "pyproject.toml" || name == "requirements.txt" || name == "setup.py":
+	case "pyproject.toml", "requirements.txt", "setup.py":
 		d.BuildSystems = append(d.BuildSystems, "Python")
 		langs["Python"] = struct{}{}
-	case name == "pom.xml":
+	case "pom.xml":
 		d.BuildSystems = append(d.BuildSystems, "Maven")
 		langs["Java"] = struct{}{}
-	case name == "build.gradle" || name == "build.gradle.kts":
+	case "build.gradle", "build.gradle.kts":
 		d.BuildSystems = append(d.BuildSystems, "Gradle")
 		langs["Java/Kotlin"] = struct{}{}
-	case name == "Gemfile":
+	case "Gemfile":
 		d.BuildSystems = append(d.BuildSystems, "Bundler")
 		langs["Ruby"] = struct{}{}
 	}

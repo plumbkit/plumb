@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 
-	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/tui"
 )
 
@@ -85,12 +85,7 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(tui.MutedStyle.Render(ctxStr))
-	fmt.Println(ctxBox)
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println("\nRestart Claude Desktop to apply the change.")
 	return nil
 }
@@ -124,12 +119,7 @@ func runSetupGemini(_ *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(tui.MutedStyle.Render(ctxStr))
-	fmt.Println(ctxBox)
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println("\nRestart Gemini CLI to apply the change.")
 	return nil
 }
@@ -163,12 +153,7 @@ func runSetupCodex(_ *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(tui.MutedStyle.Render(ctxStr))
-	fmt.Println(ctxBox)
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println("\nRestart Codex to apply the change.")
 	return nil
 }
@@ -266,12 +251,7 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(tui.MutedStyle.Render(ctxStr))
-	fmt.Println(ctxBox)
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println("\nReload Claude Code (or open a new session) to apply the change.")
 	return nil
 }

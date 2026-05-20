@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/golimpio/plumb/internal/render"
 )
 
 func (m *Model) handleRightPanelClick(bodyRow int) {
@@ -154,23 +156,23 @@ func (m *Model) rightLinesTools(rw int) []string {
 			"  " + MutedStyle.Render("No calls recorded yet."),
 		}
 	}
-	lc := padRight(HintStyle.Render("Tool"), c1w)
-	h := "  " + lc + s3 + padLeft(HintStyle.Render("Calls"), c2w) + s3 + padLeft(HintStyle.Render("Avg"), c3w) + s3 + HintStyle.Render("Errors")
+	lc := render.PadRight(HintStyle.Render("Tool"), c1w)
+	h := "  " + lc + s3 + render.PadLeft(HintStyle.Render("Calls"), c2w) + s3 + render.PadLeft(HintStyle.Render("Avg"), c3w) + s3 + HintStyle.Render("Errors")
 	lines := []string{h, sln}
 	m.statsTableBodyRow = 2 // tab bar + blank = 2 rows before this content
 	for i, ts := range m.toolStats {
 		sel := m.focusPanel == focusToolStats && i == m.toolStatsCursor
-		tn := padRight(truncate(ts.Tool, c1w-2), c1w-2)
+		tn := render.PadRight(truncate(ts.Tool, c1w-2), c1w-2)
 		if sel {
-			pc, pa, pe := padLeft(fmt.Sprintf("%d", ts.Calls), c2w), padLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), padLeft("", c4w)
+			pc, pa, pe := render.PadLeft(fmt.Sprintf("%d", ts.Calls), c2w), render.PadLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), render.PadLeft("", c4w)
 			if ts.Errors > 0 {
-				pe = padLeft(fmt.Sprintf("%d", ts.Errors), c4w)
+				pe = render.PadLeft(fmt.Sprintf("%d", ts.Errors), c4w)
 			}
 			lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pc+s3+pa+s3+pe+s3))
 		} else {
-			c2, c3, c4 := padLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), c2w), padLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), c3w), padLeft("", c4w)
+			c2, c3, c4 := render.PadLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), c2w), render.PadLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), c3w), render.PadLeft("", c4w)
 			if ts.Errors > 0 {
-				c4 = padLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), c4w)
+				c4 = render.PadLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), c4w)
 			}
 			lines = append(lines, "  ○ "+tn+s3+c2+s3+c3+s3+c4+s3)
 		}
@@ -194,18 +196,18 @@ func (m *Model) rightLinesHistory(rw int) []string {
 			"  " + MutedStyle.Render("No calls in this session yet."),
 		}
 	}
-	rlc := padRight(HintStyle.Render("Tool"), rc1w)
-	h := "  " + rlc + s3 + padLeft(HintStyle.Render("Dur"), c2w) + s3 + padLeft(HintStyle.Render("When"), c3w) + s3 + padLeft(HintStyle.Render("Err"), c4w) + s3 + HintStyle.Render("Session")
+	rlc := render.PadRight(HintStyle.Render("Tool"), rc1w)
+	h := "  " + rlc + s3 + render.PadLeft(HintStyle.Render("Dur"), c2w) + s3 + render.PadLeft(HintStyle.Render("When"), c3w) + s3 + render.PadLeft(HintStyle.Render("Err"), c4w) + s3 + HintStyle.Render("Session")
 	lines := []string{h, sln}
 	m.recentTableBodyRow = 2 // tab bar + blank = 2 rows before this content
 	for i, c := range m.recentCalls {
 		sel := m.focusPanel == focusStats && i == m.statsCursor
-		tn := padRight(truncate(c.Tool, rc1w-2), rc1w-2)
-		sn := padRight(truncate(c.SessionName, c5w), c5w)
+		tn := render.PadRight(truncate(c.Tool, rc1w-2), rc1w-2)
+		sn := render.PadRight(truncate(c.SessionName, c5w), c5w)
 		if sel {
-			pd, pw, pe := padLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), padLeft(humanAgeTUI(c.CalledAt), c3w), padLeft("", c4w)
+			pd, pw, pe := render.PadLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), render.PadLeft(render.HumanAge(c.CalledAt), c3w), render.PadLeft("", c4w)
 			if !c.Success {
-				pe = padLeft("✗", c4w)
+				pe = render.PadLeft("✗", c4w)
 			}
 			lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pd+s3+pw+s3+pe+s3+sn))
 		} else {
@@ -213,11 +215,11 @@ func (m *Model) rightLinesHistory(rw int) []string {
 			if !c.Success {
 				mk = WarnStyle.Render("✗") + " "
 			}
-			c2, c3, c4 := padLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), c2w), padLeft(MutedStyle.Render(humanAgeTUI(c.CalledAt)), c3w), padLeft("", c4w)
+			c2, c3, c4 := render.PadLeft(MutedStyle.Render(fmt.Sprintf("%dms", c.DurationMs)), c2w), render.PadLeft(MutedStyle.Render(render.HumanAge(c.CalledAt)), c3w), render.PadLeft("", c4w)
 			if !c.Success {
-				c4 = padLeft(WarnStyle.Render("✗"), c4w)
+				c4 = render.PadLeft(WarnStyle.Render("✗"), c4w)
 			}
-			c5 := padRight(MutedStyle.Render(truncate(c.SessionName, c5w)), c5w)
+			c5 := render.PadRight(MutedStyle.Render(truncate(c.SessionName, c5w)), c5w)
 			lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3+c5)
 		}
 	}

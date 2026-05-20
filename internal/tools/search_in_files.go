@@ -375,11 +375,11 @@ func searchScanFile(p searchPathPair, re *regexp.Regexp, contextLines int) *sear
 		hitNums[i] = lines[h].number
 	}
 	return &searchFileMatch{
-		relPath:     p.rel,
-		absPath:     p.abs,
-		lines:       formatHitLines(lines, hitLineIdxs, contextLines),
-		hitLineNums: hitNums,
-		hits:        len(hitLineIdxs),
+		relPath:      p.rel,
+		absPath:      p.abs,
+		lines:        formatHitLines(lines, hitLineIdxs, contextLines),
+		hitLineNums:  hitNums,
+		hits:         len(hitLineIdxs),
 		skippedLines: skippedLines,
 	}
 }

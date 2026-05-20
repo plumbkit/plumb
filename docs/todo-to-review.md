@@ -382,6 +382,26 @@ Implementation: `internal/tools/find_replace.go` — `format_after` schema field
 
 ---
 
+### CQ-7 — De-duplicate CLI/TUI presentation helpers
+
+**Completed in:** 0.7.1 (2026-05-21)
+**Original priority:** P2, medium effort
+
+Introduced `internal/render` as a new leaf-level package with shared, pure helpers: `ContractPath` (home → `~` path contraction), `HumanAge` (concise age string; unified to `Jan 2` for dates older than 24 h), `PadRight`, `PadLeft`, `ContextBox`, and `DottedTableBase`.
+
+Migrated all CLI and TUI duplicates:
+- `internal/cli/stats.go` — removed local `padRight`, `humanAge`; replaced `table.New()/DottedBorder` setup with `render.DottedTableBase`.
+- `internal/cli/sessions.go` — removed `contractSessionPath` and inline table setup; uses `render.ContractPath`, `render.DottedTableBase`.
+- `internal/cli/diagnostics.go`, `init.go`, `setup.go` — replaced four inline `lipgloss.NewStyle().Border(ContextBorder, ...)` boxes with `render.ContextBox`.
+- `internal/cli/config.go` — `contractConfigPath` now delegates path-contraction to `render.ContractPath`.
+- `internal/cli/doctor.go` — replaced `contractSessionPath` calls with `render.ContractPath`.
+- `internal/tui/model_utils.go` — removed `padRight`, `padLeft`, `humanAgeTUI`; `overlayLogoBottom` uses `render.PadRight`.
+- `internal/tui/model_right.go`, `model_logs.go` — all call sites updated to `render.PadRight`, `render.PadLeft`, `render.HumanAge`.
+
+`internal/render` has unit tests covering all public functions.
+
+---
+
 ### CQ-4 — Split oversized files by responsibility (P1)
 
 **Completed in:** 0.7.1 (2026-05-20)

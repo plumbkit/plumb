@@ -65,10 +65,10 @@ func TestRenameSymbol_EmptyEditSet(t *testing.T) {
 	tool := tools.NewRenameSymbol(mock)
 
 	args, _ := json.Marshal(map[string]any{
-		"uri":      "file:///any.go",
-		"line":     0,
+		"uri":       "file:///any.go",
+		"line":      0,
 		"character": 0,
-		"new_name": "NewName",
+		"new_name":  "NewName",
 	})
 
 	out, err := tool.Execute(context.Background(), args)

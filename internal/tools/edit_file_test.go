@@ -390,9 +390,9 @@ func TestEditFile_ApplyPartial_SomeFail(t *testing.T) {
 		"path":          path,
 		"apply_partial": true,
 		"edits": []map[string]string{
-			{"old_str": "aaa", "new_str": "AAA"},    // succeeds
+			{"old_str": "aaa", "new_str": "AAA"},   // succeeds
 			{"old_str": "MISSING", "new_str": "X"}, // fails
-			{"old_str": "ccc", "new_str": "CCC"},    // succeeds
+			{"old_str": "ccc", "new_str": "CCC"},   // succeeds
 		},
 	})
 	if err != nil {

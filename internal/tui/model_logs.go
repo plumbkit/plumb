@@ -8,6 +8,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/golimpio/plumb/internal/render"
 )
 
 // filteredLogEntries returns log entries that match the current filter string
@@ -52,7 +54,7 @@ func (m Model) renderLogEntry(e logEntry, width int, selected bool) string {
 
 	// Level badge padded to 5 chars.
 	const levelW = 5
-	lvlText := padRight(e.Level, levelW)
+	lvlText := render.PadRight(e.Level, levelW)
 	var lvlStyled string
 	switch strings.ToUpper(strings.TrimSpace(e.Level)) {
 	case "ERROR":
@@ -346,7 +348,7 @@ func (m Model) renderLogDetailContentLine(text string, innerW int, rBar string) 
 func (m Model) renderLogDetailStatusBar(innerW int) string {
 	contentW := max(innerW-2, 1)
 	if m.logDetailCopied {
-		content := StatusStyle.Render(padRight("Copied to the clipboard", contentW))
+		content := StatusStyle.Render(render.PadRight("Copied to the clipboard", contentW))
 		return SepStyle.Render("│") + " " + content + " " + SepStyle.Render("│")
 	}
 	left := StatusKeyStyle.Render("c") + StatusStyle.Render(" copy")
@@ -400,7 +402,7 @@ func logDetailLines(e logEntry, width int) []string {
 }
 
 func logDetailField(label, value string) string {
-	return LogDetailKeyStyle.Render(padRight(label, 9)) + value
+	return LogDetailKeyStyle.Render(render.PadRight(label, 9)) + value
 }
 
 func logDetailTitle(label string) string {

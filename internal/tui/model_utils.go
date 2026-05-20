@@ -3,18 +3,17 @@ package tui
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/stats"
 )
 
@@ -82,29 +81,13 @@ func locateTool(stats []stats.ToolStat, toolName string, fallback int) int {
 	return fallback
 }
 
-func padRight(s string, w int) string {
-	v := lipgloss.Width(s)
-	if v >= w {
-		return s
-	}
-	return s + strings.Repeat(" ", w-v)
-}
-
-func padLeft(s string, w int) string {
-	v := lipgloss.Width(s)
-	if v >= w {
-		return s
-	}
-	return strings.Repeat(" ", w-v) + s
-}
-
 func overlayLogoBottom(line string, width int) string {
 	logoBottom := strings.Split(LogoText, "\n")[3]
 	logoW := lipgloss.Width(logoBottom)
 	if width <= logoW {
 		return line
 	}
-	line = padRight(line, width)
+	line = render.PadRight(line, width)
 
 	targetW := width - logoW
 	var b strings.Builder
@@ -171,20 +154,6 @@ func contractPath(p string, max int) string {
 		return "…"
 	}
 	return "…" + string(r[len(r)-(max-1):])
-}
-
-func humanAgeTUI(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return t.Format("Jan 2")
-	}
 }
 
 func daemonRunning() bool {

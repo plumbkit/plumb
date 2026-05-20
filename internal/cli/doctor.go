@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/stats"
 	"github.com/golimpio/plumb/internal/tui"
 )
@@ -180,7 +181,7 @@ func checkDaemon() []checkResult {
 		return []checkResult{{
 			name:   "socket",
 			ok:     false,
-			detail: fmt.Sprintf("cannot dial %s", contractSessionPath(socketPath)),
+			detail: fmt.Sprintf("cannot dial %s", render.ContractPath(socketPath)),
 			fix:    "run `plumb serve` or let an MCP client start it automatically",
 		}}
 	}
@@ -189,7 +190,7 @@ func checkDaemon() []checkResult {
 	results := []checkResult{{
 		name:   "socket",
 		ok:     true,
-		detail: contractSessionPath(socketPath),
+		detail: render.ContractPath(socketPath),
 	}}
 
 	data, err := os.ReadFile(daemonVersionPath())

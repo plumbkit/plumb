@@ -978,24 +978,6 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 ---
 
-### CQ-7 — De-duplicate CLI/TUI presentation helpers (P2)
-
-**Priority:** medium. Subsumes cli-and-core-review-plan.md §14.
-**Effort:** Medium.
-**Status:** Not started.
-
-**Problem.** Path contraction, age/duration formatting, padding, diagnostic-box rendering, and table styling are reimplemented across `internal/cli/{stats,config,sessions,diagnostics,doctor}.go` and partially duplicated in `internal/tui`. Divergent copies drift (e.g. age formatting already differs subtly between CLI and TUI).
-
-**Definition of done.**
-
-1. Introduce `internal/render` (or `internal/textui`) with the shared, pure helpers: path contraction, human-age, padding/truncation, diagnostic box, common table style.
-2. Migrate CLI commands first, then TUI, to the shared implementation. No behaviour change beyond intended unification; add snapshot tests where output stability matters (CLI is a UX contract).
-3. Do not couple CLI to TUI internals beyond shared style constants already intentionally shared.
-
-**Watch out for.** Respect the layering rule in AGENTS.md — presentation helpers must not pull domain/transport packages upward. Keep the new package leaf-level.
-
----
-
 ### Suggested sequencing
 
 1. **CQ-2** (delete dead code) and the mechanical half of **CQ-1** (gofumpt/ineffassign/prealloc/errcheck) — fast, stops the bleeding, makes diffs clean for everything after.

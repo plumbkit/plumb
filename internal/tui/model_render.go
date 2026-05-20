@@ -153,15 +153,15 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 		if dimmed {
 			msgStyle = InactiveStyle
 		}
-		
+
 		leftFooter := msgStyle.Render(msg)
 		// fill until 3 columns before the right footer
-		fillW := max(m.width - lipgloss.Width(msg) - lipgloss.Width(rightFooterPlain) - 3, 0)
-		
+		fillW := max(m.width-lipgloss.Width(msg)-lipgloss.Width(rightFooterPlain)-3, 0)
+
 		rightFooter := keyStyle.Render("/") + style.Render(" menu  ·  ") +
 			keyStyle.Render("^q") + style.Render(" quit  ·  ") +
 			keyStyle.Render("^h") + style.Render(" help ")
-			
+
 		return leftFooter + strings.Repeat(" ", fillW) + "   " + rightFooter
 	}
 

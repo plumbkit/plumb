@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/tui"
 )
@@ -140,13 +141,7 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 			tui.MutedStyle.Render("↳ Run a tool that touches each (or open in your editor) to force analysis."),
 		)
 
-		noteBox := lipgloss.NewStyle().
-			Border(ContextBorder, false, false, false, true).
-			BorderForeground(tui.SepStyle.GetForeground()).
-			PaddingLeft(1).
-			Render(noteStr)
-
-		fmt.Println(noteBox)
+		fmt.Println(render.ContextBox(noteStr, tui.SepStyle))
 	}
 	return nil
 }
@@ -204,7 +199,7 @@ func styleDiagnostics(raw string) string {
 
 		// If it's a file path
 		if strings.HasSuffix(trimmed, ".go") {
-			contracted := contractSessionPath(trimmed)
+			contracted := render.ContractPath(trimmed)
 			out = append(out, "", tui.HintStyle.Bold(true).Render(contracted))
 			continue
 		}
@@ -251,18 +246,12 @@ func printDiagHeader(workspace string) {
 		}
 	}
 
-	ctxStr := contractSessionPath(workspace)
+	ctxStr := render.ContractPath(workspace)
 	if match != nil {
 		ctxStr += fmt.Sprintf("\nsession %s", match.ID)
 	}
 
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(tui.MutedStyle.Render(ctxStr))
-
-	fmt.Println(ctxBox)
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println()
 }
 

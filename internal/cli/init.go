@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/tui"
 )
 
@@ -63,12 +63,7 @@ func runInit(_ *cobra.Command, args []string) error {
 	if _, err := os.Stat(plumbDir); err == nil {
 		tui.RebuildStyles()
 		ctxStr := fmt.Sprintf(".plumb already exists at:\n↳ %s", plumbDir)
-		ctxBox := lipgloss.NewStyle().
-			Border(ContextBorder, false, false, false, true).
-			BorderForeground(tui.SepStyle.GetForeground()).
-			PaddingLeft(1).
-			Render(tui.MutedStyle.Render(ctxStr))
-		fmt.Println(ctxBox)
+		fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 		fmt.Println()
 		return nil
 	}
@@ -118,12 +113,7 @@ func runInit(_ *cobra.Command, args []string) error {
 	}
 
 	tui.RebuildStyles()
-	ctxBox := lipgloss.NewStyle().
-		Border(ContextBorder, false, false, false, true).
-		BorderForeground(tui.SepStyle.GetForeground()).
-		PaddingLeft(1).
-		Render(tui.MutedStyle.Render(ctxStr))
-	fmt.Println(ctxBox)
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println("\nAdd .plumb to your .gitignore if you prefer to keep it local, or commit it to share with your team.")
 	return nil
 }
