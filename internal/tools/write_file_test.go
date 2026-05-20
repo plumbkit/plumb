@@ -174,6 +174,40 @@ func TestWriteFile_DirtyCheck_AllowsNewFile(t *testing.T) {
 	}
 }
 
+func TestWriteFile_ShowWriteDiff_IncludesDiff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("old content\n"), 0o644)
+
+	out, err := NewWriteFile(WriteDeps{ShowWriteDiff: true}).Execute(
+		context.Background(),
+		mustJSON(map[string]any{"path": path, "content": "new content\n"}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "-old content") {
+		t.Errorf("expected deletion line in diff; got:\n%s", out)
+	}
+	if !strings.Contains(out, "+new content") {
+		t.Errorf("expected addition line in diff; got:\n%s", out)
+	}
+}
+
+func TestWriteFile_ShowWriteDiff_NewFileEmitsNewFileMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "brand-new.txt")
+
+	out, err := NewWriteFile(WriteDeps{ShowWriteDiff: true}).Execute(
+		context.Background(),
+		mustJSON(map[string]any{"path": path, "content": "hello\n"}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "new file") {
+		t.Errorf("expected 'new file' marker for a new file; got:\n%s", out)
+	}
+}
+
 func TestWriteFile_AtomicTmpCleanedOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")

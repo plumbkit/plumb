@@ -410,6 +410,54 @@ func TestEditFile_ApplyPartial_SomeFail(t *testing.T) {
 	}
 }
 
+func TestEditFile_DirtyCheck_RefusesDirtyFile(t *testing.T) {
+	dir := initGitRepo(t)
+	path := filepath.Join(dir, "f.go")
+	_ = os.WriteFile(path, []byte("package main\n"), 0o644)
+	gitExec(t, dir, "add", "f.go")
+	gitExec(t, dir, "commit", "-m", "add")
+	// Modify after commit to make dirty.
+	_ = os.WriteFile(path, []byte("package main\n// modified\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "package main", "new_str": "package foo"}},
+	})
+	if err == nil {
+		t.Fatal("expected dirty file rejection")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	// File must be unchanged.
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "modified") {
+		t.Error("file content changed unexpectedly")
+	}
+}
+
+func TestEditFile_ShowWriteDiff_IncludesDiff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("package main\n\nfunc Old() {}\n"), 0o644)
+
+	out, err := NewEditFile(WriteDeps{
+		Reads:         NewReadTracker(),
+		ShowWriteDiff: true,
+	}).Execute(context.Background(), mustJSON(map[string]any{
+		"path":  path,
+		"edits": []map[string]string{{"old_str": "Old", "new_str": "New"}},
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "-func Old()") {
+		t.Errorf("expected deletion line in diff; got:\n%s", out)
+	}
+	if !strings.Contains(out, "+func New()") {
+		t.Errorf("expected addition line in diff; got:\n%s", out)
+	}
+}
+
 func TestEditFile_ApplyPartial_AllFail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f.go")
 	content := "aaa\nbbb\n"

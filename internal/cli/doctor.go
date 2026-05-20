@@ -78,11 +78,11 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 
 	if failures == 0 {
 		fmt.Println(tui.OkStyle.Render("All checks passed."))
-	} else {
-		fmt.Printf("%s  %d check(s) need attention — see hints above.\n",
-			tui.WarnStyle.Render("✗"), failures)
+		return nil
 	}
-	return nil
+	fmt.Printf("%s  %d check(s) need attention — see hints above.\n",
+		tui.WarnStyle.Render("✗"), failures)
+	return fmt.Errorf("%d check(s) need attention", failures)
 }
 
 func runSection(title string, run func() []checkResult) []checkResult {

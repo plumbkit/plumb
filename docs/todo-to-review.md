@@ -42,57 +42,6 @@ gopls v0.22+ registers both forms after `client/registerCapability`. Before the 
 
 ---
 
-## Features
-
-### Automatic session orientation via the MCP `instructions` field
-
-**Completed in:** commit `015f32b` (or nearby) — `feat: add doctor and agent safeguards`
-**Original priority:** high
-
-`internal/mcp/server.go` now populates the `instructions` field in the `initialize` response. The default text lives in `internal/mcp/instructions.go` as `DefaultInstructions` — it tells the model to call `session_start` as the first tool of every session, explains what it returns, covers the no-workspace branch, and nudges toward symbol-aware tools. The field is `omitempty` so clients that predate the spec change see no unexpected keys. Override with `ServerInfo.Instructions = "-"` to suppress.
-
----
-
-### Token Usage Optimisation — Unified diff and smart truncation
-
-**Completed in:** commit `31fe447` — `feat(tools): unified diff in edit/write responses, smart truncation for search and git`
-**Original priority:** high
-
-`edit_file` and `write_file` now return a unified diff of the change alongside the line-range summary, giving the agent immediate confirmation without a follow-up `read_file` turn. `search_in_files` and `git log` outputs are automatically capped and include a summary line ("Showing N of M matches") when truncated.
-
----
-
-### `plumb doctor` — discovery and health-check CLI
-
-**Completed in:** commits `015f32b`, `600ce76`, `b208fb9`, `a8ca361`, `5389138`, `db1f507`
-**Original priority:** medium
-
-`plumb doctor` is a traffic-light report showing: binary path + version, daemon running + version-match, gopls/pyright/jdtls/java on PATH, stats DB status, global and project config existence, and MCP client registration for Claude Desktop, Claude Code, Gemini CLI, and others. Exit code 0 on all ✓, 1 on any ✗. `--json` flag for machine-readable output. Implementation: `internal/cli/doctor.go`.
-
----
-
-### "Working tree is dirty" guard on write tools
-
-**Completed in:** commit `840d4d4` — `feat(tools): add dirty_ok guard to all write tools`
-**Original priority:** medium
-
-`write_file`, `edit_file`, `delete_file`, `rename_file`, and `transaction_apply` all accept a `dirty_ok bool` parameter (default `false`). When `false`, the tool checks `git status --porcelain` for the target file and refuses if uncommitted changes are present, with a message explaining how to proceed. `dirty_ok: true` bypasses the check.
-
-Implementation: `pathIsDirty` helper in `internal/tools/file_write_helpers.go`; parameter wired into each tool's `args` struct and schema.
-
----
-
-### TUI: Live Log Viewer
-
-**Completed in:** commit `2656db6` — `feat(tui): add live log viewer tab (v0.6.3)`, refined in subsequent commits
-**Original priority:** low
-
-A full-width Logs tab (section index 3) tails `daemon.log` in real time. Log lines are displayed as they arrive; substring filtering (`logFilter`) narrows visible lines; `logFollow = true` (default) keeps the view pinned to the newest entry. Press `G` to re-engage follow after scrolling up, `esc` to clear the filter, type to filter.
-
-Implementation: `internal/tui/log_view.go`, integrated into `internal/tui/model.go`.
-
----
-
 ## Testing & verification
 
 ### Claude Desktop end-to-end smoke test
