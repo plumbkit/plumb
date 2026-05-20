@@ -190,7 +190,9 @@ Topology must be fast and memory-efficient, but its contract is different from L
 1. **Storage:** SQLite backend in `<workspace>/.plumb/topology.db`.
    - `nodes`: files, packages/modules, symbols, routes, tests, config entry points.
    - `edges`: defines, imports, calls, references, inherits/implements, contains, route-to-handler, test-covers.
-   - FTS5 virtual table for fuzzy symbol/path/search queries.
+   - FTS5 virtual table for fuzzy symbol/path/search queries, with separate indexed fields for symbol names, signatures, paths, comments/docstrings, routes, and test names.
+   - Code-aware tokenisation: split `camelCase`, `snake_case`, `kebab-case`, package/path segments, and preserve exact names so `workspacePool`, `workspace pool`, and `workspace_pool` can all be discovered.
+   - Dependency: this is the code-structure backend for [Workspace Search Engine](#workspace-search-engine-exact-scan--indexed-discovery); Topology owns indexed code entities, while the search engine owns the user-facing exact-vs-ranked tool contract.
    - Metadata table: schema version, index generation, indexed file hash/mtime, language, extractor version, last error.
    - WAL mode and short write transactions so MCP read queries do not block on indexing.
 2. **Extraction:** Go-native Tree-sitter integration. Use checked-in `.scm` queries per language.
@@ -209,7 +211,7 @@ Topology must be fast and memory-efficient, but its contract is different from L
    - Per-workspace one-indexer-at-a-time lock; coalesce repeated writes.
 5. **Tools:**
    - `topology_status`: index health, indexed/skipped/stale file counts, DB size, last sync, watcher state, language coverage, last errors.
-   - `topology_search`: fuzzy global symbol/file/route search.
+   - `topology_search`: fuzzy global symbol/file/route search over indexed code structure. This is a dependency for `workspace_search`, not a replacement for exact `search_in_files` scans.
    - `topology_explore`: bounded neighbourhood around a symbol/file/route/test.
    - `topology_impact`: transitive dependency and reference closure.
    - `topology_routes`: framework-aware entry points.
@@ -236,7 +238,7 @@ Supported `include_source`: `none`, `signatures`, `snippets`, `full` (full shoul
 1. `internal/topology` package with SQLite schema for nodes, edges, FTS5 search, and index metadata.
 2. Daemon-owned incremental indexer with debounce, stale cleanup, delete/rename handling, and manual resync.
 3. Go and Python extractors functional and tested against fixtures.
-4. `topology_status`, `topology_search`, and `topology_explore` exposed as MCP tools and documented.
+4. `topology_status`, `topology_search`, and `topology_explore` exposed as MCP tools and documented with clear `source=topology`, `mode=ranked`, and index-freshness semantics.
 5. `topology_explore` enforces `max_nodes`/`max_bytes` and reports truncation.
 6. Benchmark: Topology-based symbol listing is >5x faster than LSP-based `list_symbols` on cold start.
 7. Concurrency tests prove MCP read queries do not fail while indexing is active.
@@ -277,8 +279,10 @@ The important distinction: memory must be **grounded, private, and budgeted**. A
 
 2. **FTS5 Semantic Search & Background Indexing:**
    `search_memories` is currently a basic grep. We should index the Markdown memories into a SQLite table using the **FTS5** (Full-Text Search) extension.
-   - **Mechanism:** The `internal/memory` package maintains an `fts_index` virtual table. On `write_memory` or daemon start, a background worker crawls `.plumb/memories/*.md` and keeps the index in sync.
-   - **Benefit:** Gives us ranking (relevance), stemming (matches "running" to "run"), and proximity matching (a "poor man's vector search") out-of-the-box, making memory retrieval much more resilient to exact keyword misses.
+   - **Mechanism:** The `internal/memory` package maintains an `fts_index` virtual table. On `write_memory`, `delete_memory`, or daemon start, a background worker crawls `.plumb/memories/*.md` and keeps the index in sync.
+   - **Indexed fields:** memory name, description/frontmatter, body, path globs, source paths/symbols, provenance labels, and generated-vs-user-authored confidence.
+   - **Benefit:** Gives us ranking (relevance), stemming (matches "running" to "run"), prefix/phrase/proximity matching, and snippets/highlights out-of-the-box, making memory retrieval more resilient to exact keyword misses.
+   - **Dependency:** this is the memory backend for [Workspace Search Engine](#workspace-search-engine-exact-scan--indexed-discovery). Memory FTS should feed ranked discovery, while `search_memories` must keep a deterministic grep fallback when FTS5 is unavailable or stale.
 
 3. **Lifecycle Hooks for Proactive Context Injection:**
    Agents often forget to call `relevant_memories` when reading a file. We can inject this knowledge proactively at the tool-response layer.
@@ -316,7 +320,7 @@ The important distinction: memory must be **grounded, private, and budgeted**. A
 
 **Definition of done — Phase 1.**
 
-1. **FTS5 implementation:** SQLite FTS5 virtual table added to `internal/memory/store.go`. `write_memory` and `delete_memory` trigger incremental index updates. `search_memories` uses `MATCH` queries with relevance ranking and a grep fallback if FTS5 is unavailable.
+1. **FTS5 implementation:** SQLite FTS5 virtual table added to `internal/memory/store.go`. `write_memory` and `delete_memory` trigger incremental index updates. `search_memories` uses `MATCH` queries with relevance ranking, snippets/highlights, index freshness reporting, and a grep fallback if FTS5 is unavailable or stale.
 2. **Privacy/redaction:** Add a small redaction package used before writing generated episodic memories. Unit tests cover common secret shapes.
 3. **Episodic logic:** New `episodic_memories` table in `stats.db`. Daemon implements an idle-session listener that generates bounded summaries. `session_start` reads the most recent summary for the workspace and appends it only within a configured budget.
 4. **Provenance:** Generated memories store source session/tool-call IDs and touched file paths. `read_memory` displays provenance metadata.
@@ -325,7 +329,7 @@ The important distinction: memory must be **grounded, private, and budgeted**. A
 
 **Phase 2.**
 
-1. Hybrid retrieval: combine FTS5 rank, path-glob relevance, recency, confidence, and usage count. Keep embeddings optional; do not add a vector database unless FTS5 quality is clearly insufficient.
+1. Hybrid retrieval: combine FTS5 rank, path-glob relevance, recency, confidence, and usage count. Feed the same ranked memory hits into `workspace_search` once the search engine exists. Keep embeddings optional; do not add a vector database unless FTS5 quality is clearly insufficient.
 2. Memory lifecycle commands/views: list stale memories, show unused memories, mark superseded, and prune generated memories older than a configured threshold.
 3. Topology-backed retrieval once Topology is available.
 4. TUI Memory section consumes the same store: memory list, details, provenance, source paths/symbols, and stale/superseded state.
@@ -338,7 +342,120 @@ The important distinction: memory must be **grounded, private, and budgeted**. A
 - Summaries can become stale after refactors. Provenance and topology links make stale detection possible.
 - Keep memory retrieval deterministic and explainable. If an agent sees a memory, it should be able to tell why it was shown.
 
-**Shared Topology + Memory opportunity.**
+---
+
+### Workspace Search Engine: Exact Scan + Indexed Discovery
+
+**Priority:** High
+**Effort:** Medium/significant. Depends on Topology and Advanced Memory storage pieces for the full version.
+**Status:** Planning.
+**Dependencies:** [Plumb Topology](#plumb-topology-persistent-semantic-indexing) provides indexed code entities; [Advanced Memory Engine](#advanced-memory-engine) provides indexed memories. This item defines the user-facing search contract so overlapping search tools do not confuse MCP clients.
+
+**Problem.**
+
+`search_in_files` is intentionally grep-like: it scans current files, supports regex/smart-case/context lines, honours `.gitignore`, and can annotate hits with enclosing LSP symbols. That is the right tool for exact text checks, audits, and replacement prep.
+
+What it lacks as a discovery engine:
+
+- No relevance ranking: every hit is roughly equal, even if one result is clearly the best answer.
+- No persistent index: repeated broad searches rescan the workspace and produce large tool output.
+- No fuzzy/token-aware matching: `workspacePool`, `workspace pool`, `workspace_pool`, and path segments are different unless the caller writes a careful regex.
+- No unified corpus: source files, symbols, docs, memories, comments, routes, tests, and paths are searched through different tools.
+- No first-class snippets/highlights or field labels that say *why* a result matched.
+- Broad grep output is token-expensive and often forces follow-up `read_file` calls.
+
+**Design rule — two lanes, not one overloaded tool.**
+
+Do **not** replace `search_in_files` with FTS5. Keep two explicit mechanisms with different names, descriptions, and output metadata:
+
+| Tool | Contract | Use when |
+|---|---|---|
+| `search_in_files` | Exact scan of current filesystem contents. Regex/literal matching, context lines, exhaustive-ish result set bounded by `max_results`. | The agent needs every occurrence, exact verification, audits, or safe replacement prep. |
+| `workspace_search` | Ranked indexed discovery across code, docs, symbols, paths, routes, tests, and memories. FTS5-backed, freshness-aware, approximate by design. | The agent asks conceptual questions like "where is daemon locking handled?" or needs likely starting points. |
+| `topology_search` | Code-structure search over Topology entities only. | Internal/advanced code-map queries, and as one backend feeding `workspace_search`. |
+| `search_memories` | Memory-only search. | Direct memory lookup, with FTS5 ranking plus deterministic grep fallback. |
+
+MCP tool descriptions must include the decision rule in plain language:
+
+```text
+Use search_in_files for exact literal or regex matches from current file contents.
+Use workspace_search for ranked discovery across indexed code, docs, symbols, and memories.
+```
+
+**User-facing output contract.**
+
+Every indexed search result should make its semantics visible so agents do not mistake ranked discovery for exact proof:
+
+```text
+source: fts5|topology|memory|hybrid
+mode: ranked
+index_status: fresh|stale|building|missing
+exact_match: true|false
+field: symbol|signature|path|comment|body|memory|route|test
+score: <rank or normalised score>
+path: <workspace-relative path>
+line: <best-known line, optional>
+snippet: <short highlighted excerpt>
+why: <short reason, e.g. "symbol name + memory path glob">
+```
+
+For exact scans, `search_in_files` should continue to advertise `source=filesystem` / `mode=exact-regex` in docs and, if useful later, in compact output metadata.
+
+**Search ladder for agents.**
+
+Document the recommended order clearly in `AGENTS.md`, `README.md`, and `docs/mcp-tools.md` once implemented:
+
+1. Use `workspace_search` for broad conceptual discovery.
+2. Use `topology_explore` or LSP semantic tools for structure around promising hits.
+3. Use `search_in_files` to verify exact text or regex matches.
+4. Use `read_file(start_line, end_line)` for bounded inspection.
+5. Use `find_replace` only after exact verification when editing by text pattern.
+
+**Implementation plan.**
+
+1. Keep `search_in_files` behaviour-preserving. Do not route regex searches through FTS5.
+2. Add `workspace_search` only after at least one indexed backend exists. Minimum viable backend can be memory-only FTS5 or topology-only FTS5, but the response must say which corpus was searched.
+3. Add a small search broker package that queries available backends in parallel with per-backend timeouts and merges ranked results:
+   - topology FTS: symbols, paths, routes, tests, signatures, comments/docstrings.
+   - memory FTS: memory name, description, body, path/symbol refs, provenance.
+   - docs/source text FTS: markdown docs and optionally source-file body/comment chunks.
+4. Use daemon-owned background indexing. Index updates are triggered by attach, file writes, deletes, renames, memory writes, and manual resync.
+5. Track freshness per result: indexed file hash/mtime, backend generation, extractor version, last error.
+6. Use continuation handles for large result sets. `workspace_search` should return top N plus `next_page_token`, not dump the full ranked list.
+7. Add query options:
+   ```json
+   {
+     "query": "daemon lock",
+     "corpus": ["code", "docs", "memory"],
+     "mode": "ranked",
+     "limit": 20,
+     "include_snippets": true,
+     "freshness": "allow_stale"
+   }
+   ```
+8. Add exact-search handoff hints: when `workspace_search` returns a high-confidence source-code hit, include a compact suggestion for the exact verification call, e.g. `search_in_files(pattern="plumb.daemon.lock", path="internal/cli")`.
+
+**Definition of done — Phase 1.**
+
+1. Tool naming and descriptions make the exact-vs-ranked distinction unambiguous.
+2. `workspace_search` exists with at least one FTS5-backed corpus and reports corpus coverage/freshness in every response.
+3. `search_in_files` remains the exact filesystem scanner and its docs explicitly say it is not ranked discovery.
+4. Indexed results include field labels, score/rank, source, freshness, and snippet/why metadata.
+5. Missing/stale/building index states degrade clearly and suggest `search_in_files` when exact current contents matter.
+6. Tests cover ranking order, stale-index reporting, fallback behaviour, and MCP descriptions so tool selection stays clear for agents.
+
+**Watch out for.**
+
+- FTS5 is not regex. Do not promise exhaustive exact matching from indexed search.
+- FTS5 can be stale. Exact edits and replacement prep must verify against current files.
+- Tool naming matters. Avoid a vague tool named just `search`; it will blur semantics for MCP clients.
+- Code tokenisation is product-critical. If names are not split and preserved correctly, ranked search will feel worse than grep.
+- Ranking can become opaque. Include a short `why` field so agents can reason about whether a result is worth opening.
+- Index DBs can grow. Surface DB size and corpus counts in `topology_status` / future search status views.
+
+---
+
+### Shared Topology + Memory Opportunity
 
 The best version of these two features is not two separate systems:
 
@@ -795,7 +912,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 **Priority:** ⭐ this is the actual "good software engineering" ask. Discuss the standard, then execute per-tool.
 **Effort:** Significant. Phased, one tool per commit.
-**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20). `TransactionApply.Execute` decomposed (2026-05-20). `FindFiles.Execute` decomposed (2026-05-20). `EditFile.Execute` decomposed (2026-05-20). `WriteFile.Execute` decomposed (2026-05-20). `SessionStart.Execute` decomposed (2026-05-20). `computeEditScript` + `groupHunks` in diff.go decomposed (2026-05-20). `ListFiles.Execute` decomposed (2026-05-20). `ListDirectory.Execute` decomposed (2026-05-20). `symbolKindName` map lookup (2026-05-20). `ReadSymbol.Execute` decomposed (2026-05-20). `executePartial` in edit_file.go decomposed (2026-05-20). `readContentMaybeRanged` in read_file.go decomposed (2026-05-20). `RenameFile.Execute` decomposed (2026-05-20). `(*CallHierarchy).Execute` decomposed (2026-05-20). `(*RenameSymbol).Execute` decomposed (2026-05-20). `(*TypeHierarchy).Execute` decomposed (2026-05-20). `walkDir` decomposed (2026-05-20). All `internal/tools` violations resolved — zero gocyclo findings in that package.
+**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20). `TransactionApply.Execute` decomposed (2026-05-20). `FindFiles.Execute` decomposed (2026-05-20). `EditFile.Execute` decomposed (2026-05-20). `WriteFile.Execute` decomposed (2026-05-20). `SessionStart.Execute` decomposed (2026-05-20). `computeEditScript` + `groupHunks` in diff.go decomposed (2026-05-20). `ListFiles.Execute` decomposed (2026-05-20). `ListDirectory.Execute` decomposed (2026-05-20). `symbolKindName` map lookup (2026-05-20). `ReadSymbol.Execute` decomposed (2026-05-20). `executePartial` in edit_file.go decomposed (2026-05-20). `readContentMaybeRanged` in read_file.go decomposed (2026-05-20). `RenameFile.Execute` decomposed (2026-05-20). `(*CallHierarchy).Execute` decomposed (2026-05-20). `(*RenameSymbol).Execute` decomposed (2026-05-20). `(*TypeHierarchy).Execute` decomposed (2026-05-20). `walkDir` decomposed (2026-05-20). All `internal/tools` violations resolved — zero gocyclo findings in that package. `(*Server).Serve` decomposed (2026-05-20).
 
 **Problem.** 36 functions exceed gocyclo 15. The worst are tool `Execute()` methods that interleave five concerns:
 
@@ -809,7 +926,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 | `handleConn` (daemon) | ~~38~~ **done (0.7.0)** |
 | `(*FindFiles).Execute` | ~~35~~ **done (0.7.0)** |
 | `(*EditFile).Execute` | ~~33~~ **done (0.7.0)** |
-| `(*Server).Serve` | 32 |
+| `(*Server).Serve` | ~~32~~ **done (0.7.0)** |
 | `(*SessionStart).Execute` | ~~31~~ **done (0.7.0)** |
 | `(Model).handleLogSectionKey` | 30 |
 | `applyEnv` (config) | 28 |

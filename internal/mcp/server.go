@@ -55,6 +55,13 @@ type mcpError struct {
 	Message string `json:"message"`
 }
 
+// scanLine carries one message from the reader goroutine to the main loop.
+type scanLine struct {
+	data     []byte
+	err      error
+	tooLarge bool
+}
+
 // ─── Server ──────────────────────────────────────────────────────────────────
 
 // ServerInfo identifies this server to the MCP client.
@@ -140,79 +147,125 @@ func (s *Server) Register(t Tool) {
 	s.tools[t.Name()] = t
 }
 
-// Serve reads newline-delimited JSON-RPC 2.0 messages from r and writes
-// responses to w until r is exhausted or ctx is cancelled. Each request is
-// handled concurrently; Serve waits for all in-flight handlers before returning.
-func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
-	reader := bufio.NewReader(r)
+// ─── serveState ──────────────────────────────────────────────────────────────
 
+// serveState holds the mutable per-Serve-call state shared across the scan
+// goroutine, request dispatcher, and response writer.
+type serveState struct {
+	s    *Server
+	enc  *json.Encoder
+	wrMu sync.Mutex
+	wg   sync.WaitGroup
+}
+
+func newServeState(s *Server, w io.Writer) *serveState {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	var wrMu sync.Mutex
+	return &serveState{s: s, enc: enc}
+}
 
-	write := func(resp mcpResponse) {
-		wrMu.Lock()
-		defer wrMu.Unlock()
-		if err := enc.Encode(resp); err != nil {
-			slog.Error("mcp: write error", "err", err)
-		}
+func (ss *serveState) write(resp mcpResponse) {
+	ss.wrMu.Lock()
+	defer ss.wrMu.Unlock()
+	if err := ss.enc.Encode(resp); err != nil {
+		slog.Error("mcp: write error", "err", err)
+	}
+}
+
+// makeRequest sends a server-initiated JSON-RPC request and waits for the
+// response, satisfying the RequestFn signature.
+func (ss *serveState) makeRequest(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	id := fmt.Sprintf("srv-%d", ss.s.reqCounter.Add(1))
+	ch := make(chan json.RawMessage, 1)
+
+	ss.s.pendingMu.Lock()
+	ss.s.pending[id] = ch
+	ss.s.pendingMu.Unlock()
+
+	msg := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
+	if params != nil {
+		msg["params"] = params
+	}
+	ss.wrMu.Lock()
+	encErr := ss.enc.Encode(msg)
+	ss.wrMu.Unlock()
+	if encErr != nil {
+		ss.s.pendingMu.Lock()
+		delete(ss.s.pending, id)
+		ss.s.pendingMu.Unlock()
+		return nil, fmt.Errorf("sending %s: %w", method, encErr)
 	}
 
-	// requestFn sends a server-initiated request and waits for the response.
-	requestFn := func(ctx context.Context, method string, params any) (json.RawMessage, error) {
-		id := fmt.Sprintf("srv-%d", s.reqCounter.Add(1))
-		ch := make(chan json.RawMessage, 1)
-
-		s.pendingMu.Lock()
-		s.pending[id] = ch
-		s.pendingMu.Unlock()
-
-		msg := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
-		if params != nil {
-			msg["params"] = params
-		}
-		wrMu.Lock()
-		encErr := enc.Encode(msg)
-		wrMu.Unlock()
-		if encErr != nil {
-			s.pendingMu.Lock()
-			delete(s.pending, id)
-			s.pendingMu.Unlock()
-			return nil, fmt.Errorf("sending %s: %w", method, encErr)
-		}
-
-		select {
-		case raw := <-ch:
-			var r struct {
-				Result json.RawMessage `json:"result"`
-				Error  *struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal(raw, &r); err != nil {
-				return nil, fmt.Errorf("parsing %s response: %w", method, err)
-			}
-			if r.Error != nil {
-				return nil, fmt.Errorf("%s: %s", method, r.Error.Message)
-			}
-			return r.Result, nil
-		case <-ctx.Done():
-			s.pendingMu.Lock()
-			delete(s.pending, id)
-			s.pendingMu.Unlock()
-			return nil, ctx.Err()
-		}
+	select {
+	case raw := <-ch:
+		return ss.parseResponse(method, raw)
+	case <-ctx.Done():
+		ss.s.pendingMu.Lock()
+		delete(ss.s.pending, id)
+		ss.s.pendingMu.Unlock()
+		return nil, ctx.Err()
 	}
+}
 
-	// scanCh carries lines from the reader goroutine.
-	type scanLine struct {
-		data     []byte
-		err      error
-		tooLarge bool
+func (ss *serveState) parseResponse(method string, raw json.RawMessage) (json.RawMessage, error) {
+	var r struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-	scanCh := make(chan scanLine)
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, fmt.Errorf("parsing %s response: %w", method, err)
+	}
+	if r.Error != nil {
+		return nil, fmt.Errorf("%s: %s", method, r.Error.Message)
+	}
+	return r.Result, nil
+}
+
+// dispatchMessage handles one inbound message in a wg.Go goroutine.
+func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce *sync.Once) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("mcp: handler panic", "err", r)
+			// Best-effort: try to send an error response so the client
+			// doesn't hang waiting for a reply that will never come.
+			var req mcpRequest
+			if json.Unmarshal(data, &req) == nil && req.ID != nil {
+				ss.write(errResp(req.ID, -32603, fmt.Sprintf("internal error: %v", r)))
+			}
+		}
+	}()
+
+	// Peek at method before full handling (needed for post-init hook).
+	var peek struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(data, &peek)
+
+	resp, isRequest := ss.s.handle(ctx, data)
+	if !isRequest {
+		if peek.Method == "notifications/roots/listChanged" && ss.s.OnRootsChanged != nil {
+			go safeRun("OnRootsChanged", func() { ss.s.OnRootsChanged(ctx, ss.makeRequest) })
+		}
+		return
+	}
+	ss.write(resp)
+
+	if peek.Method == "initialize" && resp.Error == nil && ss.s.OnInit != nil {
+		initOnce.Do(func() {
+			go safeRun("OnInit", func() { ss.s.OnInit(ctx, ss.makeRequest) })
+		})
+	}
+}
+
+// startScanGoroutine spawns the reader goroutine and returns a channel that
+// delivers one scanLine per inbound message until the reader is exhausted or
+// ctx is cancelled.
+func startScanGoroutine(ctx context.Context, reader *bufio.Reader) <-chan scanLine {
+	ch := make(chan scanLine)
 	go func() {
-		defer close(scanCh)
+		defer close(ch)
 		for {
 			b, tooLarge, err := readMessageLine(reader, maxMessageBytes)
 			if err != nil {
@@ -220,75 +273,49 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 					return
 				}
 				select {
-				case scanCh <- scanLine{data: b, err: err, tooLarge: tooLarge}:
+				case ch <- scanLine{data: b, err: err, tooLarge: tooLarge}:
 				case <-ctx.Done():
 				}
 				return
 			}
 			select {
-			case scanCh <- scanLine{data: b, tooLarge: tooLarge}:
+			case ch <- scanLine{data: b, tooLarge: tooLarge}:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
+	return ch
+}
 
-	var wg sync.WaitGroup
+// Serve reads newline-delimited JSON-RPC 2.0 messages from r and writes
+// responses to w until r is exhausted or ctx is cancelled. Each request is
+// handled concurrently; Serve waits for all in-flight handlers before returning.
+func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
+	ss := newServeState(s, w)
+	scanCh := startScanGoroutine(ctx, bufio.NewReader(r))
 	var initOnce sync.Once
 
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Wait()
+			ss.wg.Wait()
 			return ctx.Err()
 		case line, ok := <-scanCh:
 			if !ok {
-				wg.Wait()
+				ss.wg.Wait()
 				return nil
 			}
 			data := line.data
 			if line.tooLarge {
-				write(errResp(extractID(data), codeInvalidRequest, fmt.Sprintf("message exceeds %d byte limit", maxMessageBytes)))
+				ss.write(errResp(extractID(data), codeInvalidRequest, fmt.Sprintf("message exceeds %d byte limit", maxMessageBytes)))
 				continue
 			}
 			if line.err != nil {
-				wg.Wait()
+				ss.wg.Wait()
 				return line.err
 			}
-			wg.Go(func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("mcp: handler panic", "err", r)
-						// Best-effort: try to send an error response so the client
-						// doesn't hang waiting for a reply that will never come.
-						var req mcpRequest
-						if json.Unmarshal(data, &req) == nil && req.ID != nil {
-							write(errResp(req.ID, -32603, fmt.Sprintf("internal error: %v", r)))
-						}
-					}
-				}()
-
-				// Peek at method before full handling (needed for post-init hook).
-				var peek struct {
-					Method string `json:"method"`
-				}
-				_ = json.Unmarshal(data, &peek)
-
-				resp, isRequest := s.handle(ctx, data)
-				if !isRequest {
-					if peek.Method == "notifications/roots/listChanged" && s.OnRootsChanged != nil {
-						go safeRun("OnRootsChanged", func() { s.OnRootsChanged(ctx, requestFn) })
-					}
-					return
-				}
-				write(resp)
-
-				if peek.Method == "initialize" && resp.Error == nil && s.OnInit != nil {
-					initOnce.Do(func() {
-						go safeRun("OnInit", func() { s.OnInit(ctx, requestFn) })
-					})
-				}
-			})
+			ss.wg.Go(func() { ss.dispatchMessage(ctx, data, &initOnce) })
 		}
 	}
 }
