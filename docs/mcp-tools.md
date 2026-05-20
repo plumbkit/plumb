@@ -47,7 +47,8 @@ Plumb exposes 34 structured tools to AI assistants. Every write tool is concurre
 | `write_file` | Create or overwrite a file atomically. |
 | `edit_file` | Targeted str_replace with uniqueness locks. |
 | `delete_file` | Atomic delete. |
-| `rename_file` | Atomic move/rename. |
+| `rename_file` | **Primary move tool.** Atomic move/rename; notifies LSP with FileDeleted+FileCreated. |
+| `copy_file` | Duplicate a file preserving permissions. Cross-device safe. Notifies LSP with FileCreated. |
 | `transaction_apply` | Multi-file atomic edits with rollback. |
 
 ## Memory

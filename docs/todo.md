@@ -819,20 +819,6 @@ The `internal/stats/db.go` file contains a hand-rolled SQLite migration system (
 - **Outcome:** A robust and scalable theming system that is easy to extend and maintain.
 **Watch out for:** Ensure that changes maintain consistency across light/dark mode and that all UI elements (borders, text, accents, alerts) remain legible under the new scheme.
 
----
-
-### Add copy file support and move/rename clarification
-
-**Priority:** Medium.
-**Effort:** Small.
-**Status:** Planning.
-**Description:** Plumb currently lacks a dedicated `copy_file` tool, forcing agents to `read_file` then `write_file`. Additionally, `rename_file`'s role as a move tool is not always clear to agents.
-- **Goal:** Add `copy_file` and clarify move semantics.
-- **Action:** 
-  - Implement `copy_file(from, to, dirty_ok)`. Must preserve file permissions (modes) and support cross-device copying.
-  - Update `rename_file` description to explicitly highlight it as the primary tool for "moving" files, or add a `move_file` alias to simplify agent tool selection.
-- **Definition of done:** New tool(s) implemented, tested (including cross-directory moves/copies and parent directory creation), and documented in `docs/mcp-tools.md` and `AGENTS.md`.
-
 ### Security: Tool path restrictions (Jailing) and temp aliases
 
 **Priority:** High.

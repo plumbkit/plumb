@@ -217,6 +217,30 @@ CQ-6's pre-commit hook item (ensuring the hook invokes `golangci-lint run --fix`
 
 ## Improvements
 
+### `copy_file` tool + `rename_file` move clarity
+
+**Completed in:** 0.7.1
+**Original priority:** Medium
+
+New `copy_file` tool in `internal/tools/copy_file.go`:
+- Parameters: `from`, `to` (required), `overwrite` (default false), `dirty_ok` (default false).
+- Preserves source file permissions (modes) on the copy.
+- Cross-device safe: uses `safeWrite` (tmpdir+rename+EXDEV fallback), no `os.Rename` on source→dest path.
+- Creates parent directories automatically.
+- Locks both paths in lexical order (same deadlock-safe pattern as `rename_file`).
+- Checks git dirty state on source (unless `dirty_ok`).
+- Notifies LSP with `FileCreated` for destination; invalidates symbol cache.
+- Consumes one rate-limit slot.
+- Registered in `internal/cli/conn.go` alongside other write tools.
+
+`rename_file` description updated: now explicitly says it is "the primary tool for moving files" and points to `copy_file` for duplicating without removing the source.
+
+Docs updated: `docs/mcp-tools.md`, `AGENTS.md` tool table (count 34→35) and Quick Reference section.
+
+Tests: `TestCopyFile_*` (8 cases) in `internal/tools/copy_file_test.go` — basic copy, permission preservation, nested parent creation, overwrite guard, overwrite flag, directory-source rejection, same-path error, missing-from error.
+
+---
+
 ### `plumb doctor --json` — machine-readable output
 
 **Completed in:** 0.7.1

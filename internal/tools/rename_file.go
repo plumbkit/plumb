@@ -51,11 +51,13 @@ func NewRenameFile(deps WriteDeps) *RenameFile { return &RenameFile{deps: deps} 
 func (*RenameFile) Name() string                 { return "rename_file" }
 func (*RenameFile) InputSchema() json.RawMessage { return renameFileSchema }
 func (*RenameFile) Description() string {
-	return "Move or rename a file. Parent directories of `to` are created if missing. " +
+	return "Move (rename) a file — this is the primary tool for moving files. " +
+		"Parent directories of `to` are created if missing. " +
 		"Refuses to overwrite an existing destination unless overwrite=true. The LSP server " +
 		"is notified with FileDeleted (source) and FileCreated (destination) so symbol " +
-		"indexes and diagnostics update immediately. For LSP-semantic identifier renames " +
-		"across files, use rename_symbol instead."
+		"indexes and diagnostics update immediately. " +
+		"To duplicate a file without removing the source, use copy_file instead. " +
+		"For LSP-semantic identifier renames across files, use rename_symbol instead."
 }
 
 type renameFileArgs struct {

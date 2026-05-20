@@ -201,7 +201,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (34)
+## Available tools (35)
 
 **Bootstrap**
 
@@ -251,7 +251,8 @@ Pyright is the worked example.
 | `write_file` | `write_file.go` | Atomic (tmpdir + rename + EXDEV-fallback). Symlink-aware. Permissions preserved. Post-write diagnostics appended to response. `FileCreated`/`FileChanged` notification. `dirty_ok` param (default false) — refused if target has uncommitted changes. |
 | `edit_file` | `edit_file.go` | str_replace; uniqueness lock; CRLF tolerance; in-memory application (all-or-nothing); pre-rename mtime check; post-rename concurrent-write retry (max 3); optional `expected_mtime` opt-in concurrency check; strict-mode requires-read check; line-range summary + post-write diagnostics in response. `dirty_ok` param. `apply_partial: true` applies each edit independently — failures collected per-edit rather than rolling back the whole batch (not compatible with strict mode or `transaction_apply`). |
 | `delete_file` | `delete_file.go` | Refuses directories. `FileDeleted` notification. `dirty_ok` param. |
-| `rename_file` | `rename_file.go` | Atomic. Two-path locks (lexical order, deadlock-safe). `FileDeleted` + `FileCreated` notifications. Refuses to overwrite without `overwrite=true`. `dirty_ok` param (checks source). |
+| `rename_file` | `rename_file.go` | **Primary move tool** — use this to move files. Atomic. Two-path locks (lexical order, deadlock-safe). `FileDeleted` + `FileCreated` notifications. Refuses to overwrite without `overwrite=true`. `dirty_ok` param (checks source). |
+| `copy_file` | `copy_file.go` | Duplicate a file preserving permissions. Cross-device safe (read+write, no `os.Rename` dependency). Two-path locks. `FileCreated` notification. Refuses to overwrite without `overwrite=true`. `dirty_ok` param. |
 | `transaction_apply` | `transaction.go` | Multi-file atomic edits. Up to 50 ops. Phase 1 validates everything in memory; phase 2 writes under locks; phase 3 rolls back successful writes on partial failure. Each op consumes one rate-limit slot. Use for cross-file refactors. `dirty_ok` param — batched check per directory, all dirty files reported at once. |
 
 **Other**
@@ -417,7 +418,8 @@ You are likely an AI agent reading this through plumb. Treat the following as th
 - **Targeted edit:** `edit_file({path, edits: [{old_str, new_str}], expected_mtime})`. `old_str` must appear exactly once. CRLF differences are tolerated automatically.
 - **Cross-file refactor:** `transaction_apply({operations: [{path, edits, expected_mtime}]})`. All-or-nothing.
 - **Delete:** `delete_file({path})`. Refuses directories.
-- **Move/rename:** `rename_file({from, to})`. Distinct from `rename_symbol` (LSP-semantic identifier rename).
+- **Move/rename:** `rename_file({from, to})` — primary move tool. Distinct from `rename_symbol` (LSP-semantic identifier rename).
+- **Copy:** `copy_file({from, to})`. Preserves permissions; cross-device safe. Use when you want to keep the source.
 - **Discover what changed:** `git({subcommand: "status"})` or `git({subcommand: "log", args: ["-10", "--oneline"]})`.
 - **See your own activity:** `plumb` TUI's right panel shows "Recent Edits" for the selected session.
 - **Throttled?** You hit the rate limit (default 120/min). Wait or set `PLUMB_WRITE_RATE_LIMIT=0`.
