@@ -198,6 +198,34 @@ Topology must be fast and memory-efficient (SQLite + Tree-sitter), but **reliabi
 
 ---
 
+### Advanced Memory Engine
+
+**Priority:** Medium
+**Effort:** Medium
+**Status:** Planning
+
+**The pitch — smarter memory retrieval without heavy infrastructure.**
+
+Plumb's current memory system is deterministic (grep/glob over markdown files). While reliable, it forces the agent to explicitly search and remember to check for context. We can implement a more "cognitive" memory engine using the tools Plumb already has (SQLite, stats tracking, and the tool intercept layer) without introducing vector databases or heavy background AI tasks.
+
+1. **Episodic Summaries via `stats.db`:**
+   Currently, `session_start` gives generic repo orientation. Plumb already tracks every tool call in `stats.db`. When a session goes idle, the daemon should synthesize a lightweight "Episodic Summary" based on the modified files and tools used. 
+   - *Example outcome:* `session_start` output appends: *"In your last session, you heavily modified `internal/auth/login.go` and used `find_references` on `UserSession`."*
+
+2. **FTS5 Semantic Search:**
+   `search_memories` is currently a basic grep. We should index the Markdown memories into a SQLite table using the **FTS5** (Full-Text Search) extension. This gives us ranking, stemming, and proximity matching (a "poor man's vector search") out-of-the-box, making memory retrieval much more resilient to exact keyword misses.
+
+3. **Proactive Memory Hints:**
+   Agents often forget to call `relevant_memories` when reading a file. We can inject this knowledge proactively. If an agent calls `read_file` or `edit_file` on a path that matches a memory's `paths:` frontmatter glob, the tool response should append a brief warning:
+   - *Example outcome:* `[Hint: There is a relevant memory 'auth-gotchas' attached to this file. Use read_memory to view it.]`
+
+**Definition of done:**
+1. SQLite FTS5 virtual table added to `internal/memory/store.go` and `search_memories` updated to use it.
+2. Daemon calculates and persists a brief summary of a session upon disconnect. `session_start` reads and displays the previous session's summary.
+3. Read/write tools cross-reference the memory store's path globs and append the hint string to their output when a match is found.
+
+---
+
 ### Client-aware token-savings model
 
 **Priority:** high for TUI/stats credibility.
