@@ -426,6 +426,13 @@ func (m Model) dashProjectWidget(width int) []string {
 // (bottom-fill, ⣀ idle background). Bottom 2 rows show daemon history
 // (top-fill, ⠉ idle background). Together they form a dotted centre-line when
 // the chart has no activity.
+func formatFriendlySinceDate(t, now time.Time) string {
+	if t.Year() == now.Year() {
+		return t.Format("2 Jan")
+	}
+	return t.Format("2 Jan 2006")
+}
+
 func (m Model) dashActivityChart(width int) []string {
 	const halfH = 2 // chart rows per half
 
@@ -524,11 +531,13 @@ func (m Model) dashActivityChart(width int) []string {
 	lines := make([]string, 0, halfH*2+2)
 
 	// Top caption: lifetime totals.
-	capTopL := "↓ " + formatLargeInt(m.dashLifetimeCalls) + " calls (all time)  ·  " + formatSessionCount(m.dashLifetimeSessions)
+	callScope := "all time"
 	capTopR := ""
 	if !m.dashLifetimeFirstAt.IsZero() {
-		capTopR = "since " + m.dashLifetimeFirstAt.Format("2006-01-02") + "  ·  " + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt))
+		callScope = "since " + formatFriendlySinceDate(m.dashLifetimeFirstAt, time.Now())
+		capTopR = formatUptimePrecise(time.Since(m.dashLifetimeFirstAt))
 	}
+	capTopL := "↓ " + formatLargeInt(m.dashLifetimeCalls) + " calls (" + callScope + ")  ·  " + formatSessionCount(m.dashLifetimeSessions)
 	pad := max(width-lipgloss.Width(capTopL)-lipgloss.Width(capTopR), 1)
 	lines = append(lines, MutedStyle.Render(capTopL)+strings.Repeat(" ", pad)+MutedStyle.Render(capTopR))
 

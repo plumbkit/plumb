@@ -834,6 +834,36 @@ func TestDiagnosticsControlOutputExplainsOldDaemon(t *testing.T) {
 	}
 }
 
+func TestFormatFriendlySinceDate(t *testing.T) {
+	now := time.Date(2026, time.May, 20, 12, 0, 0, 0, time.Local)
+	if got := formatFriendlySinceDate(time.Date(2026, time.May, 11, 0, 0, 0, 0, time.Local), now); got != "11 May" {
+		t.Fatalf("formatFriendlySinceDate same year = %q, want 11 May", got)
+	}
+	if got := formatFriendlySinceDate(time.Date(2025, time.May, 11, 0, 0, 0, 0, time.Local), now); got != "11 May 2025" {
+		t.Fatalf("formatFriendlySinceDate prior year = %q, want 11 May 2025", got)
+	}
+}
+
+func TestDashActivityChartMovesSinceDateIntoLeftCaption(t *testing.T) {
+	RebuildStyles()
+	now := time.Now()
+	first := now.AddDate(0, 0, -9)
+	m := Model{
+		dashLifetimeCalls:    4200,
+		dashLifetimeSessions: 96,
+		dashLifetimeFirstAt:  first,
+	}
+
+	caption := ansiStripForTest(m.dashActivityChart(120)[0])
+	want := "↓ 4.2k calls (since " + formatFriendlySinceDate(first, now) + ")  ·  96 sessions"
+	if !strings.Contains(caption, want) {
+		t.Fatalf("dashboard lifetime caption missing %q:\n%s", want, caption)
+	}
+	if strings.Index(caption, "since ") > strings.Index(caption, "sessions") {
+		t.Fatalf("dashboard since date is still on the right side:\n%s", caption)
+	}
+}
+
 func keyPress(s string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Text: s, Code: []rune(s)[0]})
 }
