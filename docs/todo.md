@@ -978,26 +978,6 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 ---
 
-### CQ-4 — Split oversized files by responsibility (P1)
-
-**Priority:** high — directly answers "I got source code with > 3000 lines". (The 2947-line `internal/tui/model.go` was split on 2026-05-20; this item finishes the job for the rest.)
-**Effort:** Medium. Mechanical extraction, separate commits, no behaviour change.
-**Status:** Not started.
-
-**Definition of done — split each by clear responsibility:**
-
-1. `internal/cli/daemon.go` (832) → daemon lifecycle / `handleConn` connection handler / control socket / spawn + singleton-lock logic.
-2. `internal/stats/db.go` (705) → schema + migrations / read queries / write path. (Coordinate with CQ-5's SQL-concat fix.)
-3. `internal/mcp/server.go` (600) → stdio transport+framing / request dispatch / lifecycle. (Coordinate with the `bufio.Scanner` limit item in cli-and-core-review-plan.md §7.)
-4. `internal/cli/setup.go` (556) → one file per client (claude-desktop, claude-code, codex, gemini) + shared config-merge helper.
-5. `internal/tools/edit_file.go` (528) and `internal/tools/file_write_helpers.go` (503) → naturally fall out of CQ-3.
-6. `internal/tui/dashboard.go` (892), `internal/cli/doctor.go` (518), `internal/tui/model_logs.go` (498), `internal/tools/search_in_files.go` (483) → split along the seams CQ-3 introduces.
-7. **Documented exception list** in AGENTS.md for files where a single unit is correct: `internal/lsp/protocol/types.go` (535) is a protocol type catalogue mirroring the LSP spec — splitting it harms readability. The ~400-line rule gets an explicit, short allowlist rather than being silently ignored.
-
-**Watch out for.** Pure file moves only — no logic edits in the same commit (those are CQ-3). Keep package-private symbols package-private; do not export something just to move it. One file per commit so `git log --follow` and bisect stay useful.
-
----
-
 ### CQ-5 — Triage and resolve the 13 gosec findings (P1, security)
 
 **Priority:** high — security posture is part of "good practices", and plumb is an agent-facing daemon (prompt-injection → tool-call is a real threat model).

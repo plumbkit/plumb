@@ -360,3 +360,23 @@ Implementation: `internal/tools/search_in_files.go` — `include_enclosing_symbo
 `find_replace` now accepts `format_after: true`. After writing all replacements (non-dry-run only), the appropriate source formatter is run on each modified file: `gofumpt` (falling back to `gofmt`) for `.go` files, `ruff format` (falling back to `black`) for `.py` files. If the formatter is not found the file is silently skipped. If the formatter errors, the failure is reported as a warning line in the response and does not fail the tool call. The response appends `formatted N file(s)` when any files were reformatted.
 
 Implementation: `internal/tools/find_replace.go` — `format_after` schema field and args struct field; `runFormatterOnFiles` and `formatterCmd` package-level helpers; `fileChange` struct elevated from local to package scope to allow the helpers to reference it. Tests in `internal/tools/find_replace_test.go` cover: `.txt` file (no formatter → no "formatted" line) and `formatterCmd` extension dispatch.
+
+---
+
+### CQ-4 — Split oversized files by responsibility (P1)
+
+**Completed in:** 0.7.1 (2026-05-20)
+**Original priority:** high
+
+Six files over 400 lines split across six commits (one new file each). All first-party non-test files now sit at or below the 400-line limit. Pure moves — no logic changes.
+
+| New file | Extracted from | Lines moved |
+|---|---|---|
+| `internal/tui/dashboard_activity.go` | `dashboard.go` (892 → 318) | 201 |
+| `internal/tui/dashboard_alerts.go` | `dashboard.go` | 87 |
+| `internal/tui/dashboard_widgets.go` | `dashboard.go` | 372 |
+| `internal/stats/db_query.go` | `db.go` (719 → 295) | 431 |
+| `internal/mcp/server_handlers.go` | `server.go` (628 → 397) | 241 |
+| `internal/cli/setup_helpers.go` | `setup.go` (556 → 369) | 195 |
+
+`internal/cli/daemon.go` had already dropped to 390 lines through CQ-3 work — no split needed. `internal/lsp/protocol/types.go` remains on the documented exception list (protocol type catalogue mirroring the LSP spec).
