@@ -254,6 +254,29 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 	visibleRight := allRight[m.popupDetailScroll:]
 	scrollbar := scrollbarCol(len(allRight), rightScrollH, m.popupDetailScroll, false)
 
+	lines = append(lines, m.renderPopupBody(visibleLeft, visibleRight, bodyHeight, pLW, pRW, leftScrollbar, scrollbar, rightScrollH)...)
+	lines = append(lines, m.renderBottomBorderPopup(pLW, pRW))
+
+	overlayText := strings.Join(lines, "\n")
+
+	// The overlay should start on row 4 (line 5 visually)
+	// and end 1 row above the status bar (m.height - 2).
+
+	ovLines := strings.Split(overlayText, "\n")
+	ovW := 0
+	for _, l := range ovLines {
+		if lw := lipgloss.Width(l); lw > ovW {
+			ovW = lw
+		}
+	}
+	sx := (m.width - ovW) / 2
+	sy := 4
+
+	return spliceOverlayAt(bg, overlayText, sx, sy)
+}
+
+func (m Model) renderPopupBody(visibleLeft, visibleRight []string, bodyHeight, pLW, pRW int, leftScrollbar, scrollbar []string, rightScrollH int) []string {
+	lines := make([]string, 0, bodyHeight)
 	for i := range bodyHeight {
 		var lCell string
 		if i < len(visibleLeft) && visibleLeft[i] != "" {
@@ -292,24 +315,7 @@ func (m Model) renderPopup(bg string, rightWidth, bodyHeight int) string {
 
 		lines = append(lines, lb+lCell+SepStyle.Render("┆")+rCell+rb)
 	}
-	lines = append(lines, m.renderBottomBorderPopup(pLW, pRW))
-
-	overlayText := strings.Join(lines, "\n")
-
-	// The overlay should start on row 4 (line 5 visually)
-	// and end 1 row above the status bar (m.height - 2).
-
-	ovLines := strings.Split(overlayText, "\n")
-	ovW := 0
-	for _, l := range ovLines {
-		if lw := lipgloss.Width(l); lw > ovW {
-			ovW = lw
-		}
-	}
-	sx := (m.width - ovW) / 2
-	sy := 4
-
-	return spliceOverlayAt(bg, overlayText, sx, sy)
+	return lines
 }
 
 func (m Model) renderHelp(bg string) string {
