@@ -279,10 +279,10 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 		return nil, nil
 	}
 	where, args := filter.where()
-	// where is built by filter.where() using ? placeholders; no user values interpolated.
+	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes, input_json, output_text
-	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?` //nolint:gosec // G202: see comment above
+	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, n)
 
 	rows, err := d.db.Query(q, args...)
@@ -322,10 +322,10 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 	}
 	f := Filter{Tool: tool, Workspace: workspace}
 	where, args := f.where()
-	// where is built by filter.where() using ? placeholders; no user values interpolated.
+	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
 	             error_msg, input_bytes, output_bytes
-	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?` //nolint:gosec // G202: see comment above
+	      FROM tool_calls` + where + ` ORDER BY called_at DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := d.db.Query(q, args...)
