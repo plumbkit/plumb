@@ -210,7 +210,7 @@ func rollbackDir(dir string) {
 			slog.Error("txlog: rollback: cannot read snapshot", "snap", snapPath, "err", err)
 			continue
 		}
-		if err := os.WriteFile(op.Path, content, op.Perm); err != nil {
+		if err := os.WriteFile(op.Path, content, op.Perm); err != nil { //nolint:gosec // G703: op.Path is a workspace path validated by the transaction machinery before being stored in the manifest
 			slog.Error("txlog: rollback: cannot restore file", "path", op.Path, "err", err)
 			continue
 		}

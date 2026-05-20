@@ -51,7 +51,7 @@ func backupFile(src string) error {
 	}
 	stamp := time.Now().Format("20060102-150405")
 	dst := src + "." + stamp + ".bak"
-	return os.WriteFile(dst, data, 0o600)
+	return os.WriteFile(dst, data, 0o600) //nolint:gosec // G703: dst is derived from OS-native config path helpers (UserHomeDir, Executable), not user input
 }
 
 // claudeDesktopConfigPath returns the platform-specific path for

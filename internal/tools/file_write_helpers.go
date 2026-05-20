@@ -384,7 +384,7 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 	res := writeResult{modTimeBeforeWrite: modTimeBefore}
 
 	sibling := path + ".plumb.tmp"
-	if err := os.WriteFile(sibling, data, perm); err != nil {
+	if err := os.WriteFile(sibling, data, perm); err != nil { //nolint:gosec // G703: path is validated and locked by the safeWrite contract before reaching this function
 		return res, fmt.Errorf("writing sibling temp file: %w", err)
 	}
 	res.tempWrittenAt = time.Now()
