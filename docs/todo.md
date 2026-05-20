@@ -532,7 +532,7 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 
 **Priority:** ⭐ this is the actual "good software engineering" ask. Discuss the standard, then execute per-tool.
 **Effort:** Significant. Phased, one tool per commit.
-**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20). `TransactionApply.Execute` decomposed (2026-05-20). `FindFiles.Execute` decomposed (2026-05-20). `EditFile.Execute` decomposed (2026-05-20). `WriteFile.Execute` decomposed (2026-05-20). `SessionStart.Execute` decomposed (2026-05-20). `computeEditScript` + `groupHunks` in diff.go decomposed (2026-05-20).
+**Status:** In progress (0.7.0). CQ-6 standard agreed. `SearchInFiles.Execute` decomposed (2026-05-20). `findReplaceTool.Execute` decomposed (2026-05-20). `TransactionApply.Execute` decomposed (2026-05-20). `FindFiles.Execute` decomposed (2026-05-20). `EditFile.Execute` decomposed (2026-05-20). `WriteFile.Execute` decomposed (2026-05-20). `SessionStart.Execute` decomposed (2026-05-20). `computeEditScript` + `groupHunks` in diff.go decomposed (2026-05-20). `ListFiles.Execute` decomposed (2026-05-20). `ListDirectory.Execute` decomposed (2026-05-20). `symbolKindName` map lookup (2026-05-20). `ReadSymbol.Execute` decomposed (2026-05-20). `executePartial` in edit_file.go decomposed (2026-05-20). `readContentMaybeRanged` in read_file.go decomposed (2026-05-20). `RenameFile.Execute` decomposed (2026-05-20).
 
 **Problem.** 36 functions exceed gocyclo 15. The worst are tool `Execute()` methods that interleave five concerns:
 
@@ -553,7 +553,18 @@ This section is ordered by priority. P0 items are mechanical, low-risk, and shou
 | `runStats` (cli) | 28 |
 | `computeEditScript` (diff) | ~~27~~ **done (0.7.0)** |
 | `(*WriteFile).Execute` | ~~26~~ **done (0.7.0)** |
-| …20 more between 16 and 24 | |
+| `groupHunks` (diff) | ~~16~~ **done (0.7.0)** |
+| `(*ListFiles).Execute` | ~~20~~ **done (0.7.0)** |
+| `(*ListDirectory).Execute` | ~~20~~ **done (0.7.0)** |
+| `symbolKindName` (find_symbol) | ~~18~~ **done (0.7.0)** |
+| `(*ReadSymbol).Execute` | ~~18~~ **done (0.7.0)** |
+| `executePartial` (edit_file) | ~~18~~ **done (0.7.0)** |
+| `readContentMaybeRanged` (read_file) | ~~17~~ **done (0.7.0)** |
+| `(*RenameFile).Execute` | ~~17~~ **done (0.7.0)** |
+| `walkDir` (walk) | **17** |
+| `(*CallHierarchy).Execute` | **16** |
+| `(*RenameSymbol).Execute` | **16** |
+| `(*TypeHierarchy).Execute` | **16** |
 
 **The standard to adopt (see CQ-6).** Every `Tool.Execute()` becomes a thin orchestrator over four named, individually testable steps:
 

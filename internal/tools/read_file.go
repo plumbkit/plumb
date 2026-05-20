@@ -187,19 +187,26 @@ func readContentMaybeRanged(src io.Reader, startLine, endLine *int) (string, err
 		}
 		return string(data), nil
 	}
-
-	start := 1
-	if startLine != nil && *startLine > 1 {
-		start = *startLine
-	}
-	end := -1 // unbounded
-	if endLine != nil {
-		end = *endLine
-	}
+	start, end := resolveReadRange(startLine, endLine)
 	if end >= 0 && start > end {
 		return fmt.Sprintf("(no lines in range %d–%d)", start, end), nil
 	}
+	return readLineRange(src, start, end)
+}
 
+func resolveReadRange(startLine, endLine *int) (start, end int) {
+	start = 1
+	if startLine != nil && *startLine > 1 {
+		start = *startLine
+	}
+	end = -1 // -1 means unbounded
+	if endLine != nil {
+		end = *endLine
+	}
+	return start, end
+}
+
+func readLineRange(src io.Reader, start, end int) (string, error) {
 	scanner := bufio.NewScanner(src)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024) // up to 4 MiB per line
 	var sb strings.Builder

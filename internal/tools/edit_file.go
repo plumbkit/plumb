@@ -410,14 +410,28 @@ func (t *EditFile) executePartial(
 	preDiags []protocol.Diagnostic,
 ) (string, error) {
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
+	applied := countApplied(results)
+	var sb strings.Builder
+	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr))
+	sb.WriteString(formatPartialEditsResults(results))
+	if writeErr == nil && applied > 0 {
+		_ = res
+		t.executePartialPostWrite(ctx, path, uri, preDiags, &sb)
+	}
+	return sb.String(), nil
+}
 
-	applied := 0
+func countApplied(results []partialEditResult) int {
+	n := 0
 	for _, r := range results {
 		if r.applied {
-			applied++
+			n++
 		}
 	}
+	return n
+}
 
+func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error) string {
 	var sb strings.Builder
 	if writeErr != nil {
 		fmt.Fprintf(&sb, "partial apply: write failed after %d successful edit(s): %v\n\n", applied, writeErr)
@@ -425,7 +439,7 @@ func (t *EditFile) executePartial(
 		sb.WriteString("partial apply: all edits failed — file not modified\n\n")
 	} else {
 		fmt.Fprintf(&sb, "partial apply: applied %d of %d edit(s) to %s (%d bytes)\n",
-			applied, len(edits), path, len(content))
+			applied, total, path, len(content))
 		if info, err := os.Stat(path); err == nil {
 			fmt.Fprintf(&sb, "mtime: %s\n", info.ModTime().Format(time.RFC3339Nano))
 		}
@@ -439,7 +453,11 @@ func (t *EditFile) executePartial(
 		}
 		sb.WriteString("\n")
 	}
+	return sb.String()
+}
 
+func formatPartialEditsResults(results []partialEditResult) string {
+	var sb strings.Builder
 	sb.WriteString("edit results:\n")
 	for _, r := range results {
 		if r.applied {
@@ -452,25 +470,23 @@ func (t *EditFile) executePartial(
 			fmt.Fprintf(&sb, "  [%d] FAILED: %v\n", r.index, r.err)
 		}
 	}
+	return sb.String()
+}
 
-	if writeErr == nil && applied > 0 {
-		if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
-			slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
-		}
-		if t.deps.PostWriteNotifyFn != nil {
-			if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
-				slog.Warn("edit_file: post-write adapter notification failed", "path", path, "err", err)
-			}
-		}
-		invalidateCache(t.deps.Cache, uri)
-		_ = res
-		if t.deps.Diag != nil {
-			fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
-			sb.WriteString(formatPostWriteDiagnostics(fresh))
+func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string, preDiags []protocol.Diagnostic, sb *strings.Builder) {
+	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
+		slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
+	}
+	if t.deps.PostWriteNotifyFn != nil {
+		if err := t.deps.PostWriteNotifyFn(ctx, path); err != nil {
+			slog.Warn("edit_file: post-write adapter notification failed", "path", path, "err", err)
 		}
 	}
-
-	return sb.String(), nil
+	invalidateCache(t.deps.Cache, uri)
+	if t.deps.Diag != nil {
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
+		sb.WriteString(formatPostWriteDiagnostics(fresh))
+	}
 }
 
 // tryEditPartial reads the file and applies each edit independently.
