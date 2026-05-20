@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+### Changed
+- **CQ-3 #1: Decompose `SearchInFiles.Execute` (complexity 86 → ≤15).** Extracted the monolithic `Execute` into eight named, independently-testable helpers following the `parseArgs / validate / run / format` blueprint from AGENTS.md. New functions: `parseSearchInFilesArgs`, `applySearchDefaults`, `applySearchDeadline`, `resolveSearchRoot`, `compileSearchRegex`, `collectSearchPaths` (+ `searchDirFilter` / `searchFileFilter` predicates), `searchScanFile`, `formatHitLines`, `makeSearchLineSplit`, `trimCRSuffix`, `runParallelScan`, `annotateWithSymbols`, `formatSearchOutput`. The `pathPair` / `fileMatch` local types became package-level `searchPathPair` / `searchFileMatch`. All existing tests pass; behaviour is identical.
+
 ## 0.6.9 (2026-05-20)
 
 ### Changed

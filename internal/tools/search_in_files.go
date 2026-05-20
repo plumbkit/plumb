@@ -135,35 +135,71 @@ type searchInFilesArgs struct {
 	IncludeEnclosingSymbol bool     `json:"include_enclosing_symbol"`
 }
 
+// searchPathPair is a resolved candidate file for parallel scanning.
+type searchPathPair struct{ abs, rel string }
+
+// searchFileMatch holds per-file results from a parallel scan.
+type searchFileMatch struct {
+	relPath      string
+	absPath      string
+	lines        []string
+	hitLineNums  []int
+	hits         int
+	skippedLines int
+}
+
 func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	a, err := parseSearchInFilesArgs(raw)
+	if err != nil {
+		return "", err
+	}
+	applySearchDefaults(&a)
+
+	ctx, cancel := applySearchDeadline(ctx)
+	defer cancel()
+
+	root, err := resolveSearchRoot(a, t.ws)
+	if err != nil {
+		return "", err
+	}
+	re, err := compileSearchRegex(a)
+	if err != nil {
+		return "", err
+	}
+
+	paths, walkErr := t.collectSearchPaths(ctx, a, root)
+	results, totalLines, totalSkipped, truncated := t.runParallelScan(ctx, paths, a, re)
+
+	sort.Slice(results, func(i, j int) bool { return results[i].relPath < results[j].relPath })
+
+	timedOut := errors.Is(walkErr, context.DeadlineExceeded)
+	cancelled := errors.Is(walkErr, context.Canceled)
+	if len(results) == 0 {
+		if timedOut {
+			return fmt.Sprintf("Search for %q timed out before any matches were found (budget %s — narrow with path/glob, or set a tighter pattern).", a.Pattern, searchDefaultDeadline), nil
+		}
+		if cancelled {
+			return "", walkErr
+		}
+		return fmt.Sprintf("No matches for %q.", a.Pattern), nil
+	}
+
+	ann := t.annotateWithSymbols(ctx, a, results)
+	return formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped), nil
+}
+
+func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
 	var a searchInFilesArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", fmt.Errorf("search_in_files: invalid arguments: %w", err)
+		return a, fmt.Errorf("search_in_files: invalid arguments: %w", err)
 	}
 	if a.Pattern == "" {
-		return "", fmt.Errorf("search_in_files: pattern must not be empty")
+		return a, fmt.Errorf("search_in_files: pattern must not be empty")
 	}
+	return a, nil
+}
 
-	// If the caller hasn't bounded the call, apply a default wall-clock budget
-	// so a pathological walk (huge tree, large files, $HOME as cwd) can never
-	// outlive the MCP client's own timeout and leave the daemon wedged.
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, searchDefaultDeadline)
-		defer cancel()
-	}
-
-	// Resolve search root.
-	root := resolvePath(a.Path, t.ws)
-	info, err := os.Stat(root)
-	if err != nil {
-		return "", fmt.Errorf("search_in_files: path %q: %w", root, err)
-	}
-	if !info.IsDir() {
-		root = filepath.Dir(root)
-	}
-
-	// Defaults.
+func applySearchDefaults(a *searchInFilesArgs) {
 	if a.MaxResults <= 0 {
 		a.MaxResults = 200
 	}
@@ -173,8 +209,28 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	if a.MaxFileBytes == 0 {
 		a.MaxFileBytes = searchDefaultMaxFileBytes
 	}
+}
 
-	// Compile regex with smart-case.
+func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); !ok {
+		return context.WithTimeout(ctx, searchDefaultDeadline)
+	}
+	return ctx, func() {}
+}
+
+func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn) (string, error) {
+	root := resolvePath(a.Path, ws)
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("search_in_files: path %q: %w", root, err)
+	}
+	if !info.IsDir() {
+		root = filepath.Dir(root)
+	}
+	return root, nil
+}
+
+func compileSearchRegex(a searchInFilesArgs) (*regexp.Regexp, error) {
 	caseSensitive := a.CaseSensitive != nil && *a.CaseSensitive
 	if !caseSensitive && !allLower(a.Pattern) {
 		caseSensitive = true
@@ -185,206 +241,216 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 	re, err := regexp.Compile(reStr)
 	if err != nil {
-		return "", fmt.Errorf("search_in_files: invalid pattern %q: %w", a.Pattern, err)
+		return nil, fmt.Errorf("search_in_files: invalid pattern %q: %w", a.Pattern, err)
 	}
+	return re, nil
+}
 
-	type fileMatch struct {
-		relPath      string
-		absPath      string   // absolute path, used for LSP URI when include_enclosing_symbol is set
-		lines        []string // formatted "LINE: content" entries
-		hitLineNums  []int    // 1-based line numbers of actual match lines (parallel to hits)
-		hits         int      // raw hit count, used for max_results truncation
-		skippedLines int
-	}
-
+func (t *SearchInFiles) collectSearchPaths(ctx context.Context, a searchInFilesArgs, root string) ([]searchPathPair, error) {
 	opts := walkOptions{
 		root:          root,
 		includeHidden: a.IncludeHidden,
 		respectIgnore: true,
 	}
-
 	globPrefix := globLiteralPrefix(a.Glob)
-
-	// Phase 1: collect candidate file paths via a single-threaded walk. The
-	// walk is cheap; the per-file scan is the bottleneck and gets fanned out
-	// to a worker pool below.
-	type pathPair struct{ abs, rel string }
-	var paths []pathPair
-
+	var paths []searchPathPair
 	walkErr := walk(ctx, opts, func(path string, d fs.DirEntry, _ int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if path != root && (globPrefix != "" || len(a.Exclude) > 0) {
-				rel, _ := filepath.Rel(root, path)
-				relSlash := filepath.ToSlash(rel)
-				if globPrefix != "" && !dirCompatibleWithPrefix(relSlash, globPrefix) {
-					return fs.SkipDir
-				}
-				for _, excl := range a.Exclude {
-					if m, _ := doubleStarMatchFile(excl, relSlash); m {
-						return fs.SkipDir
-					}
-				}
-			}
+			return searchDirFilter(path, root, a, globPrefix)
+		}
+		if !searchFileFilter(path, d, a, root) {
 			return nil
 		}
-
-		// Glob filter.
-		if a.Glob != "" {
-			matched, err := filepath.Match(a.Glob, d.Name())
-			if err != nil || !matched {
-				// Also try matching against relative path for patterns like **/*.go.
-				rel, _ := filepath.Rel(root, path)
-				matched2, _ := doubleStarMatchFile(a.Glob, filepath.ToSlash(rel))
-				if !matched2 {
-					return nil
-				}
-			}
-		}
-
-		// Exclude filter.
-		if len(a.Exclude) > 0 {
-			rel, _ := filepath.Rel(root, path)
-			relSlash := filepath.ToSlash(rel)
-			for _, excl := range a.Exclude {
-				if m, _ := doubleStarMatchFile(excl, relSlash); m {
-					return nil
-				}
-			}
-		}
-
-		// Size guard: skip outsized text files before opening. Walking past
-		// these is the dominant pathology that pushes search past the MCP
-		// timeout.
-		if fi, err := d.Info(); err == nil && fi.Size() > a.MaxFileBytes {
-			return nil
-		}
-
 		rel, _ := filepath.Rel(root, path)
-		paths = append(paths, pathPair{abs: path, rel: filepath.ToSlash(rel)})
+		paths = append(paths, searchPathPair{abs: path, rel: filepath.ToSlash(rel)})
 		return nil
 	})
+	return paths, walkErr
+}
 
-	// Phase 2: scan candidate files in parallel. Each file is streamed
-	// line-by-line via bufio.Scanner so we never materialise the whole file
-	// in memory — the previous bytes.Buffer approach was O(file_size) per worker.
-	scan := func(p pathPair) *fileMatch {
-		f, err := os.Open(p.abs)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-
-		// Sniff first 8 KB for a null byte; bail before reading the rest.
-		sniff := make([]byte, binarySniffBytes)
-		n, _ := f.Read(sniff)
-		if bytes.IndexByte(sniff[:n], 0) >= 0 {
-			return nil
-		}
-
-		// Prepend the sniffed bytes via MultiReader to avoid seeking.
-		// Use a custom split function (closure) so oversized lines are skipped
-		// in-place rather than aborting the scan via ErrTooLong.
-		var hitLineIdxs []int
-		var lines []searchLine
-		lineNo := 1
-		skippedLines := 0
-
-		scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(sniff[:n]), f))
-		scanner.Buffer(make([]byte, 64*1024), 2*searchMaxLineBytes)
-		scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-			if atEOF && len(data) == 0 {
-				return 0, nil, nil
-			}
-			if i := bytes.IndexByte(data, '\n'); i >= 0 {
-				line := data[:i]
-				if len(line) > 0 && line[len(line)-1] == '\r' {
-					line = line[:len(line)-1]
-				}
-				if len(line) > searchMaxLineBytes {
-					skippedLines++ // oversized: advance past the newline, return no token
-					lineNo++
-					return i + 1, nil, nil
-				}
-				return i + 1, line, nil
-			}
-			if atEOF {
-				line := data
-				if len(line) > 0 && line[len(line)-1] == '\r' {
-					line = line[:len(line)-1]
-				}
-				if len(line) > searchMaxLineBytes {
-					skippedLines++
-					return len(data), nil, nil
-				}
-				return len(data), line, nil
-			}
-			return 0, nil, nil
-		})
-
-		for scanner.Scan() {
-			data := scanner.Bytes()
-			cp := make([]byte, len(data))
-			copy(cp, data)
-			idx := len(lines)
-			lines = append(lines, searchLine{number: lineNo, data: cp})
-			if re.Match(cp) {
-				hitLineIdxs = append(hitLineIdxs, idx)
-			}
-			lineNo++
-		}
-		if scanner.Err() != nil {
-			// A line exceeded 2*searchMaxLineBytes; everything up to it has been
-			// processed; count the scanner abort as one more skipped line.
-			skippedLines++
-		}
-
-		if len(hitLineIdxs) == 0 {
-			if skippedLines > 0 {
-				return &fileMatch{relPath: p.rel, skippedLines: skippedLines}
-			}
-			return nil
-		}
-
-		// Format hits with optional context, merging overlapping windows.
-		var formatted []string
-		shown := make(map[int]bool)
-		for _, h := range hitLineIdxs {
-			lo := max(0, h-a.ContextLines)
-			hi := min(len(lines)-1, h+a.ContextLines)
-			for i := lo; i <= hi; i++ {
-				if shown[i] {
-					continue
-				}
-				shown[i] = true
-				prefix := "  "
-				if i == h {
-					prefix = "> " // mark the actual match line
-				}
-				formatted = append(formatted,
-					fmt.Sprintf("  %d:%s%s", lines[i].number, prefix, strings.TrimRight(string(lines[i].data), "\r")))
-			}
-		}
-		hitNums := make([]int, len(hitLineIdxs))
-		for i, h := range hitLineIdxs {
-			hitNums[i] = lines[h].number
-		}
-		return &fileMatch{
-			relPath: p.rel, absPath: p.abs,
-			lines: formatted, hitLineNums: hitNums,
-			hits: len(hitLineIdxs), skippedLines: skippedLines,
+// searchDirFilter returns fs.SkipDir when the directory can be pruned from the
+// walk based on glob prefix or exclude patterns.
+func searchDirFilter(path, root string, a searchInFilesArgs, globPrefix string) error {
+	if path == root {
+		return nil
+	}
+	if globPrefix == "" && len(a.Exclude) == 0 {
+		return nil
+	}
+	rel, _ := filepath.Rel(root, path)
+	relSlash := filepath.ToSlash(rel)
+	if globPrefix != "" && !dirCompatibleWithPrefix(relSlash, globPrefix) {
+		return fs.SkipDir
+	}
+	for _, excl := range a.Exclude {
+		if m, _ := doubleStarMatchFile(excl, relSlash); m {
+			return fs.SkipDir
 		}
 	}
+	return nil
+}
 
+// searchFileFilter reports whether the file passes glob, exclude, and size
+// filters and should be included in the scan candidate list.
+func searchFileFilter(path string, d fs.DirEntry, a searchInFilesArgs, root string) bool {
+	if a.Glob != "" {
+		matched, err := filepath.Match(a.Glob, d.Name())
+		if err != nil || !matched {
+			rel, _ := filepath.Rel(root, path)
+			if m, _ := doubleStarMatchFile(a.Glob, filepath.ToSlash(rel)); !m {
+				return false
+			}
+		}
+	}
+	if len(a.Exclude) > 0 {
+		rel, _ := filepath.Rel(root, path)
+		relSlash := filepath.ToSlash(rel)
+		for _, excl := range a.Exclude {
+			if m, _ := doubleStarMatchFile(excl, relSlash); m {
+				return false
+			}
+		}
+	}
+	if fi, err := d.Info(); err == nil && fi.Size() > a.MaxFileBytes {
+		return false
+	}
+	return true
+}
+
+// searchScanFile opens, sniffs, and scans a single file for regex matches.
+// Returns nil when the file is binary, unreadable, or has no hits and no
+// oversized lines.
+func searchScanFile(p searchPathPair, re *regexp.Regexp, contextLines int) *searchFileMatch {
+	f, err := os.Open(p.abs)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	sniff := make([]byte, binarySniffBytes)
+	n, _ := f.Read(sniff)
+	if bytes.IndexByte(sniff[:n], 0) >= 0 {
+		return nil
+	}
+
+	var hitLineIdxs []int
+	var lines []searchLine
+	lineNo := 1
+	skippedLines := 0
+
+	scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(sniff[:n]), f))
+	scanner.Buffer(make([]byte, 64*1024), 2*searchMaxLineBytes)
+	scanner.Split(makeSearchLineSplit(&skippedLines, &lineNo))
+
+	for scanner.Scan() {
+		data := scanner.Bytes()
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		idx := len(lines)
+		lines = append(lines, searchLine{number: lineNo, data: cp})
+		if re.Match(cp) {
+			hitLineIdxs = append(hitLineIdxs, idx)
+		}
+		lineNo++
+	}
+	if scanner.Err() != nil {
+		// A line exceeded 2*searchMaxLineBytes; count the scanner abort as
+		// one more skipped line.
+		skippedLines++
+	}
+
+	if len(hitLineIdxs) == 0 {
+		if skippedLines > 0 {
+			return &searchFileMatch{relPath: p.rel, skippedLines: skippedLines}
+		}
+		return nil
+	}
+
+	hitNums := make([]int, len(hitLineIdxs))
+	for i, h := range hitLineIdxs {
+		hitNums[i] = lines[h].number
+	}
+	return &searchFileMatch{
+		relPath:     p.rel,
+		absPath:     p.abs,
+		lines:       formatHitLines(lines, hitLineIdxs, contextLines),
+		hitLineNums: hitNums,
+		hits:        len(hitLineIdxs),
+		skippedLines: skippedLines,
+	}
+}
+
+// formatHitLines builds the formatted output lines for a set of hits,
+// merging overlapping context windows to avoid duplicate lines.
+func formatHitLines(lines []searchLine, hitLineIdxs []int, contextLines int) []string {
+	var formatted []string
+	shown := make(map[int]bool)
+	for _, h := range hitLineIdxs {
+		lo := max(0, h-contextLines)
+		hi := min(len(lines)-1, h+contextLines)
+		for i := lo; i <= hi; i++ {
+			if shown[i] {
+				continue
+			}
+			shown[i] = true
+			prefix := "  "
+			if i == h {
+				prefix = "> "
+			}
+			formatted = append(formatted,
+				fmt.Sprintf("  %d:%s%s", lines[i].number, prefix, strings.TrimRight(string(lines[i].data), "\r")))
+		}
+	}
+	return formatted
+}
+
+// makeSearchLineSplit returns a bufio.SplitFunc that strips CRLF line endings
+// and skips lines exceeding searchMaxLineBytes in-place (increments *skippedLines
+// and *lineNo for each skipped line) rather than aborting the scan.
+func makeSearchLineSplit(skippedLines, lineNo *int) bufio.SplitFunc {
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			line := trimCRSuffix(data[:i])
+			if len(line) > searchMaxLineBytes {
+				*skippedLines++
+				*lineNo++
+				return i + 1, nil, nil
+			}
+			return i + 1, line, nil
+		}
+		if atEOF {
+			line := trimCRSuffix(data)
+			if len(line) > searchMaxLineBytes {
+				*skippedLines++
+				return len(data), nil, nil
+			}
+			return len(data), line, nil
+		}
+		return 0, nil, nil
+	}
+}
+
+// trimCRSuffix removes a trailing \r byte.
+func trimCRSuffix(b []byte) []byte {
+	if len(b) > 0 && b[len(b)-1] == '\r' {
+		return b[:len(b)-1]
+	}
+	return b
+}
+
+func (t *SearchInFiles) runParallelScan(ctx context.Context, paths []searchPathPair, a searchInFilesArgs, re *regexp.Regexp) ([]*searchFileMatch, int, int, bool) {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	workers := max(1, min(runtime.NumCPU(), len(paths)))
-
-	pathsCh := make(chan pathPair)
-	resultsCh := make(chan *fileMatch, workers)
+	pathsCh := make(chan searchPathPair)
+	resultsCh := make(chan *searchFileMatch, workers)
 
 	var wg sync.WaitGroup
 	for range workers {
@@ -393,7 +459,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 				if wctx.Err() != nil {
 					continue
 				}
-				if r := scan(p); r != nil {
+				if r := searchScanFile(p, re, a.ContextLines); r != nil {
 					select {
 					case resultsCh <- r:
 					case <-wctx.Done():
@@ -420,17 +486,16 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		close(resultsCh)
 	}()
 
-	var results []*fileMatch
-	totalLines := 0
-	totalSkippedLines := 0
+	var results []*searchFileMatch
+	totalLines, totalSkipped := 0, 0
 	truncated := false
 	for r := range resultsCh {
-		totalSkippedLines += r.skippedLines
+		totalSkipped += r.skippedLines
 		if r.hits == 0 {
 			continue
 		}
 		if truncated {
-			continue // drain remaining sends so workers can exit
+			continue // drain so workers can exit
 		}
 		results = append(results, r)
 		totalLines += r.hits
@@ -439,59 +504,48 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 			cancel()
 		}
 	}
+	return results, totalLines, totalSkipped, truncated
+}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].relPath < results[j].relPath })
-
-	timedOut := errors.Is(walkErr, context.DeadlineExceeded)
-	cancelled := errors.Is(walkErr, context.Canceled)
-
-	if len(results) == 0 {
-		if timedOut {
-			return fmt.Sprintf("Search for %q timed out before any matches were found (budget %s — narrow with path/glob, or set a tighter pattern).", a.Pattern, searchDefaultDeadline), nil
-		}
-		if cancelled {
-			return "", walkErr
-		}
-		return fmt.Sprintf("No matches for %q.", a.Pattern), nil
+func (t *SearchInFiles) annotateWithSymbols(ctx context.Context, a searchInFilesArgs, results []*searchFileMatch) map[string]map[int]string {
+	if !a.IncludeEnclosingSymbol || t.client == nil {
+		return nil
 	}
-
-	// Phase 3: optional per-file symbol annotation via LSP.
-	// One DocumentSymbols call per distinct matched file; results cached.
-	var fileAnnotations map[string]map[int]string // absPath → (1-based line → symbol name)
-	if a.IncludeEnclosingSymbol && t.client != nil {
-		fileAnnotations = make(map[string]map[int]string)
-		for _, fm := range results {
-			uri := protocol.FileURI(fm.absPath)
-			syms := t.docSymbolsCached(ctx, uri)
-			if len(syms) == 0 {
-				continue
+	fileAnnotations := make(map[string]map[int]string)
+	for _, fm := range results {
+		uri := protocol.FileURI(fm.absPath)
+		syms := t.docSymbolsCached(ctx, uri)
+		if len(syms) == 0 {
+			continue
+		}
+		m := make(map[int]string, len(fm.hitLineNums))
+		for _, lineNo := range fm.hitLineNums {
+			if sym := deepestEnclosingSymbol(syms, uint32(lineNo-1)); sym != "" {
+				m[lineNo] = sym
 			}
-			m := make(map[int]string, len(fm.hitLineNums))
-			for _, lineNo := range fm.hitLineNums {
-				if sym := deepestEnclosingSymbol(syms, uint32(lineNo-1)); sym != "" {
-					m[lineNo] = sym
-				}
-			}
-			if len(m) > 0 {
-				fileAnnotations[fm.absPath] = m
-			}
+		}
+		if len(m) > 0 {
+			fileAnnotations[fm.absPath] = m
 		}
 	}
+	return fileAnnotations
+}
 
+func formatSearchOutput(results []*searchFileMatch, ann map[string]map[int]string, a searchInFilesArgs, timedOut, truncated bool, totalLines, totalSkipped int) string {
 	var sb strings.Builder
 	for _, fm := range results {
 		sb.WriteString(fm.relPath)
 		sb.WriteByte('\n')
-		ann := fileAnnotations[fm.absPath] // nil when feature off or no symbols
+		fileAnn := ann[fm.absPath] // nil when feature off or no symbols
 		hitIdx := 0
 		for _, l := range fm.lines {
 			sb.WriteString(l)
 			sb.WriteByte('\n')
 			// After a hit line (marker ":> "), append the enclosing symbol.
-			if ann != nil && strings.Contains(l, ":> ") && hitIdx < len(fm.hitLineNums) {
+			if fileAnn != nil && strings.Contains(l, ":> ") && hitIdx < len(fm.hitLineNums) {
 				lineNo := fm.hitLineNums[hitIdx]
 				hitIdx++
-				if name, ok := ann[lineNo]; ok {
+				if name, ok := fileAnn[lineNo]; ok {
 					fmt.Fprintf(&sb, "  [in: %s]\n", name)
 				}
 			}
@@ -508,11 +562,11 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	default:
 		summary = fmt.Sprintf("%d hit(s) across %d file(s).", totalLines, len(results))
 	}
-	if totalSkippedLines > 0 {
-		summary += fmt.Sprintf(" (%d oversized line(s) skipped)", totalSkippedLines)
+	if totalSkipped > 0 {
+		summary += fmt.Sprintf(" (%d oversized line(s) skipped)", totalSkipped)
 	}
 	sb.WriteString(summary)
-	return sb.String(), nil
+	return sb.String()
 }
 
 // allLower reports whether s contains no uppercase Unicode letters (smart-case).
