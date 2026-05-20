@@ -3,6 +3,7 @@
 ## 0.7.0 (unreleased)
 
 ### Changed
+- **Dashboard actionable alerts.** The Dashboard alerts widget now stays sparse and only surfaces actionable daemon/workspace problems: daemon availability, stale metrics, session-load errors, stats DB open failures, unresolved or auto-attached workspaces, LSP-unavailable workspaces, daemon version mismatches, and recent uptime tool-error spikes.
 - **Dashboard visual polish.** The Dashboard now presents the activity chart, daemon memory, tokens saved, top tools, project, and alerts areas as consistent widgets. Activity frames all-time and uptime captions in the widget borders; daemon metrics focus on memory with aligned leader fills; tokens saved uses larger two-column indicators; top tools is split into compact all-time and uptime widgets with right-aligned numeric columns; project stats show proportional contribution bars and a project-scoped tools table. The dashboard also uses friendlier non-US date formatting (`11 May`) for "since" captions and hides the uptime tools widget when it has no data.
 - **`plumb config show` table borders.** Config-show tables now use a thin continuous outer/header border with dotted row separators, making the output match the newer CLI table style without the fully dotted frame.
 - **CLI unknown-command diagnostics.** Unknown-command errors now keep only one blank bordered line between Cobra suggestions and the `Try:` block.

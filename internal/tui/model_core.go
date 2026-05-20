@@ -32,6 +32,7 @@ type Model struct {
 	scrollBounds    *scrollBounds
 	sessions        []session.Info
 	globalDB        *stats.DB
+	statsErr        string
 	toolStats       []stats.ToolStat
 	recentCalls     []stats.RecentCall
 	activity        stats.ActivitySummary

@@ -872,6 +872,49 @@ func TestDashDaemonWidgetUsesMemoryRows(t *testing.T) {
 	}
 }
 
+func TestDashboardDaemonVersionAlert(t *testing.T) {
+	oldVersion := Version
+	Version = "0.7.0"
+	defer func() { Version = oldVersion }()
+
+	m := Model{sessions: []session.Info{{DaemonVersion: "0.6.9"}}}
+	got := m.dashboardDaemonVersionAlert()
+	if !strings.Contains(got, "running 0.6.9") || !strings.Contains(got, "run plumb stop") {
+		t.Fatalf("dashboardDaemonVersionAlert = %q, want mismatch with refresh hint", got)
+	}
+}
+
+func TestDashboardWorkspaceStateAlert(t *testing.T) {
+	m := Model{sessions: []session.Info{{Synthetic: true}}}
+	if got := m.dashboardWorkspaceStateAlert(); !strings.Contains(got, "auto-attached") {
+		t.Fatalf("dashboardWorkspaceStateAlert synthetic = %q, want auto-attached alert", got)
+	}
+
+	m = Model{
+		dashProjectFolder: "/repo",
+		sessions:          []session.Info{{Folder: "/repo", Language: "none"}},
+	}
+	if got := m.dashboardWorkspaceStateAlert(); !strings.Contains(got, "LSP unavailable") {
+		t.Fatalf("dashboardWorkspaceStateAlert language none = %q, want LSP alert", got)
+	}
+}
+
+func TestDashboardErrorSpikeAlert(t *testing.T) {
+	m := Model{dashUptimeTopTools: []stats.ToolStat{
+		{Tool: "read_file", Calls: 8, Errors: 2},
+		{Tool: "edit_file", Calls: 4, Errors: 1},
+	}}
+	got := m.dashboardErrorSpikeAlert()
+	if !strings.Contains(got, "3/12") {
+		t.Fatalf("dashboardErrorSpikeAlert = %q, want 3/12 failure summary", got)
+	}
+
+	m = Model{dashUptimeTopTools: []stats.ToolStat{{Tool: "read_file", Calls: 20, Errors: 2}}}
+	if got := m.dashboardErrorSpikeAlert(); got != "" {
+		t.Fatalf("dashboardErrorSpikeAlert below threshold = %q, want empty", got)
+	}
+}
+
 func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 	RebuildStyles()
 	m := Model{

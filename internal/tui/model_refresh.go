@@ -46,9 +46,7 @@ func (m *Model) refreshDaemonMetrics() {
 }
 
 func (m *Model) refreshStats() {
-	if m.globalDB == nil {
-		m.globalDB, _ = stats.OpenReadOnly()
-	}
+	m.ensureGlobalDB()
 	if m.globalDB == nil {
 		m.toolStats = nil
 		m.recentCalls = nil
@@ -148,7 +146,7 @@ func (m *Model) refreshPopupCalls() {
 		return
 	}
 	if m.globalDB == nil {
-		m.globalDB, _ = stats.OpenReadOnly()
+		m.ensureGlobalDB()
 	}
 	if m.globalDB == nil {
 		m.popupCalls = nil
@@ -216,7 +214,7 @@ func (m *Model) currentDetail() (inputJSON, outputText string) {
 		return
 	}
 	if m.globalDB == nil {
-		m.globalDB, _ = stats.OpenReadOnly()
+		m.ensureGlobalDB()
 	}
 	if m.globalDB == nil {
 		return
@@ -230,4 +228,17 @@ func (m *Model) currentDetail() (inputJSON, outputText string) {
 		loaded:     true,
 	}
 	return
+}
+
+func (m *Model) ensureGlobalDB() {
+	if m.globalDB != nil {
+		return
+	}
+	db, err := stats.OpenReadOnly()
+	if err != nil {
+		m.statsErr = err.Error()
+	} else {
+		m.statsErr = ""
+	}
+	m.globalDB = db
 }
