@@ -1,6 +1,37 @@
 package cli
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestJsonCheckResultMarshaling(t *testing.T) {
+	checks := []checkResult{
+		{name: "socket", ok: true, detail: "~/.cache/plumb/plumb.sock", fix: ""},
+		{name: "version", ok: false, detail: "running 0.7.0, binary is 0.7.1", fix: "run `plumb stop`"},
+	}
+	out := make([]jsonCheckResult, len(checks))
+	for i, c := range checks {
+		out[i] = jsonCheckResult{Name: c.name, OK: c.ok, Detail: c.detail, Fix: c.fix}
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded []jsonCheckResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("want 2 results, got %d", len(decoded))
+	}
+	if decoded[0].Name != "socket" || !decoded[0].OK {
+		t.Errorf("first result: got %+v", decoded[0])
+	}
+	if decoded[1].Name != "version" || decoded[1].OK || decoded[1].Fix == "" {
+		t.Errorf("second result: got %+v", decoded[1])
+	}
+}
 
 func TestParseJavaMajorVersion(t *testing.T) {
 	cases := []struct {

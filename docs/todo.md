@@ -755,22 +755,6 @@ Net-new user-facing capabilities. Lower architectural risk than the Architecture
 
 Refinements to existing behaviour. No new contracts, no new infrastructure — just better defaults or more flexibility.
 
-### `plumb doctor --json` — machine-readable output
-
-**Priority:** Low
-**Effort:** Small
-**Status:** Not started. The `--json` flag was described in the original doctor spec but never implemented.
-
-Add a `--json` flag to `plumb doctor` that emits the check results as a JSON array instead of the ANSI-coloured table. Each element should carry at minimum `name`, `ok`, `detail`, and `fix` fields matching the `checkResult` struct. Exit code behaviour is unchanged (0 = all pass, 1 = any fail). Useful for CI scripts and tooling that consume doctor output programmatically.
-
-**Definition of done:**
-1. `--json` flag registered on `doctorCmd`.
-2. `printChecks` skipped when flag is set; results marshalled to `json.NewEncoder(os.Stdout)`.
-3. Working indicator suppressed in JSON mode (stdout is not a terminal when piped).
-4. `plumb doctor --json | jq '.[] | select(.ok == false)'` produces useful output.
-
----
-
 ### Clean up legacy database migration logic
 
 **Priority:** Low (Cleanup for v0.9)

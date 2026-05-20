@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -20,7 +21,10 @@ import (
 	"github.com/golimpio/plumb/internal/tui"
 )
 
-var doctorWorkspace string
+var (
+	doctorWorkspace string
+	doctorJSON      bool
+)
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
@@ -35,6 +39,8 @@ Use --workspace to include project-scoped checks (stats rows, project config).`,
 func init() {
 	doctorCmd.Flags().StringVar(&doctorWorkspace, "workspace", "",
 		"Workspace directory to include in project-scoped checks (defaults to current dir)")
+	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false,
+		"Emit results as a JSON array instead of the ANSI table")
 }
 
 type checkResult struct {
@@ -50,6 +56,9 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		if cwd, err := os.Getwd(); err == nil {
 			ws = cwd
 		}
+	}
+	if doctorJSON {
+		return runDoctorJSON(ws)
 	}
 
 	tui.RebuildStyles()
@@ -83,6 +92,50 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	fmt.Printf("%s  %d check(s) need attention — see hints above.\n",
 		tui.WarnStyle.Render("✗"), failures)
 	return fmt.Errorf("%d check(s) need attention", failures)
+}
+
+// jsonCheckResult is the JSON serialisation shape for a single doctor check.
+type jsonCheckResult struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+	Fix    string `json:"fix"`
+}
+
+// runDoctorJSON runs all doctor checks and writes results as a JSON array to
+// stdout. Working indicators and section headers are suppressed. Exit code
+// behaviour is unchanged: returns a non-nil error when any check fails.
+func runDoctorJSON(ws string) error {
+	runs := []func() []checkResult{
+		checkDaemon,
+		func() []checkResult { return checkLSPs(ws) },
+		checkMCPClients,
+		func() []checkResult { return checkConfigs(ws) },
+		func() []checkResult { return checkStatsDB(ws) },
+	}
+	all := make([]checkResult, 0, len(runs)*3)
+	for _, run := range runs {
+		all = append(all, run()...)
+	}
+
+	out := make([]jsonCheckResult, len(all))
+	for i, c := range all {
+		out[i] = jsonCheckResult{Name: c.name, OK: c.ok, Detail: c.detail, Fix: c.fix}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+		return fmt.Errorf("encoding results: %w", err)
+	}
+
+	failures := 0
+	for _, c := range all {
+		if !c.ok {
+			failures++
+		}
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d check(s) need attention", failures)
+	}
+	return nil
 }
 
 func runSection(title string, run func() []checkResult) []checkResult {

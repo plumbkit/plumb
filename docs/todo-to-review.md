@@ -217,6 +217,24 @@ CQ-6's pre-commit hook item (ensuring the hook invokes `golangci-lint run --fix`
 
 ## Improvements
 
+### `plumb doctor --json` — machine-readable output
+
+**Completed in:** 0.7.1
+**Original priority:** Low
+
+`plumb doctor` now accepts a `--json` flag. When set:
+- `runDoctorJSON(ws)` is called instead of the ANSI display path.
+- All five check sections (Daemon, Language Servers, MCP Clients, Configuration, Data) run silently — no logo, no section headers, no working indicator (already suppressed by `stdoutIsTerminal()` when piped anyway).
+- Results are collected into `[]jsonCheckResult{Name, OK, Detail, Fix}` and written with `json.NewEncoder(os.Stdout).Encode`.
+- Exit code unchanged: non-nil error returned when any check fails.
+
+Implementation: `internal/cli/doctor.go` — `doctorJSON bool` flag, `jsonCheckResult` struct, `runDoctorJSON`.
+Test: `TestJsonCheckResultMarshaling` in `internal/cli/doctor_test.go` verifies round-trip marshal/unmarshal of passing and failing results.
+
+Usage: `plumb doctor --json | jq '.[] | select(.ok == false)'`
+
+---
+
 ### `session_start` orientation — recommended first step, workspace scale
 
 **Completed in:** 0.7.1
