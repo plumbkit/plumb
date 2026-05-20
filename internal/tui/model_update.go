@@ -48,9 +48,6 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.MouseReleaseMsg:
 		m.draggingDivider = false
 	case tea.KeyPressMsg:
-		if m.waitingForQuit && msg.String() != "ctrl+c" && msg.String() != "ctrl+q" {
-			m.waitingForQuit = false
-		}
 		return m.handleKeyMsg(msg)
 	}
 	return m, nil
@@ -158,6 +155,10 @@ func (m *Model) handleTabBarClick(x int) {
 }
 
 func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	key := msg.String()
+	if m.waitingForQuit && key != "ctrl+c" && key != "ctrl+q" {
+		m.waitingForQuit = false
+	}
 	if m.showPopup {
 		return m.handlePopupKey(msg)
 	}
