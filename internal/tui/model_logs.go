@@ -237,7 +237,7 @@ func (m Model) renderLogsSection() string {
 	filtered := m.filteredLogEntries()
 	scroll := m.logBodyScroll(len(filtered), bodyHeight)
 	visible := filtered[scroll:]
-	scrollbar := scrollbarCol(len(filtered), bodyHeight, scroll)
+	scrollbar := scrollbarCol(len(filtered), bodyHeight, scroll, isOverlay)
 	selectedIdx := m.selectedLogIndex(len(filtered))
 
 	for i := range bodyHeight {
@@ -313,7 +313,7 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 		scroll = 0
 	}
 	visible := all[scroll:]
-	scrollbar := scrollbarCol(len(all), scrollH, scroll)
+	scrollbar := scrollbarCol(len(all), scrollH, scroll, false)
 
 	title := " Log Detail "
 	fill := max(innerW-lipgloss.Width(title)-1, 0)

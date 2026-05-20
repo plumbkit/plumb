@@ -248,7 +248,7 @@ func TestSectionMenuUsesNumberedRows(t *testing.T) {
 	bg := strings.Repeat(strings.Repeat(" ", 40)+"\n", 8)
 	plain := ansiStripForTest(m.renderSectionMenuOverlay(bg))
 	for _, want := range []string{
-		"╭────────────────────╮",
+		"╭─ Section ──────────╮",
 		"│   1. Dashboard     │",
 		"│   2. Sessions      │",
 		"│   3. Memory        │",

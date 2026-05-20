@@ -18,7 +18,7 @@ import (
 	"github.com/golimpio/plumb/internal/stats"
 )
 
-func scrollbarCol(total, visible, offset int) []string {
+func scrollbarCol(total, visible, offset int, dimmed bool) []string {
 	if total <= visible {
 		return nil
 	}
@@ -26,11 +26,17 @@ func scrollbarCol(total, visible, offset int) []string {
 	mo := max(total-visible, 1)
 	tst := offset * (visible - ts) / mo
 	col := make([]string, visible)
+	thumbStyle := ScrollThumbStyle
+	trackStyle := ScrollTrackStyle
+	if dimmed {
+		thumbStyle = InactiveStyle
+		trackStyle = InactiveStyle
+	}
 	for i := range visible {
 		if i >= tst && i < tst+ts {
-			col[i] = ScrollThumbStyle.Render("┃")
+			col[i] = thumbStyle.Render("┃")
 		} else {
-			col[i] = ScrollTrackStyle.Render("│")
+			col[i] = trackStyle.Render("│")
 		}
 	}
 	return col

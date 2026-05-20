@@ -141,7 +141,7 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 
 	if m.waitingForQuit {
 		msg := " Press ctrl+c again to quit "
-		msgStyle := lipgloss.NewStyle().Foreground(ActiveTheme.TextPrimary).Background(ActiveTheme.Warning)
+		msgStyle := lipgloss.NewStyle().Foreground(ActiveTheme.Warning)
 		if dimmed {
 			msgStyle = InactiveStyle
 		}

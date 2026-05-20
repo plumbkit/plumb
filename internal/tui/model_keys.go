@@ -89,50 +89,13 @@ func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.logDetailOpen {
-		switch msg.String() {
-		case "ctrl+q", "ctrl+c":
-			return m.mainKeyQuit()
-		case "esc":
-			m.logDetailOpen = false
-			m.logDetailScroll = 0
-		case "c":
-			if text := m.currentLogDetailText(); text != "" {
-				m.logDetailCopied = true
-				return m, tea.Batch(
-					copyTextToClipboard(text),
-					tea.Tick(3*time.Second, func(time.Time) tea.Msg { return logDetailCopyResetMsg{} }),
-				)
-			}
-		case "up", "k":
-			if m.logDetailScroll > 0 {
-				m.logDetailScroll--
-			}
-		case "down", "j":
-			m.logDetailScroll++
-		case "pgup":
-			pageSize := max(m.height-10, 1)
-			m.logDetailScroll -= pageSize
-			if m.logDetailScroll < 0 {
-				m.logDetailScroll = 0
-			}
-		case "pgdown":
-			pageSize := max(m.height-10, 1)
-			m.logDetailScroll += pageSize
-		}
-		return m, nil
+		return m.handleLogDetailKey(msg)
 	}
-
 	switch msg.String() {
 	case "ctrl+q", "ctrl+c":
 		return m.mainKeyQuit()
 	case "esc":
-		if m.logFilter != "" {
-			m.logFilter = ""
-			m.logScroll = 0
-		} else {
-			m.sectionMenuOpen = true
-			m.sectionMenuCursor = m.currentSection
-		}
+		m = m.handleLogSectionEscKey()
 	case "/":
 		if m.sectionMenuOpen {
 			m.sectionMenuOpen = false
@@ -155,25 +118,81 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "G":
 		m.logFollow = true
 	case "enter":
-		if len(m.filteredLogEntries()) > 0 {
-			m.logDetailOpen = true
+		m = m.handleLogEnterKey()
+	default:
+		m = m.handleLogFilterInput(msg.String())
+	}
+	return m, nil
+}
+
+func (m Model) handleLogDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+q", "ctrl+c":
+		return m.mainKeyQuit()
+	case "esc":
+		m.logDetailOpen = false
+		m.logDetailScroll = 0
+	case "c":
+		if text := m.currentLogDetailText(); text != "" {
+			m.logDetailCopied = true
+			return m, tea.Batch(
+				copyTextToClipboard(text),
+				tea.Tick(3*time.Second, func(time.Time) tea.Msg { return logDetailCopyResetMsg{} }),
+			)
+		}
+	case "up", "k":
+		if m.logDetailScroll > 0 {
+			m.logDetailScroll--
+		}
+	case "down", "j":
+		m.logDetailScroll++
+	case "pgup":
+		pageSize := max(m.height-10, 1)
+		m.logDetailScroll -= pageSize
+		if m.logDetailScroll < 0 {
 			m.logDetailScroll = 0
 		}
-	case "backspace":
+	case "pgdown":
+		pageSize := max(m.height-10, 1)
+		m.logDetailScroll += pageSize
+	}
+	return m, nil
+}
+
+func (m Model) handleLogSectionEscKey() Model {
+	if m.logFilter != "" {
+		m.logFilter = ""
+		m.logScroll = 0
+	} else {
+		m.sectionMenuOpen = true
+		m.sectionMenuCursor = m.currentSection
+	}
+	return m
+}
+
+func (m Model) handleLogEnterKey() Model {
+	if len(m.filteredLogEntries()) > 0 {
+		m.logDetailOpen = true
+		m.logDetailScroll = 0
+	}
+	return m
+}
+
+func (m Model) handleLogFilterInput(s string) Model {
+	if s == "backspace" {
 		if r := []rune(m.logFilter); len(r) > 0 {
 			m.logFilter = string(r[:len(r)-1])
 			m.logScroll = 0
 			m.logCursor = 0
 		}
-	default:
-		s := msg.String()
-		if len(s) == 1 && s[0] >= 32 && s[0] < 127 {
-			m.logFilter += s
-			m.logScroll = 0
-			m.logCursor = 0
-		}
+		return m
 	}
-	return m, nil
+	if len(s) == 1 && s[0] >= 32 && s[0] < 127 {
+		m.logFilter += s
+		m.logScroll = 0
+		m.logCursor = 0
+	}
+	return m
 }
 
 func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {

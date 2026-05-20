@@ -48,6 +48,9 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.MouseReleaseMsg:
 		m.draggingDivider = false
 	case tea.KeyPressMsg:
+		if m.waitingForQuit && msg.String() != "ctrl+c" && msg.String() != "ctrl+q" {
+			m.waitingForQuit = false
+		}
 		return m.handleKeyMsg(msg)
 	}
 	return m, nil
