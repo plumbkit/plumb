@@ -36,8 +36,9 @@ func runStop(_ *cobra.Command, _ []string) error {
 		fmt.Println("Daemon is not running.")
 		return nil
 	}
+	prompted := false
 	if !stopFlagForce {
-		ok, err := confirmStopWithActiveSessions()
+		ok, shown, err := confirmStopWithActiveSessions()
 		if err != nil {
 			return err
 		}
@@ -45,33 +46,35 @@ func runStop(_ *cobra.Command, _ []string) error {
 			fmt.Println("\nStop cancelled.")
 			return nil
 		}
+		prompted = shown
 	}
 	if len(pids) > 1 {
 		fmt.Printf("Found %d daemon process(es) — stopping all.\n", len(pids))
 	}
 	var lastErr error
-	for _, pid := range pids {
-		if err := stopByPID(pid); err != nil {
+	for i, pid := range pids {
+		if err := stopByPID(pid, prompted && i == 0); err != nil {
 			lastErr = err
 		}
 	}
 	return lastErr
 }
 
-func confirmStopWithActiveSessions() (bool, error) {
+func confirmStopWithActiveSessions() (bool, bool, error) {
 	active, err := session.List()
 	if err != nil {
-		return false, fmt.Errorf("listing active sessions: %w", err)
+		return false, false, fmt.Errorf("listing active sessions: %w", err)
 	}
 	if len(active) == 0 {
-		return true, nil
+		return true, false, nil
 	}
 
 	if err := renderSessions(active, 0); err != nil {
-		return false, err
+		return false, false, err
 	}
 	fmt.Println()
-	return runStopConfirmationSelector(len(active))
+	ok, err := runStopConfirmationSelector(len(active))
+	return ok, true, err
 }
 
 func runStopConfirmationSelector(sessionCount int) (bool, error) {
@@ -158,7 +161,7 @@ func renderStopConfirmationPrompt(sessionCount, cursor int) string {
 		infoBadge,
 		tui.ItemStyle.Render(fmt.Sprintf("You have %s.", sessionLabel)),
 		muted.Render("    Stopping the daemon will terminate all active sessions."),
-		tui.ItemStyle.Render("    Stop the daemon?"),
+		tui.ItemStyle.Render("    Confirm?"),
 		optionLines[0],
 		optionLines[1],
 	)
@@ -265,7 +268,7 @@ func findPIDViaSocket(socketPath string) int {
 }
 
 // stopByPID sends SIGTERM to pid and waits up to 5 seconds for it to exit.
-func stopByPID(pid int) error {
+func stopByPID(pid int, leadingBlank bool) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil || proc.Signal(syscall.Signal(0)) != nil {
 		fmt.Println("Daemon is not running (stale reference cleaned up).")
@@ -277,6 +280,9 @@ func stopByPID(pid int) error {
 		return fmt.Errorf("sending SIGTERM to daemon (PID %d): %w", pid, err)
 	}
 
+	if leadingBlank {
+		fmt.Println()
+	}
 	fmt.Printf("Stopping daemon (PID %d) ...", pid)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

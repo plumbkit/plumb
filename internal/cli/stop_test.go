@@ -32,6 +32,12 @@ func TestRenderStopConfirmationPromptUsesPluralSessionCount(t *testing.T) {
 	if strings.Contains(got, "choose") || strings.Contains(got, "enter confirm") {
 		t.Fatalf("prompt should not include shortcut help text:\n%s", got)
 	}
+	if !strings.Contains(got, "Stopping the daemon will terminate all active sessions.\n    Confirm?") {
+		t.Fatalf("prompt should keep confirmation on the next line:\n%s", got)
+	}
+	if strings.Contains(got, "Stop the daemon?") {
+		t.Fatalf("prompt should use the shorter confirmation copy:\n%s", got)
+	}
 	if !strings.Contains(got, "┊   Yes") || !strings.Contains(got, "┊ ❯ No") {
 		t.Fatalf("prompt missing yes/no options:\n%s", got)
 	}
