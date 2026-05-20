@@ -210,19 +210,25 @@ Plumb's current memory system is deterministic (grep/glob over markdown files). 
 
 1. **Episodic Summaries via `stats.db`:**
    Currently, `session_start` gives generic repo orientation. Plumb already tracks every tool call in `stats.db`. When a session goes idle, the daemon should synthesize a lightweight "Episodic Summary" based on the modified files and tools used. 
-   - *Example outcome:* `session_start` output appends: *"In your last session, you heavily modified `internal/auth/login.go` and used `find_references` on `UserSession`."*
+   - **Mechanism:** A background task in the daemon that runs after a session hasn't seen a tool call for N minutes. It queries the `tool_calls` table for that session, extracts the list of touched files and high-level tool types (Reads vs Writes), and persists a 1-2 sentence summary in a new `episodic_memories` table.
+   - **Outcome:** `session_start` output appends: *"In your last session, you heavily modified `internal/auth/login.go` and used `find_references` on `UserSession`."*
 
-2. **FTS5 Semantic Search:**
-   `search_memories` is currently a basic grep. We should index the Markdown memories into a SQLite table using the **FTS5** (Full-Text Search) extension. This gives us ranking, stemming, and proximity matching (a "poor man's vector search") out-of-the-box, making memory retrieval much more resilient to exact keyword misses.
+2. **FTS5 Semantic Search & Background Indexing:**
+   `search_memories` is currently a basic grep. We should index the Markdown memories into a SQLite table using the **FTS5** (Full-Text Search) extension.
+   - **Mechanism:** The `internal/memory` package maintains an `fts_index` virtual table. On `write_memory` or daemon start, a background worker crawls `.plumb/memories/*.md` and keeps the index in sync.
+   - **Benefit:** Gives us ranking (relevance), stemming (matches "running" to "run"), and proximity matching (a "poor man's vector search") out-of-the-box, making memory retrieval much more resilient to exact keyword misses.
 
-3. **Proactive Memory Hints:**
-   Agents often forget to call `relevant_memories` when reading a file. We can inject this knowledge proactively. If an agent calls `read_file` or `edit_file` on a path that matches a memory's `paths:` frontmatter glob, the tool response should append a brief warning:
-   - *Example outcome:* `[Hint: There is a relevant memory 'auth-gotchas' attached to this file. Use read_memory to view it.]`
+3. **Lifecycle Hooks for Proactive Context Injection:**
+   Agents often forget to call `relevant_memories` when reading a file. We can inject this knowledge proactively at the tool-response layer.
+   - **Mechanism:** Add an `OnAfterTool` interceptor that checks the `paths:` frontmatter globs for all workspace memories.
+   - **Triggers:** If an agent calls `read_file`, `edit_file`, or `find_symbol` on a path that matches a memory, append a `[Hint: ...]` block to the response.
+   - **Outcome:** `[Hint: There is a relevant memory 'auth-gotchas' attached to this file. Use read_memory to view it.]`
 
 **Definition of done:**
-1. SQLite FTS5 virtual table added to `internal/memory/store.go` and `search_memories` updated to use it.
-2. Daemon calculates and persists a brief summary of a session upon disconnect. `session_start` reads and displays the previous session's summary.
-3. Read/write tools cross-reference the memory store's path globs and append the hint string to their output when a match is found.
+1. **FTS5 Implementation:** SQLite FTS5 virtual table added to `internal/memory/store.go`. `write_memory` and `delete_memory` trigger incremental index updates. `search_memories` updated to use `MATCH` queries with relevance ranking.
+2. **Episodic Logic:** New `episodic_memories` table in `stats.db`. Daemon implements an idle-session listener that generates summaries. `session_start` reads the most recent summary for the workspace and appends it to the orientation packet.
+3. **Context Injection:** `internal/mcp/server.go` or `internal/cli/daemon.go` Gains a hook to inject memory hints into tool responses. The hint logic must be cheap (cache the compiled glob patterns).
+4. **Tests:** Unit tests verify that FTS5 search handles stemming/ranking; integration tests verify that `read_file` on a tagged path includes the hint.
 
 ---
 
