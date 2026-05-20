@@ -2,6 +2,9 @@
 
 ## 0.7.4 (unreleased)
 
+### Added
+- **`git_commit` tool — stage files and create a local git commit.** `message` (required), `files` (optional list of absolute paths to stage), and `repo` (optional path inside the repo). If `files` is omitted, all tracked modifications are staged via `git add -u`; untracked files are never staged automatically and must be listed explicitly. Pre-commit hooks always run — there is no `--no-verify` escape hatch. Returns the short commit hash and subject on success. Counts against the session write rate limit. 7 unit tests.
+
 ## 0.7.3
 
 ### Changed

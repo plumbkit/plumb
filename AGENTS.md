@@ -201,7 +201,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (35)
+## Available tools (36)
 
 **Bootstrap**
 
@@ -261,6 +261,7 @@ Pyright is the worked example.
 |---|---|---|
 | `find_replace` | `find_replace.go` | Text/regex find-and-replace across files; dry-run by default. `format_after: true` runs the workspace formatter (`gofumpt`/`gofmt` for Go, `ruff`/`black` for Python) on each modified file after replacement; formatter errors are warnings, not failures. |
 | `git` | `git.go` | Read-only subcommands (status, log, diff, show, blame, branch, tag, shortlog, stash). |
+| `git_commit` | `git_commit.go` | Stage files and create a commit. Explicit `files` list or `git add -u` fallback. Pre-commit hooks always run. Returns short hash + subject. |
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
 | `daemon_info` | `daemon_info.go` | Current session name, session ID, daemon version, start time, uptime. |

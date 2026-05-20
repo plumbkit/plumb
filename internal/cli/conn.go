@@ -446,6 +446,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl))
 	srv.Register(tools.NewFindFiles(s.workspace))
 	srv.Register(tools.NewGit())
+	srv.Register(tools.NewGitCommit(wd))
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace(wd))
 	srv.Register(tools.NewVersion())
