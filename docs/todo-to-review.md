@@ -6,6 +6,40 @@ Items that appeared in `todo.md` at commit `3728b3ef` and are no longer in the c
 
 ## Architecture
 
+### Plumb Topology: Persistent Semantic Indexing
+
+**Completed in:** 0.7.5 — commits `7a40cc0`–`ef7cf0c` (config → schema → types → extractor interface → Go extractor → Python extractor → indexer → search → explore → store → topologyPool → wiring → MCP tools)
+**Original priority:** ⭐ top architectural priority
+
+Phase 1 ships a SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`, a daemon-owned background indexer, two language extractors (Go and Python), and three MCP tools (`topology_status`, `topology_search`, `topology_explore`). Disabled by default (`[topology] enabled = false`).
+
+**What was shipped:**
+
+- `internal/topology/` — `NodeKind`/`EdgeKind` constants, `Node`, `Edge`, `SearchResult`, `SearchOpts`, `ExploreOpts`, `Neighbourhood`, `Status` types; `Store` façade (`Open`, `Close`, `Enqueue`, `EnqueueDelete`, `Resync`, `Search`, `Explore`, `Status`); SQLite schema with WAL mode, `busy_timeout=5000`, foreign keys, FTS5 virtual table (`topology_fts`); background `Indexer` with coalescing queue (cap 256), mtime-based staleness, `safeExtract` panic guard, all-or-nothing per-file transaction; FTS5 BM25-ranked `Search` with kind/language filters and snippet extraction; BFS `Explore` with hard caps (depth ≤ 4, nodes ≤ 200, bytes ≤ 100 000) and `Truncated` flag; `FormatStatus` report with file count, entity count, DB size, indexed languages, last sync, last error.
+- `internal/topology/extractors/golang/` — Go extractor using `go/parser`+`go/ast` (stdlib, no CGo). Extracts: package, imports (with containment edges), functions, methods (with signature and docstring), types, constants/variables, tests. Edge `FromID`/`ToID` use 0-based indices into the returned `[]Node` slice; the indexer remaps these to actual DB rowIDs.
+- `internal/topology/extractors/python/` — Python extractor using line-by-line `bufio.Scanner` with regex. Extracts: classes, functions, async functions, methods (by indentation), imports, test functions (`test_`/`Test` prefix). Containment edges link methods to their class with `confidence=0.8`, `source="heuristic"`.
+- `internal/cli/topology_pool.go` — `topologyPool`: daemon-level lazy per-workspace `Store` registry. `Acquire` is safe for concurrent callers; per-root mutex prevents double-open. `StopAll` called on daemon shutdown.
+- `internal/config/config.go` — `TopologyConfig` struct added; `Topology` field added to `Config`; defaults: `Enabled=false`, `MaxFileSizeBytes=512*1024`; `ExcludePatterns` slice deep-copied in `cloneConfig`.
+- `internal/cli/conn.go` — `topologyPool`/`topologyStore` fields on `connSession`; `startTopologyIndexer` (called after `startQualityRunner` in `attachWorkspace` and `attachSynthetic`); `buildWriteDeps` wires `TopologyNotify`; `registerAllTools` registers the three topology tools via a `topoFn` closure.
+- `internal/cli/daemon.go` — `topoPool` created alongside `workspacePool`; `StopAll` deferred; `topoPool` threaded through `runDaemonAcceptLoop` → `handleConn` → `newConnSession`.
+- `internal/tools/write_deps.go` — `TopologyNotifyFn` type alias; `TopologyNotify` field on `WriteDeps`; `notifyTopology` nil-safe helper.
+- `internal/tools/write_file.go`, `edit_file.go`, `transaction.go` — call `notifyTopology(path)` after each successful write.
+- `internal/tools/topology_status.go`, `topology_search.go`, `topology_explore.go` — three new MCP tools following `parseArgs → validate → run → format` pattern; nil-store graceful degradation.
+- Tests: `internal/topology/db_test.go` (schema, WAL, FTS5), `internal/topology/search_test.go` (ranking, kind/language filters), `internal/tools/topology_*_test.go` (nil-store degradation).
+
+**What is NOT in Phase 1 (deferred to Phase 2):**
+
+- `topology_impact`, `topology_routes`, `topology_affected` tools.
+- TypeScript/JavaScript, Java, Rust, Ruby, Swift extractors.
+- Tree-sitter integration (Phase 1 uses `go/parser`+`go/ast` and regex; Tree-sitter adds CGo).
+- Topology-backed fallbacks to `list_symbols`, `find_symbol`, `workspace_symbols`.
+- TUI/doctor topology health section.
+- Formal benchmark (DoD item 6) and concurrency stress test (DoD item 7).
+
+---
+
+## Architecture
+
 ### `expected_sha` parameter on `edit_file` and `transaction_apply`
 
 **Completed in:** 0.6.x (multiple commits)

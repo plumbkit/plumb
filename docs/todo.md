@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.6.8** (2026-05-20). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices).
+Last reviewed against: **0.7.5** (2026-05-21). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices). Topology Phase 1 completed and moved to `docs/todo-to-review.md`.
 
 When you complete a TODO entry: **move its section to `docs/todo-to-review.md`** (do not just delete it), add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -31,109 +31,6 @@ Run `go test -tags=integration -timeout=3m ./cmd/smoke/` to verify the smoke che
 ## Architecture
 
 Deep design changes, contract changes, and new infrastructure. These are the items most likely to need design discussion before implementation.
-
-
-### Plumb Topology: Persistent Semantic Indexing
-
-**Priority:** ⭐ top architectural priority.
-**Effort:** Significant (multi-week).
-**Status:** Planning.
-**Discussion:** Derived from `codegraph` research. This feature adds a "structural map" layer to Plumb to solve startup latency, language breadth, and context-density gaps.
-
-**The pitch — speed, breadth, and instant context.**
-
-Plumb currently relies on live Language Servers (LSPs) for all semantic queries. While precise, LSPs are heavy, slow to boot, and limited to a few languages. **Plumb Topology** implements a persistent, disk-based semantic graph using **Tree-sitter + SQLite + FTS5**.
-
-Why this is a priority:
-- **Instant discovery:** Agents can query the project structure immediately on attach, without waiting for LSP indexing.
-- **Universal breadth:** Tree-sitter grammars cover far more languages than Plumb's current validated LSP adapters.
-- **Efficient outline replacement:** `list_symbols`, `find_symbol`, and workspace symbol discovery can use Topology when LSP is unavailable or still warming up.
-- **Context density:** `topology_explore` can return a bounded symbol neighbourhood — callers, callees, imports, related tests, routes, and source snippets — in one tool call.
-- **Bridge to memory:** Topology gives memory a stable entity layer. Memories can attach to symbols/routes/tests, not only path globs.
-
-**The balance: speed vs. authority.**
-
-Topology must be fast and memory-efficient, but its contract is different from LSP:
-
-- Topology is broad, persistent, and approximate. It answers "what exists?", "how is it connected?", "what might be affected?", and "what context should I inspect first?"
-- LSP remains authoritative for surgical semantics: precise definitions, references, renames, type-aware edits, and diagnostics.
-- When both sources are available, tool responses should expose the source/confidence: `source=topology`, `source=lsp`, or `source=merged`.
-- Topology must degrade cleanly: if the index is absent, stale, or partial, return a clear status and a bounded partial answer rather than pretending to be complete.
-
-**Implementation plan.**
-
-1. **Storage:** SQLite backend in `<workspace>/.plumb/topology.db`.
-   - `nodes`: files, packages/modules, symbols, routes, tests, config entry points.
-   - `edges`: defines, imports, calls, references, inherits/implements, contains, route-to-handler, test-covers.
-   - FTS5 virtual table for fuzzy symbol/path/search queries, with separate indexed fields for symbol names, signatures, paths, comments/docstrings, routes, and test names.
-   - Code-aware tokenisation: split `camelCase`, `snake_case`, `kebab-case`, package/path segments, and preserve exact names so `workspacePool`, `workspace pool`, and `workspace_pool` can all be discovered.
-   - Dependency: this is the code-structure backend for [Workspace Search Engine](#workspace-search-engine-exact-scan--indexed-discovery); Topology owns indexed code entities, while the search engine owns the user-facing exact-vs-ranked tool contract.
-   - Metadata table: schema version, index generation, indexed file hash/mtime, language, extractor version, last error.
-   - WAL mode and short write transactions so MCP read queries do not block on indexing.
-2. **Extraction:** Go-native Tree-sitter integration. Use checked-in `.scm` queries per language.
-   - Phase 1: Go and Python.
-   - Phase 2: TypeScript/JavaScript, Java, Rust, Ruby, Swift based on user demand.
-   - Store file content hash/mtime with extracted rows so stale data can be discarded.
-3. **Resolution:** Pragmatic, confidence-scored resolution.
-   - Import tracing + local name matching first.
-   - Framework-specific patterns later: Express/FastAPI routes, test naming conventions, CLI command registration, Cobra command trees.
-   - Every inferred edge carries a confidence/source marker so agents can distinguish "known" from "likely".
-4. **Incremental sync:** daemon-owned background indexer.
-   - Debounced file watcher queue.
-   - Handles create/update/delete/rename.
-   - Cleans stale nodes and edges when files disappear.
-   - Manual resync command/tool for recovery.
-   - Per-workspace one-indexer-at-a-time lock; coalesce repeated writes.
-5. **Tools:**
-   - `topology_status`: index health, indexed/skipped/stale file counts, DB size, last sync, watcher state, language coverage, last errors.
-   - `topology_search`: fuzzy global symbol/file/route search over indexed code structure. This is a dependency for `workspace_search`, not a replacement for exact `search_in_files` scans.
-   - `topology_explore`: bounded neighbourhood around a symbol/file/route/test.
-   - `topology_impact`: transitive dependency and reference closure.
-   - `topology_routes`: framework-aware entry points.
-   - `topology_affected`: given changed files/symbols, return likely affected files and tests.
-
-**Context-budget contract.**
-
-Topology tools must not accidentally dump a huge graph into the conversation. `topology_explore` and `topology_impact` should require or default these controls:
-
-```json
-{
-  "depth": 2,
-  "max_nodes": 50,
-  "max_bytes": 30000,
-  "include_source": "snippets",
-  "budget": "compact"
-}
-```
-
-Supported `include_source`: `none`, `signatures`, `snippets`, `full` (full should be opt-in and capped). Supported `budget`: `compact`, `normal`, `deep`. Responses should say when results were truncated and how to narrow.
-
-**Definition of done — Phase 1.**
-
-1. `internal/topology` package with SQLite schema for nodes, edges, FTS5 search, and index metadata.
-2. Daemon-owned incremental indexer with debounce, stale cleanup, delete/rename handling, and manual resync.
-3. Go and Python extractors functional and tested against fixtures.
-4. `topology_status`, `topology_search`, and `topology_explore` exposed as MCP tools and documented with clear `source=topology`, `mode=ranked`, and index-freshness semantics.
-5. `topology_explore` enforces `max_nodes`/`max_bytes` and reports truncation.
-6. Benchmark: Topology-based symbol listing is >5x faster than LSP-based `list_symbols` on cold start.
-7. Concurrency tests prove MCP read queries do not fail while indexing is active.
-
-**Phase 2.**
-
-1. Add `topology_impact`, `topology_routes`, and `topology_affected`.
-2. Add TypeScript/JavaScript extractor and route patterns.
-3. Add topology-backed fallbacks to `list_symbols`, `find_symbol`, and `workspace_symbols` when LSP is unavailable.
-4. Add status visibility in TUI/doctor: index health, stale state, and last indexing error.
-
-**Watch out for.**
-
-- SQLite write contention can show up as `database is locked` if index writes hold transactions too long. Use WAL mode, short writes, context timeouts, and retryable reads.
-- Tree-sitter resolution is not type checking. Do not use it for semantic rename or edit correctness.
-- Framework inference can become a swamp. Start with simple, confidence-scored patterns and keep them optional.
-- Keep extractors deterministic. Index output should not change unless source files or extractor versions change.
-- Index DBs can grow quietly. Track size in `topology_status` and plan retention/compaction before large workspaces become painful.
-
----
 
 ### Advanced Memory Engine
 

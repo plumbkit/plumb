@@ -29,7 +29,7 @@ Strict layered architecture — lower layers must never import higher ones:
 
 ```
 Transport (MCP/LSP) → Domain (symbols, edits, capabilities)
-                    → Intelligence (topology) [PLANNED]
+                    → Intelligence (topology)
                     → Application (composite tools, caching, rate-limiting)
                     → Presentation (TUI, CLI)
 ```
@@ -43,7 +43,9 @@ Key packages:
 | `internal/lsp/adapters/gopls/` | Validated Go adapter |
 | `internal/lsp/adapters/pyright/` | Validated Python adapter |
 | `internal/lsp/adapters/jdtls/` | Experimental Java adapter (jdtls); enabled via `[lsp.java] enabled = true` |
-| `internal/topology/` | *(Planned)* Tree-sitter SQLite semantic graph for high-speed discovery |
+| `internal/topology/` | SQLite/FTS5 semantic graph; background indexer; Go AST + Python regex extractors; search + BFS explore |
+| `internal/topology/extractors/golang/` | Go extractor using `go/parser`+`go/ast`; no CGo |
+| `internal/topology/extractors/python/` | Python extractor using line-by-line regex scan; no CGo |
 | `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool dependencies |
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
@@ -201,7 +203,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (38)
+## Available tools (41)
 
 **Bootstrap**
 
@@ -268,6 +270,14 @@ Pyright is the worked example.
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
 | `daemon_info` | `daemon_info.go` | Current session name, session ID, daemon version, start time, uptime. |
 | `rename_session` | `rename_session.go` | Rename the current MCP session. Letters and `-` only; stored uppercase; max 16 characters. |
+
+**Topology** — SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. Enabled via `[topology] enabled = true`. Disabled by default.
+
+| Tool | File | Notes |
+|---|---|---|
+| `topology_status` | `topology_status.go` | Index health: file count, entity count, DB size, indexed languages, last sync time, last error. Returns a clear "topology is disabled" message when the store is nil. |
+| `topology_search` | `topology_search.go` | FTS5 ranked symbol/file search. Inputs: `query`, optional `kinds` filter, optional `language` filter, `limit` (default 20), `include_snippets` (default true). Reports `source=topology`, `mode=ranked`, index freshness. |
+| `topology_explore` | `topology_explore.go` | BFS neighbourhood around a named symbol. Inputs: `name`, `depth` (default 2, max 4), `max_nodes` (default 50, max 200), `max_bytes` (default 30 000, max 100 000), `include_source` (`none`/`signatures`/`snippets`/`full`), `edge_kinds`. Reports truncation when budget is exhausted. |
 
 **Memory** — per-workspace markdown notes at `<workspace>/.plumb/memories/`. Also exposed as MCP resources.
 
