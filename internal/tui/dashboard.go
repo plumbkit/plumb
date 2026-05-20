@@ -733,7 +733,7 @@ func dashActivityBorder(leftCorner, rightCorner string, inner int, leftTitle, ri
 // Bottom 2 rows show daemon history (top-fill, ⠉ idle background). Together they
 // form a dotted centre-line when the chart has no activity.
 func (m Model) dashActivityGraphLines(width int) []string {
-	const halfH = 2 // chart rows per half
+	const halfH = 2
 
 	// Braille bottom-fill patterns: left/right column filled upward.
 	botL := [5]int{0, 0x40, 0x44, 0x46, 0x47}
@@ -743,89 +743,8 @@ func (m Model) dashActivityGraphLines(width int) []string {
 	topL := [5]int{0, 0x01, 0x03, 0x07, 0x47}
 	topR := [5]int{0, 0x08, 0x18, 0x38, 0xB8}
 
-	buildGrid := func(buckets []int64, fillDown bool) [][]int {
-		pixH := halfH * 4
-		var maxV int64 = 10
-		for _, v := range buckets {
-			if v > maxV {
-				maxV = v
-			}
-		}
-		sample := func(i int) int64 {
-			if len(buckets) == 0 {
-				return 0
-			}
-			idx := i * len(buckets) / (width * 2)
-			if idx >= len(buckets) {
-				idx = len(buckets) - 1
-			}
-			return buckets[idx]
-		}
-		toPx := func(v int64) int {
-			if v <= 0 {
-				return 0
-			}
-			px := int(float64(v) / float64(maxV) * float64(pixH-1))
-			if px < 1 {
-				px = 1
-			}
-			return px
-		}
-		grid := make([][]int, halfH)
-		for r := range halfH {
-			grid[r] = make([]int, width)
-		}
-		for x := range width {
-			pxL := toPx(sample(x * 2))
-			pxR := toPx(sample(x*2 + 1))
-			if fillDown {
-				for r := range halfH {
-					base := r * 4
-					lf := min(4, max(0, pxL-base))
-					rf := min(4, max(0, pxR-base))
-					grid[r][x] = topL[lf] | topR[rf]
-				}
-			} else {
-				for r := halfH - 1; r >= 0; r-- {
-					base := (halfH - 1 - r) * 4
-					lf := min(4, max(0, pxL-base))
-					rf := min(4, max(0, pxR-base))
-					grid[r][x] = botL[lf] | botR[rf]
-				}
-			}
-		}
-		return grid
-	}
-
-	renderRow := func(row []int, bgRune rune) string {
-		var sb strings.Builder
-		i := 0
-		for i < width {
-			faded := row[i] == 0
-			j := i + 1
-			for j < width && (row[j] == 0) == faded {
-				j++
-			}
-			var run strings.Builder
-			for k := i; k < j; k++ {
-				if faded {
-					run.WriteRune(bgRune)
-				} else {
-					run.WriteRune(rune(0x2800 + row[k]))
-				}
-			}
-			if faded {
-				sb.WriteString(SepStyle.Render(run.String()))
-			} else {
-				sb.WriteString(SelectedStyle.Render(run.String()))
-			}
-			i = j
-		}
-		return sb.String()
-	}
-
-	gridLife := buildGrid(m.dashLifetimeBuckets, false) // bottom-fill
-	gridDaem := buildGrid(m.dashDaemBuckets, true)      // top-fill
+	gridLife := dashBuildGrid(m.dashLifetimeBuckets, false, width, halfH, botL, botR, topL, topR)
+	gridDaem := dashBuildGrid(m.dashDaemBuckets, true, width, halfH, botL, botR, topL, topR)
 
 	lines := make([]string, 0, halfH*2)
 
@@ -836,7 +755,7 @@ func (m Model) dashActivityGraphLines(width int) []string {
 		if r == halfH-1 {
 			bg = '⣀'
 		}
-		lines = append(lines, renderRow(gridLife[r], bg))
+		lines = append(lines, dashRenderRow(gridLife[r], bg, width))
 	}
 
 	// Bottom half: daemon data, top-fill.
@@ -846,10 +765,94 @@ func (m Model) dashActivityGraphLines(width int) []string {
 		if r == 0 {
 			bg = '⠉'
 		}
-		lines = append(lines, renderRow(gridDaem[r], bg))
+		lines = append(lines, dashRenderRow(gridDaem[r], bg, width))
 	}
 
 	return lines
+}
+
+// dashBuildGrid converts a slice of call counts into a halfH×width braille pixel grid.
+// fillDown=true fills from the top (daemon style); fillDown=false fills from the bottom (lifetime style).
+func dashBuildGrid(buckets []int64, fillDown bool, width, halfH int, botL, botR, topL, topR [5]int) [][]int {
+	pixH := halfH * 4
+	var maxV int64 = 10
+	for _, v := range buckets {
+		if v > maxV {
+			maxV = v
+		}
+	}
+	sample := func(i int) int64 {
+		if len(buckets) == 0 {
+			return 0
+		}
+		idx := i * len(buckets) / (width * 2)
+		if idx >= len(buckets) {
+			idx = len(buckets) - 1
+		}
+		return buckets[idx]
+	}
+	toPx := func(v int64) int {
+		if v <= 0 {
+			return 0
+		}
+		px := int(float64(v) / float64(maxV) * float64(pixH-1))
+		if px < 1 {
+			px = 1
+		}
+		return px
+	}
+	grid := make([][]int, halfH)
+	for r := range halfH {
+		grid[r] = make([]int, width)
+	}
+	for x := range width {
+		pxL := toPx(sample(x * 2))
+		pxR := toPx(sample(x*2 + 1))
+		if fillDown {
+			for r := range halfH {
+				base := r * 4
+				lf := min(4, max(0, pxL-base))
+				rf := min(4, max(0, pxR-base))
+				grid[r][x] = topL[lf] | topR[rf]
+			}
+		} else {
+			for r := halfH - 1; r >= 0; r-- {
+				base := (halfH - 1 - r) * 4
+				lf := min(4, max(0, pxL-base))
+				rf := min(4, max(0, pxR-base))
+				grid[r][x] = botL[lf] | botR[rf]
+			}
+		}
+	}
+	return grid
+}
+
+// dashRenderRow converts one row of braille pixel codes into a styled string.
+func dashRenderRow(row []int, bgRune rune, width int) string {
+	var sb strings.Builder
+	i := 0
+	for i < width {
+		faded := row[i] == 0
+		j := i + 1
+		for j < width && (row[j] == 0) == faded {
+			j++
+		}
+		var run strings.Builder
+		for k := i; k < j; k++ {
+			if faded {
+				run.WriteRune(bgRune)
+			} else {
+				run.WriteRune(rune(0x2800 + row[k]))
+			}
+		}
+		if faded {
+			sb.WriteString(SepStyle.Render(run.String()))
+		} else {
+			sb.WriteString(SelectedStyle.Render(run.String()))
+		}
+		i = j
+	}
+	return sb.String()
 }
 
 const dashWidgetGap = 3
