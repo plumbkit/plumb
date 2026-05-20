@@ -256,6 +256,17 @@ Remaining gosec findings (G306 file perms, G703 path traversal, G115 integer ove
 
 ---
 
+### CQ-3 — Decompose the monolithic `Execute()` methods
+
+**Completed in:** 0.7.0 (non-TUI) and 0.7.1 (TUI)
+**Original priority:** ⭐ P1
+
+39 commits, one per decomposed function, each a pure behaviour-preserving refactor following the `parseArgs / validate / run / format` blueprint codified in CQ-6. Every first-party non-test function now passes gocyclo 15; `golangci-lint run --enable-only gocyclo ./...` returns zero violations.
+
+Functions decomposed by version: **0.7.0** — `SearchInFiles.Execute` (74→≤15), `findReplaceTool.Execute` (58→≤15), `TransactionApply.Execute` (44→≤15), `handleConn` (38→1), `FindFiles.Execute` (35→≤15), `EditFile.Execute` (33→≤15), `(*Server).Serve` (32→6), `SessionStart.Execute` (31→≤15), `computeEditScript` (27→≤15), `(*WriteFile).Execute` (26→≤15), `applyEnv` (28→≤15), `runStats` (28→≤15), `Discover` (23→≤15), `runDiagOnWorkspace` (22→≤15), `ListFiles.Execute` (20→≤15), `ListDirectory.Execute` (20→≤15), `symbolKindName` (18→map), `ReadSymbol.Execute` (18→≤15), `executePartial` (18→≤15), `walkDir` (17→≤15), `runDaemon` (17→≤15), `RenameFile.Execute` (17→≤15), `runConfigShow` (17→≤15), `readContentMaybeRanged` (17→≤15), `groupHunks` (16→≤15), `(*CallHierarchy).Execute` (16→≤15), `(*RenameSymbol).Execute` (16→≤15), `(*TypeHierarchy).Execute` (16→≤15). **0.7.1** — `handleMainKey` (59→9), `updateInner` (41→14), `handleLogSectionKey` (31→14), `handlePopupKey` (25→15), `render` (24→12), `dashActivityGraphLines` (22→5), `renderPopup` (21→9), `popupRightAll` (18→13), `handleDashboardKey` (17→15), `handleMouseWheel` (17→14), `leftLines` (16→14).
+
+---
+
 ## Bugs & known limitations
 
 ### `rename_symbol` stale LSP position index — clear error message
