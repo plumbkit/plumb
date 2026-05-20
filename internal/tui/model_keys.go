@@ -8,7 +8,9 @@ import (
 
 func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+q", "ctrl+c":
+	case "ctrl+q":
+		return m, tea.Quit
+	case "ctrl+c":
 		return m.mainKeyQuit()
 	case "esc":
 		m.showPopup = false
@@ -92,7 +94,9 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.handleLogDetailKey(msg)
 	}
 	switch msg.String() {
-	case "ctrl+q", "ctrl+c":
+	case "ctrl+q":
+		return m, tea.Quit
+	case "ctrl+c":
 		return m.mainKeyQuit()
 	case "esc":
 		m = m.handleLogSectionEscKey()
@@ -127,7 +131,9 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) handleLogDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+q", "ctrl+c":
+	case "ctrl+q":
+		return m, tea.Quit
+	case "ctrl+c":
 		return m.mainKeyQuit()
 	case "esc":
 		m.logDetailOpen = false
@@ -197,7 +203,9 @@ func (m Model) handleLogFilterInput(s string) Model {
 
 func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+q", "ctrl+c":
+	case "ctrl+q":
+		return m, tea.Quit
+	case "ctrl+c":
 		return m.mainKeyQuit()
 	case "enter":
 		m = m.mainKeyEnter()
