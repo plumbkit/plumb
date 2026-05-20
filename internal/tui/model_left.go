@@ -59,21 +59,20 @@ func (m Model) leftLines() []string {
 			path = contractPath(s.Folder, mf)
 		}
 		secondLine := "    ╰─ " + path
-		if i == m.cursor {
-			lines = append(lines, SelectedStyle.Render(firstLine))
-			lines = append(lines, SelectedStyle.Render(secondLine))
-		} else {
-			if lf {
-				lines = append(lines, ItemStyle.Render(firstLine))
-				lines = append(lines, MutedStyle.Render(secondLine))
-			} else {
-				lines = append(lines, FadedStyle.Render(firstLine))
-				lines = append(lines, FadedStyle.Render(secondLine))
-			}
-		}
+		lines = append(lines, leftSessionRowLines(firstLine, secondLine, selected, lf)...)
 		lines = append(lines, "")
 	}
 	return lines
+}
+
+func leftSessionRowLines(firstLine, secondLine string, selected, lf bool) []string {
+	if selected {
+		return []string{SelectedStyle.Render(firstLine), SelectedStyle.Render(secondLine)}
+	}
+	if lf {
+		return []string{ItemStyle.Render(firstLine), MutedStyle.Render(secondLine)}
+	}
+	return []string{FadedStyle.Render(firstLine), FadedStyle.Render(secondLine)}
 }
 
 func sessionLangBadge(language string, selected, focused bool) string {
