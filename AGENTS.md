@@ -10,7 +10,7 @@ This file is the canonical brief for AI agents working in the plumb codebase. Ke
 
 > **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
 
-Current version: **0.7.7** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.7.8** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -43,16 +43,21 @@ Key packages:
 | `internal/lsp/adapters/gopls/` | Validated Go adapter |
 | `internal/lsp/adapters/pyright/` | Validated Python adapter |
 | `internal/lsp/adapters/jdtls/` | Experimental Java adapter (jdtls); enabled via `[lsp.java] enabled = true` |
-| `internal/topology/` | SQLite/FTS5 semantic graph; background indexer; Go AST + Python regex extractors; search + BFS explore |
+| `internal/topology/` | SQLite/FTS5 semantic graph; background indexer; Go AST, Python regex, and TypeScript/JS regex extractors; search + BFS explore/impact/affected/routes |
 | `internal/topology/extractors/golang/` | Go extractor using `go/parser`+`go/ast`; no CGo |
 | `internal/topology/extractors/python/` | Python extractor using line-by-line regex scan; no CGo |
-| `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool dependencies |
+| `internal/topology/extractors/typescript/` | TypeScript/JS extractor using regex scan; no CGo |
+| `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool dependencies; `txlog` subpackage is the transaction rollback WAL |
+| `internal/quality/` | Offline post-write code analysers (golangci-lint, …) against changed files; findings appended to write responses |
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, `user_version` 5) |
+| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 7) |
 | `internal/memory/` | Per-workspace markdown memory store; exposed as MCP resources |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
+| `internal/render/` | Shared, pure CLI/TUI presentation helpers (stdlib + rendering libs only) |
+| `internal/fsguard/` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs |
+| `internal/monitor/` | Process resource-usage snapshots (CPU %, memory) feeding the TUI daemon metrics |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |
 
 ## Daemon architecture
@@ -116,12 +121,14 @@ Resolved configuration is built in four layers; each can override the prior. Use
 [edits]
 strict = true                  # require read_file before edit_file (default false)
 rate_limit_per_minute = 30     # 0 disables; default 120
+show_write_diff = true         # append unified diff to edit_file/write_file responses (default true)
 ```
 
 | Field | Env var | Effect |
 |---|---|---|
 | `strict` | `PLUMB_STRICT_EDITS` | `true`/`1`/`yes` enables strict mode. Every `edit_file` target must have been read in this session AND the mtime must match. Closes the "edit without read" footgun. Per-session via `ReadTracker`. |
 | `rate_limit_per_minute` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. Protects against runaway-loop scenarios. |
+| `show_write_diff` | `PLUMB_SHOW_WRITE_DIFF` | When `true` (default), `edit_file` and `write_file` append a unified diff of the change to their response. Set to `false` to suppress diffs in high-volume write workflows. |
 
 ### `[workspace]` section — root detection fallback
 
@@ -169,6 +176,19 @@ theme = "nordico"   # built-in theme name; default "nordico"
 | `theme` | Selects the active TUI colour theme. Must match a key in `tui.AvailableThemes`. Written by the theme picker (`enter`/`space` in Settings). Read at `plumb` startup by `internal/cli/root.go` before `tui.Run()`. |
 
 Built-in themes: `nordico` (dark, Nord-inspired), `darcula` (dark, JetBrains), `dracula` (dark, dracula.github.io), `gruvbox` (dark, earthy), `github-light` (light, GitHub), `solarized-light` (light, Solarized classic). Each theme maps to a chroma style used by `plumb config show`. `SaveTheme(name)` in `internal/config/config.go` performs a full-file rewrite (load → mutate `UI.Theme` → re-encode); user-added TOML comments are lost on first save — known v1 limitation. Only the global config file is written; project config does not support `[ui]`.
+
+### `[lsp_query]` section — LSP tool-call timeout
+
+```toml
+[lsp_query]
+timeout = "30s"   # cap on a single LSP tool call; "0s" disables. Default 30s.
+```
+
+| Field | Env var | Effect |
+|---|---|---|
+| `timeout` | `PLUMB_LSP_QUERY_TIMEOUT` | Bounds every LSP-backed tool call (queries and symbol edits). If the language server has not answered within this window the tool fails fast with a clear message instead of blocking until the MCP client's own timeout fires. `0s` disables the cap. |
+
+Note this is a top-level section (`[lsp_query]`), distinct from the per-language `[lsp.<lang>]` server tables — `LSP` in `internal/config/config.go` is a `map[string]LSPConfig`, so the scalar lives in its own section to avoid colliding with a language key. The deadline is applied at the tool layer (`withLSPDeadline` / `lspTimeoutErr` in `internal/tools/lsp_deadline.go`) and is a no-op when the caller's context already carries a deadline, so the cold-start `initialize`/`initialized` handshake — which runs on the adapter before the routing proxy is live — is never shortened. Independently, `jsonrpc.Conn.Call` logs any request slower than 2 s at WARN (`jsonrpc: slow call`) so a still-indexing or saturated server shows up in `daemon.log`.
 
 ## Client setup commands
 
@@ -235,7 +255,7 @@ Pyright is the worked example.
 3. For write/edit tools, take a single `WriteDeps` parameter — do not grow the constructor signature with new positional params. Add a field to `WriteDeps` if you need a new cross-cutting concern.
 4. Register the tool in `handleConn` in `internal/cli/daemon.go`. Write tools use the shared `writeDeps` instance.
 5. Write unit tests in `internal/tools/<name>_test.go`. Use `WriteDeps{}` for nil-safe test setups.
-6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
+6. Document inputs, outputs, and required LSP capabilities in `docs/tools.md`.
 7. Update this file's tool table.
 
 ## Available tools (47)
@@ -456,9 +476,9 @@ make install-hooks  # install pre-commit hook (required after every fresh clone)
 
 ## Known limitations and pending work
 
-Outstanding items, footguns, and "subtle things to be aware of" live in [`docs/todo.md`](docs/todo.md). Always check it before adding a feature that touches concurrency, the rate limiter, the read tracker, or the stats schema — there are known limitations in each of those that any new work needs to either respect or address.
+Outstanding items, footguns, and "subtle things to be aware of" live in [`docs/internal/todo.md`](docs/internal/todo.md). Always check it before adding a feature that touches concurrency, the rate limiter, the read tracker, or the stats schema — there are known limitations in each of those that any new work needs to either respect or address.
 
-When you complete a TODO item, delete the section from `docs/todo.md` *in the same commit* that adds the `CHANGELOG.md` entry.
+When you complete a TODO item, delete the section from `docs/internal/todo.md` *in the same commit* that adds the `CHANGELOG.md` entry.
 
 ## Quick reference for agents
 
