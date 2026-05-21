@@ -42,6 +42,18 @@ var (
 	WarnStyle        lipgloss.Style
 	ScrollThumbStyle lipgloss.Style
 	ScrollTrackStyle lipgloss.Style
+
+	// Derived from rightTabBar — moved here so they rebuild with RebuildStyles.
+	RightTabActiveLabel   lipgloss.Style
+	RightTabActiveBracket lipgloss.Style
+	RightTabInactive      lipgloss.Style
+	RightTabMuted         lipgloss.Style
+
+	// WarningMsgStyle is used for the "press ctrl+c again" status bar message.
+	WarningMsgStyle lipgloss.Style
+
+	// DashLabelStyle is used for the key-column label in dashboard memory rows.
+	DashLabelStyle lipgloss.Style
 )
 
 func init() { RebuildStyles() }
@@ -100,7 +112,7 @@ func RebuildStyles() {
 	SessionLangSelectedStyle = lipgloss.NewStyle().
 		Bold(true).
 		Background(t.Accent).
-		Foreground(lipgloss.Color("0"))
+		Foreground(t.ContrastText)
 
 	SessionLangFadedStyle = lipgloss.NewStyle().
 		Background(t.TextInactive).
@@ -136,17 +148,26 @@ func RebuildStyles() {
 		Foreground(t.TextHint)
 
 	TabActiveStyle = lipgloss.NewStyle().
-		Background(ActiveTheme.Accent).
-		Foreground(lipgloss.Color("0")). // Force dark/black text for contrast
+		Background(t.Accent).
+		Foreground(t.ContrastText).
 		Align(lipgloss.Center)
 
 	TabInactiveStyle = lipgloss.NewStyle().
-		Background(ActiveTheme.Border).
-		Foreground(ActiveTheme.TextPrimary).
+		Background(t.Border).
+		Foreground(t.TextPrimary).
 		Align(lipgloss.Center)
 
-	TabActiveEdgeStyle = lipgloss.NewStyle().Foreground(ActiveTheme.Accent)
-	TabInactiveEdgeStyle = lipgloss.NewStyle().Foreground(ActiveTheme.Border)
+	TabActiveEdgeStyle = lipgloss.NewStyle().Foreground(t.Accent)
+	TabInactiveEdgeStyle = lipgloss.NewStyle().Foreground(t.Border)
+
+	RightTabActiveLabel = lipgloss.NewStyle().Foreground(t.Accent).Bold(true)
+	RightTabActiveBracket = lipgloss.NewStyle().Foreground(t.Accent)
+	RightTabInactive = lipgloss.NewStyle().Foreground(t.TextFaded)
+	RightTabMuted = lipgloss.NewStyle().Foreground(t.TextMuted)
+
+	WarningMsgStyle = lipgloss.NewStyle().Foreground(t.Warning)
+
+	DashLabelStyle = lipgloss.NewStyle().Foreground(t.Key)
 
 	StatusStyle = lipgloss.NewStyle().
 		Foreground(t.TextHint)

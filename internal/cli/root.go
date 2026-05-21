@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/tui"
 )
 
@@ -20,6 +21,13 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		tui.Version = Version
+		if cfg, err := config.Load(); err == nil {
+			if t, ok := tui.AvailableThemes[cfg.UI.Theme]; ok {
+				tui.ActiveTheme = t
+				tui.ActiveThemeName = cfg.UI.Theme
+				tui.RebuildStyles()
+			}
+		}
 		return tui.Run(daemonLogPath(), daemonCtrlSocketPath())
 	},
 }

@@ -152,7 +152,7 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 
 	if m.waitingForQuit {
 		msg := " Press ctrl+c again to quit "
-		msgStyle := lipgloss.NewStyle().Foreground(ActiveTheme.Warning)
+		msgStyle := WarningMsgStyle
 		if dimmed {
 			msgStyle = InactiveStyle
 		}
@@ -350,6 +350,14 @@ func (m Model) renderHelp(bg string) string {
 			items: []helpItem{
 				{key: "tab / shift+tab", desc: "Switch focus: sessions, details, tools, recent"},
 				{key: "[  ]", desc: "Resize columns"},
+			},
+		},
+		{
+			title: "Settings (theme picker)",
+			items: []helpItem{
+				{key: "↑/↓  j/k", desc: "Select theme (live preview)"},
+				{key: "enter / space", desc: "Confirm and save theme"},
+				{key: "esc", desc: "Revert to previous theme"},
 			},
 		},
 		{

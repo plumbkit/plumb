@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
-
 	"github.com/golimpio/plumb/internal/render"
 )
 
@@ -45,10 +43,6 @@ func (m Model) rightTabFocusPanel() panelFocus {
 // rightTabBar renders the pill-style tab header row for the right panel.
 // Active pill uses accent colour; inactive pills use muted text.
 func (m Model) rightTabBar(_ int) string {
-	activeLabel := lipgloss.NewStyle().Foreground(ActiveTheme.Accent).Bold(true)
-	activeBracket := lipgloss.NewStyle().Foreground(ActiveTheme.Accent)
-	inactiveLabel := lipgloss.NewStyle().Foreground(ActiveTheme.TextFaded)
-	inactiveBracket := lipgloss.NewStyle().Foreground(ActiveTheme.TextMuted)
 	rightFocused := m.focusPanel != focusSessions
 
 	tabs := []string{"Details", "Tools", "History", "Diagnostics"}
@@ -59,9 +53,9 @@ func (m Model) rightTabBar(_ int) string {
 			sb.WriteString("  ")
 		}
 		if i == m.rightTab && rightFocused {
-			sb.WriteString(activeBracket.Render("[") + activeLabel.Render(" "+name+" ") + activeBracket.Render("]"))
+			sb.WriteString(RightTabActiveBracket.Render("[") + RightTabActiveLabel.Render(" "+name+" ") + RightTabActiveBracket.Render("]"))
 		} else {
-			sb.WriteString(inactiveBracket.Render("[") + inactiveLabel.Render(" "+name+" ") + inactiveBracket.Render("]"))
+			sb.WriteString(RightTabMuted.Render("[") + RightTabInactive.Render(" "+name+" ") + RightTabMuted.Render("]"))
 		}
 	}
 	return sb.String()
@@ -70,6 +64,9 @@ func (m Model) rightTabBar(_ int) string {
 func (m *Model) rightLines(rw int) []string {
 	if m.currentSection == 2 {
 		return m.memoryRightLines(rw)
+	}
+	if m.currentSection == 4 {
+		return m.settingsRightLines(rw)
 	}
 	lines := []string{m.rightTabBar(rw), ""}
 	if len(m.sessions) == 0 {

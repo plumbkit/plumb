@@ -4,6 +4,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/golimpio/plumb/internal/config"
 )
 
 func (m Model) handlePopupKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -473,6 +475,54 @@ func (m Model) mainKeyPageUp() Model {
 		}
 	}
 	return m
+}
+
+func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+q":
+		return m, tea.Quit
+	case "ctrl+c":
+		return m.mainKeyQuit()
+	case "/":
+		m.sectionMenuOpen = true
+		m.sectionMenuCursor = m.currentSection
+	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5", "alt+1", "alt+2", "alt+3", "alt+4", "alt+5":
+		m.selectSectionShortcut(msg.String())
+	case "ctrl+h":
+		m.showHelp = true
+	case "esc":
+		// Revert to the theme that was active when we entered Settings.
+		if orig, ok := AvailableThemes[m.themePickerOriginal]; ok {
+			ActiveTheme = orig
+			ActiveThemeName = m.themePickerOriginal
+			RebuildStyles()
+		}
+		m.sectionMenuOpen = true
+		m.sectionMenuCursor = m.currentSection
+	case "enter", " ":
+		names := ThemeNames()
+		if m.themePickerCursor >= 0 && m.themePickerCursor < len(names) {
+			n := names[m.themePickerCursor]
+			ActiveThemeName = n
+			m.themePickerOriginal = n
+			_ = config.SaveTheme(n) // best-effort; UI already applied
+		}
+	case "up", "k":
+		names := ThemeNames()
+		if m.themePickerCursor > 0 {
+			m.themePickerCursor--
+			ActiveTheme = AvailableThemes[names[m.themePickerCursor]]
+			RebuildStyles()
+		}
+	case "down", "j":
+		names := ThemeNames()
+		if m.themePickerCursor < len(names)-1 {
+			m.themePickerCursor++
+			ActiveTheme = AvailableThemes[names[m.themePickerCursor]]
+			RebuildStyles()
+		}
+	}
+	return m, nil
 }
 
 func (m Model) handleMainKeySimple(key string) Model {

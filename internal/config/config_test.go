@@ -379,3 +379,56 @@ func TestLoadProject_OverridesWorkspace(t *testing.T) {
 		t.Error("project config should have set Workspace.AutoAttachPersist to true")
 	}
 }
+
+func TestDefaults_UIThemeIsNordico(t *testing.T) {
+	cfg := Defaults()
+	if cfg.UI.Theme != "nordico" {
+		t.Errorf("UI.Theme default = %q, want %q", cfg.UI.Theme, "nordico")
+	}
+}
+
+func TestSaveTheme_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if err := SaveTheme("dracula"); err != nil {
+		t.Fatalf("SaveTheme: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load after SaveTheme: %v", err)
+	}
+	if got.UI.Theme != "dracula" {
+		t.Errorf("UI.Theme = %q after save, want %q", got.UI.Theme, "dracula")
+	}
+}
+
+func TestSaveTheme_PreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	// Write a custom rate limit, then save a theme. The rate limit must survive.
+	cfgPath := GlobalConfigPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("[edits]\nrate_limit_per_minute = 42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveTheme("gruvbox"); err != nil {
+		t.Fatalf("SaveTheme: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.UI.Theme != "gruvbox" {
+		t.Errorf("UI.Theme = %q, want %q", got.UI.Theme, "gruvbox")
+	}
+	if got.Edits.RateLimitPerMinute != 42 {
+		t.Errorf("RateLimitPerMinute = %d after SaveTheme, want 42", got.Edits.RateLimitPerMinute)
+	}
+}

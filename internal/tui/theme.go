@@ -75,6 +75,16 @@ type Theme struct {
 
 	// SelectionBackground is the dark background for selected table rows.
 	SelectionBackground color.Color
+
+	// ContrastText is the foreground colour rendered on top of a coloured
+	// background (accent-coloured selection row, tab badges). Use
+	// lipgloss.Color("0") (black) for dark themes with bright accent colours;
+	// lipgloss.Color("15") (white) for light themes where the accent is dark.
+	ContrastText color.Color
+
+	// ChromaStyle is the chroma syntax-highlighting style name used by
+	// `plumb config show`. Must match a name in alecthomas/chroma/v2/styles.
+	ChromaStyle string
 }
 
 // Nordico is the default theme — a TUI adaptation of the Nordico colour
@@ -99,16 +109,141 @@ var Nordico = Theme{
 	ScrollThumb:         lipgloss.Color("12"),      // bright blue — same as Accent
 	ScrollTrack:         lipgloss.Color("#4C566A"), // same as Border — track blends with border
 	SelectionBackground: lipgloss.Color("#2E3440"), // Nord0 — dark selected-row fill
+	ContrastText:        lipgloss.Color("0"),       // black — contrast on bright accent bg
+	ChromaStyle:         "nord",
+}
+
+// Darcula is the JetBrains Darcula colour scheme: warm dark background with
+// muted blue/orange accents.
+var Darcula = Theme{
+	Accent:              lipgloss.Color("#6897BB"), // JetBrains blue
+	Border:              lipgloss.Color("#4B4B4B"),
+	PanelTitle:          lipgloss.Color("#A9B7C6"),
+	TextPrimary:         lipgloss.Color("#A9B7C6"),
+	TextSecondary:       lipgloss.Color("#9AA6B5"),
+	TextMuted:           lipgloss.Color("#808080"),
+	TextInactive:        lipgloss.Color("#3C3F41"),
+	TextFaded:           lipgloss.Color("#606366"),
+	TextHint:            lipgloss.Color("#6A6A6A"),
+	Key:                 lipgloss.Color("#CC7832"), // JetBrains orange
+	ItemText:            lipgloss.Color("#A9B7C6"),
+	Success:             lipgloss.Color("#6A8759"),
+	Warning:             lipgloss.Color("#CF8B53"),
+	ScrollThumb:         lipgloss.Color("#6897BB"),
+	ScrollTrack:         lipgloss.Color("#4B4B4B"),
+	SelectionBackground: lipgloss.Color("#214283"),
+	ContrastText:        lipgloss.Color("15"), // white — accent is dark blue
+	ChromaStyle:         "darcula",
+}
+
+// Dracula is the dracula.github.io colour scheme: dark purple-tinted background
+// with vivid pink, cyan, and green accents.
+var Dracula = Theme{
+	Accent:              lipgloss.Color("#BD93F9"), // Dracula purple
+	Border:              lipgloss.Color("#44475A"),
+	PanelTitle:          lipgloss.Color("#F8F8F2"),
+	TextPrimary:         lipgloss.Color("#F8F8F2"),
+	TextSecondary:       lipgloss.Color("#CCCCCC"),
+	TextMuted:           lipgloss.Color("#6272A4"),
+	TextInactive:        lipgloss.Color("#3D404F"),
+	TextFaded:           lipgloss.Color("#5C6270"),
+	TextHint:            lipgloss.Color("#6272A4"),
+	Key:                 lipgloss.Color("#8BE9FD"), // Dracula cyan
+	ItemText:            lipgloss.Color("#F8F8F2"),
+	Success:             lipgloss.Color("#50FA7B"), // Dracula green
+	Warning:             lipgloss.Color("#FFB86C"), // Dracula orange
+	ScrollThumb:         lipgloss.Color("#BD93F9"),
+	ScrollTrack:         lipgloss.Color("#44475A"),
+	SelectionBackground: lipgloss.Color("#44475A"),
+	ContrastText:        lipgloss.Color("0"), // black — accent is bright purple
+	ChromaStyle:         "dracula",
+}
+
+// Gruvbox is the dark variant of the Gruvbox colour scheme: earthy warm
+// background with retro yellow, orange, and aqua accents.
+var Gruvbox = Theme{
+	Accent:              lipgloss.Color("#83A598"), // Gruvbox aqua
+	Border:              lipgloss.Color("#504945"),
+	PanelTitle:          lipgloss.Color("#EBDBB2"),
+	TextPrimary:         lipgloss.Color("#EBDBB2"),
+	TextSecondary:       lipgloss.Color("#D5C4A1"),
+	TextMuted:           lipgloss.Color("#928374"),
+	TextInactive:        lipgloss.Color("#3C3836"),
+	TextFaded:           lipgloss.Color("#665C54"),
+	TextHint:            lipgloss.Color("#7C6F64"),
+	Key:                 lipgloss.Color("#FABD2F"), // Gruvbox yellow
+	ItemText:            lipgloss.Color("#EBDBB2"),
+	Success:             lipgloss.Color("#B8BB26"), // Gruvbox green
+	Warning:             lipgloss.Color("#FE8019"), // Gruvbox orange
+	ScrollThumb:         lipgloss.Color("#83A598"),
+	ScrollTrack:         lipgloss.Color("#504945"),
+	SelectionBackground: lipgloss.Color("#3C3836"),
+	ContrastText:        lipgloss.Color("0"), // black — accent is bright aqua
+	ChromaStyle:         "gruvbox",
+}
+
+// GithubLight is a light theme matching GitHub's clean, minimal UI palette.
+var GithubLight = Theme{
+	Accent:              lipgloss.Color("#0969DA"), // GitHub blue
+	Border:              lipgloss.Color("#D0D7DE"),
+	PanelTitle:          lipgloss.Color("#24292F"),
+	TextPrimary:         lipgloss.Color("#24292F"),
+	TextSecondary:       lipgloss.Color("#57606A"),
+	TextMuted:           lipgloss.Color("#6E7781"),
+	TextInactive:        lipgloss.Color("#D0D7DE"),
+	TextFaded:           lipgloss.Color("#8C959F"),
+	TextHint:            lipgloss.Color("#6E7781"),
+	Key:                 lipgloss.Color("#0550AE"),
+	ItemText:            lipgloss.Color("#24292F"),
+	Success:             lipgloss.Color("#1A7F37"),
+	Warning:             lipgloss.Color("#CF222E"),
+	ScrollThumb:         lipgloss.Color("#0969DA"),
+	ScrollTrack:         lipgloss.Color("#D0D7DE"),
+	SelectionBackground: lipgloss.Color("#DDF4FF"),
+	ContrastText:        lipgloss.Color("15"), // white — accent is dark blue
+	ChromaStyle:         "github",
+}
+
+// SolarizedLight is the classic Solarized light colour scheme, praised for
+// its readability and contrast ratios.
+var SolarizedLight = Theme{
+	Accent:              lipgloss.Color("#268BD2"), // Solarized blue
+	Border:              lipgloss.Color("#93A1A1"),
+	PanelTitle:          lipgloss.Color("#657B83"),
+	TextPrimary:         lipgloss.Color("#657B83"),
+	TextSecondary:       lipgloss.Color("#586E75"),
+	TextMuted:           lipgloss.Color("#839496"),
+	TextInactive:        lipgloss.Color("#EEE8D5"),
+	TextFaded:           lipgloss.Color("#93A1A1"),
+	TextHint:            lipgloss.Color("#839496"),
+	Key:                 lipgloss.Color("#2AA198"), // Solarized cyan
+	ItemText:            lipgloss.Color("#657B83"),
+	Success:             lipgloss.Color("#859900"), // Solarized green
+	Warning:             lipgloss.Color("#CB4B16"), // Solarized orange
+	ScrollThumb:         lipgloss.Color("#268BD2"),
+	ScrollTrack:         lipgloss.Color("#93A1A1"),
+	SelectionBackground: lipgloss.Color("#EEE8D5"),
+	ContrastText:        lipgloss.Color("15"), // white — accent is dark blue
+	ChromaStyle:         "solarized-light",
 }
 
 // ActiveTheme is the theme used by RebuildStyles. Set it before calling
 // tui.Run() to select a different built-in theme. Defaults to Nordico.
 var ActiveTheme = Nordico
 
+// ActiveThemeName is the key in AvailableThemes for the current ActiveTheme.
+// Updated by the theme picker alongside ActiveTheme.
+var ActiveThemeName = "nordico"
+
 // AvailableThemes is the catalogue of built-in themes, keyed by the name
-// accepted by the --theme flag.
+// accepted by the --theme flag and stored in the [ui] config section.
 var AvailableThemes = map[string]Theme{
-	"nordico": Nordico,
+	"nordico":         Nordico,
+	"darcula":         Darcula,
+	"dracula":         Dracula,
+	"gruvbox":         Gruvbox,
+	"github-light":    GithubLight,
+	"solarized-light": SolarizedLight,
 }
 
 // ThemeNames returns the sorted list of available theme names, suitable for

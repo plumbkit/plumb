@@ -96,9 +96,8 @@ func (m Model) dashDaemonWidget(inner int) []string {
 func dashMemoryRow(label, value string, inner int) string {
 	const margin = 3
 	leaderW := max(inner-margin-lipgloss.Width(label)-1-1-lipgloss.Width(value)-margin, 1)
-	labelStyle := lipgloss.NewStyle().Foreground(ActiveTheme.Key)
 	return strings.Repeat(" ", margin) +
-		labelStyle.Render(label) + " " +
+		DashLabelStyle.Render(label) + " " +
 		SepStyle.Render(strings.Repeat("⣀", leaderW)) + " " +
 		DetailStyle.Render(value) + strings.Repeat(" ", margin)
 }

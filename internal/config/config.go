@@ -160,6 +160,14 @@ type TopologyConfig struct {
 	ResyncIntervalMinutes int `toml:"resync_interval_minutes"`
 }
 
+// UIConfig controls presentation settings stored in the global config only.
+// These are TUI-layer preferences; project-local overrides are not supported.
+type UIConfig struct {
+	// Theme is the key of the active colour theme in tui.AvailableThemes.
+	// Default "nordico". Persisted by the TUI theme picker via SaveTheme.
+	Theme string `toml:"theme"`
+}
+
 // QualityConfig controls post-write offline code-quality analysis.
 // All fields can be overridden per-project via <workspace>/.plumb/config.toml.
 type QualityConfig struct {
@@ -184,6 +192,7 @@ type Config struct {
 	LogLevel  string               `toml:"log_level"`
 	LogFormat string               `toml:"log_format"`
 	LogFile   string               `toml:"log_file"`
+	UI        UIConfig             `toml:"ui"`
 	Cache     CacheConfig          `toml:"cache"`
 	Edits     EditsConfig          `toml:"edits"`
 	Walk      WalkConfig           `toml:"walk"`
@@ -197,6 +206,7 @@ type Config struct {
 var defaults = Config{
 	LogLevel:  "info",
 	LogFormat: "text",
+	UI:        UIConfig{Theme: "nordico"},
 	Cache: CacheConfig{
 		TTL:     Duration{5 * time.Minute},
 		MaxSize: 1000,
@@ -547,4 +557,23 @@ func validate(cfg Config) error {
 // Print writes cfg as TOML to w.
 func Print(cfg Config, w io.Writer) error {
 	return toml.NewEncoder(w).Encode(cfg)
+}
+
+// SaveTheme persists themeName into the [ui] section of the global config
+// file without disturbing other settings. It loads the current global config
+// first so existing values are preserved, then re-encodes the full struct.
+// Creates the config file (and parent directory) if they do not yet exist.
+func SaveTheme(themeName string) error {
+	cfg, _ := Load() // errors mean defaults; either way we write
+	cfg.UI.Theme = themeName
+	path := GlobalConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
 }

@@ -10,6 +10,9 @@ func (m Model) leftLines() []string {
 	if m.currentSection == 2 {
 		return m.memoryLeftLines()
 	}
+	if m.currentSection == 4 {
+		return m.settingsLeftLines()
+	}
 	lf := m.focusPanel == focusSessions
 
 	var titleStyle lipgloss.Style
@@ -22,22 +25,7 @@ func (m Model) leftLines() []string {
 
 	lines := []string{titleStyle.Render(titleText), ""}
 	if len(m.sessions) == 0 {
-		m1, m2 := " Daemon running.", " Call a tool to begin."
-		if !daemonRunning() {
-			m1, m2 = " No active sessions.", ""
-		}
-		if lf {
-			lines = append(lines, MutedStyle.Render(m1))
-			if m2 != "" {
-				lines = append(lines, MutedStyle.Render(m2))
-			}
-		} else {
-			lines = append(lines, InactiveStyle.Render(m1))
-			if m2 != "" {
-				lines = append(lines, InactiveStyle.Render(m2))
-			}
-		}
-		return lines
+		return append(lines, emptySessionsLines(lf)...)
 	}
 	for i, s := range m.sessions {
 		selected := i == m.cursor
@@ -64,6 +52,22 @@ func (m Model) leftLines() []string {
 		secondLine := "    ╰─ " + path
 		lines = append(lines, leftSessionRowLines(firstLine, secondLine, selected, lf)...)
 		lines = append(lines, "")
+	}
+	return lines
+}
+
+func emptySessionsLines(lf bool) []string {
+	m1, m2 := " Daemon running.", " Call a tool to begin."
+	if !daemonRunning() {
+		m1, m2 = " No active sessions.", ""
+	}
+	style := InactiveStyle
+	if lf {
+		style = MutedStyle
+	}
+	lines := []string{style.Render(m1)}
+	if m2 != "" {
+		lines = append(lines, style.Render(m2))
 	}
 	return lines
 }

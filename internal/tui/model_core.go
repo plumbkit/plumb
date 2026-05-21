@@ -104,6 +104,10 @@ type Model struct {
 	memoryBodyCache     string
 	memoryBodyCacheName string
 
+	// Settings section (section 4) — theme picker.
+	themePickerCursor   int    // index into ThemeNames() for the highlighted theme
+	themePickerOriginal string // ActiveThemeName when the section was entered
+
 	// Dashboard section (section 0).
 	dashLifetimeCalls       int64
 	dashLifetimeSessions    int64

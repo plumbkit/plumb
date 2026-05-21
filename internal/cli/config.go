@@ -37,9 +37,13 @@ var configPrintCmd = &cobra.Command{
 			return err
 		}
 
-		// Use chroma to highlight TOML if stdout is a terminal, else just print it
+		// Use chroma to highlight TOML if stdout is a terminal, else just print it.
+		chromaStyle := "nord"
+		if t, ok := tui.AvailableThemes[cfg.UI.Theme]; ok && t.ChromaStyle != "" {
+			chromaStyle = t.ChromaStyle
+		}
 		if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
-			if err := quick.Highlight(os.Stdout, buf.String(), "toml", "terminal256", "nord"); err != nil {
+			if err := quick.Highlight(os.Stdout, buf.String(), "toml", "terminal256", chromaStyle); err != nil {
 				fmt.Print(buf.String()) // fallback
 			}
 		} else {
