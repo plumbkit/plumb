@@ -3,7 +3,7 @@
 // Package smoke_test exercises the full plumb stack end-to-end over the MCP
 // wire protocol. It spawns a real `plumb serve` subprocess, speaks newline-
 // delimited JSON-RPC 2.0 over its stdin/stdout, and verifies the responses
-// match the assertions in docs/claude-desktop-smoke.md.
+// match the assertions in docs/internal/claude-desktop-smoke.md.
 //
 // Prerequisites: gopls must be on PATH.
 // Run: go test -tags=integration -timeout=3m ./cmd/smoke/

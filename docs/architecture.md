@@ -8,18 +8,14 @@ answers from a real language server running under the hood.
 
 ## Layers
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Presentation   internal/tui      internal/cli               │
-├──────────────────────────────────────────────────────────────┤
-│  Application    internal/tools    internal/cache             │
-├──────────────────────────────────────────────────────────────┤
-│  Domain         internal/domain   internal/workspace         │
-├──────────────────────────────────────────────────────────────┤
-│  Intelligence   internal/topology (SQLite/FTS5 semantic graph) │
-├──────────────────────────────────────────────────────────────┤
-│  Transport      internal/mcp      internal/lsp               │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    P["Presentation — internal/tui · internal/cli"]
+    A["Application — internal/tools · internal/cache · internal/quality"]
+    D["Domain — internal/domain · internal/workspace"]
+    I["Intelligence — internal/topology (SQLite/FTS5)"]
+    T["Transport — internal/mcp · internal/lsp"]
+    P --> A --> D --> I --> T
 ```
 
 **Rule: lower layers must never import higher layers.**  The transport layer
@@ -30,9 +26,9 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | Package | Role |
 |---|---|
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
-| `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `status`, `setup`, `sessions`, `stats`, `init`, `config`, `doctor`, `version`; per-connection session wiring; workspace + topology pools |
+| `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
-| `internal/tools` | MCP tool implementations (49 tools — see `docs/mcp-tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
+| `internal/tools` | MCP tool implementations (47 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
@@ -65,6 +61,13 @@ causes incompatible model, command, and style types.
 
 Plumb pairs two complementary technologies to solve the context efficiency problem for AI agents: **Topology** and **LSP**. They do not compete; they handle different phases of the agent's workflow.
 
+```mermaid
+flowchart LR
+    Q["Agent question"] --> TOPO["Topology (the Map)<br/>FTS5 search · BFS explore<br/>instant, syntactic"]
+    TOPO -->|found where to work| LSP["LSP (the GPS)<br/>rename · diagnostics · references<br/>precise, type-aware"]
+    LSP --> EDIT["Safe edit + verify"]
+```
+
 ### 1. Plumb Topology (The Map)
 Topology uses **Go AST, Python regex, and TypeScript/JS regex extractors** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). Enabled via `[topology] enabled = true` in the project config. It is exposed through six tools: `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, and `topology_routes`.
 *   **Strengths:** Instant availability (no LSP boot time), minimal memory footprint, handles broken code gracefully, FTS5 ranked search, BFS neighbourhood exploration.
@@ -91,23 +94,30 @@ While Plumb focuses on providing the **Map** (Topology) and the **GPS** (LSP), i
 
 ## Data flow: MCP tool call
 
-```
-Claude Desktop
-     │  newline-delimited JSON-RPC 2.0 (stdin/stdout)
-     ▼
-internal/mcp.Server
-     │  dispatches to Tool.Execute()
-     ▼
-internal/tools.FindSymbol / GetDefinition / ExplainSymbol
-     │  checks cache; on miss calls LSPClient
-     ▼
-internal/cli.routingProxy  (per-session; routes to the pooled adapter)
-     │
-     ▼
-internal/lsp/adapters/gopls.Adapter  (or pyright.Adapter)
-     │  JSON-RPC 2.0 with Content-Length framing (stdin/stdout of LSP process)
-     ▼
-gopls / pyright-langserver  (subprocess)
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant S as mcp.Server
+    participant T as tools (Tool.Execute)
+    participant Ca as cache
+    participant P as cli.routingProxy
+    participant A as adapter (gopls/pyright)
+    participant LS as language server
+
+    C->>S: tools/call (JSON-RPC over stdio)
+    S->>T: dispatch to Tool.Execute()
+    T->>Ca: check cache
+    alt cache hit
+        Ca-->>T: cached result
+    else cache miss
+        T->>P: LSP request (per-session routing)
+        P->>A: forward to pooled adapter
+        A->>LS: JSON-RPC 2.0, Content-Length framed
+        LS-->>A: response
+        A-->>T: response (via proxy)
+        T->>Ca: store result
+    end
+    T-->>C: text result
 ```
 
 Cache invalidation runs in the opposite direction: when gopls sends a
@@ -120,16 +130,15 @@ contains the changed file's URI.
 `plumb serve` is a thin stdio proxy. The real server is `plumb daemon`, a
 long-lived background process that owns the gopls subprocesses:
 
-```
-Claude Desktop / Claude Code
-  └── plumb serve  (per conversation — dials Unix socket, proxies bytes)
-        └── ~/Library/Caches/plumb/plumb.sock        (macOS)
-        └── ~/.cache/plumb/plumb.sock                (Linux, via os.UserCacheDir)
-              └── plumb daemon  (one process, shared across all conversations)
-                    ├── workspacePool  (one gopls per workspace root)
-                    │     ├── poolEntry{proxy, inv, cache} for /projects/foo
-                    │     └── poolEntry{proxy, inv, cache} for /projects/bar
-                    └── handleConn(conn, pool, statsDB)  (per-connection MCP session)
+```mermaid
+flowchart TD
+    CC["Claude Desktop / Claude Code"] --> SV["plumb serve (per conversation)"]
+    SV -->|Unix socket| SOCK["plumb.sock"]
+    SOCK --> D["plumb daemon (one shared process)"]
+    D --> WP["workspacePool — one language server per root"]
+    WP --> PE1["poolEntry · /projects/foo (gopls + cache + invalidator)"]
+    WP --> PE2["poolEntry · /projects/bar (pyright + cache + invalidator)"]
+    D --> HC["handleConn — per-connection MCP session"]
 ```
 
 Key design properties:
@@ -292,6 +301,23 @@ socket (spawning `plumb daemon` if none is running), then copies bytes between
 the client's stdin/stdout and the Unix socket until EOF. It registers no tools
 and owns no LSP processes.
 
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant SV as plumb serve
+    participant D as plumb daemon
+    participant CS as connSession
+    C->>SV: launch (stdio)
+    SV->>SV: acquire spawn lock
+    SV->>D: dial socket (spawn daemon if absent)
+    C->>D: initialize
+    D->>CS: handleConn → register session.Info
+    Note over CS: workspace resolves lazily<br/>(roots/list, then cwd/path walk)
+    CS->>CS: acquire language server, cache, project config
+    CS->>CS: registerAllTools + lifecycle hooks
+    C->>D: tools/call …
+```
+
 The daemon does the real work. For each accepted connection, `handleConn` builds
 a `connSession` (`internal/cli/conn.go`) which:
 
@@ -349,14 +375,21 @@ responses by request ID using a `sync.Map` of pending channels.
 Config file: `$XDG_CONFIG_HOME/plumb/config.toml`
 (defaults to `~/.config/plumb/config.toml`).
 
-Environment overrides: `PLUMB_LOG_LEVEL`, `PLUMB_LOG_FILE`.
+Environment overrides: `PLUMB_LOG_LEVEL`, `PLUMB_LOG_FILE`, `PLUMB_LOG_FORMAT`
+(and the other `PLUMB_*` variables). The running daemon's level can also be
+changed live with `plumb log-level <level>` — there is no `--log-level` flag.
 
-CLI flag: `--log-level` (overrides both file and env).
+Configuration resolves in layers, each overriding the previous:
 
-See `plumb config show` for the active resolved configuration. Configuration is
-resolved in four layers (compiled defaults → global `config.toml` → project
-`<workspace>/.plumb/config.toml` → environment); see `AGENTS.md` for the
-`[edits]`, `[workspace]`, `[git]`, `[topology]`, `[quality]`, and `[ui]` sections.
+```mermaid
+flowchart LR
+    A["Compiled defaults"] --> B["Global config.toml"]
+    B --> C["Project .plumb/config.toml"]
+    C --> E["Environment variables"]
+```
+
+See [`docs/configuration.md`](configuration.md) for every section and field,
+and `plumb config show` for the resolved values with per-field provenance.
 
 ## Cache key convention
 

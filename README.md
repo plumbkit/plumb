@@ -6,7 +6,7 @@
 
 **Real IDE intelligence for AI assistants** — go-to-definition, find-references, rename, diagnostics, atomic file editing, and semantic refactors, powered by the same language servers your editor uses.
 
-Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes 49 structured tools so the assistant can query and edit a codebase the way an IDE would.
+Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes 47 structured tools so the assistant can query and edit a codebase the way an IDE would.
 
 ---
 
@@ -41,7 +41,7 @@ Engineers love visibility. Plumb includes a live Bubble Tea TUI to monitor what 
 - **Session Inspector:** Drill down into every tool call, see request/response payloads, and debug failures.
 - **Live Logs:** Stream daemon logs with filtering and follow support.
 
-*Run `plumb` or `plumb status` from your terminal to launch the dashboard.*
+*Run `plumb` from your terminal to launch the dashboard.*
 
 ---
 
@@ -75,11 +75,13 @@ Go to your project root and run:
 plumb init
 ```
 
+> Full walkthrough — prerequisites, per-client setup, and enabling Python/Java — in [**docs/getting-started.md**](docs/getting-started.md).
+
 ---
 
 ## Core Capabilities
 
-Plumb exposes 49 tools across several categories. For a full API reference, see [**docs/mcp-tools.md**](docs/mcp-tools.md).
+Plumb exposes 47 tools across several categories. For a full API reference, see [**docs/tools.md**](docs/tools.md).
 
 - **Session:** One-shot bootstrap, identity tracking, and daemon info.
 - **LSP Queries:** Definitions, references, symbols, call/type hierarchies, and diagnostics.
@@ -120,7 +122,15 @@ strict = true                  # require read_file before edit_file
 rate_limit_per_minute = 30     # prevent runaway agent loops
 ```
 
-Run `plumb config show` to see your resolved configuration.
+Run `plumb config show` to see your resolved configuration. Full settings reference: [**docs/configuration.md**](docs/configuration.md).
+
+## Documentation
+
+Full documentation lives in [**docs/**](docs/index.md):
+
+- [Getting Started](docs/getting-started.md) · [CLI Reference](docs/cli-reference.md) · [Configuration](docs/configuration.md)
+- [Tools (MCP API)](docs/tools.md) · [Architecture](docs/architecture.md) · [Topology](docs/topology.md)
+- [Troubleshooting](docs/troubleshooting.md) · [Contributing](docs/contributing.md)
 
 ## Similar tools
 

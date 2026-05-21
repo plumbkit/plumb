@@ -56,7 +56,7 @@ func requireGoplsBench(t testing.TB) string {
 // comparable single-digit ms (~1.2x, within noise). Topology's value is
 // availability without an LSP and no per-conversation indexing wait — not raw
 // query speed. The comparison is logged for transparency; the unmet >=5x claim
-// is tracked in docs/todo.md.
+// is tracked in docs/internal/todo.md.
 //
 // Run: go test -tags=integration -run TestDoD6 ./internal/topology/...
 func TestDoD6_TopologyQueryLatency(t *testing.T) {

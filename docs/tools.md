@@ -1,0 +1,299 @@
+# Tools — MCP API Reference
+
+Plumb exposes **47** structured tools to AI assistants. Every write tool is
+concurrency-safe, atomic, and notifies the language server via
+`workspace/didChangeWatchedFiles`.
+
+This page documents each tool's purpose and inputs. For day-to-day workflow,
+see [Getting Started](getting-started.md); for the bigger picture, see
+[Architecture](architecture.md).
+
+## Client capabilities and fallback behaviour
+
+| Client | Native filesystem | Native shell/git | Notes |
+|---|---|---|---|
+| Claude Desktop | None | None | Plumb is the **only** interface — no fallback tools exist |
+| Claude Code | `Read` / `Edit` / `Write` | `Bash` | Plumb adds LSP-semantic tools with no native equivalent |
+| Codex | Shell (`shell` tool) | Yes | Plumb adds an LSP-semantic layer and concurrency-safe writes |
+| Gemini CLI | Filesystem tools | Yes | Plumb adds an LSP-semantic layer and concurrency-safe writes |
+
+## Conventions
+
+These apply across many tools:
+
+- **Paths and URIs.** Filesystem tools accept an absolute path *or* a `file://`
+  URI. Some accept workspace-relative paths, resolved against the session's
+  workspace root.
+- **Positions are zero-based.** LSP query/edit tools that take a `line` and
+  `character` use zero-based numbering (matching the LSP spec). Output line
+  numbers are printed one-based.
+- **Position or name.** `get_definition`, `find_references`, and `read_symbol`
+  accept either a position (`uri` + `line` + `character`) or a symbol name
+  (`symbol_name` / `name`, plain or dotted `ReceiverType.MethodName`).
+- **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
+  `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
+  `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.
+- **`dirty_ok`.** Filesystem write tools refuse to touch a file with
+  uncommitted git changes unless you pass `dirty_ok: true`.
+- **`expected_mtime` / `expected_sha`.** `read_file` and `read_symbol` emit a
+  header line — `# plumb-read mtime=<RFC3339Nano> sha256=<hash> indent=<…>` —
+  whose `mtime`/`sha256` you can pass back to `edit_file` for optimistic
+  concurrency checks.
+
+---
+
+## Session
+
+### `session_start`
+Bootstrap tool — **call first in every session.** Returns workspace path,
+language, git branch, the first 200 lines of `.plumb/context.md`, memory
+names/descriptions, top-5 tool usage, 5 recently-modified files, 3 recent
+commits, and active diagnostics. Idempotent.
+**Inputs:** `workspace` (string, optional — defaults to the daemon's resolved
+workspace, then a cwd walk).
+
+### `daemon_info`
+Current session name and ID, daemon version, start time, and uptime.
+**Inputs:** none.
+
+### `rename_session`
+Rename the current MCP session. **Inputs:** `name` (string — letters and `-`
+only, stored uppercase, max 16 chars).
+
+---
+
+## LSP queries
+
+### `find_symbol`
+Search symbols by name within a **single document** (case-insensitive
+substring). **Inputs:** `query` (string, required), `uri` (string, required).
+
+### `workspace_symbols`
+Search symbols by name across the **entire workspace** via the LSP index;
+stdlib/dependency hits are filtered out. Prefer over text search for name
+lookups. **Inputs:** `query` (string, required).
+
+### `get_definition`
+Source location where a symbol is defined. **Inputs:** `uri` (required), and
+either `line` + `character` or `symbol_name`.
+
+### `explain_symbol`
+Hover documentation and type information for a symbol. **Inputs:** `uri`
+(required) plus a position (`line` + `character`).
+
+### `list_symbols`
+Full symbol outline of a file — names, kinds, line ranges, children.
+**Inputs:** `uri` (required), `include_signatures` (bool — appends each
+function/method/constructor's declaration line).
+
+### `find_references`
+All usages of a symbol across the workspace, each with its source line.
+**Inputs:** `uri` (required), either `line` + `character` or `symbol_name`,
+`include_declaration` (bool, default true).
+
+### `call_hierarchy`
+Incoming and outgoing calls for a function. **Inputs:** `uri` (required) plus a
+position (`line` + `character`).
+
+### `type_hierarchy`
+Supertypes and subtypes of a class or interface. **Inputs:** `uri` (required)
+plus a position (`line` + `character`).
+
+### `diagnostics`
+LSP errors, warnings, and hints. **Inputs:** `uris` (array of `file://` URIs —
+omit or pass `[]` for all files with issues; one URI for a single file; many
+URIs to batch). A single call replaces multiple per-file calls.
+
+---
+
+## LSP semantic edits
+
+All default to `dry_run: true`.
+
+### `rename_symbol`
+Workspace-wide rename via LSP — scope- and type-aware, updates every reference.
+**Inputs:** `uri`, `line`, `character`, `new_name` (all required), `dry_run`
+(default true). Provide the position of the identifier to rename.
+
+### `replace_symbol_body`
+Replace a symbol's entire declaration. **Inputs:** `uri`, `name_path`,
+`content` (required), `include_doc_comment` (bool), `dry_run`.
+
+### `insert_before_symbol`
+Insert text immediately before a symbol's declaration. **Inputs:** `uri`,
+`name_path`, `content` (required), `include_doc_comment` (bool), `dry_run`.
+
+### `insert_after_symbol`
+Insert text immediately after a symbol's declaration. **Inputs:** `uri`,
+`name_path`, `content` (required), `dry_run`.
+
+### `safe_delete_symbol`
+Delete a symbol only if it has no external references (reports them and refuses
+otherwise). **Inputs:** `uri`, `name_path` (required), `include_doc_comment`
+(bool), `dry_run`.
+
+> `name_path` is a slash-separated symbol path within the file, e.g.
+> `"ClassName/methodName"` or just `"funcName"` for a top-level symbol. This is
+> distinct from `rename_symbol`, which takes a cursor position.
+
+---
+
+## Filesystem reads
+
+### `read_file`
+Read a file's text. **Inputs:** `path` (required), `start_line`, `end_line`
+(1-based, inclusive — stream a slice of a large file). Binary files rejected;
+output capped at 200 KiB. Emits the `# plumb-read …` header.
+
+### `read_symbol`
+Read the source body of a named symbol in one call (LSP `documentSymbol` +
+file read). **Inputs:** `path` (required), `name` (required — plain or dotted
+`ReceiverType.MethodName`). Returns all matches when ambiguous.
+
+### `read_multiple_files`
+Read up to 20 files in parallel; per-file errors reported inline. **Inputs:**
+`paths` (array, 1–20, required).
+
+### `list_directory`
+Immediate children of a directory (`[FILE]`/`[DIR]`, sizes, mtimes) —
+non-recursive. **Inputs:** `path` (required), `pattern` (glob),
+`include_hidden` (bool), `sort_by` (`name` | `size` | `modified`).
+
+### `list_files`
+Recursive file listing relative to a root. **Inputs:** `root`, `pattern`
+(glob), `max_depth` (default 8), `include_hidden`. Honours `.gitignore` and
+skips `.git`, `vendor`, `node_modules`, …
+
+### `find_files`
+Glob/regex file or directory finder. **Inputs:** `pattern` (required), `path`,
+`type` (`file` | `dir` | `any`, default `file`), `extension`, `max_depth`,
+`max_results` (default 500), `include_hidden`, `use_regex`.
+
+### `search_in_files`
+ripgrep-style content search; smart-case; honours `.gitignore`. **Inputs:**
+`pattern` (required, regex), `path`, `glob`, `exclude` (array of globs),
+`case_sensitive`, `context_lines` (0–10), `max_results` (default 200),
+`include_hidden`, `max_file_bytes`, `include_enclosing_symbol` (bool —
+annotates each hit with the deepest enclosing LSP symbol; requires LSP).
+
+---
+
+## Filesystem writes
+
+All hold per-path locks, write atomically (`tmpdir` → rename), notify the LSP,
+invalidate the symbol cache, consume one rate-limit slot, and accept
+`dirty_ok` (default false).
+
+### `write_file`
+Create or overwrite a file atomically; post-write diagnostics appended.
+**Inputs:** `path`, `content` (required), `dirty_ok`.
+
+### `edit_file`
+Targeted `str_replace` with a uniqueness lock and CRLF tolerance. **Inputs:**
+`path` (required), `edits` (array of `{old_str, new_str}` — each `old_str` must
+appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
+check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
+
+### `delete_file`
+Delete a file (refuses directories). **Inputs:** `path` (required), `dirty_ok`.
+
+### `rename_file`
+**Primary move tool.** Atomic move/rename. **Inputs:** `from`, `to` (required),
+`overwrite` (bool — required to clobber an existing target), `dirty_ok`.
+
+### `copy_file`
+Duplicate a file, preserving permissions; cross-device safe. **Inputs:**
+`from`, `to` (required), `overwrite`, `dirty_ok`.
+
+### `transaction_apply`
+Multi-file atomic edits with rollback (up to 50 ops). Validates everything in
+memory, then writes under locks, rolling back on partial failure. **Inputs:**
+`operations` (array of `{path, edits, expected_mtime?}`), `dirty_ok`.
+
+---
+
+## Memory
+
+Per-workspace markdown notes at `<workspace>/.plumb/memories/`, also exposed as
+MCP resources. Names are constrained to `[A-Za-z0-9_-]+`.
+
+| Tool | Purpose | Inputs |
+|---|---|---|
+| `list_memories` | List all memory names + descriptions. | optional workspace |
+| `read_memory` | Read one memory. | memory name |
+| `write_memory` | Create or overwrite a memory. | name, content, optional description |
+| `delete_memory` | Remove a memory. | memory name |
+| `search_memories` | Pattern search across memory bodies. | search pattern |
+| `relevant_memories` | Memories relevant to a given file path. | file path |
+
+---
+
+## Topology
+
+A persistent SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`.
+Enabled via `[topology] enabled = true`; all tools degrade gracefully when it's
+off. See the [Topology guide](topology.md).
+
+### `topology_status`
+Index health: file count, entity count, DB size, indexed languages, last sync,
+last error. **Inputs:** none.
+
+### `topology_search`
+FTS5 ranked symbol/file search. **Inputs:** `query` (required), `kinds`
+(filter), `language` (filter), `limit` (default 20), `include_snippets`
+(default true).
+
+### `topology_explore`
+BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`
+(default 2, max 4), `max_nodes` (default 50, max 200), `max_bytes` (default
+30000, max 100000), `include_source` (`none` | `signatures` | `snippets` |
+`full`), `edge_kinds`.
+
+### `topology_impact`
+Bidirectional blast-radius: what a symbol depends on and what depends on it.
+**Inputs:** `name` (required), `depth` (default 3, max 4), `max_nodes` (default
+100, max 200), `max_bytes` (default 30000), `edge_kinds` (default
+`["imports","calls"]`).
+
+### `topology_affected`
+Given changed files/symbols, return likely affected files and tests. **Inputs:**
+`files` (array), `symbols` (array), `max_results` (default 50).
+
+### `topology_routes`
+Framework-aware entry-point scanner (Go HTTP handlers, Cobra commands, Python
+`@app.route`). Results annotated with confidence — heuristic. **Inputs:**
+`framework` (optional: `go` | `python` | `cobra`), `path_prefix` (optional),
+`limit` (default 20).
+
+---
+
+## VCS & utilities
+
+### `git`
+Unified tiered git tool. **Read** subcommands always run (`status`, `log`,
+`diff`, `show`, `blame`, `shortlog`, and branch/tag/stash listing). **Write**
+needs `[git] allow_writes` (`add` via `files`, `commit` via `message`, `switch`,
+branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
+`checkout`, `restore`, `rebase`, …) needs `allow_destructive` + `confirm:true`.
+**Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
+Force-push to a protected branch and ad-hoc URL pushes are always refused. See
+[Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
+**Inputs:** `subcommand` (required), `args` (array), `files` (array, for `add`),
+`message` (string, for `commit`), `confirm` (bool).
+
+### `git_init`
+Initialise a git repository at a path. **Inputs:** path, `init_plumb` (bool —
+also creates `.plumb/context.md`).
+
+### `find_replace`
+Text/regex find-and-replace across files; **dry-run by default.** **Inputs:**
+`pattern`, `replacement` (required), `path`, `glob`, `use_regex`, `dry_run`
+(default true), `dirty_ok`, `format_after` (run the workspace formatter),
+`case_sensitive`, `max_files`, `max_file_bytes`. Prefer `rename_symbol` for
+renaming identifiers — it understands scope and types.
+
+### `file_diff`
+Unified diff between two files (system `diff -U`). **Inputs:** two file paths.
+
+### `version`
+Plumb version, Go runtime, OS/arch. **Inputs:** none.
