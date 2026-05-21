@@ -190,6 +190,8 @@ timeout = "30s"   # cap on a single LSP tool call; "0s" disables. Default 30s.
 
 Note this is a top-level section (`[lsp_query]`), distinct from the per-language `[lsp.<lang>]` server tables — `LSP` in `internal/config/config.go` is a `map[string]LSPConfig`, so the scalar lives in its own section to avoid colliding with a language key. The deadline is applied at the tool layer (`withLSPDeadline` / `lspTimeoutErr` in `internal/tools/lsp_deadline.go`) and is a no-op when the caller's context already carries a deadline, so the cold-start `initialize`/`initialized` handshake — which runs on the adapter before the routing proxy is live — is never shortened. Independently, `jsonrpc.Conn.Call` logs any request slower than 2 s at WARN (`jsonrpc: slow call`) so a still-indexing or saturated server shows up in `daemon.log`.
 
+When a query does error or time out, `find_symbol`, `workspace_symbols`, and `list_symbols` fall back to the topology index (when `[topology]` is enabled) instead of failing — returning approximate results annotated `source=topology, mode=indexed-approximate` with a `[topology fallback — … may be stale]` line. The fallback is wired via a nil-safe `WithTopologyFallback` setter in `registerAllTools`, runs under the original request context (not the expired LSP deadline), and is a no-op when topology is disabled or has no match (so the authoritative LSP error still surfaces). The position/semantic tools (`get_definition`, `find_references`, `explain_symbol`, hierarchies, `rename_symbol`) have no topology equivalent and surface the error unchanged.
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server for supported clients:
