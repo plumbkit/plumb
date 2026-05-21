@@ -73,6 +73,18 @@ type SearchOpts struct {
 	Snippets bool
 }
 
+// Direction controls which edges a directed BFS traversal follows.
+type Direction int
+
+const (
+	// DirectionBoth follows edges in both directions (default, undirected).
+	DirectionBoth Direction = 0
+	// DirectionOutward follows edges from the frontier (from_id → to_id).
+	DirectionOutward Direction = 1
+	// DirectionInward follows edges toward the frontier (to_id → from_id).
+	DirectionInward Direction = 2
+)
+
 // ExploreOpts controls the bounded BFS neighbourhood expansion.
 type ExploreOpts struct {
 	Depth         int
@@ -80,6 +92,22 @@ type ExploreOpts struct {
 	MaxBytes      int
 	IncludeSource string // none | signatures | snippets | full
 	EdgeKinds     []string
+	Direction     Direction // defaults to DirectionBoth
+}
+
+// ImpactOpts controls the bidirectional BFS used by topology_impact.
+type ImpactOpts struct {
+	Depth     int
+	MaxNodes  int
+	MaxBytes  int
+	EdgeKinds []string
+}
+
+// ImpactResult is the result of a bidirectional BFS around a centre node.
+type ImpactResult struct {
+	Centre       Node
+	DependsOn    *Neighbourhood // outward: what centre depends on
+	DependedOnBy *Neighbourhood // inward: what depends on centre
 }
 
 // Neighbourhood is the result of a BFS exploration around a centre node.

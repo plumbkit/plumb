@@ -79,7 +79,7 @@ func bfs(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neigh
 	byteEst := estimateBytes(centre)
 
 	for depth := 0; depth < opts.Depth && len(queue) > 0; depth++ {
-		next, edges, err := expandFrontier(ctx, db, queue, opts.EdgeKinds)
+		next, edges, err := expandFrontier(ctx, db, queue, opts.EdgeKinds, opts.Direction)
 		if err != nil {
 			return nil, err
 		}
@@ -124,18 +124,30 @@ func filterEdges(edges []Edge, inOutput map[int64]bool, seen map[int64]bool) []E
 	return result
 }
 
-func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []string) ([]Node, []Edge, error) {
+func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []string, dir Direction) ([]Node, []Edge, error) {
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(ids))
-	placeholders = placeholders[:len(placeholders)-1]
+	ph := strings.Repeat("?,", len(ids))
+	ph = ph[:len(ph)-1]
 	args := make([]any, len(ids))
 	for i, id := range ids {
 		args[i] = id
 	}
-	where := fmt.Sprintf(`(from_id IN (%s) OR to_id IN (%s))`, placeholders, placeholders)
-	allArgs := append(args, args...)
+
+	var where string
+	var allArgs []any
+	switch dir {
+	case DirectionOutward:
+		where = fmt.Sprintf(`from_id IN (%s)`, ph)
+		allArgs = args
+	case DirectionInward:
+		where = fmt.Sprintf(`to_id IN (%s)`, ph)
+		allArgs = args
+	default:
+		where = fmt.Sprintf(`(from_id IN (%s) OR to_id IN (%s))`, ph, ph)
+		allArgs = append(args, args...)
+	}
 
 	if len(edgeKinds) > 0 {
 		kindPH := strings.Repeat("?,", len(edgeKinds))
@@ -151,10 +163,10 @@ func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []st
 	if err != nil {
 		return nil, nil, fmt.Errorf("topology: edge query: %w", err)
 	}
-	return collectNeighbours(ctx, db, rows, ids)
+	return collectNeighbours(ctx, db, rows, ids, dir)
 }
 
-func collectNeighbours(ctx context.Context, db *sql.DB, rows *sql.Rows, frontier []int64) ([]Node, []Edge, error) {
+func collectNeighbours(ctx context.Context, db *sql.DB, rows *sql.Rows, frontier []int64, dir Direction) ([]Node, []Edge, error) {
 	frontierSet := make(map[int64]bool, len(frontier))
 	for _, id := range frontier {
 		frontierSet[id] = true
@@ -168,11 +180,18 @@ func collectNeighbours(ctx context.Context, db *sql.DB, rows *sql.Rows, frontier
 			continue
 		}
 		edges = append(edges, e)
-		if !frontierSet[e.ToID] {
+		switch dir {
+		case DirectionOutward:
 			neighbourIDs[e.ToID] = true
-		}
-		if !frontierSet[e.FromID] {
+		case DirectionInward:
 			neighbourIDs[e.FromID] = true
+		default:
+			if !frontierSet[e.ToID] {
+				neighbourIDs[e.ToID] = true
+			}
+			if !frontierSet[e.FromID] {
+				neighbourIDs[e.FromID] = true
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
