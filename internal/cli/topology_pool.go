@@ -8,6 +8,7 @@ import (
 	"github.com/golimpio/plumb/internal/topology"
 	"github.com/golimpio/plumb/internal/topology/extractors/golang"
 	"github.com/golimpio/plumb/internal/topology/extractors/python"
+	"github.com/golimpio/plumb/internal/topology/extractors/typescript"
 )
 
 // topologyPool manages one topology.Store per workspace root.
@@ -66,5 +67,6 @@ func buildExtractors() []topology.Extractor {
 	return []topology.Extractor{
 		golang.New(),
 		python.New(),
+		typescript.New(),
 	}
 }
