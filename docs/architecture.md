@@ -30,23 +30,28 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | Package | Role |
 |---|---|
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
-| `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `status`, `setup`, `sessions`, `stats`, `init`, `config`, `version` |
+| `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `status`, `setup`, `sessions`, `stats`, `init`, `config`, `doctor`, `version`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
-| `internal/tools` | MCP tool implementations (15 tools — see `docs/mcp-tools.md`) |
+| `internal/tools` | MCP tool implementations (49 tools — see `docs/mcp-tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
+| `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
-| `internal/stats` | SQLite-backed tool call statistics (WAL mode, per-tool summary, P95) |
+| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 7) |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
-| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + Python regex extractors; search + BFS explore |
+| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST, Python regex, and TypeScript/JS regex extractors (`extractors/{golang,python,typescript}`); search + BFS explore/impact/affected/routes |
+| `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
+| `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
+| `internal/monitor` | Process resource-usage snapshots (CPU %, memory) with per-OS implementations; feeds the TUI daemon metrics |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
 | `internal/lsp` | `LSPClient` interface, process supervisor |
-| `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio; mock for testing |
+| `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio (server-request support); mock for testing |
 | `internal/lsp/protocol` | LSP types and method-name constants |
-| `internal/lsp/adapters/gopls` | Validated Go adapter (integration-tested) |
-| `internal/lsp/adapters/pyright` | Experimental Python adapter (unit-tested) |
-| `internal/config` | TOML config, XDG path resolution |
-| `internal/domain` | Pure types — no I/O (reserved for future shared domain types) |
-| `internal/workspace` | Language detection, adapter routing (reserved for future routing logic) |
+| `internal/lsp/adapters/gopls` | Validated Go adapter (unit- + integration-tested) |
+| `internal/lsp/adapters/pyright` | Validated Python adapter (unit- + integration-tested) |
+| `internal/lsp/adapters/jdtls` | Experimental Java adapter; enable via `[lsp.java] enabled = true`; requires Java 21+ and jdtls on PATH |
+| `internal/config` | TOML config, XDG path resolution, project-config merging |
+| `internal/domain` | Reserved for future shared domain types (currently empty) |
+| `internal/workspace` | Reserved for future routing logic (currently empty) |
 
 ### Charm dependency rule
 
@@ -61,7 +66,7 @@ causes incompatible model, command, and style types.
 Plumb pairs two complementary technologies to solve the context efficiency problem for AI agents: **Topology** and **LSP**. They do not compete; they handle different phases of the agent's workflow.
 
 ### 1. Plumb Topology (The Map)
-Topology uses **Go AST + Python regex extractors** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). Enabled via `[topology] enabled = true` in the project config.
+Topology uses **Go AST, Python regex, and TypeScript/JS regex extractors** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). Enabled via `[topology] enabled = true` in the project config. It is exposed through six tools: `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, and `topology_routes`.
 *   **Strengths:** Instant availability (no LSP boot time), minimal memory footprint, handles broken code gracefully, FTS5 ranked search, BFS neighbourhood exploration.
 *   **Role in Plumb:** Discovery engine. When an agent asks "Where is the routing logic?" or needs to see a symbol's neighbourhood, Topology handles it without waiting for the language server to index.
 *   **Trade-offs:** Syntactic extraction only — no type resolution. "Broad" recall, not compiler-level precision.
@@ -96,7 +101,7 @@ internal/mcp.Server
 internal/tools.FindSymbol / GetDefinition / ExplainSymbol
      │  checks cache; on miss calls LSPClient
      ▼
-internal/cli.clientProxy  (delegates to live adapter)
+internal/cli.routingProxy  (per-session; routes to the pooled adapter)
      │
      ▼
 internal/lsp/adapters/gopls.Adapter  (or pyright.Adapter)
@@ -166,10 +171,16 @@ Key design properties:
 | `~/Library/Caches/plumb/daemon.log` | daemon | slog text output |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
+| `<workspace>/.plumb/topology.db` | daemon (when `[topology] enabled`) | Per-workspace SQLite/FTS5 semantic index |
 
 XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
 respected when set. Cache paths use `os.UserCacheDir()` directly because they
 are runtime, not data — see Daemon architecture above for why.
+
+The table above shows the Linux data layout. On macOS the data dir defaults to
+`~/Library/Application Support/plumb/` (so stats live at
+`~/Library/Application Support/plumb/stats.db`); cache files live under
+`~/Library/Caches/plumb/`.
 
 ### Statistics database (`stats.db`)
 
@@ -189,7 +200,9 @@ CREATE TABLE tool_calls (
     success      INTEGER NOT NULL DEFAULT 1,    -- 1 = ok, 0 = error
     error_msg    TEXT    NOT NULL DEFAULT '',
     input_json   TEXT    NOT NULL DEFAULT '',   -- raw tool args, capped
-    output_text  TEXT    NOT NULL DEFAULT ''    -- tool output, capped
+    output_text    TEXT  NOT NULL DEFAULT '',   -- tool output, capped
+    client_name    TEXT  NOT NULL DEFAULT '',   -- MCP clientInfo.name
+    client_version TEXT  NOT NULL DEFAULT ''    -- MCP clientInfo.version
 );
 CREATE INDEX idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
@@ -219,9 +232,12 @@ workspace, session, timing, and I/O sizes. The workspace and session fields are
 required row attributes because the single stats database contains all projects
 served by the single daemon.
 
-Schema versioning is driven by `PRAGMA user_version`. Before 1.0, plumb treats
-the current schema as the supported shape; read-only tools require the current
-version, and write-capable opens stamp the active version.
+Schema versioning is driven by `PRAGMA user_version` (currently 7). `stats.Open()`
+(the daemon — the single writer) applies forward migrations (`ALTER TABLE ADD
+COLUMN`) when the on-disk version is older, then stamps the current version, so
+existing history is preserved across upgrades. `OpenReadOnly()` (TUI, `plumb
+stats`) does not migrate; it reports a schema-upgrade-required notice until the
+daemon migrates the file.
 
 ### Session registry (`sessions/<id>.json`)
 
@@ -269,20 +285,29 @@ Memory tools use a `WorkspaceFn` accessor to default to the connection's
 resolved workspace when the caller doesn't pass `workspace` explicitly,
 making cross-project memory access possible.
 
-## Startup sequence (`plumb serve`)
+## Startup sequence
 
-1. `config.Load()` — reads `~/.config/plumb/config.toml`, applies env overrides.
-2. `cache.New(ttl)` — creates the sharded in-memory cache.
-3. `lsp.NewSupervisor(…)` — creates the process supervisor.
-4. `sup.Start(ctx)` — spawns the LSP subprocess; `OnStart` callback calls
-   `Initialize` + `Initialized` on the adapter, wires the cache invalidator,
-   and sets `clientProxy.cur` to the live adapter.
-5. `mcp.New(…)` + `srv.Register(…)` — builds the MCP server and registers the
-   three tools (explicit registration, not via `init()`).
-6. `srv.Serve(ctx, os.Stdin, os.Stdout)` — serves the MCP protocol loop until
-   stdin is closed or the process receives SIGINT/SIGTERM.
-7. On shutdown: `Shutdown` + `Exit` are sent to the LSP, `Supervisor.Stop()`
-   tears down the process, `cache.Close()` stops the cleanup goroutine.
+`plumb serve` is a thin stdio proxy: it takes the spawn lock, dials the daemon
+socket (spawning `plumb daemon` if none is running), then copies bytes between
+the client's stdin/stdout and the Unix socket until EOF. It registers no tools
+and owns no LSP processes.
+
+The daemon does the real work. For each accepted connection, `handleConn` builds
+a `connSession` (`internal/cli/conn.go`) which:
+
+1. Registers a `session.Info` immediately (Folder empty until the workspace resolves).
+2. Resolves the workspace lazily — via `roots/list` on `initialize`, then by
+   walking up from the first tool call's path argument.
+3. On attach: acquires the shared language server for the workspace from
+   `workspacePool` (one per root), opens the per-connection cache + invalidator,
+   loads project config, and — when enabled — acquires the topology store and
+   the quality runner.
+4. Registers all MCP tools (`registerAllTools`) and lifecycle hooks
+   (`registerHooks`: `OnInit`, `OnRootsChanged`, `OnBeforeTool`, `OnAfterTool`,
+   `OnClientInfo`).
+
+On daemon shutdown (SIGINT/SIGTERM) the workspace and topology pools are stopped,
+the stats DB is closed, and the socket / PID / lock files are removed.
 
 ## Concurrency model
 
@@ -292,7 +317,7 @@ making cross-project memory access possible.
 | `cache.Cache` | Sharded map; each shard has its own `sync.RWMutex`. Stats counters use `atomic.Int64`. |
 | `cache.Invalidator` | Called from the adapter's notification goroutine; thread-safe via the cache's own locking. |
 | `lsp/jsonrpc.Conn` | Write serialised by `sync.Mutex`; pending calls tracked in a `sync.Map`; read loop on a dedicated goroutine. |
-| `cli.clientProxy` | `sync.RWMutex` around the current adapter pointer; updated by `OnStart` on each process restart. |
+| `cli.routingProxy` | Per-session proxy; `sync.RWMutex` around the primary pool-entry pointer; set on workspace attach. |
 | `lsp.Supervisor` | Supervision loop on one goroutine; exported methods protected by `sync.RWMutex`. |
 | `adapters/*.Adapter` | Capabilities stored under `sync.RWMutex`; subscribers stored under `sync.RWMutex`; notification dispatch copies the handler slice before releasing the lock. |
 
@@ -328,7 +353,10 @@ Environment overrides: `PLUMB_LOG_LEVEL`, `PLUMB_LOG_FILE`.
 
 CLI flag: `--log-level` (overrides both file and env).
 
-See `plumb config print` for the active resolved configuration.
+See `plumb config show` for the active resolved configuration. Configuration is
+resolved in four layers (compiled defaults → global `config.toml` → project
+`<workspace>/.plumb/config.toml` → environment); see `AGENTS.md` for the
+`[edits]`, `[workspace]`, `[topology]`, and `[quality]` sections.
 
 ## Cache key convention
 

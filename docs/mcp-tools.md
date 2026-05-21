@@ -1,4 +1,4 @@
-# Available tools (48)
+# Available tools (49)
 
 ## Client capabilities and fallback behaviour
 
@@ -15,7 +15,7 @@
 
 ---
 
-Plumb exposes 48 structured tools to AI assistants. Every write tool is concurrency-safe, atomic, and LSP-notified.
+Plumb exposes 49 structured tools to AI assistants. Every write tool is concurrency-safe, atomic, and LSP-notified.
 
 ## Session
 | Tool | Description |
@@ -50,6 +50,7 @@ Plumb exposes 48 structured tools to AI assistants. Every write tool is concurre
 | Tool | Description |
 |---|---|
 | `read_file` | Read a file (supports line ranges and mtime headers). |
+| `read_symbol` | Read the source body of a named symbol (function, method, type) in one call via LSP `documentSymbol` + file read. Accepts a plain name or dotted `ReceiverType.MethodName`; returns all matches when ambiguous. Emits the same mtime header as `read_file`. |
 | `read_multiple_files` | Up to 20 files in parallel. |
 | `list_directory` | Immediate children with metadata. |
 | `list_files` | Recursive walk with glob filtering. |

@@ -6,7 +6,7 @@
 
 **Real IDE intelligence for AI assistants** — go-to-definition, find-references, rename, diagnostics, atomic file editing, and semantic refactors, powered by the same language servers your editor uses.
 
-Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes 34 structured tools so the assistant can query and edit a codebase the way an IDE would.
+Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes 49 structured tools so the assistant can query and edit a codebase the way an IDE would.
 
 ---
 
@@ -79,13 +79,14 @@ plumb init
 
 ## Core Capabilities
 
-Plumb exposes 34 tools across several categories. For a full API reference, see [**docs/mcp-tools.md**](docs/mcp-tools.md).
+Plumb exposes 49 tools across several categories. For a full API reference, see [**docs/mcp-tools.md**](docs/mcp-tools.md).
 
 - **Session:** One-shot bootstrap, identity tracking, and daemon info.
 - **LSP Queries:** Definitions, references, symbols, call/type hierarchies, and diagnostics.
 - **LSP Edits:** Scope-aware renames and targeted symbol insertions/deletions.
 - **Filesystem:** Atomic writes, unique-string replacement, recursive search, and parallel reads.
 - **VCS & Memory:** Git inspection, multi-file transactions, and durable project notes.
+- **Topology (optional):** A persistent SQLite/FTS5 semantic index — ranked symbol search, BFS neighbourhood exploration, and blast-radius/route analysis that works instantly, without waiting for a language server. Enable with `[topology] enabled = true`.
 
 ---
 
@@ -128,7 +129,7 @@ If Plumb isn't quite what you're looking for, check out these excellent alternat
 - **[CodeGraph](https://github.com/colbymchenry/codegraph)**: Instead of using live LSPs, CodeGraph uses `tree-sitter` to build a pre-indexed SQLite graph of your codebase. It excels at rapid exploration, impact analysis, and minimizing agent tool calls by returning bundled semantic chunks.
 - **[Serena](https://github.com/oraios/serena)**: An MCP toolkit backed by either standard LSPs or a JetBrains IDE plugin. It offers similar symbol-level editing to Plumb, but when paired with JetBrains, it adds deep IDE features like interactive debugging and execution control.
 
-*(By comparison, **Plumb** focuses strictly on live LSP integration for real-time diagnostics, concurrency-safe file writes, and atomic cross-file transactions).*
+*(By comparison, **Plumb** combines live LSP integration — real-time diagnostics, concurrency-safe file writes, and atomic cross-file transactions — with an optional SQLite/FTS5 **Topology** index for fast, language-server-free symbol search and graph exploration.)*
 
 ## Contributing
 

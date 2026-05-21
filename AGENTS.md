@@ -87,7 +87,7 @@ On daemon start the binary writes the following files under the system cache dir
 | `daemon.log` | All daemon logs |
 
 Stats live in one persistent global database at `config.DataDir()/stats.db`
-(for example `~/.local/share/plumb/stats.db` on Linux). This follows the
+(for example `~/.local/share/plumb/stats.db` on Linux, `~/Library/Application Support/plumb/stats.db` on macOS). This follows the
 single-daemon architecture: every row must carry both `workspace` and
 `session_id`, and project/session views filter on those row attributes.
 
@@ -169,7 +169,7 @@ When the daemon starts without a workspace (Claude Desktop launches the daemon f
 3. `roots/list` query to the MCP client
 4. Walk up from `os.Getwd()` for a project marker
 
-Run `plumb init` in any project root to create a `.plumb/` marker directory (also holds `context.md` and the project's `stats.db`). For non-Go/non-Python projects this is now sufficient to get the full daemon experience — no language server, but everything else.
+Run `plumb init` in any project root to create a `.plumb/` marker directory (also holds `context.md`, the `memories/` store, and — when `[topology]` is enabled — `topology.db`). Stats are global (`config.DataDir()/stats.db`), not per-project. For non-Go/non-Python projects this is now sufficient to get the full daemon experience — no language server, but everything else.
 
 ## Adapter validation status
 
@@ -203,7 +203,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (48)
+## Available tools (49)
 
 **Bootstrap**
 
@@ -240,6 +240,7 @@ Pyright is the worked example.
 | Tool | File | Notes |
 |---|---|---|
 | `read_file` | `read_file.go` | Absolute path or `file://`. Line ranges stream via `bufio.Scanner`. 200 KiB cap. Binary detection. Records mtime in `ReadTracker` for strict mode. Output header: `# plumb-read mtime=<RFC3339Nano>` — copy into `edit_file.expected_mtime`. |
+| `read_symbol` | `read_symbol.go` | Reads the source body of a named symbol (function, method, type) in one call via `textDocument/documentSymbol` + file read — collapses the `list_symbols` + `read_file` pattern. Accepts a plain name or dotted `ReceiverType.MethodName` form; returns all matches when the name is ambiguous. Records mtime in `ReadTracker` and emits the same `# plumb-read mtime=<RFC3339Nano>` header as `read_file`, so the value can be passed to `edit_file.expected_mtime`. |
 | `read_multiple_files` | `read_multiple_files.go` | Up to 20 paths. Parallel (cap 8). Per-file errors inline. |
 | `list_directory` | `list_directory.go` | Immediate children, `[FILE]`/`[DIR]` prefixes, sizes, mtimes. Glob `pattern`. Sort by name/size/modified. |
 | `list_files` | `list_files.go` | Recursive; glob filter; depth control; respects `.gitignore`. |
