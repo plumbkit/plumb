@@ -6,12 +6,29 @@ func (m Model) dashAlertsWidget(width int) []string {
 	inner := width - 2
 	alerts := m.dashboardAlerts()
 
+	const (
+		lpad    = "   "    // 3-space left margin
+		rpad    = "   "    // 3-space right margin
+		contPad = "      " // 6-space continuation indent (lpad + mark + space + 1)
+	)
+	// Available text width: inner minus the widest prefix (contPad) and right margin.
+	textWidth := inner - len(contPad) - len(rpad)
+
 	var content []string
 	if len(alerts) == 0 {
-		content = []string{"   " + OkStyle.Render("✓") + " " + MutedStyle.Render("No issues detected") + "   "}
+		content = []string{lpad + OkStyle.Render("✓") + " " + MutedStyle.Render("No issues detected") + rpad}
 	} else {
-		for _, msg := range alerts {
-			content = append(content, "   "+WarnStyle.Render("✗")+" "+WarnStyle.Render(msg)+"   ")
+		for i, msg := range alerts {
+			if i > 0 {
+				content = append(content, "") // blank line between alerts
+			}
+			for j, line := range wrapText(msg, textWidth) {
+				if j == 0 {
+					content = append(content, lpad+WarnStyle.Render("✗")+" "+WarnStyle.Render(line)+rpad)
+				} else {
+					content = append(content, contPad+WarnStyle.Render(line)+rpad)
+				}
+			}
 		}
 	}
 	return dashBox(" Alerts ", inner, content)
