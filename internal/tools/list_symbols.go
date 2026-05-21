@@ -33,13 +33,14 @@ var listSymbolsSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type ListSymbols struct {
-	client lsp.Client
-	cache  *cache.Cache
-	ttl    time.Duration
+	client  lsp.Client
+	cache   *cache.Cache
+	ttl     time.Duration
+	timeout time.Duration
 }
 
-func NewListSymbols(client lsp.Client, c *cache.Cache, ttl time.Duration) *ListSymbols {
-	return &ListSymbols{client: client, cache: c, ttl: ttl}
+func NewListSymbols(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *ListSymbols {
+	return &ListSymbols{client: client, cache: c, ttl: ttl, timeout: timeout}
 }
 
 func (t *ListSymbols) Name() string                 { return "list_symbols" }
@@ -71,11 +72,13 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 		}
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
 	})
 	if err != nil {
-		return "", fmt.Errorf("list_symbols: %w", err)
+		return "", lspTimeoutErr("list_symbols", t.timeout, err)
 	}
 	if t.cache != nil {
 		t.cache.Set(key, syms, t.ttl)

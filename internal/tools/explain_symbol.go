@@ -35,14 +35,15 @@ var explainSymbolSchema = json.RawMessage(`{
 // ExplainSymbol returns hover information (documentation, type signature) for
 // the symbol at a given position.
 type ExplainSymbol struct {
-	client lsp.Client
-	cache  *cache.Cache
-	ttl    time.Duration
+	client  lsp.Client
+	cache   *cache.Cache
+	ttl     time.Duration
+	timeout time.Duration
 }
 
 // NewExplainSymbol creates an ExplainSymbol tool. Pass a nil cache to disable caching.
-func NewExplainSymbol(client lsp.Client, c *cache.Cache, ttl time.Duration) *ExplainSymbol {
-	return &ExplainSymbol{client: client, cache: c, ttl: ttl}
+func NewExplainSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *ExplainSymbol {
+	return &ExplainSymbol{client: client, cache: c, ttl: ttl, timeout: timeout}
 }
 
 func (t *ExplainSymbol) Name() string                 { return "explain_symbol" }
@@ -75,6 +76,8 @@ func (t *ExplainSymbol) Execute(ctx context.Context, args json.RawMessage) (stri
 		}
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	hover, err := t.client.Hover(ctx, protocol.HoverParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
 		Position:     protocol.Position{Line: a.Line, Character: a.Character},
