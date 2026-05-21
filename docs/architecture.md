@@ -356,7 +356,7 @@ CLI flag: `--log-level` (overrides both file and env).
 See `plumb config show` for the active resolved configuration. Configuration is
 resolved in four layers (compiled defaults → global `config.toml` → project
 `<workspace>/.plumb/config.toml` → environment); see `AGENTS.md` for the
-`[edits]`, `[workspace]`, `[topology]`, and `[quality]` sections.
+`[edits]`, `[workspace]`, `[git]`, `[topology]`, `[quality]`, and `[ui]` sections.
 
 ## Cache key convention
 

@@ -157,6 +157,19 @@ All `[git]` fields follow the standard layering: compiled defaults → global co
 
 The `git` tool always runs the requested subcommand as the first argv element, so global flags supplied in `args` (e.g. `-c`, `--exec-path`) cannot reconfigure git. A small denylist also rejects `-c`, `-C`, `--git-dir`, `--work-tree`, `--namespace`, `--upload-pack`, `--receive-pack`, and `--exec-path` outright. There is no shell.
 
+### `[ui]` section — TUI theme
+
+```toml
+[ui]
+theme = "nordico"   # built-in theme name; default "nordico"
+```
+
+| Field | Effect |
+|---|---|
+| `theme` | Selects the active TUI colour theme. Must match a key in `tui.AvailableThemes`. Written by the theme picker (`enter`/`space` in Settings). Read at `plumb` startup by `internal/cli/root.go` before `tui.Run()`. |
+
+Built-in themes: `nordico` (dark, Nord-inspired), `darcula` (dark, JetBrains), `dracula` (dark, dracula.github.io), `gruvbox` (dark, earthy), `github-light` (light, GitHub), `solarized-light` (light, Solarized classic). Each theme maps to a chroma style used by `plumb config show`. `SaveTheme(name)` in `internal/config/config.go` performs a full-file rewrite (load → mutate `UI.Theme` → re-encode); user-added TOML comments are lost on first save — known v1 limitation. Only the global config file is written; project config does not support `[ui]`.
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server for supported clients:
@@ -324,8 +337,10 @@ Pyright is the worked example.
 - Section menu opened with `/`; sections are `Dashboard`, `Sessions`, `Memory`, `Logs`, `Settings` (indices 0–4).
 - Sessions section (index 1, default): two-panel layout — **Sessions** list (left) and **Details** / **Tool Statistics** / **Recent Tools** (right).
 - Logs section (index 3): full-width live log viewer (`internal/tui/log_view.go`). Tails `daemon.log` from `daemonLogPath()` (passed by CLI at startup). Filters by substring (`logFilter`); follows newest entry when `logFollow = true` (default). Press `G` to re-engage follow, `esc` to clear filter, type to filter.
+- Settings section (index 4): live two-panel theme picker (`internal/tui/model_settings.go`). Left panel lists all built-in themes (one per row: `❯` = cursor, `✓` = saved); right panel shows colour swatches (`██` per semantic token) and a mini preview. Navigation (`↑↓`/`jk`) applies the theme immediately via `RebuildStyles()`; `esc` reverts to the theme that was active when Settings was entered; `enter`/`space` saves via `config.SaveTheme(name)`.
 - `panelFocus` constants: `focusSessions`, `focusToolStats`, `focusStats`, `focusDetails`, `focusLogs` — only the first four are used in the Sessions section; `focusLogs` is reserved for future use within the Logs section.
 - Overlays: dim the background with `dimLines()`, splice the box via `spliceOverlay()`.
+- **Theme system:** `ActiveTheme` (`tui.Theme`) and `ActiveThemeName` (`string`) are package-level globals in `internal/tui/theme.go`. All 40+ lipgloss styles are package-level vars rebuilt by `RebuildStyles()` — call it after every `ActiveTheme` mutation. `AvailableThemes map[string]Theme` is the built-in catalogue. `ThemeNames() []string` returns sorted keys. `Theme` has 16 `color.Color` fields, plus `ContrastText` (text on coloured backgrounds; `"0"` dark, `"15"` light) and `ChromaStyle` (chroma style name for `plumb config show`). Adding a new field to `Theme` requires updating every theme literal — `TestTheme_AllFieldsSet` catches omissions.
 
 ## Code style rules
 
