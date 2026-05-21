@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.5 (unreleased)
+## 0.7.6 (unreleased)
 
 ### Added
 - **Plumb Topology: Phase 2 — call edges, new tools, TypeScript extractor, and indexer hardening.** Completes the original topology vision across five work tiers:
