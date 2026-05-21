@@ -2,7 +2,7 @@
 
 Canonical index of known gaps, deferred work, and subtle footguns. Each entry carries enough context that another session can pick it up cold and execute.
 
-Last reviewed against: **0.7.6** (2026-05-21). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices). Topology Phase 1 completed and moved to `docs/todo-to-review.md`.
+Last reviewed against: **0.7.6** (2026-05-21). A full code-quality pass was added on 2026-05-20 — see [Code quality & engineering practices](#code-quality--engineering-practices). Topology Phase 1 and most of Phase 2 shipped in 0.7.5–0.7.6 (see `CHANGELOG.md`); the remaining Phase 2 gaps are under [Architecture](#architecture).
 
 When you complete a TODO entry: **move its section to `docs/todo-to-review.md`** (do not just delete it), add a `CHANGELOG.md` entry for the version that ships the fix, in the **same commit**. If new gaps surface during the work, add them here in the same commit.
 
@@ -36,7 +36,7 @@ Deep design changes, contract changes, and new infrastructure. These are the ite
 
 **Priority:** Medium — Phase 2 shipped the extractors, call edges, three new tools, and indexer hardening (0.7.6). These three items were in the Phase 2 plan but were not completed; they are the remaining work before topology can be called "done" or considered for default-enable.
 **Effort:** Medium.
-**Status:** Planning. See `docs/todo-to-review.md` → "Plumb Topology: Phase 2" for the full original plan and the completion record.
+**Status:** Planning. Phase 2 shipped its core in 0.7.6 (see the `CHANGELOG.md` entry for what was delivered); the three items below are the remainder.
 
 **1. DoD-6 performance claim is unmet — decide the metric.**
 The original DoD-6 required topology symbol lookup to be ">=5x faster than gopls on cold start". Measured reality (`internal/topology/benchmark_test.go`, `TestDoD6_TopologyQueryLatency`): topology is ~1.2x faster warm (5.8 ms vs 6.9 ms, within noise) and ~10x *slower* cold (it pays a one-off full-index build). The integration test was reframed to record the numbers and assert only an absolute latency bound, not a false >=5x gate. Decide before claiming a speedup anywhere: either (a) drop the ">=5x" claim from all docs and frame topology's value as "available without an LSP, no per-conversation indexing wait" (true), or (b) define a metric topology genuinely wins (e.g. time-to-first-answer when no language server is installed or warm) and assert that. Do NOT reinstate a >=5x assertion without data that supports it.
