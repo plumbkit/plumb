@@ -57,6 +57,35 @@ func (s *Store) Resync() {
 	s.idx.Enqueue("", opResync)
 }
 
+// SymbolsInFile returns the indexed symbols for a single file, ordered by start
+// line. path may be absolute, a file:// URI, or workspace-relative. Returns an
+// empty slice (no error) when the file is not in the index.
+func (s *Store) SymbolsInFile(ctx context.Context, path string) ([]Node, error) {
+	rel := s.toRelative(strings.TrimPrefix(path, "file://"))
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path
+		FROM topology_nodes n
+		JOIN topology_files f ON f.id = n.file_id
+		WHERE f.path = ?
+		ORDER BY n.start_line`, rel)
+	if err != nil {
+		return nil, fmt.Errorf("topology: symbols in file: %w", err)
+	}
+	defer rows.Close()
+	var out []Node
+	for rows.Next() {
+		var n Node
+		var kind string
+		if scanErr := rows.Scan(&kind, &n.Name, &n.Qualified, &n.Signature,
+			&n.StartLine, &n.EndLine, &n.Language, &n.Path); scanErr != nil {
+			continue
+		}
+		n.Kind = NodeKind(kind)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // Search performs a ranked FTS5 search over the topology index.
 func (s *Store) Search(ctx context.Context, query string, opts SearchOpts) ([]SearchResult, error) {
 	return Search(ctx, s.db, query, opts)

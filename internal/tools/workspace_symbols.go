@@ -10,6 +10,7 @@ import (
 	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/golimpio/plumb/internal/topology"
 )
 
 var workspaceSymbolsSchema = json.RawMessage(`{
@@ -30,6 +31,14 @@ type WorkspaceSymbols struct {
 	ttl     time.Duration
 	timeout time.Duration
 	ws      WorkspaceFn // used to filter out dependency-cache hits
+	topo    topologyStoreFn
+}
+
+// WithTopologyFallback wires the topology index as a fallback for when the
+// language server errors or times out. Returns the tool for chaining.
+func (t *WorkspaceSymbols) WithTopologyFallback(fn topologyStoreFn) *WorkspaceSymbols {
+	t.topo = fn
+	return t
 }
 
 // NewWorkspaceSymbols creates a WorkspaceSymbols tool. ws may be nil, in
@@ -51,6 +60,25 @@ type workspaceSymbolsArgs struct {
 	Query string `json:"query"`
 }
 
+// topologyFallback answers a workspace-wide symbol search from the topology
+// index. ok is false when topology is unavailable or returns nothing, so the
+// caller surfaces the original LSP error instead of an empty index result.
+func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, query string) (string, bool) {
+	store := activeTopology(t.topo)
+	if store == nil {
+		return "", false
+	}
+	results, err := store.Search(ctx, query, topology.SearchOpts{Limit: 100})
+	if err != nil || len(results) == 0 {
+		return "", false
+	}
+	nodes := make([]topology.Node, 0, len(results))
+	for _, r := range results {
+		nodes = append(nodes, r.Node)
+	}
+	return formatTopologyMatches(fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
+}
+
 func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a workspaceSymbolsArgs
 	if err := json.Unmarshal(args, &a); err != nil {
@@ -67,10 +95,13 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	syms, err := t.client.WorkspaceSymbols(ctx, protocol.WorkspaceSymbolParams{Query: a.Query})
+	syms, err := t.client.WorkspaceSymbols(lspCtx, protocol.WorkspaceSymbolParams{Query: a.Query})
 	if err != nil {
+		if out, ok := t.topologyFallback(ctx, a.Query); ok {
+			return out, nil
+		}
 		return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
 	}
 

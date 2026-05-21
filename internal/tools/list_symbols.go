@@ -37,6 +37,14 @@ type ListSymbols struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
+	topo    topologyStoreFn
+}
+
+// WithTopologyFallback wires the topology index as a fallback for when the
+// language server errors or times out. Returns the tool for chaining.
+func (t *ListSymbols) WithTopologyFallback(fn topologyStoreFn) *ListSymbols {
+	t.topo = fn
+	return t
 }
 
 func NewListSymbols(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *ListSymbols {
@@ -51,6 +59,21 @@ func (t *ListSymbols) Description() string {
 		"to discover what a file contains without reading it. " +
 		"Set include_signatures=true to append the declaration line of each function, method, or constructor " +
 		"(shows parameter types and receiver types)."
+}
+
+// topologyFallback answers a file outline from the topology index. ok is false
+// when topology is unavailable or has not indexed the file, so the caller
+// surfaces the original LSP error instead.
+func (t *ListSymbols) topologyFallback(ctx context.Context, uri string) (string, bool) {
+	store := activeTopology(t.topo)
+	if store == nil {
+		return "", false
+	}
+	nodes, err := store.SymbolsInFile(ctx, uri)
+	if err != nil || len(nodes) == 0 {
+		return "", false
+	}
+	return formatTopologyOutline(uri, nodes), true
 }
 
 func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -72,12 +95,15 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 		}
 	}
 
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+	syms, err := t.client.DocumentSymbols(lspCtx, protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
 	})
 	if err != nil {
+		if out, ok := t.topologyFallback(ctx, a.URI); ok {
+			return out, nil
+		}
 		return "", lspTimeoutErr("list_symbols", t.timeout, err)
 	}
 	if t.cache != nil {

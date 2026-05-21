@@ -34,6 +34,14 @@ type FindSymbol struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
+	topo    topologyStoreFn
+}
+
+// WithTopologyFallback wires the topology index as a fallback for when the
+// language server errors or times out. Returns the tool for chaining.
+func (t *FindSymbol) WithTopologyFallback(fn topologyStoreFn) *FindSymbol {
+	t.topo = fn
+	return t
 }
 
 // NewFindSymbol creates a FindSymbol tool. Pass a nil cache to disable caching.
@@ -63,9 +71,32 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 	if a.URI == "" {
 		return "", fmt.Errorf("find_symbol: uri is required (use workspace_symbols for workspace-wide search)")
 	}
-	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
-	return t.inDocument(ctx, a.URI, a.Query)
+	out, err := t.inDocument(lspCtx, a.URI, a.Query)
+	if err != nil {
+		if fb, ok := t.topologyFallback(ctx, a.URI, a.Query); ok {
+			return fb, nil
+		}
+		return "", err
+	}
+	return out, nil
+}
+
+// topologyFallback answers an in-file symbol search from the topology index.
+// ok is false when topology is unavailable or has not indexed the file, so the
+// caller surfaces the original LSP error instead.
+func (t *FindSymbol) topologyFallback(ctx context.Context, uri, query string) (string, bool) {
+	store := activeTopology(t.topo)
+	if store == nil {
+		return "", false
+	}
+	nodes, err := store.SymbolsInFile(ctx, uri)
+	if err != nil || len(nodes) == 0 {
+		return "", false
+	}
+	matches := filterTopologyByName(nodes, query)
+	return formatTopologyMatches(fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
 }
 
 func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string, error) {

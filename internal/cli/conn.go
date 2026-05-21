@@ -590,11 +590,16 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 // registerAllTools registers every MCP tool with srv.
 func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Time) {
 	lspTimeout := s.cfg.LSPQuery.Timeout.Duration
-	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
-	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace))
+	topoFn := func() *topology.Store {
+		s.stateMu.Lock()
+		defer s.stateMu.Unlock()
+		return s.topologyStore
+	}
+	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
+	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
 	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
-	srv.Register(tools.NewListSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
+	srv.Register(tools.NewListSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout))
@@ -644,11 +649,6 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.RegisterPrompt(mcp.NewOrientPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewWhatsBrokenPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewRecentChangesPrompt(s.workspace))
-	topoFn := func() *topology.Store {
-		s.stateMu.Lock()
-		defer s.stateMu.Unlock()
-		return s.topologyStore
-	}
 	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace))
 	srv.Register(tools.NewTopologySearch(topoFn))
 	srv.Register(tools.NewTopologyExplore(topoFn))
