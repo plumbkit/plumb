@@ -27,7 +27,7 @@ func TestFindSymbol_DocumentSearch(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute)
+	tool := tools.NewFindSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"query": "greet", "uri": "file:///p/main.go"})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -49,7 +49,7 @@ func TestFindSymbol_DocumentSearch_NoMatch(t *testing.T) {
 			{Name: "Greeter", Kind: protocol.SKClass},
 		},
 	}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute)
+	tool := tools.NewFindSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"query": "Xyz", "uri": "file:///p/main.go"})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -63,7 +63,7 @@ func TestFindSymbol_DocumentSearch_NoMatch(t *testing.T) {
 
 func TestFindSymbol_LSPError(t *testing.T) {
 	mock := &mockLSP{err: errors.New("lsp unavailable")}
-	tool := tools.NewFindSymbol(mock, nil, time.Minute)
+	tool := tools.NewFindSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"query": "Greeter", "uri": "file:///p/main.go"})
 
 	_, err := tool.Execute(context.Background(), args)
@@ -73,7 +73,7 @@ func TestFindSymbol_LSPError(t *testing.T) {
 }
 
 func TestFindSymbol_EmptyQuery(t *testing.T) {
-	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"query": "", "uri": "file:///p/main.go"})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
@@ -82,7 +82,7 @@ func TestFindSymbol_EmptyQuery(t *testing.T) {
 }
 
 func TestFindSymbol_MissingURI(t *testing.T) {
-	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"query": "Greeter"})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
@@ -94,7 +94,7 @@ func TestFindSymbol_MissingURI(t *testing.T) {
 }
 
 func TestFindSymbol_Interface(t *testing.T) {
-	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute, 0)
 	if tool.Name() != "find_symbol" {
 		t.Errorf("unexpected name: %s", tool.Name())
 	}

@@ -18,7 +18,7 @@ func TestGetDefinition_SingleLocation(t *testing.T) {
 			{URI: "file:///p/base.go", Range: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}}},
 		},
 	}
-	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 10, "character": 3})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -41,7 +41,7 @@ func TestGetDefinition_MultipleLocations(t *testing.T) {
 			{URI: "file:///p/b.go", Range: protocol.Range{Start: protocol.Position{Line: 5}}},
 		},
 	}
-	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 0, "character": 0})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -58,7 +58,7 @@ func TestGetDefinition_MultipleLocations(t *testing.T) {
 
 func TestGetDefinition_NoResult(t *testing.T) {
 	mock := &mockLSP{locations: nil}
-	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 0, "character": 0})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -72,7 +72,7 @@ func TestGetDefinition_NoResult(t *testing.T) {
 
 func TestGetDefinition_LSPError(t *testing.T) {
 	mock := &mockLSP{err: errors.New("lsp error")}
-	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 0, "character": 0})
 
 	_, err := tool.Execute(context.Background(), args)
@@ -82,7 +82,7 @@ func TestGetDefinition_LSPError(t *testing.T) {
 }
 
 func TestGetDefinition_EmptyURI(t *testing.T) {
-	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "", "line": 0, "character": 0})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
@@ -91,7 +91,7 @@ func TestGetDefinition_EmptyURI(t *testing.T) {
 }
 
 func TestGetDefinition_NeitherNameNorPosition(t *testing.T) {
-	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go"})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
@@ -118,7 +118,7 @@ func TestGetDefinition_ByName_SingleMatch(t *testing.T) {
 			{URI: "file:///p/server.go", Range: protocol.Range{Start: protocol.Position{Line: 5, Character: 0}}},
 		},
 	}
-	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{
 		"uri":         "file:///p/main.go",
 		"symbol_name": "Serve",
@@ -134,7 +134,7 @@ func TestGetDefinition_ByName_SingleMatch(t *testing.T) {
 
 func TestGetDefinition_ByName_NotFound(t *testing.T) {
 	mock := &mockLSP{docSymbols: nil}
-	tool := tools.NewGetDefinition(mock, nil, time.Minute)
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{
 		"uri":         "file:///p/main.go",
 		"symbol_name": "Missing",
@@ -149,7 +149,7 @@ func TestGetDefinition_ByName_NotFound(t *testing.T) {
 }
 
 func TestGetDefinition_Interface(t *testing.T) {
-	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewGetDefinition(&mockLSP{}, nil, time.Minute, 0)
 	if tool.Name() != "get_definition" {
 		t.Errorf("unexpected name: %s", tool.Name())
 	}

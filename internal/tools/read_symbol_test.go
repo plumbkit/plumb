@@ -33,7 +33,7 @@ func TestReadSymbol_SingleMatch(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewReadSymbol(mock, nil, time.Minute, tools.NewReadTracker())
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker())
 	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Greet"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestReadSymbol_DottedName(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewReadSymbol(mock, nil, time.Minute, tools.NewReadTracker())
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker())
 	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Server.Start"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestReadSymbol_MultipleMatches(t *testing.T) {
 			}},
 		},
 	}
-	tool := tools.NewReadSymbol(mock, nil, time.Minute, tools.NewReadTracker())
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker())
 	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Run"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -127,7 +127,7 @@ func TestReadSymbol_NotFound(t *testing.T) {
 	}
 
 	mock := &mockLSP{docSymbols: nil}
-	tool := tools.NewReadSymbol(mock, nil, time.Minute, tools.NewReadTracker())
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker())
 	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Missing"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestReadSymbol_NotFound(t *testing.T) {
 }
 
 func TestReadSymbol_MissingPath(t *testing.T) {
-	tool := tools.NewReadSymbol(&mockLSP{}, nil, time.Minute, tools.NewReadTracker())
+	tool := tools.NewReadSymbol(&mockLSP{}, nil, time.Minute, 0, tools.NewReadTracker())
 	raw, _ := json.Marshal(map[string]any{"name": "Greet"})
 	_, err := tool.Execute(context.Background(), raw)
 	if err == nil {
@@ -148,7 +148,7 @@ func TestReadSymbol_MissingPath(t *testing.T) {
 }
 
 func TestReadSymbol_MissingName(t *testing.T) {
-	tool := tools.NewReadSymbol(&mockLSP{}, nil, time.Minute, tools.NewReadTracker())
+	tool := tools.NewReadSymbol(&mockLSP{}, nil, time.Minute, 0, tools.NewReadTracker())
 	raw, _ := json.Marshal(map[string]any{"path": "/some/file.go"})
 	_, err := tool.Execute(context.Background(), raw)
 	if err == nil {

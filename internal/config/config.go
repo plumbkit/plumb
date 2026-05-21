@@ -409,6 +409,25 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PLUMB_LOG_FORMAT"); v != "" {
 		cfg.LogFormat = v
 	}
+	applyEditsEnv(cfg)
+	applyGitEnv(cfg)
+	if v, ok := envBool("PLUMB_REFUSE_HOME_ROOTS"); ok {
+		cfg.Walk.RefuseHomeRoots = v
+	}
+	if v, ok := envBool("PLUMB_AUTO_ATTACH"); ok {
+		cfg.Workspace.AutoAttach = v
+	}
+	if v, ok := envBool("PLUMB_AUTO_ATTACH_PERSIST"); ok {
+		cfg.Workspace.AutoAttachPersist = v
+	}
+	if d, ok := envDuration("PLUMB_LSP_QUERY_TIMEOUT"); ok {
+		cfg.LSPQuery.Timeout = Duration{d}
+	}
+	normaliseConfig(cfg)
+}
+
+// applyEditsEnv overlays the [edits] environment variables onto cfg.
+func applyEditsEnv(cfg *Config) {
 	if v, ok := envBool("PLUMB_STRICT_EDITS"); ok {
 		cfg.Edits.Strict = v
 	}
@@ -424,9 +443,10 @@ func applyEnv(cfg *Config) {
 	if v, ok := envBoolNeg("PLUMB_SHOW_WRITE_DIFF"); ok {
 		cfg.Edits.ShowWriteDiff = v
 	}
-	if v, ok := envBool("PLUMB_REFUSE_HOME_ROOTS"); ok {
-		cfg.Walk.RefuseHomeRoots = v
-	}
+}
+
+// applyGitEnv overlays the [git] environment variables onto cfg.
+func applyGitEnv(cfg *Config) {
 	if v, ok := envBoolNeg("PLUMB_GIT_ALLOW_WRITES"); ok {
 		cfg.Git.AllowWrites = v
 	}
@@ -436,16 +456,6 @@ func applyEnv(cfg *Config) {
 	if v, ok := envBool("PLUMB_GIT_ALLOW_PUSH"); ok {
 		cfg.Git.AllowPush = v
 	}
-	if v, ok := envBool("PLUMB_AUTO_ATTACH"); ok {
-		cfg.Workspace.AutoAttach = v
-	}
-	if v, ok := envBool("PLUMB_AUTO_ATTACH_PERSIST"); ok {
-		cfg.Workspace.AutoAttachPersist = v
-	}
-	if d, ok := envDuration("PLUMB_LSP_QUERY_TIMEOUT"); ok {
-		cfg.LSPQuery.Timeout = Duration{d}
-	}
-	normaliseConfig(cfg)
 }
 
 // envBool reads key from the environment. ok is true when the variable is

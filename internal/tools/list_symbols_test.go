@@ -35,7 +35,7 @@ func TestListSymbols_Full(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewListSymbols(mock, nil, 0)
+	tool := tools.NewListSymbols(mock, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestListSymbols_Full(t *testing.T) {
 
 func TestListSymbols_Empty(t *testing.T) {
 	mock := &mockLSP{}
-	tool := tools.NewListSymbols(mock, nil, 0)
+	tool := tools.NewListSymbols(mock, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{"uri": "file:///p/empty.go"})
 	out, err := tool.Execute(context.Background(), raw)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestListSymbols_Empty(t *testing.T) {
 }
 
 func TestListSymbols_MissingURI(t *testing.T) {
-	tool := tools.NewListSymbols(&mockLSP{}, nil, 0)
+	tool := tools.NewListSymbols(&mockLSP{}, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{})
 	_, err := tool.Execute(context.Background(), raw)
 	if err == nil {
@@ -94,7 +94,7 @@ func TestListSymbols_IncludeSignatures(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewListSymbols(mock, nil, 0)
+	tool := tools.NewListSymbols(mock, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":                "file://" + f.Name(),
 		"include_signatures": true,
@@ -143,7 +143,7 @@ func TestListSymbols_IncludeSignatures_NonCallableKinds(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewListSymbols(mock, nil, 0)
+	tool := tools.NewListSymbols(mock, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":                "file://" + f.Name(),
 		"include_signatures": true,
@@ -184,7 +184,7 @@ func TestListSymbols_IncludeSignatures_SkipsCommentLines(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewListSymbols(mock, nil, 0)
+	tool := tools.NewListSymbols(mock, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":                "file://" + f.Name(),
 		"include_signatures": true,
@@ -204,5 +204,5 @@ func TestListSymbols_Interface(t *testing.T) {
 		Description() string
 		InputSchema() json.RawMessage
 		Execute(context.Context, json.RawMessage) (string, error)
-	} = tools.NewListSymbols(&mockLSP{}, nil, 0)
+	} = tools.NewListSymbols(&mockLSP{}, nil, 0, 0)
 }

@@ -19,7 +19,7 @@ func TestFindReferences_Found(t *testing.T) {
 			{URI: "file:///p/main.go", Range: protocol.Range{Start: protocol.Position{Line: 9, Character: 8}}},
 		},
 	}
-	tool := tools.NewFindReferences(mock, nil, time.Minute)
+	tool := tools.NewFindReferences(mock, nil, time.Minute, 0)
 	line, char := uint32(4), uint32(2)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":       "file:///p/main.go",
@@ -40,7 +40,7 @@ func TestFindReferences_Found(t *testing.T) {
 
 func TestFindReferences_None(t *testing.T) {
 	mock := &mockLSP{locations: nil}
-	tool := tools.NewFindReferences(mock, nil, time.Minute)
+	tool := tools.NewFindReferences(mock, nil, time.Minute, 0)
 	zero := uint32(0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":       "file:///p/main.go",
@@ -57,7 +57,7 @@ func TestFindReferences_None(t *testing.T) {
 }
 
 func TestFindReferences_MissingURI(t *testing.T) {
-	tool := tools.NewFindReferences(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewFindReferences(&mockLSP{}, nil, time.Minute, 0)
 	raw, _ := json.Marshal(map[string]any{"line": 0, "character": 0})
 	_, err := tool.Execute(context.Background(), raw)
 	if err == nil {
@@ -67,7 +67,7 @@ func TestFindReferences_MissingURI(t *testing.T) {
 
 func TestFindReferences_LSPError(t *testing.T) {
 	mock := &mockLSP{err: errors.New("lsp error")}
-	tool := tools.NewFindReferences(mock, nil, time.Minute)
+	tool := tools.NewFindReferences(mock, nil, time.Minute, 0)
 	zero := uint32(0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":       "file:///p/main.go",
@@ -81,7 +81,7 @@ func TestFindReferences_LSPError(t *testing.T) {
 }
 
 func TestFindReferences_NeitherNameNorPosition(t *testing.T) {
-	tool := tools.NewFindReferences(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewFindReferences(&mockLSP{}, nil, time.Minute, 0)
 	raw, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go"})
 	_, err := tool.Execute(context.Background(), raw)
 	if err == nil {
@@ -108,7 +108,7 @@ func TestFindReferences_ByName_SingleMatch(t *testing.T) {
 			{URI: "file:///p/main.go", Range: protocol.Range{Start: protocol.Position{Line: 10, Character: 2}}},
 		},
 	}
-	tool := tools.NewFindReferences(mock, nil, time.Minute)
+	tool := tools.NewFindReferences(mock, nil, time.Minute, 0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":         "file:///p/main.go",
 		"symbol_name": "Greet",
@@ -124,7 +124,7 @@ func TestFindReferences_ByName_SingleMatch(t *testing.T) {
 
 func TestFindReferences_ByName_NotFound(t *testing.T) {
 	mock := &mockLSP{docSymbols: nil}
-	tool := tools.NewFindReferences(mock, nil, time.Minute)
+	tool := tools.NewFindReferences(mock, nil, time.Minute, 0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":         "file:///p/main.go",
 		"symbol_name": "Missing",
@@ -152,7 +152,7 @@ func TestFindReferences_ByName_MultipleMatches(t *testing.T) {
 			{URI: "file:///p/main.go", Range: protocol.Range{Start: protocol.Position{Line: 20}}},
 		},
 	}
-	tool := tools.NewFindReferences(mock, nil, time.Minute)
+	tool := tools.NewFindReferences(mock, nil, time.Minute, 0)
 	raw, _ := json.Marshal(map[string]any{
 		"uri":         "file:///p/main.go",
 		"symbol_name": "Run",

@@ -21,7 +21,7 @@ func TestExplainSymbol_WithContent(t *testing.T) {
 			},
 		},
 	}
-	tool := tools.NewExplainSymbol(mock, nil, time.Minute)
+	tool := tools.NewExplainSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 5, "character": 2})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -35,7 +35,7 @@ func TestExplainSymbol_WithContent(t *testing.T) {
 
 func TestExplainSymbol_NilHover(t *testing.T) {
 	mock := &mockLSP{hover: nil}
-	tool := tools.NewExplainSymbol(mock, nil, time.Minute)
+	tool := tools.NewExplainSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 0, "character": 0})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -49,7 +49,7 @@ func TestExplainSymbol_NilHover(t *testing.T) {
 
 func TestExplainSymbol_EmptyContent(t *testing.T) {
 	mock := &mockLSP{hover: &protocol.Hover{Contents: protocol.MarkupContent{Value: ""}}}
-	tool := tools.NewExplainSymbol(mock, nil, time.Minute)
+	tool := tools.NewExplainSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 0, "character": 0})
 
 	result, err := tool.Execute(context.Background(), args)
@@ -63,7 +63,7 @@ func TestExplainSymbol_EmptyContent(t *testing.T) {
 
 func TestExplainSymbol_LSPError(t *testing.T) {
 	mock := &mockLSP{err: errors.New("hover failed")}
-	tool := tools.NewExplainSymbol(mock, nil, time.Minute)
+	tool := tools.NewExplainSymbol(mock, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go", "line": 0, "character": 0})
 
 	_, err := tool.Execute(context.Background(), args)
@@ -73,7 +73,7 @@ func TestExplainSymbol_LSPError(t *testing.T) {
 }
 
 func TestExplainSymbol_EmptyURI(t *testing.T) {
-	tool := tools.NewExplainSymbol(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewExplainSymbol(&mockLSP{}, nil, time.Minute, 0)
 	args, _ := json.Marshal(map[string]any{"uri": "", "line": 0, "character": 0})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
@@ -82,7 +82,7 @@ func TestExplainSymbol_EmptyURI(t *testing.T) {
 }
 
 func TestExplainSymbol_Interface(t *testing.T) {
-	tool := tools.NewExplainSymbol(&mockLSP{}, nil, time.Minute)
+	tool := tools.NewExplainSymbol(&mockLSP{}, nil, time.Minute, 0)
 	if tool.Name() != "explain_symbol" {
 		t.Errorf("unexpected name: %s", tool.Name())
 	}
