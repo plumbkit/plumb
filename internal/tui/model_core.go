@@ -60,8 +60,8 @@ type Model struct {
 	showPopup bool
 	showHelp  bool
 
-	renameModal      *renameSessionModal
-	renameSessionFn  func(string) (string, error)
+	renameModal     *renameSessionModal
+	renameSessionFn func(string) (string, error)
 
 	sectionMenuOpen   bool
 	sectionMenuCursor int
