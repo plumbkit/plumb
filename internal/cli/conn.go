@@ -293,12 +293,18 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
 	if projectCfg.Edits.Strict != s.cfg.Edits.Strict ||
 		projectCfg.Edits.RateLimitPerMinute != s.cfg.Edits.RateLimitPerMinute ||
-		projectCfg.Walk.RefuseHomeRoots != s.cfg.Walk.RefuseHomeRoots {
+		projectCfg.Walk.RefuseHomeRoots != s.cfg.Walk.RefuseHomeRoots ||
+		projectCfg.Git.AllowWrites != s.cfg.Git.AllowWrites ||
+		projectCfg.Git.AllowDestructive != s.cfg.Git.AllowDestructive ||
+		projectCfg.Git.AllowPush != s.cfg.Git.AllowPush {
 		slog.Info("daemon: project config applied",
 			"workspace", workspace,
 			"strict", projectCfg.Edits.Strict,
 			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
-			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots)
+			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots,
+			"git.allow_writes", projectCfg.Git.AllowWrites,
+			"git.allow_destructive", projectCfg.Git.AllowDestructive,
+			"git.allow_push", projectCfg.Git.AllowPush)
 	}
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	if info, err := os.Stat(configPath); err == nil {

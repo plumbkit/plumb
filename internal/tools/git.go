@@ -77,7 +77,11 @@ const (
 // follow the subcommand (git interprets them per-subcommand), but rejecting
 // them is defence-in-depth against any future code path that prepends args, and
 // blocks the upload-pack/receive-pack remote-helper RCE vectors on push/fetch.
+// -c and -C are included because some subcommands pass unknown flags up to git's
+// global parser, making -c <key>=<val> a live config-injection vector there.
 var dangerousGitGlobalFlags = map[string]bool{
+	"-c":             true,
+	"-C":             true,
 	"--exec-path":    true,
 	"--git-dir":      true,
 	"--work-tree":    true,
@@ -140,6 +144,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	}
 	tier := classifyGit(a.Subcommand, a.Args)
 	if tier == tierReject {
+		if a.Subcommand == "stash" && len(a.Args) > 0 {
+			return "", fmt.Errorf("git stash: sub-command %q is not permitted; use list, show, push, pop, apply, drop, or clear", a.Args[0])
+		}
 		return "", fmt.Errorf("git: subcommand %q is not permitted", a.Subcommand)
 	}
 	policy := t.resolvePolicy()
@@ -279,7 +286,7 @@ func classifyStash(args []string) gitTier {
 	case "drop", "clear":
 		return tierDestructive
 	default:
-		return tierReject
+		return tierReject // unknown stash sub-subcommand; caller reports "not permitted"
 	}
 }
 

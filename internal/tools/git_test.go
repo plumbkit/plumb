@@ -110,11 +110,21 @@ func TestGit_GlobalFlagDenylist(t *testing.T) {
 		{"--upload-pack", "sh"},
 		{"--exec-path=/x"},
 		{"--receive-pack=sh -c x"},
+		{"-c", "core.pager=sh"},
+		{"-C", "/tmp"},
 	} {
 		_, err := callGit(t, tool, map[string]any{"subcommand": "status", "args": args})
 		if err == nil || !strings.Contains(err.Error(), "not permitted") {
 			t.Errorf("args %v: expected 'not permitted' error, got %v", args, err)
 		}
+	}
+}
+
+func TestGit_StashUnknownSubSubcommand(t *testing.T) {
+	tool := NewGit(WriteDeps{}, nil)
+	_, err := callGit(t, tool, map[string]any{"subcommand": "stash", "args": []string{"branch"}})
+	if err == nil || !strings.Contains(err.Error(), "sub-command") || !strings.Contains(err.Error(), "branch") {
+		t.Fatalf("expected helpful stash sub-command error, got %v", err)
 	}
 }
 
