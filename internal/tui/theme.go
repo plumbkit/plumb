@@ -236,7 +236,7 @@ var ActiveTheme = Nordico
 var ActiveThemeName = "nordico"
 
 // AvailableThemes is the catalogue of built-in themes, keyed by the name
-// accepted by the --theme flag and stored in the [ui] config section.
+// stored in the [ui] config section.
 var AvailableThemes = map[string]Theme{
 	"nordico":         Nordico,
 	"darcula":         Darcula,
@@ -246,8 +246,8 @@ var AvailableThemes = map[string]Theme{
 	"solarized-light": SolarizedLight,
 }
 
-// ThemeNames returns the sorted list of available theme names, suitable for
-// use in flag help text.
+// ThemeNames returns the sorted list of available theme names, used by the
+// Settings theme picker.
 func ThemeNames() []string {
 	names := make([]string, 0, len(AvailableThemes))
 	for k := range AvailableThemes {

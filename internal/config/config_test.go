@@ -432,3 +432,32 @@ func TestSaveTheme_PreservesOtherFields(t *testing.T) {
 		t.Errorf("RateLimitPerMinute = %d after SaveTheme, want 42", got.Edits.RateLimitPerMinute)
 	}
 }
+
+// TestSaveTheme_RefusesBrokenConfig verifies SaveTheme aborts rather than
+// overwriting a config file that exists but cannot be parsed — so the user's
+// recoverable settings are not silently replaced with defaults.
+func TestSaveTheme_RefusesBrokenConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgPath := GlobalConfigPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	broken := []byte("[edits\nrate_limit_per_minute = 42\n") // unterminated table header
+	if err := os.WriteFile(cfgPath, broken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveTheme("dracula"); err == nil {
+		t.Fatal("SaveTheme succeeded on a broken config; want an error")
+	}
+
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(broken) {
+		t.Errorf("SaveTheme overwrote a broken config; file changed to:\n%s", after)
+	}
+}

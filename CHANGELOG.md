@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.8 (unreleased)
+
+### Fixed
+- **`config.SaveTheme` no longer clobbers an unreadable config file.** The TUI theme picker's save path called `Load()` and discarded its error, so a global `config.toml` with a syntax error was silently overwritten with defaults plus the new theme — destroying the user's recoverable settings. `SaveTheme` now aborts with a clear error when the existing file cannot be parsed; a *missing* file is still fine (first-save creates it). Added `TestSaveTheme_RefusesBrokenConfig`. Also dropped two stale doc comments in `internal/tui/theme.go` that referenced a `--theme` flag which was never implemented. Closes the 0.7.7 theme-system review; two non-blocking follow-ups (decouple `plumb config show` from the TUI package; `SaveTheme` re-encodes the full resolved config) recorded in `docs/todo.md`.
+
 ## 0.7.7 (unreleased)
 
 ### Added

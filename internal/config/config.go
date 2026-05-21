@@ -598,8 +598,16 @@ func Print(cfg Config, w io.Writer) error {
 // file without disturbing other settings. It loads the current global config
 // first so existing values are preserved, then re-encodes the full struct.
 // Creates the config file (and parent directory) if they do not yet exist.
+//
+// A missing config file is not an error (Load returns defaults), so first-save
+// still creates one. But if the file exists and is unparseable, Load returns an
+// error and SaveTheme refuses rather than overwriting the user's recoverable
+// settings with defaults.
 func SaveTheme(themeName string) error {
-	cfg, _ := Load() // errors mean defaults; either way we write
+	cfg, err := Load()
+	if err != nil {
+		return fmt.Errorf("refusing to save theme: existing config is unreadable (fix it first): %w", err)
+	}
 	cfg.UI.Theme = themeName
 	path := GlobalConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

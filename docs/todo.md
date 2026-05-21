@@ -397,6 +397,16 @@ The `internal/stats/db.go` file contains a hand-rolled SQLite migration system (
    - Remove or simplify references to schema migrations and `user_version` logic in `docs/architecture.md`.
    - Review `AGENTS.md` (and symlinks) and remove details about how migrations are applied if they exist outside of historical logs.
 
+### Decouple `plumb config show` from the TUI package
+
+**Priority:** Low (cleanup).
+**Effort:** Small.
+**Status:** Planning. Surfaced during the 0.7.7 theme-system review.
+
+`internal/cli/config.go` imports `internal/tui` solely to read `tui.AvailableThemes[cfg.UI.Theme].ChromaStyle` when highlighting `plumb config show`, pulling the entire Bubble Tea TUI into the CLI's config path. The theme→chroma-style mapping is plain data, not presentation; it would sit more naturally in `internal/config` (or a tiny shared `internal/theme` package that both `tui` and `cli` import), letting `config show` drop its TUI dependency.
+
+**Definition of done:** the theme→chroma mapping lives below the TUI layer; `internal/cli/config.go` no longer imports `internal/tui`; `plumb config show` still selects the chroma style from the active theme; `make verify` green.
+
 ### Configurable TUI Shortcuts
 
 **Priority:** Medium.
@@ -606,6 +616,19 @@ After a `make build`, `plumb serve` reads `~/Library/Caches/plumb/plumb.version`
 **Why it's probably the right behaviour:** if the symlink target doesn't exist, the user's intent is likely to *create* the file (perhaps writing the target through the link's location). Treating the write as a new-file create is the most user-friendly outcome.
 
 **When this could surprise someone:** if they expected plumb to refuse to write to broken symlinks. It doesn't.
+
+---
+
+### `SaveTheme` rewrites the full resolved config
+
+`config.SaveTheme` (used by the TUI theme picker) calls `Load()` and re-encodes the **entire** resolved `Config` back to the global file. Two consequences beyond the documented "comments lost on first save":
+
+- The first save expands a minimal/empty config file into a full dump of every field at its current value (defaults included).
+- Because `Load()` overlays environment variables, any active `PLUMB_*` override is baked into the file as if it were a file setting — e.g. running once with `PLUMB_WRITE_RATE_LIMIT=5` set and then saving a theme persists `rate_limit_per_minute = 5` permanently.
+
+**Why it's not fixed:** writing only the `[ui]` key (or diffing against defaults/env before encoding) is larger than the 0.7.7 review scope. The parse-error guard added in that review already stops the worst case — clobbering an unreadable file with defaults.
+
+**When to fix:** before any other code starts writing config programmatically, or when env-var overrides become common in real setups. Have `SaveTheme` persist only the `[ui]` section rather than the whole struct.
 
 ---
 
