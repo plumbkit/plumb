@@ -155,7 +155,7 @@ protected_branches = ["main", "master"] # never force-pushable
 
 All `[git]` fields follow the standard layering: compiled defaults → global config → `<workspace>/.plumb/config.toml` → environment. A project file that sets only one field (e.g. `allow_destructive = true`) inherits the rest, and changes are hot-reloaded by the config watcher. The resolved values appear under the `git` section of `plumb config show` with per-field provenance. The daemon resolves the per-connection policy live via `gitPolicyFn` (`internal/cli/conn.go` `gitConfig()`), so a project-config edit takes effect on the next `git` call without reconnecting.
 
-The `git` tool always runs the requested subcommand as the first argv element, so global flags supplied in `args` (e.g. `-c`, `--exec-path`) cannot reconfigure git. A small denylist also rejects `--git-dir`, `--work-tree`, `--namespace`, `--upload-pack`, `--receive-pack`, and `--exec-path` outright. There is no shell.
+The `git` tool always runs the requested subcommand as the first argv element, so global flags supplied in `args` (e.g. `-c`, `--exec-path`) cannot reconfigure git. A small denylist also rejects `-c`, `-C`, `--git-dir`, `--work-tree`, `--namespace`, `--upload-pack`, `--receive-pack`, and `--exec-path` outright. There is no shell.
 
 ## Client setup commands
 
