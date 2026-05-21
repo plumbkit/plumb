@@ -298,10 +298,7 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 		return bg
 	}
 	entry := filtered[m.selectedLogIndex(len(filtered))]
-	boxW := m.width
-	if boxW < 42 {
-		boxW = 42
-	}
+	boxW := max(m.width, 42)
 	innerW := boxW - 2
 	scrollH := max(m.height-10, 3)
 
@@ -310,10 +307,7 @@ func (m Model) renderLogDetail(bg string, filtered []logEntry) string {
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxLogDetail = maxScroll
 	}
-	scroll := min(m.logDetailScroll, maxScroll)
-	if scroll < 0 {
-		scroll = 0
-	}
+	scroll := max(min(m.logDetailScroll, maxScroll), 0)
 	visible := all[scroll:]
 	scrollbar := scrollbarCol(len(all), scrollH, scroll, false)
 

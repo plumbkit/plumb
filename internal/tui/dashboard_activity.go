@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,7 +133,7 @@ func dashP90MaxV(buckets []int64) int64 {
 	if len(nonZero) == 0 {
 		return floor
 	}
-	sort.Slice(nonZero, func(i, j int) bool { return nonZero[i] < nonZero[j] })
+	slices.Sort(nonZero)
 	idx := (len(nonZero) * 90) / 100
 	if idx >= len(nonZero) {
 		idx = len(nonZero) - 1
@@ -163,10 +163,7 @@ func dashBuildGrid(buckets []int64, fillDown bool, width, halfH int, botL, botR,
 		if v <= 0 {
 			return 0
 		}
-		px := int(float64(v) / float64(maxV) * float64(pixH))
-		if px < 1 {
-			px = 1
-		}
+		px := max(int(float64(v)/float64(maxV)*float64(pixH)), 1)
 		return px
 	}
 	grid := make([][]int, halfH)

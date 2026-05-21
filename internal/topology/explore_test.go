@@ -74,7 +74,7 @@ func TestExplore_MaxNodesTruncation(t *testing.T) {
 
 	fileID := insertTestFile(t, db, "b.go")
 	n1 := insertTestNode(t, db, fileID, "b.go", Node{Kind: KindPackage, Name: "pkg", Language: "go"})
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		nx := insertTestNode(t, db, fileID, "b.go", Node{Kind: KindFunction, Name: "fn", Language: "go"})
 		insertTestEdge(t, db, n1, nx, string(EdgeContains))
 	}
@@ -164,7 +164,7 @@ func TestExplore_NoDanglingEdgesOnTruncation(t *testing.T) {
 	fileID := insertTestFile(t, db, "d.go")
 	centre := insertTestNode(t, db, fileID, "d.go", Node{Kind: KindPackage, Name: "hub", Language: "go"})
 	// Create more children than MaxNodes=1 allows.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		child := insertTestNode(t, db, fileID, "d.go", Node{Kind: KindFunction, Name: "fn", Language: "go"})
 		insertTestEdge(t, db, centre, child, string(EdgeContains))
 	}
@@ -220,6 +220,36 @@ func TestExplore_NoEdgeDuplicates(t *testing.T) {
 		if count > 1 {
 			t.Errorf("edge %d appears %d times in output, want 1", id, count)
 		}
+	}
+}
+
+func TestExplore_MaxNodesSemantics(t *testing.T) {
+	// MaxNodes caps nb.Nodes (neighbours); the centre is not counted against the
+	// budget. With MaxNodes=3 and 5 children, we get exactly 3 in nb.Nodes.
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "sem.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "s.go")
+	centre := insertTestNode(t, db, fileID, "s.go", Node{Kind: KindPackage, Name: "root", Language: "go"})
+	for i := 0; i < 5; i++ {
+		child := insertTestNode(t, db, fileID, "s.go", Node{Kind: KindFunction, Name: "fn", Language: "go"})
+		insertTestEdge(t, db, centre, child, string(EdgeContains))
+	}
+
+	const maxNodes = 3
+	nb, err := Explore(context.Background(), db, "root", ExploreOpts{Depth: 1, MaxNodes: maxNodes, MaxBytes: 100000})
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	if !nb.Truncated {
+		t.Error("expected Truncated=true with 5 children and MaxNodes=3")
+	}
+	if len(nb.Nodes) > maxNodes {
+		t.Errorf("len(nb.Nodes) = %d, must be ≤ MaxNodes=%d", len(nb.Nodes), maxNodes)
 	}
 }
 

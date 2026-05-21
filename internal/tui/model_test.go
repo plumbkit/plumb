@@ -586,7 +586,7 @@ func TestRenderHelpGroupsShortcutsAndKeepsBorders(t *testing.T) {
 		}
 	}
 
-	for _, line := range strings.Split(plain, "\n") {
+	for line := range strings.SplitSeq(plain, "\n") {
 		if !strings.Contains(line, "shift+tab") && !strings.Contains(line, "ctrl+1-5") {
 			continue
 		}
@@ -1286,15 +1286,15 @@ func TestRender_AlignsBorders(t *testing.T) {
 	// Line 6 is the long session name
 	bodyLine := ansi.Strip(lines[6])
 
-	topIdx := strings.Index(topBorder, "┬")
-	bodyIdx := strings.Index(bodyLine, "┆")
+	before, _, _ := strings.Cut(topBorder, "┬")
+	topCharIdx := len([]rune(before))
 
-	topCharIdx := len([]rune(topBorder[:topIdx]))
-	bodyCharIdx := len([]rune(bodyLine[:bodyIdx]))
+	before, _, _ = strings.Cut(bodyLine, "┆")
+	bodyCharIdx := len([]rune(before))
 
 	bottomBorder := ansi.Strip(lines[18])
-	bottomIdx := strings.Index(bottomBorder, "┴")
-	bottomCharIdx := len([]rune(bottomBorder[:bottomIdx]))
+	before, _, _ = strings.Cut(bottomBorder, "┴")
+	bottomCharIdx := len([]rune(before))
 
 	if topCharIdx != bodyCharIdx || topCharIdx != bottomCharIdx {
 		t.Errorf("Misalignment: top connector at char %d, body divider at char %d, bottom connector at char %d\ntop:    %s\nbody:   %s\nbottom: %s", topCharIdx, bodyCharIdx, bottomCharIdx, topBorder, bodyLine, bottomBorder)

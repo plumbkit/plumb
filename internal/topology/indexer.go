@@ -51,11 +51,9 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64) *
 
 // Start launches the background worker and enqueues an initial full resync.
 func (idx *Indexer) Start() {
-	idx.wg.Add(1)
-	go func() {
-		defer idx.wg.Done()
+	idx.wg.Go(func() {
 		idx.backgroundWorker()
-	}()
+	})
 	idx.Enqueue("", opResync)
 }
 

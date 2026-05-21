@@ -2,6 +2,7 @@ package python
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -47,13 +48,7 @@ func TestExtract_ClassMethodsTests(t *testing.T) {
 		{"import", "os"},
 	}
 	for _, c := range cases {
-		found := false
-		for _, name := range byKind[c.kind] {
-			if name == c.name {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(byKind[c.kind], c.name)
 		if !found {
 			t.Errorf("kind=%q name=%q not found; got %v", c.kind, c.name, byKind[c.kind])
 		}

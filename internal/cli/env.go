@@ -78,7 +78,7 @@ func readPathsFile(path string) []string {
 		return nil
 	}
 	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			lines = append(lines, line)
 		}

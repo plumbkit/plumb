@@ -66,6 +66,10 @@ func resolveNode(db *sql.DB, name string) (Node, error) {
 	return n, nil
 }
 
+// bfs performs a bounded BFS from centre.
+// MaxNodes is the cap on nb.Nodes (neighbours only); the centre node itself is
+// not counted against the budget, so the total output is centre + up to MaxNodes
+// neighbours.
 func bfs(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
 	nb := &Neighbourhood{Centre: centre}
 	visited := map[int64]bool{centre.ID: true}

@@ -94,7 +94,7 @@ type Neighbourhood struct {
 type Status struct {
 	IndexedFiles int
 	SkippedFiles int
-	StaleFiles   int
+	EmptyFiles   int // successfully indexed files with zero nodes (comment-only, unsupported language, etc.)
 	TotalNodes   int
 	TotalEdges   int
 	DBSizeBytes  int64

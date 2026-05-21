@@ -121,7 +121,7 @@ func matchField(query, name, tokens, qual, sig, doc string) string {
 	ql := strings.ToLower(qual)
 	sl := strings.ToLower(sig)
 	dl := strings.ToLower(doc)
-	for _, t := range strings.Fields(strings.ToLower(query)) {
+	for t := range strings.FieldsSeq(strings.ToLower(query)) {
 		t = strings.Trim(t, `"`)
 		if t == "" {
 			continue

@@ -2,6 +2,7 @@ package topology
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -49,10 +50,8 @@ func splitIdentifier(s string) string {
 // findExtractor returns the first Extractor in exts that handles ext, or nil.
 func findExtractor(ext string, exts []Extractor) Extractor {
 	for _, e := range exts {
-		for _, x := range e.Extensions() {
-			if x == ext {
-				return e
-			}
+		if slices.Contains(e.Extensions(), ext) {
+			return e
 		}
 	}
 	return nil

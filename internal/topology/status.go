@@ -32,7 +32,7 @@ func countFiles(db *sql.DB, s *Status) {
         SELECT COUNT(*) FROM topology_files
         WHERE error_msg = '' AND (
             SELECT COUNT(*) FROM topology_nodes WHERE file_id = topology_files.id
-        ) = 0`).Scan(&s.StaleFiles)
+        ) = 0`).Scan(&s.EmptyFiles)
 }
 
 func countEntities(db *sql.DB, s *Status) {

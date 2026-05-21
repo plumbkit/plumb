@@ -72,7 +72,7 @@ func TestOpenDB_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "topo.db")
 	// Opening twice should succeed without schema conflicts.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		db, err := openDB(dbPath)
 		if err != nil {
 			t.Fatalf("openDB attempt %d: %v", i+1, err)

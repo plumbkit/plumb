@@ -45,15 +45,11 @@ func (s *Store) Close() error {
 
 // Enqueue schedules a file for re-indexing. path may be absolute or workspace-relative.
 // Non-blocking; drops silently if the queue is full.
+// When the file no longer exists on disk, processUpsert detects the ENOENT and
+// automatically routes to processDelete — callers do not need a separate delete call.
 func (s *Store) Enqueue(path string) {
 	rel := s.toRelative(path)
 	s.idx.Enqueue(rel, opUpsert)
-}
-
-// EnqueueDelete schedules a file for removal from the index.
-func (s *Store) EnqueueDelete(path string) {
-	rel := s.toRelative(path)
-	s.idx.Enqueue(rel, opDelete)
 }
 
 // Resync triggers a full workspace resync in the background.

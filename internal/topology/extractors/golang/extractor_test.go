@@ -2,6 +2,7 @@ package golang
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/golimpio/plumb/internal/topology"
@@ -53,13 +54,7 @@ func TestExtract_FunctionsMethodsTests(t *testing.T) {
 		{"variable", "defaultTimeout"},
 	}
 	for _, c := range cases {
-		found := false
-		for _, name := range byKind[c.kind] {
-			if name == c.name {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(byKind[c.kind], c.name)
 		if !found {
 			t.Errorf("kind=%q name=%q not found; got %v", c.kind, c.name, byKind[c.kind])
 		}
