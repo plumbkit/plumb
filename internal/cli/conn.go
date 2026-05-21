@@ -43,11 +43,15 @@ type connSession struct {
 	sessID   string
 	sessName string
 
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	stateMu          sync.Mutex
 	acquiredRoot     string
 	acquiredLanguage string
 	clientName       string
 	clientVersion    string
+	lastCfgMtime     time.Time
 
 	sessionProxy *routingProxy
 	sessionInv   *routingInvProxy
@@ -65,6 +69,8 @@ type connSession struct {
 	walkMu       sync.RWMutex
 	walkCfg      config.WalkConfig
 
+	watcherOnce sync.Once
+
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex
 }
@@ -78,7 +84,10 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Conf
 		Name:          sessName,
 		DaemonVersion: Version,
 	})
+	ctx, cancel := context.WithCancel(context.Background())
 	return &connSession{
+		ctx:            ctx,
+		cancel:         cancel,
 		pool:           pool,
 		topologyPool:   topoPool,
 		cfg:            cfg,
@@ -99,6 +108,7 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Conf
 
 // close releases per-session resources and unregisters the session.
 func (s *connSession) close() {
+	s.cancel()
 	s.sessionCache.Close()
 	if s.qualityRunner != nil {
 		s.qualityRunner.Stop()
@@ -277,6 +287,62 @@ func (s *connSession) applyProjectConfig(workspace string) {
 			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
 			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots)
 	}
+	configPath := filepath.Join(workspace, ".plumb", "config.toml")
+	if info, err := os.Stat(configPath); err == nil {
+		s.stateMu.Lock()
+		s.lastCfgMtime = info.ModTime()
+		s.stateMu.Unlock()
+	}
+}
+
+// startConfigWatcher launches a background goroutine that polls for config file
+// changes every 30 seconds and reapplies the config when the file is modified.
+// The goroutine runs until s.ctx is cancelled (on session disconnect or daemon shutdown).
+// Invoked exactly once per session via sync.Once.
+func (s *connSession) startConfigWatcher() {
+	s.watcherOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.ctx.Done():
+					return
+				case <-ticker.C:
+					s.checkAndReloadConfig()
+				}
+			}
+		}()
+	})
+}
+
+// checkAndReloadConfig reapplies the workspace config when its file mtime
+// differs from the last-applied version (lastCfgMtime, seeded at attach by
+// applyProjectConfig). Any changed mtime triggers a reload — there is no
+// staleness window, so edits made with a backdated mtime (git checkout,
+// restore-from-backup) are still picked up. Called on each watcher poll.
+func (s *connSession) checkAndReloadConfig() {
+	workspace := s.workspace()
+	if workspace == "" {
+		return
+	}
+	configPath := filepath.Join(workspace, ".plumb", "config.toml")
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return
+	}
+	mtime := info.ModTime()
+	s.stateMu.Lock()
+	alreadySeen := mtime.Equal(s.lastCfgMtime)
+	if !alreadySeen {
+		s.lastCfgMtime = mtime
+	}
+	s.stateMu.Unlock()
+	if alreadySeen {
+		return
+	}
+	s.applyProjectConfig(workspace)
+	slog.Info("daemon: project config hot-reloaded", "workspace", workspace)
 }
 
 // javaPostWriteNotify sends DidOpen + DidClose to jdtls after a write so that
@@ -416,10 +482,12 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 			}()
 		}
 		s.applyProjectConfig(s.workspace())
+		s.startConfigWatcher()
 		return
 	}
 	s.attachWorkspace(toolCtx, "file://"+root)
 	s.applyProjectConfig(s.workspace())
+	s.startConfigWatcher()
 }
 
 // startTopologyIndexer acquires the topology store for the workspace when
@@ -575,12 +643,14 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		s.setClientRequest(request)
 		s.attachWorkspace(initCtx, rootFromRoots(initCtx, request))
 		s.applyProjectConfig(s.workspace())
+		s.startConfigWatcher()
 	}
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
 		s.setClientRequest(request)
 		slog.Info("daemon: roots changed — re-fetching workspace root")
 		s.attachWorkspace(initCtx, rootFromRoots(initCtx, request))
 		s.applyProjectConfig(s.workspace())
+		s.startConfigWatcher()
 	}
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage) {
 		s.onBeforeTool(toolCtx, name, args)
