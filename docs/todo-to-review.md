@@ -85,9 +85,7 @@ CI now runs `go test -tags=integration ./...` with gopls, pyright, and Java 21 +
 
 ### Plumb Topology: Phase 2
 
-**Priority:** High — Phase 1 foundation is in production; Phase 2 completes the original vision.
-**Effort:** Significant (multi-week, can be split across several PRs).
-**Status:** Planning. Phase 1 shipped in 0.7.5. See `docs/todo-to-review.md` for the full Phase 1 completion record and the canonical list of what was explicitly deferred.
+**Status (0.7.6): PARTIALLY COMPLETE.** Shipped and verified: Go+Python call edges (Tier 1), `topology_impact`/`topology_affected`/`topology_routes` tools (Tier 2 — registered, tested, documented), TypeScript/JavaScript extractor (Tier 3), `drain` per-path coalescing + `isStale` content-hash + periodic-resync ticker (Tier 4), and the DoD-7 concurrency stress test (passes under `-race`). **NOT done — moved back to `docs/todo.md` → "Topology — remaining Phase 2 gaps":** the DoD-6 ">=5x faster than LSP" performance claim (measured ~1.2x warm / ~0.1x cold; the integration test was reframed to an honest latency check rather than a false >=5x assertion), LSP fallback for `list_symbols`/`find_symbol`/`workspace_symbols` (item 5), and TUI + `plumb doctor` topology visibility (item 6). The plan text below is retained verbatim for reference.
 
 **Context.**
 
@@ -287,7 +285,9 @@ Phase 2 item — low impact for typical developer workflows where mtime is a rel
 
 ---
 
-**Completed in:** 0.7.5 (Topology Phase 2)
+**Partially completed in:** 0.7.6 (Topology Phase 2)
 **Original priority:** high
 
-All Phase 2 items shipped: DoD-6/DoD-7 benchmarks, Go+Python call edges, TypeScript/JavaScript extractor, `topology_impact`/`topology_affected`/`topology_routes` tools (registered, tested, documented), drain per-path coalescing, isStale content-hash check, periodic resync ticker. `make verify` passes at 0 issues.
+Shipped: Go+Python `EdgeCalls`, TypeScript/JavaScript extractor, `topology_impact`/`topology_affected`/`topology_routes` (registered, tested, documented in `AGENTS.md` + `docs/mcp-tools.md`), `drain` per-path coalescing, `isStale` content-hash check, periodic-resync ticker, and the DoD-7 concurrency stress test (passes under `-race`). `make verify` is green; unit + integration tests pass.
+
+NOT shipped — tracked in `docs/todo.md` → "Topology — remaining Phase 2 gaps": DoD-6's ">=5x faster" claim is unmet (topology is ~1.2x warm, slower cold; `TestDoD6_TopologyQueryLatency` now records latency honestly instead of asserting a false gate); LSP fallback (item 5); TUI + `plumb doctor` topology visibility (item 6).

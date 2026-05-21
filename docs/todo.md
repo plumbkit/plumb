@@ -32,6 +32,26 @@ Run `go test -tags=integration -timeout=3m ./cmd/smoke/` to verify the smoke che
 
 Deep design changes, contract changes, and new infrastructure. These are the items most likely to need design discussion before implementation.
 
+### Topology — remaining Phase 2 gaps
+
+**Priority:** Medium — Phase 2 shipped the extractors, call edges, three new tools, and indexer hardening (0.7.6). These three items were in the Phase 2 plan but were not completed; they are the remaining work before topology can be called "done" or considered for default-enable.
+**Effort:** Medium.
+**Status:** Planning. See `docs/todo-to-review.md` → "Plumb Topology: Phase 2" for the full original plan and the completion record.
+
+**1. DoD-6 performance claim is unmet — decide the metric.**
+The original DoD-6 required topology symbol lookup to be ">=5x faster than gopls on cold start". Measured reality (`internal/topology/benchmark_test.go`, `TestDoD6_TopologyQueryLatency`): topology is ~1.2x faster warm (5.8 ms vs 6.9 ms, within noise) and ~10x *slower* cold (it pays a one-off full-index build). The integration test was reframed to record the numbers and assert only an absolute latency bound, not a false >=5x gate. Decide before claiming a speedup anywhere: either (a) drop the ">=5x" claim from all docs and frame topology's value as "available without an LSP, no per-conversation indexing wait" (true), or (b) define a metric topology genuinely wins (e.g. time-to-first-answer when no language server is installed or warm) and assert that. Do NOT reinstate a >=5x assertion without data that supports it.
+
+**2. LSP fallback integration (was Phase 2 item 5).**
+When LSP is unavailable or still warming up, `list_symbols`, `find_symbol`, and `workspace_symbols` should transparently fall back to topology results, annotated `source=topology` / `mode=indexed-approximate` with a `[topology fallback — index may be stale]` line. Trigger only on LSP error/timeout (~500 ms), never when the LSP is healthy. Wire the topology store into those tools via an optional `TopologyFallbackFn` in their constructors (mirror the `WriteDeps` accessor pattern; `connSession` already builds a `topoFn` accessor in `registerAllTools`).
+
+**3. TUI + `plumb doctor` topology visibility (was Phase 2 item 6).**
+- TUI Sessions right panel: a "Topology" row in the workspace detail block — `Topology: idle | 1,234 nodes | 4.2 MB | last sync 2m ago`; red with the first line of `LastError` when `IndexerState == "error"`.
+- `plumb doctor`: new `"topology"` check — passes if disabled, or enabled with `IndexedFiles > 0`; fails if enabled but `TotalNodes == 0` after 30 s. Include it in `plumb doctor --json`.
+
+**Definition of done:** items 2 and 3 implemented, tested, and documented in `AGENTS.md` + `docs/mcp-tools.md`; the DoD-6 claim decision made and reflected in all docs; `make verify` green.
+
+---
+
 ### Advanced Memory Engine
 
 **Priority:** Medium
