@@ -61,7 +61,7 @@ func TestIndexer_EndToEnd(t *testing.T) {
 	// drains the background goroutine before the database connection closes.
 	t.Cleanup(func() { db.Close() })
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	idx.Start()
 	t.Cleanup(idx.Stop) // registered second → runs first (LIFO)
 

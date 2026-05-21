@@ -1,4 +1,4 @@
-# Available tools (37)
+# Available tools (48)
 
 ## Client capabilities and fallback behaviour
 
@@ -15,7 +15,7 @@
 
 ---
 
-Plumb exposes 34 structured tools to AI assistants. Every write tool is concurrency-safe, atomic, and LSP-notified.
+Plumb exposes 48 structured tools to AI assistants. Every write tool is concurrency-safe, atomic, and LSP-notified.
 
 ## Session
 | Tool | Description |
@@ -75,6 +75,17 @@ Plumb exposes 34 structured tools to AI assistants. Every write tool is concurre
 | `delete_memory` | Delete a memory by name. |
 | `search_memories` | Pattern search across memory bodies. |
 | `relevant_memories` | Filter memories by file path relevance. |
+
+## Topology
+SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. Enabled via `[topology] enabled = true` in `.plumb/config.toml`. All tools degrade gracefully when topology is disabled.
+| Tool | Description |
+|---|---|
+| `topology_status` | Index health: file count, entity count, DB size, indexed languages, last sync time, last error. |
+| `topology_search` | FTS5 ranked symbol/file search. Inputs: `query`, optional `kinds`/`language` filters, `limit` (default 20), `include_snippets`. |
+| `topology_explore` | BFS neighbourhood around a named symbol. Configurable depth, node, and byte budgets. |
+| `topology_impact` | Bidirectional blast-radius analysis. Two sub-graphs: what a symbol depends on and what depends on it. Use before refactoring to assess scope. |
+| `topology_affected` | Given changed files or symbols, returns likely affected files and tests. Use after writing to suggest which tests to run. |
+| `topology_routes` | Framework-aware entry-point scanner (Go HTTP handlers, Cobra commands, Python `@app.route`). Results annotated with confidence — heuristic. |
 
 ## VCS & Utils
 | Tool | Description |

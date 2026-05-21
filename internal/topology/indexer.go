@@ -22,6 +22,7 @@ type Indexer struct {
 	db         *sql.DB
 	extractors []Extractor
 	maxSize    int64
+	resyncMins int // 0 disables periodic resync
 
 	queue chan indexOp
 	done  chan struct{}
@@ -34,7 +35,8 @@ type Indexer struct {
 }
 
 // newIndexer creates an Indexer. Call Start() before enqueuing operations.
-func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64) *Indexer {
+// resyncMins controls the optional periodic full-resync interval; 0 disables it.
+func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64, resyncMins int) *Indexer {
 	if maxSize <= 0 {
 		maxSize = 512 * 1024
 	}
@@ -43,6 +45,7 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64) *
 		db:         db,
 		extractors: exts,
 		maxSize:    maxSize,
+		resyncMins: resyncMins,
 		queue:      make(chan indexOp, 256),
 		done:       make(chan struct{}),
 		state:      "idle",
@@ -113,16 +116,37 @@ func (idx *Indexer) setState(state, errMsg string) {
 }
 
 func (idx *Indexer) backgroundWorker() {
+	// Set up an optional periodic-resync ticker. A nil channel blocks forever,
+	// so the select case is never chosen when resync is disabled.
+	var tickC <-chan time.Time
+	if idx.resyncMins > 0 {
+		ticker := time.NewTicker(time.Duration(idx.resyncMins) * time.Minute)
+		defer ticker.Stop()
+		tickC = ticker.C
+	}
+
 	for {
 		select {
 		case <-idx.done:
 			return
+		case <-tickC:
+			// Only enqueue when idle — don't pile up resyncs if a previous one
+			// is still running.
+			if idx.State() == "idle" {
+				idx.Enqueue("", opResync)
+			}
 		case op := <-idx.queue:
-			op = idx.drain(op)
+			ops := idx.drain(op)
 			idx.setState("running", "")
-			if err := idx.dispatch(context.Background(), op); err != nil {
-				slog.Warn("topology: indexer error", "op", op.kind, "path", op.path, "err", err)
-				idx.setState("error", err.Error())
+			var lastErr error
+			for _, o := range ops {
+				if err := idx.dispatch(context.Background(), o); err != nil {
+					slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
+					lastErr = err
+				}
+			}
+			if lastErr != nil {
+				idx.setState("error", lastErr.Error())
 			} else {
 				idx.setState("idle", "")
 			}
@@ -130,16 +154,21 @@ func (idx *Indexer) backgroundWorker() {
 	}
 }
 
-// drain reads all pending ops from the queue and returns the last one.
-// This coalesces bursts of changes into a single operation.
-func (idx *Indexer) drain(initial indexOp) indexOp {
-	last := initial
+// drain coalesces all buffered ops into a slice keeping the last op per unique
+// path. This ensures every distinct file gets processed, while still collapsing
+// rapid successive writes to the same file into a single operation.
+func (idx *Indexer) drain(initial indexOp) []indexOp {
+	seen := map[string]indexOp{initial.path: initial}
 	for {
 		select {
 		case op := <-idx.queue:
-			last = op
+			seen[op.path] = op // last write per path wins
 		default:
-			return last
+			ops := make([]indexOp, 0, len(seen))
+			for _, op := range seen {
+				ops = append(ops, op)
+			}
+			return ops
 		}
 	}
 }
@@ -167,21 +196,26 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	if info.IsDir() || info.Size() > idx.maxSize {
 		return nil
 	}
-	stale, fileID, err := idx.isStale(relPath, info)
+	// Read and hash before the staleness check so a backup-restore that
+	// resets mtime but changes content is still re-indexed.
+	nodes, edges, hash, err := idx.extractPath(ctx, absPath, relPath)
+	if err != nil {
+		return idx.recordFileError(relPath, info, err)
+	}
+	stale, fileID, err := idx.isStale(relPath, info, hash)
 	if err != nil {
 		return err
 	}
 	if !stale {
 		return nil
 	}
-	nodes, edges, hash, err := idx.extractPath(ctx, absPath, relPath)
-	if err != nil {
-		return idx.recordFileError(relPath, info, err)
-	}
 	return idx.persistFile(fileID, relPath, info, hash, nodes, edges)
 }
 
-func (idx *Indexer) isStale(relPath string, info os.FileInfo) (stale bool, fileID int64, err error) {
+// isStale returns true when either the mtime or the content hash differs from
+// the stored values — whichever changes triggers a re-index. This catches
+// backup-restores that produce an older mtime with different content.
+func (idx *Indexer) isStale(relPath string, info os.FileInfo, hash string) (stale bool, fileID int64, err error) {
 	var dbMtime int64
 	var dbHash string
 	row := idx.db.QueryRow(`SELECT id, mtime_ns, content_hash FROM topology_files WHERE path = ?`, relPath)
@@ -190,7 +224,7 @@ func (idx *Indexer) isStale(relPath string, info os.FileInfo) (stale bool, fileI
 	} else if scanErr != nil {
 		return false, 0, fmt.Errorf("topology: query file: %w", scanErr)
 	}
-	return dbMtime != info.ModTime().UnixNano(), fileID, nil
+	return dbMtime != info.ModTime().UnixNano() || dbHash != hash, fileID, nil
 }
 
 func (idx *Indexer) extractPath(ctx context.Context, absPath, relPath string) (nodes []Node, edges []Edge, hash string, err error) {

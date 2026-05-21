@@ -54,7 +54,7 @@ func TestIndexer_ProcessUpsert_Insert(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	if err := idx.processUpsert(context.Background(), "main.go"); err != nil {
 		t.Fatalf("processUpsert: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestIndexer_ProcessUpsert_UpdateOnChange(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	if err := idx.processUpsert(context.Background(), "a.go"); err != nil {
 		t.Fatalf("first processUpsert: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestIndexer_ProcessUpsert_NotExistRoutesToDelete(t *testing.T) {
 	fileID := insertTestFile(t, db, "gone.go")
 	insertTestNode(t, db, fileID, "gone.go", Node{Kind: KindFunction, Name: "Gone", Language: "go"})
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	// "gone.go" does not exist on disk — processUpsert should route to processDelete.
 	if err := idx.processUpsert(context.Background(), "gone.go"); err != nil {
 		t.Fatalf("processUpsert on missing file: %v", err)
@@ -153,7 +153,7 @@ func TestIndexer_ProcessDelete_RemovesNodesEdgesFTS(t *testing.T) {
 	n2 := insertTestNode(t, db, fileID, "del.go", Node{Kind: KindFunction, Name: "Bar", Language: "go"})
 	insertTestEdge(t, db, n1, n2, string(EdgeContains))
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	if err := idx.processDelete(context.Background(), "del.go"); err != nil {
 		t.Fatalf("processDelete: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestIndexer_ProcessDelete_MissingFileIsNoop(t *testing.T) {
 	}
 	defer db.Close()
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	// Deleting a path not in the DB should be a no-op (no error).
 	if err := idx.processDelete(context.Background(), "nonexistent.go"); err != nil {
 		t.Errorf("processDelete on unknown path: %v", err)
@@ -207,9 +207,9 @@ func TestIndexer_IsStale_NewFile(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	info, _ := os.Stat(goFile)
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 
-	stale, fileID, err := idx.isStale("s.go", info)
+	stale, fileID, err := idx.isStale("s.go", info, "anyhash")
 	if err != nil {
 		t.Fatalf("isStale: %v", err)
 	}
@@ -239,13 +239,14 @@ func TestIndexer_IsStale_UnchangedFile(t *testing.T) {
 		`INSERT INTO topology_files(path, mtime_ns, content_hash, indexed_at, error_msg)
          VALUES (?, ?, '', 0, '')`, "u.go", info.ModTime().UnixNano())
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
-	stale, _, err := idx.isStale("u.go", info)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	// Pass the same empty hash stored in the DB so both mtime and hash match.
+	stale, _, err := idx.isStale("u.go", info, "")
 	if err != nil {
 		t.Fatalf("isStale: %v", err)
 	}
 	if stale {
-		t.Error("expected stale=false for file with matching mtime")
+		t.Error("expected stale=false for file with matching mtime and hash")
 	}
 }
 
@@ -285,7 +286,7 @@ func TestIndexer_RecordFileError(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	info, _ := os.Stat(goFile)
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 
 	fakeErr := os.ErrInvalid
 	if err := idx.recordFileError("bad.go", info, fakeErr); err != nil {
@@ -301,19 +302,26 @@ func TestIndexer_RecordFileError(t *testing.T) {
 
 // --- drain coalescing ---
 
-func TestIndexer_Drain_ReturnsLast(t *testing.T) {
+func TestIndexer_Drain_PerPathCoalescing(t *testing.T) {
 	idx := &Indexer{
 		queue: make(chan indexOp, 256),
 	}
-	// Pre-fill the queue with three ops.
+	// Pre-fill: two writes to the same path (last wins) plus two distinct paths.
 	idx.queue <- indexOp{kind: opUpsert, path: "a.go"}
 	idx.queue <- indexOp{kind: opUpsert, path: "b.go"}
-	idx.queue <- indexOp{kind: opResync, path: ""}
+	idx.queue <- indexOp{kind: opDelete, path: "a.go"} // overwrites first a.go op
 
-	// drain should return the last op (opResync).
 	result := idx.drain(indexOp{kind: opUpsert, path: "initial.go"})
-	if result.kind != opResync {
-		t.Errorf("drain returned kind=%v, want opResync", result.kind)
+
+	// Should have 3 distinct paths: initial.go, a.go (delete), b.go
+	if len(result) != 3 {
+		t.Errorf("drain returned %d ops, want 3; ops=%v", len(result), result)
+	}
+	// a.go should carry the last op (opDelete), not the first (opUpsert).
+	for _, op := range result {
+		if op.path == "a.go" && op.kind != opDelete {
+			t.Errorf("a.go: got kind=%v, want opDelete (last write wins)", op.kind)
+		}
 	}
 }
 
@@ -330,7 +338,7 @@ func TestIndexer_PruneDeleted_RemovesStale(t *testing.T) {
 	// Insert a file that is NOT in the "present" set.
 	insertTestFile(t, db, "stale.go")
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	present := map[string]bool{} // empty — "stale.go" is absent
 	if err := idx.pruneDeleted(present); err != nil {
 		t.Fatalf("pruneDeleted: %v", err)
@@ -354,7 +362,7 @@ func TestIndexer_PruneDeleted_KeepsPresent(t *testing.T) {
 	insertTestFile(t, db, "keep.go")
 	insertTestFile(t, db, "remove.go")
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	present := map[string]bool{"keep.go": true}
 	if err := idx.pruneDeleted(present); err != nil {
 		t.Fatalf("pruneDeleted: %v", err)
@@ -392,7 +400,7 @@ func TestFTSPathInvariant_AfterDelete(t *testing.T) {
 		t.Fatal("FTS row missing before delete")
 	}
 
-	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024)
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	if err := idx.processDelete(context.Background(), "sync.go"); err != nil {
 		t.Fatalf("processDelete: %v", err)
 	}

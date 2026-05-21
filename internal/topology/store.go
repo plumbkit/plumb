@@ -31,7 +31,7 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 	if err != nil {
 		return nil, err
 	}
-	idx := newIndexer(workspace, db, exts, cfg.MaxFileSizeBytes)
+	idx := newIndexer(workspace, db, exts, cfg.MaxFileSizeBytes, cfg.ResyncIntervalMinutes)
 	idx.Start()
 	return &Store{workspace: workspace, db: db, idx: idx}, nil
 }
@@ -65,6 +65,11 @@ func (s *Store) Search(ctx context.Context, query string, opts SearchOpts) ([]Se
 // Explore performs a bounded BFS neighbourhood from the named symbol.
 func (s *Store) Explore(ctx context.Context, name string, opts ExploreOpts) (*Neighbourhood, error) {
 	return Explore(ctx, s.db, name, opts)
+}
+
+// Impact performs a bidirectional BFS around the named symbol.
+func (s *Store) Impact(ctx context.Context, name string, opts ImpactOpts) (*ImpactResult, error) {
+	return Impact(ctx, s.db, name, opts)
 }
 
 // Status returns a snapshot of the index health.

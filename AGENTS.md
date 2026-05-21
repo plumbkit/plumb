@@ -203,7 +203,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (41)
+## Available tools (48)
 
 **Bootstrap**
 
@@ -278,6 +278,9 @@ Pyright is the worked example.
 | `topology_status` | `topology_status.go` | Index health: file count, entity count, DB size, indexed languages, last sync time, last error. Returns a clear "topology is disabled" message when the store is nil. |
 | `topology_search` | `topology_search.go` | FTS5 ranked symbol/file search. Inputs: `query`, optional `kinds` filter, optional `language` filter, `limit` (default 20), `include_snippets` (default true). Reports `source=topology`, `mode=ranked`, index freshness. |
 | `topology_explore` | `topology_explore.go` | BFS neighbourhood around a named symbol. Inputs: `name`, `depth` (default 2, max 4), `max_nodes` (default 50, max 200), `max_bytes` (default 30 000, max 100 000), `include_source` (`none`/`signatures`/`snippets`/`full`), `edge_kinds`. Reports truncation when budget is exhausted. |
+| `topology_impact` | `topology_impact.go` | Bidirectional blast-radius analysis around a named symbol. Two sub-graphs: outward (what this symbol depends on) and inward (what depends on this symbol). Inputs: `name` (required), `depth` (default 3, max 4), `max_nodes` (default 100, max 200), `max_bytes` (default 30 000, max 100 000), `edge_kinds` (default `["imports","calls"]`). |
+| `topology_affected` | `topology_affected.go` | Given changed files or symbols, return likely affected files and tests. Inputs: `files` ([]string), `symbols` ([]string), `max_results` (default 50). Two sections in output: "affected files" and "likely affected tests" (KindTest nodes). Use after writing to suggest which tests to run. |
+| `topology_routes` | `topology_routes.go` | Framework-aware entry-point scanner. Inputs: `framework` (optional: `"go"`, `"python"`, `"cobra"` — omit for all), `path_prefix` (optional), `limit` (default 20). Matches Go HTTP handlers, Cobra Run/RunE, Python `@app.route`/`@router.get` patterns. Confidence annotation mandatory — results are heuristic. |
 
 **Memory** — per-workspace markdown notes at `<workspace>/.plumb/memories/`. Also exposed as MCP resources.
 
