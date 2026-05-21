@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
@@ -36,12 +37,13 @@ var callHierarchySchema = json.RawMessage(`{
 
 // CallHierarchy implements the call_hierarchy MCP tool.
 type CallHierarchy struct {
-	client lsp.Client
+	client  lsp.Client
+	timeout time.Duration
 }
 
 // NewCallHierarchy creates a CallHierarchy tool.
-func NewCallHierarchy(client lsp.Client) *CallHierarchy {
-	return &CallHierarchy{client: client}
+func NewCallHierarchy(client lsp.Client, timeout time.Duration) *CallHierarchy {
+	return &CallHierarchy{client: client, timeout: timeout}
 }
 
 func (t *CallHierarchy) Name() string                 { return "call_hierarchy" }
@@ -79,6 +81,9 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 		return "", err
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
+
 	items, err := t.client.PrepareCallHierarchy(ctx, protocol.PrepareCallHierarchyParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
 		Position:     protocol.Position{Line: a.Line, Character: a.Character},
@@ -98,7 +103,7 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.Direction == "incoming" || a.Direction == "both" {
 		incoming, err := t.client.IncomingCalls(ctx, protocol.CallHierarchyIncomingCallsParams{Item: item})
 		if err != nil {
-			return "", fmt.Errorf("call_hierarchy incoming: %w", err)
+			return "", lspTimeoutErr("call_hierarchy", t.timeout, fmt.Errorf("incoming: %w", err))
 		}
 		sb.WriteString("## Callers (incoming)\n\n")
 		if len(incoming) == 0 {
@@ -116,7 +121,7 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.Direction == "outgoing" || a.Direction == "both" {
 		outgoing, err := t.client.OutgoingCalls(ctx, protocol.CallHierarchyOutgoingCallsParams{Item: item})
 		if err != nil {
-			return "", fmt.Errorf("call_hierarchy outgoing: %w", err)
+			return "", lspTimeoutErr("call_hierarchy", t.timeout, fmt.Errorf("outgoing: %w", err))
 		}
 		sb.WriteString("## Callees (outgoing)\n\n")
 		if len(outgoing) == 0 {
