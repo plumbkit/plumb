@@ -30,14 +30,15 @@ var findSymbolSchema = json.RawMessage(`{
 // FindSymbol searches for symbols by name within a single document. For
 // workspace-wide search, use workspace_symbols.
 type FindSymbol struct {
-	client lsp.Client
-	cache  *cache.Cache
-	ttl    time.Duration
+	client  lsp.Client
+	cache   *cache.Cache
+	ttl     time.Duration
+	timeout time.Duration
 }
 
 // NewFindSymbol creates a FindSymbol tool. Pass a nil cache to disable caching.
-func NewFindSymbol(client lsp.Client, c *cache.Cache, ttl time.Duration) *FindSymbol {
-	return &FindSymbol{client: client, cache: c, ttl: ttl}
+func NewFindSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FindSymbol {
+	return &FindSymbol{client: client, cache: c, ttl: ttl, timeout: timeout}
 }
 
 func (t *FindSymbol) Name() string                 { return "find_symbol" }
@@ -62,6 +63,8 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 	if a.URI == "" {
 		return "", fmt.Errorf("find_symbol: uri is required (use workspace_symbols for workspace-wide search)")
 	}
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	return t.inDocument(ctx, a.URI, a.Query)
 }
 
@@ -81,7 +84,7 @@ func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string,
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err != nil {
-			return "", fmt.Errorf("find_symbol: %w", err)
+			return "", lspTimeoutErr("find_symbol", t.timeout, err)
 		}
 		if t.cache != nil {
 			t.cache.Set(key, syms, t.ttl)

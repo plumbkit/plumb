@@ -25,16 +25,17 @@ var workspaceSymbolsSchema = json.RawMessage(`{
 
 // WorkspaceSymbols searches for symbols by name across the entire workspace.
 type WorkspaceSymbols struct {
-	client lsp.Client
-	cache  *cache.Cache
-	ttl    time.Duration
-	ws     WorkspaceFn // used to filter out dependency-cache hits
+	client  lsp.Client
+	cache   *cache.Cache
+	ttl     time.Duration
+	timeout time.Duration
+	ws      WorkspaceFn // used to filter out dependency-cache hits
 }
 
 // NewWorkspaceSymbols creates a WorkspaceSymbols tool. ws may be nil, in
 // which case no workspace-scoping filter is applied.
-func NewWorkspaceSymbols(client lsp.Client, c *cache.Cache, ttl time.Duration, ws WorkspaceFn) *WorkspaceSymbols {
-	return &WorkspaceSymbols{client: client, cache: c, ttl: ttl, ws: ws}
+func NewWorkspaceSymbols(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, ws WorkspaceFn) *WorkspaceSymbols {
+	return &WorkspaceSymbols{client: client, cache: c, ttl: ttl, timeout: timeout, ws: ws}
 }
 
 func (t *WorkspaceSymbols) Name() string                 { return "workspace_symbols" }
@@ -66,9 +67,11 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	syms, err := t.client.WorkspaceSymbols(ctx, protocol.WorkspaceSymbolParams{Query: a.Query})
 	if err != nil {
-		return "", fmt.Errorf("workspace_symbols: %w", err)
+		return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
 	}
 
 	// Drop dependency-cache and stdlib hits so results stay focused on the

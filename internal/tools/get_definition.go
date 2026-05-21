@@ -40,14 +40,15 @@ var getDefinitionSchema = json.RawMessage(`{
 // GetDefinition returns the definition location(s) for a symbol at a position
 // or by name.
 type GetDefinition struct {
-	client lsp.Client
-	cache  *cache.Cache
-	ttl    time.Duration
+	client  lsp.Client
+	cache   *cache.Cache
+	ttl     time.Duration
+	timeout time.Duration
 }
 
 // NewGetDefinition creates a GetDefinition tool. Pass a nil cache to disable caching.
-func NewGetDefinition(client lsp.Client, c *cache.Cache, ttl time.Duration) *GetDefinition {
-	return &GetDefinition{client: client, cache: c, ttl: ttl}
+func NewGetDefinition(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *GetDefinition {
+	return &GetDefinition{client: client, cache: c, ttl: ttl, timeout: timeout}
 }
 
 func (t *GetDefinition) Name() string                 { return "get_definition" }
@@ -76,6 +77,9 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 		return "", fmt.Errorf("get_definition: uri must not be empty")
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
+
 	if a.SymbolName != "" {
 		return t.executeByName(ctx, a.URI, a.SymbolName)
 	}
@@ -100,7 +104,7 @@ func (t *GetDefinition) executeByName(ctx context.Context, uri, name string) (st
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err != nil {
-			return "", fmt.Errorf("get_definition: resolving symbol %q: %w", name, err)
+			return "", lspTimeoutErr("get_definition", t.timeout, fmt.Errorf("resolving symbol %q: %w", name, err))
 		}
 		if t.cache != nil {
 			t.cache.Set(key, syms, t.ttl)
