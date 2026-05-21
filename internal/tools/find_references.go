@@ -49,13 +49,14 @@ var findReferencesSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type FindReferences struct {
-	client lsp.Client
-	cache  *cache.Cache
-	ttl    time.Duration
+	client  lsp.Client
+	cache   *cache.Cache
+	ttl     time.Duration
+	timeout time.Duration
 }
 
-func NewFindReferences(client lsp.Client, c *cache.Cache, ttl time.Duration) *FindReferences {
-	return &FindReferences{client: client, cache: c, ttl: ttl}
+func NewFindReferences(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FindReferences {
+	return &FindReferences{client: client, cache: c, ttl: ttl, timeout: timeout}
 }
 
 func (t *FindReferences) Name() string                 { return "find_references" }
@@ -89,6 +90,9 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 		includeDecl = *a.IncludeDeclaration
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
+
 	if a.SymbolName != "" {
 		return t.executeByName(ctx, a.URI, a.SymbolName, includeDecl)
 	}
@@ -113,7 +117,7 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err != nil {
-			return "", fmt.Errorf("find_references: resolving symbol %q: %w", name, err)
+			return "", lspTimeoutErr("find_references", t.timeout, fmt.Errorf("resolving symbol %q: %w", name, err))
 		}
 		if t.cache != nil {
 			t.cache.Set(key, syms, t.ttl)
