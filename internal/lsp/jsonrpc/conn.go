@@ -8,11 +8,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// slowCallThreshold is the round-trip latency above which a request is logged
+// at WARN. A warm gopls answers queries in well under a second; a multi-second
+// round-trip signals the server is still indexing or otherwise saturated,
+// which is the most common cause of an LSP tool appearing to hang.
+const slowCallThreshold = 2 * time.Second
 
 // Caller abstracts the JSON-RPC connection so adapters can be tested with a
 // mock without spawning a real process.
@@ -154,6 +162,13 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 	}); err != nil {
 		return err
 	}
+
+	start := time.Now()
+	defer func() {
+		if d := time.Since(start); d > slowCallThreshold {
+			slog.Warn("jsonrpc: slow call", "method", method, "elapsed", d.Round(time.Millisecond))
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
