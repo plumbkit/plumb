@@ -39,11 +39,12 @@ type ReadSymbol struct {
 	client  lsp.Client
 	cache   *cache.Cache
 	ttl     time.Duration
+	timeout time.Duration
 	tracker *ReadTracker
 }
 
-func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl time.Duration, tracker *ReadTracker) *ReadSymbol {
-	return &ReadSymbol{client: client, cache: c, ttl: ttl, tracker: tracker}
+func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
+	return &ReadSymbol{client: client, cache: c, ttl: ttl, timeout: timeout, tracker: tracker}
 }
 
 func (t *ReadSymbol) Name() string                 { return "read_symbol" }
@@ -67,6 +68,8 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", err
 	}
 	fpath, uri := resolveReadSymbolPaths(a.Path)
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	syms, err := t.fetchReadSymbolSymbols(ctx, uri)
 	if err != nil {
 		return "", err
@@ -112,7 +115,7 @@ func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read_symbol: %w", err)
+		return nil, lspTimeoutErr("read_symbol", t.timeout, err)
 	}
 	if t.cache != nil {
 		t.cache.Set(key, syms, t.ttl)
