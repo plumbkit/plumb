@@ -148,4 +148,5 @@ func (t *CopyFile) copyFilePostWrite(ctx context.Context, to string) {
 		slog.Warn("copy_file: LSP create-notify failed", "path", to, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+to)
+	t.deps.notifyTopology(to)
 }

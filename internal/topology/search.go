@@ -16,22 +16,45 @@ func Search(ctx context.Context, db *sql.DB, query string, opts SearchOpts) ([]S
 		return nil, fmt.Errorf("topology: search query is empty")
 	}
 	ftsQuery := buildFTSQuery(query)
-	// JOIN topology_nodes inline to avoid a per-row nodeByID roundtrip (N+1 → 1 query).
-	// Over-fetch to allow kind filtering without losing top results after post-scan filtering.
-	rows, err := db.QueryContext(ctx,
-		`SELECT fts.rowid, fts.name, fts.name_tokens, fts.qualified, fts.signature,
-		        fts.docstring, fts.path, fts.kind, fts.rank,
-		        n.start_line, n.end_line, n.language, n.file_id
-		 FROM topology_fts fts
-		 JOIN topology_nodes n ON n.id = fts.rowid
-		 WHERE topology_fts MATCH ?
-		 ORDER BY fts.rank
-		 LIMIT ?`, ftsQuery, opts.Limit*3)
+	sqlStr, args := buildSearchSQL(ftsQuery, opts)
+	rows, err := db.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("topology: fts query: %w", err)
 	}
 	defer rows.Close()
 	return collectSearchResults(rows, query, opts)
+}
+
+// buildSearchSQL builds the FTS5 search query with optional kind and language
+// filters pushed into SQL, avoiding an over-fetch + post-scan kind filter.
+//
+//nolint:gosec // G202: WHERE clause built from constant strings and bind params; no user data interpolated
+func buildSearchSQL(ftsQuery string, opts SearchOpts) (string, []any) {
+	args := []any{ftsQuery}
+	where := `WHERE topology_fts MATCH ?`
+
+	if len(opts.Kinds) > 0 {
+		ph := strings.Repeat("?,", len(opts.Kinds))
+		where += ` AND n.kind IN (` + ph[:len(ph)-1] + `)`
+		for _, k := range opts.Kinds {
+			args = append(args, k)
+		}
+	}
+	if opts.Language != "" {
+		where += ` AND n.language = ?`
+		args = append(args, opts.Language)
+	}
+	args = append(args, opts.Limit)
+
+	// JOIN topology_nodes inline to avoid a per-row nodeByID roundtrip (N+1 → 1 query).
+	return `SELECT fts.rowid, fts.name, fts.name_tokens, fts.qualified, fts.signature,
+		        fts.docstring, fts.path, fts.kind, fts.rank,
+		        n.start_line, n.end_line, n.language, n.file_id
+		 FROM topology_fts fts
+		 JOIN topology_nodes n ON n.id = fts.rowid
+		 ` + where + `
+		 ORDER BY fts.rank
+		 LIMIT ?`, args
 }
 
 func buildFTSQuery(query string) string {
@@ -61,9 +84,6 @@ func collectSearchResults(rows *sql.Rows, query string, opts SearchOpts) ([]Sear
 			&startLine, &endLine, &language, &fileID); err != nil {
 			continue
 		}
-		if !matchesKindOpts(kind, opts) {
-			continue
-		}
 		n := Node{
 			ID:        rowid,
 			FileID:    fileID,
@@ -77,39 +97,18 @@ func collectSearchResults(rows *sql.Rows, query string, opts SearchOpts) ([]Sear
 			Language:  language,
 			Path:      path,
 		}
+		var snippet string
+		if opts.Snippets {
+			snippet = buildSnippet(name, tokens, sig)
+		}
 		results = append(results, SearchResult{
 			Node:    n,
 			Score:   -rank, // FTS5 rank is negative; higher (less negative) is better
 			Field:   matchField(query, name, tokens, qual, sig, doc),
-			Snippet: buildSnippet(name, tokens, sig),
+			Snippet: snippet,
 		})
 	}
 	return results, rows.Err()
-}
-
-func matchesKindOpts(kind string, opts SearchOpts) bool {
-	if len(opts.Kinds) == 0 {
-		return true
-	}
-	for _, k := range opts.Kinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
-}
-
-func nodeByID(db *sql.DB, id int64) (Node, error) {
-	var n Node
-	row := db.QueryRow(
-		`SELECT n.id, n.file_id, n.kind, n.name, n.qualified, n.signature,
-                n.start_line, n.end_line, n.docstring, n.language, f.path
-         FROM topology_nodes n
-         JOIN topology_files f ON f.id = n.file_id
-         WHERE n.id = ?`, id)
-	err := row.Scan(&n.ID, &n.FileID, &n.Kind, &n.Name, &n.Qualified, &n.Signature,
-		&n.StartLine, &n.EndLine, &n.Docstring, &n.Language, &n.Path)
-	return n, err
 }
 
 // matchField returns the FTS column most likely responsible for the match by

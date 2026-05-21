@@ -144,4 +144,8 @@ func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) 
 	}
 	invalidateCache(t.deps.Cache, "file://"+from)
 	invalidateCache(t.deps.Cache, "file://"+to)
+	// Enqueue from first: processUpsert detects the missing file and routes to
+	// processDelete. Then enqueue to so the new path is indexed immediately.
+	t.deps.notifyTopology(from)
+	t.deps.notifyTopology(to)
 }

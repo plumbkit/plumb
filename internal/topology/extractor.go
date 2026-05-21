@@ -29,8 +29,17 @@ func splitIdentifier(s string) string {
 	var buf strings.Builder
 	runes := []rune(s)
 	for i, r := range runes {
-		if i > 0 && unicode.IsUpper(r) && !unicode.IsUpper(runes[i-1]) && runes[i-1] != ' ' {
-			buf.WriteRune(' ')
+		if i > 0 && runes[i-1] != ' ' {
+			// Split on lower→upper boundary: "workspacePool" → "workspace pool"
+			lowerToUpper := unicode.IsUpper(r) && !unicode.IsUpper(runes[i-1])
+			// Split before the last uppercase letter of a consecutive-uppercase run when
+			// the following letter is lowercase: "HTTPServer" → "http server".
+			// Condition: current=upper, previous=upper, next=lower.
+			upperSeqToLower := unicode.IsUpper(r) && unicode.IsUpper(runes[i-1]) &&
+				i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			if lowerToUpper || upperSeqToLower {
+				buf.WriteRune(' ')
+			}
 		}
 		buf.WriteRune(unicode.ToLower(r))
 	}

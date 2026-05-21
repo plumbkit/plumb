@@ -125,6 +125,84 @@ func TestExtract_LanguageAndPath(t *testing.T) {
 	}
 }
 
+func TestExtract_MethodQualifiedIncludesReceiver(t *testing.T) {
+	src := []byte(`package p
+
+type Server struct{}
+
+func (s *Server) Start() error { return nil }
+
+func (v Value) String() string { return "" }
+`)
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "p.go", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	for _, n := range nodes {
+		switch n.Name {
+		case "Start":
+			if n.Qualified != "(*Server).Start" {
+				t.Errorf("Start.Qualified = %q, want (*Server).Start", n.Qualified)
+			}
+		case "String":
+			if n.Qualified != "(Value).String" {
+				t.Errorf("String.Qualified = %q, want (Value).String", n.Qualified)
+			}
+		}
+	}
+}
+
+func TestExtract_BenchAndExampleAreTest(t *testing.T) {
+	src := []byte(`package p
+
+func BenchmarkFoo(b interface{}) {}
+
+func ExampleBar() {}
+
+func TestBaz(t interface{}) {}
+`)
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "bench.go", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	for _, n := range nodes {
+		switch n.Name {
+		case "BenchmarkFoo", "ExampleBar", "TestBaz":
+			if string(n.Kind) != "test" {
+				t.Errorf("%s.Kind = %q, want test", n.Name, n.Kind)
+			}
+		}
+	}
+}
+
+func TestExtract_InterfaceTypeDistinctFromStruct(t *testing.T) {
+	src := []byte(`package p
+
+type Writer interface{ Write([]byte) (int, error) }
+
+type Buffer struct{ data []byte }
+`)
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "iface.go", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	byName := map[string]string{}
+	for _, n := range nodes {
+		if n.Name == "Writer" || n.Name == "Buffer" {
+			byName[n.Name] = string(n.Kind)
+		}
+	}
+	if k := byName["Writer"]; k != "type" {
+		t.Errorf("Writer.Kind = %q, want type", k)
+	}
+	if k := byName["Buffer"]; k != "type" {
+		t.Errorf("Buffer.Kind = %q, want type", k)
+	}
+}
+
 func TestExtract_LineRanges(t *testing.T) {
 	ext := New()
 	nodes, _, err := ext.Extract(context.Background(), "foo.go", goSrc)

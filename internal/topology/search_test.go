@@ -190,6 +190,85 @@ func TestMatchField_Qualified(t *testing.T) {
 	}
 }
 
+func TestSearch_LanguageFilter(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "lang.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	goFileID := insertTestFile(t, db, "main.go")
+	pyFileID := insertTestFile(t, db, "main.py")
+	insertNodeWithFTS(t, db, goFileID, "main.go", Node{Kind: KindFunction, Name: "ProcessData", Language: "go"})
+	insertNodeWithFTS(t, db, pyFileID, "main.py", Node{Kind: KindFunction, Name: "ProcessData", Language: "python"})
+
+	results, err := Search(context.Background(), db, "ProcessData", SearchOpts{Limit: 10, Language: "python"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, r := range results {
+		if r.Node.Language != "python" {
+			t.Errorf("got language=%q after python filter, want python", r.Node.Language)
+		}
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one result for python-filtered search")
+	}
+}
+
+func TestSearch_KindAndLanguageFilter(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "kl.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "mixed.go")
+	insertNodeWithFTS(t, db, fileID, "mixed.go", Node{Kind: KindFunction, Name: "Alpha", Language: "go"})
+	insertNodeWithFTS(t, db, fileID, "mixed.go", Node{Kind: KindType, Name: "AlphaType", Language: "go"})
+
+	results, err := Search(context.Background(), db, "Alpha", SearchOpts{
+		Limit:    10,
+		Kinds:    []string{"function"},
+		Language: "go",
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, r := range results {
+		if string(r.Node.Kind) != "function" {
+			t.Errorf("got kind=%q with kind+language filter, want function", r.Node.Kind)
+		}
+		if r.Node.Language != "go" {
+			t.Errorf("got language=%q with kind+language filter, want go", r.Node.Language)
+		}
+	}
+}
+
+func TestSearch_SnippetsOpt(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "snip.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "s.go")
+	insertNodeWithFTS(t, db, fileID, "s.go", Node{Kind: KindFunction, Name: "SnipMe", Language: "go"})
+
+	withSnip, _ := Search(context.Background(), db, "SnipMe", SearchOpts{Limit: 5, Snippets: true})
+	without, _ := Search(context.Background(), db, "SnipMe", SearchOpts{Limit: 5, Snippets: false})
+
+	if len(withSnip) > 0 && withSnip[0].Snippet == "" {
+		t.Error("expected non-empty snippet when Snippets=true")
+	}
+	if len(without) > 0 && without[0].Snippet != "" {
+		t.Errorf("expected empty snippet when Snippets=false, got %q", without[0].Snippet)
+	}
+}
+
 func TestSearch_RankOrder(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(filepath.Join(dir, "rank.db"))

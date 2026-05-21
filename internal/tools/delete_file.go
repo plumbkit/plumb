@@ -86,6 +86,8 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		slog.Warn("delete_file: LSP notification failed", "path", path, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+path)
+	// processUpsert detects the missing file and routes to processDelete automatically.
+	t.deps.notifyTopology(path)
 
 	return fmt.Sprintf("deleted %s", path), nil
 }

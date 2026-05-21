@@ -215,16 +215,16 @@ Phase 2 item — low impact for typical developer workflows where mtime is a rel
 
 **Definition of done — Phase 2.**
 
-1. DoD-6 and DoD-7 benchmarks/stress tests pass under `-race`.
-2. Extractor unit tests exist for Go and Python (all cases listed in item 2 above).
+1. DoD-6 and DoD-7 benchmarks/stress tests pass under `-race` (integration tests, not yet written).
+2. Extractor unit tests exist for Go and Python — `_test.go` files are present; remaining gap is async/def and confidence-value assertions in the Python extractor.
 3. `topology_impact`, `topology_routes`, `topology_affected` implemented, tested, registered, and documented in `AGENTS.md` and `docs/mcp-tools.md`.
 4. TypeScript/JavaScript extractor implemented and tested against fixtures.
 5. LSP fallback wired for `list_symbols`, `find_symbol`, `workspace_symbols`; fallback is explicit in response.
 6. TUI sessions panel shows topology state row; `plumb doctor` topology check passes.
 7. Periodic resync wired when `resync_interval_minutes > 0`.
-8. `drain` coalescing fixed to retain the last op per unique path across all queued files.
-9. `isStale` extended to compare content hash in addition to mtime.
-10. `make verify` stays green; golangci-lint 0 issues; all extractor packages have `_test.go` files.
+8. `drain` coalescing fixed to retain the last op per unique path across all queued files (todo item 8).
+9. `isStale` extended to compare content hash in addition to mtime (todo item 9).
+10. `make verify` stays green; golangci-lint 0 issues.
 
 **Watch out for.**
 

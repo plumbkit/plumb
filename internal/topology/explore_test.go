@@ -115,6 +115,114 @@ func TestExplore_HardCaps(t *testing.T) {
 	}
 }
 
+func TestExplore_EdgeKindFilter(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "ek.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "c.go")
+	n1 := insertTestNode(t, db, fileID, "c.go", Node{Kind: KindPackage, Name: "pkg", Language: "go"})
+	n2 := insertTestNode(t, db, fileID, "c.go", Node{Kind: KindFunction, Name: "Fn", Language: "go"})
+	n3 := insertTestNode(t, db, fileID, "c.go", Node{Kind: KindFunction, Name: "Callee", Language: "go"})
+	insertTestEdge(t, db, n1, n2, string(EdgeContains))
+	insertTestEdge(t, db, n2, n3, string(EdgeCalls))
+
+	// Filter to only "contains" edges — should not traverse the "calls" edge.
+	nb, err := Explore(context.Background(), db, "pkg", ExploreOpts{
+		Depth:     2,
+		MaxNodes:  50,
+		MaxBytes:  100000,
+		EdgeKinds: []string{string(EdgeContains)},
+	})
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	// Fn should be reachable via contains; Callee should NOT appear (only via calls).
+	nameSet := map[string]bool{}
+	for _, n := range nb.Nodes {
+		nameSet[n.Name] = true
+	}
+	if !nameSet["Fn"] {
+		t.Error("expected Fn in neighbourhood via 'contains' edge")
+	}
+	if nameSet["Callee"] {
+		t.Error("Callee should not appear when filtering to 'contains' edges only")
+	}
+}
+
+func TestExplore_NoDanglingEdgesOnTruncation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "de.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "d.go")
+	centre := insertTestNode(t, db, fileID, "d.go", Node{Kind: KindPackage, Name: "hub", Language: "go"})
+	// Create more children than MaxNodes=1 allows.
+	for i := 0; i < 3; i++ {
+		child := insertTestNode(t, db, fileID, "d.go", Node{Kind: KindFunction, Name: "fn", Language: "go"})
+		insertTestEdge(t, db, centre, child, string(EdgeContains))
+	}
+
+	nb, err := Explore(context.Background(), db, "hub", ExploreOpts{Depth: 2, MaxNodes: 1, MaxBytes: 100000})
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	if !nb.Truncated {
+		t.Error("expected Truncated=true")
+	}
+	// Build the set of node IDs in output (centre + nb.Nodes).
+	outputIDs := map[int64]bool{nb.Centre.ID: true}
+	for _, n := range nb.Nodes {
+		outputIDs[n.ID] = true
+	}
+	// Every edge must reference only nodes that are in the output set.
+	for _, e := range nb.Edges {
+		if !outputIDs[e.FromID] {
+			t.Errorf("edge %d: FromID %d not in output set", e.ID, e.FromID)
+		}
+		if !outputIDs[e.ToID] {
+			t.Errorf("edge %d: ToID %d not in output set", e.ID, e.ToID)
+		}
+	}
+}
+
+func TestExplore_NoEdgeDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "dup.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "e.go")
+	n1 := insertTestNode(t, db, fileID, "e.go", Node{Kind: KindPackage, Name: "pkgX", Language: "go"})
+	n2 := insertTestNode(t, db, fileID, "e.go", Node{Kind: KindFunction, Name: "A", Language: "go"})
+	n3 := insertTestNode(t, db, fileID, "e.go", Node{Kind: KindFunction, Name: "B", Language: "go"})
+	insertTestEdge(t, db, n1, n2, string(EdgeContains))
+	insertTestEdge(t, db, n1, n3, string(EdgeContains))
+	insertTestEdge(t, db, n2, n3, string(EdgeCalls))
+
+	nb, err := Explore(context.Background(), db, "pkgX", ExploreOpts{Depth: 3, MaxNodes: 50, MaxBytes: 100000})
+	if err != nil {
+		t.Fatalf("Explore: %v", err)
+	}
+	seen := map[int64]int{}
+	for _, e := range nb.Edges {
+		seen[e.ID]++
+	}
+	for id, count := range seen {
+		if count > 1 {
+			t.Errorf("edge %d appears %d times in output, want 1", id, count)
+		}
+	}
+}
+
 func TestExplore_Defaults(t *testing.T) {
 	opts := clampOpts(ExploreOpts{})
 	if opts.Depth != defaultDepth {

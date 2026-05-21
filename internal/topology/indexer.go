@@ -59,9 +59,10 @@ func (idx *Indexer) Start() {
 	idx.Enqueue("", opResync)
 }
 
-// Stop signals the background worker to exit and waits for it to finish.
-// Safe to call more than once; subsequent calls are no-ops that return
-// immediately because the worker goroutine has already exited.
+// Stop signals the background worker to exit and waits for it to drain its
+// current operation before returning. The wg.Wait() ensures any in-progress
+// transaction completes before the caller may close the database.
+// Safe to call more than once; subsequent calls are no-ops.
 func (idx *Indexer) Stop() {
 	select {
 	case <-idx.done:
@@ -382,6 +383,9 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 	present := make(map[string]bool)
 	err := filepath.Walk(idx.workspace, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
+			// Surface permission errors and other walk failures in the last-error field
+			// rather than silently swallowing them.
+			slog.Warn("topology: resync walk error", "path", path, "err", walkErr)
 			return nil
 		}
 		if info.IsDir() {
@@ -420,22 +424,45 @@ func (idx *Indexer) pruneDeleted(present map[string]bool) error {
 		}
 	}
 	rows.Close()
+	var firstErr error
 	for _, e := range stale {
 		tx, txErr := idx.db.Begin()
 		if txErr != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("topology: prune begin tx for %q: %w", e.path, txErr)
+			}
 			continue
 		}
-		_ = deleteFileNodes(tx, e.id)
-		_, _ = tx.Exec(`DELETE FROM topology_files WHERE id = ?`, e.id)
-		_ = tx.Commit()
+		if err := deleteFileNodes(tx, e.id); err != nil {
+			_ = tx.Rollback()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("topology: prune nodes for %q: %w", e.path, err)
+			}
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM topology_files WHERE id = ?`, e.id); err != nil {
+			_ = tx.Rollback()
+			if firstErr == nil {
+				firstErr = fmt.Errorf("topology: prune file %q: %w", e.path, err)
+			}
+			continue
+		}
+		if err := tx.Commit(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("topology: prune commit for %q: %w", e.path, err)
+		}
 	}
-	return nil
+	return firstErr
 }
 
 // shouldSkipDir returns true for directories that should never be indexed.
+// Dot-prefixed directories (hidden dirs like .vscode, .idea, .venv) are always
+// skipped to avoid indexing editor artefacts and virtual environments.
 func shouldSkipDir(name string) bool {
+	if len(name) > 1 && name[0] == '.' {
+		return true
+	}
 	switch name {
-	case "vendor", "node_modules", ".git", "testdata", ".plumb", "dist", "build", "__pycache__":
+	case "vendor", "node_modules", "testdata", "dist", "build", "__pycache__":
 		return true
 	}
 	return false

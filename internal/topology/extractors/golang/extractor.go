@@ -103,10 +103,15 @@ func extractFunc(fset *token.FileSet, d *ast.FuncDecl, relPath string, nodeCount
 		kind = topology.KindTest
 	}
 	sig := funcSignature(d)
+	qualified := d.Name.Name
+	if d.Recv != nil && len(d.Recv.List) > 0 {
+		recv := typeStr(d.Recv.List[0].Type)
+		qualified = "(" + recv + ")." + d.Name.Name
+	}
 	n := topology.Node{
 		Kind:      kind,
 		Name:      d.Name.Name,
-		Qualified: d.Name.Name,
+		Qualified: qualified,
 		Signature: sig,
 		StartLine: start,
 		EndLine:   end,
