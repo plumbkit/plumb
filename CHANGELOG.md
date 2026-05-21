@@ -7,6 +7,7 @@
 
 ### Fixed
 - **`config.SaveTheme` no longer clobbers an unreadable config file.** The TUI theme picker's save path called `Load()` and discarded its error, so a global `config.toml` with a syntax error was silently overwritten with defaults plus the new theme — destroying the user's recoverable settings. `SaveTheme` now aborts with a clear error when the existing file cannot be parsed; a *missing* file is still fine (first-save creates it). Added `TestSaveTheme_RefusesBrokenConfig`. Also dropped two stale doc comments in `internal/tui/theme.go` that referenced a `--theme` flag which was never implemented. Closes the 0.7.7 theme-system review; two non-blocking follow-ups (decouple `plumb config show` from the TUI package; `SaveTheme` re-encodes the full resolved config) recorded in `docs/todo.md`.
+- **Cancelled LSP queries are now cancelled in the server, not just abandoned locally.** When an LSP call hits its `[lsp_query].timeout` (or is otherwise cancelled), `jsonrpc.Conn.Call` sends an LSP `$/cancelRequest` for that request id so the language server stops computing a result that would be discarded. Without it, a timed-out query kept running inside gopls; repeated retries could stack overlapping abandoned computations and inflate the server's CPU and memory. Adds `TestConn_ContextCancel_SendsCancelRequest`.
 
 ## 0.7.7 (unreleased)
 
