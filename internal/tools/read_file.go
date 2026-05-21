@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -131,11 +132,19 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		truncated = true
 	}
 
-	sha, _ := fileSHA256(fpath)
+	sha, err := fileSHA256(fpath)
+	if err != nil {
+		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
+	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s\n\n",
-		mtime.Format(time.RFC3339Nano), sha, classifyIndent(content))
+	if sha != "" {
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s\n\n",
+			mtime.Format(time.RFC3339Nano), sha, classifyIndent(content))
+	} else {
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n\n",
+			mtime.Format(time.RFC3339Nano), classifyIndent(content))
+	}
 	sb.WriteString(content)
 	if truncated {
 		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")

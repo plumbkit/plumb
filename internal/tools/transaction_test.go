@@ -103,6 +103,46 @@ func TestTransaction_RejectsDuplicatePath(t *testing.T) {
 	}
 }
 
+func TestTransaction_RespectsExpectedSha(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	_ = os.WriteFile(a, []byte("hello"), 0o644)
+
+	sha, err := fileSHA256(a)
+	if err != nil {
+		t.Fatalf("fileSHA256: %v", err)
+	}
+
+	// Correct sha — transaction must succeed.
+	_, err = callTransaction(t, map[string]any{
+		"operations": []map[string]any{
+			{
+				"path":         a,
+				"expected_sha": sha,
+				"edits":        []map[string]string{{"old_str": "hello", "new_str": "hi"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error with correct expected_sha: %v", err)
+	}
+
+	// Wrong sha — transaction must be rejected.
+	_ = os.WriteFile(a, []byte("reset"), 0o644)
+	_, err = callTransaction(t, map[string]any{
+		"operations": []map[string]any{
+			{
+				"path":         a,
+				"expected_sha": "0000000000000000000000000000000000000000000000000000000000000000",
+				"edits":        []map[string]string{{"old_str": "reset", "new_str": "done"}},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "content has changed") {
+		t.Fatalf("expected sha rejection, got: %v", err)
+	}
+}
+
 func TestTransaction_RespectsExpectedMtime(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.txt")

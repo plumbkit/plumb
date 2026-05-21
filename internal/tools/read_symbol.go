@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -126,10 +127,17 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 	}
 	mtime := info.ModTime()
 	t.tracker.Record(fpath, mtime)
-	sha, _ := fileSHA256(fpath)
+	sha, err := fileSHA256(fpath)
+	if err != nil {
+		slog.Warn("read_symbol: computing sha256", "path", fpath, "err", err)
+	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s\n", mtime.Format(time.RFC3339Nano), sha)
+	if sha != "" {
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s\n", mtime.Format(time.RFC3339Nano), sha)
+	} else {
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s\n", mtime.Format(time.RFC3339Nano))
+	}
 	if len(matches) > 1 {
 		fmt.Fprintf(&sb, "# %d matches for %q\n", len(matches), name)
 	}

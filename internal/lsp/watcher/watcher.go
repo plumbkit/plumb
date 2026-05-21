@@ -182,6 +182,9 @@ func matchGlob(pattern, filePath, base string) bool {
 
 // expandAlternation expands the first {a,b,c} group in pattern into multiple
 // patterns. Returns a single-element slice when no braces are present.
+// Only the first brace group is expanded; patterns with multiple groups
+// (e.g. {a,b}/{c,d}) are not fully expanded. gopls v0.22+ emits only
+// single brace groups, so this is not a live limitation.
 func expandAlternation(pattern string) []string {
 	start := strings.IndexByte(pattern, '{')
 	if start < 0 {
