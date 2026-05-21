@@ -17,6 +17,7 @@ type mockLSP struct {
 	caps         *protocol.ServerCapabilities
 	err          error
 	renameResult *protocol.WorkspaceEdit // returned by Rename when non-nil
+	block        bool                    // when true, query methods wait for ctx cancellation
 }
 
 func (m *mockLSP) Initialize(_ context.Context, _ protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -41,11 +42,19 @@ func (m *mockLSP) DidChangeWatchedFiles(_ context.Context, _ protocol.DidChangeW
 	return m.err
 }
 
-func (m *mockLSP) WorkspaceSymbols(_ context.Context, _ protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
+func (m *mockLSP) WorkspaceSymbols(ctx context.Context, _ protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
+	if m.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return m.wsSymbols, m.err
 }
 
-func (m *mockLSP) DocumentSymbols(_ context.Context, _ protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
+func (m *mockLSP) DocumentSymbols(ctx context.Context, _ protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
+	if m.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return m.docSymbols, m.err
 }
 

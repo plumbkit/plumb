@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
@@ -88,6 +90,9 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("language server did not respond in time (it may still be indexing the workspace — retry shortly)")
+		}
 		return nil, fmt.Errorf("documentSymbols: %w", err)
 	}
 	sym := findSymbolByPath(syms, namePath)
@@ -128,10 +133,13 @@ func capitalise(s string) string {
 
 // ─── insert_before_symbol ──────────────────────────────────────────────────
 
-type InsertBeforeSymbol struct{ client lsp.Client }
+type InsertBeforeSymbol struct {
+	client  lsp.Client
+	timeout time.Duration
+}
 
-func NewInsertBeforeSymbol(client lsp.Client) *InsertBeforeSymbol {
-	return &InsertBeforeSymbol{client: client}
+func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
+	return &InsertBeforeSymbol{client: client, timeout: timeout}
 }
 
 func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
@@ -152,6 +160,8 @@ func (*InsertBeforeSymbol) InputSchema() json.RawMessage {
 }
 
 func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	var a symbolEditArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -180,10 +190,13 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
 
-type InsertAfterSymbol struct{ client lsp.Client }
+type InsertAfterSymbol struct {
+	client  lsp.Client
+	timeout time.Duration
+}
 
-func NewInsertAfterSymbol(client lsp.Client) *InsertAfterSymbol {
-	return &InsertAfterSymbol{client: client}
+func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
+	return &InsertAfterSymbol{client: client, timeout: timeout}
 }
 
 func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
@@ -201,6 +214,8 @@ func (*InsertAfterSymbol) InputSchema() json.RawMessage {
 }
 
 func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	var a symbolEditArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -225,10 +240,13 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 
 // ─── replace_symbol_body ───────────────────────────────────────────────────
 
-type ReplaceSymbolBody struct{ client lsp.Client }
+type ReplaceSymbolBody struct {
+	client  lsp.Client
+	timeout time.Duration
+}
 
-func NewReplaceSymbolBody(client lsp.Client) *ReplaceSymbolBody {
-	return &ReplaceSymbolBody{client: client}
+func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
+	return &ReplaceSymbolBody{client: client, timeout: timeout}
 }
 
 func (*ReplaceSymbolBody) Name() string { return "replace_symbol_body" }
@@ -253,6 +271,8 @@ func (*ReplaceSymbolBody) InputSchema() json.RawMessage {
 }
 
 func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	var a symbolEditArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -281,10 +301,13 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
 
-type SafeDeleteSymbol struct{ client lsp.Client }
+type SafeDeleteSymbol struct {
+	client  lsp.Client
+	timeout time.Duration
+}
 
-func NewSafeDeleteSymbol(client lsp.Client) *SafeDeleteSymbol {
-	return &SafeDeleteSymbol{client: client}
+func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
+	return &SafeDeleteSymbol{client: client, timeout: timeout}
 }
 
 func (*SafeDeleteSymbol) Name() string { return "safe_delete_symbol" }
@@ -304,6 +327,8 @@ func (*SafeDeleteSymbol) InputSchema() json.RawMessage {
 }
 
 func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 	var a symbolEditArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid args: %w", err)
@@ -327,7 +352,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		Context:      protocol.ReferenceContext{IncludeDeclaration: false},
 	})
 	if err != nil {
-		return "", fmt.Errorf("references: %w", err)
+		return "", lspTimeoutErr("safe_delete_symbol", t.timeout, fmt.Errorf("references: %w", err))
 	}
 	external := 0
 	var refLines []string

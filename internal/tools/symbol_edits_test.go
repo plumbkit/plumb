@@ -48,7 +48,7 @@ func TestReplaceSymbolBody_IncludeDocComment(t *testing.T) {
 	path, uri := writeFixture(t, "main.go", src)
 
 	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 1, 1, 13)}}
-	tool := tools.NewReplaceSymbolBody(mock)
+	tool := tools.NewReplaceSymbolBody(mock, 0)
 	dryRun := false
 	args, _ := json.Marshal(map[string]any{
 		"uri":                 uri,
@@ -74,7 +74,7 @@ func TestReplaceSymbolBody_DefaultLeavesDocComment(t *testing.T) {
 	path, uri := writeFixture(t, "main.go", src)
 
 	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 1, 1, 13)}}
-	tool := tools.NewReplaceSymbolBody(mock)
+	tool := tools.NewReplaceSymbolBody(mock, 0)
 	dryRun := false
 	args, _ := json.Marshal(map[string]any{
 		"uri":       uri,
@@ -103,7 +103,7 @@ func TestSafeDeleteSymbol_IncludeDocComment(t *testing.T) {
 		docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 1, 1, 13)},
 		locations:  nil, // no external references → deletion proceeds
 	}
-	tool := tools.NewSafeDeleteSymbol(mock)
+	tool := tools.NewSafeDeleteSymbol(mock, 0)
 	dryRun := false
 	args, _ := json.Marshal(map[string]any{
 		"uri":                 uri,
@@ -131,7 +131,7 @@ func TestInsertBeforeSymbol_IncludeDocCommentSkipsOverExistingDoc(t *testing.T) 
 	path, uri := writeFixture(t, "main.go", src)
 
 	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 1, 1, 13)}}
-	tool := tools.NewInsertBeforeSymbol(mock)
+	tool := tools.NewInsertBeforeSymbol(mock, 0)
 	dryRun := false
 	newBlock := "// Bar doc.\nfunc Bar() {}\n\n"
 	args, _ := json.Marshal(map[string]any{
@@ -159,7 +159,7 @@ func TestReplaceSymbolBody_IncludeDocComment_MultiLineBlock(t *testing.T) {
 	path, uri := writeFixture(t, "main.go", src)
 
 	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 3, 3, 13)}}
-	tool := tools.NewReplaceSymbolBody(mock)
+	tool := tools.NewReplaceSymbolBody(mock, 0)
 	dryRun := false
 	args, _ := json.Marshal(map[string]any{
 		"uri":                 uri,
@@ -187,7 +187,7 @@ func TestReplaceSymbolBody_IncludeDocComment_NoCommentAbove(t *testing.T) {
 	path, uri := writeFixture(t, "main.go", src)
 
 	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
-	tool := tools.NewReplaceSymbolBody(mock)
+	tool := tools.NewReplaceSymbolBody(mock, 0)
 	dryRun := false
 	args, _ := json.Marshal(map[string]any{
 		"uri":                 uri,
@@ -217,10 +217,10 @@ func TestInputSchema_IncludesDocCommentFlag(t *testing.T) {
 		t          schemaProvider
 		shouldHave bool
 	}{
-		{"insert_before", tools.NewInsertBeforeSymbol(nil), true},
-		{"replace", tools.NewReplaceSymbolBody(nil), true},
-		{"safe_delete", tools.NewSafeDeleteSymbol(nil), true},
-		{"insert_after", tools.NewInsertAfterSymbol(nil), false},
+		{"insert_before", tools.NewInsertBeforeSymbol(nil, 0), true},
+		{"replace", tools.NewReplaceSymbolBody(nil, 0), true},
+		{"safe_delete", tools.NewSafeDeleteSymbol(nil, 0), true},
+		{"insert_after", tools.NewInsertAfterSymbol(nil, 0), false},
 	}
 	for _, c := range cases {
 		schema := string(c.t.InputSchema())

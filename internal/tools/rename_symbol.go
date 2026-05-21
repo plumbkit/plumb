@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
@@ -26,10 +27,13 @@ Recovery options:
 // computes all call-site updates safely (across files, respecting scope and
 // types). Plumb applies the resulting WorkspaceEdit atomically to disk.
 type RenameSymbol struct {
-	client lsp.Client
+	client  lsp.Client
+	timeout time.Duration
 }
 
-func NewRenameSymbol(client lsp.Client) *RenameSymbol { return &RenameSymbol{client: client} }
+func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
+	return &RenameSymbol{client: client, timeout: timeout}
+}
 
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 
@@ -95,6 +99,9 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
+
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
 
 	we, err := t.client.Rename(ctx, protocol.RenameParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},

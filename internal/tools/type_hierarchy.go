@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
@@ -36,12 +37,13 @@ var typeHierarchySchema = json.RawMessage(`{
 
 // TypeHierarchy implements the type_hierarchy MCP tool.
 type TypeHierarchy struct {
-	client lsp.Client
+	client  lsp.Client
+	timeout time.Duration
 }
 
 // NewTypeHierarchy creates a TypeHierarchy tool.
-func NewTypeHierarchy(client lsp.Client) *TypeHierarchy {
-	return &TypeHierarchy{client: client}
+func NewTypeHierarchy(client lsp.Client, timeout time.Duration) *TypeHierarchy {
+	return &TypeHierarchy{client: client, timeout: timeout}
 }
 
 func (t *TypeHierarchy) Name() string                 { return "type_hierarchy" }
@@ -79,6 +81,9 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 		return "", err
 	}
 
+	ctx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
+
 	items, err := t.client.PrepareTypeHierarchy(ctx, protocol.PrepareTypeHierarchyParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
 		Position:     protocol.Position{Line: a.Line, Character: a.Character},
@@ -98,7 +103,7 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.Direction == "supertypes" || a.Direction == "both" {
 		supers, err := t.client.Supertypes(ctx, protocol.TypeHierarchySupertypesParams{Item: item})
 		if err != nil {
-			return "", fmt.Errorf("type_hierarchy supertypes: %w", err)
+			return "", lspTimeoutErr("type_hierarchy", t.timeout, fmt.Errorf("supertypes: %w", err))
 		}
 		sb.WriteString("## Supertypes\n\n")
 		if len(supers) == 0 {
@@ -115,7 +120,7 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.Direction == "subtypes" || a.Direction == "both" {
 		subs, err := t.client.Subtypes(ctx, protocol.TypeHierarchySubtypesParams{Item: item})
 		if err != nil {
-			return "", fmt.Errorf("type_hierarchy subtypes: %w", err)
+			return "", lspTimeoutErr("type_hierarchy", t.timeout, fmt.Errorf("subtypes: %w", err))
 		}
 		sb.WriteString("## Subtypes\n\n")
 		if len(subs) == 0 {

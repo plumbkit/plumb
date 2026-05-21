@@ -37,7 +37,7 @@ func TestRenameSymbol_StaleIndexError(t *testing.T) {
 	}
 
 	mock := &mockLSP{renameResult: we}
-	tool := tools.NewRenameSymbol(mock)
+	tool := tools.NewRenameSymbol(mock, 0)
 
 	args, _ := json.Marshal(map[string]any{
 		"uri":       "file://" + path,
@@ -62,7 +62,7 @@ func TestRenameSymbol_StaleIndexError(t *testing.T) {
 
 func TestRenameSymbol_EmptyEditSet(t *testing.T) {
 	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{}}
-	tool := tools.NewRenameSymbol(mock)
+	tool := tools.NewRenameSymbol(mock, 0)
 
 	args, _ := json.Marshal(map[string]any{
 		"uri":       "file:///any.go",
