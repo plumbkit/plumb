@@ -172,6 +172,7 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 
 	select {
 	case <-ctx.Done():
+		c.cancelRequest(rawID)
 		return ctx.Err()
 	case <-c.done:
 		return fmt.Errorf("jsonrpc: connection closed")
@@ -186,6 +187,18 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 		}
 		return nil
 	}
+}
+
+// cancelRequest sends an LSP $/cancelRequest notification for id, telling the
+// server to abandon an in-flight request whose context was cancelled so it
+// does not keep computing a result we will discard. Best effort: a send error
+// means the connection is already dying, which the read loop will surface.
+func (c *Conn) cancelRequest(id json.RawMessage) {
+	params, err := json.Marshal(map[string]json.RawMessage{"id": id})
+	if err != nil {
+		return
+	}
+	_ = c.send(wireMessage{JSONRPC: "2.0", Method: "$/cancelRequest", Params: params})
 }
 
 // Notify sends a notification (no ID, no response expected).

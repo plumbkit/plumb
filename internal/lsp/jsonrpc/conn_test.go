@@ -142,6 +142,56 @@ func TestConn_ContextCancel(t *testing.T) {
 	}
 }
 
+// TestConn_ContextCancel_SendsCancelRequest verifies that cancelling a call's
+// context emits an LSP $/cancelRequest for that request id, so the server can
+// abandon the work instead of computing a result we will discard.
+func TestConn_ContextCancel_SendsCancelRequest(t *testing.T) {
+	pr, pw := io.Pipe()
+	cr, cw := io.Pipe()
+	defer pw.Close()
+
+	conn := NewConn(pr, cw)
+	defer conn.Close()
+
+	br := bufio.NewReader(cr)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- conn.Call(ctx, "noreply", nil, nil) }()
+
+	// The first frame on the wire is the outbound request.
+	req, err := readMessage(br)
+	if err != nil {
+		t.Fatalf("reading request frame: %v", err)
+	}
+	if req.Method != "noreply" {
+		t.Fatalf("first frame method = %q, want noreply", req.Method)
+	}
+
+	cancel()
+
+	// After cancellation the connection must emit $/cancelRequest for the same id.
+	got, err := readMessage(br)
+	if err != nil {
+		t.Fatalf("reading cancel frame: %v", err)
+	}
+	if got.Method != "$/cancelRequest" {
+		t.Fatalf("second frame method = %q, want $/cancelRequest", got.Method)
+	}
+	var p struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(got.Params, &p); err != nil {
+		t.Fatalf("decoding cancel params: %v", err)
+	}
+	if string(p.ID) != string(req.ID) {
+		t.Errorf("cancelRequest id = %s, want %s", p.ID, req.ID)
+	}
+
+	if err := <-errCh; err == nil {
+		t.Fatal("expected Call to return an error after cancel")
+	}
+}
+
 // TestConn_ServerRequest_OK verifies that a server-initiated request is
 // dispatched to the registered handler and the result is sent back.
 func TestConn_ServerRequest_OK(t *testing.T) {
