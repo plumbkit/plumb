@@ -496,6 +496,15 @@ func (m Model) handleMainKeySimple(key string) Model {
 		if m.sectionMenuOpen {
 			m.selectSection(int(key[0] - '1'))
 		}
+	case "r":
+		// Only allow rename when sessions are focused and we have sessions to rename
+		if m.focusPanel == focusSessions && m.currentSection != 2 && len(m.sessions) > 0 {
+			currentSession := m.sessions[m.cursor]
+			m.renameModal = &renameSessionModal{
+				currentName: currentSession.Name,
+				input:       "",
+			}
+		}
 	case "a":
 		m.refresh()
 	case "[":

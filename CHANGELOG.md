@@ -2,6 +2,9 @@
 
 ## 0.7.7 (unreleased)
 
+### Added
+- **Interactive session renaming via TUI.** Press `r` on a selected session in the Sessions panel to open a rename modal with real-time validation. Allowed character set: letters (any case), digits, and hyphens; max 25 characters. User input case is preserved (not forced uppercase like auto-generated names). Modal shows validation feedback (✓ valid or ⚠ error reason), closes on Enter to save or Esc to cancel. Session name is immediately persisted to stats DB. Changes: `MaxNameLength` 16→25 in `internal/session/names.go`; `NormaliseName` accepts `[A-Za-z0-9-]` and preserves case; new `renameSessionModal` component in `internal/tui/model_rename_modal.go`; 'r' key handler in `model_keys.go`; modal integration in `model_update.go` and `model_render.go`. Validation rules: not empty, max 25 chars, start/end with letter or digit (no leading/trailing hyphens), no consecutive hyphens.
+
 ### Fixed
 - **`git` denylist now includes `-c` and `-C`.** Both flags were listed in the original design spec but were absent from the implementation. `-c <key>=<val>` is a live config-injection vector on subcommands that pass unknown flags up to git's global parser; `-C <path>` changes the working directory and would bypass `findGitRoot`'s pinning.
 - **`git stash <unknown>` now gives a helpful error.** Previously `git stash branch` reported `subcommand "stash" is not permitted`, which is wrong because `stash` itself is allowed. It now names the rejected sub-subcommand and lists the valid ones.

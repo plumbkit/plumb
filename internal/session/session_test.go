@@ -62,13 +62,17 @@ func TestNormaliseName(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "build-fix", want: "BUILD-FIX"},
-		{name: " Release ", want: "RELEASE"},
+		{name: "build-fix", want: "build-fix"},
+		{name: "Build-Fix", want: "Build-Fix"},
+		{name: "BUILD-FIX", want: "BUILD-FIX"},
+		{name: " Release ", want: "Release"},
+		{name: "api-2026-05", want: "api-2026-05"},
 		{name: "", wantErr: true},
 		{name: "bad name", wantErr: true},
 		{name: "bad_name", wantErr: true},
 		{name: "-bad", wantErr: true},
 		{name: "bad-", wantErr: true},
+		{name: "bad--name", wantErr: true},
 		{name: strings.Repeat("a", session.MaxNameLength+1), wantErr: true},
 	}
 	for _, tt := range tests {
@@ -101,15 +105,15 @@ func TestRenameUpdatesSessionFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rename: %v", err)
 	}
-	if got != "NEW-NAME" {
-		t.Fatalf("Rename returned %q, want NEW-NAME", got)
+	if got != "new-name" {
+		t.Fatalf("Rename returned %q, want new-name", got)
 	}
 	sessions, err := session.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].Name != "NEW-NAME" {
-		t.Fatalf("session name = %#v, want NEW-NAME", sessions)
+	if len(sessions) != 1 || sessions[0].Name != "new-name" {
+		t.Fatalf("session name = %#v, want new-name", sessions)
 	}
 }
 

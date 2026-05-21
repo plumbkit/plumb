@@ -23,7 +23,7 @@ func (t *renameSession) Name() string { return "rename_session" }
 
 func (t *renameSession) Description() string {
 	return fmt.Sprintf(
-		"Renames the current MCP session. Names may contain only letters and '-' and are capped at %d characters; accepted names are stored uppercase.",
+		"Renames the current MCP session. Names may contain letters (any case), digits, and hyphens, capped at %d characters. User-provided case is preserved; auto-generated names are uppercase.",
 		session.MaxNameLength,
 	)
 }
@@ -34,7 +34,7 @@ func (t *renameSession) InputSchema() json.RawMessage {
   "properties": {
     "name": {
       "type": "string",
-      "description": "New session name. Letters and '-' only, max %d characters. Stored uppercase."
+      "description": "New session name. Letters, digits, and hyphens only; max %d characters. Cannot start/end with hyphen or contain consecutive hyphens. Case is preserved as entered."
     }
   },
   "required": ["name"],

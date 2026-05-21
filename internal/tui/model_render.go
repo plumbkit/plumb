@@ -73,6 +73,9 @@ func (m Model) render() string {
 	if m.sectionMenuOpen {
 		final = m.renderSectionMenuOverlay(final)
 	}
+	if m.renameModal != nil {
+		final = m.renameModal.renderModal(final, m.width, m.height)
+	}
 	return final
 }
 

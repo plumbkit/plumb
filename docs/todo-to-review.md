@@ -44,6 +44,26 @@ gopls v0.22+ registers both forms after `client/registerCapability`. Before the 
 
 ---
 
+## Features
+
+### Interactive Session Renaming via TUI
+
+**Completed in:** 0.7.7
+**Original priority:** Medium
+
+Users can now press `r` on a selected session in the Sessions TUI panel to open a rename modal with real-time validation. Allowed character set: letters (any case), digits, and hyphens; max 25 characters. User input case is preserved (not forced uppercase like auto-generated names). Modal shows validation feedback (✓ valid or ⚠ error reason), closes on Enter to save or Esc to cancel. Session name is immediately persisted to stats DB.
+
+Changes:
+- `MaxNameLength` 16→25 in `internal/session/names.go`
+- `NormaliseName` accepts `[A-Za-z0-9-]` and preserves case
+- New `renameSessionModal` component in `internal/tui/model_rename_modal.go`
+- 'r' key handler in `model_keys.go`
+- Modal integration in `model_update.go` and `model_render.go`
+
+Validation rules: not empty, max 25 chars, start/end with letter or digit (no leading/trailing hyphens), no consecutive hyphens.
+
+---
+
 ## Testing & verification
 
 ### Claude Desktop end-to-end smoke test

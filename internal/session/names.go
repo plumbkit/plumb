@@ -10,7 +10,7 @@ import (
 
 // MaxNameLength is the longest generated session name length. Custom names
 // use the same cap so the TUI can reserve one stable visual envelope.
-const MaxNameLength = 16
+const MaxNameLength = 25
 
 // GenerateName returns a random two-word name in ADJECTIVE-NOUN form, all
 // uppercase. Used to give each MCP session a memorable, human-readable
@@ -36,8 +36,8 @@ func randIndex(n int) int {
 }
 
 // NormaliseName validates a user-provided session name and returns the stored
-// form. Names intentionally match the generated-name alphabet: ASCII letters
-// plus '-' only, uppercased on write.
+// form. Names may contain ASCII letters (any case), digits, and hyphens.
+// Auto-generated names are uppercase; user-provided names preserve their case.
 func NormaliseName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -49,12 +49,21 @@ func NormaliseName(name string) (string, error) {
 	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
 		return "", fmt.Errorf("name must not start or end with '-'")
 	}
+	if strings.Contains(name, "--") {
+		return "", fmt.Errorf("name must not contain consecutive hyphens")
+	}
 	for _, r := range name {
-		if r > unicode.MaxASCII || r != '-' && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
-			return "", fmt.Errorf("name may contain only letters and '-'")
+		if r > unicode.MaxASCII {
+			return "", fmt.Errorf("name may contain only ASCII letters, digits, and hyphens")
+		}
+		isLetter := (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+		isDigit := r >= '0' && r <= '9'
+		isHyphen := r == '-'
+		if !isLetter && !isDigit && !isHyphen {
+			return "", fmt.Errorf("name may contain only letters, digits, and hyphens; got '%c'", r)
 		}
 	}
-	return strings.ToUpper(name), nil
+	return name, nil
 }
 
 var adjectives = []string{

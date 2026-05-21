@@ -171,6 +171,24 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.waitingForQuit && key != "ctrl+c" && key != "ctrl+q" {
 		m.waitingForQuit = false
 	}
+	// Handle rename modal if active
+	if m.renameModal != nil {
+		modal, confirmed := m.renameModal.Update(msg)
+		m.renameModal = &modal
+		if confirmed && m.renameSessionFn != nil && m.cursor < len(m.sessions) {
+			// Call rename function
+			newName, err := m.renameSessionFn(modal.input)
+			if err == nil {
+				// Update the session name in memory
+				m.sessions[m.cursor].Name = newName
+				m.refreshStats()
+			}
+			m.renameModal = nil
+		} else if key == "esc" {
+			m.renameModal = nil
+		}
+		return m, nil
+	}
 	if m.showPopup {
 		return m.handlePopupKey(msg)
 	}
