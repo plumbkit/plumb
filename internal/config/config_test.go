@@ -47,6 +47,59 @@ rate_limit_per_minute = 30
 	}
 }
 
+func TestLoadProject_OverridesGit(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Project sets only allow_destructive; the other git fields must inherit.
+	cfg := "[git]\nallow_destructive = true\n"
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.Git.AllowDestructive {
+		t.Error("AllowDestructive should be true after project override")
+	}
+	// Unset git fields preserved from base defaults.
+	if !got.Git.AllowWrites {
+		t.Error("AllowWrites should remain true (default) when not set by project")
+	}
+	if got.Git.AllowPush {
+		t.Error("AllowPush should remain false (default) when not set by project")
+	}
+	if len(got.Git.ProtectedBranches) != 2 || got.Git.ProtectedBranches[0] != "main" {
+		t.Errorf("ProtectedBranches should remain default, got %v", got.Git.ProtectedBranches)
+	}
+}
+
+func TestLoadProject_GitEnvOverridesProject(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	_ = os.MkdirAll(plumbDir, 0o755)
+	_ = os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[git]\nallow_writes = true\nallow_push = true\n"), 0o644)
+
+	t.Setenv("PLUMB_GIT_ALLOW_WRITES", "0")
+	t.Setenv("PLUMB_GIT_ALLOW_PUSH", "false")
+
+	got, err := LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Git.AllowWrites {
+		t.Error("env should have forced AllowWrites to false")
+	}
+	if got.Git.AllowPush {
+		t.Error("env should have forced AllowPush to false")
+	}
+}
+
 func TestLoadProject_EnvOverridesProject(t *testing.T) {
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")

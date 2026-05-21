@@ -10,7 +10,7 @@ This file is the canonical brief for AI agents working in the plumb codebase. Ke
 
 > **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
 
-Current version: **0.7.6** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.7.7** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -71,6 +71,7 @@ Claude Desktop / Claude Code / Codex / Gemini CLI
                           ├── readTracker        (per-connection strict-mode state)
                           ├── writeLimiter       (per-connection limit + shared client budget parent)
                           ├── editsCfg + strictFn (resolved per-project [edits])
+                          ├── gitCfg + gitPolicyFn (resolved per-project [git])
                           └── sessionCache       (per-connection symbol cache)
 ```
 
@@ -134,6 +135,27 @@ auto_attach_persist = false # create .plumb/ at the synthetic root on first atta
 |---|---|---|
 | `auto_attach` | `PLUMB_AUTO_ATTACH` | When `true`, `OnBeforeTool` falls back to `SynthesiseRoot` (nearest `.git/` or seed dir) if `Detect` fails. Stats and TUI work; LSP unavailable. |
 | `auto_attach_persist` | `PLUMB_AUTO_ATTACH_PERSIST` | When `true`, the daemon creates `<root>/.plumb/` on first attach so the next session resolves via the normal marker path. Implies `auto_attach`. |
+
+### `[git]` section — tiered git tool gating
+
+```toml
+[git]
+allow_writes = true                    # add, commit, switch, branch/tag create, stash (default true)
+allow_destructive = false              # reset, clean, checkout, restore, rebase, … (default false)
+allow_push = false                     # push, fetch, pull (default false)
+protected_branches = ["main", "master"] # never force-pushable
+```
+
+| Field | Env var | Effect |
+|---|---|---|
+| `allow_writes` | `PLUMB_GIT_ALLOW_WRITES` | Gates the safe-write tier. `0`/`false`/`no` disables it; default on. |
+| `allow_destructive` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Gates the destructive tier. Each destructive call also requires `confirm:true`. Default off. |
+| `allow_push` | `PLUMB_GIT_ALLOW_PUSH` | Gates the network tier (`push`/`fetch`/`pull`). Each network call also requires `confirm:true`. Default off. |
+| `protected_branches` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. Default `["main", "master"]`. |
+
+All `[git]` fields follow the standard layering: compiled defaults → global config → `<workspace>/.plumb/config.toml` → environment. A project file that sets only one field (e.g. `allow_destructive = true`) inherits the rest, and changes are hot-reloaded by the config watcher. The resolved values appear under the `git` section of `plumb config show` with per-field provenance. The daemon resolves the per-connection policy live via `gitPolicyFn` (`internal/cli/conn.go` `gitConfig()`), so a project-config edit takes effect on the next `git` call without reconnecting.
+
+The `git` tool always runs the requested subcommand as the first argv element, so global flags supplied in `args` (e.g. `-c`, `--exec-path`) cannot reconfigure git. A small denylist also rejects `--git-dir`, `--work-tree`, `--namespace`, `--upload-pack`, `--receive-pack`, and `--exec-path` outright. There is no shell.
 
 ## Client setup commands
 
@@ -203,7 +225,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/mcp-tools.md`.
 7. Update this file's tool table.
 
-## Available tools (49)
+## Available tools (47)
 
 **Bootstrap**
 
@@ -263,9 +285,7 @@ Pyright is the worked example.
 | Tool | File | Notes |
 |---|---|---|
 | `find_replace` | `find_replace.go` | Text/regex find-and-replace across files; dry-run by default. `format_after: true` runs the workspace formatter (`gofumpt`/`gofmt` for Go, `ruff`/`black` for Python) on each modified file after replacement; formatter errors are warnings, not failures. |
-| `git` | `git.go` | Read-only subcommands (status, log, diff, show, blame, branch, tag, shortlog, stash). |
-| `git_add` | `git_add.go` | Stage explicit file paths (`git add -- <files>`). Derives repo root from first file if `repo` omitted. Returns staged-file summary. |
-| `git_commit` | `git_commit.go` | Commit whatever is currently staged. Pre-commit hooks always run. Returns short hash + subject. |
+| `git` | `git.go` | Unified tiered git tool. **Read** (always): `status`, `log`, `diff`, `show`, `blame`, `shortlog`, plus `branch`/`tag`/`stash` listing. **Write** (gated by `[git] allow_writes`, default on): `add` (typed `files`), `commit` (typed `message` → `-m`), `switch`, `mv`, `branch`/`tag` create, `stash` push/pop. **Destructive** (`allow_destructive` + `confirm:true`): `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `branch`/`tag` delete, `stash` drop. **Network** (`allow_push` + `confirm:true`): `push`, `fetch`, `pull`. Subcommand always leads the argv (no global-flag injection); ad-hoc URL pushes and force-pushes to a protected branch are always refused. Unknown subcommands rejected. |
 | `git_init` | `git_init.go` | Initialise a git repo at a path. `init_plumb: true` also creates `.plumb/context.md`. |
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |

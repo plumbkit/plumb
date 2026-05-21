@@ -168,6 +168,13 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"auto_attach_persist", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttachPersist), sourceFor("auto_attach_persist", defaultsCfg.Workspace.AutoAttachPersist, globalCfg.Workspace.AutoAttachPersist, projectCfg.Workspace.AutoAttachPersist)},
 	})
 
+	addConfigSection(cfgTable, "git", [][]string{
+		{"allow_writes", fmt.Sprintf("%v", projectCfg.Git.AllowWrites), sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites)},
+		{"allow_destructive", fmt.Sprintf("%v", projectCfg.Git.AllowDestructive), sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive)},
+		{"allow_push", fmt.Sprintf("%v", projectCfg.Git.AllowPush), sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush)},
+		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches)},
+	})
+
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]
@@ -329,6 +336,12 @@ func envVarForField(field string) string {
 		return "PLUMB_AUTO_ATTACH"
 	case "auto_attach_persist":
 		return "PLUMB_AUTO_ATTACH_PERSIST"
+	case "allow_writes":
+		return "PLUMB_GIT_ALLOW_WRITES"
+	case "allow_destructive":
+		return "PLUMB_GIT_ALLOW_DESTRUCTIVE"
+	case "allow_push":
+		return "PLUMB_GIT_ALLOW_PUSH"
 	}
 	return ""
 }

@@ -121,6 +121,29 @@ type EditsConfig struct {
 	ShowWriteDiff bool `toml:"show_write_diff"`
 }
 
+// GitConfig controls the unified git tool's tiered allowlist. Read-only
+// subcommands always run. Write, destructive, and network tiers are gated by
+// these flags so the same tool can be flexible on trusted workspaces and
+// locked down elsewhere. All fields can be overridden per-project via
+// <workspace>/.plumb/config.toml and by environment variables.
+//
+// Concurrency: read-only after Load returns.
+type GitConfig struct {
+	// AllowWrites gates the safe-write tier (add, commit, switch, branch
+	// create, tag create, stash push/pop). Default true.
+	AllowWrites bool `toml:"allow_writes"`
+	// AllowDestructive gates the destructive tier (reset, clean, checkout,
+	// restore, rebase, revert, branch/tag delete, stash drop/clear). Each call
+	// also requires confirm:true. Default false.
+	AllowDestructive bool `toml:"allow_destructive"`
+	// AllowPush gates the network tier (push, fetch, pull). Each call also
+	// requires confirm:true. Default false.
+	AllowPush bool `toml:"allow_push"`
+	// ProtectedBranches are branch names that may never be force-pushed, even
+	// when AllowPush is true and confirm is set. Default ["main", "master"].
+	ProtectedBranches []string `toml:"protected_branches"`
+}
+
 // TopologyConfig controls the persistent semantic index.
 // All fields can be overridden per-project via <workspace>/.plumb/config.toml.
 type TopologyConfig struct {
@@ -165,6 +188,7 @@ type Config struct {
 	Edits     EditsConfig          `toml:"edits"`
 	Walk      WalkConfig           `toml:"walk"`
 	Workspace WorkspaceConfig      `toml:"workspace"`
+	Git       GitConfig            `toml:"git"`
 	Quality   QualityConfig        `toml:"quality"`
 	Topology  TopologyConfig       `toml:"topology"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
@@ -186,6 +210,12 @@ var defaults = Config{
 	},
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,
+	},
+	Git: GitConfig{
+		AllowWrites:       true,
+		AllowDestructive:  false,
+		AllowPush:         false,
+		ProtectedBranches: []string{"main", "master"},
 	},
 	Quality: QualityConfig{
 		Enabled:            false,
@@ -230,6 +260,9 @@ func cloneConfig(cfg Config) Config {
 	out := cfg
 	if cfg.Topology.ExcludePatterns != nil {
 		out.Topology.ExcludePatterns = append([]string(nil), cfg.Topology.ExcludePatterns...)
+	}
+	if cfg.Git.ProtectedBranches != nil {
+		out.Git.ProtectedBranches = append([]string(nil), cfg.Git.ProtectedBranches...)
 	}
 	if cfg.LSP != nil {
 		out.LSP = make(map[string]LSPConfig, len(cfg.LSP))
@@ -369,6 +402,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v, ok := envBool("PLUMB_REFUSE_HOME_ROOTS"); ok {
 		cfg.Walk.RefuseHomeRoots = v
+	}
+	if v, ok := envBoolNeg("PLUMB_GIT_ALLOW_WRITES"); ok {
+		cfg.Git.AllowWrites = v
+	}
+	if v, ok := envBool("PLUMB_GIT_ALLOW_DESTRUCTIVE"); ok {
+		cfg.Git.AllowDestructive = v
+	}
+	if v, ok := envBool("PLUMB_GIT_ALLOW_PUSH"); ok {
+		cfg.Git.AllowPush = v
 	}
 	if v, ok := envBool("PLUMB_AUTO_ATTACH"); ok {
 		cfg.Workspace.AutoAttach = v

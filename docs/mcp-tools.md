@@ -91,9 +91,7 @@ SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. Enabled via `[to
 ## VCS & Utils
 | Tool | Description |
 |---|---|
-| `git` | Read-only git subcommands. |
-| `git_add` | Stage explicit file paths for the next commit. |
-| `git_commit` | Commit whatever is currently staged. |
+| `git` | Unified tiered git tool. Read subcommands (status, log, diff, show, blame, listing) always run; write (add via `files`, commit via `message`, switch, branch/tag create, stash) need `[git] allow_writes` (default on); destructive (reset, clean, checkout, restore, rebase) need `allow_destructive` + `confirm:true`; network (push, fetch, pull) need `allow_push` + `confirm:true`. Force-push to a protected branch and ad-hoc URL pushes are always refused. |
 | `git_init` | Initialise a git repository. |
 | `file_diff` | Unified diff between any two files. |
 | `find_replace` | Dry-run search-and-replace with formatting. |

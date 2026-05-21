@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.7 (unreleased)
+
+### Changed
+- **Unified git tool — `git_add` and `git_commit` folded into a single tiered `git` tool.** The git surface is no longer split across a read-only `git` plus separate write tools; one `git` tool now covers the full status→add→commit→branch→push flow, gated by a tiered allowlist so flexibility does not compromise safety. Tiers: **read** (status, log, diff, show, blame, shortlog, plus branch/tag/stash listing) always run; **write** (add via typed `files`, commit via typed `message` → `-m`, switch, mv, branch/tag create, stash push/pop) require `[git] allow_writes` (default on); **destructive** (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) require `allow_destructive` + `confirm:true`; **network** (push, fetch, pull) require `allow_push` + `confirm:true`. Tier classification is arg-aware and safe-biased (e.g. `restore --staged` is a write, but `restore <path>` is destructive; `checkout -b` is a write, any other checkout is destructive). New `[git]` config section (`allow_writes`, `allow_destructive`, `allow_push`, `protected_branches`) resolvable globally, per-project, and via `PLUMB_GIT_ALLOW_WRITES`/`_DESTRUCTIVE`/`_PUSH` env vars. Security invariants: the subcommand always leads the argv so global flags in `args` cannot reconfigure git, a denylist rejects `--git-dir`/`--work-tree`/`--namespace`/`--upload-pack`/`--receive-pack`/`--exec-path`, force-pushing a `protected_branches` entry (default `main`/`master`) and pushing to an ad-hoc URL are always refused, and unknown subcommands (`merge`, `rm`, `config`, `filter-branch`, `clone`, `submodule`, …) are rejected. No shell is ever invoked. **Breaking:** the `git_add` and `git_commit` MCP tools are removed — call `git` with `subcommand:"add"` (typed `files`) or `subcommand:"commit"` (typed `message`) instead. Tool count 49 → 47.
+
 ## 0.7.6 (unreleased)
 
 ### Added

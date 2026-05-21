@@ -68,6 +68,8 @@ type connSession struct {
 	editsCfg     config.EditsConfig
 	walkMu       sync.RWMutex
 	walkCfg      config.WalkConfig
+	gitMu        sync.RWMutex
+	gitCfg       config.GitConfig
 
 	watcherOnce sync.Once
 
@@ -103,6 +105,7 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Conf
 		writeLimiter:   tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
 		editsCfg:       cfg.Edits,
 		walkCfg:        cfg.Walk,
+		gitCfg:         cfg.Git,
 	}
 }
 
@@ -156,6 +159,13 @@ func (s *connSession) editsConfig() config.EditsConfig {
 	s.editsMu.RLock()
 	defer s.editsMu.RUnlock()
 	return s.editsCfg
+}
+
+// gitConfig returns the current resolved git tool config.
+func (s *connSession) gitConfig() config.GitConfig {
+	s.gitMu.RLock()
+	defer s.gitMu.RUnlock()
+	return s.gitCfg
 }
 
 // refuseHomeRoots reports whether the session refuses home-directory roots.
@@ -277,6 +287,9 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	s.walkMu.Lock()
 	s.walkCfg = projectCfg.Walk
 	s.walkMu.Unlock()
+	s.gitMu.Lock()
+	s.gitCfg = projectCfg.Git
+	s.gitMu.Unlock()
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
 	if projectCfg.Edits.Strict != s.cfg.Edits.Strict ||
 		projectCfg.Edits.RateLimitPerMinute != s.cfg.Edits.RateLimitPerMinute ||
@@ -593,9 +606,15 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTransactionApply(wd))
 	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl))
 	srv.Register(tools.NewFindFiles(s.workspace))
-	srv.Register(tools.NewGit())
-	srv.Register(tools.NewGitAdd(wd))
-	srv.Register(tools.NewGitCommit(wd))
+	srv.Register(tools.NewGit(wd, func() tools.GitPolicy {
+		c := s.gitConfig()
+		return tools.GitPolicy{
+			AllowWrites:       c.AllowWrites,
+			AllowDestructive:  c.AllowDestructive,
+			AllowPush:         c.AllowPush,
+			ProtectedBranches: c.ProtectedBranches,
+		}
+	}))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace(wd))
