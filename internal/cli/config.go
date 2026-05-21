@@ -179,6 +179,10 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches)},
 	})
 
+	addConfigSection(cfgTable, "lsp_query", [][]string{
+		{"timeout", projectCfg.LSPQuery.Timeout.String(), sourceFor("timeout", defaultsCfg.LSPQuery.Timeout, globalCfg.LSPQuery.Timeout, projectCfg.LSPQuery.Timeout)},
+	})
+
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]
@@ -346,6 +350,8 @@ func envVarForField(field string) string {
 		return "PLUMB_GIT_ALLOW_DESTRUCTIVE"
 	case "allow_push":
 		return "PLUMB_GIT_ALLOW_PUSH"
+	case "timeout":
+		return "PLUMB_LSP_QUERY_TIMEOUT"
 	}
 	return ""
 }

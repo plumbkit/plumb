@@ -53,6 +53,16 @@ type LSPConfig struct {
 	Enabled     bool              `toml:"enabled"`
 }
 
+// LSPQueryConfig bounds LSP tool operations so a slow, indexing, or wedged
+// language server cannot hang a request until the MCP client's own timeout
+// fires. Global only — there is no per-project override.
+// Concurrency: read-only after Load returns.
+type LSPQueryConfig struct {
+	// Timeout caps a single LSP tool operation (query or edit) when the
+	// caller's context carries no deadline. 0 disables the cap. Default 30s.
+	Timeout Duration `toml:"timeout"`
+}
+
 // CacheConfig controls the in-memory session cache.
 type CacheConfig struct {
 	TTL     Duration `toml:"ttl"`
@@ -201,6 +211,7 @@ type Config struct {
 	Quality   QualityConfig        `toml:"quality"`
 	Topology  TopologyConfig       `toml:"topology"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
+	LSPQuery  LSPQueryConfig       `toml:"lsp_query"`
 }
 
 var defaults = Config{
@@ -237,6 +248,9 @@ var defaults = Config{
 	Topology: TopologyConfig{
 		Enabled:          false,
 		MaxFileSizeBytes: 512 * 1024,
+	},
+	LSPQuery: LSPQueryConfig{
+		Timeout: Duration{30 * time.Second},
 	},
 	LSP: map[string]LSPConfig{
 		"go": {
@@ -428,6 +442,9 @@ func applyEnv(cfg *Config) {
 	if v, ok := envBool("PLUMB_AUTO_ATTACH_PERSIST"); ok {
 		cfg.Workspace.AutoAttachPersist = v
 	}
+	if d, ok := envDuration("PLUMB_LSP_QUERY_TIMEOUT"); ok {
+		cfg.LSPQuery.Timeout = Duration{d}
+	}
 	normaliseConfig(cfg)
 }
 
@@ -463,6 +480,21 @@ func envNonNegInt(key string) (n int, ok bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// envDuration reads key from the environment and parses it as a non-negative
+// Go duration (e.g. "30s", "2m"). ok is false when unset, unparseable, or
+// negative.
+func envDuration(key string) (d time.Duration, ok bool) {
+	s := os.Getenv(key)
+	if s == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return 0, false
+	}
+	return d, true
 }
 
 func normaliseConfig(cfg *Config) {
@@ -545,6 +577,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Quality.MaxFindingsPerFile < 0 {
 		return fmt.Errorf("quality.max_findings_per_file must be non-negative")
+	}
+	if cfg.LSPQuery.Timeout.Duration < 0 {
+		return fmt.Errorf("lsp_query.timeout must be non-negative (0 disables)")
 	}
 	for name, lsp := range cfg.LSP {
 		if lsp.Enabled && lsp.Command == "" {
