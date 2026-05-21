@@ -93,6 +93,97 @@ func TestExtract_LanguageAndPath(t *testing.T) {
 	}
 }
 
+func TestExtract_AsyncDefIsFunction(t *testing.T) {
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "a.py", []byte("async def background():\n    pass\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range nodes {
+		if n.Name == "background" {
+			if string(n.Kind) != "function" {
+				t.Errorf("async def background: kind=%q, want function", n.Kind)
+			}
+			return
+		}
+	}
+	t.Error("async def background node not found")
+}
+
+func TestExtract_ContainmentEdgeConfidence(t *testing.T) {
+	src := []byte(`class MyService:
+    def run(self):
+        pass
+`)
+	ext := New()
+	_, edges, err := ext.Extract(context.Background(), "svc.py", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if string(e.Kind) == "contains" {
+			if e.Confidence != 0.8 {
+				t.Errorf("containment edge confidence=%v, want 0.8", e.Confidence)
+			}
+			return
+		}
+	}
+	t.Error("no containment edge found")
+}
+
+func TestExtract_CommentOnlyFile(t *testing.T) {
+	src := []byte("# just a comment\n# another comment\n")
+	ext := New()
+	nodes, edges, err := ext.Extract(context.Background(), "comments.py", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected 0 nodes for comment-only file, got %d", len(nodes))
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for comment-only file, got %d", len(edges))
+	}
+}
+
+func TestExtract_CallEdges_IntraFile(t *testing.T) {
+	src := []byte(`def helper():
+    pass
+
+def caller():
+    helper()
+`)
+	ext := New()
+	nodes, edges, err := ext.Extract(context.Background(), "c.py", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var helperIdx, callerIdx int64 = -1, -1
+	for i, n := range nodes {
+		switch n.Name {
+		case "helper":
+			helperIdx = int64(i)
+		case "caller":
+			callerIdx = int64(i)
+		}
+	}
+	if helperIdx < 0 || callerIdx < 0 {
+		t.Fatalf("helper or caller not found; nodes=%v", nodes)
+	}
+	for _, e := range edges {
+		if string(e.Kind) == "calls" && e.FromID == callerIdx && e.ToID == helperIdx {
+			if e.Confidence != 0.6 {
+				t.Errorf("call edge confidence=%v, want 0.6", e.Confidence)
+			}
+			if e.Source != "heuristic" {
+				t.Errorf("call edge source=%q, want heuristic", e.Source)
+			}
+			return
+		}
+	}
+	t.Errorf("no EdgeCalls(caller→helper) found; edges=%v", edges)
+}
+
 func TestExtract_FromImport(t *testing.T) {
 	ext := New()
 	src := []byte("from pathlib import Path\n")

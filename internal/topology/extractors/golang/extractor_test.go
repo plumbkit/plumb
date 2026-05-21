@@ -198,6 +198,80 @@ type Buffer struct{ data []byte }
 	}
 }
 
+func TestExtract_CallEdges_IntraFile(t *testing.T) {
+	src := []byte(`package p
+
+func helper() {}
+
+func caller() {
+	helper()
+}
+`)
+	ext := New()
+	nodes, edges, err := ext.Extract(context.Background(), "p.go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var helperIdx, callerIdx int64 = -1, -1
+	for i, n := range nodes {
+		switch n.Name {
+		case "helper":
+			helperIdx = int64(i)
+		case "caller":
+			callerIdx = int64(i)
+		}
+	}
+	if helperIdx < 0 || callerIdx < 0 {
+		t.Fatalf("helper or caller node not found; nodes=%v", nodes)
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeCalls && e.FromID == callerIdx && e.ToID == helperIdx {
+			return // found the expected edge
+		}
+	}
+	t.Errorf("no EdgeCalls(caller→helper) found; edges=%v", edges)
+}
+
+func TestExtract_CallEdges_NoSelfLoop(t *testing.T) {
+	src := []byte(`package p
+
+func recursive() {
+	recursive()
+}
+`)
+	ext := New()
+	_, edges, err := ext.Extract(context.Background(), "p.go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeCalls && e.FromID == e.ToID {
+			t.Error("self-loop EdgeCalls emitted")
+		}
+	}
+}
+
+func TestExtract_CallEdges_CrossFileNotEmitted(t *testing.T) {
+	src := []byte(`package p
+
+import "fmt"
+
+func greet() {
+	fmt.Println("hello")
+}
+`)
+	ext := New()
+	_, edges, err := ext.Extract(context.Background(), "p.go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeCalls {
+			t.Errorf("unexpected EdgeCalls edge (callee not in file): %+v", e)
+		}
+	}
+}
+
 func TestExtract_LineRanges(t *testing.T) {
 	ext := New()
 	nodes, _, err := ext.Extract(context.Background(), "foo.go", goSrc)

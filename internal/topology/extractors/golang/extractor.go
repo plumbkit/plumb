@@ -35,9 +35,16 @@ func (e *Extractor) Extract(_ context.Context, relPath string, src []byte) ([]to
 	return extractFile(fset, f, relPath)
 }
 
+// funcEntry pairs a parsed FuncDecl with the index of its Node in the nodes slice.
+type funcEntry struct {
+	decl *ast.FuncDecl
+	idx  int
+}
+
 func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.Node, []topology.Edge, error) {
 	var nodes []topology.Node
 	var edges []topology.Edge
+	var funcEntries []funcEntry
 
 	pkgName := f.Name.Name
 	pkgNode := topology.Node{
@@ -65,7 +72,9 @@ func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.N
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
-			ns, es := extractFunc(fset, d, relPath, len(nodes), pkgIdx)
+			nodeIdx := len(nodes)
+			ns, es := extractFunc(fset, d, relPath, nodeIdx, pkgIdx)
+			funcEntries = append(funcEntries, funcEntry{decl: d, idx: nodeIdx})
 			nodes = append(nodes, ns...)
 			edges = append(edges, es...)
 		case *ast.GenDecl:
@@ -74,7 +83,74 @@ func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.N
 			edges = append(edges, es...)
 		}
 	}
+	edges = append(edges, fileCallEdges(funcEntries, nodes)...)
 	return nodes, edges, nil
+}
+
+// fileCallEdges emits EdgeCalls for intra-file calls only (confidence 1.0).
+// Cross-file calls are not emitted because single-file extraction has no
+// information about symbols defined in other files.
+func fileCallEdges(funcEntries []funcEntry, nodes []topology.Node) []topology.Edge {
+	if len(funcEntries) == 0 {
+		return nil
+	}
+	nameToIdx := buildNameIndex(nodes)
+	var edges []topology.Edge
+	for _, fe := range funcEntries {
+		edges = append(edges, callEdgesFor(fe.decl, int64(fe.idx), nameToIdx)...)
+	}
+	return edges
+}
+
+func buildNameIndex(nodes []topology.Node) map[string]int64 {
+	m := make(map[string]int64, len(nodes))
+	for i, n := range nodes {
+		switch n.Kind {
+		case topology.KindFunction, topology.KindMethod, topology.KindTest:
+			m[n.Name] = int64(i)
+		}
+	}
+	return m
+}
+
+func callEdgesFor(fn *ast.FuncDecl, fromIdx int64, nameToIdx map[string]int64) []topology.Edge {
+	if fn.Body == nil {
+		return nil
+	}
+	var edges []topology.Edge
+	seen := map[int64]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		callee := calleeIdent(call.Fun)
+		toIdx, found := nameToIdx[callee]
+		if !found || seen[toIdx] || toIdx == fromIdx {
+			return true
+		}
+		seen[toIdx] = true
+		edges = append(edges, topology.Edge{
+			FromID:     fromIdx,
+			ToID:       toIdx,
+			Kind:       topology.EdgeCalls,
+			Confidence: 1.0,
+			Source:     "extractor",
+		})
+		return true
+	})
+	return edges
+}
+
+func calleeIdent(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return e.Sel.Name
+	default:
+		return ""
+	}
 }
 
 func importNode(imp *ast.ImportSpec, relPath string) topology.Node {

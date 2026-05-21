@@ -9,10 +9,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/golimpio/plumb/internal/topology"
 )
+
+// reCallExpr matches bare function/method calls: word( at the start of an
+// identifier boundary. Used for heuristic call-edge detection.
+var reCallExpr = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 
 // Extractor extracts Python symbols using line-by-line heuristic scanning.
 type Extractor struct{}
@@ -23,10 +28,16 @@ func New() *Extractor { return &Extractor{} }
 func (e *Extractor) Language() string     { return "python" }
 func (e *Extractor) Extensions() []string { return []string{".py"} }
 
-// Extract scans src line by line and extracts classes, functions, and imports.
+// Extract scans src line by line and extracts classes, functions, imports, and
+// heuristic call edges (confidence 0.6) between functions defined in the same file.
 func (e *Extractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(src))
-	return scanLines(scanner, relPath)
+	nodes, edges, err := scanLines(scanner, relPath)
+	if err != nil {
+		return nodes, edges, err
+	}
+	callEdges := pyCallEdges(src, nodes)
+	return nodes, append(edges, callEdges...), nil
 }
 
 type pyState struct {
@@ -166,4 +177,81 @@ func importName(trimmed string) string {
 
 func isTestName(name string) bool {
 	return strings.HasPrefix(name, "test_") || strings.HasPrefix(name, "Test")
+}
+
+// pyCallEdges does a second scan of src to emit heuristic EdgeCalls between
+// functions defined in the same file. Confidence 0.6 because regex matching
+// cannot distinguish calls from keyword uses or identically-named external symbols.
+func pyCallEdges(src []byte, nodes []topology.Node) []topology.Edge {
+	nameToIdx := pyBuildNameIndex(nodes)
+	if len(nameToIdx) == 0 {
+		return nil
+	}
+	return pyWalkCalls(src, nameToIdx)
+}
+
+func pyBuildNameIndex(nodes []topology.Node) map[string]int64 {
+	m := make(map[string]int64, len(nodes))
+	for i, n := range nodes {
+		switch n.Kind {
+		case topology.KindFunction, topology.KindMethod, topology.KindTest:
+			m[n.Name] = int64(i)
+		}
+	}
+	return m
+}
+
+func pyWalkCalls(src []byte, nameToIdx map[string]int64) []topology.Edge {
+	scanner := bufio.NewScanner(bytes.NewReader(src))
+	var edges []topology.Edge
+	var curFuncIdx int64 = -1
+	curFuncIndent := -1
+	seen := map[[2]int64]bool{}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(trimmed)
+
+		if curFuncIdx >= 0 && indent <= curFuncIndent {
+			curFuncIdx = -1
+		}
+		if strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "async def ") {
+			prefix := "def "
+			if strings.HasPrefix(trimmed, "async ") {
+				prefix = "async def "
+			}
+			name := extractPyName(trimmed, prefix)
+			if idx, ok := nameToIdx[name]; ok {
+				curFuncIdx = idx
+				curFuncIndent = indent
+			}
+			continue
+		}
+		if curFuncIdx < 0 {
+			continue
+		}
+		for _, m := range reCallExpr.FindAllSubmatch([]byte(trimmed), -1) {
+			toIdx, found := nameToIdx[string(m[1])]
+			if !found || toIdx == curFuncIdx {
+				continue
+			}
+			key := [2]int64{curFuncIdx, toIdx}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			edges = append(edges, topology.Edge{
+				FromID:     curFuncIdx,
+				ToID:       toIdx,
+				Kind:       topology.EdgeCalls,
+				Confidence: 0.6,
+				Source:     "heuristic",
+			})
+		}
+	}
+	return edges
 }
