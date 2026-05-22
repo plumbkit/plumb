@@ -25,6 +25,27 @@ func Report(db *sql.DB, workspace string, idx *Indexer) Status {
 	return s
 }
 
+// StatusForWorkspace opens the topology index for ws read-only and returns a
+// Status snapshot without starting an indexer. It is intended for out-of-daemon
+// inspectors such as `plumb doctor`. A missing database is reported as an error
+// satisfying os.IsNotExist; the IndexerState in the returned Status is
+// "stopped" because no live indexer is attached.
+func StatusForWorkspace(ws string) (Status, error) {
+	dbPath := DBPath(ws)
+	if _, err := os.Stat(dbPath); err != nil {
+		return Status{}, err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return Status{}, fmt.Errorf("topology: open db: %w", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA busy_timeout = 2000`); err != nil {
+		return Status{}, fmt.Errorf("topology: busy_timeout: %w", err)
+	}
+	return Report(db, ws, nil), nil
+}
+
 func countFiles(db *sql.DB, s *Status) {
 	_ = db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE error_msg = ''`).Scan(&s.IndexedFiles)
 	_ = db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE error_msg != ''`).Scan(&s.SkippedFiles)

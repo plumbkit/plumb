@@ -18,6 +18,7 @@ import (
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/stats"
+	"github.com/golimpio/plumb/internal/topology"
 	"github.com/golimpio/plumb/internal/tui"
 )
 
@@ -73,6 +74,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		{"MCP Clients", checkMCPClients},
 		{"Configuration", func() []checkResult { return checkConfigs(ws) }},
 		{"Data", func() []checkResult { return checkStatsDB(ws) }},
+		{"Indexing", func() []checkResult { return checkTopology(ws) }},
 	}
 
 	failures := 0
@@ -112,6 +114,7 @@ func runDoctorJSON(ws string) error {
 		checkMCPClients,
 		func() []checkResult { return checkConfigs(ws) },
 		func() []checkResult { return checkStatsDB(ws) },
+		func() []checkResult { return checkTopology(ws) },
 	}
 	all := make([]checkResult, 0, len(runs)*3)
 	for _, run := range runs {
@@ -555,6 +558,89 @@ func checkStatsDB(ws string) []checkResult {
 		ok:     true,
 		detail: fmt.Sprintf("%s  (%d calls recorded)", contractConfigPath(dbPath), total),
 	}}
+}
+
+// checkTopology reports the health of the per-workspace topology index. It is a
+// no-op pass when topology is disabled (the opt-in default). When enabled, it
+// inspects the on-disk index read-only (without starting an indexer): a missing
+// or empty index is a failure with a hint to run a daemon session.
+func checkTopology(ws string) []checkResult {
+	cfg, err := config.Load()
+	if err != nil {
+		return []checkResult{{
+			name:   "topology",
+			ok:     false,
+			detail: err.Error(),
+			fix:    "fix global config at " + contractConfigPath(config.GlobalConfigPath()),
+		}}
+	}
+	if ws != "" {
+		if merged, mErr := config.LoadProject(cfg, ws); mErr == nil {
+			cfg = merged
+		}
+	}
+	if !cfg.Topology.Enabled {
+		return []checkResult{{
+			name:   "topology",
+			ok:     true,
+			detail: "disabled (opt-in — set [topology] enabled = true to activate)",
+		}}
+	}
+	if ws == "" {
+		return []checkResult{{
+			name:   "topology",
+			ok:     true,
+			detail: "enabled (pass --workspace to inspect the index)",
+		}}
+	}
+	return checkTopologyIndex(ws)
+}
+
+// checkTopologyIndex inspects the on-disk topology index for an enabled workspace.
+func checkTopologyIndex(ws string) []checkResult {
+	st, err := topology.StatusForWorkspace(ws)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []checkResult{{
+				name:   "topology",
+				ok:     false,
+				detail: "enabled but no index found",
+				fix:    "open a plumb session in this workspace so the daemon builds the index",
+			}}
+		}
+		return []checkResult{{
+			name:   "topology",
+			ok:     false,
+			detail: err.Error(),
+			fix:    "the index may be corrupt — remove " + contractConfigPath(topology.DBPath(ws)) + " to rebuild",
+		}}
+	}
+	if st.TotalNodes == 0 {
+		return []checkResult{{
+			name:   "topology",
+			ok:     false,
+			detail: fmt.Sprintf("enabled but index is empty (%d files, 0 nodes)", st.IndexedFiles),
+			fix:    "check daemon.log for indexer errors, or remove the index to force a rebuild",
+		}}
+	}
+	detail := fmt.Sprintf("%d files, %d nodes, %d edges, %s",
+		st.IndexedFiles, st.TotalNodes, st.TotalEdges, humanBytes(st.DBSizeBytes))
+	if len(st.Languages) > 0 {
+		detail += "  [" + strings.Join(st.Languages, ", ") + "]"
+	}
+	return []checkResult{{name: "topology", ok: true, detail: detail}}
+}
+
+// humanBytes formats a byte count for one-line doctor output.
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(b)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 func setupCmdName(clientName string) string {
