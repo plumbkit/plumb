@@ -142,7 +142,8 @@ The daemon is long-lived and shared across conversations. If you rebuild plumb,
 the old daemon keeps running your old code until you restart it:
 
 ```sh
-plumb stop          # the next client connection starts a fresh daemon
+plumb stop           # prompts if sessions are active
+plumb stop --force   # skip the prompt (useful in scripts/Makefiles)
 ```
 
 `plumb serve` warns on stderr when the running daemon's version differs from

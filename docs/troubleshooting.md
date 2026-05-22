@@ -15,7 +15,8 @@ The daemon is long-lived and shared across conversations, so it keeps running
 the binary it started with. After rebuilding:
 
 ```sh
-plumb stop      # next client connection starts a fresh daemon
+plumb stop           # prompts if sessions are active
+plumb stop --force   # skip the prompt (useful in scripts/Makefiles)
 ```
 
 `plumb serve` warns on stderr when the running daemon's version differs from
@@ -68,7 +69,7 @@ The LSP position index is stale after in-session edits. Recovery options:
 1. Call `diagnostics` to confirm the server re-indexed, then retry.
 2. Fall back to `find_replace` for the fully-qualified name, then fix bare-name
    references in comments manually.
-3. `plumb stop` to restart the daemon if re-indexing doesn't help.
+3. `plumb stop --force` to restart the daemon if re-indexing doesn't help.
 
 ## "LSP server not yet ready" / language is `none`
 

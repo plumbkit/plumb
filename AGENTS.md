@@ -447,7 +447,7 @@ Version is injected at build time via `-ldflags`:
 
 To bump during development, edit the `VERSION` file. Do not create a git tag for every iteration.
 
-The daemon writes its build version to `~/Library/Caches/plumb/plumb.version` on start. `plumb serve` reads it and warns on mismatch ("run `plumb stop` to refresh"). If you've just rebuilt and a different daemon version is running, **restart the daemon** — no amount of new code will activate against the old process.
+The daemon writes its build version to `~/Library/Caches/plumb/plumb.version` on start. `plumb serve` reads it and warns on mismatch ("run `plumb stop` to refresh"). If you've just rebuilt and a different daemon version is running, **restart the daemon** — no amount of new code will activate against the old process. Use `plumb stop --force` to skip the confirmation prompt when no interactive terminal is available (scripts, Makefiles).
 
 ## Commit conventions
 
