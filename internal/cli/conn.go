@@ -215,16 +215,20 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 	if language != LanguageNone {
 		e, err := s.pool.acquireLang(ctx, folder, language)
 		if err != nil {
-			slog.Error("daemon: acquire LS", "root", folder, "language", language, "err", err)
-			return
-		}
-		s.sessionProxy.setPrimary(folder, e.proxy)
-		s.sessionInv.setPrimary(folder, e.inv)
-		switch language {
-		case "go":
-			adapter = "gopls"
-		case "python":
-			adapter = "pyright"
+			// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
+			// rather than aborting. The workspace is still attached for filesystem
+			// tools and stat tracking; LSP tools will surface their own errors.
+			slog.Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
+			language = LanguageNone
+		} else {
+			s.sessionProxy.setPrimary(folder, e.proxy)
+			s.sessionInv.setPrimary(folder, e.inv)
+			switch language {
+			case "go":
+				adapter = "gopls"
+			case "python":
+				adapter = "pyright"
+			}
 		}
 	}
 	s.acquiredRoot = folder

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.11 (unreleased)
+
+### Fixed
+- **Sessions stuck on "resolving…" when the language server is unavailable.** When `gopls` or `pyright` is not on the daemon's `$PATH`, `attachWorkspace` previously returned early — before calling `session.Patch` to set `info.Folder` — leaving every session with an empty workspace in the TUI and preventing stats attribution. The workspace is now always recorded; if LSP acquisition fails the session degrades to filesystem-only mode (`LanguageNone`) so the TUI, stats, and all non-LSP tools continue to work.
+
 ## 0.7.10 (unreleased)
 
 ### Fixed
