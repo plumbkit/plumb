@@ -28,6 +28,9 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 	case logDetailCopyResetMsg:
 		m.logDetailCopied = false
 		return m, nil
+	case settingsStatusMsg:
+		m.settingsStatus = msg.text
+		return m, nil
 	case tea.WindowSizeMsg:
 		m = m.handleWindowSizeMsg(msg)
 	case tea.MouseClickMsg:
@@ -116,6 +119,12 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 		m.selectLogAtBodyRow(mouse.Y - bodyStartRow)
 		return
 	}
+	if m.currentSection == 4 {
+		if !m.showHelp && !m.showThemePicker {
+			m.selectSettingAtBodyRow(mouse.Y)
+		}
+		return
+	}
 	if m.onDivider(mouse.X) {
 		m.draggingDivider = true
 		m.setLeftWidthFromMouse(mouse.X)
@@ -176,6 +185,9 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if m.showPopup {
 		return m.handlePopupKey(msg)
+	}
+	if m.showThemePicker {
+		return m.handleThemePickerKey(msg)
 	}
 	if updated, cmd, handled := m.handleDashboardKey(msg); handled {
 		return updated, cmd
@@ -335,14 +347,7 @@ func (m *Model) selectSection(idx int) {
 		m.logInitd = true
 	}
 	if m.currentSection == 4 && prev != 4 {
-		m.themePickerOriginal = ActiveThemeName
-		names := ThemeNames()
-		for i, n := range names {
-			if n == ActiveThemeName {
-				m.themePickerCursor = i
-				break
-			}
-		}
+		m.enterSettings()
 	}
 }
 
@@ -359,31 +364,47 @@ func (m *Model) handleMouseWheelDash(delta int) bool {
 
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
 	if m.showPopup {
-		pLW := m.popupLeftWidth
-		pRW := max(m.width-pLW-3, 10)
-		ovW := pLW + pRW + 3
-		sx := (m.width - ovW) / 2
-		if mouse.X <= sx+pLW+1 {
-			m.popupLeftScroll += delta
-		} else {
-			m.popupDetailScroll += delta
-		}
+		m.handleMouseWheelPopup(mouse, delta)
 		return
 	}
 	if m.handleMouseWheelDash(delta) {
 		return
 	}
 	if m.currentSection == 3 && !m.sectionMenuOpen && !m.showHelp {
-		if m.logDetailOpen {
-			m.logDetailScroll += delta
-			if m.logDetailScroll < 0 {
-				m.logDetailScroll = 0
-			}
-			return
-		}
-		m.moveLogSelection(delta)
+		m.handleMouseWheelLogs(delta)
 		return
 	}
+	if m.currentSection == 4 && !m.sectionMenuOpen && !m.showHelp && !m.showThemePicker {
+		m.scrollSettings(delta)
+		return
+	}
+	m.handleMouseWheelBody(mouse, delta)
+}
+
+func (m *Model) handleMouseWheelPopup(mouse tea.Mouse, delta int) {
+	pLW := m.popupLeftWidth
+	pRW := max(m.width-pLW-3, 10)
+	ovW := pLW + pRW + 3
+	sx := (m.width - ovW) / 2
+	if mouse.X <= sx+pLW+1 {
+		m.popupLeftScroll += delta
+	} else {
+		m.popupDetailScroll += delta
+	}
+}
+
+func (m *Model) handleMouseWheelLogs(delta int) {
+	if m.logDetailOpen {
+		m.logDetailScroll += delta
+		if m.logDetailScroll < 0 {
+			m.logDetailScroll = 0
+		}
+		return
+	}
+	m.moveLogSelection(delta)
+}
+
+func (m *Model) handleMouseWheelBody(mouse tea.Mouse, delta int) {
 	bodyHeight := max(m.height-6, 1)
 	if mouse.Y < bodyStartRow || mouse.Y >= bodyStartRow+bodyHeight {
 		return

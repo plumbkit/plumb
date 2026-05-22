@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/memory"
 	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
@@ -104,9 +105,14 @@ type Model struct {
 	memoryBodyCache     string
 	memoryBodyCacheName string
 
-	// Settings section (section 4) — theme picker.
-	themePickerCursor   int    // index into ThemeNames() for the highlighted theme
-	themePickerOriginal string // ActiveThemeName when the section was entered
+	// Settings section (section 4) — grouped settings screen + theme popup.
+	settingsCfg       config.Config // global config snapshot, loaded on entering the section
+	settingsItems     []settingItem // selectable rows (group headers excluded)
+	settingsCursor    int           // index into settingsItems for the highlighted row
+	settingsScroll    int           // first visible scrollable line in the settings list
+	settingsStatus    string        // transient status line ("saved", "applies on restart", …)
+	showThemePicker   bool          // theme-picker popup overlay open
+	themePickerCursor int           // index into ThemeNames() for the highlighted theme
 
 	// Dashboard section (section 0).
 	dashLifetimeCalls       int64

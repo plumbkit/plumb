@@ -604,21 +604,24 @@ func Print(cfg Config, w io.Writer) error {
 	return toml.NewEncoder(w).Encode(cfg)
 }
 
-// SaveTheme persists themeName into the [ui] section of the global config
-// file without disturbing other settings. It loads the current global config
-// first so existing values are preserved, then re-encodes the full struct.
-// Creates the config file (and parent directory) if they do not yet exist.
+// Save persists a change to the global config file without disturbing other
+// settings. It loads the current global config first so existing values are
+// preserved, applies the mutation, then re-encodes the full struct. Creates
+// the config file (and parent directory) if they do not yet exist.
 //
 // A missing config file is not an error (Load returns defaults), so first-save
 // still creates one. But if the file exists and is unparseable, Load returns an
-// error and SaveTheme refuses rather than overwriting the user's recoverable
+// error and Save refuses rather than overwriting the user's recoverable
 // settings with defaults.
-func SaveTheme(themeName string) error {
+//
+// Known limitation: re-encoding rewrites the whole file, so any comments the
+// user added by hand are lost on the first save.
+func Save(apply func(*Config)) error {
 	cfg, err := Load()
 	if err != nil {
-		return fmt.Errorf("refusing to save theme: existing config is unreadable (fix it first): %w", err)
+		return fmt.Errorf("refusing to save config: existing config is unreadable (fix it first): %w", err)
 	}
-	cfg.UI.Theme = themeName
+	apply(&cfg)
 	path := GlobalConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
@@ -629,4 +632,10 @@ func SaveTheme(themeName string) error {
 	}
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(cfg)
+}
+
+// SaveTheme persists themeName into the [ui] section of the global config
+// file, preserving all other settings.
+func SaveTheme(themeName string) error {
+	return Save(func(c *Config) { c.UI.Theme = themeName })
 }

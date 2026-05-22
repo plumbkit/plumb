@@ -30,6 +30,9 @@ func (m Model) render() string {
 	if m.currentSection == 3 && !m.showPopup {
 		return m.renderLogsSection()
 	}
+	if m.currentSection == 4 && !m.showPopup {
+		return m.renderSettingsSection()
+	}
 
 	rightWidth := max(m.width-m.leftWidth-3, 10)
 	bodyHeight := max(m.height-6, 1)
@@ -353,11 +356,11 @@ func (m Model) renderHelp(bg string) string {
 			},
 		},
 		{
-			title: "Settings (theme picker)",
+			title: "Settings",
 			items: []helpItem{
-				{key: "↑/↓  j/k", desc: "Select theme (live preview)"},
-				{key: "enter / space", desc: "Confirm and save theme"},
-				{key: "esc", desc: "Revert to previous theme"},
+				{key: "↑/↓  ←/→", desc: "Move between / change settings"},
+				{key: "enter / space", desc: "Toggle, or open the theme picker"},
+				{key: "theme: ↑/↓", desc: "Apply + save live; esc closes"},
 			},
 		},
 		{

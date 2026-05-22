@@ -387,6 +387,33 @@ func TestDefaults_UIThemeIsNordico(t *testing.T) {
 	}
 }
 
+func TestSave_PersistsFieldAndPreservesRest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if err := Save(func(c *Config) { c.UI.Theme = "gruvbox" }); err != nil {
+		t.Fatalf("Save theme: %v", err)
+	}
+	if err := Save(func(c *Config) { c.LogLevel = "warn"; c.Edits.Strict = true }); err != nil {
+		t.Fatalf("Save edits: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.LogLevel != "warn" {
+		t.Errorf("LogLevel = %q, want \"warn\"", got.LogLevel)
+	}
+	if !got.Edits.Strict {
+		t.Error("Edits.Strict should be true after Save")
+	}
+	// The earlier theme save must survive the second mutation.
+	if got.UI.Theme != "gruvbox" {
+		t.Errorf("UI.Theme = %q, want preserved \"gruvbox\"", got.UI.Theme)
+	}
+}
+
 func TestSaveTheme_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
