@@ -233,7 +233,9 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 
 - **Binary**: `jdtls` — install jdtls and ensure it is on PATH. Requires Java 21 or later.
   macOS: `brew install jdtls`. SDKMAN: `sdk install java 21-tem`.
-  Other platforms: download from https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases.
+  Other platforms: download from https://download.eclipse.org/jdtls/ (`milestones/`
+  for stable builds, `snapshots/jdt-language-server-latest.tar.gz` for the rolling
+  latest). The GitHub repo does not publish language-server tarballs as releases.
 - **Status**: validated — unit-tested with mocked transport and integration-tested
   against a real jdtls binary in `internal/lsp/adapters/jdtls/` (gated with
   `//go:build integration`).

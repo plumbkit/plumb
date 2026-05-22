@@ -58,15 +58,22 @@ jobs:
         run: npm install -g pyright
 
       - name: Install jdtls
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          # Resolve the latest stable release asset URL via the GitHub API.
-          ASSET_URL=$(curl -fsSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/eclipse-jdtls/eclipse.jdt.ls/releases/latest \
-            | jq -r '[.assets[] | select(.name | test("jdt-language-server.*\\.tar\\.gz$"))] | first | .browser_download_url')
+          # jdtls is published to download.eclipse.org, not GitHub Releases
+          # (the repo's only "release" is an unrelated pre-release VSIX, so the
+          # GitHub releases/latest API 404s). Resolve the newest stable
+          # milestone and its timestamped tarball, falling back to the rolling
+          # snapshot if the milestone listing cannot be parsed.
+          BASE="https://download.eclipse.org/jdtls/milestones"
+          VERSION=$(curl -fsSL "$BASE/" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tail -1)
+          if [ -n "$VERSION" ]; then
+            FILE=$(curl -fsSL "$BASE/$VERSION/" | grep -oE "jdt-language-server-$VERSION-[0-9]+\.tar\.gz" | sort -u | tail -1)
+          fi
+          if [ -n "$VERSION" ] && [ -n "$FILE" ]; then
+            ASSET_URL="$BASE/$VERSION/$FILE"
+          else
+            ASSET_URL="https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"
+          fi
           echo "Downloading jdtls from $ASSET_URL"
           curl -fsSL "$ASSET_URL" -o jdtls.tar.gz
           mkdir -p "$HOME/.local/jdtls" "$HOME/.local/bin"

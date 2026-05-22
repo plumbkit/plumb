@@ -2,6 +2,9 @@
 
 ## 0.7.10 (unreleased)
 
+### Fixed
+- **CI: the `integration` job no longer 404s installing jdtls.** The step resolved the jdtls tarball from `api.github.com/repos/eclipse-jdtls/eclipse.jdt.ls/releases/latest`, but that repository publishes no language-server releases — its only release is an unrelated pre-release VSIX, so `releases/latest` returned 404, `ASSET_URL` resolved to empty, and `curl` then failed with "Malformed input to a URL function". jdtls is distributed via `download.eclipse.org`, not GitHub Releases. The step now resolves the newest stable milestone (and its timestamped tarball) from `download.eclipse.org/jdtls/milestones/`, falls back to the rolling `snapshots/jdt-language-server-latest.tar.gz` if the listing cannot be parsed, and no longer needs `GH_TOKEN`. `docs/adding-an-lsp.md` updated to point at the Eclipse download server for the same reason.
+
 ### Documentation
 - **Documented the unified `git` tool's full behavioural contract.** The safe-biased tier classification of ambiguous subcommands (`checkout -b` is a write but any other `checkout` is destructive; `restore --staged` vs `restore --worktree`; `switch --force`; bare `git stash` is a write; `branch`/`tag` create vs delete vs list), the typed `add`/`commit` footgun protection (only `commit -m <message>` / `add -- <files>` ever run, so `--amend`/`--no-verify`/`-F`/editor/globs are unreachable, and pre-commit hooks always run), the write-rate-limit slot consumed by every non-read tier, and the output caps (200 lines for `log`/`blame`, 100 KiB overall) were all implemented but undocumented. Now recorded in `docs/tools.md` (full contract), the `AGENTS.md` `[git]` section, and `docs/configuration.md` (classification note + cross-link).
 
