@@ -28,10 +28,11 @@ type Indexer struct {
 	done  chan struct{}
 	wg    sync.WaitGroup
 
-	mu       sync.RWMutex
-	state    string
-	lastSync time.Time
-	lastErr  string
+	mu            sync.RWMutex
+	state         string
+	lastSync      time.Time
+	lastErr       string
+	resyncPending bool // set when Enqueue overflows; triggers a recovery resync
 }
 
 // newIndexer creates an Indexer. Call Start() before enqueuing operations.
@@ -79,6 +80,12 @@ func (idx *Indexer) Enqueue(path string, kind opKind) {
 	select {
 	case idx.queue <- indexOp{kind: kind, path: path}:
 	default:
+		// Queue full: rather than silently lose this change, flag a full resync
+		// so the next worker cycle reconciles the whole tree and the index does
+		// not drift out of sync with the filesystem.
+		idx.mu.Lock()
+		idx.resyncPending = true
+		idx.mu.Unlock()
 	}
 }
 
@@ -136,22 +143,47 @@ func (idx *Indexer) backgroundWorker() {
 				idx.Enqueue("", opResync)
 			}
 		case op := <-idx.queue:
-			ops := idx.drain(op)
-			idx.setState("running", "")
-			var lastErr error
-			for _, o := range ops {
-				if err := idx.dispatch(context.Background(), o); err != nil {
-					slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
-					lastErr = err
-				}
-			}
-			if lastErr != nil {
-				idx.setState("error", lastErr.Error())
-			} else {
-				idx.setState("idle", "")
-			}
+			idx.runQueueCycle(op)
 		}
 	}
+}
+
+// runQueueCycle drains and processes all buffered ops, then runs a full resync
+// when one was flagged by Enqueue after a queue overflow, so dropped per-file
+// updates cannot leave the index permanently stale. The indexer state is set to
+// error or idle based on the combined outcome.
+func (idx *Indexer) runQueueCycle(initial indexOp) {
+	ops := idx.drain(initial)
+	idx.setState("running", "")
+	var lastErr error
+	for _, o := range ops {
+		if err := idx.dispatch(context.Background(), o); err != nil {
+			slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
+			lastErr = err
+		}
+	}
+	if idx.takeResyncPending() {
+		if err := idx.processResync(context.Background()); err != nil {
+			slog.Warn("topology: recovery resync error", "err", err)
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		idx.setState("error", lastErr.Error())
+	} else {
+		idx.setState("idle", "")
+	}
+}
+
+// takeResyncPending atomically reads and clears the pending-resync flag.
+func (idx *Indexer) takeResyncPending() bool {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if idx.resyncPending {
+		idx.resyncPending = false
+		return true
+	}
+	return false
 }
 
 // drain coalesces all buffered ops into a slice keeping the last op per unique
