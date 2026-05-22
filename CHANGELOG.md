@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.10 (unreleased)
+
+### Documentation
+- **Documented the unified `git` tool's full behavioural contract.** The safe-biased tier classification of ambiguous subcommands (`checkout -b` is a write but any other `checkout` is destructive; `restore --staged` vs `restore --worktree`; `switch --force`; bare `git stash` is a write; `branch`/`tag` create vs delete vs list), the typed `add`/`commit` footgun protection (only `commit -m <message>` / `add -- <files>` ever run, so `--amend`/`--no-verify`/`-F`/editor/globs are unreachable, and pre-commit hooks always run), the write-rate-limit slot consumed by every non-read tier, and the output caps (200 lines for `log`/`blame`, 100 KiB overall) were all implemented but undocumented. Now recorded in `docs/tools.md` (full contract), the `AGENTS.md` `[git]` section, and `docs/configuration.md` (classification note + cross-link).
+
 ## 0.7.9 (unreleased)
 
 ### Changed
