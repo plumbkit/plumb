@@ -57,8 +57,8 @@ Current session name and ID, daemon version, start time, and uptime.
 **Inputs:** none.
 
 ### `rename_session`
-Rename the current MCP session. **Inputs:** `name` (string — letters and `-`
-only, stored uppercase, max 16 chars).
+Rename the current MCP session. **Inputs:** `name` (string — letters, digits,
+and `-` only; user-provided case is preserved; max 25 chars).
 
 ---
 

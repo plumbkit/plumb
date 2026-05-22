@@ -10,7 +10,7 @@ This file is the canonical brief for AI agents working in the plumb codebase. Ke
 
 > **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
 
-Current version: **0.7.8** (see `VERSION` and `CHANGELOG.md`).
+Current version: **0.7.9** (see `VERSION` and `CHANGELOG.md`).
 
 ## Project purpose
 
@@ -325,7 +325,7 @@ Pyright is the worked example.
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
 | `daemon_info` | `daemon_info.go` | Current session name, session ID, daemon version, start time, uptime. |
-| `rename_session` | `rename_session.go` | Rename the current MCP session. Letters and `-` only; stored uppercase; max 16 characters. |
+| `rename_session` | `rename_session.go` | Rename the current MCP session. Letters, digits, and `-` only; user-provided case is preserved; max 25 characters. |
 
 **Topology** — SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. Enabled via `[topology] enabled = true`. Disabled by default.
 
