@@ -38,6 +38,9 @@ func TestRegisterUnregister(t *testing.T) {
 	if s.Language != "go" {
 		t.Errorf("Language: got %q", s.Language)
 	}
+	if s.Name == "" || s.Name != strings.ToLower(s.Name) {
+		t.Errorf("Name: got %q, want automatic lowercase name", s.Name)
+	}
 	if s.PID != os.Getpid() {
 		t.Errorf("PID: got %d, want %d", s.PID, os.Getpid())
 	}
@@ -53,6 +56,16 @@ func TestRegisterUnregister(t *testing.T) {
 	}
 	if len(sessions) != 0 {
 		t.Fatalf("expected 0 sessions after unregister, got %d", len(sessions))
+	}
+}
+
+func TestGenerateNameLowercase(t *testing.T) {
+	name := session.GenerateName()
+	if name != strings.ToLower(name) {
+		t.Fatalf("GenerateName() = %q, want lowercase", name)
+	}
+	if got, err := session.NormaliseName(name); err != nil || got != name {
+		t.Fatalf("generated name failed validation: got %q, err %v", got, err)
 	}
 }
 

@@ -57,8 +57,8 @@ Current session name and ID, daemon version, start time, and uptime.
 **Inputs:** none.
 
 ### `rename_session`
-Rename the current MCP session. **Inputs:** `name` (string — letters and `-`
-only, stored uppercase, max 16 chars).
+Rename the current MCP session. **Inputs:** `name` (string — letters, digits,
+and `-` only; user-provided case is preserved; max 25 chars).
 
 ---
 
@@ -278,6 +278,31 @@ branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
 **Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
 Force-push to a protected branch and ad-hoc URL pushes are always refused. See
 [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
+
+**Ambiguous subcommands are classified by their arguments**, biased towards the
+safer-to-deny higher tier:
+
+- `checkout -b`/`-B` (branch creation) is **write**; any other `checkout` is
+  **destructive** (it can discard the working tree or detach HEAD). Prefer
+  `switch` for safe branch changes.
+- `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` is
+  **destructive**.
+- `restore --staged` (index only) is **write**; `restore --worktree` (or no
+  flag) is **destructive**.
+- `branch`/`tag`: creating or renaming is **write**, `--delete`/`-d`/`-D` is
+  **destructive**, and `--list`/`-a`/`-r`/… is **read**.
+- `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
+  are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
+  an unknown `stash` sub-subcommand is rejected with the valid list.
+
+`add` and `commit` are **typed, not pass-through**: `commit` only ever runs
+`commit -m <message>` (so `--amend`, `--no-verify`, `-F`, and the editor are
+unreachable) and `add` only runs `add -- <files>` (no globs, no free-form
+paths). Pre-commit hooks always run. Every non-read call consumes one
+write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
+overall); `add` and `commit` return a concise summary (staged file count, or
+`<short-hash> <subject>`) rather than raw git output.
+
 **Inputs:** `subcommand` (required), `args` (array), `files` (array, for `add`),
 `message` (string, for `commit`), `confirm` (bool).
 

@@ -12,11 +12,11 @@ import (
 // use the same cap so the TUI can reserve one stable visual envelope.
 const MaxNameLength = 25
 
-// GenerateName returns a random two-word name in ADJECTIVE-NOUN form, all
-// uppercase. Used to give each MCP session a memorable, human-readable
-// identity that is stable for the session's lifetime and visible in the TUI.
+// GenerateName returns a random two-word name in adjective-noun form. Used to
+// give each MCP session a memorable, human-readable identity that is stable for
+// the session's lifetime and visible in the TUI.
 //
-// Example outputs: AZURE-FALCON, TINY-OTTER, WILD-NARWHAL.
+// Example outputs: azure-falcon, tiny-otter, wild-narwhal.
 //
 // The word lists are intentionally short and universally safe for work. With
 // ~80 adjectives and ~80 nouns there are ~6 400 combinations — enough to make
@@ -37,7 +37,7 @@ func randIndex(n int) int {
 
 // NormaliseName validates a user-provided session name and returns the stored
 // form. Names may contain ASCII letters (any case), digits, and hyphens.
-// Auto-generated names are uppercase; user-provided names preserve their case.
+// User-provided names preserve their case.
 func NormaliseName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -67,30 +67,30 @@ func NormaliseName(name string) (string, error) {
 }
 
 var adjectives = []string{
-	"AMBER", "ANCIENT", "ARCTIC", "AZURE", "BOLD", "BRAVE", "BRIGHT",
-	"BRONZE", "CALM", "CLEVER", "COBALT", "COOL", "CORAL", "COSMIC",
-	"CRISP", "CRYSTAL", "DAWN", "DEEP", "EAGER", "EMERALD", "FAINT",
-	"FIERCE", "FLEET", "FOREST", "FROZEN", "GENTLE", "GIANT", "GOLDEN",
-	"GRAND", "GREEN", "GREY", "HIDDEN", "HUMBLE", "ICY", "IDLE",
-	"INDIGO", "JADE", "KEEN", "LIGHT", "LOFTY", "LONE", "LUCKY",
-	"LUNAR", "MARBLE", "MIGHTY", "MISTY", "MORNING", "NOBLE", "OLD",
-	"PALE", "PATIENT", "POLAR", "PROUD", "PURE", "QUIET", "RADIANT",
-	"RAPID", "RARE", "RISING", "ROCKY", "ROYAL", "SAGE", "SCARLET",
-	"SERENE", "SILVER", "SLEEK", "SLIM", "SMALL", "SMOOTH", "SOLAR",
-	"SOLID", "STARK", "STILL", "STONE", "SWIFT", "TALL", "TEAL",
-	"TINY", "TRUE", "VAST", "VELVET", "VIVID", "WARM", "WILD", "WISE",
+	"amber", "ancient", "arctic", "azure", "bold", "brave", "bright",
+	"bronze", "calm", "clever", "cobalt", "cool", "coral", "cosmic",
+	"crisp", "crystal", "dawn", "deep", "eager", "emerald", "faint",
+	"fierce", "fleet", "forest", "frozen", "gentle", "giant", "golden",
+	"grand", "green", "grey", "hidden", "humble", "icy", "idle",
+	"indigo", "jade", "keen", "light", "lofty", "lone", "lucky",
+	"lunar", "marble", "mighty", "misty", "morning", "noble", "old",
+	"pale", "patient", "polar", "proud", "pure", "quiet", "radiant",
+	"rapid", "rare", "rising", "rocky", "royal", "sage", "scarlet",
+	"serene", "silver", "sleek", "slim", "small", "smooth", "solar",
+	"solid", "stark", "still", "stone", "swift", "tall", "teal",
+	"tiny", "true", "vast", "velvet", "vivid", "warm", "wild", "wise",
 }
 
 var nouns = []string{
-	"ANTELOPE", "BADGER", "BEAR", "BEAVER", "BISON", "BROOK", "CANYON",
-	"COBRA", "COMET", "CONDOR", "CRANE", "DEER", "DINGO", "EAGLE",
-	"FALCON", "FINCH", "FJORD", "FOX", "GECKO", "GLACIER", "GULL",
-	"HAWK", "HERON", "HORSE", "HOUND", "JAGUAR", "LARK", "LEMUR",
-	"LEOPARD", "LION", "LYNX", "MAPLE", "MARSH", "MEADOW", "MESA",
-	"MINK", "MOOSE", "NARWHAL", "OTTER", "OWL", "PANTHER", "PEAK",
-	"PINE", "RAVEN", "REEF", "RIDGE", "RIVER", "ROBIN", "SALMON",
-	"SEAL", "SHARK", "SIERRA", "SLATE", "SPARK", "SPRUCE", "STAG",
-	"STORM", "STREAM", "TIGER", "TUNDRA", "VALE", "VALLEY", "VINE",
-	"VIPER", "VISTA", "WALRUS", "WARBLER", "WHALE", "WOLF", "WREN",
-	"YAK", "ZEBRA",
+	"antelope", "badger", "bear", "beaver", "bison", "brook", "canyon",
+	"cobra", "comet", "condor", "crane", "deer", "dingo", "eagle",
+	"falcon", "finch", "fjord", "fox", "gecko", "glacier", "gull",
+	"hawk", "heron", "horse", "hound", "jaguar", "lark", "lemur",
+	"leopard", "lion", "lynx", "maple", "marsh", "meadow", "mesa",
+	"mink", "moose", "narwhal", "otter", "owl", "panther", "peak",
+	"pine", "raven", "reef", "ridge", "river", "robin", "salmon",
+	"seal", "shark", "sierra", "slate", "spark", "spruce", "stag",
+	"storm", "stream", "tiger", "tundra", "vale", "valley", "vine",
+	"viper", "vista", "walrus", "warbler", "whale", "wolf", "wren",
+	"yak", "zebra",
 }

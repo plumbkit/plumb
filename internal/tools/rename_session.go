@@ -23,7 +23,7 @@ func (t *renameSession) Name() string { return "rename_session" }
 
 func (t *renameSession) Description() string {
 	return fmt.Sprintf(
-		"Renames the current MCP session. Names may contain letters (any case), digits, and hyphens, capped at %d characters. User-provided case is preserved; auto-generated names are uppercase.",
+		"Renames the current MCP session. Names may contain letters (any case), digits, and hyphens, capped at %d characters. User-provided case is preserved; auto-generated names are lowercase.",
 		session.MaxNameLength,
 	)
 }

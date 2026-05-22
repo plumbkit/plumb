@@ -164,6 +164,8 @@ All `[git]` fields follow the standard layering: compiled defaults → global co
 
 The `git` tool always runs the requested subcommand as the first argv element, so global flags supplied in `args` (e.g. `-c`, `--exec-path`) cannot reconfigure git. A small denylist also rejects `-c`, `-C`, `--git-dir`, `--work-tree`, `--namespace`, `--upload-pack`, `--receive-pack`, and `--exec-path` outright. There is no shell.
 
+Tier classification is *safe-biased*: ambiguous subcommands (`checkout`, `switch`, `restore`, `branch`, `tag`, `stash`) inspect their args and round **up** to the higher tier when uncertain — e.g. `checkout -b` is a write but any other `checkout` is destructive, `restore --staged` is a write but `restore --worktree` is destructive, and bare `git stash` is a write. `add` and `commit` are typed, not pass-through: `commit` only ever runs `commit -m <message>` (so `--amend`, `--no-verify`, `-F`, and the editor are unreachable) and `add` only runs `add -- <files>`; pre-commit hooks always run. Every non-read call consumes one write-rate-limit slot, and output is capped (200 lines for `log`/`blame`, 100 KiB overall) with `add`/`commit` returning a concise summary rather than raw git output. Classification lives in `classifyGit` (`internal/tools/git.go`).
+
 ### `[ui]` section — TUI theme
 
 ```toml
@@ -325,7 +327,7 @@ Pyright is the worked example.
 | `file_diff` | `file_diff.go` | System `diff -U`. |
 | `version` | `version.go` | Server version, Go runtime, OS/arch. |
 | `daemon_info` | `daemon_info.go` | Current session name, session ID, daemon version, start time, uptime. |
-| `rename_session` | `rename_session.go` | Rename the current MCP session. Letters and `-` only; stored uppercase; max 16 characters. |
+| `rename_session` | `rename_session.go` | Rename the current MCP session. Letters, digits, and `-` only; user-provided case is preserved; max 25 characters. |
 
 **Topology** — SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. Enabled via `[topology] enabled = true`. Disabled by default.
 

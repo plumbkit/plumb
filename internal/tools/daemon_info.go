@@ -37,7 +37,7 @@ func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
 	return "Returns metadata about the current MCP session and daemon process: " +
-		"session name (e.g. SWIFT-FALCON), session ID, daemon version, start timestamp, and uptime. " +
+		"session name (e.g. swift-falcon), session ID, daemon version, start timestamp, and uptime. " +
 		"Use this to identify which session you are operating in or to verify the daemon state."
 }
 

@@ -96,6 +96,14 @@ and network calls additionally require `confirm: true` per call.
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 
+Ambiguous subcommands (`checkout`, `switch`, `restore`, `branch`, `tag`,
+`stash`) are classified by their arguments and biased towards the higher tier —
+e.g. `checkout -b` is a write but any other `checkout` is destructive, and
+`restore --staged` is a write but `restore --worktree` is destructive. `add` and
+`commit` are typed (only `commit -m <message>` / `add -- <files>` ever run, so
+`--amend`/`--no-verify`/globs are unreachable; pre-commit hooks always run). See
+[Tools → `git`](tools.md#git) for the full behavioural contract.
+
 ## `[quality]` — post-write code analysis
 
 | Field | Type | Default | Effect |

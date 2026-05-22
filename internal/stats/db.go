@@ -225,7 +225,7 @@ func (d *DB) Close() {
 // Call holds one tool invocation record.
 type Call struct {
 	SessionID     string
-	SessionName   string // human-readable name, e.g. "SWIFT-FALCON"
+	SessionName   string // human-readable name, e.g. "swift-falcon"
 	Workspace     string // absolute path to the project root
 	Tool          string
 	CalledAt      time.Time
