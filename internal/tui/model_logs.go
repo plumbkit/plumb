@@ -219,7 +219,7 @@ func (m Model) renderLogsSection() string {
 	innerW := m.width - 2 // visible content width inside │ borders
 
 	var sb strings.Builder
-	isOverlay := m.showHelp || m.sectionMenuOpen
+	isOverlay := m.showHelp || m.sectionMenuOpen || m.showThemePicker
 
 	sepStyle := SepStyle
 	if isOverlay {
@@ -264,13 +264,7 @@ func (m Model) renderLogsSection() string {
 	if m.logDetailOpen {
 		final = m.renderLogDetail(final, filtered)
 	}
-	if m.showHelp {
-		final = m.renderHelp(final)
-	}
-	if m.sectionMenuOpen {
-		final = m.renderSectionMenuOverlay(final)
-	}
-	return final
+	return m.applyOverlays(final)
 }
 
 // renderLogStatusBar builds the in-frame status bar for the Logs section.

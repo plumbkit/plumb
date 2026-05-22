@@ -112,7 +112,7 @@ func (m *Model) refreshDashboardProject() {
 
 // renderDashboard renders the full-width Dashboard section (section 0).
 func (m Model) renderDashboard() string {
-	isOverlay := m.showHelp || m.sectionMenuOpen
+	isOverlay := m.showHelp || m.sectionMenuOpen || m.showThemePicker
 
 	bodyHeight := max(m.height-6, 1)
 	innerW := m.width - 2
@@ -174,14 +174,7 @@ func (m Model) renderDashboard() string {
 	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
-	final := sb.String()
-	if m.showHelp {
-		final = m.renderHelp(final)
-	}
-	if m.sectionMenuOpen {
-		final = m.renderSectionMenuOverlay(final)
-	}
-	return final
+	return m.applyOverlays(sb.String())
 }
 
 // dashboardBodyLines returns all body lines for the Dashboard, ready to be

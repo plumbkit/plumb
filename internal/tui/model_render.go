@@ -38,7 +38,7 @@ func (m Model) render() string {
 	bodyHeight := max(m.height-6, 1)
 
 	var sb strings.Builder
-	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen
+	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen || m.showThemePicker
 
 	sepStyle := SepStyle
 	if isOverlay {
@@ -70,14 +70,25 @@ func (m Model) render() string {
 	if m.showPopup {
 		final = m.renderPopup(final, bodyHeight-1)
 	}
+	final = m.applyOverlays(final)
+	if m.renameModal != nil {
+		final = m.renameModal.renderModal(final, m.width, m.height)
+	}
+	return final
+}
+
+// applyOverlays composites the help, section-menu, and theme-picker overlays
+// (in that order) onto an already-rendered section. Shared by every full-width
+// section renderer so the theme picker (global ^t) appears over all of them.
+func (m Model) applyOverlays(final string) string {
 	if m.showHelp {
 		final = m.renderHelp(final)
 	}
 	if m.sectionMenuOpen {
 		final = m.renderSectionMenuOverlay(final)
 	}
-	if m.renameModal != nil {
-		final = m.renameModal.renderModal(final, m.width, m.height)
+	if m.showThemePicker {
+		final = m.renderThemePicker(final)
 	}
 	return final
 }
@@ -368,6 +379,7 @@ func (m Model) renderHelp(bg string) string {
 			items: []helpItem{
 				{key: "enter", desc: "Open detail or select menu item"},
 				{key: "esc", desc: "Close popup or menu"},
+				{key: "ctrl+t", desc: "Open the theme picker (anywhere)"},
 				{key: "ctrl+h", desc: "Open help"},
 				{key: "ctrl+q", desc: "Quit"},
 			},

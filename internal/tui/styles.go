@@ -35,8 +35,14 @@ var (
 	StatusKeyStyle           lipgloss.Style
 	LogStatusStyle           lipgloss.Style
 	LogSelectedStyle         lipgloss.Style
-	LogDetailKeyStyle        lipgloss.Style
-	LogDetailGutterStyle     lipgloss.Style
+
+	// Settings/theme-picker footer bar: subtle background with normal text,
+	// brighter keys, and a primary-coloured status message.
+	SettingsBarStyle     lipgloss.Style
+	SettingsBarKeyStyle  lipgloss.Style
+	SettingsBarMsgStyle  lipgloss.Style
+	LogDetailKeyStyle    lipgloss.Style
+	LogDetailGutterStyle lipgloss.Style
 
 	OkStyle          lipgloss.Style
 	WarnStyle        lipgloss.Style
@@ -176,6 +182,19 @@ func RebuildStyles() {
 		Foreground(t.TextMuted)
 
 	LogStatusStyle = lipgloss.NewStyle().
+		Background(t.SelectionBackground).
+		Foreground(t.TextPrimary)
+
+	SettingsBarStyle = lipgloss.NewStyle().
+		Background(t.SelectionBackground).
+		Foreground(t.TextHint)
+
+	SettingsBarKeyStyle = lipgloss.NewStyle().
+		Bold(true).
+		Background(t.SelectionBackground).
+		Foreground(t.Accent)
+
+	SettingsBarMsgStyle = lipgloss.NewStyle().
 		Background(t.SelectionBackground).
 		Foreground(t.TextPrimary)
 

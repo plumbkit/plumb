@@ -23,7 +23,7 @@ func (m *Model) enterSettings() {
 		cfg = config.Defaults()
 		m.settingsStatus = "config unreadable; showing defaults"
 	} else {
-		m.settingsStatus = ""
+		m.settingsStatus = "theme → " + ActiveThemeName
 	}
 	m.settingsCfg = cfg
 	m.settingsItems = buildSettingItems(cfg)
@@ -351,6 +351,23 @@ func (m Model) applyLogLevelLive(level string) tea.Cmd {
 		_, _ = bufio.NewReader(conn).ReadString('\n')
 		return settingsStatusMsg{text: "log level → " + level + " (applied live + saved)"}
 	}
+}
+
+// maybeOpenThemePicker opens the theme picker for the global ^t shortcut unless
+// another overlay (help or the section menu) is already showing.
+func (m Model) maybeOpenThemePicker() (Model, tea.Cmd) {
+	if m.showHelp || m.sectionMenuOpen {
+		return m, nil
+	}
+	return m.openThemePicker()
+}
+
+// openThemePicker opens the theme-picker popup from anywhere (the global ^t
+// shortcut). It reuses the same popup and key handler as the Settings Theme row.
+func (m Model) openThemePicker() (Model, tea.Cmd) {
+	m.showThemePicker = true
+	m.syncThemeCursor()
+	return m, nil
 }
 
 // handleThemePickerKey drives the theme-picker popup: moving the cursor applies

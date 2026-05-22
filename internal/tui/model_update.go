@@ -189,6 +189,9 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.showThemePicker {
 		return m.handleThemePickerKey(msg)
 	}
+	if key == "ctrl+t" {
+		return m.maybeOpenThemePicker()
+	}
 	if updated, cmd, handled := m.handleDashboardKey(msg); handled {
 		return updated, cmd
 	}

@@ -305,6 +305,37 @@ func TestSettingsEnterOpensThemePicker(t *testing.T) {
 	}
 }
 
+func TestThemePickerRow_Format(t *testing.T) {
+	origName := ActiveThemeName
+	t.Cleanup(func() { ActiveThemeName = origName })
+	ActiveThemeName = "nordico"
+
+	if got := themePickerRow("nordico", true); got != "❯ nordico ✓" {
+		t.Errorf("focused active row = %q, want \"❯ nordico ✓\"", got)
+	}
+	if got := themePickerRow("darcula", false); got != "  darcula" {
+		t.Errorf("unfocused inactive row = %q, want \"  darcula\"", got)
+	}
+}
+
+func TestMaybeOpenThemePicker_GlobalShortcut(t *testing.T) {
+	// ^t opens the picker from a non-Settings section.
+	m := newSettingsModel()
+	m.currentSection = 0
+	got, _ := m.handleKeyMsg(ctrlKey('t'))
+	if !got.showThemePicker {
+		t.Error("ctrl+t should open the theme picker from any section")
+	}
+
+	// It is ignored while another overlay (help) is showing.
+	m2 := newSettingsModel()
+	m2.showHelp = true
+	got2, _ := m2.maybeOpenThemePicker()
+	if got2.showThemePicker {
+		t.Error("ctrl+t should not open the picker while help is showing")
+	}
+}
+
 func TestThemePicker_MoveAppliesAndSaves(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	origTheme, origName := ActiveTheme, ActiveThemeName

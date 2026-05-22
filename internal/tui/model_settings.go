@@ -191,17 +191,7 @@ func (m Model) renderSettingsSection() string {
 	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
-	final := sb.String()
-	if m.showHelp {
-		final = m.renderHelp(final)
-	}
-	if m.sectionMenuOpen {
-		final = m.renderSectionMenuOverlay(final)
-	}
-	if m.showThemePicker {
-		final = m.renderThemePicker(final)
-	}
-	return final
+	return m.applyOverlays(sb.String())
 }
 
 // renderSettingsBody renders the scrollable list rows plus the pinned footer.
@@ -299,24 +289,48 @@ func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string
 // settingsFooterRow renders one of the three pinned footer rows: a blank
 // separator (0), the key-hint bar (1), and the status bar (2).
 func (m Model) settingsFooterRow(idx, innerW int, isOverlay bool) string {
+	contentW := max(innerW-4, 0)
 	switch idx {
 	case 1:
-		return settingsBar("↑↓ move · ←→ change · enter toggle/open · * applies on next daemon start", innerW, isOverlay)
+		return statusBarLine(settingsHintContent(contentW), innerW, isOverlay)
 	case 2:
-		return settingsBar(m.settingsStatus, innerW, isOverlay)
+		return statusBarLine(settingsStatusContent(m.settingsStatus, contentW), innerW, isOverlay)
 	default:
 		return lipgloss.NewStyle().Width(innerW).Render("")
 	}
 }
 
-// settingsBar renders a footer line with a subtle background that sits one
-// column in from each border (1-space gap left and right).
-func settingsBar(text string, innerW int, isOverlay bool) string {
+// statusBarLine frames footer content on a subtle background bar: a 1-space
+// plain gap from each border, then the background — within which the content is
+// inset one further space on each side, so text begins one column into the
+// background. content must already be exactly innerW-4 wide and styled.
+func statusBarLine(content string, innerW int, isOverlay bool) string {
 	if isOverlay {
-		return lipgloss.NewStyle().Width(innerW).Render(" " + text)
+		return lipgloss.NewStyle().Width(innerW).Render("  " + ansi.Strip(content))
 	}
-	bgW := max(innerW-2, 0)
-	return " " + LogStatusStyle.Width(bgW).Render(text) + " "
+	return " " + SettingsBarStyle.Render(" ") + content + SettingsBarStyle.Render(" ") + " "
+}
+
+// settingsHintContent builds the hint bar: the restart legend on the left and
+// the navigation shortcuts (brighter keys) on the right.
+func settingsHintContent(contentW int) string {
+	legend := "* applies on next daemon start"
+	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
+		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
+		SettingsBarKeyStyle.Render("enter") + SettingsBarStyle.Render(" toggle/open")
+	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  enter toggle/open")
+	gap := max(contentW-lipgloss.Width(legend)-shortcutW, 1)
+	return SettingsBarStyle.Render(legend) + SettingsBarStyle.Render(strings.Repeat(" ", gap)) + shortcut
+}
+
+// settingsStatusContent left-aligns the status message on the bar, padded with
+// the background colour to the full content width.
+func settingsStatusContent(text string, contentW int) string {
+	if lipgloss.Width(text) > contentW {
+		text = truncate(text, contentW)
+	}
+	pad := max(contentW-lipgloss.Width(text), 0)
+	return SettingsBarMsgStyle.Render(text) + SettingsBarStyle.Render(strings.Repeat(" ", pad))
 }
 
 // settingControl renders the interactive control affordance for a row. Cycle
@@ -338,10 +352,12 @@ func settingControl(it settingItem) string {
 }
 
 // pickerLine is one rendered row of the theme picker: raw text plus the style
-// to apply. A zero value renders as a blank padding line.
+// to apply. A zero value renders as a blank padding line. When header is set,
+// the text is rendered as a section name followed by a faded dotted rule.
 type pickerLine struct {
-	text  string
-	style lipgloss.Style
+	text   string
+	style  lipgloss.Style
+	header bool
 }
 
 // themeGroups splits the sorted theme names into dark and light buckets.
@@ -368,35 +384,40 @@ func themePickerOrder() []string {
 // background re-renders in the highlighted theme — that is the preview.
 func (m Model) renderThemePicker(bg string) string {
 	dark, light := themeGroups()
-	lines := m.themePickerLines(dark, light)
+	rows := m.themePickerRows(dark, light)
 
-	contentW := 0
-	for _, ln := range lines {
-		if w := lipgloss.Width(ln.text); w > contentW {
-			contentW = w
+	contentW := lipgloss.Width("↑↓ apply + save  ·  esc close")
+	for _, ln := range rows {
+		if !ln.header {
+			if w := lipgloss.Width(ln.text); w > contentW {
+				contentW = w
+			}
 		}
 	}
-	const pad = 3 // blank columns on each side of the content
+	const pad = 3 // blank columns on each side of the row content
 	innerW := contentW + pad*2
 
 	var b strings.Builder
 	b.WriteString(themePickerTop(innerW) + "\n")
-	for _, ln := range lines {
-		b.WriteString(themePickerBodyLine(ln, innerW, pad) + "\n")
+	for _, ln := range rows {
+		b.WriteString(themePickerBodyLine(ln, innerW, pad, contentW) + "\n")
 	}
+	// Footer status bar (same treatment as the Settings status bar).
+	b.WriteString(SepStyle.Render("│") + statusBarLine(themePickerFooterContent(innerW-4), innerW, false) + SepStyle.Render("│") + "\n")
 	b.WriteString(SepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
 
 	return spliceOverlay(bg, b.String(), m.width, m.height)
 }
 
-// themePickerLines builds the grouped body of the picker: a blank line top and
-// bottom, a Dark and a Light section (header + rows), and the footer.
-func (m Model) themePickerLines(dark, light []string) []pickerLine {
+// themePickerRows builds the grouped body of the picker: a blank line at the
+// top, a Dark and a Light section (dotted header + rows), and a blank line
+// before the footer (rendered separately).
+func (m Model) themePickerRows(dark, light []string) []pickerLine {
 	var lines []pickerLine
 	blank := func() { lines = append(lines, pickerLine{}) }
 	flat := 0
 	group := func(title string, names []string) {
-		lines = append(lines, pickerLine{text: title, style: PanelHeaderFadedStyle})
+		lines = append(lines, pickerLine{text: title, header: true})
 		for _, n := range names {
 			sel := flat == m.themePickerCursor
 			st := ItemStyle
@@ -419,21 +440,21 @@ func (m Model) themePickerLines(dark, light []string) []pickerLine {
 		group("Light", light)
 	}
 	blank()
-	lines = append(lines, pickerLine{text: "↑↓ apply + save · esc close", style: HintStyle})
-	blank()
 	return lines
 }
 
+// themePickerRow formats one theme row: a cursor (❯) when focused and a ✓ after
+// the name when it is the active theme.
 func themePickerRow(name string, cursor bool) string {
-	c := " "
+	c := "  "
 	if cursor {
-		c = "❯"
+		c = "❯ "
 	}
-	s := " "
+	row := c + name
 	if name == ActiveThemeName {
-		s = "✓"
+		row += " ✓"
 	}
-	return c + " " + s + " " + name
+	return row
 }
 
 func themePickerTop(innerW int) string {
@@ -442,10 +463,31 @@ func themePickerTop(innerW int) string {
 	return SepStyle.Render("╭─") + PanelHeaderStyle.Render(title) + SepStyle.Render(strings.Repeat("─", dashes)+"╮")
 }
 
-func themePickerBodyLine(ln pickerLine, innerW, pad int) string {
-	rpad := max(innerW-pad-lipgloss.Width(ln.text), 0)
-	body := strings.Repeat(" ", pad) + ln.style.Render(ln.text) + strings.Repeat(" ", rpad)
+func themePickerBodyLine(ln pickerLine, innerW, pad, contentW int) string {
+	var styled string
+	var vis int
+	if ln.header {
+		dots := max(contentW-lipgloss.Width(ln.text)-1, 0)
+		styled = PanelHeaderFadedStyle.Render(ln.text) + " " + SepStyle.Render(strings.Repeat("╌", dots))
+		vis = lipgloss.Width(ln.text) + 1 + dots
+	} else {
+		styled = ln.style.Render(ln.text)
+		vis = lipgloss.Width(ln.text)
+	}
+	rpad := max(innerW-pad-vis, 0)
+	body := strings.Repeat(" ", pad) + styled + strings.Repeat(" ", rpad)
 	return SepStyle.Render("│") + body + SepStyle.Render("│")
+}
+
+// themePickerFooterContent centres the apply/close hint (brighter keys) within
+// the footer content width.
+func themePickerFooterContent(contentW int) string {
+	hint := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" apply + save  ·  ") +
+		SettingsBarKeyStyle.Render("esc") + SettingsBarStyle.Render(" close")
+	w := lipgloss.Width("↑↓ apply + save  ·  esc close")
+	left := max((contentW-w)/2, 0)
+	right := max(contentW-w-left, 0)
+	return SettingsBarStyle.Render(strings.Repeat(" ", left)) + hint + SettingsBarStyle.Render(strings.Repeat(" ", right))
 }
 
 // isLightTheme heuristically identifies a light theme by checking whether
