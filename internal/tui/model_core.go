@@ -139,6 +139,10 @@ type Model struct {
 }
 
 func NewModel(logPath, ctrlPath string) Model {
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.Defaults()
+	}
 	m := Model{
 		leftWidth:         defaultLeftWidth,
 		currentSection:    0,
@@ -148,6 +152,7 @@ func NewModel(logPath, ctrlPath string) Model {
 		logFollow:         true,
 		dashProjectFolder: detectWorkspaceFolder(),
 		scrollBounds:      &scrollBounds{},
+		settingsCfg:       cfg,
 	}
 	m.refresh()
 	return m

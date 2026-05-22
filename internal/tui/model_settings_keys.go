@@ -192,6 +192,8 @@ func (m Model) adjustSetting(dir int) (Model, tea.Cmd) {
 		return m.setCacheMaxSize(m.settingsCfg.Cache.MaxSize + dir*100), nil
 	case skCacheTTL, skLSPTimeout:
 		return m.setDuration(it.key, dir), nil
+	case skPathStyle:
+		return m.setPathStyle(cycleOption(pathStyleOptions, m.settingsCfg.UI.PathStyle, dir)), nil
 	case skStrict, skShowWriteDiff, skTopology, skQuality,
 		skGitWrites, skGitDestructive, skGitPush, skAutoAttach:
 		return m.toggleBool(it.key), nil
@@ -422,6 +424,15 @@ func cycleOption(opts []string, cur string, dir int) string {
 		idx += len(opts)
 	}
 	return opts[idx]
+}
+
+func (m Model) setPathStyle(style string) Model {
+	if m.persist(func(c *config.Config) { c.UI.PathStyle = style }) {
+		m.settingsCfg.UI.PathStyle = style
+		m.settingsItems = buildSettingItems(m.settingsCfg)
+		m.settingsStatus = "path style → " + style
+	}
+	return m
 }
 
 func restartStatus(change string) string {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.12 (unreleased)
+
+### Added
+- **Configurable path abbreviation style in the Sessions sidebar.** The folder path shown under each session name is now formatted according to `[ui] path_style` in `config.toml`, with three options: **`compact`** (new default) abbreviates every intermediate directory component to its first letter and keeps the final component in full — e.g. `~/Projects/experiments/others/cve-explorer` → `~/P/e/o/cve-explorer`; **`truncate-middle`** preserves the previous behaviour of keeping the tail of the path after a leading `…`; **`full`** shows the tilde-home path without abbreviation, falling back to `…/<last>` only when the column is too narrow. The setting is also editable live in the TUI Settings screen (Appearance group, `←→` to cycle) and takes effect immediately without a daemon restart. New helper functions `contractPathCompact`, `contractPathFull`, and `contractPathTruncateLeft` in `internal/tui/model_utils.go` back the three strategies.
+
+### Fixed
+- **Sessions sidebar no longer appends a trailing `…` to abbreviated paths.** The cell renderer in `model_render.go` clips every left-panel line to `m.leftWidth-1` characters. The available-width budget passed to `contractPath` was off by one, so the path line was always exactly one character over the limit and the renderer silently replaced the last character with `…`. The budget is now `m.leftWidth - 8` (prefix width + 1 guard) so the formatted line fits within the renderer threshold.
+
 ## 0.7.11 (unreleased)
 
 ### Fixed

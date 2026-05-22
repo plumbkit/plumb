@@ -41,6 +41,7 @@ const (
 	skCacheMaxSize
 	skLSPTimeout
 	skAutoAttach
+	skPathStyle
 )
 
 // settingItem is one selectable row on the Settings screen. Group headers are
@@ -61,6 +62,7 @@ var (
 	logFormatOptions  = []string{"text", "json"}
 	cacheTTLOptions   = []string{"1m", "5m", "10m", "30m", "1h"}
 	lspTimeoutOptions = []string{"0s", "10s", "30s", "1m", "2m"}
+	pathStyleOptions  = []string{"compact", "truncate-middle", "full"}
 )
 
 // durValue formats a duration as its matching preset string when one exists,
@@ -88,12 +90,20 @@ func rateLimitValue(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
+func pathStyleValue(s string) string {
+	if s == "" {
+		return "compact"
+	}
+	return s
+}
+
 // buildSettingItems returns the curated, editable settings rows in display
 // order. Theme reflects the live ActiveThemeName; everything else comes from
 // the supplied config snapshot.
 func buildSettingItems(cfg config.Config) []settingItem {
 	return []settingItem{
 		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName, live: true},
+		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions, live: true},
 		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions, live: true},
 		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions, restart: true},
 		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict), restart: true},

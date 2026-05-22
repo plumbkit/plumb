@@ -27,8 +27,8 @@ func newSettingsModel() Model {
 
 func TestBuildSettingItems_ShapeAndFlags(t *testing.T) {
 	items := buildSettingItems(config.Defaults())
-	if len(items) != 15 {
-		t.Fatalf("len(items) = %d, want 15", len(items))
+	if len(items) != 16 {
+		t.Fatalf("len(items) = %d, want 16", len(items))
 	}
 	if items[0].key != skTheme || items[0].kind != settingPopup || !items[0].live {
 		t.Errorf("first item should be the live Theme popup, got %+v", items[0])
@@ -43,6 +43,9 @@ func TestBuildSettingItems_ShapeAndFlags(t *testing.T) {
 	}
 	if ll := byKey[skLogLevel]; !ll.live || ll.restart {
 		t.Errorf("log level should be live and not restart-gated, got %+v", ll)
+	}
+	if ps := byKey[skPathStyle]; !ps.live || ps.restart {
+		t.Errorf("path style should be live and not restart-gated, got %+v", ps)
 	}
 	for _, k := range []settingKey{
 		skLogFormat, skStrict, skShowWriteDiff, skRateLimit, skTopology, skQuality,

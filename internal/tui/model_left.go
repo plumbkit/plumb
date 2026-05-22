@@ -43,8 +43,10 @@ func (m Model) leftLines() []string {
 		}
 		path := "resolving…"
 		if s.Folder != "" {
-			mf := max(m.leftWidth-len([]rune("    ╰─ ")), 0)
-			path = contractPath(s.Folder, mf)
+			// Subtract one extra so the rendered line stays within m.leftWidth-1
+			// and the cell renderer never appends a trailing ….
+			mf := max(m.leftWidth-len([]rune("    ╰─ "))-1, 0)
+			path = contractPath(s.Folder, mf, m.settingsCfg.UI.PathStyle)
 		}
 		secondLine := "    ╰─ " + path
 		lines = append(lines, leftSessionRowLines(firstLine, secondLine, selected, lf)...)

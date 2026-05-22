@@ -91,7 +91,7 @@ func (m Model) rightLinesDetails(rw int) []string {
 	if fld == "" {
 		fld = MutedStyle.Render("(resolving workspace…)")
 	} else {
-		fld = contractPath(fld, mv)
+		fld = contractPath(fld, mv, m.settingsCfg.UI.PathStyle)
 	}
 	adp := s.Adapter
 	if adp == "" {

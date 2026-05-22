@@ -176,6 +176,13 @@ type UIConfig struct {
 	// Theme is the key of the active colour theme in tui.AvailableThemes.
 	// Default "nordico". Persisted by the TUI theme picker via SaveTheme.
 	Theme string `toml:"theme"`
+	// PathStyle controls how workspace folder paths are abbreviated in the
+	// Sessions sidebar. "compact" (default) shows the tilde-home prefix, the
+	// first letter of each intermediate directory component, and the full last
+	// component — e.g. ~/P/e/o/cve-explorer. "truncate-middle" trims the left
+	// side of the path and keeps the tail. "full" shows the full tilde-home
+	// path and only falls back to ellipsis+last when still over the column width.
+	PathStyle string `toml:"path_style"`
 }
 
 // QualityConfig controls post-write offline code-quality analysis.
@@ -217,7 +224,7 @@ type Config struct {
 var defaults = Config{
 	LogLevel:  "info",
 	LogFormat: "text",
-	UI:        UIConfig{Theme: "nordico"},
+	UI:        UIConfig{Theme: "nordico", PathStyle: "compact"},
 	Cache: CacheConfig{
 		TTL:     Duration{5 * time.Minute},
 		MaxSize: 1000,
@@ -590,6 +597,11 @@ func validate(cfg Config) error {
 	}
 	if cfg.LSPQuery.Timeout.Duration < 0 {
 		return fmt.Errorf("lsp_query.timeout must be non-negative (0 disables)")
+	}
+	switch cfg.UI.PathStyle {
+	case "", "compact", "truncate-middle", "full":
+	default:
+		return fmt.Errorf("ui.path_style must be compact, truncate-middle, or full; got %q", cfg.UI.PathStyle)
 	}
 	for name, lsp := range cfg.LSP {
 		if lsp.Enabled && lsp.Command == "" {

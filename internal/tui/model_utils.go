@@ -142,18 +142,87 @@ func wrapText(s string, width int) []string {
 
 func detailRow(k, v string) string { return "  " + KeyStyle.Render(k) + ValStyle.Render(v) }
 
-func contractPath(p string, max int) string {
+// contractPath formats p for display in a width-limited column.
+// style selects the abbreviation strategy; see config.UIConfig.PathStyle.
+func contractPath(p string, maxW int, style string) string {
 	if h, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, h) {
 		p = "~" + p[len(h):]
 	}
+	switch style {
+	case "truncate-middle":
+		return contractPathTruncateLeft(p, maxW)
+	case "full":
+		return contractPathFull(p, maxW)
+	default: // "compact" and empty/unrecognised
+		return contractPathCompact(p, maxW)
+	}
+}
+
+// contractPathTruncateLeft keeps the rightmost maxW runes, prefixed with "…".
+func contractPathTruncateLeft(p string, maxW int) string {
 	r := []rune(p)
-	if len(r) <= max {
+	if len(r) <= maxW {
 		return p
 	}
-	if max <= 1 {
+	if maxW <= 1 {
 		return "…"
 	}
-	return "…" + string(r[len(r)-(max-1):])
+	return "…" + string(r[len(r)-(maxW-1):])
+}
+
+// contractPathFull preserves the full path and falls back to "…/<last>" when
+// it still overflows, never truncating the final directory component.
+func contractPathFull(p string, maxW int) string {
+	if len([]rune(p)) <= maxW {
+		return p
+	}
+	base := filepath.Base(p)
+	sep := string(filepath.Separator)
+	fallback := "…" + sep + base
+	if len([]rune(fallback)) <= maxW {
+		return fallback
+	}
+	return contractPathTruncateLeft(base, maxW)
+}
+
+// contractPathCompact abbreviates every intermediate directory component to
+// its first letter, keeping the final component in full:
+//
+//	~/Projects/experiments/others/cve-explorer  →  ~/P/e/o/cve-explorer
+//
+// Falls back to "…/<last>" when the abbreviated form still overflows.
+func contractPathCompact(p string, maxW int) string {
+	if len([]rune(p)) <= maxW {
+		return p
+	}
+	sep := string(filepath.Separator)
+	parts := strings.Split(p, sep)
+	// Drop an empty trailing component produced by a trailing separator.
+	if len(parts) > 1 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) < 2 {
+		return contractPathTruncateLeft(p, maxW)
+	}
+	last := parts[len(parts)-1]
+	heads := make([]string, len(parts)-1)
+	for i, part := range parts[:len(parts)-1] {
+		rr := []rune(part)
+		if len(rr) <= 1 || part == "~" {
+			heads[i] = part
+		} else {
+			heads[i] = string(rr[:1])
+		}
+	}
+	candidate := strings.Join(heads, sep) + sep + last
+	if len([]rune(candidate)) <= maxW {
+		return candidate
+	}
+	fallback := "…" + sep + last
+	if len([]rune(fallback)) <= maxW {
+		return fallback
+	}
+	return contractPathTruncateLeft(last, maxW)
 }
 
 func daemonRunning() bool {
