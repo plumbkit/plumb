@@ -1,21 +1,70 @@
-# Topology — the semantic index
+# Topology — plumb's semantic code index
 
-Topology is plumb's optional, persistent semantic index of your codebase. It
-complements the language server: where LSP gives compiler-grade precision after
-a startup cost, topology gives instant, broad answers from a local SQLite/FTS5
-database — no language-server boot, no per-conversation indexing wait.
+## What is it? (start here)
 
-Topology is **disabled by default**. Enable it per project or globally:
+When you open a large codebase for the first time, the hard part isn't reading
+any single file — it's knowing *where things are* and *how they connect*.
+**Topology is plumb's answer to that.** It is a small, local database that plumb
+builds from your code and keeps up to date in the background. It records the
+*structure* of your project — every function, type, method, route, and test, and
+the relationships between them (which function calls which, which file imports
+which) — so questions like:
 
-```toml
-[topology]
-enabled = true
-```
+- "Where is the routing / auth / database logic?"
+- "What calls this function, and what would break if I change it?"
+- "Which tests cover this area?"
 
-The index lives at `<workspace>/.plumb/topology.db` and is maintained by a
-background indexer.
+can be answered **instantly**, without reading the whole repository and without
+waiting for any heavy tooling to start.
 
-## The dual-engine model
+The name comes from *topology* in the mathematical sense — the shape of how
+things are connected. Plumb's topology is a **graph** of your code's entities
+(the nodes) and their relationships (the edges), stored in a single file you can
+delete and rebuild at any time.
+
+> **You don't need to understand any of the internals to use it.** Turn it on
+> with `[topology] enabled = true` and the `topology_*` tools (plus faster
+> symbol search) start working. The rest of this page explains the benefits and
+> how it works, for the curious.
+
+## Why it exists — the problem it solves
+
+On an unfamiliar codebase, agents and developers hit the same bottleneck:
+**discovery is expensive.** The usual options each fall short:
+
+- **Read files** — accurate but slow and token-hungry; you read a lot to find a
+  little.
+- **Grep / text search** — fast but blind: no ranking, no idea whether a match
+  is a definition, a comment, or a call, and no sense of structure.
+- **Ask the language server (LSP)** — compiler-grade precision, but it must boot
+  and index first (seconds to minutes on a cold or large project), needs the
+  right server installed, and wants the code in a compilable state.
+
+Topology fills the gap: **broad, structural answers, available immediately** —
+even before (or entirely without) a language server, and even when the code
+doesn't compile. For an AI agent that is a large token saving: it can pinpoint
+the right few files instead of reading dozens.
+
+## Benefits at a glance
+
+- **Instant.** Answers come from a local SQLite/FTS5 database — no
+  language-server boot, no per-conversation indexing wait.
+- **Works without a language server.** Useful for TypeScript/JavaScript (which
+  has no LSP adapter in plumb) and for any project where the LSP isn't installed.
+- **Tolerant of broken code.** It's syntactic, so it keeps working mid-refactor
+  when the code won't compile.
+- **Structural, not just textual.** Ranked symbol search, neighbourhood
+  exploration, and blast-radius/impact analysis — things grep cannot do.
+- **Cheap and self-throttling.** A small file under `.plumb/`, maintained by a
+  background indexer that paces itself so it never hogs a CPU core.
+- **Safe to delete.** It's derived data: drop `topology.db` and plumb rebuilds
+  it. (plumb also keeps it out of git automatically.)
+
+The trade-off — a deliberate one — is that topology is *approximate*: it
+understands syntax, not full type semantics. That's why plumb pairs it with the
+language server.
+
+## The dual-engine model: Map + GPS
 
 Plumb pairs two engines that handle different phases of an agent's work:
 
@@ -36,7 +85,36 @@ flowchart LR
   verify changes with full type awareness.
 
 See [Architecture → dual-engine](architecture.md#plumb-topology-vs-lsp-the-dual-engine-architecture)
-for how the two fit into the layered design.
+for how the two fit into plumb's layered design.
+
+## How it works (architecture)
+
+You can skip this section and still use topology happily. For the curious, the
+pipeline has four parts:
+
+1. **Extractors read your source.** Per language, a lightweight extractor turns
+   a file into a list of *entities* (functions, types, methods, imports, tests)
+   and *edges* (calls, imports, containment). Go uses the standard library's
+   `go/parser` + `go/ast` (precise, no cgo); Python and TypeScript/JavaScript use
+   fast regex scanners. None of this requires the code to compile.
+2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
+   tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual
+   table powers ranked, typo-tolerant symbol search and splits
+   `CamelCase`/`snake_case` so `UserSession` matches both `user` and `session`.
+3. **A background indexer keeps it fresh.** One goroutine per workspace: every
+   plumb write re-indexes just that file, and a periodic full resync (hourly by
+   default) reconciles anything changed outside plumb — a `git pull`, a branch
+   switch, another editor. The full resync is **throttled** (it pauses briefly
+   every `resync_batch` files) so a large repo's index build never saturates a
+   core or competes with your live tool calls; the pause is interruptible so
+   daemon shutdown stays fast.
+4. **Six tools query the graph** (below), reporting their source and freshness so
+   an agent never mistakes an approximate answer for compiler-grade truth.
+
+In plumb's layered architecture, topology is the **Intelligence** layer
+(`internal/topology`), sitting below the application/presentation layers and
+beside the domain layer — it never depends on higher layers, and other layers
+treat it as an optional, rebuildable index.
 
 ## When to use topology vs LSP
 
@@ -55,12 +133,17 @@ for how the two fit into the layered design.
 A common flow: `topology_search` to locate → `topology_explore`/`topology_impact`
 to scope → LSP tools to read and edit precisely → `diagnostics` to verify.
 
+When topology is enabled, the name-lookup tools `find_symbol`,
+`workspace_symbols`, and `list_symbols` also **fall back** to the topology index
+if the language server errors or times out, returning approximate results
+annotated `source=topology, mode=indexed-approximate` rather than failing.
+
 ## The six tools
 
 See [Tools → Topology](tools.md#topology) for full inputs. In brief:
 
 - **`topology_status`** — index health: file/entity counts, DB size, indexed
-  languages, last sync, last error.
+  languages, last sync, last error. (`plumb doctor` also reports this.)
 - **`topology_search`** — FTS5 ranked symbol/file search (`query`, optional
   `kinds`/`language` filters).
 - **`topology_explore`** — BFS neighbourhood around a named symbol, with depth,
@@ -84,13 +167,22 @@ All `[topology]` fields (see the
 | `resync_on_attach` | `false` | Full resync each time the workspace attaches. |
 | `exclude_patterns` | `[]` | Path globs to skip during indexing. |
 | `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). |
-| `resync_interval_minutes` | `0` | Periodic full-resync interval; `0` disables. |
+| `resync_batch` | `100` | Files extracted before the full resync pauses (CPU throttle). `0` disables pacing. |
+| `resync_pause_ms` | `25` | Pause after each `resync_batch` files, in milliseconds. `0` disables pacing. |
+| `resync_interval_minutes` | `60` | Periodic full-resync interval (when enabled); `0` disables. |
+
+The index is enabled per project or globally. It writes only to
+`<workspace>/.plumb/topology.db` (and its SQLite `-wal`/`-shm` sidecars), which
+plumb adds to `.plumb/.gitignore` automatically so the rebuildable index is
+never committed.
 
 ## Trade-offs and limitations
 
-- **Syntactic, not semantic.** Topology does not resolve types or follow
-  dynamic dispatch. Treat its graph as a strong hint, then confirm with LSP.
-- **`topology_routes` is heuristic.** It pattern-matches known frameworks;
-  always read the confidence annotation.
-- **Per-workspace cost.** The index is a small SQLite file under `.plumb/`. The
-  background indexer keeps it fresh as files change.
+- **Syntactic, not semantic.** Topology does not resolve types or follow dynamic
+  dispatch. Treat its graph as a strong hint, then confirm with LSP.
+- **`topology_routes` is heuristic.** It pattern-matches known frameworks; always
+  read the confidence annotation.
+- **Freshness is eventual.** Edits made through plumb re-index immediately;
+  external changes are picked up by the periodic resync (or on the next attach).
+- **Disabled by default.** Topology is opt-in while the path to safely enabling
+  it by default is completed (see `docs/internal/todo.md`).

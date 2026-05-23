@@ -69,7 +69,7 @@ flowchart LR
 ```
 
 ### 1. Plumb Topology (The Map)
-Topology uses **Go AST, Python regex, and TypeScript/JS regex extractors** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). Enabled via `[topology] enabled = true` in the project config. It is exposed through six tools: `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, and `topology_routes`.
+Topology uses **Go AST, Python regex, and TypeScript/JS regex extractors** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). Enabled via `[topology] enabled = true` in the project config. It is exposed through six tools: `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, and `topology_routes`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
 *   **Strengths:** Instant availability (no LSP boot time), minimal memory footprint, handles broken code gracefully, FTS5 ranked search, BFS neighbourhood exploration.
 *   **Role in Plumb:** Discovery engine. When an agent asks "Where is the routing logic?" or needs to see a symbol's neighbourhood, Topology handles it without waiting for the language server to index.
 *   **Trade-offs:** Syntactic extraction only — no type resolution. "Broad" recall, not compiler-level precision.

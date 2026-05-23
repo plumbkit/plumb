@@ -122,7 +122,9 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 | `resync_on_attach` | bool | `false` | Force a full resync each time the workspace attaches. |
 | `exclude_patterns` | []string | `[]` | Path glob patterns to skip during indexing. |
 | `max_file_size_bytes` | int64 | `524288` (512 KiB) | Largest file considered for extraction. `0` uses the default. |
-| `resync_interval_minutes` | int | `0` | Interval between full resyncs. `0` disables periodic resync. |
+| `resync_batch` | int | `100` | Files the full resync extracts before pausing, to throttle CPU. `0` disables pacing. |
+| `resync_pause_ms` | int | `25` | Pause (milliseconds) after each `resync_batch` files. `0` disables pacing. |
+| `resync_interval_minutes` | int | `60` | Interval between full resyncs (for enabled workspaces). `0` disables periodic resync. |
 
 ## `[lsp_query]` — LSP operation timeout (global only)
 
@@ -247,7 +249,9 @@ enabled                 = false             # persistent semantic index
 resync_on_attach        = false
 exclude_patterns        = []
 max_file_size_bytes     = 524288            # 512 KiB
-resync_interval_minutes = 0                 # 0 disables periodic resync
+resync_batch            = 100               # files per pause during a full resync (0 disables)
+resync_pause_ms         = 25                # pause after each batch, ms (0 disables)
+resync_interval_minutes = 60                # periodic full resync; 0 disables
 
 [lsp_query]
 timeout = "30s"          # per-operation cap; 0 disables; global only

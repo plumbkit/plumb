@@ -16,6 +16,7 @@
 - **Sessions sidebar no longer appends a trailing `…` to abbreviated paths.** The cell renderer in `model_render.go` clips every left-panel line to `m.leftWidth-1` characters. The available-width budget passed to `contractPath` was off by one, so the path line was always exactly one character over the limit and the renderer silently replaced the last character with `…`. The budget is now `m.leftWidth - 8` (prefix width + 1 guard) so the formatted line fits within the renderer threshold.
 
 ### Documentation
+- **Rewrote the Topology guide for newcomers and refreshed the config docs.** `docs/topology.md` now opens with a plain-language "what is it / why it exists / benefits" introduction and a "how it works" architecture section aimed at readers new to the concept, and `docs/architecture.md` links to it. `docs/configuration.md` is updated to match the new resync settings (`resync_batch`, `resync_pause_ms`, and `resync_interval_minutes` now defaulting to 60).
 - **Documented the `plumb doctor` topology check and the topology LSP fallback.** `docs/cli-reference.md` now lists the new "Indexing" section under `plumb doctor`; `docs/tools.md` notes the topology fallback (shipped in 0.7.8) on `find_symbol`, `workspace_symbols`, and `list_symbols`.
 
 ## 0.7.11 (unreleased)
