@@ -10,6 +10,7 @@ import (
 	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
+	"github.com/golimpio/plumb/internal/topology"
 )
 
 func (m *Model) refresh() {
@@ -26,6 +27,7 @@ func (m *Model) refresh() {
 	}
 	m.refreshDaemonMetrics()
 	m.refreshStats()
+	m.refreshTopology()
 	m.refreshDashboard()
 	m.refreshMemories()
 }
@@ -102,6 +104,29 @@ func (m *Model) refreshDiagnostics() {
 		return
 	}
 	m.lastDiagnosticsOutput = diagnosticsControlOutput(string(b))
+}
+
+// refreshTopology fetches the topology index status for the selected session's
+// workspace, read-only and without starting an indexer. topoStatusOK is false
+// when no session is selected, the folder is unknown, or no index exists on disk
+// (the common case when topology is disabled), so the detail panel omits the row.
+func (m *Model) refreshTopology() {
+	m.topoStatusOK = false
+	if len(m.sessions) == 0 {
+		m.topoStatusFolder = ""
+		return
+	}
+	folder := m.sessions[m.cursor].Folder
+	m.topoStatusFolder = folder
+	if folder == "" {
+		return
+	}
+	st, err := topology.StatusForWorkspace(folder)
+	if err != nil {
+		return
+	}
+	m.topoStatus = st
+	m.topoStatusOK = true
 }
 
 func diagnosticsControlOutput(out string) string {

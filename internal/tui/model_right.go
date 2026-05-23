@@ -134,8 +134,39 @@ func (m Model) rightLinesDetails(rw int) []string {
 	lines = append(lines, detailRow("Tools", fmt.Sprintf("%d", len(m.toolStats))))
 	lines = append(lines, detailRow("Calls", fmt.Sprintf("%d", totalCalls)))
 	lines = append(lines, detailRow("Issues", fmt.Sprintf("%d", issues)))
+	if row, ok := m.topologyDetailRow(); ok {
+		lines = append(lines, row)
+	}
 
 	return lines
+}
+
+// topologyDetailRow renders a one-line topology summary for the selected
+// session's workspace, or ok=false when the workspace has no on-disk index
+// (topology disabled, or not yet built). Counts come from a read-only snapshot;
+// the live indexer state is not shown here because the TUI is a separate process.
+func (m Model) topologyDetailRow() (string, bool) {
+	if !m.topoStatusOK {
+		return "", false
+	}
+	st := m.topoStatus
+	info := fmt.Sprintf("%d nodes · %d files · %s", st.TotalNodes, st.IndexedFiles, byteSizeLabel(st.DBSizeBytes))
+	if len(st.Languages) > 0 {
+		info += " · " + strings.Join(st.Languages, ",")
+	}
+	return detailRow("Topology", info), true
+}
+
+// byteSizeLabel formats a byte count compactly for the detail panel.
+func byteSizeLabel(b int64) string {
+	switch {
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(b)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 func (m *Model) rightLinesTools(rw int) []string {

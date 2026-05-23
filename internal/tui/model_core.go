@@ -10,6 +10,7 @@ import (
 	"github.com/golimpio/plumb/internal/monitor"
 	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/stats"
+	"github.com/golimpio/plumb/internal/topology"
 )
 
 // Version is set by the cli package before calling Run so it appears in the header.
@@ -56,6 +57,12 @@ type Model struct {
 	lastActivityAt  time.Time
 	activitySession string // DEPRECATED: no longer used for activity caching since it's global
 	loadErr         string
+
+	// Topology index status for the selected session's workspace, fetched
+	// read-only per refresh from <folder>/.plumb/topology.db (zero when absent).
+	topoStatus       topology.Status
+	topoStatusOK     bool   // true when the selected workspace has an on-disk index
+	topoStatusFolder string // folder topoStatus was fetched for
 
 	// UI Overlays
 	showPopup bool
