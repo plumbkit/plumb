@@ -166,7 +166,15 @@ type TopologyConfig struct {
 	// MaxFileSizeBytes caps the file size considered for extraction.
 	// Default 512 KiB. 0 means use the default.
 	MaxFileSizeBytes int64 `toml:"max_file_size_bytes"`
-	// ResyncIntervalMinutes is the interval between full resyncs. 0 disables periodic resync.
+	// ResyncBatch is the number of files a full resync extracts before pausing
+	// for ResyncPauseMs, so the indexer yields CPU to live tool calls on a large
+	// workspace. Only the full resync walk is paced; write-triggered upserts are
+	// never delayed. 0 disables pacing. Default 100.
+	ResyncBatch int `toml:"resync_batch"`
+	// ResyncPauseMs is the pause (milliseconds) inserted after each ResyncBatch
+	// files during a full resync. 0 disables pacing. Default 25.
+	ResyncPauseMs int `toml:"resync_pause_ms"`
+	// ResyncIntervalMinutes is the interval between full resyncs. 0 disables periodic resync. Default 60.
 	ResyncIntervalMinutes int `toml:"resync_interval_minutes"`
 }
 
@@ -253,8 +261,11 @@ var defaults = Config{
 		MaxFindingsPerFile: 5,
 	},
 	Topology: TopologyConfig{
-		Enabled:          false,
-		MaxFileSizeBytes: 512 * 1024,
+		Enabled:               false,
+		MaxFileSizeBytes:      512 * 1024,
+		ResyncBatch:           100,
+		ResyncPauseMs:         25,
+		ResyncIntervalMinutes: 60,
 	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},
@@ -584,19 +595,14 @@ func validate(cfg Config) error {
 	if cfg.Edits.ConcurrentWriteSkewMs < 0 {
 		return fmt.Errorf("edits.concurrent_write_skew_ms must be non-negative")
 	}
-	switch cfg.Quality.Mode {
-	case "", "background", "sync":
-	default:
-		return fmt.Errorf("quality.mode must be \"background\" or \"sync\"; got %q", cfg.Quality.Mode)
-	}
-	if cfg.Quality.TimeoutMs < 0 {
-		return fmt.Errorf("quality.timeout_ms must be non-negative")
-	}
-	if cfg.Quality.MaxFindingsPerFile < 0 {
-		return fmt.Errorf("quality.max_findings_per_file must be non-negative")
+	if err := validateQuality(cfg.Quality); err != nil {
+		return err
 	}
 	if cfg.LSPQuery.Timeout.Duration < 0 {
 		return fmt.Errorf("lsp_query.timeout must be non-negative (0 disables)")
+	}
+	if err := validateTopology(cfg.Topology); err != nil {
+		return err
 	}
 	switch cfg.UI.PathStyle {
 	case "", "compact", "truncate-middle", "full":
@@ -607,6 +613,37 @@ func validate(cfg Config) error {
 		if lsp.Enabled && lsp.Command == "" {
 			return fmt.Errorf("lsp.%s.command must be set when enabled", name)
 		}
+	}
+	return nil
+}
+
+func validateQuality(q QualityConfig) error {
+	switch q.Mode {
+	case "", "background", "sync":
+	default:
+		return fmt.Errorf("quality.mode must be \"background\" or \"sync\"; got %q", q.Mode)
+	}
+	if q.TimeoutMs < 0 {
+		return fmt.Errorf("quality.timeout_ms must be non-negative")
+	}
+	if q.MaxFindingsPerFile < 0 {
+		return fmt.Errorf("quality.max_findings_per_file must be non-negative")
+	}
+	return nil
+}
+
+func validateTopology(tp TopologyConfig) error {
+	if tp.MaxFileSizeBytes < 0 {
+		return fmt.Errorf("topology.max_file_size_bytes must be non-negative (0 uses the default)")
+	}
+	if tp.ResyncBatch < 0 {
+		return fmt.Errorf("topology.resync_batch must be non-negative (0 disables pacing)")
+	}
+	if tp.ResyncPauseMs < 0 {
+		return fmt.Errorf("topology.resync_pause_ms must be non-negative (0 disables pacing)")
+	}
+	if tp.ResyncIntervalMinutes < 0 {
+		return fmt.Errorf("topology.resync_interval_minutes must be non-negative (0 disables periodic resync)")
 	}
 	return nil
 }

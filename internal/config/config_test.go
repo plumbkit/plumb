@@ -301,6 +301,19 @@ func TestDefaults_TopologyDisabledAndMaxFileSize(t *testing.T) {
 	}
 }
 
+func TestDefaults_TopologyResyncPacingAndInterval(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Topology.ResyncBatch != 100 {
+		t.Errorf("ResyncBatch = %d, want 100", cfg.Topology.ResyncBatch)
+	}
+	if cfg.Topology.ResyncPauseMs != 25 {
+		t.Errorf("ResyncPauseMs = %d, want 25", cfg.Topology.ResyncPauseMs)
+	}
+	if cfg.Topology.ResyncIntervalMinutes != 60 {
+		t.Errorf("ResyncIntervalMinutes = %d, want 60", cfg.Topology.ResyncIntervalMinutes)
+	}
+}
+
 func TestDefaults_TopologyExcludePatternsIsolated(t *testing.T) {
 	cfg := Defaults()
 	cfg.Topology.ExcludePatterns = []string{"vendor/"}

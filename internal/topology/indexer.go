@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,11 +19,13 @@ import (
 //
 // Concurrency: all exported methods are safe for concurrent use.
 type Indexer struct {
-	workspace  string
-	db         *sql.DB
-	extractors []Extractor
-	maxSize    int64
-	resyncMins int // 0 disables periodic resync
+	workspace   string
+	db          *sql.DB
+	extractors  []Extractor
+	maxSize     int64
+	resyncMins  int           // 0 disables periodic resync
+	resyncBatch int           // files per pause during a full resync; 0 disables pacing
+	resyncPause time.Duration // pause between resync batches; 0 disables pacing
 
 	queue chan indexOp
 	done  chan struct{}
@@ -443,8 +446,14 @@ func (idx *Indexer) processDelete(ctx context.Context, relPath string) error {
 	return tx.Commit()
 }
 
+// errResyncAborted is returned through filepath.Walk when the indexer is
+// stopping (or its context is cancelled) mid-resync, so processResync can skip
+// pruning — a partial walk must not delete files it simply hasn't visited yet.
+var errResyncAborted = errors.New("topology: resync aborted")
+
 func (idx *Indexer) processResync(ctx context.Context) error {
 	present := make(map[string]bool)
+	processed := 0
 	err := filepath.Walk(idx.workspace, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			// Surface permission errors and other walk failures in the last-error field
@@ -463,12 +472,38 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 			return nil
 		}
 		present[rel] = true
-		return idx.processUpsert(ctx, rel)
+		if upErr := idx.processUpsert(ctx, rel); upErr != nil {
+			return upErr
+		}
+		processed++
+		return idx.pace(ctx, processed)
 	})
+	if errors.Is(err, errResyncAborted) {
+		// Shutting down: skip prune so a partial walk cannot delete live files.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("topology: resync walk: %w", err)
 	}
 	return idx.pruneDeleted(present)
+}
+
+// pace throttles the full resync walk: after every resyncBatch files it pauses
+// for resyncPause, yielding CPU to live tool calls and other workspaces sharing
+// the daemon. It returns errResyncAborted when the indexer is stopping or the
+// context is cancelled. A zero batch or pause disables pacing entirely.
+func (idx *Indexer) pace(ctx context.Context, processed int) error {
+	if idx.resyncBatch <= 0 || idx.resyncPause <= 0 || processed%idx.resyncBatch != 0 {
+		return nil
+	}
+	select {
+	case <-idx.done:
+		return errResyncAborted
+	case <-ctx.Done():
+		return errResyncAborted
+	case <-time.After(idx.resyncPause):
+		return nil
+	}
 }
 
 func (idx *Indexer) pruneDeleted(present map[string]bool) error {

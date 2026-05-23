@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/golimpio/plumb/internal/config"
 )
@@ -32,6 +33,8 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 		return nil, err
 	}
 	idx := newIndexer(workspace, db, exts, cfg.MaxFileSizeBytes, cfg.ResyncIntervalMinutes)
+	idx.resyncBatch = cfg.ResyncBatch
+	idx.resyncPause = time.Duration(cfg.ResyncPauseMs) * time.Millisecond
 	idx.Start()
 	return &Store{workspace: workspace, db: db, idx: idx}, nil
 }
