@@ -32,7 +32,7 @@ func readLinuxStatm(pid int, out *processMetrics) error {
 	if len(fields) < 2 {
 		return nil
 	}
-	pageSize := uint64(os.Getpagesize())
+	pageSize := uint64(os.Getpagesize()) //nolint:gosec // G115: os.Getpagesize returns a small positive power of two; never negative
 	if size, err := strconv.ParseUint(fields[0], 10, 64); err == nil {
 		out.VMSBytes = size * pageSize
 		out.VMSAvailable = true
@@ -67,6 +67,7 @@ func readLinuxCPUTime(pid int, out *processMetrics) error {
 		return err
 	}
 	ticks := utime + stime
+	//nolint:gosec // G115: ticks is a CPU clock-tick count that cannot approach math.MaxInt64 (≈2.9e9 years of CPU time)
 	out.CPUTime = time.Duration(ticks) * time.Second / linuxClockTicksPerSecond
 	out.CPUTimeAvailable = true
 	return nil
