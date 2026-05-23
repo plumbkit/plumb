@@ -103,7 +103,7 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 	brokenPath := filepath.Join(ws, "broken.py")
 	brokenURI := protocol.FileURI(brokenPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	// Subscribe to publishDiagnostics BEFORE init so we don't miss any.
@@ -153,9 +153,12 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 		t.Fatal("DidChangeWatchedFiles:", err)
 	}
 
-	// Wait up to 15 s for pyright to publish diagnostics for the broken file.
-	// Pyright can be slow on first-run cache warming; 15 s gives ample headroom.
-	deadline := time.After(15 * time.Second)
+	// Wait for pyright to publish diagnostics for the broken file. A freshly
+	// installed pyright on a cold CI runner takes far longer than a warm local
+	// one to boot Node, initialise, index, and publish — so the deadline is
+	// generous (well within the 60 s context above). A healthy pyright still
+	// answers in a few seconds; the headroom only covers a cold start.
+	deadline := time.After(45 * time.Second)
 	for {
 		select {
 		case errs := <-diagCh:
@@ -163,7 +166,7 @@ func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 				return // success: pyright acted on our notification
 			}
 		case <-deadline:
-			t.Fatal("pyright did not publish error diagnostics for broken.py within 15s — " +
+			t.Fatal("pyright did not publish error diagnostics for broken.py within 45s — " +
 				"DidChangeWatchedFiles may not be reaching the server, or capability " +
 				"negotiation is broken")
 		}
