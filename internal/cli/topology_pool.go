@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/langsupport"
 	"github.com/golimpio/plumb/internal/topology"
 	"github.com/golimpio/plumb/internal/topology/extractors/golang"
 	"github.com/golimpio/plumb/internal/topology/extractors/python"
@@ -63,10 +64,28 @@ func (p *topologyPool) StopAll() {
 	}
 }
 
+// extractorCtors maps a language name to its structural-extractor constructor.
+// A language is indexed only when its langsupport entry has a non-EngineNone
+// structural engine AND a constructor here. This is the seam for moving a
+// language onto a different engine (regex → tree-sitter): change the
+// langsupport entry and point the constructor here at the new extractor.
+var extractorCtors = map[string]func() topology.Extractor{
+	"go":         func() topology.Extractor { return golang.New() },
+	"python":     func() topology.Extractor { return python.New() },
+	"typescript": func() topology.Extractor { return typescript.New() },
+}
+
+// buildExtractors instantiates the structural extractors for every language the
+// langsupport registry marks indexable, in registry order.
 func buildExtractors() []topology.Extractor {
-	return []topology.Extractor{
-		golang.New(),
-		python.New(),
-		typescript.New(),
+	out := make([]topology.Extractor, 0, len(extractorCtors))
+	for _, l := range langsupport.All() {
+		if l.Structural == langsupport.EngineNone {
+			continue
+		}
+		if ctor, ok := extractorCtors[l.Name]; ok {
+			out = append(out, ctor())
+		}
 	}
+	return out
 }
