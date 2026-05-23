@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -250,6 +251,74 @@ func TestExplore_MaxNodesSemantics(t *testing.T) {
 	}
 	if len(nb.Nodes) > maxNodes {
 		t.Errorf("len(nb.Nodes) = %d, must be ≤ MaxNodes=%d", len(nb.Nodes), maxNodes)
+	}
+}
+
+func TestEstimateBytes_SourceModes(t *testing.T) {
+	n := Node{
+		Name: "f", Qualified: "pkg.f", Path: "a.go",
+		Signature: "func f(x int) (Result, error)", Docstring: "f does a thing",
+	}
+	none := estimateBytes(n, "none")
+	sig := estimateBytes(n, "signatures")
+	full := estimateBytes(n, "full")
+	if none >= sig {
+		t.Errorf("expected none(%d) < signatures(%d): signature should be counted only when shown", none, sig)
+	}
+	if sig >= full {
+		t.Errorf("expected signatures(%d) < full(%d): docstring should be counted for full", sig, full)
+	}
+	// Empty source defaults to signature-level (matches the tool default).
+	if estimateBytes(n, "") != sig {
+		t.Errorf("empty source mode = %d, want signatures-level %d", estimateBytes(n, ""), sig)
+	}
+}
+
+// TestExplore_ByteBudgetWholeSymbols proves the byte budget truncates on symbol
+// boundaries and is source-aware: with signatures counted, only some neighbours
+// fit; with source=none (no signature bytes) strictly more fit. Either way every
+// returned node is a whole symbol.
+func TestExplore_ByteBudgetWholeSymbols(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, "budget.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "c.go")
+	root := insertTestNode(t, db, fileID, "c.go", Node{Kind: KindPackage, Name: "root", Language: "go"})
+	bigSig := strings.Repeat("x", 200) // 200-byte signature per neighbour
+	for range 8 {
+		nx := insertTestNode(t, db, fileID, "c.go",
+			Node{Kind: KindFunction, Name: "fn", Signature: bigSig, Language: "go"})
+		insertTestEdge(t, db, root, nx, string(EdgeContains))
+	}
+
+	// Budget large enough for several name-only nodes but not all signature-laden ones.
+	const budget = 700
+	withSig, err := Explore(context.Background(), db, "root",
+		ExploreOpts{Depth: 1, MaxNodes: 50, MaxBytes: budget, IncludeSource: "signatures"})
+	if err != nil {
+		t.Fatalf("Explore signatures: %v", err)
+	}
+	noSrc, err := Explore(context.Background(), db, "root",
+		ExploreOpts{Depth: 1, MaxNodes: 50, MaxBytes: budget, IncludeSource: "none"})
+	if err != nil {
+		t.Fatalf("Explore none: %v", err)
+	}
+	if len(noSrc.Nodes) <= len(withSig.Nodes) {
+		t.Errorf("source-aware budget: none fit %d nodes, signatures fit %d; expected none to fit strictly more",
+			len(noSrc.Nodes), len(withSig.Nodes))
+	}
+	if !withSig.Truncated {
+		t.Error("expected truncation under a tight byte budget with signatures")
+	}
+	// Every returned node is a whole symbol with its name intact (never a fragment).
+	for _, n := range withSig.Nodes {
+		if n.Name != "fn" {
+			t.Errorf("unexpected partial/garbled node name %q", n.Name)
+		}
 	}
 }
 

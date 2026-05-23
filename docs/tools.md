@@ -93,6 +93,21 @@ function/method/constructor's declaration line). Falls back to the topology
 index (annotated `source=topology, mode=indexed-approximate`) when the LSP
 errors or times out and `[topology]` is enabled.
 
+### `file_outline`
+A token-cheap skeleton of a file: every function, type, method, class, and
+constant rendered as its **signature line with the body collapsed**, nested by
+containment, with byte-precise 1-based line ranges — a 2000-line file's shape in
+a few hundred tokens, so you can decide what to read without reading it.
+**Inputs:** `uri` (required), `include_docs` (bool, default true — prepends the
+first line of each symbol's leading doc comment). Symbols come from the language
+server (`documentSymbol`) when one answers; when the server is cold or does not
+cover the file it falls back to the **tree-sitter topology index** (so the
+outline still works for files no warm LSP serves), and the output is annotated
+`source=lsp` or `source=topology`. Multi-line signatures are joined; the body
+opener (`{`) and everything after it is stripped. Shares the documentSymbol
+cache with `list_symbols`. Distinct from `list_symbols`, which lists names/kinds/
+ranges; `file_outline` shows the actual signature of every symbol as a skeleton.
+
 ### `find_references`
 All usages of a symbol across the workspace, each with its source line.
 **Inputs:** `uri` (required), either `line` + `character` or `symbol_name`,
@@ -253,8 +268,13 @@ FTS5 ranked symbol/file search. **Inputs:** `query` (required), `kinds`
 ### `topology_explore`
 BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`
 (default 2, max 4), `max_nodes` (default 50, max 200), `max_bytes` (default
-30000, max 100000), `include_source` (`none` | `signatures` | `snippets` |
-`full`), `edge_kinds`.
+30000, max 100000), `include_source` (`none` = name only | `signatures`
+(default) | `snippets`/`full` = signature plus docstring), `edge_kinds`.
+Budgeting is on **symbol boundaries**: each whole symbol is costed against
+`max_bytes` for the chosen source mode and added only if it fits in full, so a
+truncated result is always a set of whole, coherent symbols — never a fragment
+of a function. `none` omits the signature bytes, so more neighbours fit under
+the same budget.
 
 ### `topology_impact`
 Bidirectional blast-radius: what a symbol depends on and what depends on it.

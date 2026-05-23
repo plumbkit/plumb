@@ -33,7 +33,7 @@ var topologyExploreSchema = json.RawMessage(`{
     },
     "include_source": {
       "type": "string",
-      "description": "How much source detail to include: none, signatures (default), snippets, full.",
+      "description": "How much source detail to include per symbol: none (name only), signatures (default), or snippets/full (signature plus docstring). Symbols are always returned whole — max_bytes truncates on symbol boundaries, never mid-function.",
       "default": "signatures"
     },
     "edge_kinds": {
@@ -140,6 +140,9 @@ func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreAr
 	if a.IncludeSource != "none" && nb.Centre.Signature != "" {
 		fmt.Fprintf(&sb, "  sig:  %s\n", nb.Centre.Signature)
 	}
+	if wantsDocstring(a.IncludeSource) && nb.Centre.Docstring != "" {
+		fmt.Fprintf(&sb, "  doc:  %s\n", firstLine(nb.Centre.Docstring))
+	}
 	sb.WriteString("\n")
 
 	if len(nb.Nodes) == 0 {
@@ -173,4 +176,28 @@ func writeNeighbourLine(sb *strings.Builder, n topology.Node, includeSource stri
 	if includeSource != "none" && n.Signature != "" {
 		fmt.Fprintf(sb, "    sig: %s\n", n.Signature)
 	}
+	if wantsDocstring(includeSource) && n.Docstring != "" {
+		fmt.Fprintf(sb, "    doc: %s\n", firstLine(n.Docstring))
+	}
+}
+
+// wantsDocstring reports whether the source mode includes docstrings (the
+// richer "snippets"/"full" modes), as opposed to signatures alone.
+func wantsDocstring(includeSource string) bool {
+	return includeSource == "snippets" || includeSource == "full"
+}
+
+// firstLine returns the first non-empty line of s, trimmed and length-capped,
+// so a multi-line docstring contributes one compact line to the output.
+func firstLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln != "" {
+			if len(ln) > 120 {
+				return ln[:120] + "…"
+			}
+			return ln
+		}
+	}
+	return ""
 }

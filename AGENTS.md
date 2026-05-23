@@ -290,7 +290,7 @@ Pyright is the worked example.
 6. Document inputs, outputs, and required LSP capabilities in `docs/tools.md`.
 7. Update this file's tool table.
 
-## Available tools (47)
+## Available tools (48)
 
 **Bootstrap**
 
@@ -307,6 +307,7 @@ Pyright is the worked example.
 | `get_definition` | `get_definition.go` | `textDocument/definition` | Cached. |
 | `explain_symbol` | `explain_symbol.go` | `textDocument/hover` | Cached. |
 | `list_symbols` | `list_symbols.go` | `textDocument/documentSymbol` | Full hierarchy with line ranges. |
+| `file_outline` | `file_outline.go` | `textDocument/documentSymbol` | Token-cheap skeleton: every symbol's signature line with the body collapsed, nested by containment, byte-precise 1-based ranges (`include_docs` prepends the leading doc-comment line). A 2000-line file's shape in a few hundred tokens. LSP-backed, with tree-sitter topology fallback when the server is cold/absent (source annotated). Shares the documentSymbol cache with `list_symbols`. |
 | `find_references` | `find_references.go` | `textDocument/references` | Includes source-line text. |
 | `call_hierarchy` | `call_hierarchy.go` | `textDocument/prepareCallHierarchy` | Incoming + outgoing. |
 | `type_hierarchy` | `type_hierarchy.go` | `textDocument/prepareTypeHierarchy` | Supertypes + subtypes. |

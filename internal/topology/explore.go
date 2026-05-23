@@ -70,13 +70,18 @@ func resolveNode(db *sql.DB, name string) (Node, error) {
 // MaxNodes is the cap on nb.Nodes (neighbours only); the centre node itself is
 // not counted against the budget, so the total output is centre + up to MaxNodes
 // neighbours.
+//
+// Budgeting is on AST boundaries: each whole symbol is costed by estimateBytes
+// for the current source mode, and a neighbour is added only if it fits within
+// MaxBytes in full — a symbol is never split, so the truncated result is always
+// a set of whole, coherent symbols.
 func bfs(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
 	nb := &Neighbourhood{Centre: centre}
 	visited := map[int64]bool{centre.ID: true}
 	inOutput := map[int64]bool{centre.ID: true}
 	seenEdges := map[int64]bool{}
 	queue := []int64{centre.ID}
-	byteEst := estimateBytes(centre)
+	byteEst := estimateBytes(centre, opts.IncludeSource)
 
 	for depth := 0; depth < opts.Depth && len(queue) > 0; depth++ {
 		next, edges, err := expandFrontier(ctx, db, queue, opts.EdgeKinds, opts.Direction)
@@ -89,7 +94,7 @@ func bfs(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neigh
 				continue
 			}
 			visited[n.ID] = true
-			byteEst += estimateBytes(n)
+			byteEst += estimateBytes(n, opts.IncludeSource)
 			if len(nb.Nodes)+1 > opts.MaxNodes || byteEst > opts.MaxBytes {
 				nb.Truncated = true
 				break
@@ -239,6 +244,19 @@ func nodesByIDs(ctx context.Context, db *sql.DB, ids map[int64]bool) ([]Node, er
 	return nodes, rows.Err()
 }
 
-func estimateBytes(n Node) int {
-	return len(n.Name) + len(n.Qualified) + len(n.Signature) + len(n.Path) + 50
+// estimateBytes approximates a node's contribution to the rendered output under
+// the given source mode, so MaxBytes bounds what is actually returned. The
+// estimate is per whole symbol: the signature is counted only when it will be
+// shown (every mode except "none"), and the docstring only for the richer
+// "snippets"/"full" modes. Because a node is always added whole, costing it this
+// way keeps truncation on symbol boundaries.
+func estimateBytes(n Node, includeSource string) int {
+	b := len(n.Name) + len(n.Qualified) + len(n.Path) + 50
+	if includeSource != "none" {
+		b += len(n.Signature)
+	}
+	if includeSource == "snippets" || includeSource == "full" {
+		b += len(n.Docstring)
+	}
+	return b
 }
