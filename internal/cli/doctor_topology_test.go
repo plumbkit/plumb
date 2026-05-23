@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/golimpio/plumb/internal/topology"
 )
 
 // writeProjectTopologyConfig drops a minimal project config that toggles the
@@ -54,6 +56,62 @@ func TestCheckTopology_EnabledButNoIndex(t *testing.T) {
 	}
 	if res[0].fix == "" {
 		t.Error("a failing topology check should carry a fix hint")
+	}
+}
+
+func TestTopologyIndexHealth(t *testing.T) {
+	cases := []struct {
+		name      string
+		st        topology.Status
+		wantOK    bool
+		wantWarn  bool
+		detailSub string
+	}{
+		{
+			name:      "cold start — nothing processed yet",
+			st:        topology.Status{},
+			wantOK:    true,
+			wantWarn:  true,
+			detailSub: "initial indexing",
+		},
+		{
+			name:      "all files skipped",
+			st:        topology.Status{SkippedFiles: 3},
+			wantOK:    true,
+			wantWarn:  true,
+			detailSub: "no files indexed",
+		},
+		{
+			name:      "indexed but no symbols",
+			st:        topology.Status{IndexedFiles: 5},
+			wantOK:    true,
+			wantWarn:  true,
+			detailSub: "no symbols extracted",
+		},
+		{
+			name:      "healthy",
+			st:        topology.Status{IndexedFiles: 5, TotalNodes: 42, TotalEdges: 10},
+			wantOK:    true,
+			wantWarn:  false,
+			detailSub: "42 nodes",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := topologyIndexHealth(c.st)
+			if res.ok != c.wantOK {
+				t.Errorf("ok = %v, want %v", res.ok, c.wantOK)
+			}
+			if res.warn != c.wantWarn {
+				t.Errorf("warn = %v, want %v", res.warn, c.wantWarn)
+			}
+			if !strings.Contains(res.detail, c.detailSub) {
+				t.Errorf("detail = %q, want it to contain %q", res.detail, c.detailSub)
+			}
+			if c.wantWarn && res.fix == "" {
+				t.Error("a warning should carry a fix hint")
+			}
+		})
 	}
 }
 

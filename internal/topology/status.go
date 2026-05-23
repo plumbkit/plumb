@@ -25,24 +25,26 @@ func Report(db *sql.DB, workspace string, idx *Indexer) Status {
 	return s
 }
 
-// StatusForWorkspace opens the topology index for ws read-only and returns a
-// Status snapshot without starting an indexer. It is intended for out-of-daemon
-// inspectors such as `plumb doctor`. A missing database is reported as an error
-// satisfying os.IsNotExist; the IndexerState in the returned Status is
-// "stopped" because no live indexer is attached.
+// StatusForWorkspace opens the topology index for ws strictly read-only and
+// returns a Status snapshot without starting an indexer. It is intended for
+// out-of-daemon inspectors such as `plumb doctor` and the TUI. A missing
+// database is reported as an error satisfying os.IsNotExist; the IndexerState in
+// the returned Status is "stopped" because no live indexer is attached.
+//
+// The connection is opened with mode=ro so the inspection is side-effect-free:
+// it never writes the main database and — when the daemon is down and the WAL
+// has been checkpointed away on clean shutdown — creates no -wal/-shm sidecars.
+// This mirrors stats.OpenReadOnly.
 func StatusForWorkspace(ws string) (Status, error) {
 	dbPath := DBPath(ws)
 	if _, err := os.Stat(dbPath); err != nil {
 		return Status{}, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_busy_timeout=2000")
 	if err != nil {
-		return Status{}, fmt.Errorf("topology: open db: %w", err)
+		return Status{}, fmt.Errorf("topology: open db read-only: %w", err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`PRAGMA busy_timeout = 2000`); err != nil {
-		return Status{}, fmt.Errorf("topology: busy_timeout: %w", err)
-	}
 	return Report(db, ws, nil), nil
 }
 

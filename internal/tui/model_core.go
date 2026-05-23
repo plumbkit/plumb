@@ -61,8 +61,9 @@ type Model struct {
 	// Topology index status for the selected session's workspace, fetched
 	// read-only per refresh from <folder>/.plumb/topology.db (zero when absent).
 	topoStatus       topology.Status
-	topoStatusOK     bool   // true when the selected workspace has an on-disk index
-	topoStatusFolder string // folder topoStatus was fetched for
+	topoStatusOK     bool      // true when the selected workspace has an on-disk index
+	topoStatusFolder string    // folder topoStatus was fetched for
+	topoStatusAt     time.Time // when topoStatus was last fetched (debounce guard)
 
 	// UI Overlays
 	showPopup bool

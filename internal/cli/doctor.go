@@ -46,9 +46,10 @@ func init() {
 
 type checkResult struct {
 	name   string
-	ok     bool
+	ok     bool // false = failure (drives the exit code); a warning keeps ok=true
+	warn   bool // ok=true but with a non-fatal caveat — rendered "!", never a failure
 	detail string
-	fix    string // one-line hint printed when ok=false
+	fix    string // one-line hint printed when the check is not a clean pass
 }
 
 func runDoctor(_ *cobra.Command, _ []string) error {
@@ -77,18 +78,25 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		{"Indexing", func() []checkResult { return checkTopology(ws) }},
 	}
 
-	failures := 0
+	failures, warnings := 0, 0
 	for _, s := range sections {
 		checks := runSection(s.title, s.run)
 		for _, c := range checks {
-			if !c.ok {
+			switch {
+			case !c.ok:
 				failures++
+			case c.warn:
+				warnings++
 			}
 		}
 	}
 
 	if failures == 0 {
-		fmt.Println(tui.OkStyle.Render("All checks passed."))
+		msg := "All checks passed."
+		if warnings > 0 {
+			msg = fmt.Sprintf("All checks passed — %d warning(s), see notes above.", warnings)
+		}
+		fmt.Println(tui.OkStyle.Render(msg))
 		return nil
 	}
 	fmt.Printf("%s  %d check(s) need attention — see hints above.\n",
@@ -100,6 +108,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 type jsonCheckResult struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
+	Warn   bool   `json:"warn,omitempty"`
 	Detail string `json:"detail"`
 	Fix    string `json:"fix"`
 }
@@ -123,7 +132,7 @@ func runDoctorJSON(ws string) error {
 
 	out := make([]jsonCheckResult, len(all))
 	for i, c := range all {
-		out[i] = jsonCheckResult{Name: c.name, OK: c.ok, Detail: c.detail, Fix: c.fix}
+		out[i] = jsonCheckResult{Name: c.name, OK: c.ok, Warn: c.warn, Detail: c.detail, Fix: c.fix}
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
 		return fmt.Errorf("encoding results: %w", err)
@@ -160,30 +169,42 @@ func printChecks(checks []checkResult) {
 			nameW = len(c.name)
 		}
 	}
-
 	for _, c := range checks {
-		marker := tui.OkStyle.Render("✓")
-		name := fmt.Sprintf("%-*s", nameW, c.name)
-		if !c.ok {
-			marker = tui.WarnStyle.Render("✗")
-			name = tui.WarnStyle.Render(name)
+		printCheck(c, nameW)
+	}
+}
+
+// printCheck renders one result. Failures (ok=false) get a "✗" marker, warnings
+// (ok=true, warn=true) a "!"; both show the detail and fix in the attention
+// colour. Clean passes get a "✓" and no fix line.
+func printCheck(c checkResult, nameW int) {
+	attention := !c.ok || c.warn
+	marker := tui.OkStyle.Render("✓")
+	switch {
+	case !c.ok:
+		marker = tui.WarnStyle.Render("✗")
+	case c.warn:
+		marker = tui.WarnStyle.Render("!")
+	}
+	name := fmt.Sprintf("%-*s", nameW, c.name)
+	if attention {
+		name = tui.WarnStyle.Render(name)
+	}
+	detailLines := strings.Split(c.detail, "\n")
+	detail := detailLines[0]
+	if attention {
+		detail = tui.WarnStyle.Render(detail)
+	}
+	fmt.Printf("  %s  %s  %s\n", marker, name, detail)
+	indent := strings.Repeat(" ", 7+nameW)
+	for _, line := range detailLines[1:] {
+		if attention {
+			line = tui.WarnStyle.Render(line)
 		}
-		detailLines := strings.Split(c.detail, "\n")
-		detail := detailLines[0]
-		if !c.ok {
-			detail = tui.WarnStyle.Render(detail)
-		}
-		fmt.Printf("  %s  %s  %s\n", marker, name, detail)
-		indent := strings.Repeat(" ", 7+nameW)
-		for _, line := range detailLines[1:] {
-			if !c.ok {
-				line = tui.WarnStyle.Render(line)
-			}
-			fmt.Printf("%s%s\n", indent, line)
-		}
-		if !c.ok && c.fix != "" {
-			fmt.Printf("%s%s\n", indent, tui.WarnStyle.Render("→ "+c.fix))
-		}
+		fmt.Printf("%s%s\n", indent, line)
+	}
+	if attention && c.fix != "" {
+		fmt.Printf("%s%s\n", indent, tui.WarnStyle.Render("→ "+c.fix))
 	}
 }
 
@@ -596,7 +617,9 @@ func checkTopology(ws string) []checkResult {
 	return checkTopologyIndex(ws)
 }
 
-// checkTopologyIndex inspects the on-disk topology index for an enabled workspace.
+// checkTopologyIndex inspects the on-disk topology index for an enabled
+// workspace. A missing or corrupt DB is a hard failure; the health of an index
+// that does exist is classified by topologyIndexHealth.
 func checkTopologyIndex(ws string) []checkResult {
 	st, err := topology.StatusForWorkspace(ws)
 	if err != nil {
@@ -615,20 +638,54 @@ func checkTopologyIndex(ws string) []checkResult {
 			fix:    "the index may be corrupt — remove " + contractConfigPath(topology.DBPath(ws)) + " to rebuild",
 		}}
 	}
-	if st.TotalNodes == 0 {
-		return []checkResult{{
+	return []checkResult{topologyIndexHealth(st)}
+}
+
+// topologyIndexHealth classifies a topology Status whose DB exists. An index
+// that has not finished its first pass is a non-fatal warning rather than a
+// failure: a freshly enabled workspace inspected before the background indexer
+// completes is healthy-but-pending, not broken, and `plumb doctor` must not
+// emit a false negative (or a non-zero exit) during that window. The states:
+//
+//   - no file processed yet — cold start, warning;
+//   - files seen but all errored/skipped — warning;
+//   - files indexed but no symbols — warning (legitimate for a docs/config-only
+//     tree; also the signature of a broken extractor, so it is surfaced);
+//   - symbols present — pass.
+func topologyIndexHealth(st topology.Status) checkResult {
+	switch {
+	case st.IndexedFiles == 0 && st.SkippedFiles == 0:
+		return checkResult{
 			name:   "topology",
-			ok:     false,
-			detail: fmt.Sprintf("enabled but index is empty (%d files, 0 nodes)", st.IndexedFiles),
-			fix:    "check daemon.log for indexer errors, or remove the index to force a rebuild",
-		}}
+			ok:     true,
+			warn:   true,
+			detail: "index is empty — initial indexing may still be in progress",
+			fix:    "re-run once the first index completes; if it stays empty, check daemon.log",
+		}
+	case st.IndexedFiles == 0:
+		return checkResult{
+			name:   "topology",
+			ok:     true,
+			warn:   true,
+			detail: fmt.Sprintf("no files indexed yet (%d skipped)", st.SkippedFiles),
+			fix:    "check daemon.log for extractor errors",
+		}
+	case st.TotalNodes == 0:
+		return checkResult{
+			name:   "topology",
+			ok:     true,
+			warn:   true,
+			detail: fmt.Sprintf("%d files indexed but no symbols extracted (expected for a docs/config-only tree)", st.IndexedFiles),
+			fix:    "if this tree has source files, check daemon.log for extractor errors",
+		}
+	default:
+		detail := fmt.Sprintf("%d files, %d nodes, %d edges, %s",
+			st.IndexedFiles, st.TotalNodes, st.TotalEdges, humanBytes(st.DBSizeBytes))
+		if len(st.Languages) > 0 {
+			detail += "  [" + strings.Join(st.Languages, ", ") + "]"
+		}
+		return checkResult{name: "topology", ok: true, detail: detail}
 	}
-	detail := fmt.Sprintf("%d files, %d nodes, %d edges, %s",
-		st.IndexedFiles, st.TotalNodes, st.TotalEdges, humanBytes(st.DBSizeBytes))
-	if len(st.Languages) > 0 {
-		detail += "  [" + strings.Join(st.Languages, ", ") + "]"
-	}
-	return []checkResult{{name: "topology", ok: true, detail: detail}}
 }
 
 // humanBytes formats a byte count for one-line doctor output.

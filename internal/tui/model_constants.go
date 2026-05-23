@@ -13,6 +13,7 @@ const (
 	sectionMenuWidth          = 22
 	pollInterval              = 2 * time.Second
 	activityInterval          = 10 * time.Second
+	topoStatusInterval        = 5 * time.Second
 	dashBucketRefreshInterval = 30 * time.Second
 	activityBuckets           = 16
 	bodyStartRow              = 4

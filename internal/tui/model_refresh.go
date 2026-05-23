@@ -110,19 +110,31 @@ func (m *Model) refreshDiagnostics() {
 // workspace, read-only and without starting an indexer. topoStatusOK is false
 // when no session is selected, the folder is unknown, or no index exists on disk
 // (the common case when topology is disabled), so the detail panel omits the row.
+//
+// The index changes slowly relative to the 2s poll, so the on-disk read is
+// debounced to at most once per topoStatusInterval — except when the selected
+// session's workspace changes, which forces an immediate re-read. The cached
+// result (including a "no index" outcome) is preserved between reads.
 func (m *Model) refreshTopology() {
-	m.topoStatusOK = false
-	if len(m.sessions) == 0 {
-		m.topoStatusFolder = ""
-		return
+	folder := ""
+	if len(m.sessions) > 0 {
+		folder = m.sessions[m.cursor].Folder
 	}
-	folder := m.sessions[m.cursor].Folder
-	m.topoStatusFolder = folder
 	if folder == "" {
+		m.topoStatusOK = false
+		m.topoStatusFolder = ""
+		m.topoStatusAt = time.Time{}
 		return
 	}
+	if folder == m.topoStatusFolder && !m.topoStatusAt.IsZero() &&
+		time.Since(m.topoStatusAt) < topoStatusInterval {
+		return
+	}
+	m.topoStatusFolder = folder
+	m.topoStatusAt = time.Now()
 	st, err := topology.StatusForWorkspace(folder)
 	if err != nil {
+		m.topoStatusOK = false
 		return
 	}
 	m.topoStatus = st
