@@ -12,6 +12,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/muesli/reflow v0.3.0
+	github.com/odvcencio/gotreesitter v0.19.1
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/sys v0.43.0
