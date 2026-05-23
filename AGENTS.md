@@ -194,6 +194,33 @@ Note this is a top-level section (`[lsp_query]`), distinct from the per-language
 
 When a query does error or time out, `find_symbol`, `workspace_symbols`, and `list_symbols` fall back to the topology index (when `[topology]` is enabled) instead of failing — returning approximate results annotated `source=topology, mode=indexed-approximate` with a `[topology fallback — … may be stale]` line. The fallback is wired via a nil-safe `WithTopologyFallback` setter in `registerAllTools`, runs under the original request context (not the expired LSP deadline), and is a no-op when topology is disabled or has no match (so the authoritative LSP error still surfaces). The position/semantic tools (`get_definition`, `find_references`, `explain_symbol`, hierarchies, `rename_symbol`) have no topology equivalent and surface the error unchanged.
 
+### `[topology]` section — semantic index
+
+```toml
+[topology]
+enabled                 = false   # opt-in; default false
+resync_on_attach        = false   # full resync each time the workspace attaches
+exclude_patterns        = []      # path globs to skip during indexing
+max_file_size_bytes     = 524288  # 512 KiB cap on files considered
+resync_batch            = 100     # files per pause during a full resync (0 disables pacing)
+resync_pause_ms         = 25      # pause after each batch, ms (0 disables pacing)
+resync_interval_minutes = 60      # periodic full resync; 0 disables
+```
+
+| Field | Default | Effect |
+|---|---|---|
+| `enabled` | `false` | Turn on the persistent SQLite/FTS5 index at `<workspace>/.plumb/topology.db`. |
+| `resync_on_attach` | `false` | Force a full resync each time the workspace attaches. |
+| `exclude_patterns` | `[]` | Path globs skipped during indexing. |
+| `max_file_size_bytes` | `524288` | Largest file extracted (512 KiB). `0` uses the default. |
+| `resync_batch` | `100` | Files the full `processResync` walk extracts before pausing `resync_pause_ms`, so the background indexer cannot saturate a core. Only the full resync walk is paced — write-triggered upserts are never delayed. `0` disables pacing. |
+| `resync_pause_ms` | `25` | Pause (ms) after each `resync_batch` files. Interruptible (`errResyncAborted`) so daemon shutdown stays fast. `0` disables pacing. |
+| `resync_interval_minutes` | `60` | Interval between periodic full resyncs for enabled workspaces, so the index recovers from external changes (`git pull`, branch switch, edits by other tools). `0` disables periodic resync. |
+
+Topology is **disabled by default**. The index is exposed through six `topology_*` tools (see the tool table) and backs the LSP fallback above; `plumb doctor` reports its health (the "Indexing" check, also in `--json`) and the TUI Sessions detail panel shows a topology row when an index exists. `topology.db` and its `-wal`/`-shm` sidecars are added to `<workspace>/.plumb/.gitignore` automatically (`ensureGitignore`) so the rebuildable index is never committed. See the [Topology guide](docs/topology.md) for an accessible overview.
+
+**Known limitation:** `topologyPool` (`internal/cli/topology_pool.go`) is built once from the daemon's *global* `cfg.Topology` and uses it for every workspace; per-connection logic only consults project config to decide *whether* to attach. So per-project `[topology]` *tuning* (interval, batch, excludes, max size) is not yet honoured — only enable/disable is per-project. Tracked in `docs/internal/todo.md`.
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server for supported clients:
