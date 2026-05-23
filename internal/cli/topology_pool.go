@@ -8,7 +8,7 @@ import (
 	"github.com/golimpio/plumb/internal/langsupport"
 	"github.com/golimpio/plumb/internal/topology"
 	"github.com/golimpio/plumb/internal/topology/extractors/golang"
-	"github.com/golimpio/plumb/internal/topology/extractors/python"
+	"github.com/golimpio/plumb/internal/topology/extractors/treesitter"
 	"github.com/golimpio/plumb/internal/topology/extractors/typescript"
 )
 
@@ -71,7 +71,7 @@ func (p *topologyPool) StopAll() {
 // langsupport entry and point the constructor here at the new extractor.
 var extractorCtors = map[string]func() topology.Extractor{
 	"go":         func() topology.Extractor { return golang.New() },
-	"python":     func() topology.Extractor { return python.New() },
+	"python":     func() topology.Extractor { return treesitter.NewPython() },
 	"typescript": func() topology.Extractor { return typescript.New() },
 }
 

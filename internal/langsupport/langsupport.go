@@ -53,7 +53,7 @@ type Language struct {
 // per-language engine and adapter choices. Iteration order is deterministic.
 var registry = []Language{
 	{Name: "go", Extensions: []string{".go"}, Structural: EngineNativeAST, LSPAdapter: "gopls"},
-	{Name: "python", Extensions: []string{".py"}, Structural: EngineRegex, LSPAdapter: "pyright-langserver"},
+	{Name: "python", Extensions: []string{".py"}, Structural: EngineTreeSitter, LSPAdapter: "pyright-langserver"},
 	{Name: "typescript", Extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}, Structural: EngineRegex, LSPAdapter: ""},
 	{Name: "java", Extensions: []string{".java"}, Structural: EngineNone, LSPAdapter: "jdtls"},
 }
