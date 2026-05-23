@@ -67,11 +67,16 @@ and `-` only; user-provided case is preserved; max 25 chars).
 ### `find_symbol`
 Search symbols by name within a **single document** (case-insensitive
 substring). **Inputs:** `query` (string, required), `uri` (string, required).
+When the language server errors or times out and `[topology]` is enabled, falls
+back to the topology index, returning approximate results annotated
+`source=topology, mode=indexed-approximate`.
 
 ### `workspace_symbols`
 Search symbols by name across the **entire workspace** via the LSP index;
 stdlib/dependency hits are filtered out. Prefer over text search for name
-lookups. **Inputs:** `query` (string, required).
+lookups. **Inputs:** `query` (string, required). Falls back to the topology
+index (annotated `source=topology, mode=indexed-approximate`) when the LSP
+errors or times out and `[topology]` is enabled.
 
 ### `get_definition`
 Source location where a symbol is defined. **Inputs:** `uri` (required), and
@@ -84,7 +89,9 @@ Hover documentation and type information for a symbol. **Inputs:** `uri`
 ### `list_symbols`
 Full symbol outline of a file — names, kinds, line ranges, children.
 **Inputs:** `uri` (required), `include_signatures` (bool — appends each
-function/method/constructor's declaration line).
+function/method/constructor's declaration line). Falls back to the topology
+index (annotated `source=topology, mode=indexed-approximate`) when the LSP
+errors or times out and `[topology]` is enabled.
 
 ### `find_references`
 All usages of a symbol across the workspace, each with its source line.

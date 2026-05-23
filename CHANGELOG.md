@@ -11,6 +11,9 @@
 - **Topology indexer no longer silently drops file updates when its queue is full.** `Indexer.Enqueue` writes to a 256-deep buffered queue and previously dropped any operation that arrived while the buffer was full, which could leave the index permanently stale until the next attach-time resync. A queue overflow now sets a pending-resync flag (`resyncPending`); the worker reconciles the whole tree at the end of its current cycle (`runQueueCycle`) so dropped per-file updates self-heal rather than being lost. Tests `TestIndexer_EnqueueOverflowFlagsResync` and `TestIndexer_RunQueueCycle_HonoursPendingResync` in `internal/topology/`. Part of the topology default-enable readiness work (item 4).
 - **Sessions sidebar no longer appends a trailing `…` to abbreviated paths.** The cell renderer in `model_render.go` clips every left-panel line to `m.leftWidth-1` characters. The available-width budget passed to `contractPath` was off by one, so the path line was always exactly one character over the limit and the renderer silently replaced the last character with `…`. The budget is now `m.leftWidth - 8` (prefix width + 1 guard) so the formatted line fits within the renderer threshold.
 
+### Documentation
+- **Documented the `plumb doctor` topology check and the topology LSP fallback.** `docs/cli-reference.md` now lists the new "Indexing" section under `plumb doctor`; `docs/tools.md` notes the topology fallback (shipped in 0.7.8) on `find_symbol`, `workspace_symbols`, and `list_symbols`.
+
 ## 0.7.11 (unreleased)
 
 ### Fixed

@@ -171,6 +171,7 @@ non-zero if any check fails. Sections:
   Code, Gemini CLI, and Codex.
 - **Configuration** — global and project `config.toml` parse cleanly.
 - **Data** — the global stats database is readable.
+- **Indexing** — when `[topology]` is enabled for the workspace, the topology index is present and non-empty (passes when topology is disabled — the opt-in default). Inspected read-only without starting an indexer; failures carry a fix hint.
 
 | Flag | Default | Effect |
 |---|---|---|
