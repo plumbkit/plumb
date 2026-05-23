@@ -1,0 +1,184 @@
+package treesitter
+
+import (
+	"context"
+	"slices"
+	"testing"
+
+	"github.com/golimpio/plumb/internal/topology"
+)
+
+var zigSrc = []byte(`const std = @import("std");
+const builtin = @import("builtin");
+
+pub const Point = struct {
+    x: f64,
+    y: f64,
+
+    pub fn norm(self: Point) f64 {
+        return self.x;
+    }
+};
+
+const Color = enum { red, green };
+const Tagged = union(enum) { a: i32, b: f64 };
+
+pub fn add(a: i32, b: i32) i32 {
+    return helper(a) + b;
+}
+
+fn helper(a: i32) i32 {
+    return a;
+}
+
+var counter: u32 = 0;
+const LIMIT: u32 = 100;
+
+test "addition works" {
+    try std.testing.expect(add(1, 2) == 3);
+}
+`)
+
+func TestZig_KindsExtracted(t *testing.T) {
+	nodes, _, err := NewZig().Extract(context.Background(), "src/geo.zig", zigSrc)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	cases := []struct {
+		kind topology.NodeKind
+		name string
+	}{
+		{topology.KindImport, "std"},
+		{topology.KindImport, "builtin"},
+		{topology.KindType, "Point"},
+		{topology.KindType, "Color"},
+		{topology.KindType, "Tagged"},
+		{topology.KindMethod, "norm"},
+		{topology.KindFunction, "add"},
+		{topology.KindFunction, "helper"},
+		{topology.KindVariable, "counter"},
+		{topology.KindConstant, "LIMIT"},
+		{topology.KindTest, "addition works"},
+	}
+	for _, c := range cases {
+		if !slices.Contains(names(nodes, c.kind), c.name) {
+			t.Errorf("kind=%s name=%q not found; got %v", c.kind, c.name, names(nodes, c.kind))
+		}
+	}
+}
+
+func TestZig_MethodContainmentCertain(t *testing.T) {
+	nodes, edges, err := NewZig().Extract(context.Background(), "geo.zig", zigSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pointIdx, normIdx int64 = -1, -1
+	for i, n := range nodes {
+		switch {
+		case n.Kind == topology.KindType && n.Name == "Point":
+			pointIdx = int64(i)
+		case n.Kind == topology.KindMethod && n.Name == "norm":
+			normIdx = int64(i)
+		}
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeContains && e.FromID == pointIdx && e.ToID == normIdx {
+			if e.Confidence != 1.0 || e.Source != "extractor" {
+				t.Errorf("contains edge conf=%v src=%q, want 1.0/extractor", e.Confidence, e.Source)
+			}
+			return
+		}
+	}
+	t.Errorf("no contains edge Point→norm; edges=%v", edges)
+}
+
+func TestZig_CallEdgeIntraFile(t *testing.T) {
+	nodes, edges, err := NewZig().Extract(context.Background(), "geo.zig", zigSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var addIdx, helperIdx int64 = -1, -1
+	for i, n := range nodes {
+		switch n.Name {
+		case "add":
+			addIdx = int64(i)
+		case "helper":
+			helperIdx = int64(i)
+		}
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeCalls && e.FromID == addIdx && e.ToID == helperIdx {
+			if e.Confidence != 0.8 || e.Source != "heuristic" {
+				t.Errorf("call edge conf=%v src=%q, want 0.8/heuristic", e.Confidence, e.Source)
+			}
+			return
+		}
+	}
+	t.Errorf("no call edge add→helper; edges=%v", edges)
+}
+
+func TestZig_ConstVsVar(t *testing.T) {
+	nodes, _, err := NewZig().Extract(context.Background(), "geo.zig", zigSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(names(nodes, topology.KindConstant), "LIMIT") {
+		t.Error("LIMIT should be a constant")
+	}
+	if !slices.Contains(names(nodes, topology.KindVariable), "counter") {
+		t.Error("counter should be a variable")
+	}
+	// A type-bound const must NOT also appear as a plain constant binding.
+	if slices.Contains(names(nodes, topology.KindConstant), "Point") {
+		t.Error("Point is a type, not a constant binding")
+	}
+}
+
+func TestZig_EndLineRecorded(t *testing.T) {
+	nodes, _, err := NewZig().Extract(context.Background(), "geo.zig", zigSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range nodes {
+		if n.Kind == topology.KindType && n.Name == "Point" {
+			if n.EndLine <= n.StartLine {
+				t.Errorf("Point EndLine=%d should exceed StartLine=%d", n.EndLine, n.StartLine)
+			}
+			return
+		}
+	}
+	t.Fatal("Point type node not found")
+}
+
+func TestZig_EmptyAndCommentOnly(t *testing.T) {
+	for _, src := range [][]byte{[]byte(""), []byte("// just a comment\n// more\n")} {
+		nodes, edges, err := NewZig().Extract(context.Background(), "e.zig", src)
+		if err != nil {
+			t.Fatalf("Extract: %v", err)
+		}
+		if len(nodes) != 0 || len(edges) != 0 {
+			t.Errorf("src=%q: want 0 nodes/edges, got %d/%d", src, len(nodes), len(edges))
+		}
+	}
+}
+
+func TestZig_LanguageAndPath(t *testing.T) {
+	nodes, _, err := NewZig().Extract(context.Background(), "src/geo.zig", zigSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range nodes {
+		if n.Language != "zig" {
+			t.Errorf("node %q language=%q, want zig", n.Name, n.Language)
+		}
+		if n.Path != "src/geo.zig" {
+			t.Errorf("node %q path=%q, want src/geo.zig", n.Name, n.Path)
+		}
+	}
+}
+
+func TestZig_Extensions(t *testing.T) {
+	if !slices.Contains(NewZig().Extensions(), ".zig") {
+		t.Error(".zig missing from Zig Extensions()")
+	}
+}

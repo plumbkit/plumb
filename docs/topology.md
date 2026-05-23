@@ -78,7 +78,7 @@ flowchart LR
 - **Topology is the Map.** Use it for discovery: "where is the routing logic?",
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
-  is syntactic (Go AST, tree-sitter Python, and TypeScript/JS regex extractors), so it offers
+  is syntactic (Go AST, tree-sitter Python/Rust/Zig, and TypeScript/JS regex extractors), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
   (`get_definition`, `find_references`, `rename_symbol`, `diagnostics`) make and
@@ -95,9 +95,10 @@ pipeline has four parts:
 1. **Extractors read your source.** Per language, a lightweight extractor turns
    a file into a list of *entities* (functions, types, methods, imports, tests)
    and *edges* (calls, imports, containment). Go uses the standard library's
-   `go/parser` + `go/ast` (precise, no cgo), Python uses the pure-Go gotreesitter
-   runtime, and TypeScript/JavaScript use fast regex scanners (tree-sitter
-   migration in progress). None of this requires the code to compile.
+   `go/parser` + `go/ast` (precise, no cgo); Python, Rust and Zig use the pure-Go
+   gotreesitter runtime; and TypeScript/JavaScript use fast regex scanners
+   (tree-sitter migration deferred — see `docs/internal/treesitter-plan.md`).
+   None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
    tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual
    table powers ranked, typo-tolerant symbol search and splits

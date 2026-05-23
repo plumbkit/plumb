@@ -56,6 +56,8 @@ var registry = []Language{
 	{Name: "python", Extensions: []string{".py"}, Structural: EngineTreeSitter, LSPAdapter: "pyright-langserver"},
 	{Name: "typescript", Extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}, Structural: EngineRegex, LSPAdapter: ""},
 	{Name: "java", Extensions: []string{".java"}, Structural: EngineNone, LSPAdapter: "jdtls"},
+	{Name: "rust", Extensions: []string{".rs"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "zig", Extensions: []string{".zig"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.

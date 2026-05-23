@@ -10,6 +10,8 @@ func TestByPath(t *testing.T) {
 		"Component.tsx": "typescript",
 		"server.mjs":    "typescript",
 		"Main.java":     "java",
+		"lib/core.rs":   "rust",
+		"src/main.zig":  "zig",
 		"README.md":     "",
 		"Makefile":      "",
 	}
@@ -33,6 +35,12 @@ func TestByName(t *testing.T) {
 	}
 	if l, ok := ByName("python"); !ok || l.LSPAdapter != "pyright-langserver" {
 		t.Errorf("ByName(python) = (%+v, %v), want pyright-langserver", l, ok)
+	}
+	if l, ok := ByName("rust"); !ok || l.Structural != EngineTreeSitter {
+		t.Errorf("ByName(rust) = (%+v, %v), want EngineTreeSitter", l, ok)
+	}
+	if l, ok := ByName("zig"); !ok || l.Structural != EngineTreeSitter {
+		t.Errorf("ByName(zig) = (%+v, %v), want EngineTreeSitter", l, ok)
 	}
 	if _, ok := ByName("cobol"); ok {
 		t.Error("ByName(cobol) should not be found")
