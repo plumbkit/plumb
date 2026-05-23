@@ -47,6 +47,7 @@ Key packages:
 | `internal/topology/extractors/golang/` | Go extractor using `go/parser`+`go/ast`; no CGo |
 | `internal/topology/extractors/python/` | Python extractor using line-by-line regex scan; no CGo |
 | `internal/topology/extractors/typescript/` | TypeScript/JS extractor using regex scan; no CGo |
+| `internal/langsupport/` | Per-language capability registry — structural engine (native-AST / tree-sitter / regex / none) and LSP adapter, keyed by language. Single source of truth consulted by `buildExtractors` (`internal/cli/topology_pool.go`); the seam for moving a language onto tree-sitter. Pure data, no topology/LSP imports. |
 | `internal/tools/` | MCP tool implementations; `WriteDeps` bundles write-tool dependencies; `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality/` | Offline post-write code analysers (golangci-lint, …) against changed files; findings appended to write responses |
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
