@@ -75,6 +75,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"typescript": func() topology.Extractor { return typescript.New() },
 	"rust":       func() topology.Extractor { return treesitter.NewRust() },
 	"zig":        func() topology.Extractor { return treesitter.NewZig() },
+	"kotlin":     func() topology.Extractor { return treesitter.NewKotlin() },
 }
 
 // buildExtractors instantiates the structural extractors for every language the
