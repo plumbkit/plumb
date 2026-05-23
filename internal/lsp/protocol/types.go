@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"os"
@@ -228,6 +229,28 @@ const (
 type TextDocumentSyncOptions struct {
 	OpenClose bool                 `json:"openClose,omitempty"`
 	Change    TextDocumentSyncKind `json:"change"`
+}
+
+// UnmarshalJSON accepts either the object form or a bare TextDocumentSyncKind
+// number. The LSP spec types ServerCapabilities.textDocumentSync as
+// `TextDocumentSyncOptions | TextDocumentSyncKind`; some servers (pyright)
+// return the bare number, which the default object decode rejects.
+func (o *TextDocumentSyncOptions) UnmarshalJSON(data []byte) error {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] != '{' {
+		var kind TextDocumentSyncKind
+		if err := json.Unmarshal(trimmed, &kind); err != nil {
+			return err
+		}
+		o.Change = kind
+		return nil
+	}
+	type alias TextDocumentSyncOptions
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*o = TextDocumentSyncOptions(a)
+	return nil
 }
 
 // RenameOptions describes rename capabilities.
