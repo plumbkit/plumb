@@ -59,6 +59,16 @@ project. Fixes:
 - Enable the synthetic-root fallback: `[workspace] auto_attach = true` (see
   [Configuration](configuration.md#workspace--root-detection-fallback)).
 
+**Claude Desktop specifically:** Desktop does not tell plumb which folder you're
+working in (it sends no MCP `roots`), and the daemon is shared across all your
+conversations — so a fresh Desktop session has no workspace until you give it
+one. Pin the project by passing an absolute path to `session_start`:
+`session_start({"workspace": "/Users/you/projects/myapp"})` (passing `workspace`
+or an absolute `path` to any tool also pins it). plumb no longer guesses the
+workspace from the daemon's launch directory, so it will say "resolving…" /
+return a "pass `workspace`" error rather than silently attach the wrong
+project.
+
 If you recently upgraded plumb but the daemon is still on the old build, the
 fix won't be active — restart it with `plumb stop --force` (it respawns on the
 next client request). The TUI footer shows the running daemon version; if it

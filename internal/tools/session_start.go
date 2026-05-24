@@ -22,7 +22,7 @@ var sessionStartSchema = json.RawMessage(`{
   "properties": {
     "workspace": {
       "type": "string",
-      "description": "Absolute workspace path. Defaults to the daemon's resolved workspace, falling back to walking up from the current working directory."
+      "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). Defaults to the daemon's already-resolved workspace."
     }
   }
 }`)
@@ -34,8 +34,8 @@ const contextMDLines = 200
 
 // RootsResolver asks the MCP client for its workspace roots (via roots/list)
 // and returns the first one as an absolute path, or "" if unavailable. It is
-// used as the third fallback in session_start's workspace resolution chain:
-// explicit argument → daemon-resolved workspace → roots/list → cwd walk.
+// the last fallback in session_start's workspace resolution chain:
+// daemon-resolved workspace → explicit argument → roots/list.
 type RootsResolver func(ctx context.Context) string
 
 // SessionStart is a bootstrap tool — call it first in every session to get
@@ -49,10 +49,14 @@ type RootsResolver func(ctx context.Context) string
 //   - active LSP diagnostics (errors and warnings only)
 //
 // Workspace resolution chain (each falls back to the next on empty):
-//  1. explicit `workspace` argument
-//  2. daemon's already-resolved workspace
-//  3. roots/list query to the MCP client (Claude Desktop's roots support)
-//  4. walk up from os.Getwd() looking for a project marker
+//  1. the daemon's already-attached root (authoritative — onBeforeTool attaches
+//     it before Execute, including from this call's own `workspace` arg)
+//  2. explicit `workspace` argument
+//  3. roots/list query to the MCP client
+//
+// There is deliberately no os.Getwd() fallback: in the shared daemon the
+// working directory is not a per-session signal, and guessing it reported the
+// wrong project.
 type SessionStart struct {
 	ws           WorkspaceFn
 	diag         diagnosticsSource // may be nil; diagnostics section skipped when nil
@@ -93,9 +97,9 @@ func (*SessionStart) Description() string {
 		"Returns one-shot orientation: workspace path, language, current git branch, " +
 		"first 200 lines of .plumb/context.md, all saved memory names/descriptions, " +
 		"top-5 most-used tools, 5 most recently-modified files, 3 most recent commits, " +
-		"and any active LSP errors/warnings. Falls back to walking up from the current " +
-		"working directory if no workspace has been resolved yet (Claude Desktop cold-start). " +
-		"Idempotent — safe to call multiple times."
+		"and any active LSP errors/warnings. If no workspace is resolved yet, pass an " +
+		"absolute `workspace` to pin it — clients like Claude Desktop do not report the " +
+		"folder automatically. Idempotent — safe to call multiple times."
 }
 
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
@@ -129,17 +133,28 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 		Workspace string `json:"workspace"`
 	}
 	_ = json.Unmarshal(raw, &a)
-	ws := resolveWorkspace(a.Workspace, t.ws)
-	if ws == "" && t.roots != nil {
-		ws = t.roots(ctx)
+	// The daemon's attached root is authoritative. onBeforeTool resolves and
+	// attaches the workspace — including from this call's own `workspace` arg
+	// (seedPathFromArgs reads it) — before Execute runs, so preferring it keeps
+	// the displayed workspace consistent with the TUI, memory, and topology.
+	if t.ws != nil {
+		if ws := t.ws(); ws != "" {
+			return ws, nil
+		}
 	}
-	if ws == "" {
-		ws = coldStartWorkspace()
+	// Not attached yet: honour an explicit arg, then ask the client for roots.
+	// There is no daemon-cwd fallback — the daemon's working directory is never
+	// a reliable per-session signal (it is shared across all connections), and
+	// guessing it produced confidently-wrong "workspaces".
+	if a.Workspace != "" {
+		return a.Workspace, nil
 	}
-	if ws == "" {
-		return "", noWorkspaceError()
+	if t.roots != nil {
+		if ws := t.roots(ctx); ws != "" {
+			return ws, nil
+		}
 	}
-	return ws, nil
+	return "", noWorkspaceError()
 }
 
 func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang string) {
@@ -329,6 +344,12 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 
 func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
 	sb.WriteString("## Tool guidance (Claude Desktop)\n\n")
+	sb.WriteString("**Pin your project first.** plumb cannot detect which folder you are working in — " +
+		"Claude Desktop does not report it, and the daemon is shared across conversations. If the " +
+		"workspace shown above is wrong or unresolved, call `session_start` again with an explicit " +
+		"absolute path, e.g. `session_start({\"workspace\": \"/Users/you/projects/myapp\"})` (passing " +
+		"`workspace` or an absolute `path` to any tool also pins it). Until then, file operations may " +
+		"target the wrong project.\n\n")
 	sb.WriteString("Claude Desktop has no native filesystem or shell tools. Plumb is your only interface to the codebase.\n\n")
 	sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
 	sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
@@ -511,30 +532,6 @@ func detectLanguage(ws string) string {
 	return ""
 }
 
-// coldStartWorkspace walks up from os.Getwd() looking for a project marker.
-// Returns "" if nothing is found within reasonable depth.
-func coldStartWorkspace() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	markers := []string{"go.mod", "package.json", "Cargo.toml", "pyproject.toml", "setup.py", "pom.xml", ".git", ".plumb"}
-	dir := cwd
-	for range 12 { // cap walk depth
-		for _, m := range markers {
-			if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
-				return dir
-			}
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
 // gitBranch returns the current branch name, or "" if not a git repo / git
 // is unavailable. Best-effort with a short timeout.
 func gitBranch(ws string) string {
@@ -614,10 +611,14 @@ func isClaudeCode(fn func() string) bool {
 }
 
 // isClaudeDesktop reports whether fn identifies the MCP client as Claude Desktop.
+// Claude Desktop identifies itself as "claude-ai" (e.g. "claude-ai 0.1.0") over
+// MCP, not "claude-desktop" — both are matched so the guidance fires regardless
+// of which name a build reports.
 func isClaudeDesktop(fn func() string) bool {
 	if fn == nil {
 		return false
 	}
 	n := strings.ToLower(fn())
-	return n == "claude-desktop" || strings.HasPrefix(n, "claude-desktop/")
+	return n == "claude-ai" || strings.HasPrefix(n, "claude-ai/") ||
+		n == "claude-desktop" || strings.HasPrefix(n, "claude-desktop/")
 }

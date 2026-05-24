@@ -372,3 +372,61 @@ func TestSessionStart_ClientNameGuidance(t *testing.T) {
 		})
 	}
 }
+
+// TestSessionStart_DesktopGuidance verifies the Desktop guidance fires for the
+// real Claude Desktop client name ("claude-ai", not "claude-desktop") and
+// leads with the workspace-pinning instruction.
+func TestSessionStart_DesktopGuidance(t *testing.T) {
+	for _, name := range []string{"claude-ai", "claude-ai/0.1.0", "claude-desktop"} {
+		t.Run(name, func(t *testing.T) {
+			tool := NewSessionStart(func() string { return t.TempDir() }, nil, nil, nil, func() string { return name })
+			out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if !strings.Contains(out, "## Tool guidance (Claude Desktop)") {
+				t.Errorf("clientName=%q: want Desktop guidance\n%s", name, out)
+			}
+			if !strings.Contains(out, "Pin your project first") {
+				t.Errorf("clientName=%q: want workspace-pinning instruction\n%s", name, out)
+			}
+		})
+	}
+}
+
+// TestSessionStart_WorkspaceResolution covers the resolution chain after the
+// os.Getwd() phantom was removed: the daemon's attached root wins, an explicit
+// arg is honoured only when nothing is attached, and nothing-resolves errors
+// (no daemon-cwd guess).
+func TestSessionStart_WorkspaceResolution(t *testing.T) {
+	t.Run("attached root wins over explicit arg", func(t *testing.T) {
+		attached := t.TempDir()
+		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"/some/other/path"}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "# Workspace: "+attached) {
+			t.Errorf("attached root should win; want %q\n%s", attached, out)
+		}
+	})
+
+	t.Run("explicit arg used when nothing attached", func(t *testing.T) {
+		explicit := t.TempDir()
+		tool := NewSessionStart(func() string { return "" }, nil, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+explicit+`"}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "# Workspace: "+explicit) {
+			t.Errorf("explicit arg should resolve; want %q\n%s", explicit, out)
+		}
+	})
+
+	t.Run("nothing resolves errors (no cwd guess)", func(t *testing.T) {
+		tool := NewSessionStart(func() string { return "" }, nil, nil, nil, func() string { return "" })
+		if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
+			t.Fatal("want noWorkspaceError when nothing resolves, got nil")
+		}
+	})
+}
