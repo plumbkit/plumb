@@ -59,6 +59,21 @@ type SessionStart struct {
 	roots        RootsResolver     // may be nil; roots/list fallback skipped when nil
 	refuseFn     func() bool       // may be nil; treated as false (no refusal)
 	clientNameFn func() string     // may be nil; returns current MCP client name
+	topo         topologyStoreFn   // may be nil; returns the live topology store, or nil when disabled
+}
+
+// WithTopology wires the topology store accessor so session_start can lead its
+// tool guidance with topology (the Map) when the index is active for the
+// workspace. Nil-safe: when unset or returning nil, the guidance falls back to
+// the LSP-led form. Returns the receiver for chaining.
+func (t *SessionStart) WithTopology(fn topologyStoreFn) *SessionStart {
+	t.topo = fn
+	return t
+}
+
+// topologyActive reports whether a topology store is wired and live.
+func (t *SessionStart) topologyActive() bool {
+	return t.topo != nil && t.topo() != nil
 }
 
 // NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted
@@ -268,32 +283,71 @@ func writeSessionStats(sb *strings.Builder, ws, clientName string) {
 func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 	switch {
 	case isClaudeCode(t.clientNameFn):
-		sb.WriteString("## Tool guidance (Claude Code)\n\n")
-		sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
-		sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
-		sb.WriteString("- **find_references** — all call sites for a symbol (LSP-semantic, not text search). Accepts name or position.\n")
-		sb.WriteString("- **get_definition** — jump to definition by name or position without reading files first.\n")
-		sb.WriteString("- **call_hierarchy** — callers and callees of a function.\n")
-		sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
-		sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
-		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
-		sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
+		t.writeClaudeCodeGuidance(sb)
 	case isClaudeDesktop(t.clientNameFn):
-		sb.WriteString("## Tool guidance (Claude Desktop)\n\n")
-		sb.WriteString("Claude Desktop has no native filesystem or shell tools. Plumb is your only interface to the codebase.\n\n")
-		sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
-		sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
-		sb.WriteString("- **write_file** / **edit_file** — create or modify files atomically.\n")
-		sb.WriteString("- **list_files** / **find_files** / **search_in_files** — discover and search the codebase.\n")
-		sb.WriteString("- **git** — read-only git queries (status, log, diff, blame).\n\n")
-		sb.WriteString("**LSP-semantic tools** (no equivalent without a language server):\n\n")
-		sb.WriteString("- **workspace_symbols** — find any symbol by name across the workspace instantly.\n")
-		sb.WriteString("- **find_references** — all call sites for a symbol (scope-aware, not text search).\n")
-		sb.WriteString("- **get_definition** — jump to definition without reading the file first.\n")
-		sb.WriteString("- **rename_symbol** — workspace-wide semantic rename across all files.\n")
-		sb.WriteString("- **diagnostics** — live compile errors and warnings from the language server.\n\n")
-		sb.WriteString("If a plumb tool fails, retry or check `daemon_info`. Do not attempt native shell commands — they are unavailable.\n\n")
+		t.writeClaudeDesktopGuidance(sb)
 	}
+}
+
+// writeClaudeCodeGuidance leads with topology (the Map) for discovery / structure
+// / impact when the index is active, then the LSP-semantic tools (the GPS) for
+// precise navigation. When topology is off it falls back to the LSP-led form
+// with a one-line pointer to enabling the index.
+func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
+	sb.WriteString("## Tool guidance (Claude Code)\n\n")
+	if t.topologyActive() {
+		sb.WriteString("Two complementary layers. **Topology (the Map)** is the primary path for " +
+			"discovery, structure, and impact — it answers instantly, tolerates broken code, and " +
+			"covers every indexed language. **LSP (the GPS)** is for precise, type-aware navigation " +
+			"once you know where to work.\n\n")
+		sb.WriteString("Topology — start here for where / what / what-if:\n\n")
+		sb.WriteString("- **topology_affected** — THE post-change tool: which tests to run after an edit " +
+			"(dependency edges + co-location, recall-biased, confidence-labelled). No language server gives this.\n")
+		sb.WriteString("- **topology_search** — ranked symbol/file search across the index. Use over grep for discovery.\n")
+		sb.WriteString("- **topology_explore** / **topology_impact** — neighbourhood and blast radius around a symbol.\n")
+		sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) in ~200 tokens.\n")
+		sb.WriteString("- **topology_routes** — framework entry points (HTTP handlers, Cobra, Flask).\n\n")
+		sb.WriteString("LSP-semantic — precise navigation (Claude Code lacks these natively):\n\n")
+		sb.WriteString("- **get_definition** / **find_references** — exact definition and all call sites (scope-aware, not text search).\n")
+		sb.WriteString("- **rename_symbol** — workspace-wide semantic rename.\n")
+		sb.WriteString("- **call_hierarchy** / **type_hierarchy** — callers/callees, super/subtypes.\n")
+		sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
+		return
+	}
+	sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
+	sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
+	sb.WriteString("- **find_references** — all call sites for a symbol (LSP-semantic, not text search). Accepts name or position.\n")
+	sb.WriteString("- **get_definition** — jump to definition by name or position without reading files first.\n")
+	sb.WriteString("- **call_hierarchy** — callers and callees of a function.\n")
+	sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
+	sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
+	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
+	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +
+		"ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
+}
+
+func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
+	sb.WriteString("## Tool guidance (Claude Desktop)\n\n")
+	sb.WriteString("Claude Desktop has no native filesystem or shell tools. Plumb is your only interface to the codebase.\n\n")
+	sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
+	sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
+	sb.WriteString("- **write_file** / **edit_file** — create or modify files atomically.\n")
+	sb.WriteString("- **list_files** / **find_files** / **search_in_files** — discover and search the codebase.\n")
+	sb.WriteString("- **git** — read-only git queries (status, log, diff, blame).\n\n")
+	if t.topologyActive() {
+		sb.WriteString("**Topology (the Map)** — in-process, always-on structural index:\n\n")
+		sb.WriteString("- **topology_affected** — which tests to run after a change (the headline answer).\n")
+		sb.WriteString("- **topology_search** — ranked symbol/file discovery across the index.\n")
+		sb.WriteString("- **file_outline** — a file's shape in ~200 tokens without reading it.\n\n")
+	}
+	sb.WriteString("**LSP-semantic tools** (no equivalent without a language server):\n\n")
+	sb.WriteString("- **workspace_symbols** — find any symbol by name across the workspace instantly.\n")
+	sb.WriteString("- **find_references** — all call sites for a symbol (scope-aware, not text search).\n")
+	sb.WriteString("- **get_definition** — jump to definition without reading the file first.\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide semantic rename across all files.\n")
+	sb.WriteString("- **diagnostics** — live compile errors and warnings from the language server.\n\n")
+	sb.WriteString("If a plumb tool fails, retry or check `daemon_info`. Do not attempt native shell commands — they are unavailable.\n\n")
 }
 
 func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {

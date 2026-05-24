@@ -108,3 +108,59 @@ func TestTopologyAffected_TestsInDirs(t *testing.T) {
 		t.Errorf("TestsInDirs(\".\") must not include the subdir TestSub; got %v", names)
 	}
 }
+
+// TestSessionStart_TopologyLedGuidance verifies that when the topology index is
+// active, the Claude Code guidance leads with topology (the Map) and names
+// topology_affected as the headline post-change tool.
+func TestSessionStart_TopologyLedGuidance(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "demo.go"), []byte("package demo\n\nfunc Run() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	tool := tools.NewSessionStart(
+		func() string { return ws }, nil, nil,
+		func() bool { return false },
+		func() string { return "claude-code" },
+	).WithTopology(func() *topology.Store { return s })
+
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Topology (the Map)", "topology_affected", "which tests to run"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("topology-led guidance missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestSessionStart_LSPLedGuidanceWhenTopologyOff verifies the fallback when no
+// topology store is wired: the LSP-led list plus an enable-topology tip.
+func TestSessionStart_LSPLedGuidanceWhenTopologyOff(t *testing.T) {
+	ws := t.TempDir()
+	tool := tools.NewSessionStart(
+		func() string { return ws }, nil, nil,
+		func() bool { return false },
+		func() string { return "claude-code" },
+	)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "workspace_symbols") {
+		t.Errorf("LSP-led guidance should mention workspace_symbols:\n%s", out)
+	}
+	if !strings.Contains(out, "[topology] enabled = true") {
+		t.Errorf("LSP-led guidance should tip enabling topology:\n%s", out)
+	}
+}

@@ -638,7 +638,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewVersion())
 	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr))
+	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr).WithTopology(topoFn))
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout))
