@@ -296,6 +296,29 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   layer covers while the server warms. The adapter tolerates a long `initialize`
   by not imposing its own deadline on the handshake.
 
+### sourcekit-lsp (Swift)
+
+- **Binary**: `sourcekit-lsp` — ships with the Swift toolchain (Xcode or a
+  standalone swift.org toolchain). On macOS it lives at `/usr/bin/sourcekit-lsp`.
+- **Status**: validated — integration tests in `internal/lsp/adapters/swift/`
+  (`testdata/swift-fixture/`, a SwiftPM package).
+- **Root markers**: `Package.swift`.
+- **Workspace model**: requires `rootUri` pointing at the SwiftPM package root
+  (the directory containing `Package.swift`). sourcekit-lsp derives per-file
+  compiler arguments from the package build plan; for Xcode projects it can use a
+  build-server `compile_commands.json` instead.
+- **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.
+- **Sync**: full-document sync. Registers file watchers dynamically via
+  `client/registerCapability`; the adapter answers and records the glob patterns
+  so `DidChangeWatchedFiles` events are filtered to them.
+- **Notifications**: emits `textDocument/publishDiagnostics`. Syntax errors are
+  reported from the Swift front end once a file is opened.
+- **Enable in config**:
+  ```toml
+  [lsp.swift]
+  enabled = true
+  ```
+
 ---
 
 ## Common pitfalls

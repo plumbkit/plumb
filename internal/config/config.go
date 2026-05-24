@@ -295,6 +295,12 @@ var defaults = Config{
 			RootMarkers: []string{"Cargo.toml"},
 			Enabled:     false,
 		},
+		"swift": {
+			Command:     "sourcekit-lsp",
+			Args:        []string{},
+			RootMarkers: []string{"Package.swift"},
+			Enabled:     false,
+		},
 	},
 }
 
