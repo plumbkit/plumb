@@ -22,6 +22,9 @@ const (
 	// method nor a standalone variable: a SQL column, a config-table key, a
 	// struct/record field. Used by the config/markup tree-sitter extractors.
 	KindField NodeKind = "field"
+	// KindSection is a document heading (a Markdown section). Used by the
+	// markup tree-sitter extractors for navigable document outlines.
+	KindSection NodeKind = "section"
 )
 
 // EdgeKind is the type of a relationship between two nodes.
