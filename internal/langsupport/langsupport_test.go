@@ -4,18 +4,19 @@ import "testing"
 
 func TestByPath(t *testing.T) {
 	cases := map[string]string{
-		"main.go":          "go",
-		"pkg/app.py":       "python",
-		"src/index.ts":     "typescript",
-		"Component.tsx":    "typescript",
-		"server.mjs":       "typescript",
-		"Main.java":        "java",
-		"lib/core.rs":      "rust",
-		"src/main.zig":     "zig",
-		"app/Main.kt":      "kotlin",
-		"build.gradle.kts": "kotlin",
-		"README.md":        "",
-		"Makefile":         "",
+		"main.go":           "go",
+		"pkg/app.py":        "python",
+		"src/index.ts":      "typescript",
+		"Component.tsx":     "typescript",
+		"server.mjs":        "typescript",
+		"Main.java":         "java",
+		"lib/core.rs":       "rust",
+		"src/main.zig":      "zig",
+		"app/Main.kt":       "kotlin",
+		"build.gradle.kts":  "kotlin",
+		"Sources/App.swift": "swift",
+		"README.md":         "",
+		"Makefile":          "",
 	}
 	for path, want := range cases {
 		l, ok := ByPath(path)
@@ -46,6 +47,9 @@ func TestByName(t *testing.T) {
 	}
 	if l, ok := ByName("kotlin"); !ok || l.Structural != EngineTreeSitter {
 		t.Errorf("ByName(kotlin) = (%+v, %v), want EngineTreeSitter", l, ok)
+	}
+	if l, ok := ByName("swift"); !ok || l.Structural != EngineTreeSitter {
+		t.Errorf("ByName(swift) = (%+v, %v), want EngineTreeSitter", l, ok)
 	}
 	if _, ok := ByName("cobol"); ok {
 		t.Error("ByName(cobol) should not be found")
