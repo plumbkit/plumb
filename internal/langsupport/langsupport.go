@@ -63,6 +63,7 @@ var registry = []Language{
 	{Name: "bash", Extensions: []string{".sh", ".bash"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "hcl", Extensions: []string{".tf", ".tfvars", ".hcl"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "sql", Extensions: []string{".sql"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "dockerfile", Extensions: []string{"dockerfile", "containerfile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.
@@ -80,18 +81,30 @@ func ByName(name string) (Language, bool) {
 	return Language{}, false
 }
 
-// ByPath returns the Language owning the file's extension, and whether it was found.
+// ByPath returns the Language owning the file, and whether it was found. An
+// extension pattern (dot-prefixed, e.g. ".go") matches the file extension; a
+// bare filename pattern (e.g. "dockerfile") matches the basename exactly or as
+// a dotted prefix/suffix ("Dockerfile", "Dockerfile.prod", "prod.dockerfile"),
+// so extensionless files are recognised.
 func ByPath(path string) (Language, bool) {
 	ext := strings.ToLower(filepath.Ext(path))
-	if ext == "" {
-		return Language{}, false
-	}
+	base := strings.ToLower(filepath.Base(path))
 	for _, l := range registry {
 		for _, e := range l.Extensions {
-			if e == ext {
+			if matchExtPattern(e, ext, base) {
 				return l, true
 			}
 		}
 	}
 	return Language{}, false
+}
+
+// matchExtPattern reports whether a registry pattern matches a file's extension
+// or basename. Dot-prefixed patterns match the extension; bare patterns match
+// the basename exactly or as a dotted prefix/suffix.
+func matchExtPattern(pat, ext, base string) bool {
+	if strings.HasPrefix(pat, ".") {
+		return pat == ext
+	}
+	return base == pat || strings.HasPrefix(base, pat+".") || strings.HasSuffix(base, "."+pat)
 }

@@ -2,7 +2,7 @@ package topology
 
 import (
 	"context"
-	"slices"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -47,12 +47,30 @@ func splitIdentifier(s string) string {
 	return strings.Join(strings.Fields(buf.String()), " ")
 }
 
-// findExtractor returns the first Extractor in exts that handles ext, or nil.
-func findExtractor(ext string, exts []Extractor) Extractor {
+// findExtractor returns the first Extractor whose patterns match relPath, or nil.
+// A pattern is either a dot-prefixed extension (".go") matched against the file
+// extension, or a bare filename stem ("dockerfile") matched against the basename
+// exactly or as a dotted prefix/suffix ("Dockerfile", "Dockerfile.prod",
+// "prod.dockerfile") — so extensionless files are still recognised.
+func findExtractor(relPath string, exts []Extractor) Extractor {
+	ext := strings.ToLower(filepath.Ext(relPath))
+	base := strings.ToLower(filepath.Base(relPath))
 	for _, e := range exts {
-		if slices.Contains(e.Extensions(), ext) {
-			return e
+		for _, pat := range e.Extensions() {
+			if matchExtPattern(pat, ext, base) {
+				return e
+			}
 		}
 	}
 	return nil
+}
+
+// matchExtPattern reports whether a pattern matches a file's extension or
+// basename. Dot-prefixed patterns match the extension; bare patterns match the
+// basename exactly or as a dotted prefix/suffix.
+func matchExtPattern(pat, ext, base string) bool {
+	if strings.HasPrefix(pat, ".") {
+		return pat == ext
+	}
+	return base == pat || strings.HasPrefix(base, pat+".") || strings.HasSuffix(base, "."+pat)
 }

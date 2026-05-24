@@ -1,6 +1,9 @@
 package langsupport
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestByPath(t *testing.T) {
 	cases := map[string]string{
@@ -20,6 +23,10 @@ func TestByPath(t *testing.T) {
 		"infra/main.tf":     "hcl",
 		"vars.tfvars":       "hcl",
 		"schema/init.sql":   "sql",
+		"Dockerfile":        "dockerfile",
+		"Dockerfile.prod":   "dockerfile",
+		"app.dockerfile":    "dockerfile",
+		"Containerfile":     "dockerfile",
 		"README.md":         "",
 		"Makefile":          "",
 	}
@@ -53,6 +60,7 @@ func TestByName(t *testing.T) {
 		{"bash", EngineTreeSitter, ""},
 		{"hcl", EngineTreeSitter, ""},
 		{"sql", EngineTreeSitter, ""},
+		{"dockerfile", EngineTreeSitter, ""},
 		{"java", EngineTreeSitter, "jdtls"}, // tree-sitter Map + jdtls GPS
 	}
 	for _, c := range cases {
@@ -78,8 +86,13 @@ func TestRegistryConsistency(t *testing.T) {
 			t.Error("registry entry with empty name")
 		}
 		for _, e := range l.Extensions {
-			if e == "" || e[0] != '.' {
-				t.Errorf("%s: extension %q must be dot-prefixed", l.Name, e)
+			// Patterns are either dot-prefixed extensions (".go") or bare
+			// filename stems ("dockerfile"); a bare stem must not contain a dot.
+			switch {
+			case e == "":
+				t.Errorf("%s: empty extension", l.Name)
+			case e[0] != '.' && strings.Contains(e, "."):
+				t.Errorf("%s: bare filename pattern %q must not contain a dot", l.Name, e)
 			}
 			if prev, dup := owner[e]; dup {
 				t.Errorf("extension %q owned by both %s and %s", e, prev, l.Name)

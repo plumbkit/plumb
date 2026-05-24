@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -263,8 +262,7 @@ func (idx *Indexer) isStale(relPath string, info os.FileInfo, hash string) (stal
 }
 
 func (idx *Indexer) extractPath(ctx context.Context, absPath, relPath string) (nodes []Node, edges []Edge, hash string, err error) {
-	ext := strings.ToLower(filepath.Ext(relPath))
-	ex := findExtractor(ext, idx.extractors)
+	ex := findExtractor(relPath, idx.extractors)
 	if ex == nil {
 		return nil, nil, "", nil
 	}
