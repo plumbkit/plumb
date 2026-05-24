@@ -87,7 +87,8 @@ func newWorkspacePool(cfg config.Config) *workspacePool {
 const LanguageNone = "none"
 
 // Detect walks up from start looking for a workspace root, with three
-// fallbacks tried in order at each directory:
+// markers tried in priority order at each directory (nearest directory wins,
+// since the walk returns on the first match):
 //
 //  1. A `.plumb/` marker. If an LSP language is also detectable from this
 //     directory or any ancestor, return (root, language). Otherwise return
@@ -95,10 +96,18 @@ const LanguageNone = "none"
 //     respect that even without LSP support.
 //  2. A configured language's root marker (`go.mod`, `pyproject.toml`, ...).
 //     Returns (root, language).
+//  3. A `.git/` directory. A git repository is an unambiguous project
+//     boundary, so a repo with no language marker (a scripts / multi-language
+//     repo) still resolves — returned as (root, "none"). This is what lets
+//     such workspaces attach in the default config; without it the session
+//     never resolves and the TUI shows "resolving…" forever. The user's $HOME
+//     is excluded: a dotfiles repo at $HOME must not turn all of $HOME into a
+//     workspace.
 //
-// If neither is found, walk up to the parent. If we walk past the filesystem
+// If no marker is found, walk up to the parent. If we walk past the filesystem
 // root, return an error.
 func (p *workspacePool) Detect(start string) (root, language string, err error) {
+	home, _ := os.UserHomeDir()
 	d := start
 	for {
 		// Highest priority: explicit .plumb marker. Honour it even when no
@@ -111,12 +120,20 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 			}
 			return d, LanguageNone, nil
 		}
-		// Otherwise: first language whose root marker exists.
+		// Next: first language whose root marker exists.
 		for _, l := range p.langs {
 			for _, marker := range l.cfg.RootMarkers {
 				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
 					return d, l.name, nil
 				}
+			}
+		}
+		// Lowest priority: a .git directory marks a project boundary even
+		// without a language. Skip $HOME so a dotfiles repo there does not
+		// capture the whole home directory.
+		if (home == "" || d != home) && d != filepath.Dir(d) {
+			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+				return d, LanguageNone, nil
 			}
 		}
 		parent := filepath.Dir(d)

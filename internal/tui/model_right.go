@@ -101,10 +101,14 @@ func (m Model) rightLinesDetails(rw int) []string {
 	if nm == "" {
 		nm = MutedStyle.Render("—")
 	}
+	lang := sessionLangLabel(s.Language)
+	if lang == "" {
+		lang = MutedStyle.Render("—")
+	}
 	lines := []string{
 		detailRow("Name", nm),
 		detailRow("ID", s.ID),
-		detailRow("Language", s.Language),
+		detailRow("Language", lang),
 		detailRow("Folder", fld),
 		detailRow("Adapter", adp),
 		detailRow("PID", fmt.Sprintf("%d", s.PID)),

@@ -9,8 +9,10 @@ Plumb has **no global flags**. Daemon logging is controlled through
 [`log-level`](#plumb-log-level) command.
 
 Many commands resolve the *workspace* by walking up from the given path (or the
-current directory) until they find a `.plumb/` marker or a language root marker
-(`go.mod`, `pyproject.toml`, …) — the same way the daemon does.
+current directory) until they find a `.plumb/` marker, a language root marker
+(`go.mod`, `pyproject.toml`, …), or a `.git/` directory — the same way the
+daemon does. A git repo with no language marker resolves to its git root with
+language `none`.
 
 ## Command index
 

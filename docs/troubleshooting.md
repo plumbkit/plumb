@@ -42,12 +42,27 @@ anyway.
 
 ## The TUI / `plumb sessions` is stuck on "resolving…"
 
-The session attached but no workspace resolved — usually a project with no
-`.plumb/` marker and no recognised language root marker. Fixes:
+The session attached but no workspace resolved. The workspace resolves on the
+first tool call that carries a path, so a brand-new session can briefly show
+"resolving…" until then — if it persists, the directory has no recognised
+boundary: no `.plumb/` marker, no language root marker (`go.mod`,
+`pyproject.toml`, …), **and no `.git/` directory** in it or any ancestor.
+
+A git repository *is* a recognised boundary (since 0.7.20): a repo with no
+language marker resolves to its git root with language `?` (filesystem tools,
+stats, memory, and project config all work; LSP tools are unavailable). So the
+remaining stuck case is a directory that is neither a git repo nor a marked
+project. Fixes:
 
 - Run `plumb init` in the project root to create a `.plumb/` marker, or
+- `git init` the project (any git repo now resolves), or
 - Enable the synthetic-root fallback: `[workspace] auto_attach = true` (see
   [Configuration](configuration.md#workspace--root-detection-fallback)).
+
+If you recently upgraded plumb but the daemon is still on the old build, the
+fix won't be active — restart it with `plumb stop --force` (it respawns on the
+next client request). The TUI footer shows the running daemon version; if it
+lags your `plumb version`, the daemon needs restarting.
 
 ## Python or Java tools don't work
 

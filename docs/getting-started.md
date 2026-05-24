@@ -91,8 +91,10 @@ loaded on every session), the `memories/` store, and — if you enable it —
 `.gitignore` to keep it local.
 
 A `.plumb/` marker is optional for Go/Python/Java projects (plumb also detects
-`go.mod`, `pyproject.toml`, etc.), but it's the only way to get the full daemon
-experience for other languages, and it's where per-project
+`go.mod`, `pyproject.toml`, etc.), and any git repository resolves to its git
+root even with no language marker (as language `none` — filesystem tools,
+stats, and memory still work). A `.plumb/` marker is still worthwhile: it pins
+the workspace root explicitly and is where per-project
 [configuration](configuration.md) lives.
 
 ## 5. Confirm it works

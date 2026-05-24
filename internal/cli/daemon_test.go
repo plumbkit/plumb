@@ -163,10 +163,12 @@ func TestDaemonScansTxlogSynchronouslyOnAttach(t *testing.T) {
 	}
 }
 
-// TestAutoAttach_SynthesiseRootOnDetectFailure verifies that when pool.Detect
-// fails (no project marker) and AutoAttach is enabled, pool.SynthesiseRoot
-// returns the nearest .git ancestor — matching what OnBeforeTool would use.
-func TestAutoAttach_SynthesiseRootOnDetectFailure(t *testing.T) {
+// TestDetectAndSynthesiseRoot_GitTreeAgree verifies that for a git repo with
+// no language marker, Detect now resolves to the .git-bearing root as
+// LanguageNone (the fix for the "stuck on resolving" bug), and that
+// SynthesiseRoot — still used by the auto_attach path for non-git trees —
+// agrees on the same root.
+func TestDetectAndSynthesiseRoot_GitTreeAgree(t *testing.T) {
 	root := freshTempDir(t)
 	mustMkdir(t, filepath.Join(root, ".git"))
 	sub := filepath.Join(root, "pkg", "myapp")
@@ -174,14 +176,20 @@ func TestAutoAttach_SynthesiseRootOnDetectFailure(t *testing.T) {
 
 	pool := detectTestPool()
 
-	// Detect must fail — there is no go.mod or pyproject.toml.
-	if _, _, err := pool.Detect(sub); err == nil {
-		t.Fatal("Detect: expected error for directory with no language marker, got nil")
+	// Detect resolves the git root directly, even without a language marker.
+	gotRoot, lang, err := pool.Detect(sub)
+	if err != nil {
+		t.Fatalf("Detect: unexpected error %v — a .git ancestor should resolve", err)
+	}
+	if gotRoot != root {
+		t.Errorf("Detect root = %q, want %q (.git ancestor)", gotRoot, root)
+	}
+	if lang != LanguageNone {
+		t.Errorf("Detect language = %q, want %q", lang, LanguageNone)
 	}
 
-	// SynthesiseRoot must walk up to the .git-bearing ancestor.
-	got := pool.SynthesiseRoot(sub)
-	if got != root {
+	// SynthesiseRoot walks up to the same .git-bearing ancestor.
+	if got := pool.SynthesiseRoot(sub); got != root {
 		t.Errorf("SynthesiseRoot = %q, want %q (.git ancestor)", got, root)
 	}
 }

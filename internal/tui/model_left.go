@@ -35,8 +35,8 @@ func (m Model) leftLines() []string {
 			name = s.ID
 		}
 		firstLine := " " + indicator + " " + name
-		if s.Language != "" && s.Language != "none" {
-			firstLine += " " + sessionLangBadge(s.Language, selected, lf)
+		if badge := sessionLangLabel(s.Language); badge != "" {
+			firstLine += " " + sessionLangBadge(badge, selected, lf)
 		}
 		if s.Synthetic {
 			firstLine += " (auto)"
@@ -79,6 +79,21 @@ func leftSessionRowLines(firstLine, secondLine string, selected, lf bool) []stri
 		return []string{ItemStyle.Render(firstLine), MutedStyle.Render(secondLine)}
 	}
 	return []string{FadedStyle.Render(firstLine), FadedStyle.Render(secondLine)}
+}
+
+// sessionLangLabel maps a session's internal language value to its display
+// label. An empty language (workspace not yet resolved) yields no badge; the
+// LanguageNone sentinel ("none") becomes "?" — a valid session whose language
+// could not be detected but still serves language-independent calls.
+func sessionLangLabel(language string) string {
+	switch language {
+	case "":
+		return ""
+	case "none":
+		return "?"
+	default:
+		return language
+	}
 }
 
 func sessionLangBadge(language string, selected, focused bool) string {

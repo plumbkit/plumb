@@ -193,10 +193,11 @@ Setup helpers preserve existing MCP servers, back up config before modifying it,
 
 1. **`.plumb/` marker** — explicit workspace. Returns `(dir, language)` if an LSP language is detectable here or in an ancestor; otherwise `(dir, "none")` — filesystem tools, stats, and project config still work, LSP tools fail until a language attaches.
 2. **A language root marker** (`go.mod`, `pyproject.toml`, `setup.py`, …) — returns `(dir, language)`.
+3. **A `.git/` directory** — an unambiguous project boundary. Returns `(dir, "none")` so a scripts / multi-language repo with no language marker still resolves. `$HOME` is excluded (a dotfiles repo there must not capture the whole home directory). Priority is per-directory, nearest-wins: a `.plumb/` or language marker always beats a `.git/` further up, and `.git/` only wins when nothing more specific is found.
 
 Walks to the parent otherwise; errors only after passing the filesystem root.
 
-`LanguageNone` (`"none"`, 0.5.26+) keeps non-Go/non-Python projects fully attached minus LSP (fixed the "TUI stuck on resolving…" symptom). **Auto-attach** (opt-in, `[workspace].auto_attach`, 0.6.4+) falls back to `SynthesiseRoot` (nearest `.git/` or seed dir) when `Detect` fails; synthetic sessions are marked `(auto)` in the TUI, and `auto_attach_persist` creates `<root>/.plumb/` on first attach.
+`LanguageNone` (`"none"`, 0.5.26+) keeps non-Go/non-Python projects fully attached minus LSP (fixed the "TUI stuck on resolving…" symptom — the TUI renders such a session's language as `?`). The `.git/` fallback (0.7.20+) extends this to any git repo, so the common case (a repo without a language marker, default config) now resolves on the first path-bearing tool call instead of staying on "resolving…" forever. **Auto-attach** (opt-in, `[workspace].auto_attach`, 0.6.4+) still covers the residual case — a seed dir with *no* `.git/` anywhere above — falling back to `SynthesiseRoot` when `Detect` fails; synthetic sessions are marked `(auto)` in the TUI, and `auto_attach_persist` creates `<root>/.plumb/` on first attach.
 
 Cold-start resolution in `session_start` (Claude Desktop launches the daemon from `$HOME`): explicit `workspace` arg → daemon-resolved → `roots/list` query → walk up from `os.Getwd()`. Run `plumb init` in any project root to create a `.plumb/` marker (holds `context.md`, the `memories/` store, and `topology.db` when enabled).
 

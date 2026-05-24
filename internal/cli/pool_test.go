@@ -160,6 +160,104 @@ func TestDetect_NothingFound(t *testing.T) {
 	}
 }
 
+// TestDetect_GitDirOnly is the regression test for the "TUI stuck on
+// resolving" bug on git repos with no language marker (scripts /
+// multi-language repos). A bare .git/ must resolve as LanguageNone so the
+// session attaches in the default config (auto_attach off).
+func TestDetect_GitDirOnly(t *testing.T) {
+	dir := freshTempDir(t)
+	mustMkdir(t, filepath.Join(dir, ".git"))
+
+	pool := detectTestPool()
+	root, lang, err := pool.Detect(dir)
+	if err != nil {
+		t.Fatalf("Detect: unexpected error %v — .git/ alone should resolve as LanguageNone", err)
+	}
+	if root != dir {
+		t.Errorf("root: got %s, want %s", root, dir)
+	}
+	if lang != LanguageNone {
+		t.Errorf("language: got %s, want %s", lang, LanguageNone)
+	}
+}
+
+// TestDetect_GitDirInAncestor mirrors the reported layout: a deep script
+// directory whose only project boundary is a .git/ several levels up.
+func TestDetect_GitDirInAncestor(t *testing.T) {
+	root := freshTempDir(t)
+	mustMkdir(t, filepath.Join(root, ".git"))
+	sub := filepath.Join(root, "alerts", "runbook", "check-entra-app-secret")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+	gotRoot, lang, err := pool.Detect(sub)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if gotRoot != root {
+		t.Errorf("root: got %s, want %s (git root)", gotRoot, root)
+	}
+	if lang != LanguageNone {
+		t.Errorf("language: got %s, want %s", lang, LanguageNone)
+	}
+}
+
+// TestDetect_LanguageMarkerWinsOverGit verifies precedence: a language marker
+// at the same directory as .git resolves as that language, not LanguageNone.
+func TestDetect_LanguageMarkerWinsOverGit(t *testing.T) {
+	dir := freshTempDir(t)
+	mustMkdir(t, filepath.Join(dir, ".git"))
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
+
+	pool := detectTestPool()
+	_, lang, err := pool.Detect(dir)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if lang != "go" {
+		t.Errorf("language: got %s, want go (go.mod must beat .git)", lang)
+	}
+}
+
+// TestDetect_NearestLanguageMarkerWinsOverAncestorGit verifies that a language
+// marker in a subdirectory beats a .git/ in an ancestor — the walk returns at
+// the nearer directory.
+func TestDetect_NearestLanguageMarkerWinsOverAncestorGit(t *testing.T) {
+	root := freshTempDir(t)
+	mustMkdir(t, filepath.Join(root, ".git"))
+	sub := filepath.Join(root, "services", "api")
+	mustMkdir(t, sub)
+	mustWrite(t, filepath.Join(sub, "go.mod"), "module api\n")
+
+	pool := detectTestPool()
+	gotRoot, lang, err := pool.Detect(sub)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if gotRoot != sub {
+		t.Errorf("root: got %s, want %s (subproject should win)", gotRoot, sub)
+	}
+	if lang != "go" {
+		t.Errorf("language: got %s, want go", lang)
+	}
+}
+
+// TestDetect_GitAtHomeRefused verifies the $HOME guard: a dotfiles repo at the
+// home directory must not turn all of $HOME into a workspace. Detect should
+// walk past it and (finding nothing else) error.
+func TestDetect_GitAtHomeRefused(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	mustMkdir(t, filepath.Join(home, ".git"))
+	sub := filepath.Join(home, "notes")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+	if _, _, err := pool.Detect(sub); err == nil {
+		t.Fatal("Detect: want error (a .git at $HOME must not resolve), got nil")
+	}
+}
+
 func TestSynthesiseRoot_GitDirAtSeed(t *testing.T) {
 	dir := freshTempDir(t)
 	mustMkdir(t, filepath.Join(dir, ".git"))

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.20 (unreleased)
+
+### Fixed
+- **Sessions in a git repo with no language marker no longer hang on "resolving…".** `workspacePool.Detect` (`internal/cli/pool.go`) now recognises a `.git/` directory as a lowest-priority workspace root marker, returning `(root, LanguageNone)`. Previously `Detect` knew only `.plumb/` and language root markers (`go.mod`, `pyproject.toml`, …); a scripts / multi-language repo (e.g. a PowerShell + Python runbook tree under a git root) matched none of them, so `Detect` errored on every path-bearing tool call and — with `auto_attach` off by default — the session never attached. Symptom: the TUI showed `Folder: (resolving workspace…)` indefinitely with `Tools: 0 / Calls: 0` (no workspace root ⇒ `onAfterTool` recorded nothing), even while the client was actively using tools. The `.git/` marker closes the gap in the default config (no `auto_attach` needed); precedence is per-directory nearest-wins, so a `.plumb/` or language marker still beats an ancestor `.git/`, and `$HOME` is excluded so a dotfiles repo there cannot capture the whole home directory. The pre-existing `auto_attach`/`SynthesiseRoot` path still covers the residual case of a seed dir with no `.git/` anywhere above it. Regression guards: `TestDetect_GitDirOnly`, `TestDetect_GitDirInAncestor`, `TestDetect_LanguageMarkerWinsOverGit`, `TestDetect_NearestLanguageMarkerWinsOverAncestorGit`, `TestDetect_GitAtHomeRefused` (`internal/cli/pool_test.go`).
+- **TUI now renders an undetectable language as `?` instead of nothing.** A `LanguageNone` session (valid workspace, no LSP language — it still serves language-independent calls) shows a `?` badge in the Sessions list and `Language ?` in the details panel (`sessionLangLabel`, `internal/tui/model_left.go`; details row in `model_right.go`), making clear the session is attached and usable rather than stuck.
+
 ## 0.7.19 (unreleased)
 
 ### Added

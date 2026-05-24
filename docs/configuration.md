@@ -79,9 +79,15 @@ a reconnect. `[ui]`, `[lsp_query]`, and the `[lsp.*]` servers are **global-only*
 
 ## `[workspace]` — root-detection fallback
 
+Detection walks up looking for a `.plumb/` marker, a language root marker
+(`go.mod`, `pyproject.toml`, …), or a `.git/` directory (since 0.7.20; `$HOME`
+excluded). Because any git repo now resolves on its own, `auto_attach` only
+comes into play for a directory that is *neither* a git repo *nor* a marked
+project.
+
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `auto_attach` | bool | `false` | `PLUMB_AUTO_ATTACH` | When detection finds no project marker, fall back to a synthetic root (nearest `.git/`, else the seed directory). Stats, TUI, and project config work; LSP is unavailable. |
+| `auto_attach` | bool | `false` | `PLUMB_AUTO_ATTACH` | When detection finds no marker at all (no `.plumb/`, language marker, or `.git/`), fall back to a synthetic root (the seed directory). Stats, TUI, and project config work; LSP is unavailable. |
 | `auto_attach_persist` | bool | `false` | `PLUMB_AUTO_ATTACH_PERSIST` | Create `.plumb/` at the synthetic root on first attach so later sessions resolve normally. **Implies `auto_attach`.** |
 
 ## `[git]` — tiered git-tool gating
