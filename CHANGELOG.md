@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.14 (unreleased)
+
+### Added
+- **Tree-sitter topology extraction for shell scripts (Bash).** `treesitter.NewBash` (`.sh`, `.bash`) joins the gotreesitter family, registered as an `EngineTreeSitter` row in `internal/langsupport` and wired into `buildExtractors`. It extracts shell **functions** (both `name()` and `function name` forms), top-level **variables** and **constants** (`readonly`/`declare -r` → constant, otherwise variable; function-local `local`/`declare` bindings are correctly *not* surfaced as module-level symbols), `source`/`.` **imports** (the sourced path), and intra-file **call edges** between functions (a command whose name matches a defined function). Containment is n/a (shell has no nesting we model); call sites are certain but the callee is name-resolved within the file, so call edges are heuristic (0.8/heuristic). Bash parsed clean (0 ERROR/0 MISSING) on idiomatic multi-line scripts (it is one of the few grammars with its external lex-states wired). First of the *grammar-breadth* phase — a net-new language with no prior extractor and no plumb LSP, so direct moat value for polyglot repos. Tests in `internal/topology/extractors/treesitter/bash_test.go`.
+
 ## 0.7.13 (unreleased)
 
 ### Added
