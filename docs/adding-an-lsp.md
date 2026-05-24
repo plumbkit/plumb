@@ -341,6 +341,33 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   language version, so this adapter (and the tree-sitter Zig extractor) are an
   ongoing maintenance surface.
 
+### typescript-language-server (TypeScript / JavaScript)
+
+- **Binary**: `typescript-language-server` — install with
+  `npm install -g typescript-language-server typescript`.
+- **Status**: experimental — unit-tested with a mocked transport; the
+  integration test (`internal/lsp/adapters/typescript/`,
+  `testdata/typescript-fixture/`) is written and gated `//go:build integration`
+  but skips until the binary is on PATH.
+- **Root markers**: `tsconfig.json`, `jsconfig.json`, `package.json`.
+- **Serves both languages**: this one server provides the semantic GPS for
+  TypeScript *and* JavaScript, so both the `typescript` and `javascript`
+  `langsupport` rows name it. A JS-only project (just `package.json`) resolves to
+  the `typescript` daemon language and is served fine.
+- **Workspace model**: requires `rootUri` at the project root; drives `tsserver`
+  underneath.
+- **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.
+- **Sync**: full-document sync.
+- **Notifications**: emits `textDocument/publishDiagnostics`.
+- **Enable in config**:
+  ```toml
+  [lsp.typescript]
+  enabled = true
+  ```
+- **Package-name note**: the adapter package is `typescript`, which collides by
+  name (not import path) with the topology `typescript` *extractor* package; the
+  daemon imports the adapter aliased as `tsls` in `internal/cli/pool.go`.
+
 ---
 
 ## Common pitfalls

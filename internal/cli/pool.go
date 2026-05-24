@@ -19,6 +19,7 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/adapters/pyright"
 	"github.com/golimpio/plumb/internal/lsp/adapters/rust"
 	"github.com/golimpio/plumb/internal/lsp/adapters/swift"
+	tsls "github.com/golimpio/plumb/internal/lsp/adapters/typescript"
 	"github.com/golimpio/plumb/internal/lsp/adapters/zig"
 	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
@@ -286,6 +287,8 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
 		return swift.New(conn), nil
 	case "zig":
 		return zig.New(conn), nil
+	case "typescript":
+		return tsls.New(conn), nil
 	default:
 		return nil, fmt.Errorf("no adapter registered for language %q", language)
 	}
@@ -304,6 +307,8 @@ func initParamsFor(language, rootURI string) protocol.InitializeParams {
 		return swift.DefaultInitParams(rootURI)
 	case "zig":
 		return zig.DefaultInitParams(rootURI)
+	case "typescript":
+		return tsls.DefaultInitParams(rootURI)
 	default:
 		return gopls.DefaultInitParams(rootURI)
 	}

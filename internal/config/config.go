@@ -307,6 +307,12 @@ var defaults = Config{
 			RootMarkers: []string{"build.zig", "build.zig.zon"},
 			Enabled:     false,
 		},
+		"typescript": {
+			Command:     "typescript-language-server",
+			Args:        []string{"--stdio"},
+			RootMarkers: []string{"tsconfig.json", "jsconfig.json", "package.json"},
+			Enabled:     false,
+		},
 	},
 }
 
