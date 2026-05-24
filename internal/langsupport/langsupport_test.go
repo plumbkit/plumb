@@ -33,23 +33,28 @@ func TestByPath(t *testing.T) {
 }
 
 func TestByName(t *testing.T) {
-	if l, ok := ByName("go"); !ok || l.Structural != EngineNativeAST {
-		t.Errorf("ByName(go) = (%+v, %v), want EngineNativeAST", l, ok)
+	// adapter "" means "don't check the adapter".
+	cases := []struct {
+		name    string
+		engine  StructuralEngine
+		adapter string
+	}{
+		{"go", EngineNativeAST, "gopls"},
+		{"python", EngineTreeSitter, "pyright-langserver"},
+		{"rust", EngineTreeSitter, ""},
+		{"zig", EngineTreeSitter, ""},
+		{"kotlin", EngineTreeSitter, ""},
+		{"swift", EngineTreeSitter, ""},
+		{"java", EngineTreeSitter, "jdtls"}, // tree-sitter Map + jdtls GPS
 	}
-	if l, ok := ByName("python"); !ok || l.LSPAdapter != "pyright-langserver" {
-		t.Errorf("ByName(python) = (%+v, %v), want pyright-langserver", l, ok)
-	}
-	if l, ok := ByName("rust"); !ok || l.Structural != EngineTreeSitter {
-		t.Errorf("ByName(rust) = (%+v, %v), want EngineTreeSitter", l, ok)
-	}
-	if l, ok := ByName("zig"); !ok || l.Structural != EngineTreeSitter {
-		t.Errorf("ByName(zig) = (%+v, %v), want EngineTreeSitter", l, ok)
-	}
-	if l, ok := ByName("kotlin"); !ok || l.Structural != EngineTreeSitter {
-		t.Errorf("ByName(kotlin) = (%+v, %v), want EngineTreeSitter", l, ok)
-	}
-	if l, ok := ByName("swift"); !ok || l.Structural != EngineTreeSitter {
-		t.Errorf("ByName(swift) = (%+v, %v), want EngineTreeSitter", l, ok)
+	for _, c := range cases {
+		l, ok := ByName(c.name)
+		if !ok || l.Structural != c.engine {
+			t.Errorf("ByName(%s) = (%+v, %v), want engine %v", c.name, l, ok, c.engine)
+		}
+		if c.adapter != "" && l.LSPAdapter != c.adapter {
+			t.Errorf("ByName(%s) adapter = %q, want %q", c.name, l.LSPAdapter, c.adapter)
+		}
 	}
 	if _, ok := ByName("cobol"); ok {
 		t.Error("ByName(cobol) should not be found")
