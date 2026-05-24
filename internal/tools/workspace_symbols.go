@@ -21,7 +21,8 @@ var workspaceSymbolsSchema = json.RawMessage(`{
       "description": "Symbol name or substring to search for across the entire workspace"
     }
   },
-  "required": ["query"]
+  "required": ["query"],
+  "additionalProperties": false
 }`)
 
 // WorkspaceSymbols searches for symbols by name across the entire workspace.

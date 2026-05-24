@@ -19,7 +19,8 @@ var readMultipleFilesSchema = json.RawMessage(`{
       "maxItems": 20
     }
   },
-  "required": ["paths"]
+  "required": ["paths"],
+  "additionalProperties": false
 }`)
 
 // ReadMultipleFiles reads up to 20 files in a single call, returning each

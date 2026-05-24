@@ -35,8 +35,9 @@ func (*listMemoriesTool) InputSchema() json.RawMessage {
 		"type":"object",
 		"properties":{
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
-		}
-	}`)
+		},
+  "additionalProperties": false
+}`)
 }
 
 func (t *listMemoriesTool) Execute(_ context.Context, args json.RawMessage) (string, error) {

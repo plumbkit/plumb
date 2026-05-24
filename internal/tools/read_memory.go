@@ -29,8 +29,9 @@ func (*readMemoryTool) InputSchema() json.RawMessage {
 			"name":{"type":"string","description":"Memory name (alphanumeric, _, - only)."},
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
 		},
-		"required":["name"]
-	}`)
+		"required":["name"],
+  "additionalProperties": false
+}`)
 }
 
 func (t *readMemoryTool) Execute(_ context.Context, args json.RawMessage) (string, error) {

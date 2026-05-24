@@ -44,8 +44,8 @@ func TestTransaction_TwoFilesSucceed(t *testing.T) {
 
 	out, err := callTransaction(t, map[string]any{
 		"operations": []map[string]any{
-			{"path": a, "edits": []map[string]string{{"old_str": "hello", "new_str": "hi"}}},
-			{"path": b, "edits": []map[string]string{{"old_str": "hello", "new_str": "hi"}}},
+			{"file_path": a, "edits": []map[string]string{{"old_string": "hello", "new_string": "hi"}}},
+			{"file_path": b, "edits": []map[string]string{{"old_string": "hello", "new_string": "hi"}}},
 		},
 	})
 	if err != nil {
@@ -72,8 +72,8 @@ func TestTransaction_AllOrNothing_OnValidationFailure(t *testing.T) {
 	// b's edit references a string that doesn't exist. a must NOT be touched.
 	_, err := callTransaction(t, map[string]any{
 		"operations": []map[string]any{
-			{"path": a, "edits": []map[string]string{{"old_str": "hello", "new_str": "hi"}}},
-			{"path": b, "edits": []map[string]string{{"old_str": "missing", "new_str": "hi"}}},
+			{"file_path": a, "edits": []map[string]string{{"old_string": "hello", "new_string": "hi"}}},
+			{"file_path": b, "edits": []map[string]string{{"old_string": "missing", "new_string": "hi"}}},
 		},
 	})
 	if err == nil {
@@ -94,8 +94,8 @@ func TestTransaction_RejectsDuplicatePath(t *testing.T) {
 
 	_, err := callTransaction(t, map[string]any{
 		"operations": []map[string]any{
-			{"path": a, "edits": []map[string]string{{"old_str": "hi", "new_str": "ok"}}},
-			{"path": a, "edits": []map[string]string{{"old_str": "ok", "new_str": "no"}}},
+			{"file_path": a, "edits": []map[string]string{{"old_string": "hi", "new_string": "ok"}}},
+			{"file_path": a, "edits": []map[string]string{{"old_string": "ok", "new_string": "no"}}},
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "multiple operations") {
@@ -117,9 +117,9 @@ func TestTransaction_RespectsExpectedSha(t *testing.T) {
 	_, err = callTransaction(t, map[string]any{
 		"operations": []map[string]any{
 			{
-				"path":         a,
+				"file_path":    a,
 				"expected_sha": sha,
-				"edits":        []map[string]string{{"old_str": "hello", "new_str": "hi"}},
+				"edits":        []map[string]string{{"old_string": "hello", "new_string": "hi"}},
 			},
 		},
 	})
@@ -132,9 +132,9 @@ func TestTransaction_RespectsExpectedSha(t *testing.T) {
 	_, err = callTransaction(t, map[string]any{
 		"operations": []map[string]any{
 			{
-				"path":         a,
+				"file_path":    a,
 				"expected_sha": "0000000000000000000000000000000000000000000000000000000000000000",
-				"edits":        []map[string]string{{"old_str": "reset", "new_str": "done"}},
+				"edits":        []map[string]string{{"old_string": "reset", "new_string": "done"}},
 			},
 		},
 	})
@@ -151,9 +151,9 @@ func TestTransaction_RespectsExpectedMtime(t *testing.T) {
 	_, err := callTransaction(t, map[string]any{
 		"operations": []map[string]any{
 			{
-				"path":           a,
+				"file_path":      a,
 				"expected_mtime": "1999-01-01T00:00:00Z",
-				"edits":          []map[string]string{{"old_str": "hello", "new_str": "hi"}},
+				"edits":          []map[string]string{{"old_string": "hello", "new_string": "hi"}},
 			},
 		},
 	})
@@ -174,8 +174,8 @@ func TestTransaction_TxlogCommittedOnSuccess(t *testing.T) {
 
 	out, err := callTransactionInWorkspace(t, ws, map[string]any{
 		"operations": []map[string]any{
-			{"path": a, "edits": []map[string]string{{"old_str": "original-a", "new_str": "new-a"}}},
-			{"path": b, "edits": []map[string]string{{"old_str": "original-b", "new_str": "new-b"}}},
+			{"file_path": a, "edits": []map[string]string{{"old_string": "original-a", "new_string": "new-a"}}},
+			{"file_path": b, "edits": []map[string]string{{"old_string": "original-b", "new_string": "new-b"}}},
 		},
 	})
 	if err != nil {
@@ -206,7 +206,7 @@ func TestTransaction_TxlogRolledBackOnValidationFailure(t *testing.T) {
 
 	_, err := callTransactionInWorkspace(t, ws, map[string]any{
 		"operations": []map[string]any{
-			{"path": a, "edits": []map[string]string{{"old_str": "missing-string", "new_str": "x"}}},
+			{"file_path": a, "edits": []map[string]string{{"old_string": "missing-string", "new_string": "x"}}},
 		},
 	})
 	if err == nil {

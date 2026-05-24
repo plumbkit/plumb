@@ -58,7 +58,8 @@ var findFilesSchema = json.RawMessage(`{
       "description": "Treat pattern as a regular expression instead of a glob. Default false."
     }
   },
-  "required": ["pattern"]
+  "required": ["pattern"],
+  "additionalProperties": false
 }`)
 
 // FindFiles implements fd-like recursive file/directory finding.

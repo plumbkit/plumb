@@ -24,7 +24,8 @@ var sessionStartSchema = json.RawMessage(`{
       "type": "string",
       "description": "Absolute workspace path. Defaults to the daemon's resolved workspace, falling back to walking up from the current working directory."
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // contextMDLines bounds how much of .plumb/context.md is inlined into the

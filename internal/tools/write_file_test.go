@@ -17,7 +17,7 @@ func callWriteFile(t *testing.T, args map[string]any) (string, error) {
 
 func TestWriteFile_Create(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hello.txt")
-	out, err := callWriteFile(t, map[string]any{"path": path, "content": "hello world\n"})
+	out, err := callWriteFile(t, map[string]any{"file_path": path, "content": "hello world\n"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestWriteFile_Create(t *testing.T) {
 func TestWriteFile_Overwrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f.txt")
 	_ = os.WriteFile(path, []byte("old"), 0o644)
-	out, err := callWriteFile(t, map[string]any{"path": path, "content": "new content"})
+	out, err := callWriteFile(t, map[string]any{"file_path": path, "content": "new content"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestWriteFile_Overwrite(t *testing.T) {
 func TestWriteFile_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a", "b", "c.txt")
-	_, err := callWriteFile(t, map[string]any{"path": path, "content": "deep"})
+	_, err := callWriteFile(t, map[string]any{"file_path": path, "content": "deep"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestWriteFile_CreatesParentDirs(t *testing.T) {
 func TestWriteFile_PreservesPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "exec.sh")
 	_ = os.WriteFile(path, []byte("old"), 0o755)
-	_, err := callWriteFile(t, map[string]any{"path": path, "content": "#!/bin/sh\necho hi\n"})
+	_, err := callWriteFile(t, map[string]any{"file_path": path, "content": "#!/bin/sh\necho hi\n"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestWriteFile_PreservesPermissions(t *testing.T) {
 
 func TestWriteFile_RejectsDirectory(t *testing.T) {
 	dir := t.TempDir()
-	_, err := callWriteFile(t, map[string]any{"path": dir, "content": "oops"})
+	_, err := callWriteFile(t, map[string]any{"file_path": dir, "content": "oops"})
 	if err == nil {
 		t.Fatal("expected error for directory path")
 	}
@@ -97,7 +97,7 @@ func TestWriteFile_PreservesSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks not supported on this filesystem: %v", err)
 	}
-	if _, err := callWriteFile(t, map[string]any{"path": link, "content": "new"}); err != nil {
+	if _, err := callWriteFile(t, map[string]any{"file_path": link, "content": "new"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The link must still be a symlink, not a regular file.
@@ -128,7 +128,7 @@ func TestWriteFile_DirtyCheck_RefusesDirtyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := callWriteFile(t, map[string]any{"path": f, "content": "new"})
+	_, err := callWriteFile(t, map[string]any{"file_path": f, "content": "new"})
 	if err == nil {
 		t.Fatal("expected error for dirty file")
 	}
@@ -154,7 +154,7 @@ func TestWriteFile_DirtyOk_OverwritesDirtyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := callWriteFile(t, map[string]any{"path": f, "content": "new content", "dirty_ok": true})
+	_, err := callWriteFile(t, map[string]any{"file_path": f, "content": "new content", "dirty_ok": true})
 	if err != nil {
 		t.Fatalf("unexpected error with dirty_ok=true: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestWriteFile_DirtyCheck_AllowsNewFile(t *testing.T) {
 	dir := initGitRepo(t)
 	// A file that doesn't exist yet is not dirty — creation must succeed.
 	f := filepath.Join(dir, "brand-new.txt")
-	_, err := callWriteFile(t, map[string]any{"path": f, "content": "hello"})
+	_, err := callWriteFile(t, map[string]any{"file_path": f, "content": "hello"})
 	if err != nil {
 		t.Fatalf("unexpected error creating new file: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestWriteFile_ShowWriteDiff_IncludesDiff(t *testing.T) {
 
 	out, err := NewWriteFile(WriteDeps{ShowWriteDiff: true}).Execute(
 		context.Background(),
-		mustJSON(map[string]any{"path": path, "content": "new content\n"}),
+		mustJSON(map[string]any{"file_path": path, "content": "new content\n"}),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -198,7 +198,7 @@ func TestWriteFile_ShowWriteDiff_NewFileEmitsNewFileMarker(t *testing.T) {
 
 	out, err := NewWriteFile(WriteDeps{ShowWriteDiff: true}).Execute(
 		context.Background(),
-		mustJSON(map[string]any{"path": path, "content": "hello\n"}),
+		mustJSON(map[string]any{"file_path": path, "content": "hello\n"}),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -211,7 +211,7 @@ func TestWriteFile_ShowWriteDiff_NewFileEmitsNewFileMarker(t *testing.T) {
 func TestWriteFile_AtomicTmpCleanedOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "f.txt")
-	_, err := callWriteFile(t, map[string]any{"path": path, "content": "data"})
+	_, err := callWriteFile(t, map[string]any{"file_path": path, "content": "data"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

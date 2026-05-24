@@ -29,7 +29,8 @@ var explainSymbolSchema = json.RawMessage(`{
       "minimum": 0
     }
   },
-  "required": ["uri", "line", "character"]
+  "required": ["uri", "line", "character"],
+  "additionalProperties": false
 }`)
 
 // ExplainSymbol returns hover information (documentation, type signature) for

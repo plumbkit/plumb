@@ -37,8 +37,9 @@ func (*searchMemoriesTool) InputSchema() json.RawMessage {
 			"case_sensitive":{"type":"boolean","description":"Default: smart-case."},
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
 		},
-		"required":["pattern"]
-	}`)
+		"required":["pattern"],
+  "additionalProperties": false
+}`)
 }
 
 func (t *searchMemoriesTool) Execute(_ context.Context, args json.RawMessage) (string, error) {

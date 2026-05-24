@@ -39,7 +39,8 @@ var findReferencesSchema = json.RawMessage(`{
       "description": "Include the symbol's own declaration in results (default true)"
     }
   },
-  "required": ["uri"]
+  "required": ["uri"],
+  "additionalProperties": false
 }`)
 
 // FindReferences returns all usages of a symbol across the workspace.

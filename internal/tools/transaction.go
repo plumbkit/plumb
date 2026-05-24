@@ -28,20 +28,20 @@ var transactionApplySchema = json.RawMessage(`{
       "items": {
         "type": "object",
         "properties": {
-          "path": {
+          "file_path": {
             "type": "string",
             "description": "Absolute path or file:// URI of the file to edit."
           },
           "edits": {
             "type": "array",
-            "description": "str_replace edits applied in order. Same semantics as edit_file: each old_str must appear EXACTLY ONCE.",
+            "description": "str_replace edits applied in order. Same semantics as edit_file: each old_string must appear EXACTLY ONCE.",
             "items": {
               "type": "object",
               "properties": {
-                "old_str": {"type": "string"},
-                "new_str": {"type": "string"}
+                "old_string": {"type": "string"},
+                "new_string": {"type": "string"}
               },
-              "required": ["old_str", "new_str"]
+              "required": ["old_string", "new_string"]
             },
             "minItems": 1
           },
@@ -54,20 +54,21 @@ var transactionApplySchema = json.RawMessage(`{
             "description": "Optional hex-encoded SHA-256 previously returned by read_file. If provided, the operation is rejected if the file's current content hash differs."
           }
         },
-        "required": ["path", "edits"]
+        "required": ["file_path", "edits"]
       },
       "minItems": 1,
       "maxItems": 50
     }
   },
-  "required": ["operations"]
+  "required": ["operations"],
+  "additionalProperties": false
 }`)
 
 // TransactionApply applies multi-file edits atomically:
 //
 //  1. Acquire per-path locks for every target in lexical order (deadlock-safe).
 //  2. Snapshot every target's content + mtime; validate every edit in memory.
-//     If any edit fails (old_str missing/ambiguous, expected_mtime mismatch),
+//     If any edit fails (old_string missing/ambiguous, expected_mtime mismatch),
 //     no writes happen.
 //  3. Apply writes via safeWrite. If any write fails partway, the
 //     already-written files are restored to their pre-transaction content.
@@ -89,7 +90,7 @@ func (*TransactionApply) InputSchema() json.RawMessage { return transactionApply
 func (*TransactionApply) Description() string {
 	return "No native Claude Code equivalent. " +
 		"Apply str_replace edits across multiple files atomically. Every operation is " +
-		"validated against the on-disk content first; if any old_str is missing or " +
+		"validated against the on-disk content first; if any old_string is missing or " +
 		"ambiguous, NO files are written. If writes start succeeding but one fails partway, " +
 		"the already-written files are rolled back to their pre-transaction content. " +
 		"Per-path locks prevent interleaving with other write tools. Use for refactors " +
@@ -98,7 +99,7 @@ func (*TransactionApply) Description() string {
 }
 
 type txOperation struct {
-	Path          string    `json:"path"`
+	Path          string    `json:"file_path"`
 	Edits         []strEdit `json:"edits"`
 	ExpectedMtime string    `json:"expected_mtime"`
 	ExpectedSha   string    `json:"expected_sha"`
@@ -302,7 +303,7 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 	content := before
 	for j, edit := range op.Edits {
 		if edit.OldStr == "" {
-			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d].edits[%d]: old_str must not be empty", i, j)}
+			return txPrepared{}, &editLogicErr{fmt.Errorf("transaction_apply: op[%d].edits[%d]: old_string must not be empty", i, j)}
 		}
 		oldStr := matchLineEndings(edit.OldStr, content)
 		newStr := matchLineEndings(edit.NewStr, content)
@@ -310,14 +311,14 @@ func txValidateOp(i int, op txOperation, path string) (txPrepared, error) {
 		switch count {
 		case 0:
 			return txPrepared{}, &editLogicErr{fmt.Errorf(
-				"transaction_apply: op[%d].edits[%d]: old_str not found in %q",
+				"transaction_apply: op[%d].edits[%d]: old_string not found in %q",
 				i, j, path,
 			)}
 		case 1:
 			content = strings.Replace(content, oldStr, newStr, 1)
 		default:
 			return txPrepared{}, &editLogicErr{fmt.Errorf(
-				"transaction_apply: op[%d].edits[%d]: old_str appears %d times in %q — must be unique",
+				"transaction_apply: op[%d].edits[%d]: old_string appears %d times in %q — must be unique",
 				i, j, count, path,
 			)}
 		}

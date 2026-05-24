@@ -33,8 +33,9 @@ func (*writeMemoryTool) InputSchema() json.RawMessage {
 			"description":{"type":"string","description":"One-line summary (optional). Stored as frontmatter."},
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
 		},
-		"required":["name","content"]
-	}`)
+		"required":["name","content"],
+  "additionalProperties": false
+}`)
 }
 
 func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (string, error) {

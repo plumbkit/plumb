@@ -28,7 +28,8 @@ var fileDiffSchema = json.RawMessage(`{
       "description": "Ignore whitespace-only differences"
     }
   },
-  "required": ["file_a", "file_b"]
+  "required": ["file_a", "file_b"],
+  "additionalProperties": false
 }`)
 
 const maxFileDiffBytes = 100 * 1024 // 100 KiB

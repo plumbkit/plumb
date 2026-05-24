@@ -68,8 +68,9 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip files larger than this many bytes. Default 50 MiB."},
 			"format_after":{"type":"boolean","default":false,"description":"After writing changes, run the workspace formatter (gofumpt for Go, ruff format for Python) on each modified file. Formatter errors are reported as warnings and do not fail the call."}
 		},
-		"required":["path","pattern","replacement"]
-	}`)
+		"required":["path","pattern","replacement"],
+  "additionalProperties": false
+}`)
 }
 
 const defaultMaxFileBytes int64 = 50 * 1024 * 1024

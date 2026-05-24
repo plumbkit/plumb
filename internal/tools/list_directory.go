@@ -32,7 +32,8 @@ var listDirectorySchema = json.RawMessage(`{
       "description": "Sort order. Default: name."
     }
   },
-  "required": ["path"]
+  "required": ["path"],
+  "additionalProperties": false
 }`)
 
 // ListDirectory lists the immediate children of a directory with [FILE]/[DIR]

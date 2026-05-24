@@ -14,7 +14,7 @@ import (
 var deleteFileSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "path": {
+    "file_path": {
       "type": "string",
       "description": "Absolute path or file:// URI of the file to delete."
     },
@@ -23,7 +23,8 @@ var deleteFileSchema = json.RawMessage(`{
       "description": "Allow deleting a file that has uncommitted changes in its git repository. Default false — deletion is refused if the file is dirty. Pass true to proceed anyway."
     }
   },
-  "required": ["path"]
+  "required": ["file_path"],
+  "additionalProperties": false
 }`)
 
 // DeleteFile removes a single file (not a directory) and notifies the LSP
@@ -45,7 +46,7 @@ func (*DeleteFile) Description() string {
 }
 
 type deleteFileArgs struct {
-	Path    string `json:"path"`
+	Path    string `json:"file_path"`
 	DirtyOk bool   `json:"dirty_ok"`
 }
 
@@ -58,7 +59,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("delete_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return "", fmt.Errorf("delete_file: path is required")
+		return "", fmt.Errorf("delete_file: file_path is required")
 	}
 	path := strings.TrimPrefix(a.Path, "file://")
 

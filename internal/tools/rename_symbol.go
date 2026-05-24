@@ -55,8 +55,9 @@ func (*RenameSymbol) InputSchema() json.RawMessage {
 			"new_name":{"type":"string","description":"Replacement identifier name."},
 			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview changes only."}
 		},
-		"required":["uri","line","character","new_name"]
-	}`)
+		"required":["uri","line","character","new_name"],
+  "additionalProperties": false
+}`)
 }
 
 type renameSymbolArgs struct {

@@ -16,8 +16,8 @@ func TestEditFile_StrictMode_RequiresRead(t *testing.T) {
 	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+		"file_path": path,
+		"edits":     []map[string]string{{"old_string": "hello", "new_string": "world"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "has not been read") {
 		t.Fatalf("expected strict-mode read-required error, got: %v", err)
@@ -31,11 +31,11 @@ func TestEditFile_StrictMode_AfterRead(t *testing.T) {
 
 	// Read and edit share one tracker; strict mode picks up the recorded mtime.
 	tracker := NewReadTracker()
-	_, _ = NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"path": path}))
+	_, _ = NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"file_path": path}))
 	out, err := NewEditFile(WriteDeps{Reads: tracker, Strict: func() bool { return true }}).
 		Execute(context.Background(), mustJSON(map[string]any{
-			"path":  path,
-			"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+			"file_path": path,
+			"edits":     []map[string]string{{"old_string": "hello", "new_string": "world"}},
 		}))
 	if err != nil {
 		t.Fatalf("expected success after read, got: %v", err)
@@ -54,12 +54,12 @@ func TestEditFile_StrictMode_TrackerIsolation(t *testing.T) {
 
 	sessionA := NewReadTracker()
 	sessionB := NewReadTracker()
-	_, _ = NewReadFile(sessionA).Execute(context.Background(), mustJSON(map[string]any{"path": path}))
+	_, _ = NewReadFile(sessionA).Execute(context.Background(), mustJSON(map[string]any{"file_path": path}))
 
 	_, err := NewEditFile(WriteDeps{Reads: sessionB, Strict: func() bool { return true }}).
 		Execute(context.Background(), mustJSON(map[string]any{
-			"path":  path,
-			"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+			"file_path": path,
+			"edits":     []map[string]string{{"old_string": "hello", "new_string": "world"}},
 		}))
 	if err == nil || !strings.Contains(err.Error(), "has not been read") {
 		t.Fatalf("session B's edit should have been rejected (session A read), got: %v", err)
@@ -82,9 +82,9 @@ func TestEditFile_BasicReplace(t *testing.T) {
 	_ = os.WriteFile(path, []byte("package main\n\nfunc Hello() {}\n"), 0o644)
 
 	out, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "func Hello() {}", "new_str": "func Hello() { return }"},
+			{"old_string": "func Hello() {}", "new_string": "func Hello() { return }"},
 		},
 	})
 	if err != nil {
@@ -104,10 +104,10 @@ func TestEditFile_MultipleEdits(t *testing.T) {
 	_ = os.WriteFile(path, []byte("foo\nbar\nbaz\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "foo", "new_str": "FOO"},
-			{"old_str": "baz", "new_str": "BAZ"},
+			{"old_string": "foo", "new_string": "FOO"},
+			{"old_string": "baz", "new_string": "BAZ"},
 		},
 	})
 	if err != nil {
@@ -124,9 +124,9 @@ func TestEditFile_RejectsAbsentString(t *testing.T) {
 	_ = os.WriteFile(path, []byte("hello world\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "goodbye world", "new_str": "hi"},
+			{"old_string": "goodbye world", "new_string": "hi"},
 		},
 	})
 	if err == nil {
@@ -145,7 +145,7 @@ func TestEditFile_NotFound_NamesMtimeDriftWhenFileChanged(t *testing.T) {
 	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
 
 	tracker := NewReadTracker()
-	if _, err := NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+	if _, err := NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"file_path": path})); err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
 
@@ -159,8 +159,8 @@ func TestEditFile_NotFound_NamesMtimeDriftWhenFileChanged(t *testing.T) {
 	}
 
 	_, err := NewEditFile(WriteDeps{Reads: tracker}).Execute(context.Background(), mustJSON(map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "hello", "new_str": "world"}},
+		"file_path": path,
+		"edits":     []map[string]string{{"old_string": "hello", "new_string": "world"}},
 	}))
 	if err == nil {
 		t.Fatal("expected not-found error")
@@ -181,13 +181,13 @@ func TestEditFile_NotFound_BlamesSnippetWhenFileUnchanged(t *testing.T) {
 	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
 
 	tracker := NewReadTracker()
-	if _, err := NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"path": path})); err != nil {
+	if _, err := NewReadFile(tracker).Execute(context.Background(), mustJSON(map[string]any{"file_path": path})); err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
 
 	_, err := NewEditFile(WriteDeps{Reads: tracker}).Execute(context.Background(), mustJSON(map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "goodbye", "new_str": "world"}},
+		"file_path": path,
+		"edits":     []map[string]string{{"old_string": "goodbye", "new_string": "world"}},
 	}))
 	if err == nil {
 		t.Fatal("expected not-found error")
@@ -212,14 +212,14 @@ func TestEditFile_NotFound_ShowsBothSentAndSearchedSnippets(t *testing.T) {
 	// will normalise LF → CRLF in old_str; the searched form differs from
 	// the sent form, so the error should surface both.
 	_, err := callEditFile(t, map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "gamma\nbeta", "new_str": "delta"}},
+		"file_path": path,
+		"edits":     []map[string]string{{"old_string": "gamma\nbeta", "new_string": "delta"}},
 	})
 	if err == nil {
 		t.Fatal("expected not-found error")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "old_str:") {
+	if !strings.Contains(msg, "old_string:") {
 		t.Errorf("expected as-sent old_str in error, got: %s", msg)
 	}
 	if !strings.Contains(msg, "searched (after newline normalisation):") {
@@ -236,9 +236,9 @@ func TestEditFile_RejectsAmbiguousString(t *testing.T) {
 	_ = os.WriteFile(path, []byte("foo\nfoo\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "foo", "new_str": "bar"},
+			{"old_string": "foo", "new_string": "bar"},
 		},
 	})
 	if err == nil {
@@ -254,9 +254,9 @@ func TestEditFile_RejectsEmptyOldStr(t *testing.T) {
 	_ = os.WriteFile(path, []byte("content\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "", "new_str": "something"},
+			{"old_string": "", "new_string": "something"},
 		},
 	})
 	if err == nil {
@@ -266,9 +266,9 @@ func TestEditFile_RejectsEmptyOldStr(t *testing.T) {
 
 func TestEditFile_RejectsMissingFile(t *testing.T) {
 	_, err := callEditFile(t, map[string]any{
-		"path": "/nonexistent/file.txt",
+		"file_path": "/nonexistent/file.txt",
 		"edits": []map[string]string{
-			{"old_str": "x", "new_str": "y"},
+			{"old_string": "x", "new_string": "y"},
 		},
 	})
 	if err == nil {
@@ -281,9 +281,9 @@ func TestEditFile_AtomicOnSuccess(t *testing.T) {
 	_ = os.WriteFile(path, []byte("original content\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "original content", "new_str": "new content"},
+			{"old_string": "original content", "new_string": "new content"},
 		},
 	})
 	if err != nil {
@@ -306,10 +306,10 @@ func TestEditFile_FileUnchangedOnEditFailure(t *testing.T) {
 
 	// Second edit references something that doesn't exist after first edit.
 	_, err := callEditFile(t, map[string]any{
-		"path": path,
+		"file_path": path,
 		"edits": []map[string]string{
-			{"old_str": "line1", "new_str": "LINE1"},
-			{"old_str": "NONEXISTENT", "new_str": "oops"},
+			{"old_string": "line1", "new_string": "LINE1"},
+			{"old_string": "NONEXISTENT", "new_string": "oops"},
 		},
 	})
 	if err == nil {
@@ -332,9 +332,9 @@ func TestEditFile_ExpectedSHA_AcceptsCorrect(t *testing.T) {
 	}
 
 	_, err = callEditFile(t, map[string]any{
-		"path":         path,
+		"file_path":    path,
 		"expected_sha": sha,
-		"edits":        []map[string]string{{"old_str": "hello", "new_str": "world"}},
+		"edits":        []map[string]string{{"old_string": "hello", "new_string": "world"}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error with correct expected_sha: %v", err)
@@ -346,9 +346,9 @@ func TestEditFile_ExpectedSHA_RejectsStale(t *testing.T) {
 	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path":         path,
+		"file_path":    path,
 		"expected_sha": "0000000000000000000000000000000000000000000000000000000000000000",
-		"edits":        []map[string]string{{"old_str": "hello", "new_str": "world"}},
+		"edits":        []map[string]string{{"old_string": "hello", "new_string": "world"}},
 	})
 	if err == nil {
 		t.Fatal("expected error for wrong expected_sha")
@@ -363,11 +363,11 @@ func TestEditFile_ApplyPartial_AllSucceed(t *testing.T) {
 	_ = os.WriteFile(path, []byte("aaa\nbbb\nccc\n"), 0o644)
 
 	out, err := callEditFile(t, map[string]any{
-		"path":          path,
+		"file_path":     path,
 		"apply_partial": true,
 		"edits": []map[string]string{
-			{"old_str": "aaa", "new_str": "AAA"},
-			{"old_str": "bbb", "new_str": "BBB"},
+			{"old_string": "aaa", "new_string": "AAA"},
+			{"old_string": "bbb", "new_string": "BBB"},
 		},
 	})
 	if err != nil {
@@ -387,12 +387,12 @@ func TestEditFile_ApplyPartial_SomeFail(t *testing.T) {
 	_ = os.WriteFile(path, []byte("aaa\nbbb\nccc\n"), 0o644)
 
 	out, err := callEditFile(t, map[string]any{
-		"path":          path,
+		"file_path":     path,
 		"apply_partial": true,
 		"edits": []map[string]string{
-			{"old_str": "aaa", "new_str": "AAA"},   // succeeds
-			{"old_str": "MISSING", "new_str": "X"}, // fails
-			{"old_str": "ccc", "new_str": "CCC"},   // succeeds
+			{"old_string": "aaa", "new_string": "AAA"},   // succeeds
+			{"old_string": "MISSING", "new_string": "X"}, // fails
+			{"old_string": "ccc", "new_string": "CCC"},   // succeeds
 		},
 	})
 	if err != nil {
@@ -420,8 +420,8 @@ func TestEditFile_DirtyCheck_RefusesDirtyFile(t *testing.T) {
 	_ = os.WriteFile(path, []byte("package main\n// modified\n"), 0o644)
 
 	_, err := callEditFile(t, map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "package main", "new_str": "package foo"}},
+		"file_path": path,
+		"edits":     []map[string]string{{"old_string": "package main", "new_string": "package foo"}},
 	})
 	if err == nil {
 		t.Fatal("expected dirty file rejection")
@@ -444,8 +444,8 @@ func TestEditFile_ShowWriteDiff_IncludesDiff(t *testing.T) {
 		Reads:         NewReadTracker(),
 		ShowWriteDiff: true,
 	}).Execute(context.Background(), mustJSON(map[string]any{
-		"path":  path,
-		"edits": []map[string]string{{"old_str": "Old", "new_str": "New"}},
+		"file_path": path,
+		"edits":     []map[string]string{{"old_string": "Old", "new_string": "New"}},
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -464,9 +464,9 @@ func TestEditFile_ApplyPartial_AllFail(t *testing.T) {
 	_ = os.WriteFile(path, []byte(content), 0o644)
 
 	out, err := callEditFile(t, map[string]any{
-		"path":          path,
+		"file_path":     path,
 		"apply_partial": true,
-		"edits":         []map[string]string{{"old_str": "MISSING", "new_str": "X"}},
+		"edits":         []map[string]string{{"old_string": "MISSING", "new_string": "X"}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

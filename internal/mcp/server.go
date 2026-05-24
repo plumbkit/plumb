@@ -84,10 +84,11 @@ type ServerInfo struct {
 // Concurrency: Register and setting callbacks must finish before Serve is called.
 // Serve handles individual requests concurrently.
 type Server struct {
-	info  ServerInfo
-	mu    sync.RWMutex
-	tools map[string]Tool
-	order []string // insertion order for tools/list
+	info      ServerInfo
+	mu        sync.RWMutex
+	tools     map[string]Tool
+	argShapes map[string]*shape // parsed argument contract per tool; nil when unguardable
+	order     []string          // insertion order for tools/list
 
 	// OnInit is called once after a successful MCP initialize exchange.
 	OnInit func(ctx context.Context, request RequestFn)
@@ -128,10 +129,11 @@ type Server struct {
 // New creates a Server with the given identity.
 func New(info ServerInfo) *Server {
 	return &Server{
-		info:    info,
-		tools:   make(map[string]Tool),
-		pending: make(map[string]chan json.RawMessage),
-		prompts: make(map[string]Prompt),
+		info:      info,
+		tools:     make(map[string]Tool),
+		argShapes: make(map[string]*shape),
+		pending:   make(map[string]chan json.RawMessage),
+		prompts:   make(map[string]Prompt),
 	}
 }
 
@@ -144,6 +146,24 @@ func (s *Server) Register(t Tool) {
 		s.order = append(s.order, t.Name())
 	}
 	s.tools[t.Name()] = t
+	if sh, ok := parseShape(t.InputSchema()); ok {
+		s.argShapes[t.Name()] = sh
+	} else {
+		delete(s.argShapes, t.Name())
+		slog.Warn("mcp: tool schema not guardable; arguments left unchecked", "tool", t.Name())
+	}
+}
+
+// resolveToolArgs rewrites recognised parameter aliases to their canonical
+// names and validates a tool call's arguments against the declared schema
+// before dispatch. It returns the (possibly rewritten) arguments, a warning per
+// applied alias, and a validation error. When the tool has no guardable shape
+// the arguments pass through unchanged.
+func (s *Server) resolveToolArgs(name string, args json.RawMessage) (json.RawMessage, []string, error) {
+	s.mu.RLock()
+	sh := s.argShapes[name]
+	s.mu.RUnlock()
+	return resolveArgs(sh, args)
 }
 
 // ─── serveState ──────────────────────────────────────────────────────────────

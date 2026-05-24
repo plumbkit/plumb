@@ -494,7 +494,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	// ── Step 3: read_file returns the mtime header ───────────────────────────
 	t.Log("step 3: read_file")
 	readOut := client.call(t, "read_file",
-		map[string]any{"path": mainGo},
+		map[string]any{"file_path": mainGo},
 		toolTimeout,
 	)
 	assertContains(t, "read_file", readOut, "# plumb-read mtime=")
@@ -504,9 +504,9 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	// ── Step 4: edit_file applies a valid change ─────────────────────────────
 	t.Log("step 4: edit_file (valid change)")
 	editOut := client.call(t, "edit_file", map[string]any{
-		"path": mainGo,
+		"file_path": mainGo,
 		"edits": []map[string]any{
-			{"old_str": `g.Greet("world")`, "new_str": `g.Greet("smoke test")`},
+			{"old_string": `g.Greet("world")`, "new_string": `g.Greet("smoke test")`},
 		},
 		"expected_mtime": mtime,
 		"dirty_ok":       true,
@@ -522,14 +522,14 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	t.Log("step 5: write_file (new file with syntax error — expect diagnostics)")
 	brokenGo := filepath.Join(fixture, "broken.go")
 	syntaxOut := client.call(t, "write_file", map[string]any{
-		"path":    brokenGo,
+		"file_path":    brokenGo,
 		"content": "package main\n\nfunc broken( { } // missing closing paren\n",
 	}, toolTimeout)
 	assertContains(t, "write_file(syntax error)", syntaxOut, "diagnostics after write")
 
 	// Remove broken.go so gopls is clean for any further steps.
 	t.Log("step 5: removing broken.go")
-	client.call(t, "delete_file", map[string]any{"path": brokenGo}, toolTimeout)
+	client.call(t, "delete_file", map[string]any{"file_path": brokenGo}, toolTimeout)
 
 	// ── Step 7: list_memories returns without error ──────────────────────────
 	t.Log("step 7: list_memories")

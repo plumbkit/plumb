@@ -38,7 +38,8 @@ var topologyImpactSchema = json.RawMessage(`{
       "default": ["imports","calls"]
     }
   },
-  "required": ["name"]
+  "required": ["name"],
+  "additionalProperties": false
 }`)
 
 // TopologyImpact performs a bidirectional BFS to assess blast radius around a symbol.

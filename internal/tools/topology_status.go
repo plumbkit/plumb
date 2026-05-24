@@ -15,7 +15,8 @@ var topologyStatusSchema = json.RawMessage(`{
       "type": "string",
       "description": "Absolute path to the workspace root. Defaults to the session workspace."
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // TopologyStatus reports the health and statistics of the topology index.

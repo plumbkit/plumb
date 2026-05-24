@@ -193,7 +193,7 @@ func (*InsertBeforeSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
 		`,"content":{"type":"string","description":"Text to insert before the symbol."}` +
 		docCommentSchemaFragment +
-		`},"required":["uri","name_path","content"]}`)
+		`},"required":["uri","name_path","content"],"additionalProperties":false}`)
 }
 
 func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -257,7 +257,7 @@ Works even when the language server is cold or cannot parse the file: it then lo
 func (*InsertAfterSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
 		`,"content":{"type":"string","description":"Text to insert after the symbol."}` +
-		`},"required":["uri","name_path","content"]}`)
+		`},"required":["uri","name_path","content"],"additionalProperties":false}`)
 }
 
 func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -324,7 +324,7 @@ func (*ReplaceSymbolBody) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
 		`,"content":{"type":"string","description":"The full replacement declaration."}` +
 		docCommentSchemaFragment +
-		`},"required":["uri","name_path","content"]}`)
+		`},"required":["uri","name_path","content"],"additionalProperties":false}`)
 }
 
 func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -380,7 +380,7 @@ Set include_doc_comment=true to also delete any contiguous doc comment above the
 func (*SafeDeleteSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` + symbolEditCommonSchema +
 		docCommentSchemaFragment +
-		`},"required":["uri","name_path"]}`)
+		`},"required":["uri","name_path"],"additionalProperties":false}`)
 }
 
 func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
