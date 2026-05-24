@@ -61,6 +61,7 @@ var registry = []Language{
 	{Name: "kotlin", Extensions: []string{".kt", ".kts"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "swift", Extensions: []string{".swift"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "bash", Extensions: []string{".sh", ".bash"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "hcl", Extensions: []string{".tf", ".tfvars", ".hcl"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.

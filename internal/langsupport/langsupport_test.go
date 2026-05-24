@@ -17,6 +17,8 @@ func TestByPath(t *testing.T) {
 		"Sources/App.swift": "swift",
 		"scripts/run.sh":    "bash",
 		"deploy.bash":       "bash",
+		"infra/main.tf":     "hcl",
+		"vars.tfvars":       "hcl",
 		"README.md":         "",
 		"Makefile":          "",
 	}
@@ -48,6 +50,7 @@ func TestByName(t *testing.T) {
 		{"kotlin", EngineTreeSitter, ""},
 		{"swift", EngineTreeSitter, ""},
 		{"bash", EngineTreeSitter, ""},
+		{"hcl", EngineTreeSitter, ""},
 		{"java", EngineTreeSitter, "jdtls"}, // tree-sitter Map + jdtls GPS
 	}
 	for _, c := range cases {

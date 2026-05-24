@@ -79,6 +79,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"swift":      func() topology.Extractor { return treesitter.NewSwift() },
 	"java":       func() topology.Extractor { return treesitter.NewJava() },
 	"bash":       func() topology.Extractor { return treesitter.NewBash() },
+	"hcl":        func() topology.Extractor { return treesitter.NewHCL() },
 }
 
 // buildExtractors instantiates the structural extractors for every language the
