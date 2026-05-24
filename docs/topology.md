@@ -49,7 +49,7 @@ the right few files instead of reading dozens.
 
 - **Instant.** Answers come from a local SQLite/FTS5 database — no
   language-server boot, no per-conversation indexing wait.
-- **Works without a language server.** Useful for TypeScript/JavaScript (which
+- **Works without a language server.** Useful for JavaScript/TypeScript (which
   has no LSP adapter in plumb) and for any project where the LSP isn't installed.
 - **Tolerant of broken code.** It's syntactic, so it keeps working mid-refactor
   when the code won't compile.
@@ -78,7 +78,7 @@ flowchart LR
 - **Topology is the Map.** Use it for discovery: "where is the routing logic?",
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
-  is syntactic (Go AST, tree-sitter Python/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown, and TypeScript/JS regex extractors), so it offers
+  is syntactic (Go AST, tree-sitter Python/JavaScript/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown, and a TypeScript regex extractor), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
   (`get_definition`, `find_references`, `rename_symbol`, `diagnostics`) make and
@@ -96,8 +96,9 @@ pipeline has four parts:
    a file into a list of *entities* (functions, types, methods, imports, tests)
    and *edges* (calls, imports, containment). Go uses the standard library's
    `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin, Swift and
-   Java use the pure-Go gotreesitter runtime; and TypeScript/JavaScript use fast regex scanners
-   (the TypeScript tree-sitter migration is deferred — see
+   Java use the pure-Go gotreesitter runtime; JavaScript (`.js`/`.mjs`/`.cjs`)
+   also uses gotreesitter; and TypeScript (`.ts`/`.tsx`/`.jsx`) uses a fast regex
+   scanner (the TypeScript tree-sitter migration is deferred — see
    `docs/internal/treesitter-plan.md`).
    None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in

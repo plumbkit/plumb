@@ -73,6 +73,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"go":         func() topology.Extractor { return golang.New() },
 	"python":     func() topology.Extractor { return treesitter.NewPython() },
 	"typescript": func() topology.Extractor { return typescript.New() },
+	"javascript": func() topology.Extractor { return treesitter.NewJavaScript() },
 	"rust":       func() topology.Extractor { return treesitter.NewRust() },
 	"zig":        func() topology.Extractor { return treesitter.NewZig() },
 	"kotlin":     func() topology.Extractor { return treesitter.NewKotlin() },

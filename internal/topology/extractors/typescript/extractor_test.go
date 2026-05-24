@@ -221,7 +221,7 @@ func TestExtract_ContainmentEdge(t *testing.T) {
 func TestExtract_Extensions(t *testing.T) {
 	ext := New()
 	exts := ext.Extensions()
-	required := []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+	required := []string{".ts", ".tsx", ".jsx"}
 	for _, r := range required {
 		if !slices.Contains(exts, r) {
 			t.Errorf("extension %q missing from Extensions()", r)

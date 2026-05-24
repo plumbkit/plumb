@@ -54,7 +54,8 @@ type Language struct {
 var registry = []Language{
 	{Name: "go", Extensions: []string{".go"}, Structural: EngineNativeAST, LSPAdapter: "gopls"},
 	{Name: "python", Extensions: []string{".py"}, Structural: EngineTreeSitter, LSPAdapter: "pyright-langserver"},
-	{Name: "typescript", Extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}, Structural: EngineRegex, LSPAdapter: ""},
+	{Name: "typescript", Extensions: []string{".ts", ".tsx", ".jsx"}, Structural: EngineRegex, LSPAdapter: ""},
+	{Name: "javascript", Extensions: []string{".js", ".mjs", ".cjs"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "java", Extensions: []string{".java"}, Structural: EngineTreeSitter, LSPAdapter: "jdtls"},
 	{Name: "rust", Extensions: []string{".rs"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "zig", Extensions: []string{".zig"}, Structural: EngineTreeSitter, LSPAdapter: ""},

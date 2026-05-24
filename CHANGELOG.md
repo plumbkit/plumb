@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.17 (unreleased)
+
+### Added
+- **Tree-sitter topology extraction for JavaScript (`.js`/`.mjs`/`.cjs`), split off the regex TS/JS extractor.** Plain JavaScript parses cleanly under gotreesitter — it has none of the typed-arrow syntax that trips the missing TypeScript external lex-states table (see `docs/internal/treesitter-plan.md`) — so it no longer needs the fragile regex scanner. New `treesitter.NewJavaScript`, registered as an `EngineTreeSitter` `javascript` row in `internal/langsupport` (owning `.js`/`.mjs`/`.cjs`) and wired into `buildExtractors`; the `typescript` regex row is narrowed to `.ts`/`.tsx`/`.jsx` only. It extracts top-level **functions** (declarations and arrow/function-expression bindings, including `export`ed ones), **classes** with their **methods** (lexical containment, 1.0/extractor), top-level **constants**/**variables** (`const` → constant, `let`/`var` → variable), ES `import` and CommonJS `require` **imports** (the module path), and `describe`/`it`/`test` blocks at any nesting depth (→ `KindTest`). Intra-file **call edges** are name-resolved heuristics (0.8/heuristic), resolving calls inside functions, arrow bindings and methods. JavaScript probed clean (0 ERROR/0 MISSING) on an idiomatic multi-line sample. This is the cheap interim win of the (still-blocked) Phase 8 TS/TSX flip — only `.ts`/`.tsx`/`.jsx` remain on regex. Tests in `internal/topology/extractors/treesitter/javascript_test.go`.
+
 ## 0.7.16 (unreleased)
 
 ### Added
