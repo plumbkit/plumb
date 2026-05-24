@@ -79,7 +79,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			raw, _ := json.Marshal(map[string]string{"path": p})
+			raw, _ := json.Marshal(map[string]string{"file_path": p})
 			out, err := reader.Execute(ctx, raw)
 			results[i] = result{content: out, err: err}
 		}()

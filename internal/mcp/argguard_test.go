@@ -69,6 +69,22 @@ func TestResolveArgs(t *testing.T) {
 			wantArgsSub: []string{`"old_string":"a"`, `"new_string":"b"`},
 		},
 		{
+			// file_path-canonical tool (read_file family): "path" is accepted.
+			name:        "alias path → file_path",
+			schema:      `{"type":"object","properties":{"file_path":{"type":"string"},"start_line":{"type":"integer"}},"required":["file_path"],"additionalProperties":false}`,
+			args:        `{"path":"/tmp/x.go"}`,
+			wantWarn:    []string{`interpreted "path" as "file_path"`},
+			wantArgsSub: []string{`"file_path":"/tmp/x.go"`},
+		},
+		{
+			// path-canonical tool (read_symbol): "file_path" is accepted in reverse.
+			name:        "alias file_path → path",
+			schema:      `{"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},"required":["path","name"],"additionalProperties":false}`,
+			args:        `{"file_path":"/tmp/x.go","name":"Foo"}`,
+			wantWarn:    []string{`interpreted "file_path" as "path"`},
+			wantArgsSub: []string{`"path":"/tmp/x.go"`},
+		},
+		{
 			name:    "genuine unknown is rejected with a suggestion",
 			schema:  nameSchema,
 			args:    `{"namex": "x"}`,

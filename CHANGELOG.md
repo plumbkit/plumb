@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.22 (unreleased)
+
+### Fixed
+- **`read_multiple_files` no longer fails every file with `read_file: file_path is required`.** It reads each file by calling `read_file` **in-process** (`internal/tools/read_multiple_files.go`), a path that does not cross the MCP dispatch boundary where the parameter-alias engine runs — and that internal call was still passing the pre-0.7.19 key `path`, stranded once `read_file`'s canonical key became `file_path`. The internal call now uses the canonical `file_path`. The alias engine itself was never broken: it rewrites a *client's* `path`→`file_path` with a warning at dispatch, as designed and tested. This was plumb's own internal caller carrying a stale key, and `read_multiple_files` is the only in-process tool→tool call in the codebase (every other `"path"` is a log field or a tool where `path` is genuinely canonical). New `internal/tools/read_multiple_files_test.go` drives the real `read_multiple_files`→`read_file` path (the tool had no test before, which is why the rename slipped through), and two `TestResolveArgs` cases (`internal/mcp/argguard_test.go`) confirm the alias is bidirectional and schema-aware — `path`→`file_path` for `read_file`-style tools and `file_path`→`path` for `path`-canonical tools like `read_symbol` — each accepted with a warning.
+
 ## 0.7.21 (unreleased)
 
 ### Fixed
