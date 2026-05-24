@@ -6,6 +6,50 @@ import (
 	"testing"
 )
 
+func TestExpandPath(t *testing.T) {
+	t.Setenv("HOME", "/test/home")
+	t.Setenv("MYDIR", "/my/dir")
+
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"~/go/bin/gopls", "/test/home/go/bin/gopls"},
+		{"~", "/test/home"},
+		{"$HOME/go/bin/gopls", "/test/home/go/bin/gopls"},
+		{"$MYDIR/gopls", "/my/dir/gopls"},
+		{"/absolute/path/gopls", "/absolute/path/gopls"},
+		{"gopls", "gopls"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := expandPath(tc.in)
+		if got != tc.want {
+			t.Errorf("expandPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestNormaliseConfig_LSPCommandExpanded(t *testing.T) {
+	t.Setenv("HOME", "/test/home")
+	cfg := defaults
+	cfg.LSP = map[string]LSPConfig{
+		"go": {Command: "~/go/bin/gopls", Enabled: true},
+		"py": {Command: "$HOME/.local/bin/pyright-langserver", Enabled: true},
+		"rs": {Command: "rust-analyzer", Enabled: true},
+	}
+	normaliseConfig(&cfg)
+	if got := cfg.LSP["go"].Command; got != "/test/home/go/bin/gopls" {
+		t.Errorf("go command = %q, want /test/home/go/bin/gopls", got)
+	}
+	if got := cfg.LSP["py"].Command; got != "/test/home/.local/bin/pyright-langserver" {
+		t.Errorf("py command = %q, want /test/home/.local/bin/pyright-langserver", got)
+	}
+	if got := cfg.LSP["rs"].Command; got != "rust-analyzer" {
+		t.Errorf("rs command = %q, want rust-analyzer (bare name unchanged)", got)
+	}
+}
+
 func TestLoadProject_MissingFile_NoError(t *testing.T) {
 	base := defaults
 	got, err := LoadProject(base, t.TempDir())

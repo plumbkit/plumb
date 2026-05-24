@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -559,6 +560,30 @@ func normaliseConfig(cfg *Config) {
 	if cfg.Workspace.AutoAttachPersist {
 		cfg.Workspace.AutoAttach = true
 	}
+	for name, lsp := range cfg.LSP {
+		if expanded := expandPath(lsp.Command); expanded != lsp.Command {
+			lsp.Command = expanded
+			cfg.LSP[name] = lsp
+		}
+	}
+}
+
+// expandPath expands a leading "~/" (or bare "~") to the current user's home
+// directory, then expands environment variables ($HOME, $GOPATH, etc.).
+// Used so LSP command paths in config files are portable across machines.
+func expandPath(s string) string {
+	s = os.ExpandEnv(s)
+	switch {
+	case s == "~":
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	case strings.HasPrefix(s, "~/"):
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, s[2:])
+		}
+	}
+	return s
 }
 
 // ProjectConfigPath returns the conventional location of a workspace's
