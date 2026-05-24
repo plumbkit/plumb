@@ -153,8 +153,12 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   node, and byte budgets.
 - **`topology_impact`** — bidirectional blast radius: what a symbol depends on,
   and what depends on it.
-- **`topology_affected`** — given changed files/symbols, the files and tests
-  most likely affected. Use after writing to decide what to run.
+- **`topology_affected`** — *the headline.* Given changed files/symbols, the
+  files and tests most likely affected, by inward dependency edges **and**
+  co-location (tests in the same directory as a changed/affected file — catching
+  sibling test files the call graph alone misses). Recall-biased; each test
+  carries a confidence (1.0 containment, 0.8 dependency edge, 0.5 co-located)
+  and the reason it was flagged. Use after writing to decide what to run.
 - **`topology_routes`** — heuristic, framework-aware entry-point scan (Go HTTP
   handlers, Cobra commands, Python `@app.route`). Results carry a confidence
   annotation.

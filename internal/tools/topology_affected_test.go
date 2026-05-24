@@ -54,3 +54,33 @@ func TestTopologyAffected_FormatEmptyResult(t *testing.T) {
 		t.Errorf("empty result should say 'none', got: %s", out)
 	}
 }
+
+func TestIncidentConfidence(t *testing.T) {
+	edges := []topology.Edge{
+		{FromID: 1, ToID: 2, Confidence: 0.8},
+		{FromID: 2, ToID: 3, Confidence: 1.0},
+	}
+	m := incidentConfidence(edges)
+	if m[2] != 1.0 {
+		t.Errorf("node 2 incident confidence = %v, want 1.0 (max of 0.8, 1.0)", m[2])
+	}
+	if m[1] != 0.8 {
+		t.Errorf("node 1 incident confidence = %v, want 0.8", m[1])
+	}
+}
+
+func TestTopologyAffected_FormatSurfacesConfidenceAndRecall(t *testing.T) {
+	a := topologyAffectedArgs{Symbols: []string{"Foo"}, MaxResults: 50}
+	result := &affectedResult{
+		Tests: []affectedTest{
+			{Node: topology.Node{Name: "TestFoo", Path: "foo_test.go", StartLine: 10}, Confidence: 0.8, Reason: "dependency edge"},
+			{Node: topology.Node{Name: "TestBar", Path: "bar_test.go", StartLine: 5}, Confidence: 0.5, Reason: "co-located"},
+		},
+	}
+	out := formatAffectedResult(result, a)
+	for _, want := range []string{"TestFoo", "dependency edge", "co-located", "biased toward recall", "confidence 0.8", "confidence 0.5"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}

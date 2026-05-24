@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.15 (unreleased)
+
+### Changed
+- **`topology_affected` is now the headline tool: recall-biased, confidence-labelled, and co-location-aware.** Previously it only walked inward dependency edges — but the extractors emit *intra-file* call edges only, so a test in a sibling file (`foo_test.go` beside `foo.go`, `test_foo.py` beside `foo.py`) that exercises a changed symbol was not graph-connected and went unreported. It now adds a **co-location pass**: tests in the same directory as any changed or affected file are flagged too (new `Store.TestsInDirs`, matching on the immediate parent directory). Every affected test now carries a **confidence** and the **reason** it was flagged — `1.0` certain (containment), `0.8` dependency edge, `0.5` co-located (same directory, no edge) — and tests are ordered highest-confidence first. The output leads with an explicit `source=topology — heuristic, biased toward recall (a missed test is worse than an extra)` caveat, and the tool description now frames it as *the* post-change "which tests to run" tool that no language server provides. New `incidentConfidence` confidence derivation; `collectAffected` decomposed into an `affectedGather` (graph pass + co-location pass + sort) to stay within the complexity budget. Tests in `internal/tools/topology_affected_test.go` and `topology_affected_e2e_test.go` (the e2e test proves a sibling test with no call edge is still caught); `docs/topology.md` updated.
+
 ## 0.7.14 (unreleased)
 
 ### Added

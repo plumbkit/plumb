@@ -94,6 +94,47 @@ func (s *Store) Search(ctx context.Context, query string, opts SearchOpts) ([]Se
 	return Search(ctx, s.db, query, opts)
 }
 
+// TestsInDirs returns the indexed test nodes (KindTest) whose file sits directly
+// in one of the given workspace-relative directories. It is the recall booster
+// for topology_affected: an extractor only emits intra-file call edges, so a
+// test in a sibling file (Go `foo_test.go`, Python `test_foo.py`) that exercises
+// a changed symbol is not graph-connected — but it is co-located, which is a
+// strong (if heuristic) signal it should be run. Directories are compared by
+// exact parent match, so subdirectory tests are not pulled in.
+func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		want[d] = true
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path
+		FROM topology_nodes n
+		JOIN topology_files f ON f.id = n.file_id
+		WHERE n.kind = ?`, string(KindTest))
+	if err != nil {
+		return nil, fmt.Errorf("topology: tests in dirs: %w", err)
+	}
+	defer rows.Close()
+	var out []Node
+	for rows.Next() {
+		var n Node
+		var kind string
+		if scanErr := rows.Scan(&kind, &n.Name, &n.Qualified, &n.Signature,
+			&n.StartLine, &n.EndLine, &n.Language, &n.Path); scanErr != nil {
+			continue
+		}
+		if !want[filepath.Dir(n.Path)] {
+			continue
+		}
+		n.Kind = NodeKind(kind)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // Explore performs a bounded BFS neighbourhood from the named symbol.
 func (s *Store) Explore(ctx context.Context, name string, opts ExploreOpts) (*Neighbourhood, error) {
 	return Explore(ctx, s.db, name, opts)
