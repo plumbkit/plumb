@@ -41,10 +41,19 @@ type ReadSymbol struct {
 	ttl     time.Duration
 	timeout time.Duration
 	tracker *ReadTracker
+	topo    topologyStoreFn
 }
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
 	return &ReadSymbol{client: client, cache: c, ttl: ttl, timeout: timeout, tracker: tracker}
+}
+
+// WithTopologyFallback wires the topology index so read_symbol can locate the
+// symbol from a fresh tree-sitter parse when the language server is
+// unavailable. Nil-safe; returns the tool for chaining.
+func (t *ReadSymbol) WithTopologyFallback(fn topologyStoreFn) *ReadSymbol {
+	t.topo = fn
+	return t
 }
 
 func (t *ReadSymbol) Name() string                 { return "read_symbol" }
@@ -54,7 +63,8 @@ func (t *ReadSymbol) Description() string {
 		"no native Claude Code equivalent for this LSP-backed lookup. " +
 		"Accepts plain name or dotted ReceiverType.MethodName form. " +
 		"Returns all matches when the name is ambiguous. " +
-		"Prefer this over a list_symbols + read_file pair for targeted symbol reads."
+		"Prefer this over a list_symbols + read_file pair for targeted symbol reads. " +
+		"Falls back to a tree-sitter parse when the language server is cold or absent."
 }
 
 type readSymbolArgs struct {
@@ -72,6 +82,9 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	defer cancel()
 	syms, err := t.fetchReadSymbolSymbols(ctx, uri)
 	if err != nil {
+		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
+			return fb, nil
+		}
 		return "", err
 	}
 	matches := resolveSymbolsByName(syms, a.Name)
@@ -79,6 +92,31 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return fmt.Sprintf("No symbol named %q in %s.", a.Name, fpath), nil
 	}
 	return t.formatReadSymbolResult(fpath, a.Name, matches)
+}
+
+// topologyReadFallback locates the named symbol from a fresh tree-sitter parse
+// when the language server cannot answer, and reads its source the same way the
+// LSP path does. ok is false when topology is unavailable or has no match, so
+// the caller surfaces the original LSP error.
+func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name string) (string, bool) {
+	nodes, ok := freshTopologyNodes(ctx, t.topo, uri)
+	if !ok {
+		return "", false
+	}
+	matchNodes := topologyNodesByName(nodes, name)
+	if len(matchNodes) == 0 {
+		return "", false
+	}
+	lines := fileLines(fpath)
+	matches := make([]protocol.DocumentSymbol, 0, len(matchNodes))
+	for _, n := range matchNodes {
+		matches = append(matches, nodeToDocSymbol(n, lines))
+	}
+	out, err := t.formatReadSymbolResult(fpath, name, matches)
+	if err != nil {
+		return "", false
+	}
+	return topologyFallbackNote + "\n" + out, true
 }
 
 func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.16 (unreleased)
+
+### Added
+- **Symbol tools keep working when the language server is cold or cannot parse the file (tree-sitter fallback).** `read_symbol`, `insert_before_symbol`, `insert_after_symbol` and `replace_symbol_body` now fall back to a **fresh tree-sitter parse** of the current file (via the topology index) when the LSP `documentSymbol` call errors or times out — the symbol is located structurally and the operation proceeds, annotated `[topology fallback — LSP unavailable; … range is line-granular]`. The new `Store.ExtractFile` re-parses the file *as it is on disk right now* (not the possibly-stale persisted index), so the resolved ranges are accurate; the edit application path already errors cleanly (never corrupts) on an out-of-range position, the tools remain **dry-run by default**, and the fallback only engages when the LSP path fails — so the LSP-up behaviour is byte-for-byte unchanged. `safe_delete_symbol` deliberately has **no** fallback: its safety guarantee is the LSP reference check, which topology cannot reproduce. Wired via a nil-safe `WithTopologyFallback` setter on each tool (mirrors the existing query-tool fallbacks). Shared helpers in `internal/tools/symbol_topology_fallback.go`; tests in `symbol_topology_fallback_test.go` (read, replace incl. exact-bytes + dry-run, insert, and no-fallback-surfaces-error). This is the resilience half of the Phase 4 "byte-precise surgical edits" item; the char-precise doc-comment/signature/body sub-range separation (which would retire the `include_doc_comment` heuristic) is deferred — it needs character-precise ranges in `topology.Node`, a schema change touching every extractor.
+
 ## 0.7.15 (unreleased)
 
 ### Changed

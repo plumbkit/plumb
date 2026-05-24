@@ -135,6 +135,22 @@ func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) 
 	return out, rows.Err()
 }
 
+// ExtractFile re-parses the CURRENT content of path with the matching
+// structural extractor and returns its nodes, WITHOUT touching the persisted
+// index. Unlike SymbolsInFile (which reads the possibly-stale index), this
+// reflects the file exactly as it is on disk right now — the property a
+// symbol-edit fallback needs when the language server cannot parse the file.
+// Returns (nil, nil) when no extractor handles the path.
+func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
+	rel := s.toRelative(strings.TrimPrefix(path, "file://"))
+	abs := rel
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(s.workspace, rel)
+	}
+	nodes, _, _, err := s.idx.extractPath(ctx, abs, rel)
+	return nodes, err
+}
+
 // Explore performs a bounded BFS neighbourhood from the named symbol.
 func (s *Store) Explore(ctx context.Context, name string, opts ExploreOpts) (*Neighbourhood, error) {
 	return Explore(ctx, s.db, name, opts)

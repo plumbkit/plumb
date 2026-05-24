@@ -84,6 +84,29 @@ func isCommentLine(trimmed string) bool {
 	return false
 }
 
+// resolveSymbolOrFallback resolves namePath via the LSP document-symbol tree,
+// falling back to a fresh tree-sitter parse (topology) when the language server
+// errors. viaFallback reports which path produced the symbol so the caller can
+// annotate its output (the fallback range is line-granular, not byte-precise).
+// When the LSP fails and no fallback resolves the symbol, the original LSP
+// error is returned.
+func resolveSymbolOrFallback(ctx context.Context, client lsp.Client, topo topologyStoreFn, uri, namePath string) (sym *protocol.DocumentSymbol, viaFallback bool, err error) {
+	sym, lspErr := resolveSymbol(ctx, client, uri, namePath)
+	if lspErr == nil {
+		return sym, false, nil
+	}
+	nodes, ok := freshTopologyNodes(ctx, topo, uri)
+	if !ok {
+		return nil, false, lspErr
+	}
+	node := topologyNodeByPath(nodes, namePath)
+	if node == nil {
+		return nil, false, lspErr
+	}
+	ds := nodeToDocSymbol(*node, fileLines(strings.TrimPrefix(uri, "file://")))
+	return &ds, true, nil
+}
+
 // resolveSymbol fetches the DocumentSymbol tree for uri and locates namePath.
 func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string) (*protocol.DocumentSymbol, error) {
 	syms, err := client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
@@ -105,9 +128,12 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 // applySingleEdit runs the standard apply-or-preview flow used by every
 // symbol-edit tool. summary is the human-readable verb ("inserted before",
 // "replaced", etc.) used in the dry-run / applied output.
-func applySingleEdit(uri string, edit protocol.TextEdit, dryRun bool, summary string, sym *protocol.DocumentSymbol) (string, error) {
+func applySingleEdit(uri string, edit protocol.TextEdit, dryRun bool, summary string, sym *protocol.DocumentSymbol, viaFallback bool) (string, error) {
 	path := strings.TrimPrefix(uri, "file://")
 	var sb strings.Builder
+	if viaFallback {
+		sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
+	}
 	if dryRun {
 		sb.WriteString("DRY RUN — file not modified.\n\n")
 		fmt.Fprintf(&sb, "Would %s symbol %q in %s\n", summary, sym.Name, path)
@@ -136,10 +162,19 @@ func capitalise(s string) string {
 type InsertBeforeSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
+	topo    topologyStoreFn
 }
 
 func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
 	return &InsertBeforeSymbol{client: client, timeout: timeout}
+}
+
+// WithTopologyFallback wires the topology index so the tool can resolve the
+// target symbol from a fresh tree-sitter parse when the language server is
+// unavailable. Nil-safe; returns the tool for chaining.
+func (t *InsertBeforeSymbol) WithTopologyFallback(fn topologyStoreFn) *InsertBeforeSymbol {
+	t.topo = fn
+	return t
 }
 
 func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
@@ -149,7 +184,9 @@ func (*InsertBeforeSymbol) Description() string {
 
 Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.
 
-Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.`
+Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.
+
+Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
 }
 
 func (*InsertBeforeSymbol) InputSchema() json.RawMessage {
@@ -173,7 +210,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, err := resolveSymbol(ctx, t.client, a.URI, a.NamePath)
+	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +222,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 		Range:   protocol.Range{Start: start, End: start},
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, "insert before", sym)
+	return applySingleEdit(a.URI, edit, dryRun, "insert before", sym, viaFallback)
 }
 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
@@ -193,10 +230,18 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 type InsertAfterSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
+	topo    topologyStoreFn
 }
 
 func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
 	return &InsertAfterSymbol{client: client, timeout: timeout}
+}
+
+// WithTopologyFallback wires the topology index for symbol resolution when the
+// language server is unavailable. Nil-safe; returns the tool for chaining.
+func (t *InsertAfterSymbol) WithTopologyFallback(fn topologyStoreFn) *InsertAfterSymbol {
+	t.topo = fn
+	return t
 }
 
 func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
@@ -204,7 +249,9 @@ func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
 func (*InsertAfterSymbol) Description() string {
 	return `Insert text immediately after a symbol's declaration.
 
-Useful for adding a new method to a struct (insert after an existing one), or appending a related helper. Provide the full text to insert in 'content' — include leading newline if appropriate.`
+Useful for adding a new method to a struct (insert after an existing one), or appending a related helper. Provide the full text to insert in 'content' — include leading newline if appropriate.
+
+Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
 }
 
 func (*InsertAfterSymbol) InputSchema() json.RawMessage {
@@ -227,7 +274,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, err := resolveSymbol(ctx, t.client, a.URI, a.NamePath)
+	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
 	if err != nil {
 		return "", err
 	}
@@ -235,7 +282,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 		Range:   protocol.Range{Start: sym.Range.End, End: sym.Range.End},
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, "insert after", sym)
+	return applySingleEdit(a.URI, edit, dryRun, "insert after", sym, viaFallback)
 }
 
 // ─── replace_symbol_body ───────────────────────────────────────────────────
@@ -243,10 +290,18 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 type ReplaceSymbolBody struct {
 	client  lsp.Client
 	timeout time.Duration
+	topo    topologyStoreFn
 }
 
 func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
 	return &ReplaceSymbolBody{client: client, timeout: timeout}
+}
+
+// WithTopologyFallback wires the topology index for symbol resolution when the
+// language server is unavailable. Nil-safe; returns the tool for chaining.
+func (t *ReplaceSymbolBody) WithTopologyFallback(fn topologyStoreFn) *ReplaceSymbolBody {
+	t.topo = fn
+	return t
 }
 
 func (*ReplaceSymbolBody) Name() string { return "replace_symbol_body" }
@@ -260,7 +315,9 @@ The replacement spans the symbol's full Range as reported by the LSP — for a f
 
 Set include_doc_comment=true to also cover any contiguous doc comment above the symbol — gopls and most LSP servers report the symbol range starting at the declaration keyword, so without this flag the old doc comment is left orphaned. With it on, your 'content' must include the new doc comment too (or the symbol will have none).
 
-Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both.`
+Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both.
+
+Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
 }
 
 func (*ReplaceSymbolBody) InputSchema() json.RawMessage {
@@ -284,7 +341,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, err := resolveSymbol(ctx, t.client, a.URI, a.NamePath)
+	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
 	if err != nil {
 		return "", err
 	}
@@ -296,7 +353,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 		Range:   rng,
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, "replace", sym)
+	return applySingleEdit(a.URI, edit, dryRun, "replace", sym, viaFallback)
 }
 
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
@@ -380,7 +437,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		rng.Start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
 	}
 	edit := protocol.TextEdit{Range: rng, NewText: ""}
-	return applySingleEdit(a.URI, edit, dryRun, "delete", sym)
+	return applySingleEdit(a.URI, edit, dryRun, "delete", sym, false)
 }
 
 // rangeContains returns true if outer fully contains inner.
