@@ -34,7 +34,8 @@ var getDefinitionSchema = json.RawMessage(`{
       "description": "Symbol name to look up instead of a position. Accepts plain name or ReceiverType.MethodName form. When provided, line and character are not needed."
     }
   },
-  "required": ["uri"]
+  "required": ["uri"],
+  "additionalProperties": false
 }`)
 
 // GetDefinition returns the definition location(s) for a symbol at a position

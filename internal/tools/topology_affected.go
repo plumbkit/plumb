@@ -38,7 +38,8 @@ var topologyAffectedSchema = json.RawMessage(`{
       "description": "Maximum affected nodes to return. Default 50.",
       "default": 50
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // TopologyAffected traverses inward edges from changed files/symbols to report

@@ -278,7 +278,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | Tool | Notes |
 |---|---|
 | `write_file` | Atomic create/overwrite (tmpdir + rename, EXDEV fallback); symlink-aware; permissions preserved. |
-| `edit_file` | str_replace (each `old_str` must be unique); CRLF-tolerant; all-or-nothing; optional `expected_mtime` concurrency check; strict-mode read check; `apply_partial` applies each edit independently. |
+| `edit_file` | str_replace (each `old_string` must be unique); CRLF-tolerant; all-or-nothing; optional `expected_mtime` concurrency check; strict-mode read check; `apply_partial` applies each edit independently. |
 | `delete_file` | Refuses directories. |
 | `rename_file` | **Primary move tool.** Atomic; refuses overwrite without `overwrite=true`. Distinct from `rename_symbol`. |
 | `copy_file` | Duplicate preserving permissions; cross-device safe; refuses overwrite without `overwrite=true`. |
@@ -393,12 +393,14 @@ Outstanding items, footguns, and "subtle things to be aware of" live in [`docs/i
 
 You are likely an AI agent reading this through plumb. Most common patterns:
 
+> **Parameter names follow Claude Code's native tools** — `file_path`, `old_string`, `new_string` on the file-content tools (`read_file`/`write_file`/`edit_file`/`delete_file`/`transaction_apply`); `path`/`pattern` on the search/dir tools (`list_directory`/`find_files`/`search_in_files`). Common alternative names from other agents and earlier plumb versions (`path`, `old_str`, `new_str`, `filename`, `dir`, …) are accepted as **aliases**: the call still succeeds, and the response carries a one-line note nudging you toward the canonical name. Genuinely unknown parameters are rejected with the valid list and a "did you mean" suggestion.
+
 - **First call:** `session_start({})`. Returns the orientation packet.
 - **Read before edit:** call `read_file`, copy its `mtime` header value, pass it as `expected_mtime` to `edit_file`. Mandatory under strict mode; recommended always.
-- **One-shot file create:** `write_file({path, content})`.
-- **Targeted edit:** `edit_file({path, edits: [{old_str, new_str}], expected_mtime})`. `old_str` must appear exactly once. CRLF differences are tolerated automatically.
-- **Cross-file refactor:** `transaction_apply({operations: [{path, edits, expected_mtime}]})`. All-or-nothing.
-- **Delete:** `delete_file({path})`. Refuses directories.
+- **One-shot file create:** `write_file({file_path, content})`.
+- **Targeted edit:** `edit_file({file_path, edits: [{old_string, new_string}], expected_mtime})`. `old_string` must appear exactly once. CRLF differences are tolerated automatically.
+- **Cross-file refactor:** `transaction_apply({operations: [{file_path, edits, expected_mtime}]})`. All-or-nothing.
+- **Delete:** `delete_file({file_path})`. Refuses directories.
 - **Move/rename:** `rename_file({from, to})` — primary move tool. Distinct from `rename_symbol` (LSP-semantic identifier rename).
 - **Copy:** `copy_file({from, to})`. Preserves permissions; cross-device safe. Use when you want to keep the source.
 - **Discover what changed:** `git({subcommand: "status"})` or `git({subcommand: "log", args: ["-10", "--oneline"]})`.

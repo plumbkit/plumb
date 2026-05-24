@@ -354,7 +354,8 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 // JSON arguments. Probes the argument shapes plumb's tools use:
 //
 //	{"uri": "file:///..."}                      — LSP tools
-//	{"path": "/..."}                            — most filesystem tools
+//	{"file_path": "/..."}                       — file-content tools (read/write/edit/delete)
+//	{"path": "/..."}                            — search/dir tools (list_directory, find_files, …)
 //	{"root": "/..."}                            — list_files
 //	{"workspace": "/..."}                       — session_start
 //	{"paths": ["/...", ...]}                    — read_multiple_files
@@ -365,12 +366,14 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 func seedPathFromArgs(args json.RawMessage) string {
 	var a struct {
 		URI        string   `json:"uri"`
+		FilePath   string   `json:"file_path"`
 		Path       string   `json:"path"`
 		Root       string   `json:"root"`
 		Workspace  string   `json:"workspace"`
 		Paths      []string `json:"paths"`
 		Operations []struct {
-			Path string `json:"path"`
+			FilePath string `json:"file_path"`
+			Path     string `json:"path"`
 		} `json:"operations"`
 	}
 	if json.Unmarshal(args, &a) != nil {
@@ -379,6 +382,8 @@ func seedPathFromArgs(args json.RawMessage) string {
 	switch {
 	case a.URI != "":
 		return strings.TrimPrefix(a.URI, "file://")
+	case a.FilePath != "":
+		return a.FilePath
 	case a.Path != "":
 		return a.Path
 	case a.Root != "":
@@ -388,6 +393,9 @@ func seedPathFromArgs(args json.RawMessage) string {
 	case len(a.Paths) > 0:
 		return a.Paths[0]
 	case len(a.Operations) > 0:
+		if a.Operations[0].FilePath != "" {
+			return a.Operations[0].FilePath
+		}
 		return a.Operations[0].Path
 	}
 	return ""

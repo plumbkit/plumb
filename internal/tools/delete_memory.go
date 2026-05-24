@@ -29,8 +29,9 @@ func (*deleteMemoryTool) InputSchema() json.RawMessage {
 			"name":{"type":"string","description":"Memory name to delete."},
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
 		},
-		"required":["name"]
-	}`)
+		"required":["name"],
+  "additionalProperties": false
+}`)
 }
 
 func (t *deleteMemoryTool) Execute(_ context.Context, args json.RawMessage) (string, error) {

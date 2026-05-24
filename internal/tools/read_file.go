@@ -16,7 +16,7 @@ import (
 var readFileSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "path": {
+    "file_path": {
       "type": "string",
       "description": "Absolute path or file:// URI of the file to read."
     },
@@ -31,7 +31,8 @@ var readFileSchema = json.RawMessage(`{
       "minimum": 1
     }
   },
-  "required": ["path"]
+  "required": ["file_path"],
+  "additionalProperties": false
 }`)
 
 const maxReadFileBytes = 200 * 1024 // 200 KiB
@@ -74,7 +75,7 @@ func (t *ReadFile) Description() string {
 }
 
 type readFileArgs struct {
-	Path      string `json:"path"`
+	Path      string `json:"file_path"`
 	StartLine *int   `json:"start_line"`
 	EndLine   *int   `json:"end_line"`
 }
@@ -85,7 +86,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		return "", fmt.Errorf("read_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return "", fmt.Errorf("read_file: path is required")
+		return "", fmt.Errorf("read_file: file_path is required")
 	}
 
 	// Accept both file:// URIs and plain paths.

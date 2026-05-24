@@ -15,7 +15,7 @@ import (
 var writeFileSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "path": {
+    "file_path": {
       "type": "string",
       "description": "Absolute path or file:// URI of the file to write."
     },
@@ -32,7 +32,8 @@ var writeFileSchema = json.RawMessage(`{
       "description": "Allow writing a file that has uncommitted changes in its git repository. Default false — the write is refused if the target file is dirty. Pass true to overwrite anyway."
     }
   },
-  "required": ["path", "content"]
+  "required": ["file_path", "content"],
+  "additionalProperties": false
 }`)
 
 // WriteFile creates or overwrites a file atomically.
@@ -65,7 +66,7 @@ func (*WriteFile) Description() string {
 }
 
 type writeFileArgs struct {
-	Path       string `json:"path"`
+	Path       string `json:"file_path"`
 	Content    string `json:"content"`
 	CreateDirs *bool  `json:"create_dirs"`
 	DirtyOk    bool   `json:"dirty_ok"`
@@ -111,7 +112,7 @@ func parseWriteFileArgs(raw json.RawMessage) (writeFileArgs, error) {
 		return a, fmt.Errorf("write_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("write_file: path is required")
+		return a, fmt.Errorf("write_file: file_path is required")
 	}
 	// content is schema-required; the MCP layer rejects missing keys.
 	// An explicit empty string is allowed (e.g. truncating a file).

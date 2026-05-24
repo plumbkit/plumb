@@ -43,7 +43,8 @@ var diagnosticsSchema = json.RawMessage(`{
       "type": "string",
       "description": "Deprecated — use uris instead. Single file:// URI; equivalent to uris: [uri]."
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // Diagnostics exposes LSP diagnostic notifications (errors, warnings, hints)

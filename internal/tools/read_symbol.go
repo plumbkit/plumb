@@ -26,7 +26,8 @@ var readSymbolSchema = json.RawMessage(`{
       "description": "Exact symbol name. Accepts plain name (e.g. \"handleConn\") or dotted ReceiverType.MethodName form (e.g. \"Model.renderDashboard\")."
     }
   },
-  "required": ["path", "name"]
+  "required": ["path", "name"],
+  "additionalProperties": false
 }`)
 
 // ReadSymbol returns the source body of a named symbol in one call,

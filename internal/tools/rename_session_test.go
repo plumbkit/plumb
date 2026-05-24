@@ -3,7 +3,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"testing"
+
+	"github.com/golimpio/plumb/internal/session"
 )
 
 func TestRenameSession_PreservesCase(t *testing.T) {
@@ -51,6 +54,26 @@ func TestRenameSession_PropagatesValidationError(t *testing.T) {
 
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"bad name"}`)); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// TestSessionNamePattern_AgreesWithNormalise guards against the advertised JSON
+// Schema pattern drifting from the authoritative validator. Inputs are already
+// trimmed and within the length cap, so the only rules left are charset and
+// hyphen placement — exactly what the pattern must mirror.
+func TestSessionNamePattern_AgreesWithNormalise(t *testing.T) {
+	re := regexp.MustCompile(sessionNamePattern)
+	names := []string{
+		"build-fix", "Build-Fix", "BUILD-FIX", "api-2026-05", "a", "abc", "123",
+		"bad name", "bad_name", "-bad", "bad-", "bad--name", "name.", "naïve",
+	}
+	for _, n := range names {
+		patternOK := re.MatchString(n)
+		_, err := session.NormaliseName(n)
+		normaliseOK := err == nil
+		if patternOK != normaliseOK {
+			t.Errorf("disagreement for %q: pattern=%v normalise=%v", n, patternOK, normaliseOK)
+		}
 	}
 }
 

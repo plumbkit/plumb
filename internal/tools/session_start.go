@@ -24,7 +24,8 @@ var sessionStartSchema = json.RawMessage(`{
       "type": "string",
       "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). Defaults to the daemon's already-resolved workspace."
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // contextMDLines bounds how much of .plumb/context.md is inlined into the

@@ -29,7 +29,7 @@ func callReadFile(t *testing.T, args map[string]any) (string, error) {
 
 func TestReadFile_Basic(t *testing.T) {
 	path := writeTextFile(t, "hello\nworld\n")
-	out, err := callReadFile(t, map[string]any{"path": path})
+	out, err := callReadFile(t, map[string]any{"file_path": path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestReadFile_Basic(t *testing.T) {
 
 func TestReadFile_FileURI(t *testing.T) {
 	path := writeTextFile(t, "content via URI\n")
-	out, err := callReadFile(t, map[string]any{"path": "file://" + path})
+	out, err := callReadFile(t, map[string]any{"file_path": "file://" + path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestReadFile_LineRange(t *testing.T) {
 	path := writeTextFile(t, content)
 
 	start, end := 2, 4
-	out, err := callReadFile(t, map[string]any{"path": path, "start_line": start, "end_line": end})
+	out, err := callReadFile(t, map[string]any{"file_path": path, "start_line": start, "end_line": end})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestReadFile_LineRange(t *testing.T) {
 func TestReadFile_StartLineOnly(t *testing.T) {
 	path := writeTextFile(t, "a\nb\nc\n")
 	start := 2
-	out, err := callReadFile(t, map[string]any{"path": path, "start_line": start})
+	out, err := callReadFile(t, map[string]any{"file_path": path, "start_line": start})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestReadFile_StartLineOnly(t *testing.T) {
 func TestReadFile_OutOfRangeLines(t *testing.T) {
 	path := writeTextFile(t, "one\ntwo\n")
 	start, end := 10, 20
-	out, err := callReadFile(t, map[string]any{"path": path, "start_line": start, "end_line": end})
+	out, err := callReadFile(t, map[string]any{"file_path": path, "start_line": start, "end_line": end})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestReadFile_OutOfRangeLines(t *testing.T) {
 
 func TestReadFile_Directory(t *testing.T) {
 	dir := t.TempDir()
-	_, err := callReadFile(t, map[string]any{"path": dir})
+	_, err := callReadFile(t, map[string]any{"file_path": dir})
 	if err == nil {
 		t.Fatal("expected error for directory path")
 	}
@@ -105,7 +105,7 @@ func TestReadFile_Directory(t *testing.T) {
 }
 
 func TestReadFile_MissingFile(t *testing.T) {
-	_, err := callReadFile(t, map[string]any{"path": "/nonexistent/path/file.txt"})
+	_, err := callReadFile(t, map[string]any{"file_path": "/nonexistent/path/file.txt"})
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -120,7 +120,7 @@ func TestReadFile_MissingPath(t *testing.T) {
 
 func TestReadFile_HeaderContainsSHA256(t *testing.T) {
 	path := writeTextFile(t, "hello\nworld\n")
-	out, err := callReadFile(t, map[string]any{"path": path})
+	out, err := callReadFile(t, map[string]any{"file_path": path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,9 +139,9 @@ func TestReadFile_SHA256ConsistentWithFullContent(t *testing.T) {
 	// Range reads must return the SHA of the full file, not just the slice.
 	path := writeTextFile(t, "line1\nline2\nline3\n")
 
-	full, _ := callReadFile(t, map[string]any{"path": path})
+	full, _ := callReadFile(t, map[string]any{"file_path": path})
 	start, end := 2, 2
-	partial, _ := callReadFile(t, map[string]any{"path": path, "start_line": start, "end_line": end})
+	partial, _ := callReadFile(t, map[string]any{"file_path": path, "start_line": start, "end_line": end})
 
 	shaFull := extractSHA(full)
 	shaPartial := extractSHA(partial)
@@ -165,7 +165,7 @@ func extractSHA(out string) string {
 
 func TestReadFile_OutputHasMtimeHeader(t *testing.T) {
 	path := writeTextFile(t, "hello\n")
-	out, err := callReadFile(t, map[string]any{"path": path})
+	out, err := callReadFile(t, map[string]any{"file_path": path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestReadFile_HeaderIncludesIndentStyle(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			path := writeTextFile(t, c.content)
-			out, err := callReadFile(t, map[string]any{"path": path})
+			out, err := callReadFile(t, map[string]any{"file_path": path})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -218,7 +218,7 @@ func TestReadFile_BinaryFile(t *testing.T) {
 	_, _ = f.Write(make([]byte, 100))
 	_ = f.Close()
 
-	_, err = callReadFile(t, map[string]any{"path": f.Name()})
+	_, err = callReadFile(t, map[string]any{"file_path": f.Name()})
 	if err == nil {
 		t.Fatal("expected error for binary file")
 	}

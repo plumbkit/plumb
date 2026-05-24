@@ -22,7 +22,8 @@ var gitInitSchema = json.RawMessage(`{
       "description": "Also create a .plumb/ workspace marker with a blank context.md so plumb attaches to the project on the next session. Default false."
     }
   },
-  "required": ["path"]
+  "required": ["path"],
+  "additionalProperties": false
 }`)
 
 const plumbContextTemplate = `# Project Context

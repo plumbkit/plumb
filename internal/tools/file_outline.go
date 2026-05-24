@@ -28,7 +28,8 @@ var fileOutlineSchema = json.RawMessage(`{
       "default": true
     }
   },
-  "required": ["uri"]
+  "required": ["uri"],
+  "additionalProperties": false
 }`)
 
 // outlineMaxBytes caps the file size the outline will read whole. A 2 MiB

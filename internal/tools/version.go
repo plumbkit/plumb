@@ -22,7 +22,7 @@ func (*versionTool) Description() string {
 }
 
 func (*versionTool) InputSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{},"required":[]}`)
+	return json.RawMessage(`{"type":"object","properties":{},"required":[],"additionalProperties":false}`)
 }
 
 func (*versionTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {

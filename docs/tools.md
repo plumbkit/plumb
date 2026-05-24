@@ -163,7 +163,7 @@ otherwise). **Inputs:** `uri`, `name_path` (required), `include_doc_comment`
 ## Filesystem reads
 
 ### `read_file`
-Read a file's text. **Inputs:** `path` (required), `start_line`, `end_line`
+Read a file's text. **Inputs:** `file_path` (required), `start_line`, `end_line`
 (1-based, inclusive — stream a slice of a large file). Binary files rejected;
 output capped at 200 KiB. Emits the `# plumb-read …` header.
 
@@ -208,16 +208,16 @@ invalidate the symbol cache, consume one rate-limit slot, and accept
 
 ### `write_file`
 Create or overwrite a file atomically; post-write diagnostics appended.
-**Inputs:** `path`, `content` (required), `dirty_ok`.
+**Inputs:** `file_path`, `content` (required), `dirty_ok`.
 
 ### `edit_file`
 Targeted `str_replace` with a uniqueness lock and CRLF tolerance. **Inputs:**
-`path` (required), `edits` (array of `{old_str, new_str}` — each `old_str` must
+`file_path` (required), `edits` (array of `{old_string, new_string}` — each `old_string` must
 appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
 check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
 
 ### `delete_file`
-Delete a file (refuses directories). **Inputs:** `path` (required), `dirty_ok`.
+Delete a file (refuses directories). **Inputs:** `file_path` (required), `dirty_ok`.
 
 ### `rename_file`
 **Primary move tool.** Atomic move/rename. **Inputs:** `from`, `to` (required),
@@ -230,7 +230,7 @@ Duplicate a file, preserving permissions; cross-device safe. **Inputs:**
 ### `transaction_apply`
 Multi-file atomic edits with rollback (up to 50 ops). Validates everything in
 memory, then writes under locks, rolling back on partial failure. **Inputs:**
-`operations` (array of `{path, edits, expected_mtime?}`), `dirty_ok`.
+`operations` (array of `{file_path, edits, expected_mtime?}`), `dirty_ok`.
 
 ---
 

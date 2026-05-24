@@ -41,7 +41,8 @@ var gitSchema = json.RawMessage(`{
       "description": "Required (true) for destructive and network subcommands. Acknowledges the operation may discard work or contact a remote."
     }
   },
-  "required": ["subcommand"]
+  "required": ["subcommand"],
+  "additionalProperties": false
 }`)
 
 const maxGitBytes = 100 * 1024 // 100 KiB

@@ -35,8 +35,9 @@ func (*relevantMemoriesTool) InputSchema() json.RawMessage {
 			"path":{"type":"string","description":"File path. Either absolute or relative to the workspace."},
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
 		},
-		"required":["path"]
-	}`)
+		"required":["path"],
+  "additionalProperties": false
+}`)
 }
 
 func (t *relevantMemoriesTool) Execute(_ context.Context, args json.RawMessage) (string, error) {

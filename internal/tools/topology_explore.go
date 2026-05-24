@@ -42,7 +42,8 @@ var topologyExploreSchema = json.RawMessage(`{
       "description": "Optional filter on edge kinds: calls, imports, contains, defines, inherits, implements."
     }
   },
-  "required": ["name"]
+  "required": ["name"],
+  "additionalProperties": false
 }`)
 
 // TopologyExplore performs a bounded BFS neighbourhood around a named symbol.

@@ -32,7 +32,8 @@ var callHierarchySchema = json.RawMessage(`{
       "description": "Which call direction to return: callers (incoming), callees (outgoing), or both. Defaults to both."
     }
   },
-  "required": ["uri", "line", "character"]
+  "required": ["uri", "line", "character"],
+  "additionalProperties": false
 }`)
 
 // CallHierarchy implements the call_hierarchy MCP tool.

@@ -28,6 +28,49 @@ func (e *echoTool) Execute(_ context.Context, args json.RawMessage) (string, err
 	return a.Text, nil
 }
 
+// strictTool mirrors a real tool's contract — one required, closed-set
+// parameter — to exercise the dispatch-path argument guard end-to-end.
+type strictTool struct{}
+
+func (strictTool) Name() string        { return "rename_thing" }
+func (strictTool) Description() string { return "renames a thing" }
+func (strictTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`)
+}
+
+func (strictTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(args, &a)
+	return "renamed to " + a.Name, nil
+}
+
+// resultByID returns the "result" object of the response with the given id.
+// Serve dispatches requests concurrently, so responses are not index-ordered.
+func resultByID(t *testing.T, resps []map[string]any, id float64) map[string]any {
+	t.Helper()
+	for _, r := range resps {
+		if rid, ok := r["id"].(float64); ok && rid == id {
+			res, _ := r["result"].(map[string]any)
+			return res
+		}
+	}
+	t.Fatalf("no response with id %v", id)
+	return nil
+}
+
+// toolText returns the first text content item of a tools/call result.
+func toolText(result map[string]any) string {
+	contents, _ := result["content"].([]any)
+	if len(contents) == 0 {
+		return ""
+	}
+	item, _ := contents[0].(map[string]any)
+	s, _ := item["text"].(string)
+	return s
+}
+
 func newServer() *mcp.Server {
 	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
 	s.Register(&echoTool{})
@@ -38,9 +81,16 @@ func newServer() *mcp.Server {
 // returns the parsed responses in order.
 func serve(t *testing.T, requests ...string) []map[string]any {
 	t.Helper()
+	return serveOn(t, newServer(), requests...)
+}
+
+// serveOn runs requests through a specific server, for tests that register
+// tools other than echo.
+func serveOn(t *testing.T, s *mcp.Server, requests ...string) []map[string]any {
+	t.Helper()
 	input := strings.Join(requests, "\n") + "\n"
 	var out bytes.Buffer
-	if err := newServer().Serve(context.Background(), strings.NewReader(input), &out); err != nil {
+	if err := s.Serve(context.Background(), strings.NewReader(input), &out); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
 	dec := json.NewDecoder(&out)
@@ -164,6 +214,103 @@ func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 	}
 	if resps[0]["error"] == nil {
 		t.Fatal("expected error for unknown tool")
+	}
+}
+
+func TestServer_ToolsCall_AliasesAndGuardsParameters(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(strictTool{})
+	resps := serveOn(t, s,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rename_thing","arguments":{"new_name":"x"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rename_thing","arguments":{"name":"x"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rename_thing","arguments":{"zzz":"x"}}}`,
+	)
+	if len(resps) != 3 {
+		t.Fatalf("want 3 responses, got %d", len(resps))
+	}
+
+	// id 1: the known alias new_name is applied, the call succeeds, and a note
+	// nudges toward the canonical name — no failed call.
+	r0 := resultByID(t, resps, 1)
+	if r0["isError"].(bool) {
+		t.Fatalf("alias should succeed, got error: %s", toolText(r0))
+	}
+	msg := toolText(r0)
+	if !strings.Contains(msg, "renamed to x") {
+		t.Errorf("aliased call missing tool output: %q", msg)
+	}
+	if !strings.Contains(msg, `interpreted "new_name" as "name"`) {
+		t.Errorf("aliased call missing alias note: %q", msg)
+	}
+
+	// id 2: the canonical name succeeds with no note.
+	r1 := resultByID(t, resps, 2)
+	if r1["isError"].(bool) || toolText(r1) != "renamed to x" {
+		t.Fatalf("canonical call: got %q (isError=%v)", toolText(r1), r1["isError"])
+	}
+
+	// id 3: a genuinely unknown key (no alias, not close) is still rejected.
+	r2 := resultByID(t, resps, 3)
+	if !r2["isError"].(bool) {
+		t.Fatalf("genuine unknown should be rejected, got: %s", toolText(r2))
+	}
+	for _, sub := range []string{`unknown parameter "zzz"`, "valid parameters: name"} {
+		if !strings.Contains(toolText(r2), sub) {
+			t.Errorf("rejection %q missing %q", toolText(r2), sub)
+		}
+	}
+}
+
+func TestServer_ToolsCall_GuardsMissingRequired(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(strictTool{})
+	resps := serveOn(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rename_thing","arguments":{}}}`)
+	r := resultByID(t, resps, 1)
+	if !r["isError"].(bool) {
+		t.Fatal("want isError:true for missing required parameter")
+	}
+	if msg := toolText(r); !strings.Contains(msg, `missing required parameter "name"`) {
+		t.Errorf("message %q missing the required-parameter hint", msg)
+	}
+}
+
+// editLikeTool mirrors edit_file's nested shape and records the arguments it
+// receives, so a test can prove the dispatch layer rewrites legacy keys (both
+// top-level and nested) to canonical before Execute is called.
+type editLikeTool struct{ gotArgs string }
+
+func (*editLikeTool) Name() string        { return "edit_like" }
+func (*editLikeTool) Description() string { return "edit-like tool" }
+func (*editLikeTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["old_string","new_string"]}}},"required":["file_path","edits"],"additionalProperties":false}`)
+}
+
+func (e *editLikeTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	e.gotArgs = string(args)
+	return "ok", nil
+}
+
+func TestServer_ToolsCall_RewritesLegacyNestedKeys(t *testing.T) {
+	tool := &editLikeTool{}
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(tool)
+	resps := serveOn(t, s,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"edit_like","arguments":{"path":"/f","edits":[{"old_str":"a","new_str":"b"}]}}}`,
+	)
+	r := resultByID(t, resps, 1)
+	if r["isError"].(bool) {
+		t.Fatalf("legacy-key call should succeed, got: %s", toolText(r))
+	}
+	// Execute must have seen canonical keys — top-level and nested.
+	got := strings.ReplaceAll(tool.gotArgs, " ", "")
+	for _, want := range []string{`"file_path":"/f"`, `"old_string":"a"`, `"new_string":"b"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Execute received %q, missing %q", tool.gotArgs, want)
+		}
+	}
+	// The client is nudged toward the canonical names.
+	if !strings.Contains(toolText(r), `interpreted "path" as "file_path"`) {
+		t.Errorf("missing alias note: %q", toolText(r))
 	}
 }
 

@@ -24,7 +24,8 @@ var listSymbolsSchema = json.RawMessage(`{
       "description": "When true, append the first non-blank, non-comment source line of each function, method, or constructor symbol below its entry. Useful for seeing parameter types and receiver types without reading the full file."
     }
   },
-  "required": ["uri"]
+  "required": ["uri"],
+  "additionalProperties": false
 }`)
 
 // ListSymbols returns the full symbol outline of a document in one call —

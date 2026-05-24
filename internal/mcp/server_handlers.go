@@ -102,7 +102,11 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 
 	start := time.Now()
-	text, err := t.Execute(ctx, params.Arguments)
+	var text string
+	args, warnings, err := s.resolveToolArgs(params.Name, params.Arguments)
+	if err == nil {
+		text, err = t.Execute(ctx, args)
+	}
 	dur := time.Since(start)
 
 	if s.OnAfterTool != nil {
@@ -132,6 +136,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			Content: []content{{Type: "text", Text: "error: " + err.Error()}},
 			IsError: true,
 		})
+	}
+	if len(warnings) > 0 {
+		text = aliasNotice(warnings) + text
 	}
 	return okResp(req.ID, callResult{
 		Content: []content{{Type: "text", Text: text}},

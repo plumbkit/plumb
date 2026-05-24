@@ -36,7 +36,8 @@ var topologySearchSchema = json.RawMessage(`{
       "default": true
     }
   },
-  "required": ["query"]
+  "required": ["query"],
+  "additionalProperties": false
 }`)
 
 // TopologySearch performs a ranked FTS5 search over the topology index.

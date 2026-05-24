@@ -16,7 +16,7 @@ import (
 var editFileSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
-    "path": {
+    "file_path": {
       "type": "string",
       "description": "Absolute path or file:// URI of the file to edit."
     },
@@ -26,16 +26,16 @@ var editFileSchema = json.RawMessage(`{
       "items": {
         "type": "object",
         "properties": {
-          "old_str": {
+          "old_string": {
             "type": "string",
-            "description": "Exact string to find. Must appear EXACTLY ONCE in the current file content — edit is rejected if the string is absent or appears more than once. CRLF / LF differences between old_str and the file are tolerated automatically."
+            "description": "Exact string to find. Must appear EXACTLY ONCE in the current file content — edit is rejected if the string is absent or appears more than once. CRLF / LF differences between old_string and the file are tolerated automatically."
           },
-          "new_str": {
+          "new_string": {
             "type": "string",
-            "description": "Replacement string. Use empty string to delete old_str."
+            "description": "Replacement string. Use empty string to delete old_string."
           }
         },
-        "required": ["old_str", "new_str"]
+        "required": ["old_string", "new_string"]
       },
       "minItems": 1
     },
@@ -56,7 +56,8 @@ var editFileSchema = json.RawMessage(`{
       "description": "When true, apply each edit independently and continue on failure instead of rolling back the entire batch. Returns a per-edit result list showing which edits succeeded and which failed. Incompatible with strict mode — not safe when concurrent agents share the file."
     }
   },
-  "required": ["path", "edits"]
+  "required": ["file_path", "edits"],
+  "additionalProperties": false
 }`)
 
 // maxEditRetries is the maximum number of times edit_file will retry when it
@@ -71,8 +72,8 @@ const maxEditRetries = 3
 //     write_file calls to the same path. Two parallel sessions cannot interleave
 //     read/write operations on the same file.
 //
-//  2. Uniqueness lock: each old_str must appear EXACTLY ONCE. If the file was
-//     modified concurrently (old_str absent or context changed), the edit is
+//  2. Uniqueness lock: each old_string must appear EXACTLY ONCE. If the file was
+//     modified concurrently (old_string absent or context changed), the edit is
 //     rejected with a clear error — no silent corruption possible.
 //
 //  3. Optional expected_mtime: when supplied, the file's current mtime must
@@ -87,8 +88,8 @@ const maxEditRetries = 3
 //     our read and the rename. A post-rename mtime check triggers a retry
 //     (up to maxEditRetries=3) if a third party wrote after our rename.
 //
-// CRLF/LF handling: line endings in old_str are normalised against the file
-// before matching, so an old_str with LF can match a file with CRLF.
+// CRLF/LF handling: line endings in old_string are normalised against the file
+// before matching, so an old_string with LF can match a file with CRLF.
 //
 // Concurrency: Execute is safe for concurrent use.
 type EditFile struct{ deps WriteDeps }
@@ -109,8 +110,8 @@ func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
 	return "Apply one or more str_replace edits to an existing file. Each edit specifies " +
-		"an old_str that must appear EXACTLY ONCE in the file — if it is absent or " +
-		"ambiguous the edit is rejected. CRLF differences between old_str and the file " +
+		"an old_string that must appear EXACTLY ONCE in the file — if it is absent or " +
+		"ambiguous the edit is rejected. CRLF differences between old_string and the file " +
 		"are tolerated automatically — detection uses the first CRLF found in the file; " +
 		"files with mixed line endings have undefined matching behaviour (normalise with " +
 		"dos2unix or unix2dos first). All edits are applied sequentially in memory, then " +
@@ -121,12 +122,12 @@ func (*EditFile) Description() string {
 }
 
 type strEdit struct {
-	OldStr string `json:"old_str"`
-	NewStr string `json:"new_str"`
+	OldStr string `json:"old_string"`
+	NewStr string `json:"new_string"`
 }
 
 type editFileArgs struct {
-	Path          string    `json:"path"`
+	Path          string    `json:"file_path"`
 	Edits         []strEdit `json:"edits"`
 	ExpectedMtime string    `json:"expected_mtime"`
 	ExpectedSha   string    `json:"expected_sha"`
@@ -177,7 +178,7 @@ func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
 		return a, fmt.Errorf("edit_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("edit_file: path is required")
+		return a, fmt.Errorf("edit_file: file_path is required")
 	}
 	if len(a.Edits) == 0 {
 		return a, fmt.Errorf("edit_file: at least one edit is required")
@@ -322,7 +323,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 
 // tryEdit reads the file, applies all edits in memory, and writes the result.
 // Returns (writeResult, originalContent, newContent, error). Errors from edit
-// logic (old_str not found, ambiguous) are marked with editLogicErr so the
+// logic (old_string not found, ambiguous) are marked with editLogicErr so the
 // caller knows not to retry them.
 //
 // Pre-rename mtime check: between reading the file and writing the result,
@@ -352,11 +353,11 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 	for i, edit := range edits {
 		if edit.OldStr == "" {
 			return writeResult{}, "", "", &editLogicErr{
-				fmt.Errorf("edit_file: edit[%d]: old_str must not be empty — use write_file to replace the entire file", i),
+				fmt.Errorf("edit_file: edit[%d]: old_string must not be empty — use write_file to replace the entire file", i),
 			}
 		}
-		// CRLF tolerance: if the file uses CRLF and old_str doesn't (or
-		// vice versa), normalise old_str to match the file's line ending
+		// CRLF tolerance: if the file uses CRLF and old_string doesn't (or
+		// vice versa), normalise old_string to match the file's line ending
 		// style before comparison.
 		oldStr := matchLineEndings(edit.OldStr, content)
 		newStr := matchLineEndings(edit.NewStr, content)
@@ -526,7 +527,7 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 		if edit.OldStr == "" {
 			results[i] = partialEditResult{
 				index: i,
-				err:   fmt.Errorf("old_str must not be empty — use write_file to replace the entire file"),
+				err:   fmt.Errorf("old_string must not be empty — use write_file to replace the entire file"),
 			}
 			continue
 		}
@@ -578,7 +579,7 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 	return results, res, original, content, nil
 }
 
-// notFoundError builds the "old_str not found" error. It tiers its message on
+// notFoundError builds the "old_string not found" error. It tiers its message on
 // what the daemon knows about the agent's prior read of this path: when a
 // read_file mtime is recorded and differs from the current mtime, the file
 // definitely changed since the agent read it (re-read needed); when the
@@ -586,7 +587,7 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 // snippet itself is wrong (snippet needs verification); when no read is
 // recorded, we fall back to the generic message.
 //
-// If matchLineEndings transformed old_str, both the sent and the searched
+// If matchLineEndings transformed old_string, both the sent and the searched
 // forms are surfaced so the agent can see what plumb actually looked for.
 func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtime time.Time) error {
 	recorded := t.deps.Reads.Mtime(path)
@@ -595,7 +596,7 @@ func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtim
 	searchedSnippet := truncateSnippet(searched)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "edit_file: edit[%d]: old_str not found in %q", i, path)
+	fmt.Fprintf(&b, "edit_file: edit[%d]: old_string not found in %q", i, path)
 
 	switch {
 	case !recorded.IsZero() && !recorded.Equal(preReadMtime):
@@ -604,7 +605,7 @@ func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtim
 		fmt.Fprintf(&b, " — file unchanged since your read; the snippet is incorrect")
 	}
 
-	fmt.Fprintf(&b, "\n  old_str: %q", sentSnippet)
+	fmt.Fprintf(&b, "\n  old_string: %q", sentSnippet)
 	if searched != sent {
 		fmt.Fprintf(&b, "\n  searched (after newline normalisation): %q", searchedSnippet)
 	}
@@ -624,7 +625,7 @@ func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtim
 	return errors.New(b.String())
 }
 
-// ambiguousError builds the "old_str appears N times" error. Re-reading
+// ambiguousError builds the "old_string appears N times" error. Re-reading
 // doesn't help when the snippet is non-unique, so we don't consult
 // ReadTracker here — we only surface the post-normalisation form when it
 // differs from what the agent sent.
@@ -633,12 +634,12 @@ func ambiguousError(i, count int, path, sent, searched string) error {
 	searchedSnippet := truncateSnippet(searched)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "edit_file: edit[%d]: old_str appears %d times in %q — must be unique", i, count, path)
-	fmt.Fprintf(&b, "\n  old_str: %q", sentSnippet)
+	fmt.Fprintf(&b, "edit_file: edit[%d]: old_string appears %d times in %q — must be unique", i, count, path)
+	fmt.Fprintf(&b, "\n  old_string: %q", sentSnippet)
 	if searched != sent {
 		fmt.Fprintf(&b, "\n  searched (after newline normalisation): %q", searchedSnippet)
 	}
-	b.WriteString("\n  Add more surrounding context to old_str to make it unambiguous.")
+	b.WriteString("\n  Add more surrounding context to old_string to make it unambiguous.")
 	return errors.New(b.String())
 }
 
@@ -726,8 +727,8 @@ func summariseLineChanges(before, after string) string {
 	return "lines changed: " + strings.Join(parts, ", ")
 }
 
-// editLogicErr wraps errors caused by bad edit logic (wrong old_str, empty
-// old_str, ambiguous match, expected_mtime mismatch). These are distinct from
+// editLogicErr wraps errors caused by bad edit logic (wrong old_string, empty
+// old_string, ambiguous match, expected_mtime mismatch). These are distinct from
 // I/O or concurrency errors — retrying won't fix them.
 type editLogicErr struct{ err error }
 

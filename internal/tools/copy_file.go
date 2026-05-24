@@ -32,7 +32,8 @@ var copyFileSchema = json.RawMessage(`{
       "description": "Allow copying a file that has uncommitted changes. Default false."
     }
   },
-  "required": ["from", "to"]
+  "required": ["from", "to"],
+  "additionalProperties": false
 }`)
 
 // CopyFile duplicates a file to a new path, preserving its permissions.

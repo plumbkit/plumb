@@ -25,7 +25,8 @@ var topologyRoutesSchema = json.RawMessage(`{
       "description": "Maximum number of route entries to return. Default 20.",
       "default": 20
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // TopologyRoutes scans topology nodes to identify HTTP/CLI entry points.

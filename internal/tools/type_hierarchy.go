@@ -32,7 +32,8 @@ var typeHierarchySchema = json.RawMessage(`{
       "description": "Which direction to traverse: parent types (supertypes), child types (subtypes), or both. Defaults to both."
     }
   },
-  "required": ["uri", "line", "character"]
+  "required": ["uri", "line", "character"],
+  "additionalProperties": false
 }`)
 
 // TypeHierarchy implements the type_hierarchy MCP tool.

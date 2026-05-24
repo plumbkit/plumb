@@ -24,7 +24,8 @@ var findSymbolSchema = json.RawMessage(`{
       "description": "Document to search within (file:// URI). Required."
     }
   },
-  "required": ["query", "uri"]
+  "required": ["query", "uri"],
+  "additionalProperties": false
 }`)
 
 // FindSymbol searches for symbols by name within a single document. For

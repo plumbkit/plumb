@@ -32,7 +32,8 @@ var renameFileSchema = json.RawMessage(`{
       "description": "Allow moving a file that has uncommitted changes in its git repository. Default false — the move is refused if the source file is dirty. Pass true to proceed anyway."
     }
   },
-  "required": ["from", "to"]
+  "required": ["from", "to"],
+  "additionalProperties": false
 }`)
 
 // RenameFile moves/renames a single file. Notifies the LSP server with both

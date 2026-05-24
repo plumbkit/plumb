@@ -28,7 +28,8 @@ var listFilesSchema = json.RawMessage(`{
       "type": "boolean",
       "description": "Include hidden files and directories (those starting with \".\"). Default false."
     }
-  }
+  },
+  "additionalProperties": false
 }`)
 
 // always-excluded directory names regardless of settings.

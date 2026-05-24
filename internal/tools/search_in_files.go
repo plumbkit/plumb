@@ -92,7 +92,8 @@ var searchInFilesSchema = json.RawMessage(`{
       "description": "When true and an LSP is available, annotate each match with the deepest enclosing symbol (function, method, type, etc.) from the language server. One LSP query per distinct matched file; results cached within the call. Silently omitted when the LSP is unavailable."
     }
   },
-  "required": ["pattern"]
+  "required": ["pattern"],
+  "additionalProperties": false
 }`)
 
 // SearchInFiles implements grep-like search across workspace files.
