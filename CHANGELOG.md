@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.25 (2026-05-25)
+
+### Fixed
+- **LSP `command` paths in config now expand `~/` and `$VAR` references.** The daemon is a background singleton that inherits a minimal PATH from its launcher (Claude Desktop, a LaunchAgent, etc.), so bare binary names like `gopls` fail with `executable file not found in $PATH` even when the binary is installed at `~/go/bin/gopls`. `normaliseConfig` now runs `expandPath` on every `LSPConfig.Command` after each config layer loads: `~/go/bin/gopls` expands to the user's real home directory via `os.UserHomeDir()`, and `$GOPATH/bin/gopls` or `$HOME/go/bin/gopls` expand via `os.ExpandEnv`. Bare names (e.g. the default `gopls`) and absolute paths are unchanged. `internal/config/config.go`; guards `TestExpandPath` and `TestNormaliseConfig_LSPCommandExpanded`.
+
 ## 0.7.24 (unreleased)
 
 ### Fixed
