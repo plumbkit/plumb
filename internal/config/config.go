@@ -301,6 +301,12 @@ var defaults = Config{
 			RootMarkers: []string{"Package.swift"},
 			Enabled:     false,
 		},
+		"zig": {
+			Command:     "zls",
+			Args:        []string{},
+			RootMarkers: []string{"build.zig", "build.zig.zon"},
+			Enabled:     false,
+		},
 	},
 }
 

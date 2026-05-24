@@ -319,6 +319,28 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   enabled = true
   ```
 
+### zls (Zig)
+
+- **Binary**: `zls` — install from https://github.com/zigtools/zls (or
+  `brew install zls`).
+- **Status**: experimental — unit-tested with a mocked transport; the
+  integration test (`internal/lsp/adapters/zig/`, `testdata/zig-fixture/`) is
+  written and gated `//go:build integration` but skips until `zls` is on PATH.
+- **Root markers**: `build.zig`, `build.zig.zon`.
+- **Workspace model**: requires `rootUri` pointing at the project root (the
+  directory containing `build.zig`); zls resolves the build graph from it.
+- **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.
+- **Sync**: full-document sync.
+- **Notifications**: emits `textDocument/publishDiagnostics`.
+- **Enable in config**:
+  ```toml
+  [lsp.zig]
+  enabled = true
+  ```
+- **Maintenance note**: Zig is pre-1.0; `zls` and `tree-sitter-zig` track the
+  language version, so this adapter (and the tree-sitter Zig extractor) are an
+  ongoing maintenance surface.
+
 ---
 
 ## Common pitfalls
