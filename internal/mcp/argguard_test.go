@@ -29,6 +29,26 @@ const editsSchema = `{
   "additionalProperties": false
 }`
 
+// editsRejectSchema mirrors editsSchema but sets additionalProperties:false on
+// the nested edit item too — the production shape of edit_file/transaction_apply
+// after the nested-args guard fix — so the guard rejects an unknown *nested* key.
+const editsRejectSchema = `{
+  "type": "object",
+  "properties": {
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}},
+        "required": ["old_string", "new_string"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["edits"],
+  "additionalProperties": false
+}`
+
 func mustShape(t *testing.T, schema string) *shape {
 	t.Helper()
 	sh, ok := parseShape(json.RawMessage(schema))
@@ -67,6 +87,12 @@ func TestResolveArgs(t *testing.T) {
 			args:        `{"edits":[{"old_str":"a","new_str":"b"}]}`,
 			wantWarn:    []string{`interpreted "edits[].old_str" as "old_string"`, `interpreted "edits[].new_str" as "new_string"`},
 			wantArgsSub: []string{`"old_string":"a"`, `"new_string":"b"`},
+		},
+		{
+			name:    "nested unknown key rejected (additionalProperties:false on items)",
+			schema:  editsRejectSchema,
+			args:    `{"edits":[{"old_string":"a","new_string":"b","foo":1}]}`,
+			wantErr: []string{`unknown parameter "edits[].foo"`, `valid parameters: old_string, new_string`},
 		},
 		{
 			// file_path-canonical tool (read_file family): "path" is accepted.

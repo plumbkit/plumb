@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.24 (unreleased)
+
+### Fixed
+- **The argument guard now rejects unknown *nested* keys, not just top-level ones.** The dispatch-path guard (`internal/mcp/argguard.go`, 0.7.19) already recurses validation into nested object / array-of-object levels, but `edit_file`'s `edits[]` items and `transaction_apply`'s operation object + `edits[]` items did not declare `"additionalProperties": false`, so a stray nested key (e.g. a typo'd field in an edit) was silently dropped instead of caught. Adding the marker to every nested object level of the two schemas (`internal/tools/edit_file.go`, `internal/tools/transaction.go` — the only two tools with nested object schemas) closes the gap: an unknown nested key now gets the same teaching rejection as a top-level one (`unknown parameter "edits[].foo"; valid parameters: old_string, new_string`), while recognised aliases (`old_str`→`old_string`) are still rewritten first. Every legitimate nested field is declared, so nothing valid is rejected. **Behaviour change:** extra nested keys previously dropped silently are now rejected — strictly better and consistent with the top-level contract. Guards: a nested-rejection case in `TestResolveArgs` (`internal/mcp/argguard_test.go`) and `TestNestedSchemasRejectUnknownProperties` (`internal/tools/schema_contract_test.go`), which walks the assembled schemas so a removed nested marker fails loudly.
+
 ## 0.7.23 (unreleased)
 
 ### Fixed

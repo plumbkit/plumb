@@ -41,7 +41,8 @@ var transactionApplySchema = json.RawMessage(`{
                 "old_string": {"type": "string"},
                 "new_string": {"type": "string"}
               },
-              "required": ["old_string", "new_string"]
+              "required": ["old_string", "new_string"],
+              "additionalProperties": false
             },
             "minItems": 1
           },
@@ -54,7 +55,8 @@ var transactionApplySchema = json.RawMessage(`{
             "description": "Optional hex-encoded SHA-256 previously returned by read_file. If provided, the operation is rejected if the file's current content hash differs."
           }
         },
-        "required": ["file_path", "edits"]
+        "required": ["file_path", "edits"],
+        "additionalProperties": false
       },
       "minItems": 1,
       "maxItems": 50

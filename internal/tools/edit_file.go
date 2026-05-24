@@ -35,7 +35,8 @@ var editFileSchema = json.RawMessage(`{
             "description": "Replacement string. Use empty string to delete old_string."
           }
         },
-        "required": ["old_string", "new_string"]
+        "required": ["old_string", "new_string"],
+        "additionalProperties": false
       },
       "minItems": 1
     },
