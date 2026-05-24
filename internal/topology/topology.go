@@ -18,6 +18,10 @@ const (
 	KindImport   NodeKind = "import"
 	KindClass    NodeKind = "class"
 	KindTest     NodeKind = "test"
+	// KindField is a member of a structured declaration that is neither a
+	// method nor a standalone variable: a SQL column, a config-table key, a
+	// struct/record field. Used by the config/markup tree-sitter extractors.
+	KindField NodeKind = "field"
 )
 
 // EdgeKind is the type of a relationship between two nodes.
