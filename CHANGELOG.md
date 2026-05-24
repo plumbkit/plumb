@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.19 (unreleased)
+
+### Added
+- **TypeScript (`.ts`) topology extraction moved onto tree-sitter — the lex-states gap is closed without a fork.** gotreesitter v0.19.1 ships the TypeScript external *scanner* but not the external *lex-states* table (`ts_external_scanner_states`), so typed arrow params (`(u: User): T => …`) cascaded ERROR nodes (see `docs/internal/treesitter-plan.md`). The fix: the missing `typescriptExternalLexStates` table was regenerated from upstream `tree-sitter-typescript`'s `parser.c` at the **exact pinned commit gotreesitter embeds** (`75b3874…`, recorded in `grammars/grammar_updates.json`) via gotreesitter's bundled `ts2go`, and is supplied at runtime through the grammars package's *exported* `RegisterExternalLexStates` — **no vendored fork required** (`internal/topology/extractors/treesitter/ts_lex_states.go`). New `treesitter.NewTypeScript` (`.ts`) replaces the regex extractor for TypeScript: it extracts functions (declarations + arrow/function-expression bindings, incl. `export`ed), classes (incl. `abstract`) with methods, interfaces (→ `KindType`) with their method signatures, type aliases and enums (→ `KindType`) with enum members (→ `KindConstant`), top-level const/let/var, ES/`require` imports, namespace (`internal_module`) members, and describe/it/test blocks (→ `KindTest`); containment 1.0/extractor, intra-file calls 0.8/heuristic. The previously-cascading typed-arrow utility-module layout now parses with **0 ERROR/0 MISSING** (`TestTypeScript_TypedArrowNoCascade` is the regression guard; if a future gotreesitter bump desyncs the table it fails loudly). The `typescript` `langsupport` row flips `EngineRegex → EngineTreeSitter` (extensions narrowed to `.ts`).
+
+### Known limitations
+- **TSX/JSX (`.tsx`/`.jsx`) stay on the regex extractor.** With the regenerated TSX lex-states attached, JSX itself parses clean, but gotreesitter v0.19.1's **TSX grammar still cascades on typed arrow parameters** (e.g. `const f = (x: number): number => x` → 4 ERROR nodes), which would silently drop trailing symbols from typed-arrow-heavy components — worse than the regex extractor for real-world `.tsx`. This is a residual grammar issue beyond the lex-states gap. A new `tsx` `langsupport` row (`.tsx`/`.jsx`, `EngineRegex`) keeps them on the narrowed regex extractor; closing it needs an upstream TSX-grammar fix or the WASM/wazero path (tracked in `docs/internal/treesitter-plan.md`). The correct TSX lex-states table is generated and registered (ready for when the grammar issue is resolved).
+
 ## 0.7.18 (unreleased)
 
 ### Added

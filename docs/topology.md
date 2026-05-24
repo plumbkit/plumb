@@ -78,7 +78,7 @@ flowchart LR
 - **Topology is the Map.** Use it for discovery: "where is the routing logic?",
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
-  is syntactic (Go AST, tree-sitter Python/JavaScript/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown, and a TypeScript regex extractor), so it offers
+  is syntactic (Go AST, tree-sitter Python/JavaScript/TypeScript/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown, and a TSX/JSX regex extractor), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
   (`get_definition`, `find_references`, `rename_symbol`, `diagnostics`) make and
@@ -97,9 +97,9 @@ pipeline has four parts:
    and *edges* (calls, imports, containment). Go uses the standard library's
    `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin, Swift and
    Java use the pure-Go gotreesitter runtime; JavaScript (`.js`/`.mjs`/`.cjs`)
-   also uses gotreesitter; and TypeScript (`.ts`/`.tsx`/`.jsx`) uses a fast regex
-   scanner (the TypeScript tree-sitter migration is deferred — see
-   `docs/internal/treesitter-plan.md`).
+   and TypeScript (`.ts`) also use gotreesitter; and only TSX/JSX (`.tsx`/`.jsx`)
+   still use a fast regex scanner (gotreesitter's TSX grammar cascades on typed
+   arrow params — see `docs/internal/treesitter-plan.md`).
    None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
    tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual

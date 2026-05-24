@@ -10,8 +10,8 @@ func TestByPath(t *testing.T) {
 		"main.go":             "go",
 		"pkg/app.py":          "python",
 		"src/index.ts":        "typescript",
-		"Component.tsx":       "typescript",
-		"legacy.jsx":          "typescript",
+		"Component.tsx":       "tsx",
+		"legacy.jsx":          "tsx",
 		"src/app.js":          "javascript",
 		"server.mjs":          "javascript",
 		"bundle.cjs":          "javascript",
@@ -60,6 +60,8 @@ func TestByName(t *testing.T) {
 	}{
 		{"go", EngineNativeAST, "gopls"},
 		{"python", EngineTreeSitter, "pyright-langserver"},
+		{"typescript", EngineTreeSitter, "typescript-language-server"}, // .ts on tree-sitter
+		{"tsx", EngineRegex, "typescript-language-server"},             // .tsx/.jsx still regex (TSX cascade)
 		{"javascript", EngineTreeSitter, ""},
 		{"rust", EngineTreeSitter, ""},
 		{"zig", EngineTreeSitter, ""},

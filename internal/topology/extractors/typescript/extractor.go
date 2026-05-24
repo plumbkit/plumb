@@ -10,18 +10,20 @@ import (
 	"github.com/golimpio/plumb/internal/topology"
 )
 
-// Extractor extracts TypeScript symbols using line-by-line heuristic scanning.
+// Extractor extracts TSX/JSX symbols using line-by-line heuristic scanning.
 // Plain JavaScript (.js/.mjs/.cjs) is handled by the tree-sitter javascript
-// extractor; only .ts/.tsx/.jsx remain here until the gotreesitter TypeScript
-// external lex-states gap is closed (see docs/internal/treesitter-plan.md).
+// extractor and TypeScript (.ts) by the tree-sitter TypeScript extractor; only
+// .tsx/.jsx remain here because gotreesitter v0.19.1's TSX grammar still
+// cascades on typed arrow parameters even with the regenerated TSX lex-states
+// (see docs/internal/treesitter-plan.md).
 type Extractor struct{}
 
-// New returns a new TypeScript Extractor.
+// New returns a new TSX/JSX Extractor.
 func New() *Extractor { return &Extractor{} }
 
 func (e *Extractor) Language() string { return "typescript" }
 func (e *Extractor) Extensions() []string {
-	return []string{".ts", ".tsx", ".jsx"}
+	return []string{".tsx", ".jsx"}
 }
 
 // Pattern constants for symbol detection.
