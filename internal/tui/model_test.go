@@ -24,6 +24,43 @@ func mkCall(sess string, msOffset int64) stats.RecentCall {
 	}
 }
 
+// The "uptime" anchor must follow the daemon, not the oldest live session, so it
+// stays stable as conversations come and go while the daemon keeps running.
+func TestDashboardUptimeStart(t *testing.T) {
+	now := time.Unix(10_000, 0).UTC()
+	daemonStart := now.Add(-3 * time.Hour)
+	sessionStart := now.Add(-5 * time.Minute)
+
+	// Fresh metrics snapshot: anchor on the real daemon start time, ignoring
+	// the (younger) live session.
+	m := Model{
+		daemonMetricsOK: true,
+		daemonMetrics:   monitor.DaemonMetrics{StartedAt: daemonStart},
+		sessions:        []session.Info{{StartedAt: sessionStart}},
+	}
+	if got := m.dashboardUptimeStart(now); !got.Equal(daemonStart) {
+		t.Fatalf("fresh metrics: got %v, want daemon start %v", got, daemonStart)
+	}
+
+	// No metrics (old daemon / stale snapshot): fall back to the oldest live session.
+	m = Model{sessions: []session.Info{{StartedAt: sessionStart}}}
+	if got := m.dashboardUptimeStart(now); !got.Equal(sessionStart) {
+		t.Fatalf("no metrics: got %v, want session start %v", got, sessionStart)
+	}
+
+	// Metrics present but StartedAt zero (pre-upgrade daemon build): also fall back.
+	m = Model{daemonMetricsOK: true, sessions: []session.Info{{StartedAt: sessionStart}}}
+	if got := m.dashboardUptimeStart(now); !got.Equal(sessionStart) {
+		t.Fatalf("zero StartedAt: got %v, want session start %v", got, sessionStart)
+	}
+
+	// Nothing at all: fall back to now-1m.
+	m = Model{}
+	if got := m.dashboardUptimeStart(now); !got.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("empty: got %v, want %v", got, now.Add(-time.Minute))
+	}
+}
+
 // Selecting a call and then having newer calls prepend should NOT shift the
 // user's selection to a different call — locateCall must follow the original
 // row by (session_id, called_at), not by raw index.

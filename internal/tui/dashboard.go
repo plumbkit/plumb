@@ -37,7 +37,16 @@ func detectWorkspaceFolder() string {
 	return ""
 }
 
+// dashboardUptimeStart is the anchor for every "uptime"-scoped dashboard widget
+// (token savings, top tools, activity). It returns the real daemon start time
+// when the metrics snapshot is fresh — precise because the daemon singleton
+// means every recorded call since then belongs to this run. It falls back to
+// the oldest live session (then now-1m) so the TUI degrades gracefully against
+// a stale/absent snapshot or an old daemon build that doesn't publish StartedAt.
 func (m Model) dashboardUptimeStart(now time.Time) time.Time {
+	if m.daemonMetricsOK && !m.daemonMetrics.StartedAt.IsZero() {
+		return m.daemonMetrics.StartedAt
+	}
 	var start time.Time
 	if len(m.sessions) > 0 {
 		start = m.sessions[0].StartedAt

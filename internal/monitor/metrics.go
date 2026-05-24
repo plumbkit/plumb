@@ -20,6 +20,7 @@ const SnapshotFileName = "daemon.metrics.json"
 // Concurrency: values are immutable after Sample or ReadSnapshot returns.
 type DaemonMetrics struct {
 	SampledAt         time.Time `json:"sampled_at"`
+	StartedAt         time.Time `json:"started_at,omitempty"`
 	PID               int       `json:"pid"`
 	RSSBytes          uint64    `json:"rss_bytes,omitempty"`
 	RSSAvailable      bool      `json:"rss_available"`
@@ -153,7 +154,7 @@ func WriteSnapshot(path string, metrics DaemonMetrics) error {
 	return nil
 }
 
-func StartSnapshotWriter(ctx context.Context, path string, interval time.Duration) {
+func StartSnapshotWriter(ctx context.Context, path string, interval time.Duration, startedAt time.Time) {
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
@@ -161,6 +162,7 @@ func StartSnapshotWriter(ctx context.Context, path string, interval time.Duratio
 	write := func() {
 		metrics, err := sampler.Sample(ctx)
 		if err == nil {
+			metrics.StartedAt = startedAt
 			_ = WriteSnapshot(path, metrics)
 		}
 	}

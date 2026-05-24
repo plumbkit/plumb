@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.21 (unreleased)
+
+### Fixed
+- **The dashboard's "uptime" widgets now track the real daemon uptime instead of the oldest live session.** The TUI Dashboard's "Tokens Saved (uptime)", "Top Tools (uptime)", and the activity chart's "↑ N calls (uptime)" were all anchored on `m.sessions[0].StartedAt` — the earliest *currently-connected* session (`session.List()` prunes dead-PID files) — with a `now − 1 minute` fallback. Because conversations start and end while the daemon keeps running, the "uptime" window actually tracked "age of the oldest live conversation", not the daemon: a 6-hour-old daemon whose only live conversation began 3 minutes ago showed a 3-minute uptime and scoped every uptime-labelled stat to those 3 minutes; a conversation ending and a new one starting made the window jump; with no live sessions it fell back to an arbitrary last minute. The fix exposes the daemon's real start time (`daemonStartedAt`, already captured at boot and reported by `daemon_info`) to the TUI by adding `StartedAt` to the metrics snapshot the TUI already polls every 2s (`monitor.DaemonMetrics` + `StartSnapshotWriter`, `internal/monitor/metrics.go`; threaded from `internal/cli/daemon.go`). A single shared anchor — `dashboardUptimeStart` (`internal/tui/dashboard.go`), now also used by `refreshActivity` (`internal/tui/model_refresh.go`) — returns that daemon start time when the snapshot is fresh, falling back to the previous oldest-live-session → `now−1m` logic when it is not (so the TUI degrades gracefully against a stale/absent snapshot or an old daemon build that does not publish the field). No stats-schema change: the daemon-singleton `flock` guarantees every recorded call since `daemonStartedAt` belongs to the current run, so the existing time-windowed queries become exact. Guards: `TestDashboardUptimeStart` (`internal/tui/model_test.go`) and the `StartedAt` round-trip in `TestSnapshotRoundTrip` (`internal/monitor/metrics_test.go`).
+
 ## 0.7.20 (unreleased)
 
 ### Fixed

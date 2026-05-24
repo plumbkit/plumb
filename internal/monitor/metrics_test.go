@@ -81,6 +81,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.metrics.json")
 	want := DaemonMetrics{
 		SampledAt:      time.Unix(1_000, 0).UTC(),
+		StartedAt:      time.Unix(500, 0).UTC(),
 		PID:            123,
 		RSSBytes:       42,
 		RSSAvailable:   true,
@@ -98,5 +99,8 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 	if got.PID != want.PID || got.RSSBytes != want.RSSBytes || got.CPUPercent != want.CPUPercent || got.Goroutines != want.Goroutines {
 		t.Fatalf("ReadSnapshot = %+v, want %+v", got, want)
+	}
+	if !got.StartedAt.Equal(want.StartedAt) {
+		t.Fatalf("ReadSnapshot StartedAt = %v, want %v", got.StartedAt, want.StartedAt)
 	}
 }

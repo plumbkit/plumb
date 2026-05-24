@@ -37,7 +37,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST, Python regex, and TypeScript/JS regex extractors (`extractors/{golang,python,typescript}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
 | `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
-| `internal/monitor` | Process resource-usage snapshots (CPU %, memory) with per-OS implementations; feeds the TUI daemon metrics |
+| `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
 | `internal/lsp` | `LSPClient` interface, process supervisor |
 | `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio (server-request support); mock for testing |

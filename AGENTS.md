@@ -58,7 +58,7 @@ Key packages:
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/render/` | Shared, pure CLI/TUI presentation helpers (stdlib + rendering libs only) |
 | `internal/fsguard/` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs |
-| `internal/monitor/` | Process resource-usage snapshots (CPU %, memory) feeding the TUI daemon metrics |
+| `internal/monitor/` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, feeding the TUI daemon metrics and its uptime baseline |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |
 
 ## Daemon architecture

@@ -158,13 +158,7 @@ func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 		return
 	}
 
-	var start time.Time
-	if len(m.sessions) > 0 {
-		start = m.sessions[0].StartedAt
-	}
-	if start.IsZero() {
-		start = now.Add(-time.Minute)
-	}
+	start := m.dashboardUptimeStart(now)
 	window := max(now.Sub(start), time.Minute)
 
 	activity, err := db.Activity(window, activityBuckets, stats.Filter{})
