@@ -83,6 +83,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"sql":        func() topology.Extractor { return treesitter.NewSQL() },
 	"dockerfile": func() topology.Extractor { return treesitter.NewDockerfile() },
 	"toml":       func() topology.Extractor { return treesitter.NewTOML() },
+	"yaml":       func() topology.Extractor { return treesitter.NewYAML() },
 }
 
 // buildExtractors instantiates the structural extractors for every language the

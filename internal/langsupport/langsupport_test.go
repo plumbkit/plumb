@@ -28,6 +28,8 @@ func TestByPath(t *testing.T) {
 		"app.dockerfile":    "dockerfile",
 		"Containerfile":     "dockerfile",
 		"Cargo.toml":        "toml",
+		"k8s/deploy.yaml":   "yaml",
+		"ci.yml":            "yaml",
 		"README.md":         "",
 		"Makefile":          "",
 	}
@@ -63,6 +65,7 @@ func TestByName(t *testing.T) {
 		{"sql", EngineTreeSitter, ""},
 		{"dockerfile", EngineTreeSitter, ""},
 		{"toml", EngineTreeSitter, ""},
+		{"yaml", EngineTreeSitter, ""},
 		{"java", EngineTreeSitter, "jdtls"}, // tree-sitter Map + jdtls GPS
 	}
 	for _, c := range cases {
