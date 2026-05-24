@@ -258,6 +258,40 @@ func TestDetect_GitAtHomeRefused(t *testing.T) {
 	}
 }
 
+// TestDetect_GitAtHomeTrailingSlashRefused guards the $HOME exclusion against a
+// non-canonical spelling: a raw string compare against os.UserHomeDir() would
+// not match "$HOME/" and would wrongly resolve $HOME as a workspace. The
+// identity-based guard must still refuse it.
+func TestDetect_GitAtHomeTrailingSlashRefused(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	mustMkdir(t, filepath.Join(home, ".git"))
+
+	pool := detectTestPool()
+	if _, _, err := pool.Detect(home + string(filepath.Separator)); err == nil {
+		t.Fatal("Detect: want error (a trailing-slash spelling of $HOME must not resolve), got nil")
+	}
+}
+
+// TestDetect_GitAtHomeViaSymlinkRefused guards the $HOME exclusion against a
+// symlink alias of the home directory: os.SameFile resolves it to $HOME, so the
+// .git there must still be refused — a string compare would not match the
+// symlink path.
+func TestDetect_GitAtHomeViaSymlinkRefused(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	mustMkdir(t, filepath.Join(home, ".git"))
+	alias := filepath.Join(freshTempDir(t), "home-alias")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	pool := detectTestPool()
+	if _, _, err := pool.Detect(alias); err == nil {
+		t.Fatal("Detect: want error (a symlink alias of $HOME must not resolve), got nil")
+	}
+}
+
 func TestSynthesiseRoot_GitDirAtSeed(t *testing.T) {
 	dir := freshTempDir(t)
 	mustMkdir(t, filepath.Join(dir, ".git"))

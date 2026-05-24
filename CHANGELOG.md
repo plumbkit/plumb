@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.23 (unreleased)
+
+### Fixed
+- **The `$HOME` guard in workspace detection now compares by filesystem identity, not by string.** The `.git/` root-marker guard added in 0.7.20 excludes `$HOME` (so a dotfiles repo there cannot turn the whole home directory into a workspace) — but it did so with a raw `dir != home` string compare on an un-normalised path, defeatable by a trailing slash (`/Users/you/`) or a symlink/firmlink spelling of `$HOME`, either of which would have resolved all of `$HOME` as a workspace, the exact outcome the guard exists to prevent. `Detect` (`internal/cli/pool.go`) now `filepath.Clean`s the start path and compares against a once-stat'd `$HOME` via `os.SameFile` (new `sameDirAs` helper) — robust to trailing slashes, `.`/`..` segments, symlinks, and macOS firmlinks — and falls inert (never refusing a legitimate repo) when `$HOME` is undeterminable or the directory cannot be stat'd. Surfaced reviewing the 0.7.20 workspace-resolution change. Regression guards: `TestDetect_GitAtHomeTrailingSlashRefused`, `TestDetect_GitAtHomeViaSymlinkRefused` (`internal/cli/pool_test.go`).
+
 ## 0.7.22 (unreleased)
 
 ### Fixed

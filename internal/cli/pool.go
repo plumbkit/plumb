@@ -107,8 +107,14 @@ const LanguageNone = "none"
 // If no marker is found, walk up to the parent. If we walk past the filesystem
 // root, return an error.
 func (p *workspacePool) Detect(start string) (root, language string, err error) {
-	home, _ := os.UserHomeDir()
-	d := start
+	// Stat $HOME once so the .git guard below can compare by filesystem
+	// identity (os.SameFile) rather than by string — a raw compare is defeated
+	// by a trailing slash or a symlink/firmlink alias of $HOME.
+	var homeInfo os.FileInfo
+	if home, herr := os.UserHomeDir(); herr == nil && home != "" {
+		homeInfo, _ = os.Stat(home)
+	}
+	d := filepath.Clean(start)
 	for {
 		// Highest priority: explicit .plumb marker. Honour it even when no
 		// LSP language matches — the user has declared this directory a
@@ -129,9 +135,11 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 			}
 		}
 		// Lowest priority: a .git directory marks a project boundary even
-		// without a language. Skip $HOME so a dotfiles repo there does not
-		// capture the whole home directory.
-		if (home == "" || d != home) && d != filepath.Dir(d) {
+		// without a language. Skip $HOME (by filesystem identity, so a
+		// non-canonical spelling cannot defeat the guard) so a dotfiles repo
+		// there does not capture the whole home directory, and skip the
+		// filesystem root.
+		if d != filepath.Dir(d) && !sameDirAs(d, homeInfo) {
 			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
 				return d, LanguageNone, nil
 			}
@@ -142,6 +150,24 @@ func (p *workspacePool) Detect(start string) (root, language string, err error) 
 		}
 		d = parent
 	}
+}
+
+// sameDirAs reports whether dir refers to the same directory as info (typically
+// the user's $HOME), comparing by filesystem identity via os.SameFile. This is
+// robust to trailing slashes, "."/".." segments, and symlink / macOS-firmlink
+// aliasing, where a raw string compare against $HOME would be defeated by any
+// non-canonical spelling. Returns false when info is nil (home undeterminable)
+// or dir cannot be stat'd, leaving the .git guard inert rather than refusing a
+// legitimate repo in those cases.
+func sameDirAs(dir string, info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(di, info)
 }
 
 // SynthesiseRoot returns a synthetic workspace root for seedDir, used as a
