@@ -64,6 +64,7 @@ var registry = []Language{
 	{Name: "hcl", Extensions: []string{".tf", ".tfvars", ".hcl"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "sql", Extensions: []string{".sql"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "dockerfile", Extensions: []string{"dockerfile", "containerfile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "toml", Extensions: []string{".toml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.
