@@ -266,6 +266,36 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   run. Initial startup can take 30–60 seconds. Subsequent runs within the same
   daemon lifetime are fast because the JVM stays alive.
 
+### rust-analyzer (Rust)
+
+- **Binary**: `rust-analyzer` — install with `rustup component add rust-analyzer`
+  (the rustup proxy at `~/.cargo/bin/rust-analyzer` dispatches to the toolchain
+  component; a bare proxy without the component installed errors).
+- **Status**: validated — integration tests in `internal/lsp/adapters/rust/`
+  (`testdata/rust-fixture/`).
+- **Root markers**: `Cargo.toml`.
+- **Workspace model**: requires `rootUri` pointing at the Cargo workspace root
+  (the directory containing `Cargo.toml`). Reads configuration from
+  `rust-analyzer.toml` and the Cargo manifest.
+- **Init options**: none — rust-analyzer reads its configuration from the
+  workspace, so `DefaultInitParams` sends no `initializationOptions`.
+- **Sync**: full-document sync. Registers file watchers dynamically via
+  `client/registerCapability`; the adapter answers and records the glob patterns
+  so `DidChangeWatchedFiles` events are filtered to them.
+- **Notifications**: emits `textDocument/publishDiagnostics`. Syntax errors are
+  reported from rust-analyzer's own front end (no `cargo check` needed); the
+  slower `cargo check` flycheck supplies type/borrow diagnostics.
+- **Enable in config**:
+  ```toml
+  [lsp.rust]
+  enabled = true
+  ```
+- **Cold-start warning**: rust-analyzer loads the sysroot and runs
+  `cargo metadata` on first attach. On a large workspace this can take
+  **minutes** — the canonical "unavailability" case the structural (tree-sitter)
+  layer covers while the server warms. The adapter tolerates a long `initialize`
+  by not imposing its own deadline on the handshake.
+
 ---
 
 ## Common pitfalls

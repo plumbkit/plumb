@@ -57,7 +57,7 @@ var registry = []Language{
 	{Name: "typescript", Extensions: []string{".ts", ".tsx", ".jsx"}, Structural: EngineRegex, LSPAdapter: ""},
 	{Name: "javascript", Extensions: []string{".js", ".mjs", ".cjs"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "java", Extensions: []string{".java"}, Structural: EngineTreeSitter, LSPAdapter: "jdtls"},
-	{Name: "rust", Extensions: []string{".rs"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "rust", Extensions: []string{".rs"}, Structural: EngineTreeSitter, LSPAdapter: "rust-analyzer"},
 	{Name: "zig", Extensions: []string{".zig"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "kotlin", Extensions: []string{".kt", ".kts"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "swift", Extensions: []string{".swift"}, Structural: EngineTreeSitter, LSPAdapter: ""},

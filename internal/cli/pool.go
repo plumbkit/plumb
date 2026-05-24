@@ -17,6 +17,7 @@ import (
 	"github.com/golimpio/plumb/internal/lsp/adapters/gopls"
 	"github.com/golimpio/plumb/internal/lsp/adapters/jdtls"
 	"github.com/golimpio/plumb/internal/lsp/adapters/pyright"
+	"github.com/golimpio/plumb/internal/lsp/adapters/rust"
 	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -277,6 +278,8 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
 		return jdtls.New(conn), nil
 	case "python":
 		return pyright.New(conn), nil
+	case "rust":
+		return rust.New(conn), nil
 	default:
 		return nil, fmt.Errorf("no adapter registered for language %q", language)
 	}
@@ -289,6 +292,8 @@ func initParamsFor(language, rootURI string) protocol.InitializeParams {
 		return jdtls.DefaultInitParams(rootURI)
 	case "python":
 		return pyright.DefaultInitParams(rootURI)
+	case "rust":
+		return rust.DefaultInitParams(rootURI)
 	default:
 		return gopls.DefaultInitParams(rootURI)
 	}

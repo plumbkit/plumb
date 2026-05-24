@@ -289,6 +289,12 @@ var defaults = Config{
 			RootMarkers: []string{"pom.xml", "build.gradle", "build.gradle.kts", ".classpath"},
 			Enabled:     false,
 		},
+		"rust": {
+			Command:     "rust-analyzer",
+			Args:        []string{},
+			RootMarkers: []string{"Cargo.toml"},
+			Enabled:     false,
+		},
 	},
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.18 (unreleased)
+
+### Added
+- **LSP adapter for Rust (rust-analyzer), validated against the real binary.** New `internal/lsp/adapters/rust` implements the full `lsp.Client` interface (mirroring the pyright worked example), answers `client/registerCapability`/`unregisterCapability` via `SetRequestHandler` so rust-analyzer's dynamic file-watcher registration is honoured, and bases its client capabilities on `protocol.DefaultClientCapabilities()`. Wired into the daemon (`newAdapter`/`initParamsFor` in `internal/cli/pool.go`) and added to the default `[lsp]` map as `rust` (`Command: rust-analyzer`, `RootMarkers: [Cargo.toml]`, **disabled by default** — opt in with `[lsp.rust] enabled = true`); the `rust` `langsupport` row now names `rust-analyzer` as its adapter, pairing the semantic GPS with the existing tree-sitter Rust Map. Unit-tested with the mock transport (every interface method) and **integration-tested against a real rust-analyzer** (gated `//go:build integration`, `testdata/rust-fixture/`): a document-symbol extraction test and a `DidChangeWatchedFiles` + `DidOpen` → diagnostics round-trip, both passing. **Cold-start note:** rust-analyzer loads the sysroot and runs `cargo metadata` on first attach (can take minutes on a large workspace) — the canonical unavailability case the structural layer covers while it warms.
+
 ## 0.7.17 (unreleased)
 
 ### Added
