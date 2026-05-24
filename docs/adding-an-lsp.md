@@ -368,6 +368,30 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   name (not import path) with the topology `typescript` *extractor* package; the
   daemon imports the adapter aliased as `tsls` in `internal/cli/pool.go`.
 
+### kotlin-language-server (Kotlin)
+
+- **Binary**: `kotlin-language-server` — install with
+  `brew install kotlin-language-server` or build from
+  https://github.com/fwcd/kotlin-language-server (needs a JDK).
+- **Status**: experimental — unit-tested with a mocked transport; the
+  integration test (`internal/lsp/adapters/kotlin/`, `testdata/kotlin-fixture/`)
+  is written and gated `//go:build integration` but skips until the binary is on
+  PATH.
+- **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. Note the
+  `build.gradle.kts` overlap with Java's markers — with both `[lsp.java]` and
+  `[lsp.kotlin]` enabled, the alphabetical detect order makes Java win for a
+  shared marker. Both are opt-in, so this is a non-issue by default.
+- **Workspace model**: requires `rootUri` at the project root; resolves the
+  classpath from the Gradle/Maven build files (slow on first attach).
+- **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.
+- **Sync**: full-document sync.
+- **Notifications**: emits `textDocument/publishDiagnostics`.
+- **Enable in config**:
+  ```toml
+  [lsp.kotlin]
+  enabled = true
+  ```
+
 ---
 
 ## Common pitfalls

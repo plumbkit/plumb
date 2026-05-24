@@ -313,6 +313,12 @@ var defaults = Config{
 			RootMarkers: []string{"tsconfig.json", "jsconfig.json", "package.json"},
 			Enabled:     false,
 		},
+		"kotlin": {
+			Command:     "kotlin-language-server",
+			Args:        []string{},
+			RootMarkers: []string{"settings.gradle.kts", "build.gradle.kts"},
+			Enabled:     false,
+		},
 	},
 }
 
