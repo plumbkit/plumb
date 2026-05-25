@@ -21,7 +21,7 @@ import (
 //   3. Apply the edit (atomic write) unless dry_run.
 
 const symbolEditCommonSchema = `
-"uri":{"type":"string","description":"Document URI (file://...)."},
+"uri":{"type":"string","description":"Absolute path or file:// URI."},
 "name_path":{"type":"string","description":"Slash-separated symbol path within the file (e.g. \"ClassName/methodName\", or just \"funcName\" for top-level)."},
 "dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write."}
 `
@@ -206,6 +206,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
+	a.URI = toFileURI(a.URI)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -270,6 +271,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
+	a.URI = toFileURI(a.URI)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -337,6 +339,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
+	a.URI = toFileURI(a.URI)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -393,6 +396,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
+	a.URI = toFileURI(a.URI)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun

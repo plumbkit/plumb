@@ -21,9 +21,12 @@ see [Getting Started](getting-started.md); for the bigger picture, see
 
 These apply across many tools:
 
-- **Paths and URIs.** Filesystem tools accept an absolute path *or* a `file://`
-  URI. Some accept workspace-relative paths, resolved against the session's
-  workspace root.
+- **Paths and URIs.** Every tool accepts an absolute path *or* a `file://` URI
+  for its file argument — the filesystem tools (`file_path` / `path`) and the
+  LSP query/edit tools (`uri`) alike. Filesystem tools additionally accept a
+  workspace-relative path, resolved against the session's workspace root; the
+  `uri` tools need an absolute path or `file://` URI (the language server
+  requires an absolute URI).
 - **Positions are zero-based.** LSP query/edit tools that take a `line` and
   `character` use zero-based numbering (matching the LSP spec). Output line
   numbers are printed one-based.
@@ -164,9 +167,11 @@ otherwise). **Inputs:** `uri`, `name_path` (required), `include_doc_comment`
 ## Filesystem reads
 
 ### `read_file`
-Read a file's text. **Inputs:** `file_path` (required), `start_line`, `end_line`
-(1-based, inclusive — stream a slice of a large file). Binary files rejected;
-output capped at 200 KiB. Emits the `# plumb-read …` header.
+Read a file's text. **Inputs:** `file_path` (required), plus an optional line
+window — either plumb's `start_line` + `end_line` (1-based, inclusive) or Claude
+Code's native `offset` (first line) + `limit` (line count). `start_line` and
+`offset` are synonyms; `limit` and `end_line` are mutually exclusive. Binary
+files rejected; output capped at 200 KiB. Emits the `# plumb-read …` header.
 
 ### `read_symbol`
 Read the source body of a named symbol in one call (LSP `documentSymbol` +

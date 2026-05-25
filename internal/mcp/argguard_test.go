@@ -111,6 +111,28 @@ func TestResolveArgs(t *testing.T) {
 			wantArgsSub: []string{`"path":"/tmp/x.go"`},
 		},
 		{
+			// uri-canonical tool (LSP query/edit tools): a plain "path" reaches "uri".
+			name:        "alias path → uri (uri-canonical tool)",
+			schema:      `{"type":"object","properties":{"uri":{"type":"string"}},"required":["uri"],"additionalProperties":false}`,
+			args:        `{"path":"/tmp/x.go"}`,
+			wantWarn:    []string{`interpreted "path" as "uri"`},
+			wantArgsSub: []string{`"uri":"/tmp/x.go"`},
+		},
+		{
+			name:        "alias file_path → uri (uri-canonical tool)",
+			schema:      `{"type":"object","properties":{"uri":{"type":"string"}},"required":["uri"],"additionalProperties":false}`,
+			args:        `{"file_path":"/tmp/x.go"}`,
+			wantWarn:    []string{`interpreted "file_path" as "uri"`},
+			wantArgsSub: []string{`"uri":"/tmp/x.go"`},
+		},
+		{
+			name:        "alias symbol → name (read_symbol)",
+			schema:      `{"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},"required":["path","name"],"additionalProperties":false}`,
+			args:        `{"path":"/tmp/x.go","symbol":"Foo"}`,
+			wantWarn:    []string{`interpreted "symbol" as "name"`},
+			wantArgsSub: []string{`"name":"Foo"`},
+		},
+		{
 			name:    "genuine unknown is rejected with a suggestion",
 			schema:  nameSchema,
 			args:    `{"namex": "x"}`,

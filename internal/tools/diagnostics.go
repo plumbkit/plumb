@@ -37,7 +37,7 @@ var diagnosticsSchema = json.RawMessage(`{
     "uris": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "file:// URIs to fetch diagnostics for. Omit or pass [] to return diagnostics for all files that have issues. Pass one URI for a single-file query. Pass multiple URIs to check a specific set of files in one call."
+      "description": "Absolute paths or file:// URIs to fetch diagnostics for. Omit or pass [] to return diagnostics for all files that have issues. Pass one for a single-file query. Pass multiple to check a specific set of files in one call."
     },
     "uri": {
       "type": "string",
@@ -86,6 +86,10 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("diagnostics: invalid arguments: %w", err)
+	}
+	a.URI = toFileURI(a.URI)
+	for i := range a.URIs {
+		a.URIs[i] = toFileURI(a.URIs[i])
 	}
 
 	// Backward-compat: scalar uri field is treated as uris:[uri].

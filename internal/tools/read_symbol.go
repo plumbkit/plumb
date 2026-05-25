@@ -135,12 +135,7 @@ func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {
 }
 
 func resolveReadSymbolPaths(path string) (fpath, uri string) {
-	fpath = strings.TrimPrefix(path, "file://")
-	uri = path
-	if !strings.HasPrefix(uri, "file://") {
-		uri = "file://" + uri
-	}
-	return fpath, uri
+	return strings.TrimPrefix(path, "file://"), toFileURI(path)
 }
 
 func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {

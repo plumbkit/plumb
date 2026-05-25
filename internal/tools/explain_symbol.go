@@ -16,7 +16,7 @@ var explainSymbolSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Document URI (file:// scheme)"
+      "description": "Absolute path or file:// URI of the document"
     },
     "line": {
       "type": "integer",
@@ -69,6 +69,7 @@ func (t *ExplainSymbol) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", fmt.Errorf("explain_symbol: uri must not be empty")
 	}
+	a.URI = toFileURI(a.URI)
 
 	key := fmt.Sprintf("%s:hover:%d:%d", a.URI, a.Line, a.Character)
 	if t.cache != nil {

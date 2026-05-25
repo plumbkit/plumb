@@ -49,7 +49,7 @@ func (*RenameSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"uri":{"type":"string","description":"Document URI (file://...)."},
+			"uri":{"type":"string","description":"Absolute path or file:// URI."},
 			"line":{"type":"integer","minimum":0,"description":"Zero-based line of the identifier."},
 			"character":{"type":"integer","minimum":0,"description":"Zero-based character offset within the line."},
 			"new_name":{"type":"string","description":"Replacement identifier name."},
@@ -82,6 +82,7 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 	if input.URI == "" || input.NewName == "" {
 		return renameSymbolArgs{}, fmt.Errorf("`uri` and `new_name` are required")
 	}
+	input.URI = toFileURI(input.URI)
 	dryRun := true
 	if input.DryRun != nil {
 		dryRun = *input.DryRun

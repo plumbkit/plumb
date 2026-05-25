@@ -16,7 +16,7 @@ var callHierarchySchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "File URI (file://...) containing the symbol"
+      "description": "Absolute path or file:// URI containing the symbol"
     },
     "line": {
       "type": "integer",
@@ -70,6 +70,7 @@ func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
 	if a.URI == "" {
 		return a, fmt.Errorf("call_hierarchy: uri must not be empty")
 	}
+	a.URI = toFileURI(a.URI)
 	if a.Direction == "" {
 		a.Direction = "both"
 	}

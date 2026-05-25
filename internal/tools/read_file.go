@@ -29,6 +29,16 @@ var readFileSchema = json.RawMessage(`{
       "type": "integer",
       "description": "Last line to return (1-based, inclusive). Omit to read to the end of the file.",
       "minimum": 1
+    },
+    "offset": {
+      "type": "integer",
+      "description": "First line to read, 1-based (Claude Code-style alias for start_line; start_line wins if both are given).",
+      "minimum": 1
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Number of lines to return starting at the first line (Claude Code-style window; first line defaults to 1). Mutually exclusive with end_line.",
+      "minimum": 1
     }
   },
   "required": ["file_path"],
@@ -78,6 +88,8 @@ type readFileArgs struct {
 	Path      string `json:"file_path"`
 	StartLine *int   `json:"start_line"`
 	EndLine   *int   `json:"end_line"`
+	Offset    *int   `json:"offset"`
+	Limit     *int   `json:"limit"`
 }
 
 func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, error) {
@@ -119,7 +131,11 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	}
 	src := io.MultiReader(bytes.NewReader(sniff), f)
 
-	content, err := readContentMaybeRanged(src, a.StartLine, a.EndLine)
+	start, end, err := resolveLineWindow(a)
+	if err != nil {
+		return "", fmt.Errorf("read_file: %w", err)
+	}
+	content, err := readContentMaybeRanged(src, start, end)
 	if err != nil {
 		return "", fmt.Errorf("read_file: %w", err)
 	}
@@ -151,6 +167,33 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")
 	}
 	return sb.String(), nil
+}
+
+// resolveLineWindow reconciles plumb's absolute start_line/end_line range with
+// Claude Code's native offset/limit window into the (start, end) pair
+// readContentMaybeRanged expects. offset is a synonym for start_line (start_line
+// wins when both are given); limit — "N lines from the first line" — is
+// translated to an absolute end_line and is mutually exclusive with end_line.
+func resolveLineWindow(a readFileArgs) (start, end *int, err error) {
+	start = a.StartLine
+	if start == nil {
+		start = a.Offset
+	}
+	if a.Limit == nil {
+		return start, a.EndLine, nil
+	}
+	if a.EndLine != nil {
+		return nil, nil, fmt.Errorf("specify end_line or limit, not both")
+	}
+	if *a.Limit < 1 {
+		return nil, nil, fmt.Errorf("limit must be >= 1")
+	}
+	s := 1
+	if start != nil {
+		s = *start
+	}
+	e := s + *a.Limit - 1
+	return &s, &e, nil
 }
 
 // classifyIndent inspects the leading whitespace of each non-empty line in

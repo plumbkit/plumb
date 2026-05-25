@@ -20,7 +20,7 @@ var fileOutlineSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "file:// URI (or absolute path) of the file to outline."
+      "description": "Absolute path or file:// URI of the file to outline."
     },
     "include_docs": {
       "type": "boolean",
@@ -123,6 +123,7 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 	if a.URI == "" {
 		return a, fmt.Errorf("file_outline: uri is required")
 	}
+	a.URI = toFileURI(a.URI)
 	return a, nil
 }
 

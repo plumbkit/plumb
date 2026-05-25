@@ -17,7 +17,7 @@ var getDefinitionSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Document URI (file:// scheme)"
+      "description": "Absolute path or file:// URI of the document"
     },
     "line": {
       "type": "integer",
@@ -77,6 +77,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", fmt.Errorf("get_definition: uri must not be empty")
 	}
+	a.URI = toFileURI(a.URI)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()

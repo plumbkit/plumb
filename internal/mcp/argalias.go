@@ -14,10 +14,10 @@ import "strings"
 // tools); this table lets other agents — and plumb's earlier conventions —
 // reach the same parameters without a failed call.
 var paramAliases = map[string][]string{
-	"path":      {"file_path"},
-	"filepath":  {"file_path", "path"},
-	"filename":  {"file_path"},
-	"file":      {"file_path", "path"},
+	"path":      {"file_path", "uri"},
+	"filepath":  {"file_path", "path", "uri"},
+	"filename":  {"file_path", "uri"},
+	"file":      {"file_path", "path", "uri"},
 	"oldstr":    {"old_string"},
 	"newstr":    {"new_string"},
 	"dir":       {"path"},
@@ -26,6 +26,7 @@ var paramAliases = map[string][]string{
 	"regex":     {"pattern"},
 	"query":     {"pattern"},
 	"newname":   {"name"},
+	"symbol":    {"name"},
 }
 
 // aliasNotice formats the leading note prepended to a tool result when one or

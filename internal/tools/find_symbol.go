@@ -21,7 +21,7 @@ var findSymbolSchema = json.RawMessage(`{
     },
     "uri": {
       "type": "string",
-      "description": "Document to search within (file:// URI). Required."
+      "description": "Document to search within (absolute path or file:// URI). Required."
     }
   },
   "required": ["query", "uri"],
@@ -72,6 +72,7 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 	if a.URI == "" {
 		return "", fmt.Errorf("find_symbol: uri is required (use workspace_symbols for workspace-wide search)")
 	}
+	a.URI = toFileURI(a.URI)
 	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
 	out, err := t.inDocument(lspCtx, a.URI, a.Query)

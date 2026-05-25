@@ -49,6 +49,55 @@ func TestReadFile_FileURI(t *testing.T) {
 	}
 }
 
+func TestReadFile_Limit(t *testing.T) {
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	path := writeTextFile(t, content)
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		want    []string // lines expected present
+		absent  []string // lines expected absent
+		wantErr bool
+	}{
+		{"limit from line 1", map[string]any{"limit": 2}, []string{"line1", "line2"}, []string{"line3"}, false},
+		{"start_line + limit window", map[string]any{"start_line": 3, "limit": 2}, []string{"line3", "line4"}, []string{"line2", "line5"}, false},
+		{"offset is a start_line synonym", map[string]any{"offset": 4, "limit": 1}, []string{"line4"}, []string{"line3", "line5"}, false},
+		{"limit and end_line conflict", map[string]any{"end_line": 4, "limit": 2}, nil, nil, true},
+		{"limit must be >= 1", map[string]any{"limit": 0}, nil, nil, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.args["file_path"] = path
+			out, err := callReadFile(t, tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("want error, got none")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertLines(t, out, tc.want, tc.absent)
+		})
+	}
+}
+
+func assertLines(t *testing.T, out string, want, absent []string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("want %q in:\n%s", w, out)
+		}
+	}
+	for _, a := range absent {
+		if strings.Contains(out, a) {
+			t.Errorf("did not want %q in:\n%s", a, out)
+		}
+	}
+}
+
 func TestReadFile_LineRange(t *testing.T) {
 	content := "line1\nline2\nline3\nline4\nline5\n"
 	path := writeTextFile(t, content)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.3 (unreleased)
+
+### Added
+- **`read_file` accepts Claude Code's native read window — `offset` + `limit`.** `read_file` gained real `offset` (first line) and `limit` (line count) integer parameters — the exact window Claude Code's native Read uses — alongside plumb's `start_line`/`end_line` (`offset` is a synonym for `start_line`; `limit` and `end_line` are mutually exclusive). They are *declared* params, not mere aliases: an MCP client serialises a parameter absent from the tool's schema as a string, which a key-rename alias cannot coerce back to an integer (verified live — `offset` arrived as `"15"`), so a typed declared param is the robust fix. `resolveLineWindow` (`internal/tools/read_file.go`) reconciles the two windows; guard `TestReadFile_Limit`.
+
+### Changed
+- **Every `uri`-taking tool now accepts a plain absolute path as readily as a `file://` URI — consistency with the filesystem tools.** Previously only the filesystem tools (`read_file`, `list_directory`, …) documented "path or `file://` URI"; the LSP query/edit tools (`diagnostics`, `get_definition`, `find_references`, `find_symbol`, `list_symbols`, `file_outline`, `explain_symbol`, `call_hierarchy`, `type_hierarchy`, `rename_symbol`, and the four symbol-edit tools) required a `file://` URI and silently returned nothing when handed a plain path. A shared `toFileURI` normaliser (`internal/tools/uri.go`, generalising read_symbol's `resolveReadSymbolPaths`) is applied at each tool's entry, and the alias engine now maps `path`/`file_path → uri` so a wrong-but-meaningful key resolves too. Relative paths remain unsupported on `uri` tools (the language server needs an absolute URI). Also added the `symbol → name` alias (for `read_symbol`). The reason this was split (filesystem tools took paths; LSP tools mirrored the protocol's `file://`-only `uri`) is documented in `docs/tools.md` — it was a naming convention, not a constraint. Guards: `TestToFileURI`, `TestDiagnostics_PlainPath`, and new `TestResolveArgs` cases.
+
 ## 0.8.2 (unreleased)
 
 ### Added

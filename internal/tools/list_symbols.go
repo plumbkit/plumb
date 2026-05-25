@@ -17,7 +17,7 @@ var listSymbolsSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "file:// URI of the document to outline"
+      "description": "Absolute path or file:// URI of the document to outline"
     },
     "include_signatures": {
       "type": "boolean",
@@ -88,6 +88,7 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if a.URI == "" {
 		return "", fmt.Errorf("list_symbols: uri is required")
 	}
+	a.URI = toFileURI(a.URI)
 
 	key := a.URI + ":docSymbols"
 	if t.cache != nil {

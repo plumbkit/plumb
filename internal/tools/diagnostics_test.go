@@ -49,6 +49,30 @@ func TestDiagnostics_SpecificURI(t *testing.T) {
 	}
 }
 
+// TestDiagnostics_PlainPath verifies a plain absolute path is normalised to the
+// file:// URI the language server reports diagnostics under, so passing a path
+// (or being aliased from file_path) resolves the same entry.
+func TestDiagnostics_PlainPath(t *testing.T) {
+	inv := newTestInvalidator(t)
+	pushDiagnostics(t, inv, "file:///p/main.go", []protocol.Diagnostic{
+		{
+			Range:    protocol.Range{Start: protocol.Position{Line: 0, Character: 0}},
+			Severity: protocol.SevError,
+			Message:  "boom",
+		},
+	})
+
+	tool := tools.NewDiagnostics(inv)
+	raw, _ := json.Marshal(map[string]any{"uri": "/p/main.go"})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("diagnostics: %v", err)
+	}
+	if !strings.Contains(out, "boom") {
+		t.Errorf("plain path should resolve to the file:// diagnostics key:\n%s", out)
+	}
+}
+
 func TestDiagnostics_AllFiles(t *testing.T) {
 	inv := newTestInvalidator(t)
 	pushDiagnostics(t, inv, "file:///p/a.go", []protocol.Diagnostic{

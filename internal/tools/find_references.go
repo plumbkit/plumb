@@ -20,7 +20,7 @@ var findReferencesSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "file:// URI of the document containing the symbol"
+      "description": "Absolute path or file:// URI of the document containing the symbol"
     },
     "line": {
       "type": "integer",
@@ -85,6 +85,7 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if a.URI == "" {
 		return "", fmt.Errorf("find_references: uri is required")
 	}
+	a.URI = toFileURI(a.URI)
 
 	includeDecl := true
 	if a.IncludeDeclaration != nil {

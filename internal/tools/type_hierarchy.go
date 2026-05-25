@@ -16,7 +16,7 @@ var typeHierarchySchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "File URI (file://...) containing the type"
+      "description": "Absolute path or file:// URI containing the type"
     },
     "line": {
       "type": "integer",
@@ -70,6 +70,7 @@ func parseTypeHierarchyArgs(raw json.RawMessage) (typeHierarchyArgs, error) {
 	if a.URI == "" {
 		return a, fmt.Errorf("type_hierarchy: uri must not be empty")
 	}
+	a.URI = toFileURI(a.URI)
 	if a.Direction == "" {
 		a.Direction = "both"
 	}
