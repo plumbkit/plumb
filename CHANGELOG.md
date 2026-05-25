@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 (unreleased)
+
+### Added
+- **`session_start` now reports the live, resolved git tool policy, so an agent never has to guess (or trust a stale memory about) whether it can commit through plumb.** The orientation packet gained a "## Git (via the `git` tool — live policy)" section: when `[git] allow_writes` is on it states commits & staging are enabled and steers the agent to commit through the `git` tool rather than the shell, alongside the destructive/push gate states and protected branches; when writes are off it says read-only and names the knob (`[git] allow_writes = false`). Every variant closes with "trust it over any cached note" — that line exists to contradict a stale "plumb:git is read-only" assumption at the point of orientation, which is the exact failure that prompted this (an agent shelled out for commits even though `allow_writes` defaults to **true**). The reported policy is the same live, hot-reloaded value the `git` tool gates on: the inline `tools.GitPolicy` closure in `internal/cli/conn.go` was extracted into a shared `connSession.gitPolicy()` method now passed to both `NewGit` and `NewSessionStart`. The section is nil-safe (omitted when unwired) and only emitted inside a git repository. New pure formatter `formatGitPolicy` + `writeSessionGitPolicy` (`internal/tools/session_start.go`); guards `TestFormatGitPolicy` and `TestSessionStart_GitPolicySection`.
+
 ## 0.8.1 (unreleased)
 
 ### Added

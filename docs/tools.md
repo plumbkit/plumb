@@ -48,7 +48,8 @@ These apply across many tools:
 Bootstrap tool — **call first in every session.** Returns workspace path,
 language, git branch, the first 200 lines of `.plumb/context.md`, memory
 names/descriptions, top-5 tool usage, 5 recently-modified files, 3 recent
-commits, and active diagnostics. Idempotent.
+commits, the live git tool policy (whether commits/destructive/push are
+enabled), and active diagnostics. Idempotent.
 **Inputs:** `workspace` (string, optional — defaults to the daemon's resolved
 workspace, then a cwd walk).
 

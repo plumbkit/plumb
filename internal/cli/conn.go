@@ -190,6 +190,19 @@ func (s *connSession) gitConfig() config.GitConfig {
 	return s.gitCfg
 }
 
+// gitPolicy returns the connection's current resolved git policy. Reads the
+// live gitCfg (hot-reloaded under its RWMutex) and is the single source of
+// truth shared by the git tool's gate and session_start's policy report.
+func (s *connSession) gitPolicy() tools.GitPolicy {
+	c := s.gitConfig()
+	return tools.GitPolicy{
+		AllowWrites:       c.AllowWrites,
+		AllowDestructive:  c.AllowDestructive,
+		AllowPush:         c.AllowPush,
+		ProtectedBranches: c.ProtectedBranches,
+	}
+}
+
 // refuseHomeRoots reports whether the session refuses home-directory roots.
 func (s *connSession) refuseHomeRoots() bool {
 	s.walkMu.RLock()
@@ -649,15 +662,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTransactionApply(wd))
 	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl))
 	srv.Register(tools.NewFindFiles(s.workspace))
-	srv.Register(tools.NewGit(wd, func() tools.GitPolicy {
-		c := s.gitConfig()
-		return tools.GitPolicy{
-			AllowWrites:       c.AllowWrites,
-			AllowDestructive:  c.AllowDestructive,
-			AllowPush:         c.AllowPush,
-			ProtectedBranches: c.ProtectedBranches,
-		}
-	}))
+	srv.Register(tools.NewGit(wd, s.gitPolicy))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace(wd))
@@ -671,7 +676,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 		}))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr).WithTopology(topoFn))
+	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).WithTopology(topoFn))
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))

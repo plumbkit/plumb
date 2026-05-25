@@ -245,7 +245,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 
 **Bootstrap**
 
-- `session_start` — **Call FIRST.** Orientation packet (workspace, language, branch, recent commits + files, memories, top-5 tool stats, active diagnostics) plus a client-specific tool-guidance section. Cold-start chain: explicit → daemon-resolved → `roots/list` → cwd walk.
+- `session_start` — **Call FIRST.** Orientation packet (workspace, language, branch, recent commits + files, memories, top-5 tool stats, the live git tool policy, active diagnostics) plus a client-specific tool-guidance section. Cold-start chain: explicit → daemon-resolved → `roots/list` → cwd walk.
 
 **LSP queries**
 

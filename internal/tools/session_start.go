@@ -47,6 +47,7 @@ type RootsResolver func(ctx context.Context) string
 //   - top-5 most-used tools from session history
 //   - 5 most recently-modified files (workspace-relative)
 //   - 3 most recent git commits (subject only)
+//   - the live, resolved git tool policy (writes/destructive/push)
 //   - active LSP diagnostics (errors and warnings only)
 //
 // Workspace resolution chain (each falls back to the next on empty):
@@ -65,6 +66,7 @@ type SessionStart struct {
 	refuseFn     func() bool       // may be nil; treated as false (no refusal)
 	clientNameFn func() string     // may be nil; returns current MCP client name
 	topo         topologyStoreFn   // may be nil; returns the live topology store, or nil when disabled
+	gitPolicyFn  func() GitPolicy  // may be nil; git policy section skipped when nil
 }
 
 // WithTopology wires the topology store accessor so session_start can lead its
@@ -86,9 +88,11 @@ func (t *SessionStart) topologyActive() bool {
 // the current value of walk.refuse_home_roots so live config changes are
 // honoured. Pass nil to disable the guard. clientName returns the MCP client
 // name negotiated during connection initialisation; pass nil to omit
-// client-specific guidance.
-func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver, refuseHomeRoots func() bool, clientName func() string) *SessionStart {
-	return &SessionStart{ws: ws, diag: diag, roots: roots, refuseFn: refuseHomeRoots, clientNameFn: clientName}
+// client-specific guidance. gitPolicy returns the live, resolved git tool
+// policy so session_start can report up front whether commits run through the
+// git tool; pass nil to omit the git policy section.
+func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver, refuseHomeRoots func() bool, clientName func() string, gitPolicy func() GitPolicy) *SessionStart {
+	return &SessionStart{ws: ws, diag: diag, roots: roots, refuseFn: refuseHomeRoots, clientNameFn: clientName, gitPolicyFn: gitPolicy}
 }
 
 func (*SessionStart) Name() string { return "session_start" }
@@ -98,6 +102,7 @@ func (*SessionStart) Description() string {
 		"Returns one-shot orientation: workspace path, language, current git branch, " +
 		"first 200 lines of .plumb/context.md, all saved memory names/descriptions, " +
 		"top-5 most-used tools, 5 most recently-modified files, 3 most recent commits, " +
+		"the live git tool policy (whether commits/destructive/push are enabled), " +
 		"and any active LSP errors/warnings. If no workspace is resolved yet, pass an " +
 		"absolute `workspace` to pin it — clients like Claude Desktop do not report the " +
 		"folder automatically. Idempotent — safe to call multiple times."
@@ -117,6 +122,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang)
 	writeSessionContext(&sb, ws)
 	writeSessionCommits(&sb, ws)
+	t.writeSessionGitPolicy(&sb, ws)
 	t.writeSessionRecentFiles(&sb, ws)
 	writeSessionMemories(&sb, ws)
 	clientName := ""
@@ -237,6 +243,48 @@ func writeSessionCommits(sb *strings.Builder, ws string) {
 		fmt.Fprintf(sb, "- %s\n", c)
 	}
 	sb.WriteString("\n")
+}
+
+// writeSessionGitPolicy reports the connection's live, resolved git tool policy
+// so an agent learns up front whether it can commit through the git tool —
+// rather than discovering it via a rejected call or, worse, trusting a stale
+// memory and shelling out. Nil-safe (skipped when unwired) and only emitted
+// inside a git repository (gitBranch is the cheap repo-presence signal).
+func (t *SessionStart) writeSessionGitPolicy(sb *strings.Builder, ws string) {
+	if t.gitPolicyFn == nil || gitBranch(ws) == "" {
+		return
+	}
+	sb.WriteString("## Git (via the `git` tool — live policy)\n\n")
+	sb.WriteString(formatGitPolicy(t.gitPolicyFn()))
+	sb.WriteString("\n")
+}
+
+// formatGitPolicy renders the git policy body. Pure — no I/O. The closing line
+// is always present so a stale "git is read-only" assumption is contradicted at
+// the point of orientation.
+func formatGitPolicy(p GitPolicy) string {
+	var sb strings.Builder
+	if p.AllowWrites {
+		sb.WriteString("Commits & staging ENABLED — commit through the `git` tool, not the shell.\n")
+		fmt.Fprintf(&sb, "Destructive (reset/checkout/rebase): %s.\n", gitGateLabel(p.AllowDestructive))
+		fmt.Fprintf(&sb, "Push/fetch/pull: %s.\n", gitGateLabel(p.AllowPush))
+		if len(p.ProtectedBranches) > 0 {
+			fmt.Fprintf(&sb, "Protected branches: %s.\n", strings.Join(p.ProtectedBranches, ", "))
+		}
+	} else {
+		sb.WriteString("Read-only — status/log/diff/show/blame run; commits and other writes are disabled (`[git] allow_writes = false`).\n")
+	}
+	sb.WriteString("\nThis is the resolved policy for this session — trust it over any cached note.\n")
+	return sb.String()
+}
+
+// gitGateLabel renders a git policy gate flag as the on/off word used in the
+// session_start report.
+func gitGateLabel(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }
 
 // writeSessionRecentFiles lists the 5 most recently modified files.

@@ -131,6 +131,7 @@ func TestSessionStart_TopologyLedGuidance(t *testing.T) {
 		func() string { return ws }, nil, nil,
 		func() bool { return false },
 		func() string { return "claude-code" },
+		nil,
 	).WithTopology(func() *topology.Store { return s })
 
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -152,6 +153,7 @@ func TestSessionStart_LSPLedGuidanceWhenTopologyOff(t *testing.T) {
 		func() string { return ws }, nil, nil,
 		func() bool { return false },
 		func() string { return "claude-code" },
+		nil,
 	)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
