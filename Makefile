@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.golimpio.plumb
 
-.PHONY: build test test-race integration-test lint verify run clean tidy install-hooks codesign
+.PHONY: build test test-race integration-test build-integration lint verify run clean tidy install-hooks codesign
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -57,6 +57,13 @@ test-race: $(TESTCACHE)
 integration-test: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=10m ./...
 
+# build-integration compiles and vets the //go:build integration files, which
+# test/lint skip without the tag — catching an integration-only compile error or
+# an uncommitted integration helper locally, before CI's integration job. (The
+# gap that let 0.8.1 commit a cmd/smoke that did not build under the tag.)
+build-integration: $(TESTCACHE)
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=integration ./...
+
 lint:
 	golangci-lint run
 
@@ -69,8 +76,9 @@ clean:
 tidy:
 	go mod tidy
 
-# verify is the definition of "ready to commit": build + test + lint in one target.
-verify: build test lint
+# verify is the definition of "ready to commit": build + test + lint + an
+# integration-tag compile pass (build-integration) in one target.
+verify: build test lint build-integration
 
 install-hooks:
 	cp scripts/pre-commit .git/hooks/pre-commit

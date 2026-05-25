@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.4 (unreleased)
+
+### Changed
+- **`make verify` now compiles and vets the `//go:build integration` files** via a new `build-integration` target (`go vet -tags=integration ./...`); `verify` is now `build test lint build-integration`. `test`/`lint` run *without* the build tag, so integration-only files were never compiled or linted locally — the gap that let 0.8.1 (`cbd3cd6`) commit a `cmd/smoke` that did not build under `-tags=integration` from a clean checkout (the `harness_test.go` helper was never `git add`ed; restored in `3be7a62`). CI already ran an `integration` job (`.github/workflows/ci.yml`), so this aligns the local "ready to commit" gate with CI instead of relying on the push to catch it.
+
 ## 0.8.3 (unreleased)
 
 ### Added
