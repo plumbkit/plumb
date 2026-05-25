@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 (unreleased)
+
+### Added
+- **`selftest` MCP prompt — an agent-driven self-test of every tool against a disposable sandbox.** A fourth built-in prompt (`internal/mcp/selftest_prompt.go`, registered in `internal/cli/conn.go` beside `orient`/`whats-broken`/`recent-changes`). `Expand()` returns a deterministic playbook the agent runs against the **live** workspace: a sandbox protocol (a throwaway `selftest-sandbox/` for filesystem ops; a disposable in-module scratch source file for the LSP symbol-edit tools, because the language server only indexes files inside the module; SKIP on languages with no LSP), an ordered Tier A→C checklist (read-only queries → filesystem writes confined to files it just created → symbol edits in the scratch file), mandatory cleanup, and a PASS/FAIL/SKIP report. This is the real-world complement to the `cmd/smoke` wire-level test — the actual agent drives the actual tools, so it surfaces confusing descriptions or awkward parameters a Go test cannot. Cold-start, diagnostics-timing, and dirty-guard footguns are baked into the playbook; tools that are unsafe or non-deterministic to run live (git_init, destructive/network git, transaction rollback, strict-mode, rate-limit) are explicitly deferred to the integration harness.
+- **Anti-rot coverage guard, in two halves.** `TestSelftestPrompt_CoversEveryTool` (`internal/mcp/selftest_prompt_test.go`) asserts every tool in the canonical coverage list (`SelftestToolNames`) is named verbatim in the playbook; `TestSmoke_ToolListParity` (`cmd/smoke/tierd_test.go`, integration) asserts that canonical list equals the live `tools/list`. Together a tool added without a checklist entry — or a stale entry left behind — fails CI.
+- **`cmd/smoke` Tier-D coverage (`cmd/smoke/tierd_test.go`, integration).** The behaviours the agent self-test defers, driven against a bare language-less fixture (no gopls, instant attach): `TestSmoke_StrictModeRejectsUnreadEdit` (strict mode blocks an unread `edit_file`, then a `read_file` opens the gate), `TestSmoke_TransactionRollback` (an unmatchable op leaves the first file untouched — all-or-nothing), and `TestSmoke_GitTiers` (`git_init` → `add`/`commit` write-tier → `reset --hard` destructive-tier gated by `PLUMB_GIT_ALLOW_DESTRUCTIVE` + `confirm`). `isolatedEnv`/`newMCPClient` gained an `extraEnv` variadic so each test spawns a daemon with its own config.
+
 ## 0.8.0 (unreleased)
 
 ### Added

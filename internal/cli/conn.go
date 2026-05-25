@@ -687,6 +687,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.RegisterPrompt(mcp.NewOrientPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewWhatsBrokenPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewRecentChangesPrompt(s.workspace))
+	srv.RegisterPrompt(mcp.NewSelftestPrompt(s.workspace))
 	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace))
 	srv.Register(tools.NewTopologySearch(topoFn))
 	srv.Register(tools.NewTopologyExplore(topoFn))
