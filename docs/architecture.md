@@ -45,7 +45,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/lsp/adapters/gopls` | Validated Go adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/pyright` | Validated Python adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/jdtls` | Experimental Java adapter; enable via `[lsp.java] enabled = true`; requires Java 21+ and jdtls on PATH |
-| `internal/config` | TOML config, XDG path resolution, project-config merging |
+| `internal/config` | TOML config, XDG path resolution, project-config merging; `config.Store` holds the live global base (atomic pointer + generation + observers) for hot-reload |
 | `internal/domain` | Reserved for future shared domain types (currently empty) |
 | `internal/workspace` | Reserved for future routing logic (currently empty) |
 
@@ -344,6 +344,7 @@ the stats DB is closed, and the socket / PID / lock files are removed.
 | `cache.Invalidator` | Called from the adapter's notification goroutine; thread-safe via the cache's own locking. |
 | `lsp/jsonrpc.Conn` | Write serialised by `sync.Mutex`; pending calls tracked in a `sync.Map`; read loop on a dedicated goroutine. |
 | `cli.routingProxy` | Per-session proxy; `sync.RWMutex` around the primary pool-entry pointer; set on workspace attach. |
+| `config.Store` | Live global config; `Current()`/`Generation()` are lock-free atomic loads; `publishMu` serialises reloads so generations/notifications stay ordered; listeners invoked outside the lock so they may re-enter `Current`/`LoadProject`. |
 | `lsp.Supervisor` | Supervision loop on one goroutine; exported methods protected by `sync.RWMutex`. |
 | `adapters/*.Adapter` | Capabilities stored under `sync.RWMutex`; subscribers stored under `sync.RWMutex`; notification dispatch copies the handler slice before releasing the lock. |
 
@@ -388,6 +389,19 @@ flowchart LR
     C --> E["Environment variables"]
 ```
 
+The global base config is held in a live `config.Store` (`internal/config/store.go`)
+and **hot-reloaded** without a daemon restart. Three inputs trigger a reload: an
+fsnotify watch on the global `config.toml` (debounced; the directory is watched so
+the reload survives `config.Save`'s atomic temp-file→rename), the `reload-config`
+control-socket command (used by `plumb config reload`), and the TUI settings editor
+after a save. Each MCP session subscribes to the store and re-merges its per-project
+view on a change, so `[edits]`, `[git]`, `[walk]`, and the rate limit apply live;
+`[topology]` is reconciled live by the daemon (`topologyPool.Reconcile`). Settings
+the daemon cannot apply live — LSP server definitions (`[lsp.*]`), `[cache]`, and
+`log_format` (`config.RestartSensitiveEqual`) — are reported as restart-needed by
+`Store.RestartNeeded()`: a daemon WARN on the offending reload, a line in the
+`daemon_info` tool, and a "Reload behaviour" legend in `plumb config show`.
+
 See [`docs/configuration.md`](configuration.md) for every section and field,
 and `plumb config show` for the resolved values with per-field provenance.
 
@@ -423,4 +437,9 @@ only triggered on `textDocument/publishDiagnostics` notifications.
   see the checklist in `AGENTS.md` → "How to add an MCP tool".
 - **New LSP adapter**: see `docs/adding-an-lsp.md`.
 - **New config field**: add to `config.Config`, update `defaults`, add
-  validation in `validate()`, document in this file and in `AGENTS.md`.
+  validation in `validate()`, document in this file and in `AGENTS.md`. If the
+  daemon cannot apply the field without a restart (e.g. an LSP-process or cache
+  setting), add it to `config.RestartSensitiveEqual` so `Store.RestartNeeded()`
+  reports it; otherwise it is picked up live via the per-session store
+  subscription. Consider exposing it as a row in the TUI Settings screen
+  (`internal/tui/model_settings.go`).
