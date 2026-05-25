@@ -122,7 +122,7 @@ func objectProps(obj json.RawMessage) ([]string, map[string]json.RawMessage, err
 // bytes when nothing was aliased), a human-readable warning per applied alias,
 // and a validation error. Deeper value validation (types, lengths, patterns)
 // is intentionally left to each tool.
-func resolveArgs(sh *shape, raw json.RawMessage) (json.RawMessage, []string, error) {
+func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessage, []string, error) {
 	if sh == nil {
 		return raw, nil, nil
 	}
@@ -133,7 +133,7 @@ func resolveArgs(sh *shape, raw json.RawMessage) (json.RawMessage, []string, err
 
 	var warnings []string
 	changed := rewriteObject(sh, obj, "", &warnings)
-	if err := validateObject(sh, obj, ""); err != nil {
+	if err := validateObject(sh, obj, "", toolName); err != nil {
 		return raw, nil, err
 	}
 	if !changed {
@@ -218,10 +218,10 @@ func descend(child *shape, v any, path string, warnings *[]string) bool {
 // validateObject checks one object level: no undeclared properties (when this
 // level rejects extras), every required property present, then recurses into
 // declared object/array children.
-func validateObject(sh *shape, obj map[string]any, path string) error {
+func validateObject(sh *shape, obj map[string]any, path, toolName string) error {
 	if sh.rejectExtra {
 		if unknown := firstUnknown(sh, obj); unknown != "" {
-			return unknownErr(sh, joinPath(path, unknown))
+			return unknownErr(sh, joinPath(path, unknown), toolName)
 		}
 	}
 	for _, req := range sh.required {
@@ -234,21 +234,21 @@ func validateObject(sh *shape, obj map[string]any, path string) error {
 		if !ok {
 			continue
 		}
-		if err := validateChild(child, v, joinPath(path, key)); err != nil {
+		if err := validateChild(child, v, joinPath(path, key), toolName); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateChild(child *shape, v any, path string) error {
+func validateChild(child *shape, v any, path, toolName string) error {
 	switch t := v.(type) {
 	case map[string]any:
-		return validateObject(child, t, path)
+		return validateObject(child, t, path, toolName)
 	case []any:
 		for _, e := range t {
 			if m, ok := e.(map[string]any); ok {
-				if err := validateObject(child, m, path+"[]"); err != nil {
+				if err := validateObject(child, m, path+"[]", toolName); err != nil {
 					return err
 				}
 			}
@@ -274,12 +274,16 @@ func firstUnknown(sh *shape, obj map[string]any) string {
 	return unknown[0]
 }
 
-func unknownErr(sh *shape, key string) error {
+func unknownErr(sh *shape, key, toolName string) error {
+	prefix := ""
+	if toolName != "" {
+		prefix = toolName + ": "
+	}
 	if len(sh.order) == 0 {
-		return fmt.Errorf("unknown parameter %q: this tool accepts no parameters", key)
+		return fmt.Errorf("%sunknown parameter %q: this tool accepts no parameters", prefix, key)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "unknown parameter %q", key)
+	fmt.Fprintf(&b, "%sunknown parameter %q", prefix, key)
 	if suggestion := closest(baseName(key), sh.order); suggestion != "" {
 		fmt.Fprintf(&b, "; did you mean %q?", suggestion)
 	}

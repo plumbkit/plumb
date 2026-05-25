@@ -399,15 +399,27 @@ func TestSessionStart_DesktopGuidance(t *testing.T) {
 // arg is honoured only when nothing is attached, and nothing-resolves errors
 // (no daemon-cwd guess).
 func TestSessionStart_WorkspaceResolution(t *testing.T) {
-	t.Run("attached root wins over explicit arg", func(t *testing.T) {
+	t.Run("mismatch between attached root and explicit arg returns error", func(t *testing.T) {
 		attached := t.TempDir()
 		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" })
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"/some/other/path"}`))
+		_, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"/some/other/path"}`))
+		if err == nil {
+			t.Fatal("want mismatch error when explicit workspace differs from attached root, got nil")
+		}
+		if !strings.Contains(err.Error(), "already pinned") {
+			t.Errorf("error should mention pinned workspace, got: %v", err)
+		}
+	})
+
+	t.Run("attached root returned when explicit arg matches", func(t *testing.T) {
+		attached := t.TempDir()
+		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+attached+`"}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
 		if !strings.Contains(out, "# Workspace: "+attached) {
-			t.Errorf("attached root should win; want %q\n%s", attached, out)
+			t.Errorf("attached root should be returned; want %q\n%s", attached, out)
 		}
 	})
 

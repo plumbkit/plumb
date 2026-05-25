@@ -389,3 +389,23 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 	}
 	return nil, nil
 }
+
+func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	r.mu.RLock()
+	primaryRoot := r.primaryRoot
+	primary := r.primary
+	r.mu.RUnlock()
+
+	if primary == nil {
+		return nil, nil
+	}
+	path := strings.TrimPrefix(uri, "file://")
+	root, _, err := r.pool.Detect(filepath.Dir(path))
+	if err != nil || root == primaryRoot {
+		return primary.WaitNextDiagnostics(ctx, uri)
+	}
+	if e := r.pool.lookup(root); e != nil {
+		return e.inv.WaitNextDiagnostics(ctx, uri)
+	}
+	return nil, nil
+}

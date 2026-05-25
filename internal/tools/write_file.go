@@ -94,14 +94,14 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	isNew := os.IsNotExist(statErr)
 	uri := "file://" + path
 
-	oldContent, preDiags := t.writeFilePreState(uri, path, isNew)
+	oldContent := t.writeFilePreState(uri, path, isNew)
 
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
 	}
 
 	t.writeFilePostWrite(ctx, path, uri, isNew)
-	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, preDiags)
+	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
 }
@@ -136,18 +136,16 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	return nil
 }
 
-// writeFilePreState captures the pre-write state needed for diff output and
-// diagnostic comparison. Returns empty strings/nil when the deps are not wired.
-func (t *WriteFile) writeFilePreState(uri, path string, isNew bool) (oldContent string, preDiags []protocol.Diagnostic) {
+// writeFilePreState captures the pre-write content needed for diff output.
+// Returns an empty string when the deps are not wired or the file is new.
+func (t *WriteFile) writeFilePreState(uri, path string, isNew bool) string {
+	_ = uri
 	if !isNew && t.deps.showWriteDiff() {
 		if b, err := os.ReadFile(path); err == nil && len(b) <= 200*1024 {
-			oldContent = string(b)
+			return string(b)
 		}
 	}
-	if t.deps.Diag != nil {
-		preDiags = t.deps.Diag.Diagnostics(uri)
-	}
-	return oldContent, preDiags
+	return ""
 }
 
 func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, isNew bool) {
@@ -166,7 +164,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 	invalidateCache(t.deps.Cache, uri)
 }
 
-func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, preDiags []protocol.Diagnostic) string {
+func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string) string {
 	verb := "updated"
 	if isNew {
 		verb = "created"
@@ -182,7 +180,7 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 		}
 	}
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow())
 		sb.WriteString(formatPostWriteDiagnostics(fresh))
 	}
 	return sb.String()

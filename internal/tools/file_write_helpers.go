@@ -80,34 +80,29 @@ func invalidateCache(c *cache.Cache, uri string) {
 // is zero (i.e. not explicitly configured). Empirically ~150-250ms for gopls on incremental edits.
 const defaultPostWriteDiagWindow = 300 * time.Millisecond
 
-// awaitDiagnosticsRefresh waits up to window for the diagnostics for uri to
-// change from the supplied baseline. Returns the post-write diagnostics slice
-// (which may equal the baseline if the server didn't republish in time).
-// nil-safe on the diag argument.
+// awaitDiagnosticsRefresh waits up to window for the language server to
+// re-publish diagnostics for uri after a write, then returns the result.
+// It subscribes to the next publishDiagnostics notification and returns the
+// instant the server responds — not after a fixed sleep cycle. If the server
+// does not respond within window, the most-recent diagnostics for uri are
+// returned (which may predate the write).
 //
-// window semantics: 0 → use defaultPostWriteDiagWindow (back-compat for
-// WriteDeps{}); negative → disabled, return baseline immediately.
-func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, baseline []protocol.Diagnostic, window time.Duration) []protocol.Diagnostic {
+// window semantics: 0 → use defaultPostWriteDiagWindow; negative → disabled,
+// return current diagnostics immediately without waiting.
+func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, window time.Duration) []protocol.Diagnostic {
 	if diag == nil {
 		return nil
 	}
 	if window < 0 {
-		return baseline
+		return diag.Diagnostics(uri)
 	}
 	if window == 0 {
 		window = defaultPostWriteDiagWindow
 	}
-	deadline := time.Now().Add(window)
-	for {
-		current := diag.Diagnostics(uri)
-		if !diagnosticsEqual(current, baseline) {
-			return current
-		}
-		if time.Now().After(deadline) {
-			return current
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), window)
+	defer cancel()
+	diags, _ := diag.WaitNextDiagnostics(ctx, uri)
+	return diags
 }
 
 // postWriteDiagSource is the narrow interface write/edit tools need to
@@ -115,23 +110,7 @@ func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, baseline []pr
 // and the daemon's invProxy / routingInvProxy.
 type postWriteDiagSource interface {
 	Diagnostics(uri string) []protocol.Diagnostic
-}
-
-// diagnosticsEqual returns true if a and b have the same number of entries
-// in the same order with equal Severity, Message, and Range.Start.Line.
-// Used to detect "did anything change" not "are these the same diagnostic
-// objects."
-func diagnosticsEqual(a, b []protocol.Diagnostic) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Severity != b[i].Severity || a[i].Message != b[i].Message ||
-			a[i].Range.Start.Line != b[i].Range.Start.Line {
-			return false
-		}
-	}
-	return true
+	WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error)
 }
 
 // formatPostWriteDiagnostics renders up to N error/warning diagnostics as a
@@ -462,7 +441,12 @@ func dirtyBasenamesInDir(ctx context.Context, dir string, files []string) map[st
 		if len(line) < 4 {
 			continue
 		}
-		// Porcelain v1: "XY filename" (XY = two status chars + space).
+		// Porcelain v1: "XY filename" where XY are two status characters.
+		// Skip untracked entries (??) — they have no committed state to lose,
+		// so blocking a write on them (e.g. rename_file) is unnecessary friction.
+		if line[0] == '?' {
+			continue
+		}
 		// Rename format: "R  old -> new" — take the new name after " -> ".
 		name := line[3:]
 		if i := strings.Index(name, " -> "); i >= 0 {

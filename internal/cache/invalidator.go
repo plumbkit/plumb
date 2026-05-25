@@ -116,6 +116,47 @@ func (inv *Invalidator) WaitDiagnostics(ctx context.Context, uri string) ([]prot
 	}
 }
 
+// WaitNextDiagnostics blocks until the language server publishes the next
+// diagnostics notification for uri, then returns a copy. Unlike WaitDiagnostics
+// it never returns immediately when the URI is already tracked — it always waits
+// for the next publishDiagnostics push, making it suitable for post-write refresh
+// where the cached (pre-write) snapshot must not be returned.
+//
+// On context cancellation or timeout the most-recent diagnostics for uri are
+// returned alongside ctx.Err().
+func (inv *Invalidator) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	ch := make(chan struct{}, 1)
+
+	inv.diagsMu.Lock()
+	if inv.subs == nil {
+		inv.subs = make(map[string][]chan struct{})
+	}
+	inv.subs[uri] = append(inv.subs[uri], ch)
+	inv.diagsMu.Unlock()
+
+	defer func() {
+		inv.diagsMu.Lock()
+		chans := inv.subs[uri]
+		for i, c := range chans {
+			if c == ch {
+				inv.subs[uri] = append(chans[:i], chans[i+1:]...)
+				break
+			}
+		}
+		if len(inv.subs[uri]) == 0 {
+			delete(inv.subs, uri)
+		}
+		inv.diagsMu.Unlock()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return inv.Diagnostics(uri), ctx.Err()
+	case <-ch:
+		return inv.Diagnostics(uri), nil
+	}
+}
+
 // AllDiagnostics returns a copy of every URI → diagnostics entry received so far.
 func (inv *Invalidator) AllDiagnostics() map[string][]protocol.Diagnostic {
 	inv.diagsMu.RLock()

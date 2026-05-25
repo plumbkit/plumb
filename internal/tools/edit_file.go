@@ -156,16 +156,12 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	uri := "file://" + path
-	var preDiags []protocol.Diagnostic
-	if t.deps.Diag != nil {
-		preDiags = t.deps.Diag.Diagnostics(uri)
-	}
 
 	if a.ApplyPartial {
 		t.deps.notifyTopology(path)
-		return t.executePartial(ctx, path, a.Edits, uri, preDiags) + t.deps.reportQuality(ctx, path), nil
+		return t.executePartial(ctx, path, a.Edits, uri) + t.deps.reportQuality(ctx, path), nil
 	}
-	result, err := t.editFileApply(ctx, path, a, uri, preDiags)
+	result, err := t.editFileApply(ctx, path, a, uri)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +252,7 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 
 // editFileApply runs the retry loop, notifies the LSP on success, and
 // delegates response formatting to formatEditFileSuccess.
-func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArgs, uri string, preDiags []protocol.Diagnostic) (string, error) {
+func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArgs, uri string) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, err := t.tryEdit(ctx, path, a.Edits)
@@ -286,12 +282,12 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, preDiags), nil
+		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
 }
 
-func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string, preDiags []protocol.Diagnostic) string {
+func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string) string {
 	noun := "edit"
 	if len(edits) > 1 {
 		noun = "edits"
@@ -316,7 +312,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 		}
 	}
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow())
 		sb.WriteString(formatPostWriteDiagnostics(fresh))
 	}
 	return sb.String()
@@ -417,7 +413,6 @@ func (t *EditFile) executePartial(
 	path string,
 	edits []strEdit,
 	uri string,
-	preDiags []protocol.Diagnostic,
 ) string {
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
@@ -426,7 +421,7 @@ func (t *EditFile) executePartial(
 	sb.WriteString(formatPartialEditsResults(results))
 	if writeErr == nil && applied > 0 {
 		_ = res
-		t.executePartialPostWrite(ctx, path, uri, preDiags, &sb)
+		t.executePartialPostWrite(ctx, path, uri, &sb)
 	}
 	return sb.String()
 }
@@ -483,7 +478,7 @@ func formatPartialEditsResults(results []partialEditResult) string {
 	return sb.String()
 }
 
-func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string, preDiags []protocol.Diagnostic, sb *strings.Builder) {
+func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string, sb *strings.Builder) {
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 		slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 	}
@@ -494,7 +489,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string
 	}
 	invalidateCache(t.deps.Cache, uri)
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, preDiags, t.deps.postWriteDiagWindow())
+		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow())
 		sb.WriteString(formatPostWriteDiagnostics(fresh))
 	}
 }

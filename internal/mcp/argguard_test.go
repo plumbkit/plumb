@@ -170,7 +170,7 @@ func TestResolveArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sh := mustShape(t, tt.schema)
-			out, warnings, err := resolveArgs(sh, json.RawMessage(tt.args))
+			out, warnings, err := resolveArgs(sh, json.RawMessage(tt.args), "test_tool")
 
 			if len(tt.wantErr) > 0 {
 				if err == nil {
@@ -224,7 +224,7 @@ func TestResolveArgs_PreservesDeclarationOrderInError(t *testing.T) {
   "properties": {"zebra": {"type": "string"}, "alpha": {"type": "string"}, "mike": {"type": "string"}},
   "additionalProperties": false
 }`)
-	_, _, err := resolveArgs(sh, json.RawMessage(`{"qqqq":1}`))
+	_, _, err := resolveArgs(sh, json.RawMessage(`{"qqqq":1}`), "test_tool")
 	if err == nil {
 		t.Fatal("expected error for unknown key")
 	}

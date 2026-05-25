@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.26 (unreleased)
+
+### Fixed
+- **Post-write diagnostics are no longer stale.** `edit_file` and `write_file` previously returned the pre-write error snapshot because `awaitDiagnosticsRefresh` polled `WaitDiagnostics`, which returns immediately when diagnostics for the URI are already tracked (always true after the first publication). The wait is now signal-based: a new `WaitNextDiagnostics(ctx, uri)` method on `Invalidator` subscribes a channel before returning, so it always waits for the *next* `publishDiagnostics` notification — never the cached one. `awaitDiagnosticsRefresh` rewritten to use `context.WithTimeout` + `WaitNextDiagnostics`; the `baseline []protocol.Diagnostic` parameter removed. `internal/cache/invalidator.go`, `internal/cli/routing_proxy.go`, `internal/tools/file_write_helpers.go`, `internal/tools/edit_file.go`, `internal/tools/write_file.go`.
+- **`edit_file` / `write_file` no longer hang silently when gopls is saturated.** `conn.Notify` (`internal/lsp/jsonrpc/conn.go`) called `c.send` synchronously while holding the write mutex, so a saturated gopls stdin pipe (e.g. after writing a 52 KB file that triggered a multi-minute analysis) blocked the entire MCP tool call indefinitely. `send` is now launched in a goroutine; `Notify` selects on the result, `ctx.Done()`, and connection close — the call returns promptly while the write completes in the background.
+- **`git add` now stages tracked deletions.** `buildGitArgv` produced `["add", "--"] + files`; `git add -- <path>` refuses a pathspec that no longer exists on disk, so staging a deletion failed with `fatal: pathspec did not match any files`. Changed to `["add", "-A", "--"] + files` — new, modified, and deleted entries are all staged. Behaviour for existing files is unchanged. `internal/tools/git.go`.
+- **`git rm` now returns an actionable hint instead of a generic rejection.** The error now reads: `git: subcommand "rm" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add`. `internal/tools/git.go`.
+- **`rename_file` no longer requires `dirty_ok` for untracked files.** `dirtyBasenamesInDir` parsed `??`-prefixed lines from `git status --porcelain` (untracked files) as dirty, blocking renames unless `dirty_ok: true` was set. Untracked files have nothing at HEAD to lose; the `??` lines are now skipped. `internal/tools/file_write_helpers.go`.
+- **`session_start` now returns a clear error when the explicit `workspace` arg differs from the already-attached workspace.** Previously the arg was silently ignored and the response kept showing the original workspace, giving the agent a confident but wrong workspace. The error now reads: `session_start: workspace is already pinned to /path/old — cannot re-pin to /path/new in the same connection. To switch projects, start a new MCP connection.` If the explicit arg matches the attached workspace, behaviour is unchanged. `internal/tools/session_start.go`.
+- **Unknown-parameter errors now include the tool name.** `unknownErr` (`internal/mcp/argguard.go`) now prefixes its message with the tool name (e.g. `write_file: unknown parameter "workspace" …`), making it clear which tool's schema was consulted when an agent confuses two tools. The name is threaded from `resolveToolArgs` through `resolveArgs`, `validateObject`, and `validateChild`. `internal/mcp/argguard.go`, `internal/mcp/server.go`.
+
+### Changed
+- **`git` tool schema descriptions clarified.** The `args`, `files`, and `message` field descriptions now explicitly state which subcommands each applies to; `Description()` summarises the typed-parameter contract. `internal/tools/git.go`.
+
+### Docs
+- **`post_write_diagnostics_ms` documented in `AGENTS.md`.** The `[edits]` configuration table was missing this entry despite the config field, env-var binding (`PLUMB_POST_WRITE_DIAG_MS`), and wiring all existing. `AGENTS.md`.
+
 ## 0.7.25 (2026-05-25)
 
 ### Fixed

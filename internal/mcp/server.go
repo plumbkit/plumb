@@ -163,7 +163,7 @@ func (s *Server) resolveToolArgs(name string, args json.RawMessage) (json.RawMes
 	s.mu.RLock()
 	sh := s.argShapes[name]
 	s.mu.RUnlock()
-	return resolveArgs(sh, args)
+	return resolveArgs(sh, args, name)
 }
 
 // ─── serveState ──────────────────────────────────────────────────────────────

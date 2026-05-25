@@ -13,21 +13,59 @@ import (
 )
 
 // stubDiag is a thread-safe postWriteDiagSource for testing awaitDiagnosticsRefresh.
+// set() only wakes registered WaitNextDiagnostics callers — signals are dropped
+// when no waiter is registered, matching the real Invalidator.Handle behaviour.
 type stubDiag struct {
 	mu   sync.Mutex
 	diag []protocol.Diagnostic
+	subs []chan struct{}
 }
+
+func newStubDiag() *stubDiag { return &stubDiag{} }
 
 func (s *stubDiag) Diagnostics(_ string) []protocol.Diagnostic {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.diag
+	out := make([]protocol.Diagnostic, len(s.diag))
+	copy(out, s.diag)
+	return out
+}
+
+func (s *stubDiag) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	ch := make(chan struct{}, 1)
+	s.mu.Lock()
+	s.subs = append(s.subs, ch)
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		for i, c := range s.subs {
+			if c == ch {
+				s.subs = append(s.subs[:i], s.subs[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
+	}()
+	select {
+	case <-ctx.Done():
+		return s.Diagnostics(uri), ctx.Err()
+	case <-ch:
+		return s.Diagnostics(uri), nil
+	}
 }
 
 func (s *stubDiag) set(d []protocol.Diagnostic) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.diag = d
+	subs := s.subs
+	s.subs = nil
+	s.mu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func errDiag(msg string) []protocol.Diagnostic {
@@ -35,53 +73,50 @@ func errDiag(msg string) []protocol.Diagnostic {
 }
 
 func TestAwaitDiagnosticsRefresh_NilSource(t *testing.T) {
-	got := awaitDiagnosticsRefresh(nil, "file:///foo.go", nil, 50*time.Millisecond)
+	got := awaitDiagnosticsRefresh(nil, "file:///foo.go", 50*time.Millisecond)
 	if got != nil {
 		t.Errorf("nil source: want nil, got %v", got)
 	}
 }
 
 func TestAwaitDiagnosticsRefresh_Disabled(t *testing.T) {
-	src := &stubDiag{}
-	baseline := errDiag("old error")
-	src.set(baseline)
+	src := newStubDiag()
+	src.set(errDiag("old error"))
 
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", baseline, -1)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", -1)
 	elapsed := time.Since(start)
 
 	if elapsed > 20*time.Millisecond {
 		t.Errorf("disabled window: returned after %v, want near-instant", elapsed)
 	}
 	if len(got) != 1 || got[0].Message != "old error" {
-		t.Errorf("disabled window: want baseline returned unchanged, got %v", got)
+		t.Errorf("disabled window: want current diag returned, got %v", got)
 	}
 }
 
 func TestAwaitDiagnosticsRefresh_TimesOut(t *testing.T) {
-	src := &stubDiag{}
-	baseline := errDiag("unchanged")
-	src.set(baseline)
+	src := newStubDiag()
+	src.set(errDiag("unchanged"))
 
 	window := 60 * time.Millisecond
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", baseline, window)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window)
 	elapsed := time.Since(start)
 
 	if elapsed < window {
 		t.Errorf("should have waited at least %v, returned after %v", window, elapsed)
 	}
 	if len(got) != 1 || got[0].Message != "unchanged" {
-		t.Errorf("timeout: want baseline, got %v", got)
+		t.Errorf("timeout: want current diag, got %v", got)
 	}
 }
 
 func TestAwaitDiagnosticsRefresh_EarlyReturn(t *testing.T) {
-	src := &stubDiag{}
-	baseline := errDiag("before")
-	src.set(baseline)
+	src := newStubDiag()
+	src.set(errDiag("before"))
 
-	// Change the diagnostics after a short delay.
+	// Signal new diagnostics after a short delay.
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		src.set(errDiag("after"))
@@ -89,11 +124,11 @@ func TestAwaitDiagnosticsRefresh_EarlyReturn(t *testing.T) {
 
 	window := 500 * time.Millisecond
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", baseline, window)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window)
 	elapsed := time.Since(start)
 
 	if elapsed >= window {
-		t.Errorf("should have returned early (diag changed), but waited full window %v", elapsed)
+		t.Errorf("should have returned early on signal, but waited full window %v", elapsed)
 	}
 	if len(got) != 1 || got[0].Message != "after" {
 		t.Errorf("early return: want updated diag, got %v", got)
@@ -101,13 +136,11 @@ func TestAwaitDiagnosticsRefresh_EarlyReturn(t *testing.T) {
 }
 
 func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
-	src := &stubDiag{}
-	baseline := errDiag("no change")
-	src.set(baseline)
+	src := newStubDiag()
+	src.set(errDiag("no change"))
 
-	// window=0 should use defaultPostWriteDiagWindow (300ms). We use a change
-	// fired after 50ms to confirm we didn't return instantly (which would mean
-	// the window was treated as 0 duration rather than the 300ms default).
+	// window=0 should use defaultPostWriteDiagWindow (300ms). Signal at 50ms
+	// to confirm we actually blocked waiting for the notification.
 	changed := make(chan struct{})
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -115,7 +148,7 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 		close(changed)
 	}()
 
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", baseline, 0)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", 0)
 
 	select {
 	case <-changed:
@@ -220,8 +253,10 @@ func TestPathIsDirty_UntrackedFile(t *testing.T) {
 	if err := os.WriteFile(f, []byte("new file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !pathIsDirty(context.Background(), f) {
-		t.Error("expected dirty for an untracked (newly-added) file")
+	// Untracked files are intentionally not treated as dirty: they have no
+	// committed state to lose, so blocking a rename/write on them is unnecessary.
+	if pathIsDirty(context.Background(), f) {
+		t.Error("expected not dirty for an untracked file (no committed state to lose)")
 	}
 }
 

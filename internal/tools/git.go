@@ -21,16 +21,16 @@ var gitSchema = json.RawMessage(`{
     "args": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Arguments passed directly to git, e.g. [\"--oneline\", \"-10\"] for log. Ignored for add (use files) and commit (use message)."
+      "description": "Flags and arguments passed directly to git for all subcommands except add and commit, e.g. [\"--oneline\", \"-10\"] for log or [\"--staged\"] for restore. Ignored when subcommand is \"add\" (use files) or \"commit\" (use message)."
     },
     "files": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "For subcommand \"add\": explicit paths to stage. No glob expansion."
+      "description": "Paths to stage — only used for subcommand \"add\". Uses -A semantics: new, modified, and deleted entries are all staged for each path. No glob expansion. Not used by any other subcommand."
     },
     "message": {
       "type": "string",
-      "description": "For subcommand \"commit\": the commit message (maps to -m). Pre-commit hooks always run."
+      "description": "Commit message — only used for subcommand \"commit\". Maps to -m; pre-commit hooks always run. Not used by any other subcommand."
     },
     "repo": {
       "type": "string",
@@ -113,7 +113,8 @@ func (t *Git) Description() string {
 		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) run when [git] allow_writes is enabled (default on). " +
 		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) require [git] allow_destructive AND confirm:true. " +
 		"Network subcommands (push, fetch, pull) require [git] allow_push AND confirm:true; force-pushing a protected branch is always refused, as is pushing to an ad-hoc URL. " +
-		"Use the typed message parameter for commit and the typed files parameter for add; pass other flags via args. Essential for clients without shell access (Claude Desktop, Cursor MCP)."
+		"Typed-parameter contract: add uses files (staged with -A semantics — new, modified, and deleted entries all staged); commit uses message; all other subcommands use args. " +
+		"Essential for clients without shell access (Claude Desktop, Cursor MCP)."
 }
 
 type gitToolArgs struct {
@@ -147,6 +148,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if tier == tierReject {
 		if a.Subcommand == "stash" && len(a.Args) > 0 {
 			return "", fmt.Errorf("git stash: sub-command %q is not permitted; use list, show, push, pop, apply, drop, or clear", a.Args[0])
+		}
+		if a.Subcommand == "rm" {
+			return "", fmt.Errorf("git: subcommand \"rm\" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add")
 		}
 		return "", fmt.Errorf("git: subcommand %q is not permitted", a.Subcommand)
 	}
@@ -222,6 +226,8 @@ func classifyGit(sub string, args []string) gitTier {
 		return tierDestructive
 	case "push", "fetch", "pull":
 		return tierNetwork
+	case "rm":
+		return tierReject
 	default:
 		return tierReject
 	}
@@ -401,7 +407,7 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 		if len(a.Files) == 0 {
 			return nil, fmt.Errorf("git add: at least one path is required (use the files parameter)")
 		}
-		return append([]string{"add", "--"}, a.Files...), nil
+		return append([]string{"add", "-A", "--"}, a.Files...), nil
 	default:
 		return append([]string{a.Subcommand}, a.Args...), nil
 	}

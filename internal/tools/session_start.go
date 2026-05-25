@@ -140,6 +140,12 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
 		if ws := t.ws(); ws != "" {
+			if a.Workspace != "" && filepath.Clean(a.Workspace) != filepath.Clean(ws) {
+				return "", fmt.Errorf(
+					"session_start: workspace is already pinned to %s — cannot re-pin to %s in the same connection. To switch projects, start a new MCP connection",
+					ws, a.Workspace,
+				)
+			}
 			return ws, nil
 		}
 	}

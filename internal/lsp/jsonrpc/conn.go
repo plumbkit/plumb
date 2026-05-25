@@ -202,17 +202,29 @@ func (c *Conn) cancelRequest(id json.RawMessage) {
 }
 
 // Notify sends a notification (no ID, no response expected).
+//
+// The write is performed in a goroutine so that a stalled language-server
+// pipe (e.g. the server is saturated by a large analysis and not draining
+// stdin) cannot block the caller indefinitely. If ctx is cancelled or the
+// connection closes before the write completes, Notify returns the context
+// error; the write goroutine continues in the background and will finish
+// once the server reads from its stdin buffer.
 func (c *Conn) Notify(ctx context.Context, method string, params any) error {
 	encoded, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("jsonrpc notify %s: marshaling params: %w", method, err)
 	}
-	_ = ctx // notifications don't block
-	return c.send(wireMessage{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  encoded,
-	})
+	msg := wireMessage{JSONRPC: "2.0", Method: method, Params: encoded}
+	errc := make(chan error, 1)
+	go func() { errc <- c.send(msg) }()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return fmt.Errorf("jsonrpc: connection closed")
+	}
 }
 
 // Close signals the connection to stop. It does not close the underlying
