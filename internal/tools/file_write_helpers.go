@@ -482,6 +482,29 @@ func pathIsDirtyIgnoringUntracked(ctx context.Context, path string) bool {
 	return dirtyBasenamesInDir(ctx, filepath.Dir(path), []string{filepath.Base(path)}, true)[filepath.Base(path)]
 }
 
+// dirtyBlocksWrite reports whether a destructive write to path (overwrite, edit,
+// delete) must be refused for dirtiness: the file is dirty (untracked files
+// included — overwriting or deleting one is unrecoverable) AND plumb did not
+// write it earlier this session. A file plumb wrote this session is its own
+// uncommitted work, so re-editing it is never blocked; pre-existing uncommitted
+// work still is. The caller gates on dirty_ok, which overrides this entirely.
+func dirtyBlocksWrite(ctx context.Context, writes *WriteTracker, path string) bool {
+	if writes.Wrote(path) {
+		return false
+	}
+	return pathIsDirty(ctx, path)
+}
+
+// dirtyBlocksMove is the move/copy (content-preserving) variant of
+// dirtyBlocksWrite: untracked sources don't count, and a source plumb wrote
+// this session is never blocked.
+func dirtyBlocksMove(ctx context.Context, writes *WriteTracker, path string) bool {
+	if writes.Wrote(path) {
+		return false
+	}
+	return pathIsDirtyIgnoringUntracked(ctx, path)
+}
+
 // notifyLSP tells the server "this file on disk just changed" via
 // workspace/didChangeWatchedFiles — the LSP-correct primitive for external
 // file changes. A single notification, no language-ID guessing, no version

@@ -262,7 +262,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		return rateLimitError("find_replace", t.deps.Limiter)
 	}
 	unlock := lockPath(path)
-	if !a.DirtyOk && pathIsDirty(ctx, path) {
+	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
 		unlock()
 		return fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
 	}
@@ -275,6 +275,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+path)
+	t.deps.Writes.Record(path)
 	return nil
 }
 

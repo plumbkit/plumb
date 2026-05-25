@@ -57,6 +57,7 @@ type connSession struct {
 	sessionInv   *routingInvProxy
 	sessionCache *cache.Cache
 	readTracker  *tools.ReadTracker
+	writeTracker *tools.WriteTracker
 	ttl          time.Duration
 
 	qualityRunner *quality.Runner
@@ -102,6 +103,7 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Conf
 		sessionInv:     newRoutingInvProxy(pool),
 		sessionCache:   cache.New(ttl),
 		readTracker:    tools.NewReadTracker(),
+		writeTracker:   tools.NewWriteTracker(),
 		writeLimiter:   tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
 		editsCfg:       cfg.Edits,
 		walkCfg:        cfg.Walk,
@@ -581,6 +583,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Limiter:               s.writeLimiter,
 		Strict:                s.isStrict,
 		Reads:                 s.readTracker,
+		Writes:                s.writeTracker,
 		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(s.editsConfig()) },
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspace,

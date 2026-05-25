@@ -408,7 +408,7 @@ You are likely an AI agent reading this through plumb. Most common patterns:
 - **See your own activity:** `plumb` TUI's right panel shows "Recent Edits" for the selected session.
 - **Throttled?** You hit the rate limit (default 120/min). Wait or set `PLUMB_WRITE_RATE_LIMIT=0`.
 - **Rejected for "has not been read"?** Strict mode is on. Call `read_file` first.
-- **Rejected for "uncommitted changes"?** The target file is dirty in git. Review and commit the changes, or pass `dirty_ok: true` to overwrite anyway.
+- **Rejected for "uncommitted changes"?** The target file was dirty in git *before* plumb touched it this session — re-editing a file plumb already wrote this session is never blocked (the dirty-guard is session-aware). Review and commit the pre-existing changes, or pass `dirty_ok: true` to overwrite anyway.
 - **Too much log noise from the daemon?** `plumb log-level warn` raises the floor instantly; `plumb log-level reset` restores the config-file default.
 
 When in doubt about the resolved config, `plumb config show --workspace .` from the project directory.

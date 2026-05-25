@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.27 (unreleased)
+
+### Changed
+- **The dirty-guard is now session-aware — re-editing a file plumb wrote this session is never blocked.** Previously every write tool refused a dirty target unless `dirty_ok: true` was set, which fired on the *second* edit of any file during normal iteration (the first edit makes the file dirty). A new per-session `WriteTracker` (`internal/tools/write_tracker.go`, one per MCP connection, mirroring `ReadTracker`) records every path plumb writes; the guard (`dirtyBlocksWrite` / `dirtyBlocksMove`, `internal/tools/file_write_helpers.go`) now blocks only when a file is dirty **and** plumb did not write it this session. So iterating on plumb-touched files never nags, while a file left dirty *before* plumb touched it (uncommitted work plumb did not create) still requires `dirty_ok` — the one case the guard exists to protect. Wired into `write_file`, `edit_file`, `delete_file`, `find_replace`, `rename_file`, `copy_file`, and `transaction_apply` via the new `WriteDeps.Writes` field. Guards: `TestWriteTracker_RecordWrote`/`_NilSafe`, `TestDirtyBlocksWrite_SessionAware`, `TestDirtyBlocksMove_SessionAware`, `TestEditFile_SessionAwareDirtyGuard`, `TestEditFile_DirtyGuardBlocksPreExistingDirt`.
+
 ## 0.7.26 (unreleased)
 
 ### Fixed

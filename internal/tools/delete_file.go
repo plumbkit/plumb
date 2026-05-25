@@ -74,7 +74,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("delete_file: %q is a directory — refusing to delete recursively", path)
 	}
 
-	if !a.DirtyOk && pathIsDirty(ctx, path) {
+	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
 		return "", fmt.Errorf("delete_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)
 	}

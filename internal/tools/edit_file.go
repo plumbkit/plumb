@@ -186,7 +186,7 @@ func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
 // editFilePreconditions runs the dirty-check, optimistic-concurrency, and
 // strict-mode gates before any read or write.
 func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a editFileArgs) error {
-	if !a.DirtyOk && pathIsDirty(ctx, path) {
+	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
 		return &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)}
 	}
@@ -282,6 +282,7 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
+		t.deps.Writes.Record(path)
 		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
@@ -488,6 +489,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
+	t.deps.Writes.Record(path)
 	if t.deps.Diag != nil {
 		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow())
 		sb.WriteString(formatPostWriteDiagnostics(fresh))

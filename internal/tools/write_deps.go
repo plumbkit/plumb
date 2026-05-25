@@ -53,6 +53,12 @@ type WriteDeps struct {
 	// edit_file consults in strict mode. nil disables per-session
 	// tracking (strict mode becomes a no-op for the requires-read check).
 	Reads *ReadTracker
+	// Writes is the per-session WriteTracker recording paths plumb has written
+	// this session. The dirty-guard consults it so re-editing a file plumb
+	// itself wrote is never blocked, while pre-existing uncommitted work still
+	// requires dirty_ok. nil disables session-awareness (every dirty file then
+	// blocks unless dirty_ok is set).
+	Writes *WriteTracker
 	// PostWriteDiagWindow is how long write/edit tools wait for the LSP
 	// server to re-publish diagnostics after a successful write. Zero means
 	// "use the 300 ms default" (back-compat for test setups that use

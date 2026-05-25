@@ -89,7 +89,7 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	unlock2 := lockPath(second)
 	defer unlock2()
 
-	if err := renameFilePreconditions(ctx, from, to, a); err != nil {
+	if err := renameFilePreconditions(ctx, t.deps.Writes, from, to, a); err != nil {
 		return "", err
 	}
 	if err := os.Rename(from, to); err != nil {
@@ -113,7 +113,7 @@ func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {
 	return a, nil
 }
 
-func renameFilePreconditions(ctx context.Context, from, to string, a renameFileArgs) error {
+func renameFilePreconditions(ctx context.Context, writes *WriteTracker, from, to string, a renameFileArgs) error {
 	info, err := os.Stat(from)
 	if err != nil {
 		return fmt.Errorf("rename_file: source: %w", err)
@@ -121,7 +121,7 @@ func renameFilePreconditions(ctx context.Context, from, to string, a renameFileA
 	if info.IsDir() {
 		return fmt.Errorf("rename_file: %q is a directory — refusing to move recursively", from)
 	}
-	if !a.DirtyOk && pathIsDirtyIgnoringUntracked(ctx, from) {
+	if !a.DirtyOk && dirtyBlocksMove(ctx, writes, from) {
 		return fmt.Errorf("rename_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", from)
 	}
@@ -149,4 +149,5 @@ func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) 
 	// processDelete. Then enqueue to so the new path is indexed immediately.
 	t.deps.notifyTopology(from)
 	t.deps.notifyTopology(to)
+	t.deps.Writes.Record(to)
 }

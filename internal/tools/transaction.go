@@ -148,7 +148,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		}
 	}()
 
-	if err := txDirtyCheck(ctx, paths, a.DirtyOk); err != nil {
+	if err := txDirtyCheck(ctx, t.deps.Writes, paths, a.DirtyOk); err != nil {
 		return "", err
 	}
 
@@ -213,8 +213,9 @@ func txCanonicalPaths(ops []txOperation) ([]string, error) {
 	return paths, nil
 }
 
-// txDirtyCheck batches paths by directory and refuses if any are dirty.
-func txDirtyCheck(ctx context.Context, paths []string, dirtyOk bool) error {
+// txDirtyCheck batches paths by directory and refuses if any are dirty and not
+// written by plumb this session (writes).
+func txDirtyCheck(ctx context.Context, writes *WriteTracker, paths []string, dirtyOk bool) error {
 	if dirtyOk {
 		return nil
 	}
@@ -235,7 +236,7 @@ func txDirtyCheck(ctx context.Context, paths []string, dirtyOk bool) error {
 	for dir, batch := range batches {
 		dirty := dirtyBasenamesInDir(ctx, dir, batch.bases, false)
 		for i, base := range batch.bases {
-			if dirty[base] {
+			if dirty[base] && !writes.Wrote(batch.fulls[i]) {
 				dirtyPaths = append(dirtyPaths, batch.fulls[i])
 			}
 		}
@@ -389,6 +390,7 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
+		t.deps.Writes.Record(p.path)
 	}
 }
 
