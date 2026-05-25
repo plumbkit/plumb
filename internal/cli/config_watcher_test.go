@@ -26,7 +26,7 @@ func TestCheckAndReloadConfig_DeduplicatesOnMtime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := &connSession{ctx: ctx, cfg: *getDefaultTestConfig()}
+	s := &connSession{ctx: ctx, store: config.NewStore(*getDefaultTestConfig())}
 
 	s.stateMu.Lock()
 	s.acquiredRoot = tmpdir
@@ -68,7 +68,7 @@ func TestCheckAndReloadConfig_AppliesOnNewMtime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := &connSession{ctx: ctx, cfg: *getDefaultTestConfig()}
+	s := &connSession{ctx: ctx, store: config.NewStore(*getDefaultTestConfig())}
 
 	s.stateMu.Lock()
 	s.acquiredRoot = tmpdir
@@ -138,7 +138,7 @@ func TestApplyProjectConfig_SeedsLastCfgMtime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &connSession{cfg: *getDefaultTestConfig()}
+	s := &connSession{store: config.NewStore(*getDefaultTestConfig())}
 
 	s.stateMu.Lock()
 	if !s.lastCfgMtime.IsZero() {
@@ -160,6 +160,83 @@ func TestApplyProjectConfig_SeedsLastCfgMtime(t *testing.T) {
 
 	if !actualMtime.Equal(expectedMtime) {
 		t.Errorf("expected lastCfgMtime=%v, got %v", expectedMtime, actualMtime)
+	}
+}
+
+// TestApplyProjectConfig_UsesLiveGlobalBase asserts that applyProjectConfig
+// merges against the *current* global base from the store, so a global change
+// is reflected on the next apply even with no project config file present.
+func TestApplyProjectConfig_UsesLiveGlobalBase(t *testing.T) {
+	ws := t.TempDir() // workspace with no .plumb/config.toml → inherits the global base
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	store := config.NewStore(config.Defaults())
+	s := &connSession{store: store}
+	s.stateMu.Lock()
+	s.acquiredRoot = ws
+	s.stateMu.Unlock()
+
+	s.applyProjectConfig(ws)
+	if s.isStrict() {
+		t.Fatal("expected non-strict before the global base changes")
+	}
+
+	writeGlobalConfig(t, "[edits]\nstrict = true\n")
+	if err := store.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	s.applyProjectConfig(ws)
+	if !s.isStrict() {
+		t.Error("expected strict after applyProjectConfig re-merged the new global base")
+	}
+}
+
+// TestGlobalConfigChange_ReappliesSession reproduces the subscription
+// newConnSession installs and asserts a published global change automatically
+// re-applies the per-session config (no explicit applyProjectConfig call).
+func TestGlobalConfigChange_ReappliesSession(t *testing.T) {
+	ws := t.TempDir() // no project config → session tracks the global base
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	store := config.NewStore(config.Defaults())
+	s := &connSession{store: store}
+	s.stateMu.Lock()
+	s.acquiredRoot = ws
+	s.stateMu.Unlock()
+
+	unsub := store.Subscribe(func(config.Config) {
+		if w := s.workspace(); w != "" {
+			s.applyProjectConfig(w)
+		}
+	})
+	defer unsub()
+
+	s.applyProjectConfig(ws) // seed
+	if s.isStrict() {
+		t.Fatal("expected non-strict initially")
+	}
+
+	writeGlobalConfig(t, "[edits]\nstrict = true\n")
+	if err := store.Reload(); err != nil { // fires the subscription → re-applies the session
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if !s.isStrict() {
+		t.Error("expected strict after the global config change propagated via the store")
+	}
+}
+
+// writeGlobalConfig writes body to the global config path resolved from the
+// test's XDG_CONFIG_HOME, creating the parent directory.
+func writeGlobalConfig(t *testing.T, body string) {
+	t.Helper()
+	gp := config.GlobalConfigPath()
+	if err := os.MkdirAll(filepath.Dir(gp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gp, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

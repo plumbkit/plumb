@@ -7,12 +7,28 @@ import (
 	"time"
 )
 
+// ConfigStatus is a snapshot of the live config store, surfaced by daemon_info.
+type ConfigStatus struct {
+	Generation    uint64    // monotonic; increments on every config reload
+	LastReloaded  time.Time // time of the most recent reload
+	RestartNeeded bool      // a restart-bound setting changed since daemon start
+}
+
 // daemonInfo returns session and daemon metadata to the calling agent.
 type daemonInfo struct {
 	sessID        string
 	name          func() string
 	daemonVersion string
 	startedAt     time.Time
+	configStatus  func() ConfigStatus // optional; nil when no store is wired
+}
+
+// WithConfigStatus wires a provider for live config-store state (generation,
+// last reload, restart-needed). Nil-safe: when unset, daemon_info omits those
+// lines. Returns the receiver for chaining.
+func (t *daemonInfo) WithConfigStatus(fn func() ConfigStatus) *daemonInfo {
+	t.configStatus = fn
+	return t
 }
 
 // NewDaemonInfo creates a tool that exposes session and daemon metadata.
@@ -37,7 +53,9 @@ func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
 	return "Returns metadata about the current MCP session and daemon process: " +
-		"session name (e.g. swift-falcon), session ID, daemon version, start timestamp, and uptime. " +
+		"session name (e.g. swift-falcon), session ID, daemon version, start timestamp, and uptime, " +
+		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
+		"for a pending restart-bound change). " +
 		"Use this to identify which session you are operating in or to verify the daemon state."
 }
 
@@ -59,12 +77,26 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	default:
 		upStr = fmt.Sprintf("%ds", s)
 	}
-	return fmt.Sprintf(
+	out := fmt.Sprintf(
 		"session name:   %s\nsession id:     %s\ndaemon version: %s\nstarted at:     %s\nuptime:         %s",
 		t.name(),
 		t.sessID,
 		t.daemonVersion,
 		t.startedAt.Format(time.RFC3339),
 		upStr,
-	), nil
+	)
+	if t.configStatus != nil {
+		cs := t.configStatus()
+		restart := "no"
+		if cs.RestartNeeded {
+			restart = "yes — restart the daemon for the pending change to take effect"
+		}
+		out += fmt.Sprintf(
+			"\nconfig generation: %d\nconfig reloaded:   %s\nrestart needed:    %s",
+			cs.Generation,
+			cs.LastReloaded.Format(time.RFC3339),
+			restart,
+		)
+	}
+	return out, nil
 }

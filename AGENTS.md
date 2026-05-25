@@ -101,7 +101,7 @@ Stats live in one global DB at `config.DataDir()/stats.db` (e.g. `~/Library/Appl
 Built in four layers, each overriding the prior; `plumb config show` prints the resolved config with provenance.
 
 1. **Compiled defaults** in `internal/config/config.go` `defaults`.
-2. **Global config** at `$XDG_CONFIG_HOME/plumb/config.toml` (falls back to `~/.config/plumb/config.toml`). Loaded once at daemon start.
+2. **Global config** at `$XDG_CONFIG_HOME/plumb/config.toml` (falls back to `~/.config/plumb/config.toml`). Held in a live `config.Store` (`internal/config/store.go`) and hot-reloaded — an fsnotify watch on the file, the `reload-config` control-socket command, and `plumb config reload` each trigger a re-read that propagates to every live session. Settings the daemon cannot apply live (LSP servers, cache, log format) are flagged by `plumb config show` and `daemon_info` as restart-needed.
 3. **Project config** at `<workspace>/.plumb/config.toml`. Merged onto global per connection — only fields the project sets are overridden.
 4. **Environment variables** — highest precedence.
 

@@ -94,6 +94,19 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("no language servers enabled; edit ~/.config/plumb/config.toml")
 	}
 
+	// store is the daemon-singleton source of truth for the global base config.
+	// Subsystems read from it (lock-free) and subscribe for change notifications;
+	// the control socket and the global-config file watcher drive store.Reload.
+	store := config.NewStore(cfg)
+
+	// Watch the global config file so external edits (vim, etc.) reload live; the
+	// TUI and `plumb config reload` push via the control socket instead.
+	go func() {
+		if err := newGlobalConfigWatcher(store).Run(ctx); err != nil {
+			slog.Warn("daemon: global config watcher unavailable", "err", err)
+		}
+	}()
+
 	socketPath := daemonSocketPath()
 	_ = os.Remove(socketPath)
 	_ = os.MkdirAll(filepath.Dir(socketPath), 0o700)
@@ -128,6 +141,19 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	topoPool := newTopologyPool(cfg.Topology)
 	defer topoPool.StopAll()
 
+	// Daemon-level reconciliation: on every global config change, reconfigure the
+	// shared pools that can reload live (topology), and log when a change needs a
+	// restart to take effect (LSP servers, cache, log format). Per-connection
+	// edits/git/walk reload via each session's own store subscription (conn.go).
+	// The subscription lives for the daemon's lifetime, so its unsubscribe is
+	// intentionally discarded.
+	store.Subscribe(func(c config.Config) {
+		topoPool.Reconcile(c.Topology)
+		if store.RestartNeeded() {
+			slog.Warn("daemon: config change requires a restart to take effect (LSP servers, cache, or log format)")
+		}
+	})
+
 	ctrlPath := daemonCtrlSocketPath()
 	_ = os.Remove(ctrlPath)
 	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
@@ -147,7 +173,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			}
 			return tools.FormatDiagnostics(e.inv.AllDiagnostics())
 		}
-		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn)
+		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn, store.Reload)
 	}
 
 	daemonStartedAt := time.Now()
@@ -166,11 +192,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// write rate.
 	var clientLimiters sync.Map // map[string]*tools.RateLimiter
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, cfg, statsStore, daemonStartedAt, &clientLimiters)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, &clientLimiters)
 	return nil
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	var wg sync.WaitGroup
 	go func() {
 		<-ctx.Done()
@@ -197,16 +223,16 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, cfg, statsStore, daemonStartedAt, clientLimiters)
+			handleConn(ctx, conn, pool, topoPool, store, statsStore, daemonStartedAt, clientLimiters)
 		})
 	}
 }
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, cfg config.Config, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	defer conn.Close()
-	s := newConnSession(pool, topoPool, cfg, statsStore, clientLimiters)
+	s := newConnSession(pool, topoPool, store, statsStore, clientLimiters)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	s.registerAllTools(srv, daemonStartedAt)

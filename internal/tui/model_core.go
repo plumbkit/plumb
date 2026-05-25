@@ -119,6 +119,7 @@ type Model struct {
 	settingsCursor    int           // index into settingsItems for the highlighted row
 	settingsScroll    int           // first visible scrollable line in the settings list
 	settingsStatus    string        // transient status line ("saved", "applies on restart", …)
+	pendingReload     bool          // a persisted setting changed; push reload-config to the daemon
 	showThemePicker   bool          // theme-picker popup overlay open
 	themePickerCursor int           // index into ThemeNames() for the highlighted theme
 

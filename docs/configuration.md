@@ -19,7 +19,12 @@ everything else is inherited from the layer below.
 
 1. **Compiled defaults** — baked into the binary (`internal/config/config.go`).
 2. **Global config** — `$XDG_CONFIG_HOME/plumb/config.toml`, falling back to
-   `~/.config/plumb/config.toml`. Loaded once at daemon start.
+   `~/.config/plumb/config.toml`. Held in a live `config.Store` and
+   hot-reloaded: an fsnotify watch on the file, the `reload-config`
+   control-socket command, and `plumb config reload` each trigger a re-read
+   that propagates to every live session. Settings the daemon cannot apply
+   live (LSP servers, cache, log format) are flagged as restart-needed by
+   `plumb config show` and the `daemon_info` tool.
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
    connection's workspace resolves and merged onto the global config. A project
    file that sets one field inherits the rest.

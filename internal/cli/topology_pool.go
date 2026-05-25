@@ -2,6 +2,7 @@ package cli
 
 import (
 	"log/slog"
+	"reflect"
 	"sync"
 
 	"github.com/golimpio/plumb/internal/config"
@@ -50,6 +51,59 @@ func (p *topologyPool) Acquire(root string) *topology.Store {
 	p.stores[root] = s
 	slog.Info("topology: store opened", "root", root)
 	return s
+}
+
+// Reconcile applies a new global topology config to the pool when the global
+// config reloads. It is a no-op when the topology config is unchanged (so it
+// stays cheap across unrelated config edits). When topology is disabled it
+// closes every open store; when it stays enabled but the tuning changed it
+// re-opens each open store so the new settings (resync interval, excludes, size
+// caps) take effect. Stores opened afterwards use the new config.
+//
+// This is safe to do live because the indexer is a background subsystem with no
+// synchronous request path — no in-flight tool call fails when a store is
+// closed and re-opened.
+func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if reflect.DeepEqual(cfg, p.cfg) {
+		return
+	}
+	prevEnabled := p.cfg.Enabled
+	p.cfg = cfg
+
+	if !cfg.Enabled {
+		for root, s := range p.stores {
+			if err := s.Close(); err != nil {
+				slog.Warn("topology: close on disable", "root", root, "err", err)
+			}
+			delete(p.stores, root)
+		}
+		slog.Info("topology: disabled via config reload; stores closed")
+		return
+	}
+
+	if !prevEnabled {
+		// Was disabled, now enabled: nothing open yet; new Acquires use the new
+		// config. (Already-attached sessions pick it up on their next attach.)
+		slog.Info("topology: enabled via config reload")
+		return
+	}
+
+	// Still enabled, tuning changed: re-open each store with the new config.
+	for root, s := range p.stores {
+		if err := s.Close(); err != nil {
+			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
+		}
+		ns, err := topology.Open(root, cfg, buildExtractors())
+		if err != nil {
+			slog.Error("topology: reopen on reconcile failed", "root", root, "err", err)
+			delete(p.stores, root)
+			continue
+		}
+		p.stores[root] = ns
+	}
+	slog.Info("topology: reconfigured via config reload", "roots", len(p.stores))
 }
 
 // StopAll stops all running indexers. Called by the daemon on shutdown.

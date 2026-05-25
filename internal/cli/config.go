@@ -65,10 +65,31 @@ each value came from. Pass --workspace to include a project-local
 	RunE: runConfigShow,
 }
 
+var configReloadCmd = &cobra.Command{
+	Use:   "reload",
+	Short: "Tell the running daemon to re-read the global config now",
+	Long: `Force the running plumb daemon to reload its global config immediately,
+rather than waiting for the file watcher. Live-reloadable settings (edits, git,
+walk, log level, topology, cache) take effect at once; settings that still need a
+restart are flagged by 'plumb config show'.`,
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		resp, err := dialDaemonCtrl("reload-config")
+		if err != nil {
+			return err
+		}
+		if msg, ok := strings.CutPrefix(resp, "error:"); ok {
+			return fmt.Errorf("%s", strings.TrimSpace(msg))
+		}
+		fmt.Println("daemon config reloaded")
+		return nil
+	},
+}
+
 func init() {
 	configShowCmd.Flags().StringVar(&configShowWorkspace, "workspace", "",
 		"Workspace directory to merge .plumb/config.toml from (defaults to current dir)")
-	configCmd.AddCommand(configPrintCmd, configShowCmd)
+	configCmd.AddCommand(configPrintCmd, configShowCmd, configReloadCmd)
 }
 
 func runConfigShow(_ *cobra.Command, _ []string) error {
@@ -198,6 +219,19 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Println(renderConfigShowTable(cfgTable))
+
+	// 4. Reload behaviour — which groups the running daemon applies live versus
+	// those that need a restart. Mirrors config.RestartSensitiveEqual; the daemon
+	// reports a concrete restart-pending state via the daemon_info tool.
+	fmt.Printf("\nReload behaviour\n")
+	reloadTable := tableBase().Headers("Config group", "Applies")
+	reloadTable.Row("edits, git, walk", tui.OkStyle.Render("live"))
+	reloadTable.Row("log_level", tui.OkStyle.Render("live (set-level)"))
+	reloadTable.Row("ui.theme", tui.OkStyle.Render("live (TUI)"))
+	reloadTable.Row("topology", tui.OkStyle.Render("live (reconciled)"))
+	reloadTable.Row("workspace, quality, lsp_query", tui.OkStyle.Render("live on next attach/session"))
+	reloadTable.Row("lsp.* servers, cache, log_format", tui.WarnStyle.Render("needs daemon restart"))
+	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 
 	return nil

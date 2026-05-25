@@ -36,7 +36,7 @@ import (
 // All exported methods are safe for concurrent use.
 type connSession struct {
 	pool           *workspacePool
-	cfg            config.Config
+	store          *config.Store
 	statsStore     *statsStore
 	clientLimiters *sync.Map
 
@@ -72,7 +72,13 @@ type connSession struct {
 	gitMu        sync.RWMutex
 	gitCfg       config.GitConfig
 
+	// applyMu serialises applyProjectConfig across the three paths that call it
+	// (workspace attach, the 30s poll, and the global-config store subscription)
+	// so their field swaps cannot interleave.
+	applyMu sync.Mutex
+
 	watcherOnce sync.Once
+	unsubscribe func() // removes the store-change listener on close
 
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex
@@ -80,7 +86,8 @@ type connSession struct {
 
 // newConnSession initialises a connSession and registers a new MCP session.
 // Call close() when the connection ends.
-func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Config, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
+func newConnSession(pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
+	cfg := store.Current()
 	ttl := cfg.Cache.TTL.Duration
 	sessName := session.GenerateName()
 	sessID, _ := session.Register(session.Info{
@@ -88,12 +95,12 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Conf
 		DaemonVersion: Version,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	return &connSession{
+	s := &connSession{
 		ctx:            ctx,
 		cancel:         cancel,
 		pool:           pool,
 		topologyPool:   topoPool,
-		cfg:            cfg,
+		store:          store,
 		statsStore:     statsStore,
 		clientLimiters: clientLimiters,
 		sessID:         sessID,
@@ -109,10 +116,23 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, cfg config.Conf
 		walkCfg:        cfg.Walk,
 		gitCfg:         cfg.Git,
 	}
+	// Re-merge the per-project view whenever the global base config changes, so
+	// a global edit (TUI, external editor, or `plumb config reload`) propagates
+	// to every live session without a daemon restart.
+	s.unsubscribe = store.Subscribe(func(config.Config) {
+		if ws := s.workspace(); ws != "" {
+			s.applyProjectConfig(ws)
+			slog.Info("daemon: global config changed — session re-applied", "workspace", ws)
+		}
+	})
+	return s
 }
 
 // close releases per-session resources and unregisters the session.
 func (s *connSession) close() {
+	if s.unsubscribe != nil {
+		s.unsubscribe()
+	}
 	s.cancel()
 	s.sessionCache.Close()
 	if s.qualityRunner != nil {
@@ -282,7 +302,10 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	if workspace == "" {
 		return
 	}
-	projectCfg, err := config.LoadProject(s.cfg, workspace)
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	base := s.store.Current()
+	projectCfg, err := config.LoadProject(base, workspace)
 	if err != nil {
 		slog.Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
 		return
@@ -297,12 +320,12 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	s.gitCfg = projectCfg.Git
 	s.gitMu.Unlock()
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
-	if projectCfg.Edits.Strict != s.cfg.Edits.Strict ||
-		projectCfg.Edits.RateLimitPerMinute != s.cfg.Edits.RateLimitPerMinute ||
-		projectCfg.Walk.RefuseHomeRoots != s.cfg.Walk.RefuseHomeRoots ||
-		projectCfg.Git.AllowWrites != s.cfg.Git.AllowWrites ||
-		projectCfg.Git.AllowDestructive != s.cfg.Git.AllowDestructive ||
-		projectCfg.Git.AllowPush != s.cfg.Git.AllowPush {
+	if projectCfg.Edits.Strict != base.Edits.Strict ||
+		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
+		projectCfg.Walk.RefuseHomeRoots != base.Walk.RefuseHomeRoots ||
+		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
+		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
+		projectCfg.Git.AllowPush != base.Git.AllowPush {
 		slog.Info("daemon: project config applied",
 			"workspace", workspace,
 			"strict", projectCfg.Edits.Strict,
@@ -435,7 +458,7 @@ func (s *connSession) onClientInfo(name, version string) {
 	if s.clientLimiters != nil {
 		key := name + "/" + version
 		shared, _ := s.clientLimiters.LoadOrStore(key,
-			tools.NewRateLimiter(s.cfg.Edits.RateLimitPerMinute, time.Minute))
+			tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute))
 		s.writeLimiter.SetParent(shared.(*tools.RateLimiter))
 	}
 }
@@ -491,13 +514,13 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	}
 	root, _, err := s.pool.Detect(startDir)
 	if err != nil {
-		if !s.cfg.Workspace.AutoAttach {
+		if !s.store.Current().Workspace.AutoAttach {
 			slog.Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
 		synthRoot := s.pool.SynthesiseRoot(startDir)
 		s.attachSynthetic(toolCtx, synthRoot)
-		if s.cfg.Workspace.AutoAttachPersist {
+		if s.store.Current().Workspace.AutoAttachPersist {
 			go func() {
 				if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {
 					slog.Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
@@ -521,7 +544,7 @@ func (s *connSession) startTopologyIndexer(workspace string) {
 	if s.topologyStore != nil {
 		return
 	}
-	if !s.cfg.Topology.Enabled {
+	if !s.store.Current().Topology.Enabled {
 		return
 	}
 	if s.topologyPool == nil {
@@ -537,7 +560,7 @@ func (s *connSession) startQualityRunner(workspace string) {
 	if s.qualityRunner != nil {
 		return
 	}
-	q := s.cfg.Quality
+	q := s.store.Current().Quality
 	if !q.Enabled {
 		return
 	}
@@ -596,7 +619,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 
 // registerAllTools registers every MCP tool with srv.
 func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Time) {
-	lspTimeout := s.cfg.LSPQuery.Timeout.Duration
+	lspTimeout := s.store.Current().LSPQuery.Timeout.Duration
 	topoFn := func() *topology.Store {
 		s.stateMu.Lock()
 		defer s.stateMu.Unlock()
@@ -639,7 +662,14 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewFileDiff())
 	srv.Register(tools.NewFindReplace(wd))
 	srv.Register(tools.NewVersion())
-	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt))
+	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt).
+		WithConfigStatus(func() tools.ConfigStatus {
+			return tools.ConfigStatus{
+				Generation:    s.store.Generation(),
+				LastReloaded:  s.store.LastReloaded(),
+				RestartNeeded: s.store.RestartNeeded(),
+			}
+		}))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr).WithTopology(topoFn))
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout))

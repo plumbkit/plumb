@@ -718,6 +718,11 @@ func Print(cfg Config, w io.Writer) error {
 // error and Save refuses rather than overwriting the user's recoverable
 // settings with defaults.
 //
+// The write is atomic: the encoded config is staged in a temp file in the same
+// directory and renamed over the target, so a concurrent reader or a file
+// watcher never observes a half-written config and a crash mid-write leaves the
+// previous file intact.
+//
 // Known limitation: re-encoding rewrites the whole file, so any comments the
 // user added by hand are lost on the first save.
 func Save(apply func(*Config)) error {
@@ -727,15 +732,46 @@ func Save(apply func(*Config)) error {
 	}
 	apply(&cfg)
 	path := GlobalConfigPath()
+	if path == "" {
+		return fmt.Errorf("writing config: no config path could be resolved")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("writing config: %w", err)
+	return writeConfigAtomic(path, cfg)
+}
+
+// writeConfigAtomic encodes cfg to a temp file in the target's directory, then
+// renames it over path. The rename is atomic on a single filesystem. The temp
+// name is dotfile-prefixed so a directory watcher filtering on the "config.toml"
+// basename ignores the staging writes and reacts only to the final rename.
+// Existing file permissions are preserved; a new file is created 0o644.
+func writeConfigAtomic(path string, cfg Config) error {
+	dir := filepath.Dir(path)
+	mode := os.FileMode(0o644)
+	if fi, statErr := os.Stat(path); statErr == nil {
+		mode = fi.Mode().Perm()
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	tmp, err := os.CreateTemp(dir, ".config-*.toml.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		tmp.Close()
+		return fmt.Errorf("encoding config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("flushing config: %w", err)
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return fmt.Errorf("setting config permissions: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("renaming config into place: %w", err)
+	}
+	return nil
 }
 
 // SaveTheme persists themeName into the [ui] section of the global config

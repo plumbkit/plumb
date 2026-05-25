@@ -148,31 +148,31 @@ func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
 		m.settingsCursor = min(m.settingsCursor+m.settingsPageSize(), len(m.settingsItems)-1)
 		m.ensureSettingsCursorVisible()
 	case "enter", " ":
-		return m.activateSetting()
+		return m.afterSettingChange(m.activateSetting(), nil)
 	case "left", "-":
-		return m.adjustSetting(-1)
+		return m.afterSettingChange(m.adjustSetting(-1))
 	case "right", "+", "=":
-		return m.adjustSetting(1)
+		return m.afterSettingChange(m.adjustSetting(1))
 	}
 	return m, nil
 }
 
 // activateSetting handles enter/space: opens the theme picker for the popup row
 // and flips toggles; numeric and cycle rows are changed with ←→ instead.
-func (m Model) activateSetting() (Model, tea.Cmd) {
+func (m Model) activateSetting() Model {
 	if m.settingsCursor < 0 || m.settingsCursor >= len(m.settingsItems) {
-		return m, nil
+		return m
 	}
 	it := m.settingsItems[m.settingsCursor]
 	switch it.kind {
 	case settingPopup:
 		m.showThemePicker = true
 		m.syncThemeCursor()
-		return m, nil
+		return m
 	case settingToggle:
-		return m.toggleBool(it.key), nil
+		return m.toggleBool(it.key)
 	default:
-		return m, nil
+		return m
 	}
 }
 
@@ -209,6 +209,7 @@ func (m Model) setLogLevel(lvl string) (Model, tea.Cmd) {
 	m.settingsCfg.LogLevel = lvl
 	m.settingsItems = buildSettingItems(m.settingsCfg)
 	m.settingsStatus = "log level → " + lvl
+	m.pendingReload = false // log level applies live via set-level, not reload-config
 	return m, m.applyLogLevelLive(lvl)
 }
 
@@ -333,7 +334,38 @@ func (m *Model) persist(apply func(*config.Config)) bool {
 		m.settingsStatus = "save failed: " + err.Error()
 		return false
 	}
+	m.pendingReload = true
 	return true
+}
+
+// afterSettingChange appends a best-effort daemon config-reload push when a
+// persisted setting changed, so live-reloadable settings take effect without a
+// restart. Theme and log level use their own live paths and leave the flag clear.
+func (m Model) afterSettingChange(next Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	if !next.pendingReload {
+		return next, cmd
+	}
+	next.pendingReload = false
+	return next, tea.Batch(cmd, next.applyConfigReloadLive())
+}
+
+// applyConfigReloadLive pushes a reload-config command to the running daemon so
+// a just-saved setting takes effect live. Best-effort: on success the per-setting
+// status is left intact; only an unreachable daemon annotates the status.
+func (m Model) applyConfigReloadLive() tea.Cmd {
+	ctrlPath := m.ctrlPath
+	return func() tea.Msg {
+		conn, err := net.Dial("unix", ctrlPath)
+		if err != nil {
+			return settingsStatusMsg{text: "saved (daemon not running)"}
+		}
+		defer conn.Close()
+		if _, err := fmt.Fprintf(conn, "reload-config\n"); err != nil {
+			return settingsStatusMsg{text: "saved (daemon unreachable)"}
+		}
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		return nil
+	}
 }
 
 // applyLogLevelLive pushes the new level to the running daemon via its control

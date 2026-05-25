@@ -11,6 +11,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.24.1
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/muesli/reflow v0.3.0
 	github.com/odvcencio/gotreesitter v0.19.1
 	github.com/pelletier/go-toml/v2 v2.2.3

@@ -34,22 +34,10 @@ func runLogLevel(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid log level %q; expected debug, info, warn, error, or reset", level)
 	}
 
-	conn, err := net.Dial("unix", daemonCtrlSocketPath())
+	resp, err := dialDaemonCtrl("set-level " + level)
 	if err != nil {
-		return fmt.Errorf("daemon control socket unavailable — is plumb daemon running?\n  start it with: plumb serve\n  (%w)", err)
+		return err
 	}
-	defer conn.Close()
-
-	if _, err := fmt.Fprintf(conn, "set-level %s\n", level); err != nil {
-		return fmt.Errorf("sending command: %w", err)
-	}
-
-	resp, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
-	}
-
-	resp = strings.TrimRight(resp, "\n")
 	if msg, ok := strings.CutPrefix(resp, "error:"); ok {
 		return fmt.Errorf("%s", strings.TrimSpace(msg))
 	}
@@ -60,6 +48,25 @@ func runLogLevel(_ *cobra.Command, args []string) error {
 		fmt.Printf("log level set to %s\n", level)
 	}
 	return nil
+}
+
+// dialDaemonCtrl dials the daemon control socket, sends a single-line command,
+// and returns the trimmed first response line. Shared by `plumb log-level` and
+// `plumb config reload`.
+func dialDaemonCtrl(command string) (string, error) {
+	conn, err := net.Dial("unix", daemonCtrlSocketPath())
+	if err != nil {
+		return "", fmt.Errorf("daemon control socket unavailable — is plumb daemon running?\n  start it with: plumb serve\n  (%w)", err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "%s\n", command); err != nil {
+		return "", fmt.Errorf("sending command: %w", err)
+	}
+	resp, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+	return strings.TrimRight(resp, "\n"), nil
 }
 
 func validLogLevelCommand(level string) bool {
@@ -75,17 +82,17 @@ func validLogLevelCommand(level string) bool {
 // own goroutine. It returns when ln is closed (daemon shutdown).
 // diagsFn returns live formatted diagnostics for the given workspace path;
 // pass nil if the daemon has no workspace pool (e.g. in tests that don't need it).
-func serveControlSocket(ln net.Listener, configLevel, logFormat string, diagsFn func(string) string) {
+func serveControlSocket(ln net.Listener, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go handleCtrlConn(conn, configLevel, logFormat, diagsFn)
+		go handleCtrlConn(conn, configLevel, logFormat, diagsFn, reloadFn)
 	}
 }
 
-func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(string) string) {
+func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -98,6 +105,11 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 		if diagsFn != nil {
 			fmt.Fprint(conn, diagsFn(workspace))
 		}
+		return
+	}
+
+	if line == "reload-config" {
+		handleReloadConfig(conn, reloadFn)
 		return
 	}
 
@@ -119,4 +131,19 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 
 	slog.Info("daemon: log level changed via control socket", "level", level)
 	fmt.Fprintf(conn, "ok\n")
+}
+
+// handleReloadConfig re-reads the global config in response to a control-socket
+// "reload-config" command — sent by the TUI after it saves a setting, or by
+// `plumb config reload`. A reload error is reported back to the caller; a nil
+// reloadFn is treated as a no-op success (used by tests with no store).
+func handleReloadConfig(conn net.Conn, reloadFn func() error) {
+	if reloadFn != nil {
+		if err := reloadFn(); err != nil {
+			fmt.Fprintf(conn, "error: %s\n", err.Error())
+			return
+		}
+	}
+	slog.Info("daemon: config reloaded via control socket")
+	fmt.Fprint(conn, "ok\n")
 }

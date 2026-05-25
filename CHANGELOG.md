@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.28 (unreleased)
+
+### Added
+- **Live configuration store with auto change detection — the global config now reloads without a daemon restart.** A daemon-singleton `config.Store` (`internal/config/store.go`) holds the global base config behind an `atomic.Pointer[Config]` (lock-free `Current()`), with a monotonic generation counter, a last-reloaded timestamp, and a `Subscribe`/notify observer API (notifications fire outside the lock so a listener may re-enter the store). Three inputs drive `store.Reload`: (1) an **fsnotify directory watcher** on the global-config directory (`internal/cli/config_global_watcher.go`) that reloads on external edits (vim, etc.), debounced 250 ms, watching the *directory* not the file so it survives the atomic-rename swap; (2) a new **`reload-config` control-socket command** (`internal/cli/log_level.go`); (3) the **TUI**, which pushes `reload-config` after saving any setting (`internal/tui/model_settings_keys.go`). Each MCP session subscribes and re-merges its per-project view on a global change (`internal/cli/conn.go`), so `[edits]`/`[git]`/`[walk]`/rate-limit apply live to every active session. `connSession.cfg` (a by-value snapshot) became `*config.Store`; `applyProjectConfig` is now serialised by `applyMu` and merges against the live global base. Guards: `internal/config/store_test.go`, `TestApplyProjectConfig_UsesLiveGlobalBase`, `TestGlobalConfigChange_ReappliesSession`, `TestShouldReload`, `TestGlobalConfigWatcher_ReloadsOnFileChange` (integration).
+- **`plumb config reload`** — a CLI sibling of `plumb log-level` that forces an immediate global-config reload over the control socket (`internal/cli/config.go`). The control-socket round-trip is now shared via `dialDaemonCtrl`.
+- **Live topology reconciliation.** `topologyPool.Reconcile` (`internal/cli/topology_pool.go`) applies global `[topology]` changes live: disabling closes open stores; a tuning change re-opens them with the new config; an unchanged config is a no-op (cheap across unrelated edits). Closes the long-standing "per-project topology config only toggles enable/disable" gap for the global layer. Safe because the indexer is a background subsystem with no synchronous request path. Guards: `internal/cli/topology_pool_test.go`.
+- **Restart-needed signalling for settings the daemon cannot reload live.** `Store.RestartNeeded()` compares the live config's restart-bound subset — LSP server definitions, cache sizing, and log format (`config.RestartSensitiveEqual`) — against the daemon's startup config. Surfaced three ways: a daemon WARN on the offending reload; a `restart needed:` line in the **`daemon_info`** tool (which now also reports `config generation` and `config reloaded`, via a nil-safe `WithConfigStatus`); and a **Reload behaviour** legend in **`plumb config show`**. Guards: `internal/tools/daemon_info_test.go`, `TestStore_RestartNeeded`, `TestRestartSensitiveEqual`.
+- **Atomic `config.Save`.** `config.Save` now stages the encoded TOML in a dotfile-prefixed temp file and renames it over the target (`internal/config/config.go`), so a reader or the file watcher never sees a half-written config and a crash mid-write leaves the previous file intact; existing file permissions are preserved. The dotfile prefix keeps the watcher from reacting to staging writes. Guard: `TestSave_AtomicLeavesNoTempFiles`.
+
+### Changed
+- **Global config is no longer "loaded once at daemon start".** It lives in the `config.Store` and is re-read on file change / control-socket request / TUI push. `AGENTS.md` and `docs/configuration.md` updated.
+- **Moved `docs/feedbacks.md` → `internal/feedbacks.md`** (references updated in `docs/internal/autonomous-loop.md` and `docs/internal/todo.md`).
+
+### Notes
+- **LSP-process config (`lsp.<lang>` command/args/env/markers) and `cache`/`log_format` remain restart-bound by design.** Live LSP-server reload was investigated and deferred: the routing proxy re-acquires per request (URI-bearing methods would migrate), but `setPrimary` pins a `*clientProxy` per session, so a reliable live swap needs session-level re-attachment + reference counting, or a routing-proxy refactor with grace-period draining — too large/risky to ship without integration tests against a live server. The restart-signal is the reliable interim. Full design and routing-model analysis recorded in `docs/internal/todo-to-review.md`.
+- **New dependency:** `github.com/fsnotify/fsnotify` v1.10.1 (pure-Go, no CGo).
+
 ## 0.7.27 (unreleased)
 
 ### Changed
