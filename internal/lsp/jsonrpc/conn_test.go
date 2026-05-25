@@ -70,6 +70,67 @@ func TestConn_Notification(t *testing.T) {
 	}
 }
 
+// TestConn_Notify_SendsMessage verifies Notify writes a well-formed
+// notification frame (a method, no id) on the happy path.
+func TestConn_Notify_SendsMessage(t *testing.T) {
+	dr, dw := io.Pipe() // conn's read side; closed at the end so readLoop exits
+	defer dw.Close()
+	cr, cw := io.Pipe() // conn writes here; the test reads the frame back
+	conn := NewConn(dr, cw)
+	defer conn.Close()
+
+	got := make(chan wireMessage, 1)
+	go func() {
+		if msg, err := readMessage(bufio.NewReader(cr)); err == nil {
+			got <- msg
+		}
+	}()
+
+	if err := conn.Notify(context.Background(), "textDocument/didChange", map[string]string{"k": "v"}); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	select {
+	case msg := <-got:
+		if msg.Method != "textDocument/didChange" {
+			t.Fatalf("method = %q, want textDocument/didChange", msg.Method)
+		}
+		if len(msg.ID) != 0 {
+			t.Fatalf("notification carried id %q; notifications have none", msg.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for the notification frame")
+	}
+}
+
+// TestConn_Notify_ContextCancelUnblocks verifies Notify returns promptly when
+// the context is cancelled while the underlying write is stalled (a saturated
+// language-server stdin pipe). Before the async-send fix Notify wrote
+// synchronously under wrMu, so a stalled pipe blocked the caller — and thus the
+// whole MCP tool call — until the server drained its buffer.
+func TestConn_Notify_ContextCancelUnblocks(t *testing.T) {
+	dr, dw := io.Pipe() // conn's read side; closed at the end so readLoop exits
+	defer dw.Close()
+	_, cw := io.Pipe() // conn writes here; no reader → the write blocks forever
+	conn := NewConn(dr, cw)
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- conn.Notify(ctx, "textDocument/didChange", map[string]string{}) }()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("Notify returned nil; want the context error when the write stalls")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Notify did not unblock after context cancel — the send is still synchronous")
+	}
+}
+
 // TestConn_ConcurrentCalls verifies multiple in-flight calls are correctly demuxed.
 func TestConn_ConcurrentCalls(t *testing.T) {
 	pr, pw := io.Pipe()

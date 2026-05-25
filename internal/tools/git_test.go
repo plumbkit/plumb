@@ -326,3 +326,47 @@ func TestGit_RateLimitWritesOnly(t *testing.T) {
 		t.Fatalf("expected rate-limit error on second write, got %v", err)
 	}
 }
+
+// TestGit_AddStagesTrackedDeletion proves the -A semantics: staging a tracked
+// file that has been deleted from disk succeeds (and stages the removal). The
+// pre-0.7.26 "add -- <path>" form failed here with "pathspec did not match".
+func TestGit_AddStagesTrackedDeletion(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	f := filepath.Join(dir, "doomed.txt")
+	if err := os.WriteFile(f, []byte("bye\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{f}, "repo": dir}); err != nil {
+		t.Fatalf("git add (create): %v", err)
+	}
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "commit", "message": "add doomed", "repo": dir}); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	if err := os.Remove(f); err != nil {
+		t.Fatal(err)
+	}
+	out, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{f}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git add of a tracked deletion should succeed with -A semantics, got: %v", err)
+	}
+	if !strings.Contains(out, "D\t") || !strings.Contains(out, "doomed.txt") {
+		t.Errorf("expected the deletion to be staged (D\tdoomed.txt), got: %q", out)
+	}
+}
+
+// TestGit_RmRejectedWithDeleteFileHint asserts the actionable rejection message
+// for git rm (not just the tier classification) points the agent at delete_file.
+func TestGit_RmRejectedWithDeleteFileHint(t *testing.T) {
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+	_, err := callGit(t, tool, map[string]any{"subcommand": "rm", "args": []string{"some.txt"}})
+	if err == nil {
+		t.Fatal("git rm should be rejected")
+	}
+	if !strings.Contains(err.Error(), "delete_file") {
+		t.Errorf("rm rejection should point to delete_file, got: %v", err)
+	}
+}

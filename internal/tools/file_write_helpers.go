@@ -423,7 +423,14 @@ func concurrentWriteDetected(path string, res writeResult, skew time.Duration) b
 // Batching files from the same directory avoids spawning one git process per
 // file in transaction_apply. Git errors (not a repo, unreachable, etc.) are
 // silently treated as "not dirty" to avoid false positives.
-func dirtyBasenamesInDir(ctx context.Context, dir string, files []string) map[string]bool {
+//
+// skipUntracked controls how untracked files (porcelain "??") are reported. A
+// destructive write (overwrite, edit, delete) that lands on an untracked file
+// destroys content git cannot recover, so those callers pass false and an
+// untracked file counts as dirty. A move/copy (rename_file, copy_file)
+// preserves the source content, so those callers pass true to skip untracked
+// files and avoid blocking on a brand-new file that has nothing at HEAD to lose.
+func dirtyBasenamesInDir(ctx context.Context, dir string, files []string, skipUntracked bool) map[string]bool {
 	if _, err := exec.LookPath("git"); err != nil {
 		return nil
 	}
@@ -442,9 +449,9 @@ func dirtyBasenamesInDir(ctx context.Context, dir string, files []string) map[st
 			continue
 		}
 		// Porcelain v1: "XY filename" where XY are two status characters.
-		// Skip untracked entries (??) — they have no committed state to lose,
-		// so blocking a write on them (e.g. rename_file) is unnecessary friction.
-		if line[0] == '?' {
+		// Untracked entries are "??"; skip them only for callers that preserve
+		// content (move/copy), since an untracked file has no committed state.
+		if skipUntracked && line[0] == '?' {
 			continue
 		}
 		// Rename format: "R  old -> new" — take the new name after " -> ".
@@ -457,11 +464,22 @@ func dirtyBasenamesInDir(ctx context.Context, dir string, files []string) map[st
 	return dirty
 }
 
-// pathIsDirty reports whether path has uncommitted changes in its git repository.
-// Returns false when git is not on PATH or path is not inside a git repository.
-// Git errors are silently treated as not dirty to avoid blocking writes.
+// pathIsDirty reports whether path has uncommitted changes that a destructive
+// write (overwrite, edit, delete) would lose. Untracked files count as dirty:
+// their entire content is uncommitted, so overwriting or deleting one is
+// unrecoverable. Returns false when git is not on PATH or path is not inside a
+// git repository. Git errors are silently treated as not dirty to avoid
+// blocking writes.
 func pathIsDirty(ctx context.Context, path string) bool {
-	return dirtyBasenamesInDir(ctx, filepath.Dir(path), []string{filepath.Base(path)})[filepath.Base(path)]
+	return dirtyBasenamesInDir(ctx, filepath.Dir(path), []string{filepath.Base(path)}, false)[filepath.Base(path)]
+}
+
+// pathIsDirtyIgnoringUntracked is the move/copy variant of pathIsDirty: it
+// reports uncommitted changes to content already in git history but does not
+// count untracked files as dirty. rename_file and copy_file preserve the
+// source content, so a brand-new (untracked) source need not be committed first.
+func pathIsDirtyIgnoringUntracked(ctx context.Context, path string) bool {
+	return dirtyBasenamesInDir(ctx, filepath.Dir(path), []string{filepath.Base(path)}, true)[filepath.Base(path)]
 }
 
 // notifyLSP tells the server "this file on disk just changed" via

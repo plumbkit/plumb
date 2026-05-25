@@ -253,10 +253,32 @@ func TestPathIsDirty_UntrackedFile(t *testing.T) {
 	if err := os.WriteFile(f, []byte("new file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Untracked files are intentionally not treated as dirty: they have no
-	// committed state to lose, so blocking a rename/write on them is unnecessary.
-	if pathIsDirty(context.Background(), f) {
-		t.Error("expected not dirty for an untracked file (no committed state to lose)")
+	// An untracked file's entire content is uncommitted, so a destructive write
+	// (overwrite/delete) would lose it — pathIsDirty must treat it as dirty.
+	if !pathIsDirty(context.Background(), f) {
+		t.Error("expected dirty for an untracked file (its content is unrecoverable on overwrite/delete)")
+	}
+	// The move/copy variant preserves content, so an untracked source is fine.
+	if pathIsDirtyIgnoringUntracked(context.Background(), f) {
+		t.Error("expected not dirty for an untracked file under the move/copy variant")
+	}
+}
+
+func TestPathIsDirtyIgnoringUntracked_ModifiedTrackedFile(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "tracked.txt")
+	if err := os.WriteFile(f, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "tracked.txt")
+	gitExec(t, dir, "commit", "-m", "add tracked")
+	if err := os.WriteFile(f, []byte("modified content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Only untracked files are exempted: a tracked file with working-tree edits
+	// is still dirty under the move/copy variant.
+	if !pathIsDirtyIgnoringUntracked(context.Background(), f) {
+		t.Error("expected dirty for a tracked, modified file even under the move/copy variant")
 	}
 }
 

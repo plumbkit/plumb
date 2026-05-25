@@ -125,7 +125,7 @@ func copyFilePreconditions(ctx context.Context, from, to string, a copyFileArgs)
 	if info.IsDir() {
 		return nil, 0, fmt.Errorf("copy_file: %q is a directory — refusing to copy recursively", from)
 	}
-	if !a.DirtyOk && pathIsDirty(ctx, from) {
+	if !a.DirtyOk && pathIsDirtyIgnoringUntracked(ctx, from) {
 		return nil, 0, fmt.Errorf("copy_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", from)
 	}

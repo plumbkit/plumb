@@ -205,6 +205,31 @@ func TestResolveArgs(t *testing.T) {
 	}
 }
 
+// TestResolveArgs_ToolNamePrefix asserts the tool name is threaded into the
+// rejection message so an agent that confused two tools sees which schema was
+// consulted, and that an empty tool name suppresses the prefix (in-package /
+// test call sites). The table cases above pass "test_tool" but don't assert the
+// prefix; this covers that contract directly.
+func TestResolveArgs_ToolNamePrefix(t *testing.T) {
+	sh := mustShape(t, nameSchema)
+
+	_, _, err := resolveArgs(sh, json.RawMessage(`{"bogus":1}`), "write_file")
+	if err == nil {
+		t.Fatal("expected error for unknown parameter")
+	}
+	if !strings.HasPrefix(err.Error(), "write_file: ") {
+		t.Errorf("error should be prefixed with the tool name, got: %q", err.Error())
+	}
+
+	_, _, err = resolveArgs(sh, json.RawMessage(`{"bogus":1}`), "")
+	if err == nil {
+		t.Fatal("expected error for unknown parameter")
+	}
+	if !strings.HasPrefix(err.Error(), "unknown parameter") {
+		t.Errorf("empty tool name should not add a prefix, got: %q", err.Error())
+	}
+}
+
 func TestParseShape_FailOpen(t *testing.T) {
 	for _, schema := range []string{
 		`{"type":"string"}`,                    // not an object schema

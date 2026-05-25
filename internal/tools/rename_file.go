@@ -121,7 +121,7 @@ func renameFilePreconditions(ctx context.Context, from, to string, a renameFileA
 	if info.IsDir() {
 		return fmt.Errorf("rename_file: %q is a directory — refusing to move recursively", from)
 	}
-	if !a.DirtyOk && pathIsDirty(ctx, from) {
+	if !a.DirtyOk && pathIsDirtyIgnoringUntracked(ctx, from) {
 		return fmt.Errorf("rename_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", from)
 	}

@@ -233,7 +233,7 @@ func txDirtyCheck(ctx context.Context, paths []string, dirtyOk bool) error {
 	}
 	var dirtyPaths []string
 	for dir, batch := range batches {
-		dirty := dirtyBasenamesInDir(ctx, dir, batch.bases)
+		dirty := dirtyBasenamesInDir(ctx, dir, batch.bases, false)
 		for i, base := range batch.bases {
 			if dirty[base] {
 				dirtyPaths = append(dirtyPaths, batch.fulls[i])
