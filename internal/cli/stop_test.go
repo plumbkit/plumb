@@ -25,7 +25,7 @@ func TestPluralSessionCount(t *testing.T) {
 }
 
 func TestRenderStopConfirmationPromptUsesPluralSessionCount(t *testing.T) {
-	got := ansiStripForCLITest(renderStopConfirmationPrompt(1, 1))
+	got := ansiStripForCLITest(renderStopConfirmationPrompt(stopActionPrompt.consequence, 1, 1))
 	if !strings.Contains(got, "You have 1 active session.") {
 		t.Fatalf("singular prompt missing session count:\n%s", got)
 	}
@@ -45,7 +45,7 @@ func TestRenderStopConfirmationPromptUsesPluralSessionCount(t *testing.T) {
 		t.Fatalf("prompt should end with a newline so later output does not overwrite the final option:\n%s", got)
 	}
 
-	got = ansiStripForCLITest(renderStopConfirmationPrompt(3, 0))
+	got = ansiStripForCLITest(renderStopConfirmationPrompt(stopActionPrompt.consequence, 3, 0))
 	if !strings.Contains(got, "You have 3 active sessions.") {
 		t.Fatalf("plural prompt missing session count:\n%s", got)
 	}
@@ -55,7 +55,7 @@ func TestRenderStopConfirmationPromptUsesPluralSessionCount(t *testing.T) {
 }
 
 func TestStopConfirmationModelDefaultNo(t *testing.T) {
-	m := newStopConfirmationModel(2)
+	m := newStopConfirmationModel(2, stopActionPrompt)
 	if m.cursor != 1 {
 		t.Fatalf("default cursor = %d, want No index 1", m.cursor)
 	}
@@ -66,7 +66,7 @@ func TestStopConfirmationModelDefaultNo(t *testing.T) {
 }
 
 func TestStopConfirmationModelKeyboardFlow(t *testing.T) {
-	m := newStopConfirmationModel(2)
+	m := newStopConfirmationModel(2, stopActionPrompt)
 	updated, cmd := m.Update(keyPress("up"))
 	if cmd != nil {
 		t.Fatal("navigation should not quit")
@@ -85,7 +85,7 @@ func TestStopConfirmationModelKeyboardFlow(t *testing.T) {
 		t.Fatal("enter on Yes should confirm")
 	}
 
-	m = newStopConfirmationModel(2)
+	m = newStopConfirmationModel(2, stopActionPrompt)
 	updated, cmd = m.Update(keyPress("enter"))
 	if cmd == nil {
 		t.Fatal("enter should quit")
@@ -95,7 +95,7 @@ func TestStopConfirmationModelKeyboardFlow(t *testing.T) {
 		t.Fatal("enter on default No should cancel")
 	}
 
-	m = newStopConfirmationModel(2)
+	m = newStopConfirmationModel(2, stopActionPrompt)
 	updated, cmd = m.Update(keyPress("y"))
 	if cmd == nil {
 		t.Fatal("y should quit")

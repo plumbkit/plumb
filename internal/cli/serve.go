@@ -9,16 +9,24 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
+var serveFlagNoReconnect bool
+
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the MCP server over stdio",
 	RunE:  runServe,
+}
+
+func init() {
+	serveCmd.Flags().BoolVar(&serveFlagNoReconnect, "no-reconnect", false,
+		"disable transparent daemon reconnect; exit on daemon failure (legacy byte-pump proxy)")
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
@@ -29,13 +37,53 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	conn, err := connectOrStartDaemon(ctx, daemonSocketPath())
+	socketPath := daemonSocketPath()
+	conn, err := connectOrStartDaemon(ctx, socketPath)
 	if err != nil {
 		return fmt.Errorf("plumb serve: %w", err)
 	}
-	defer conn.Close()
 
-	return proxyStdio(ctx, conn)
+	if serveFlagNoReconnect || !proxyReconnectEnabled() {
+		defer conn.Close()
+		return proxyStdio(ctx, conn)
+	}
+
+	p := newReconnectingProxy(proxyDeps{
+		in:                os.Stdin,
+		out:               os.Stdout,
+		initial:           conn,
+		dial:              func(ctx context.Context) (net.Conn, error) { return connectOrStartDaemon(ctx, socketPath) },
+		killDaemon:        killHungDaemon,
+		heartbeatInterval: proxyHeartbeatInterval(),
+	})
+	return p.run(ctx)
+}
+
+// proxyReconnectEnabled reports whether the resilient reconnecting proxy is
+// active. On by default; PLUMB_PROXY_RECONNECT=0/false/off reverts to the
+// legacy byte-pump proxy.
+func proxyReconnectEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PLUMB_PROXY_RECONNECT"))) {
+	case "0", "false", "off", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// proxyHeartbeatInterval is the idle-probe interval for hang detection.
+// PLUMB_PROXY_HEARTBEAT accepts a Go duration; "0" disables hang detection
+// (crash recovery stays on). An unset or unparseable value uses the default.
+func proxyHeartbeatInterval() time.Duration {
+	v := strings.TrimSpace(os.Getenv("PLUMB_PROXY_HEARTBEAT"))
+	if v == "" {
+		return defaultHeartbeatInterval
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return defaultHeartbeatInterval
+	}
+	return d
 }
 
 // connectOrStartDaemon dials the daemon socket. If it is not yet running,

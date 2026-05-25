@@ -63,11 +63,11 @@ Key packages:
 
 ## Daemon architecture
 
-`plumb serve` is a thin stdio proxy. The real server is `plumb daemon`:
+`plumb serve` is a resilient stdio proxy. The real server is `plumb daemon`:
 
 ```
 Claude Desktop / Claude Code / Codex / Gemini CLI
-  └── plumb serve  (per conversation — dials Unix socket, proxies bytes)
+  └── plumb serve  (per conversation — dials Unix socket, frame-aware proxy)
         └── ~/Library/Caches/plumb/plumb.sock  (macOS; os.UserCacheDir())
               └── plumb daemon  (one process, shared across all conversations)
                     ├── workspacePool  (one gopls per workspace root)
@@ -95,6 +95,8 @@ On daemon start the binary writes these files under `os.UserCacheDir()/plumb` (e
 Stats live in one global DB at `config.DataDir()/stats.db` (e.g. `~/Library/Application Support/plumb/stats.db` on macOS). Every row carries `workspace` and `session_id`; project/session views filter on those.
 
 **Singleton enforcement** (two advisory `flock`s in `internal/cli/lock.go`): `plumb.spawn.lock` serialises `plumb serve`'s spawn decision (re-dialling inside the critical section); `plumb.daemon.lock` is held by `plumb daemon` for its lifetime so a second daemon exits on `EWOULDBLOCK`. Both release on process exit; the lock files persist as zero-byte rendezvous points and are never cleaned up.
+
+**Resilient proxy** (`internal/cli/serve_proxy*.go`, 0.8.0+): `plumb serve` is not a byte pump — it is a frame-aware reconnecting proxy that survives a daemon crash or hang without the client noticing. On a daemon failure it keeps the client's stdio open, dial-or-spawns a fresh daemon, and **replays the captured MCP handshake** (the client only sends `initialize` once, so the proxy stashes and resends it, swallowing the replayed response). In-flight requests get a synthesised retryable error (`code -32000`) instead of hanging; non-idempotent writes are never auto-replayed. A *hung* daemon (alive but silent) is caught by an idle `ping` heartbeat — the MCP server dispatches concurrently, so a missed pong is a real signal — then `SIGTERM`→`SIGKILL`'d via `plumb.pid` and respawned. Reconnects are bounded (exponential backoff); on give-up the proxy exits like the legacy path. Knobs: `PLUMB_PROXY_RECONNECT` (default on; off ⇒ legacy `io.Copy` proxy), `PLUMB_PROXY_HEARTBEAT` (duration; `0` disables hang detection), and `plumb serve --no-reconnect`.
 
 ## Configuration layers
 
@@ -359,7 +361,7 @@ func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 
 Version is injected at build time: `-X github.com/golimpio/plumb/internal/cli.Version=<version>` (defaults to `"dev"`). The Makefile resolves it from the exact git tag → the `VERSION` file → the short commit hash. To bump during development, edit `VERSION`; do not tag every iteration.
 
-The daemon writes its build version to `~/Library/Caches/plumb/plumb.version`; `plumb serve` warns on mismatch. **If you've just rebuilt, restart the daemon** — new code never activates against the old process. `plumb stop --force` skips the confirmation prompt (scripts, Makefiles).
+The daemon writes its build version to `~/Library/Caches/plumb/plumb.version`; `plumb serve` warns on mismatch. **If you've just rebuilt, restart the daemon** — new code never activates against the old process. `plumb restart` stops the daemon and brings a fresh one straight back up (use it after a rebuild); since the resilient proxy reconnects connected clients automatically, it is transparent to active conversations. `plumb stop --force` / `plumb restart --force` skip the confirmation prompt (scripts, Makefiles).
 
 ## Commit conventions
 

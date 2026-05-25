@@ -29,6 +29,23 @@ func init() {
 	stopCmd.Flags().BoolVar(&stopFlagForce, "force", false, "stop without asking for confirmation")
 }
 
+// daemonActionPrompt parameterises the active-sessions confirmation so `stop`
+// and `restart` share the same gate with action-appropriate wording.
+type daemonActionPrompt struct {
+	verb        string // lower-case action name, e.g. "stop" / "restart"
+	consequence string // the muted explanation line shown above the Yes/No prompt
+}
+
+var stopActionPrompt = daemonActionPrompt{
+	verb:        "stop",
+	consequence: "Stopping the daemon will terminate all active sessions.",
+}
+
+var restartActionPrompt = daemonActionPrompt{
+	verb:        "restart",
+	consequence: "Restarting the daemon briefly drops active sessions; resilient clients reconnect automatically.",
+}
+
 func runStop(_ *cobra.Command, _ []string) error {
 	PrintLogo()
 	pids := findAllDaemonPIDs()
@@ -38,7 +55,7 @@ func runStop(_ *cobra.Command, _ []string) error {
 	}
 	prompted := false
 	if !stopFlagForce {
-		ok, shown, err := confirmStopWithActiveSessions()
+		ok, shown, err := confirmDaemonActionWithActiveSessions(stopActionPrompt)
 		if err != nil {
 			return err
 		}
@@ -60,7 +77,7 @@ func runStop(_ *cobra.Command, _ []string) error {
 	return lastErr
 }
 
-func confirmStopWithActiveSessions() (bool, bool, error) {
+func confirmDaemonActionWithActiveSessions(p daemonActionPrompt) (bool, bool, error) {
 	active, err := session.List()
 	if err != nil {
 		return false, false, fmt.Errorf("listing active sessions: %w", err)
@@ -73,15 +90,15 @@ func confirmStopWithActiveSessions() (bool, bool, error) {
 		return false, false, err
 	}
 	fmt.Println()
-	ok, err := runStopConfirmationSelector(len(active))
+	ok, err := runActionConfirmationSelector(len(active), p)
 	return ok, true, err
 }
 
-func runStopConfirmationSelector(sessionCount int) (bool, error) {
-	p := tea.NewProgram(newStopConfirmationModel(sessionCount))
-	finalModel, err := p.Run()
+func runActionConfirmationSelector(sessionCount int, p daemonActionPrompt) (bool, error) {
+	prog := tea.NewProgram(newStopConfirmationModel(sessionCount, p))
+	finalModel, err := prog.Run()
 	if err != nil {
-		return false, fmt.Errorf("confirming stop: %w", err)
+		return false, fmt.Errorf("confirming %s: %w", p.verb, err)
 	}
 	m, ok := finalModel.(stopConfirmationModel)
 	if !ok {
@@ -92,13 +109,15 @@ func runStopConfirmationSelector(sessionCount int) (bool, error) {
 
 type stopConfirmationModel struct {
 	sessionCount int
+	consequence  string
 	cursor       int // 0 yes, 1 no
 	confirmed    bool
 }
 
-func newStopConfirmationModel(sessionCount int) stopConfirmationModel {
+func newStopConfirmationModel(sessionCount int, p daemonActionPrompt) stopConfirmationModel {
 	return stopConfirmationModel{
 		sessionCount: sessionCount,
+		consequence:  p.consequence,
 		cursor:       1, // default to No
 	}
 }
@@ -132,10 +151,10 @@ func (m stopConfirmationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m stopConfirmationModel) View() tea.View {
-	return tea.NewView(renderStopConfirmationPrompt(m.sessionCount, m.cursor))
+	return tea.NewView(renderStopConfirmationPrompt(m.consequence, m.sessionCount, m.cursor))
 }
 
-func renderStopConfirmationPrompt(sessionCount, cursor int) string {
+func renderStopConfirmationPrompt(consequence string, sessionCount, cursor int) string {
 	tui.RebuildStyles()
 	infoBadge := lipgloss.NewStyle().
 		Foreground(tui.ActiveTheme.SelectionBackground).
@@ -160,7 +179,7 @@ func renderStopConfirmationPrompt(sessionCount, cursor int) string {
 		"%s %s\n%s\n%s\n%s\n%s\n",
 		infoBadge,
 		tui.ItemStyle.Render(fmt.Sprintf("You have %s.", sessionLabel)),
-		muted.Render("    Stopping the daemon will terminate all active sessions."),
+		muted.Render("    "+consequence),
 		tui.ItemStyle.Render("    Confirm?"),
 		optionLines[0],
 		optionLines[1],

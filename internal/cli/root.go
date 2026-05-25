@@ -94,7 +94,7 @@ func init() {
 		}
 	})
 
-	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd, logLevelCmd)
+	rootCmd.AddCommand(serveCmd, daemonCmd, stopCmd, restartCmd, initCmd, setupCmd, versionCmd, configCmd, sessionsCmd, statsCmd, diagnosticsCmd, doctorCmd, logLevelCmd)
 }
 
 func availableCommandNameWidth(cmd *cobra.Command) int {
