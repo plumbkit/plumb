@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1076,6 +1077,36 @@ func TestDashTopToolsTablesRenderSideBySideWhenWide(t *testing.T) {
 	plainTop := ansiStripForTest(m.dashTopToolsTables(140)[0])
 	if !strings.Contains(plainTop, "Top Tools (all time)") || !strings.Contains(plainTop, "╮   ╭─ Top Tools (uptime)") {
 		t.Fatalf("wide top tools should render side by side with three-space gap:\n%s", plainTop)
+	}
+}
+
+func TestDashTopToolsTablesEqualFrameHeightSideBySide(t *testing.T) {
+	RebuildStyles()
+	// All-time has many tools; uptime has one — the uptime frame must be padded to match.
+	lifetime := make([]stats.ToolStat, 8)
+	for i := range lifetime {
+		lifetime[i] = stats.ToolStat{Tool: fmt.Sprintf("tool_%d", i), Calls: int64(100 - i), TokensSaved: 1000}
+	}
+	m := Model{
+		dashLifetimeTopTools: lifetime,
+		dashUptimeTopTools:   []stats.ToolStat{{Tool: "read_file", Calls: 12, Errors: 1}},
+	}
+
+	lines := m.dashTopToolsTables(140)
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = ansiStripForTest(line)
+	}
+
+	// Both frames must close on the final line, and neither earlier.
+	last := len(plain) - 1
+	if got := strings.Count(plain[last], "╰"); got != 2 {
+		t.Fatalf("final line should close both frames (want 2 '╰', got %d):\n%s", got, plain[last])
+	}
+	for i := 0; i < last; i++ {
+		if strings.Contains(plain[i], "╰") {
+			t.Fatalf("a frame closed early at line %d, frames are not equal height:\n%s", i, strings.Join(plain, "\n"))
+		}
 	}
 }
 

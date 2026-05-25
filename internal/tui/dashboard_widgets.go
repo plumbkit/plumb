@@ -184,10 +184,10 @@ func (m Model) dashTopToolsTables(width int) []string {
 		outer := (width - dashWidgetGap) / 2
 		leftInner := max(outer-2, 40)
 		rightInner := max(width-dashWidgetGap-outer-2, 40)
-		return joinWidgetRow([][]string{
-			dashTopToolsWidget(" Top Tools (all time) ", leftInner, m.dashLifetimeTopTools, dashTopToolsAllTime),
-			dashTopToolsWidget(" Top Tools (uptime) ", rightInner, m.dashUptimeTopTools, dashTopToolsUptime),
-		})
+		left := dashTopToolsWidget(" Top Tools (all time) ", leftInner, m.dashLifetimeTopTools, dashTopToolsAllTime)
+		right := dashTopToolsWidget(" Top Tools (uptime) ", rightInner, m.dashUptimeTopTools, dashTopToolsUptime)
+		h := max(len(left), len(right))
+		return joinWidgetRow([][]string{padBoxHeight(left, h), padBoxHeight(right, h)})
 	}
 
 	lines := allTime

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.29 (unreleased)
+
+### Fixed
+- **Dashboard "Top Tools" panels now share one frame height side by side.** When the daemon has just started, the *Top Tools (uptime)* table has far fewer rows than *Top Tools (all time)*, so its content-driven box was shorter; `joinWidgetRow` then padded the gap with unbordered whitespace, leaving the uptime frame closing partway down with a borderless void beneath it. A new pure helper `padBoxHeight` (`internal/tui/dashboard.go`) grows the shorter `dashBox` to the taller box's height by inserting blank **bordered** rows just above its bottom border (reusing the box's own padding line, so width and style match). Applied in the side-by-side branch of `dashTopToolsTables` (`internal/tui/dashboard_widgets.go`); the stacked layout and the generic `joinWidgetRow` are untouched. Guard: `TestDashTopToolsTablesEqualFrameHeightSideBySide`.
+
 ## 0.7.28 (unreleased)
 
 ### Added

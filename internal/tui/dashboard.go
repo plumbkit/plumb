@@ -275,6 +275,24 @@ func joinWidgetRow(widgets [][]string) []string {
 	return out
 }
 
+// padBoxHeight grows a dashBox-rendered box to target total lines by inserting blank
+// bordered rows just above the bottom border, so side-by-side boxes share one frame height.
+// It reuses the box's own bottom-padding line, so the inserted rows are styled and sized to
+// match. A box with fewer than two lines, or already at/above target, is returned unchanged.
+func padBoxHeight(box []string, target int) []string {
+	if len(box) < 2 || len(box) >= target {
+		return box
+	}
+	blank := box[len(box)-2] // bottom-padding line: │  …  │
+	out := make([]string, 0, target)
+	out = append(out, box[:len(box)-1]...) // all but the bottom border
+	for range target - len(box) {
+		out = append(out, blank) // extra empty bordered rows inside the frame
+	}
+	out = append(out, box[len(box)-1]) // bottom border, last
+	return out
+}
+
 // formatLargeInt formats n as a short human string: 1234 → "1.2k", 1200000 → "1.2m".
 func formatLargeInt(n int64) string {
 	switch {
