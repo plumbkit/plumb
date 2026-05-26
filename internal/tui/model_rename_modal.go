@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/golimpio/plumb/internal/session"
 )
@@ -70,78 +71,67 @@ func (r *renameSessionModal) Update(msg tea.Msg) (renameSessionModal, bool) {
 	return *r, false
 }
 
+// renderModal composites the modal box, centred, over the (already dimmed)
+// background. spliceOverlay handles the centring — the box positions itself.
 func (r renameSessionModal) renderModal(bg string, width, height int) string {
-	return spliceOverlay(bg, r.View(width, height), width, height)
+	return spliceOverlay(bg, r.box(), width, height)
 }
 
-func (r renameSessionModal) View(width, height int) string {
-	// Center the modal box
-	modalWidth := 55
-	modalHeight := 8
-	topPad := (height - modalHeight) / 2
-	leftPad := (width - modalWidth) / 2
+// fieldWidth is the visible width of the editable name field.
+const fieldWidth = 34
 
-	if topPad < 0 {
-		topPad = 0
-	}
-	if leftPad < 0 {
-		leftPad = 0
-	}
+// box renders the rename-session modal as a self-contained, themed box using
+// the same rounded-border idiom as the help and theme-picker overlays. It does
+// not position itself; spliceOverlay centres it.
+func (r renameSessionModal) box() string {
+	const pad = 2 // blank columns each side of the content
 
-	// Build modal content
-	lines := []string{}
-
-	// Top border
-	lines = append(lines, "┌─ Rename Session "+strings.Repeat("─", modalWidth-18)+"┐")
-
-	// Empty line
-	lines = append(lines, "│"+strings.Repeat(" ", modalWidth-2)+"│")
-
-	// Current name
-	currentLine := fmt.Sprintf("│  Current name: %-37s│", r.currentName)
-	lines = append(lines, currentLine)
-
-	// Empty line
-	lines = append(lines, "│"+strings.Repeat(" ", modalWidth-2)+"│")
-
-	// Input line
-	inputField := r.input
-	if len(inputField) > modalWidth-14 {
-		inputField = inputField[len(inputField)-(modalWidth-14):]
-	}
-	inputLine := fmt.Sprintf("│  New name: [%-40s│", inputField+strings.Repeat(" ", modalWidth-14-len(inputField))+"]")
-	lines = append(lines, inputLine)
-
-	// Validation feedback
-	if r.validationErr != "" {
-		errMsg := "  ⚠ " + r.validationErr
-		if len(errMsg) > modalWidth-4 {
-			errMsg = errMsg[:modalWidth-4]
+	rows := r.contentRows()
+	contentW := lipgloss.Width(" Rename Session ")
+	for _, row := range rows {
+		if w := lipgloss.Width(row); w > contentW {
+			contentW = w
 		}
-		lines = append(lines, "│"+errMsg+strings.Repeat(" ", modalWidth-2-len(errMsg))+"│")
-	} else if r.validationErr == "" && r.input != "" {
-		lines = append(lines, "│  ✓ valid"+strings.Repeat(" ", modalWidth-11)+"│")
-	} else {
-		lines = append(lines, "│"+strings.Repeat(" ", modalWidth-2)+"│")
+	}
+	innerW := contentW + pad*2
+
+	var b strings.Builder
+	title := " Rename Session "
+	dashes := max(innerW-1-lipgloss.Width(title), 0)
+	b.WriteString(SepStyle.Render("╭─") + PanelHeaderStyle.Render(title) + SepStyle.Render(strings.Repeat("─", dashes)+"╮") + "\n")
+	for _, row := range rows {
+		rpad := max(innerW-pad-lipgloss.Width(row), 0)
+		b.WriteString(SepStyle.Render("│") + strings.Repeat(" ", pad) + row + strings.Repeat(" ", rpad) + SepStyle.Render("│") + "\n")
+	}
+	b.WriteString(SepStyle.Render("╰" + strings.Repeat("─", innerW) + "╯"))
+	return b.String()
+}
+
+// contentRows builds the inner, border-free rows of the modal. Each returned
+// string is a styled cell whose visible width box() pads to the inner width.
+func (r renameSessionModal) contentRows() []string {
+	current := MutedStyle.Render("Current   ") + DetailStyle.Render(r.currentName)
+
+	shown := r.input
+	if runes := []rune(shown); len(runes) > fieldWidth {
+		shown = string(runes[len(runes)-fieldWidth:])
+	}
+	shown += strings.Repeat(" ", max(fieldWidth-lipgloss.Width(shown), 0))
+	input := MutedStyle.Render("New name  ") + SepStyle.Render("[") + DetailStyle.Render(shown) + SepStyle.Render("]")
+
+	var status string
+	switch {
+	case r.validationErr != "":
+		msg := r.validationErr
+		if len(msg) > fieldWidth {
+			msg = msg[:fieldWidth-1] + "…"
+		}
+		status = WarnStyle.Render("⚠ " + msg)
+	case r.input != "":
+		status = OkStyle.Render("✓ valid")
 	}
 
-	// Help text
-	helpLine := "  Press Esc to cancel, Enter to save."
-	lines = append(lines, "│"+helpLine+strings.Repeat(" ", modalWidth-2-len(helpLine))+"│")
+	help := MutedStyle.Render("esc") + StatusStyle.Render(" cancel    ") + MutedStyle.Render("enter") + StatusStyle.Render(" save")
 
-	// Bottom border
-	lines = append(lines, "└"+strings.Repeat("─", modalWidth-2)+"┘")
-
-	// Build output with padding
-	var output strings.Builder
-	for i := 0; i < topPad; i++ {
-		output.WriteString("\n")
-	}
-	for _, line := range lines {
-		output.WriteString(strings.Repeat(" ", leftPad))
-		output.WriteString(line)
-		output.WriteString("\n")
-	}
-
-	return output.String()
+	return []string{"", current, "", input, "", status, "", help}
 }

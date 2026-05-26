@@ -38,7 +38,7 @@ func (m Model) render() string {
 	bodyHeight := max(m.height-6, 1)
 
 	var sb strings.Builder
-	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen || m.showThemePicker
+	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen || m.showThemePicker || m.renameModal != nil
 
 	sepStyle := SepStyle
 	if isOverlay {
