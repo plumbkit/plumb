@@ -46,8 +46,10 @@ read-only live monitor of the daemon built with Bubble Tea v2. Sections
 **Settings**. The Settings section includes a live theme picker; the active
 theme is read from `[ui].theme` in the global config.
 
-Press `q` or `ctrl+c` to quit. See the [TUI conventions in AGENTS.md](../AGENTS.md)
-for navigation details.
+In the **Sessions** section, press `r` to rename the selected session and `a`
+to refresh; both are also listed in the right panel's footer and the in-app help
+overlay (`ctrl+h`). Press `q` or `ctrl+c` to quit. See the
+[TUI conventions in AGENTS.md](../AGENTS.md) for navigation details.
 
 ---
 

@@ -604,7 +604,8 @@ func TestLogsSectionKeepsUniversalStatusBar(t *testing.T) {
 
 func TestRenderHelpGroupsShortcutsAndKeepsBorders(t *testing.T) {
 	RebuildStyles()
-	m := Model{width: 110, height: 28}
+	// Tall enough that the help box (one row per group + item) is not clipped.
+	m := Model{width: 110, height: 36}
 	bgLine := strings.Repeat(" ", m.width)
 	bg := strings.TrimSuffix(strings.Repeat(bgLine+"\n", m.height), "\n")
 
@@ -614,6 +615,9 @@ func TestRenderHelpGroupsShortcutsAndKeepsBorders(t *testing.T) {
 		"Navigation",
 		"Sections",
 		"Panels",
+		"Sessions",
+		"Rename the selected session",
+		"Refresh sessions and stats",
 		"Actions",
 		"ctrl+1-5",
 		"tab / shift+tab",
@@ -637,6 +641,50 @@ func TestRenderHelpGroupsShortcutsAndKeepsBorders(t *testing.T) {
 		}
 		if !strings.HasSuffix(strings.TrimRight(line, "│"), "   ") {
 			t.Fatalf("help row right padding = %q, want three spaces before border", line)
+		}
+	}
+}
+
+func TestSessionsRightFooterPinnedAndScrolls(t *testing.T) {
+	RebuildStyles()
+	const bodyHeight, rightWidth = 10, 40
+	left := []string{"L0"}
+	right := make([]string, 30) // overflows the viewport so the panel scrolls
+	for i := range right {
+		right[i] = fmt.Sprintf("content-%d", i)
+	}
+
+	render := func(section, scroll int) []string {
+		m := Model{currentSection: section, leftWidth: 20, rightScroll: scroll}
+		out := m.renderBodySection(left, right, bodyHeight, rightWidth, false)
+		return strings.Split(ansiStripForTest(out), "\n")
+	}
+
+	// Sessions section: the hint sits on the last body row, with a blank
+	// spacer directly above it.
+	rows := render(1, 0)
+	hint, spacer := rows[bodyHeight-1], rows[bodyHeight-2]
+	if !strings.Contains(hint, "r rename") || !strings.Contains(hint, "a refresh") {
+		t.Fatalf("footer hint missing from last row: %q", hint)
+	}
+	if strings.Contains(spacer, "rename") || strings.Contains(spacer, "refresh") {
+		t.Fatalf("expected a blank spacer above the hint, got %q", spacer)
+	}
+
+	// Scrolled hard: the footer must stay put, and the scrollable region must
+	// actually have advanced past the top.
+	scrolled := render(1, 100)
+	if !strings.Contains(scrolled[bodyHeight-1], "r rename") {
+		t.Fatalf("footer not preserved when scrolled: %q", scrolled[bodyHeight-1])
+	}
+	if rows[0] == scrolled[0] {
+		t.Fatalf("right panel did not scroll: top row unchanged (%q)", rows[0])
+	}
+
+	// Memory section (2) reserves no footer — the hint must not appear at all.
+	for _, line := range render(2, 0) {
+		if strings.Contains(line, "rename") || strings.Contains(line, "refresh") {
+			t.Fatalf("Memory section must not show the sessions footer: %q", line)
 		}
 	}
 }

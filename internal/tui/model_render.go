@@ -94,22 +94,23 @@ func (m Model) applyOverlays(final string) string {
 }
 
 func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeight, rightWidth int, isOverlay bool) string {
-	sepStyle := SepStyle
-	if isOverlay {
-		sepStyle = SepInactiveStyle
+	// The Sessions section pins a shortcut footer at the bottom of the right
+	// panel; those rows sit outside the scroll viewport so they survive
+	// scrolling. Other sections (Memory) reserve nothing.
+	var rightFooter []string
+	if m.currentSection == 1 {
+		rightFooter = sessionsRightFooter()
 	}
+	rightViewH := max(bodyHeight-len(rightFooter), 0)
 
-	// Clamp scroll offsets
 	maxLeftScroll := max(len(allLeftLines)-bodyHeight, 0)
+	maxRightScroll := max(len(allRightLines)-rightViewH, 0)
 	if m.scrollBounds != nil {
 		m.scrollBounds.maxLeft = maxLeftScroll
+		m.scrollBounds.maxRight = maxRightScroll
 	}
 	if m.leftScroll > maxLeftScroll {
 		m.leftScroll = maxLeftScroll
-	}
-	maxRightScroll := max(len(allRightLines)-bodyHeight, 0)
-	if m.scrollBounds != nil {
-		m.scrollBounds.maxRight = maxRightScroll
 	}
 	if m.rightScroll > maxRightScroll {
 		m.rightScroll = maxRightScroll
@@ -117,42 +118,65 @@ func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeigh
 
 	leftLines := allLeftLines[m.leftScroll:]
 	rightLines := allRightLines[m.rightScroll:]
-
 	leftScrollbar := scrollbarCol(len(allLeftLines), bodyHeight, m.leftScroll, isOverlay)
-	rightScrollbar := scrollbarCol(len(allRightLines), bodyHeight, m.rightScroll, isOverlay)
+	rightScrollbar := scrollbarCol(len(allRightLines), rightViewH, m.rightScroll, isOverlay)
 
 	var sb strings.Builder
 	for i := range bodyHeight {
-		l, r := "", ""
-		if i < len(leftLines) {
-			l = leftLines[i]
-		}
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-
-		leftCell := lipgloss.NewStyle().Width(m.leftWidth).Render(ansi.Truncate(l, m.leftWidth-1, "…") + " ")
-		rightCell := lipgloss.NewStyle().Width(rightWidth).Render(ansi.Truncate(r, rightWidth, "…"))
-
-		lBar := SepStyle.Render("│")
-		if leftScrollbar != nil && i < len(leftScrollbar) {
-			lBar = leftScrollbar[i]
-		}
-		rBar := SepStyle.Render("│")
-		if rightScrollbar != nil && i < len(rightScrollbar) {
-			rBar = rightScrollbar[i]
-		}
-
-		if isOverlay {
-			lDim := InactiveStyle.Render(ansi.Strip(leftCell))
-			rDim := InactiveStyle.Render(ansi.Strip(rightCell))
-			line := sepStyle.Render("│") + lDim + sepStyle.Render("┆") + rDim + sepStyle.Render("│")
-			sb.WriteString(line + "\n")
-		} else {
-			sb.WriteString(lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar + "\n")
-		}
+		l, lBar := bodyColumn(leftLines, leftScrollbar, i)
+		r, rBar := rightBodyColumn(rightLines, rightFooter, rightScrollbar, i, rightViewH)
+		sb.WriteString(assembleBodyRow(l, r, lBar, rBar, m.leftWidth, rightWidth, isOverlay) + "\n")
 	}
 	return sb.String()
+}
+
+// sessionsRightFooter is the pinned shortcut hint at the bottom of the Sessions
+// right panel: a blank spacer keeps it clear of the scrolling content above.
+// Both lines are excluded from the scroll viewport, so they stay put while the
+// panel scrolls.
+func sessionsRightFooter() []string {
+	hint := "  " + StatusKeyStyle.Render("r") + StatusStyle.Render(" rename  ·  ") +
+		StatusKeyStyle.Render("a") + StatusStyle.Render(" refresh")
+	return []string{"", hint}
+}
+
+// bodyColumn resolves the text and separator bar for one scrollable column at
+// row i: the scrollbar thumb/track when the content overflows, else a plain │.
+func bodyColumn(lines, scrollbar []string, i int) (string, string) {
+	text := ""
+	if i < len(lines) {
+		text = lines[i]
+	}
+	bar := SepStyle.Render("│")
+	if scrollbar != nil && i < len(scrollbar) {
+		bar = scrollbar[i]
+	}
+	return text, bar
+}
+
+// rightBodyColumn is bodyColumn for the right panel: scrollable content fills
+// the top rightViewH rows, the pinned footer the rows below it.
+func rightBodyColumn(rightLines, footer, scrollbar []string, i, rightViewH int) (string, string) {
+	if i >= rightViewH {
+		if fi := i - rightViewH; fi < len(footer) {
+			return footer[fi], SepStyle.Render("│")
+		}
+		return "", SepStyle.Render("│")
+	}
+	return bodyColumn(rightLines, scrollbar, i)
+}
+
+// assembleBodyRow joins the two column cells and their separator bars into one
+// body line, dimming the whole row when an overlay is active.
+func assembleBodyRow(l, r, lBar, rBar string, leftWidth, rightWidth int, isOverlay bool) string {
+	leftCell := lipgloss.NewStyle().Width(leftWidth).Render(ansi.Truncate(l, leftWidth-1, "…") + " ")
+	rightCell := lipgloss.NewStyle().Width(rightWidth).Render(ansi.Truncate(r, rightWidth, "…"))
+	if isOverlay {
+		lDim := InactiveStyle.Render(ansi.Strip(leftCell))
+		rDim := InactiveStyle.Render(ansi.Strip(rightCell))
+		return SepInactiveStyle.Render("│") + lDim + SepInactiveStyle.Render("┆") + rDim + SepInactiveStyle.Render("│")
+	}
+	return lBar + leftCell + SepStyle.Render("┆") + rightCell + rBar
 }
 
 func (m Model) renderMainStatusBar(dimmed bool) string {
@@ -364,6 +388,13 @@ func (m Model) renderHelp(bg string) string {
 			items: []helpItem{
 				{key: "tab / shift+tab", desc: "Switch focus: sessions, details, tools, recent"},
 				{key: "[  ]", desc: "Resize columns"},
+			},
+		},
+		{
+			title: "Sessions",
+			items: []helpItem{
+				{key: "r", desc: "Rename the selected session"},
+				{key: "a", desc: "Refresh sessions and stats"},
 			},
 		},
 		{
