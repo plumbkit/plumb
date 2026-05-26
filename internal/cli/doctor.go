@@ -582,7 +582,8 @@ func checkStatsDB(ws string) []checkResult {
 }
 
 // checkTopology reports the health of the per-workspace topology index. It is a
-// no-op pass when topology is disabled (the opt-in default). When enabled, it
+// no-op pass when topology is disabled (it is on by default; this is the
+// opted-out case). When enabled, it
 // inspects the on-disk index read-only (without starting an indexer): a missing
 // or empty index is a failure with a hint to run a daemon session.
 func checkTopology(ws string) []checkResult {
@@ -604,7 +605,7 @@ func checkTopology(ws string) []checkResult {
 		return []checkResult{{
 			name:   "topology",
 			ok:     true,
-			detail: "disabled (opt-in — set [topology] enabled = true to activate)",
+			detail: "disabled ([topology] enabled = false — on by default)",
 		}}
 	}
 	if ws == "" {

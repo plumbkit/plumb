@@ -24,10 +24,12 @@ func writeProjectTopologyConfig(t *testing.T, ws string, enabled bool) {
 	}
 }
 
-func TestCheckTopology_DisabledByDefault(t *testing.T) {
+func TestCheckTopology_DisabledByConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate from the developer's global config
+	ws := t.TempDir()
+	writeProjectTopologyConfig(t, ws, false) // topology is on by default; opt this workspace out
 
-	res := checkTopology("")
+	res := checkTopology(ws)
 	if len(res) != 1 {
 		t.Fatalf("want 1 result, got %d: %+v", len(res), res)
 	}

@@ -334,10 +334,10 @@ func TestDefaults_WorkspaceAutoAttachDisabled(t *testing.T) {
 	}
 }
 
-func TestDefaults_TopologyDisabledAndMaxFileSize(t *testing.T) {
+func TestDefaults_TopologyEnabledAndMaxFileSize(t *testing.T) {
 	cfg := Defaults()
-	if cfg.Topology.Enabled {
-		t.Error("topology must be disabled by default (opt-in)")
+	if !cfg.Topology.Enabled {
+		t.Error("topology must be enabled by default (opt out with [topology] enabled = false)")
 	}
 	const wantMaxSize = 512 * 1024
 	if cfg.Topology.MaxFileSizeBytes != wantMaxSize {

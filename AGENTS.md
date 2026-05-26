@@ -163,7 +163,7 @@ Top-level section (distinct from per-language `[lsp.<lang>]` tables). Applied at
 
 ```toml
 [topology]
-enabled                 = false   # opt-in; persistent SQLite/FTS5 index at <workspace>/.plumb/topology.db
+enabled                 = true    # on by default; opt out with enabled = false. SQLite/FTS5 index at <workspace>/.plumb/topology.db
 resync_on_attach        = false   # full resync each time the workspace attaches
 exclude_patterns        = []      # path globs to skip during indexing
 max_file_size_bytes     = 524288  # 512 KiB cap per file; 0 = default
@@ -172,7 +172,7 @@ resync_pause_ms         = 25      # pause after each batch, ms; 0 disables pacin
 resync_interval_minutes = 60      # periodic full resync; 0 disables
 ```
 
-Disabled by default. Only the full resync walk is paced — write-triggered upserts are never delayed. Exposed through six `topology_*` tools and backs the LSP fallback above; `plumb doctor` reports its health and the TUI Sessions panel shows a topology row when an index exists. `topology.db` (+ `-wal`/`-shm`) is auto-added to `<workspace>/.plumb/.gitignore`. See the [Topology guide](docs/topology.md).
+Enabled by default (opt out with `[topology] enabled = false`, per-project or global). On first attach to a workspace the index is created at `<workspace>/.plumb/topology.db` — this is the one case where plumb materialises `.plumb/` for a project that did not have it. Only the full resync walk is paced — write-triggered upserts are never delayed. Exposed through six `topology_*` tools and backs the LSP fallback above; `plumb doctor` reports its health and the TUI Sessions panel shows a topology row when an index exists. `topology.db` (+ `-wal`/`-shm`) is auto-added to `<workspace>/.plumb/.gitignore`. See the [Topology guide](docs/topology.md).
 
 **Known limitation:** `topologyPool` (`internal/cli/topology_pool.go`) is built once from the daemon's *global* `cfg.Topology`; per-project config only toggles enable/disable, not tuning (interval, batch, excludes, max size). Tracked in `docs/internal/todo.md`.
 
@@ -299,7 +299,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | `daemon_info` | Session name + ID, daemon version, start time, uptime. |
 | `rename_session` | Rename the current MCP session (letters/digits/`-`, ≤25 chars). |
 
-**Topology** — SQLite/FTS5 index at `<workspace>/.plumb/topology.db`; enabled via `[topology] enabled = true`, disabled by default.
+**Topology** — SQLite/FTS5 index at `<workspace>/.plumb/topology.db`; on by default (opt out with `[topology] enabled = false`).
 
 | Tool | Notes |
 |---|---|

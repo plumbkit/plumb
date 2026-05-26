@@ -22,10 +22,10 @@ things are connected. Plumb's topology is a **graph** of your code's entities
 (the nodes) and their relationships (the edges), stored in a single file you can
 delete and rebuild at any time.
 
-> **You don't need to understand any of the internals to use it.** Turn it on
-> with `[topology] enabled = true` and the `topology_*` tools (plus faster
-> symbol search) start working. The rest of this page explains the benefits and
-> how it works, for the curious.
+> **You don't need to understand any of the internals to use it.** It is **on by
+> default** — the `topology_*` tools (plus faster symbol search) work out of the
+> box; opt out with `[topology] enabled = false`. The rest of this page explains
+> the benefits and how it works, for the curious.
 
 ## Why it exists — the problem it solves
 
@@ -192,5 +192,7 @@ never committed.
   read the confidence annotation.
 - **Freshness is eventual.** Edits made through plumb re-index immediately;
   external changes are picked up by the periodic resync (or on the next attach).
-- **Disabled by default.** Topology is opt-in while the path to safely enabling
-  it by default is completed (see `docs/internal/todo.md`).
+- **Enabled by default.** Opt out with `[topology] enabled = false` (per-project
+  or global) — e.g. for a very large repo you do not want indexed. On first
+  attach the index is created at `<workspace>/.plumb/topology.db` (auto-gitignored);
+  this is the one case where plumb materialises `.plumb/` for a project.

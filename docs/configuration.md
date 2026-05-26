@@ -129,7 +129,7 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
-| `enabled` | bool | `false` | Turn on the persistent SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. See the [Topology guide](topology.md). |
+| `enabled` | bool | `true` | The persistent SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`. On by default; set `false` to opt out (per-project or global). The index is created on first attach — the one case where plumb materialises `.plumb/`. See the [Topology guide](topology.md). |
 | `resync_on_attach` | bool | `false` | Force a full resync each time the workspace attaches. |
 | `exclude_patterns` | []string | `[]` | Path glob patterns to skip during indexing. |
 | `max_file_size_bytes` | int64 | `524288` (512 KiB) | Largest file considered for extraction. `0` uses the default. |
@@ -256,7 +256,7 @@ timeout_ms            = 2000
 max_findings_per_file = 5
 
 [topology]
-enabled                 = false             # persistent semantic index
+enabled                 = true              # on by default; set false to opt out
 resync_on_attach        = false
 exclude_patterns        = []
 max_file_size_bytes     = 524288            # 512 KiB

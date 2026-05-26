@@ -158,7 +158,9 @@ type GitConfig struct {
 // TopologyConfig controls the persistent semantic index.
 // All fields can be overridden per-project via <workspace>/.plumb/config.toml.
 type TopologyConfig struct {
-	// Enabled turns topology indexing on. Default false (opt-in).
+	// Enabled turns topology indexing on. Default true; opt out per-project or
+	// globally with `enabled = false`. When on, the index lives at
+	// <workspace>/.plumb/topology.db (auto-gitignored), created on first attach.
 	Enabled bool `toml:"enabled"`
 	// ResyncOnAttach triggers a full resync whenever the workspace attaches.
 	ResyncOnAttach bool `toml:"resync_on_attach"`
@@ -262,7 +264,7 @@ var defaults = Config{
 		MaxFindingsPerFile: 5,
 	},
 	Topology: TopologyConfig{
-		Enabled:               false,
+		Enabled:               true,
 		MaxFileSizeBytes:      512 * 1024,
 		ResyncBatch:           100,
 		ResyncPauseMs:         25,
