@@ -268,3 +268,44 @@ func TestProxyHangDetection(t *testing.T) {
 	}
 	_ = h.clientIn.Close()
 }
+
+// TestProxyOutstandingTrackedOnlyAfterSend is the F11 regression: a request must
+// be tracked as in-flight only AFTER its write to the daemon succeeds. If it were
+// tracked before the write, a reconnect triggered by that very write's failure
+// would both synthesise a -32000 for it AND let the pump re-send it to the fresh
+// daemon — a double response and a forbidden auto-replay.
+func TestProxyOutstandingTrackedOnlyAfterSend(t *testing.T) {
+	t.Parallel()
+	p := newReconnectingProxy(proxyDeps{})
+
+	count := func() int {
+		p.reqMu.Lock()
+		defer p.reqMu.Unlock()
+		return len(p.outstanding)
+	}
+	has := func(raw string) bool {
+		p.reqMu.Lock()
+		defer p.reqMu.Unlock()
+		_, ok := p.outstanding[idKey([]byte(raw))]
+		return ok
+	}
+
+	toolCall := []byte(`{"jsonrpc":"2.0","id":5,"method":"tools/call"}`)
+	p.captureHandshake(toolCall)
+	if count() != 0 {
+		t.Fatalf("captureHandshake tracked %d outstanding; want 0 (track only after a successful send)", count())
+	}
+	p.trackOutstanding(toolCall)
+	if !has("5") {
+		t.Error("trackOutstanding did not record the sent request id 5")
+	}
+
+	// The initialize request is replayed by replayHandshake, never failed, so it
+	// must not be tracked as outstanding.
+	initFrame := []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
+	p.captureHandshake(initFrame)
+	p.trackOutstanding(initFrame)
+	if has("1") {
+		t.Error("initialize must not be tracked as outstanding")
+	}
+}

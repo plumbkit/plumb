@@ -184,10 +184,11 @@ func (p *reconnectingProxy) pumpClientToDaemon(ctx context.Context) error {
 		if err != nil {
 			return nil // client closed stdin — normal end of session
 		}
-		p.captureClientFrame(frame)
+		p.captureHandshake(frame)
 		for {
 			gen, werr := p.writeDaemon(frame)
 			if werr == nil {
+				p.trackOutstanding(frame) // only once the frame has actually reached the daemon
 				break
 			}
 			if ctx.Err() != nil {
@@ -250,7 +251,11 @@ func (p *reconnectingProxy) writeClient(frame []byte) {
 
 func (p *reconnectingProxy) out() io.Writer { return p.deps.out }
 
-func (p *reconnectingProxy) captureClientFrame(frame []byte) {
+// captureHandshake records the MCP handshake frames so a reconnect can replay
+// them. It runs *before* the frame is written, because the handshake must stay
+// replayable even if the daemon dies mid-write. In-flight request tracking is
+// deliberately not done here — see trackOutstanding.
+func (p *reconnectingProxy) captureHandshake(frame []byte) {
 	e := parseEnvelope(frame)
 	switch {
 	case e.Method == "initialize" && e.hasID():
@@ -262,11 +267,33 @@ func (p *reconnectingProxy) captureClientFrame(frame []byte) {
 		p.hsMu.Lock()
 		p.initializedFrame = cloneBytes(frame)
 		p.hsMu.Unlock()
-	case e.isRequest():
-		p.reqMu.Lock()
-		p.outstanding[idKey(e.ID)] = cloneBytes(e.ID)
-		p.reqMu.Unlock()
 	}
+}
+
+// trackOutstanding records a request id as in-flight — but only AFTER the frame
+// was successfully written to the daemon. Tracking before the write would let a
+// reconnect's failOutstanding synthesise a -32000 for a request the pump then
+// re-sends to the fresh daemon: a double response, and an auto-replay of a write
+// the "never auto-replay" contract forbids. By tracking only confirmed-sent
+// requests, a request whose write failed is simply re-sent once (it never
+// reached a daemon), while a confirmed-sent request that the daemon dies before
+// answering gets exactly one synthesised retryable error. The initialize request
+// is excluded — it is resolved by replayHandshake, not failOutstanding.
+func (p *reconnectingProxy) trackOutstanding(frame []byte) {
+	e := parseEnvelope(frame)
+	if !e.isRequest() {
+		return
+	}
+	key := idKey(e.ID)
+	p.hsMu.Lock()
+	isInit := key == p.initializeID
+	p.hsMu.Unlock()
+	if isInit {
+		return
+	}
+	p.reqMu.Lock()
+	p.outstanding[key] = cloneBytes(e.ID)
+	p.reqMu.Unlock()
 }
 
 func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {

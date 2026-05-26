@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.9 (unreleased)
+
+### Fixed
+- **The resilient `plumb serve` proxy no longer double-responds to (or silently replays) a request sent during a reconnect.** `pumpClientToDaemon` added every request to the in-flight `outstanding` set *before* writing it to the daemon. If that write then failed (the daemon died mid-frame, or the connection was nil during an in-progress reconnect), the reconnect's `failOutstanding` synthesised a retryable `-32000` for the request **and** the pump's retry loop re-sent the same frame to the fresh daemon — so the client received two responses for one id, and a non-idempotent write (`edit_file`, `git commit`) executed despite the "please retry" error, contradicting the documented "writes are never auto-replayed" guarantee. The frame's handshake capture (needed for replay) is now split from request tracking: `captureHandshake` still runs before the write, but the new `trackOutstanding` records a request only *after* its write to the daemon succeeds. A request whose write failed never reached a daemon, so it is simply re-sent once; a confirmed-sent request the daemon dies before answering still gets exactly one `-32000`. Guard: `TestProxyOutstandingTrackedOnlyAfterSend`.
+
 ## 0.8.8 (unreleased)
 
 ### Fixed
