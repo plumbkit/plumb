@@ -56,6 +56,7 @@ func runRestart(_ *cobra.Command, _ []string) error {
 		if err := stopByPID(pid, prompted && i == 0); err != nil {
 			return err
 		}
+		forceKillIfAlive(pid) // a daemon that ignored SIGTERM must still go, so respawn is real
 	}
 	return respawnDaemon()
 }

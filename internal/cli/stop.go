@@ -316,3 +316,27 @@ func stopByPID(pid int, leadingBlank bool) error {
 	fmt.Printf("Warning: daemon (PID %d) did not stop within 5 seconds; it may still be running.\n", pid)
 	return nil
 }
+
+// forceKillIfAlive escalates to SIGKILL when a daemon ignored the SIGTERM that
+// stopByPID already sent. `plumb restart`'s contract is a *fresh* daemon, so one
+// that will not stop must be killed outright — otherwise respawnDaemon would just
+// dial the still-running stuck daemon and falsely report a restart. `plumb stop`
+// deliberately does NOT escalate; it is the graceful path.
+func forceKillIfAlive(pid int) {
+	if !processAlive(pid) {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	fmt.Printf("Daemon (PID %d) ignored SIGTERM — sending SIGKILL.\n", pid)
+	_ = proc.Signal(syscall.SIGKILL)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
