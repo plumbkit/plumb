@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.7 (unreleased)
+
+### Added
+- **Live topology indexing via OS-level file watching (`[topology] watch`, default on).** The index now updates the moment a file changes on disk — regardless of who changed it: this agent, another agent sharing the daemon, or you in your editor — replacing time-based polling, which can only ever be eventually-consistent. A per-workspace watcher (`internal/topology/watcher.go`, built on [`github.com/sgtdi/fswatcher`](https://github.com/sgtdi/fswatcher) v1.3.0 — FSEvents on macOS, inotify on Linux, kqueue on the BSDs, ReadDirectoryChangesW on Windows) translates each change into an incremental re-index on the *existing* bounded indexer queue (no second queue). It is robust under a mass change (`git checkout`, a formatter rewriting the tree): the OS cooldown coalesces per path, the indexer's queue coalesces again (last-op-per-path), and on a queue-full or OS-overflow signal it collapses to a single paced full resync rather than a storm — so worst-case work is bounded to one resync, never thousands of parallel syncs. `.plumb/` is excluded from watching so the index's own `topology.db`/`-wal`/`-shm` writes can't self-trigger a loop. While the watcher is live the periodic `resync_interval_minutes` poll is **suppressed** (freshness is purely event-driven, with a full resync still run at startup and on any dropped/overflow signal); `resync_interval_minutes` remains the fallback when `watch = false` or the platform watcher cannot start (logged, degrades gracefully — never blocks the daemon). New `[topology] watch` config field (default true), hot-reloaded through the existing topology-pool reconcile. Unit tests: `TestFSWatcher_Handle` (event→action mapping, incl. the self-trigger and overflow paths), `TestShouldSkipPath`, `TestFSWatcher_StartStop` (real-watcher lifecycle). Dependency added: `github.com/sgtdi/fswatcher` (MIT; pulls `golang.org/x/sys`).
+
 ## 0.8.6 (unreleased)
 
 ### Fixed

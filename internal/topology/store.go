@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type Store struct {
 	workspace string
 	db        *sql.DB
 	idx       *Indexer
+	watcher   *fsWatcher // nil when [topology] watch is off or the OS watcher could not start
 }
 
 // Open opens or creates the topology index for workspace. It starts the
@@ -35,13 +37,37 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 	idx := newIndexer(workspace, db, exts, cfg.MaxFileSizeBytes, cfg.ResyncIntervalMinutes)
 	idx.resyncBatch = cfg.ResyncBatch
 	idx.resyncPause = time.Duration(cfg.ResyncPauseMs) * time.Millisecond
-	idx.Start()
-	return &Store{workspace: workspace, db: db, idx: idx}, nil
+	s := &Store{workspace: workspace, db: db, idx: idx}
+
+	var watcher *fsWatcher
+	if cfg.Watch {
+		w, werr := newFSWatcher(workspace, s)
+		if werr != nil {
+			slog.Warn("topology: file watcher unavailable; falling back to periodic resync",
+				"workspace", workspace, "err", werr)
+		} else {
+			// Event-driven freshness replaces time-based polling: suppress the
+			// periodic resync. A full resync still runs once at startup (Indexer.Start)
+			// and whenever the OS reports dropped/overflowed events.
+			idx.resyncMins = 0
+			s.watcher = w
+			watcher = w
+		}
+	}
+
+	idx.Start() // starts the consumer and enqueues the initial full resync
+	if watcher != nil {
+		watcher.Start() // begin watching once the consumer is ready
+	}
+	return s, nil
 }
 
 // Close stops the indexer and closes the database. Safe to call from any
 // goroutine; subsequent calls are no-ops.
 func (s *Store) Close() error {
+	if s.watcher != nil {
+		s.watcher.Stop() // stop enqueuing before the indexer drains and the db closes
+	}
 	s.idx.Stop()
 	return s.db.Close()
 }

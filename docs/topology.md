@@ -171,13 +171,14 @@ All `[topology]` fields (see the
 
 | Field | Default | Effect |
 |---|---|---|
-| `enabled` | `false` | Turn the index on. |
+| `enabled` | `true` | Turn the index on or off (on by default). |
 | `resync_on_attach` | `false` | Full resync each time the workspace attaches. |
 | `exclude_patterns` | `[]` | Path globs to skip during indexing. |
 | `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). |
 | `resync_batch` | `100` | Files extracted before the full resync pauses (CPU throttle). `0` disables pacing. |
 | `resync_pause_ms` | `25` | Pause after each `resync_batch` files, in milliseconds. `0` disables pacing. |
-| `resync_interval_minutes` | `60` | Periodic full-resync interval (when enabled); `0` disables. |
+| `resync_interval_minutes` | `60` | Periodic full-resync **fallback** (used only when `watch = false` or the watcher can't start); suppressed while the watcher is live; `0` disables. |
+| `watch` | `true` | OS-level file watching: re-index a file the moment it changes on disk, regardless of who changed it (agent, another agent, your editor). Replaces polling; falls back to `resync_interval_minutes` when disabled or unavailable. |
 
 The index is enabled per project or globally. It writes only to
 `<workspace>/.plumb/topology.db` (and its SQLite `-wal`/`-shm` sidecars), which

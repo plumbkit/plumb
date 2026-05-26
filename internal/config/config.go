@@ -179,6 +179,14 @@ type TopologyConfig struct {
 	ResyncPauseMs int `toml:"resync_pause_ms"`
 	// ResyncIntervalMinutes is the interval between full resyncs. 0 disables periodic resync. Default 60.
 	ResyncIntervalMinutes int `toml:"resync_interval_minutes"`
+	// Watch enables OS-level file-system watching: any change to a source file —
+	// by this agent, another agent, or an external editor — is re-indexed at the
+	// moment it happens, instead of waiting for a periodic resync. Default true.
+	// When the watcher is live the periodic resync is suppressed (freshness is
+	// event-driven, with a full resync still triggered on a dropped/overflow
+	// signal); when the watcher is disabled or unavailable, ResyncIntervalMinutes
+	// remains the fallback.
+	Watch bool `toml:"watch"`
 }
 
 // UIConfig controls presentation settings stored in the global config only.
@@ -269,6 +277,7 @@ var defaults = Config{
 		ResyncBatch:           100,
 		ResyncPauseMs:         25,
 		ResyncIntervalMinutes: 60,
+		Watch:                 true,
 	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},

@@ -169,10 +169,13 @@ exclude_patterns        = []      # path globs to skip during indexing
 max_file_size_bytes     = 524288  # 512 KiB cap per file; 0 = default
 resync_batch            = 100     # files per pause during a full resync; 0 disables pacing
 resync_pause_ms         = 25      # pause after each batch, ms; 0 disables pacing
-resync_interval_minutes = 60      # periodic full resync; 0 disables
+resync_interval_minutes = 60      # periodic full resync FALLBACK; suppressed while the watcher is live; 0 disables
+watch                   = true    # OS-level file watching (fswatcher): re-index on change, whoever made it
 ```
 
 Enabled by default (opt out with `[topology] enabled = false`, per-project or global). On first attach to a workspace the index is created at `<workspace>/.plumb/topology.db` — this is the one case where plumb materialises `.plumb/` for a project that did not have it. Only the full resync walk is paced — write-triggered upserts are never delayed. Exposed through six `topology_*` tools and backs the LSP fallback above; `plumb doctor` reports its health and the TUI Sessions panel shows a topology row when an index exists. `topology.db` (+ `-wal`/`-shm`) is auto-added to `<workspace>/.plumb/.gitignore`. See the [Topology guide](docs/topology.md).
+
+**Live indexing (`watch = true`, default on).** An OS-level file watcher ([`fswatcher`](https://github.com/sgtdi/fswatcher): FSEvents/inotify/kqueue) re-indexes a file the moment it changes on disk — regardless of who changed it (this agent, another agent, or your editor), which a write-hook alone cannot see. It feeds the same bounded indexer queue, so a mass change (`git checkout`, a formatter rewriting everything) coalesces and, on queue/OS overflow, collapses to a single paced full resync rather than a storm. While the watcher is live the periodic `resync_interval_minutes` poll is **suppressed** (freshness is event-driven; a full resync still runs at startup and on any dropped/overflow signal). `resync_interval_minutes` remains the fallback when `watch = false` or the platform watcher cannot start (logged, degrades gracefully). `.plumb/` is excluded from watching so the index's own writes never self-trigger.
 
 **Known limitation:** `topologyPool` (`internal/cli/topology_pool.go`) is built once from the daemon's *global* `cfg.Topology`; per-project config only toggles enable/disable, not tuning (interval, batch, excludes, max size). Tracked in `docs/internal/todo.md`.
 

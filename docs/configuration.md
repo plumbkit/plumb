@@ -135,7 +135,8 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 | `max_file_size_bytes` | int64 | `524288` (512 KiB) | Largest file considered for extraction. `0` uses the default. |
 | `resync_batch` | int | `100` | Files the full resync extracts before pausing, to throttle CPU. `0` disables pacing. |
 | `resync_pause_ms` | int | `25` | Pause (milliseconds) after each `resync_batch` files. `0` disables pacing. |
-| `resync_interval_minutes` | int | `60` | Interval between full resyncs (for enabled workspaces). `0` disables periodic resync. |
+| `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
+| `watch` | bool | `true` | OS-level file watching ([`fswatcher`](https://github.com/sgtdi/fswatcher)): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
 
 ## `[lsp_query]` — LSP operation timeout (global only)
 
@@ -262,7 +263,8 @@ exclude_patterns        = []
 max_file_size_bytes     = 524288            # 512 KiB
 resync_batch            = 100               # files per pause during a full resync (0 disables)
 resync_pause_ms         = 25                # pause after each batch, ms (0 disables)
-resync_interval_minutes = 60                # periodic full resync; 0 disables
+resync_interval_minutes = 60                # periodic full resync FALLBACK (suppressed while watch is on); 0 disables
+watch                   = true              # OS-level file watching: re-index on change, whoever made it
 
 [lsp_query]
 timeout = "30s"          # per-operation cap; 0 disables; global only
