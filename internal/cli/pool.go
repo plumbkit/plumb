@@ -394,23 +394,49 @@ func (p *workspacePool) lookup(root string) *poolEntry {
 	return p.entries[root]
 }
 
+// poolCloseGrace bounds the LSP graceful-shutdown handshake per entry during
+// pool.close(). jsonrpc Call/Notify honour their context, so a cold or hung
+// language server unblocks at this deadline instead of stalling daemon exit;
+// sup.Stop() then kills the process regardless. The daemon's shutdown watchdog
+// (shutdownHardDeadline) is the outer backstop.
+const poolCloseGrace = 2 * time.Second
+
 // close shuts down all LS processes. Safe to call from multiple goroutines
-// but intended to be called once at daemon shutdown.
+// but intended to be called once at daemon shutdown. Entries are torn down
+// concurrently under a bounded deadline so one slow language server cannot
+// stall the others or daemon exit.
 func (p *workspacePool) close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	bg := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
+	defer cancel()
+
+	var wg sync.WaitGroup
 	for _, e := range p.entries {
-		if c := e.proxy.get(); c != nil {
-			_ = c.Shutdown(bg)
-			_ = c.Exit(bg)
-		}
-		if e.sup != nil {
-			e.sup.Stop()
-		}
-		if e.cache != nil {
-			e.cache.Close()
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			closeEntry(ctx, e)
+		}()
+	}
+	wg.Wait()
+}
+
+// closeEntry shuts down a single pool entry: a best-effort bounded LSP
+// Shutdown/Exit handshake, then sup.Stop() to kill the process regardless of
+// whether the handshake completed. The handshake is politeness; sup.Stop()
+// (which cancels the supervisor's exec.CommandContext, killing the process) is
+// the real guarantee the language server dies.
+func closeEntry(ctx context.Context, e *poolEntry) {
+	if c := e.proxy.get(); c != nil {
+		_ = c.Shutdown(ctx)
+		_ = c.Exit(ctx)
+	}
+	if e.sup != nil {
+		e.sup.Stop()
+	}
+	if e.cache != nil {
+		e.cache.Close()
 	}
 }

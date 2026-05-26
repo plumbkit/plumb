@@ -55,6 +55,50 @@ var daemonCmd = &cobra.Command{
 	RunE:   runDaemon,
 }
 
+// shutdownHardDeadline bounds total graceful shutdown. Once a signal cancels
+// the daemon context, armShutdownWatchdog forces process exit after this
+// deadline if the orderly teardown (bounded pool.close, connection drain,
+// topology stop) has not already returned — so a wedged language server or a
+// mid-resync can never leave the daemon hanging and holding the lifetime lock.
+const shutdownHardDeadline = 5 * time.Second
+
+// acceptDrainGrace bounds how long the accept loop waits for in-flight
+// connections to finish once shutdown begins; the watchdog backstops the rest.
+const acceptDrainGrace = 2 * time.Second
+
+// armShutdownWatchdog forces process exit shutdownHardDeadline after ctx is
+// cancelled — a last-resort backstop behind the bounded graceful teardown. exit
+// is injectable for tests; production passes os.Exit. On a clean shutdown
+// runDaemon returns and the process exits before the timer fires, so exit is
+// never actually called.
+func armShutdownWatchdog(ctx context.Context, deadline time.Duration, exit func(int)) {
+	go func() {
+		<-ctx.Done()
+		timer := time.NewTimer(deadline)
+		defer timer.Stop()
+		<-timer.C
+		slog.Error("daemon: shutdown exceeded hard deadline; forcing exit", "deadline", deadline)
+		exit(0)
+	}()
+}
+
+// drainConnections waits up to d for the in-flight connection WaitGroup to
+// drain, returning false on timeout. Leaked goroutines are torn down by process
+// exit, which the shutdown watchdog guarantees.
+func drainConnections(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func runDaemon(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -72,6 +116,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	defer lock.Close()
+
+	// Last-resort backstop: guarantee the daemon exits within a bounded time of a
+	// shutdown signal even if some teardown step wedges, so it releases the
+	// lifetime lock and a restart's fresh daemon can bind the socket.
+	armShutdownWatchdog(ctx, shutdownHardDeadline, os.Exit)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -208,7 +257,9 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				wg.Wait()
+				if !drainConnections(&wg, acceptDrainGrace) {
+					slog.Warn("daemon: in-flight requests did not drain before the shutdown deadline; proceeding")
+				}
 				return
 			default:
 				slog.Error("daemon: accept", "err", err)

@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -274,4 +276,70 @@ func TestReapAfterExit(t *testing.T) {
 	if _, err := logFile.WriteString("x"); err == nil {
 		t.Error("spawner's log handle should be closed after reapAfterExit")
 	}
+}
+
+// TestArmShutdownWatchdog_ForcesExitAfterDeadline verifies the watchdog forces
+// process exit (code 0) a bounded time after the daemon context is cancelled by
+// a shutdown signal, and not before.
+func TestArmShutdownWatchdog_ForcesExitAfterDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	exited := make(chan int, 1)
+	armShutdownWatchdog(ctx, 50*time.Millisecond, func(code int) { exited <- code })
+
+	// No signal yet: the watchdog must stay dormant.
+	select {
+	case <-exited:
+		t.Fatal("watchdog fired before the context was cancelled")
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	cancel() // simulate SIGTERM cancelling the daemon context
+	select {
+	case code := <-exited:
+		if code != 0 {
+			t.Errorf("watchdog exit code = %d, want 0", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watchdog did not force exit within the deadline after cancellation")
+	}
+}
+
+// TestArmShutdownWatchdog_NoExitWhileServing verifies a daemon that never
+// receives a shutdown signal is never force-exited.
+func TestArmShutdownWatchdog_NoExitWhileServing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exited := make(chan int, 1)
+	armShutdownWatchdog(ctx, 50*time.Millisecond, func(code int) { exited <- code })
+
+	select {
+	case <-exited:
+		t.Fatal("watchdog fired without a shutdown signal")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// TestDrainConnections covers both the clean drain and the wedged-connection
+// timeout the accept loop relies on at shutdown.
+func TestDrainConnections(t *testing.T) {
+	t.Run("drains before the deadline", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			wg.Done()
+		}()
+		if !drainConnections(&wg, time.Second) {
+			t.Error("reported a timeout for a group that drained in time")
+		}
+	})
+
+	t.Run("times out on a wedged connection", func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1) // never Done — a wedged in-flight request
+		if drainConnections(&wg, 50*time.Millisecond) {
+			t.Error("reported success for a group that never drained")
+		}
+		wg.Done() // release the internal waiter goroutine
+	})
 }

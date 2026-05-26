@@ -1,13 +1,59 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golimpio/plumb/internal/config"
 )
+
+// blockingShutdownClient embeds stubClient (routing_proxy_test.go) and makes
+// Shutdown block until its context is cancelled, simulating a cold or hung
+// language server during daemon teardown.
+type blockingShutdownClient struct {
+	*stubClient
+	entered chan struct{}
+}
+
+func (b *blockingShutdownClient) Shutdown(ctx context.Context) error {
+	close(b.entered)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestCloseEntry_BoundsHungShutdown verifies closeEntry returns once its bounded
+// context fires even when the language server's Shutdown never responds — so a
+// hung LSP cannot stall daemon exit.
+func TestCloseEntry_BoundsHungShutdown(t *testing.T) {
+	client := &blockingShutdownClient{stubClient: &stubClient{}, entered: make(chan struct{})}
+	e := &poolEntry{proxy: &clientProxy{}}
+	e.proxy.set(client)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		closeEntry(ctx, e)
+		close(done)
+	}()
+
+	select {
+	case <-client.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown was never called")
+	}
+	select {
+	case <-done:
+		// returned once the deadline fired — the hung Shutdown did not stall close
+	case <-time.After(2 * time.Second):
+		t.Fatal("closeEntry did not return after its deadline; a hung Shutdown stalls daemon exit")
+	}
+}
 
 // detectTestPool builds a workspacePool with Go and Python enabled, matching
 // the default plumb configuration. Used by all Detect tests below.
