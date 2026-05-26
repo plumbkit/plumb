@@ -88,11 +88,12 @@ func (p *reconnectingProxy) ping(ctx context.Context, id string) bool {
 	}
 }
 
-// killHungDaemon terminates the daemon recorded in the PID file: SIGTERM, then
-// SIGKILL after a grace period. Used only on the hang path; a crashed daemon is
+// killHungDaemon terminates the given daemon PID: SIGTERM, then SIGKILL after a
+// grace period. The caller passes the PID it was connected to (not a fresh read
+// of the PID file), so a hang detected by one client cannot kill a different,
+// freshly-respawned daemon. Used only on the hang path; a crashed daemon is
 // already gone.
-func killHungDaemon() {
-	pid := readDaemonPID()
+func killHungDaemon(pid int) {
 	if pid <= 0 {
 		return
 	}

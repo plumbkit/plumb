@@ -130,7 +130,7 @@ func startProxy(t *testing.T, initialProxySide net.Conn, hb, pingTO time.Duratio
 				return nil, errors.New("no more daemons available")
 			}
 		},
-		killDaemon:        func() { h.killCount.Add(1) },
+		killDaemon:        func(int) { h.killCount.Add(1) },
 		heartbeatInterval: hb,
 		pingTimeout:       pingTO,
 		maxReconnects:     3,
@@ -307,5 +307,25 @@ func TestProxyOutstandingTrackedOnlyAfterSend(t *testing.T) {
 	p.trackOutstanding(initFrame)
 	if has("1") {
 		t.Error("initialize must not be tracked as outstanding")
+	}
+}
+
+// TestProxyKillTargetsCapturedPID is the F12 regression: the hang-kill path must
+// terminate the exact daemon PID the proxy connected to (captured at connect),
+// not whatever the PID file holds at kill time — otherwise a freshly-respawned
+// daemon could be killed by a different client's hang detection.
+func TestProxyKillTargetsCapturedPID(t *testing.T) {
+	t.Parallel()
+	var killed int
+	p := newReconnectingProxy(proxyDeps{
+		dial:          func(context.Context) (net.Conn, error) { return nil, errors.New("no daemon") },
+		killDaemon:    func(pid int) { killed = pid },
+		maxReconnects: 1,
+		baseBackoff:   time.Millisecond,
+	})
+	p.daemonPID.Store(4242)                                     // override the construction-time PID-file read
+	_ = p.reconnect(context.Background(), p.generation(), true) // kill=true → hang path
+	if killed != 4242 {
+		t.Errorf("kill targeted pid %d; want the captured 4242", killed)
 	}
 }

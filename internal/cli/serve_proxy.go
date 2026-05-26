@@ -53,9 +53,10 @@ type proxyDeps struct {
 	// dial establishes a fresh daemon connection (dialing the socket or spawning
 	// a daemon). It is called on every reconnect.
 	dial func(ctx context.Context) (net.Conn, error)
-	// killDaemon terminates a hung daemon (SIGTERM→SIGKILL via the PID file).
-	// Called only on the heartbeat-detected hang path.
-	killDaemon func()
+	// killDaemon terminates a specific hung daemon PID (SIGTERM→SIGKILL). The
+	// proxy passes the PID it connected to, so a hang on one client never kills a
+	// different (e.g. freshly-respawned) daemon. Called only on the hang path.
+	killDaemon func(pid int)
 
 	heartbeatInterval time.Duration // 0 disables hang detection
 	pingTimeout       time.Duration
@@ -90,6 +91,12 @@ type reconnectingProxy struct {
 	pongCh map[string]chan struct{}
 
 	lastRecvNanos atomic.Int64
+
+	// daemonPID is the PID of the daemon this proxy is currently connected to,
+	// captured from the PID file after each (re)connect. The hang-kill path
+	// targets exactly this PID — never "whatever is in the PID file now" — so a
+	// second client, or a slow cold-starting replacement daemon, is never killed.
+	daemonPID atomic.Int64
 }
 
 func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
@@ -114,6 +121,7 @@ func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
 		outstanding:  make(map[string]json.RawMessage),
 		pongCh:       make(map[string]chan struct{}),
 	}
+	p.daemonPID.Store(int64(readDaemonPID()))
 	return p
 }
 
@@ -351,7 +359,7 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 		return nil // another goroutine already reconnected past this generation
 	}
 	if kill && p.deps.killDaemon != nil {
-		p.deps.killDaemon()
+		p.deps.killDaemon(int(p.daemonPID.Load()))
 	}
 	p.closeCurrent()
 
@@ -363,6 +371,7 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 			if herr == nil {
 				p.failOutstanding()
 				gen := p.publish(conn, fr)
+				p.daemonPID.Store(int64(readDaemonPID())) // track the PID we are now connected to
 				slog.Warn("serve: reconnected to daemon after failure", "attempt", attempt, "generation", gen)
 				return nil
 			}
