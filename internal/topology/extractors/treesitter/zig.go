@@ -39,7 +39,7 @@ func (e *ZigExtractor) Extract(_ context.Context, relPath string, src []byte) ([
 		return nil, nil, nil
 	}
 	w := &zigWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
-	w.walk(tree.RootNode(), -1)
+	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil
 }
@@ -63,23 +63,26 @@ var zigContainerTypes = map[string]bool{
 	"error_set_declaration": true,
 }
 
-func (w *zigWalk) walk(n *tsg.Node, enclosingType int64) {
+func (w *zigWalk) walk(n *tsg.Node, enclosingType int64, inFunc bool) {
 	switch n.Type(w.lang) {
 	case "variable_declaration":
-		w.handleVarDecl(n, enclosingType)
+		// const/var declared inside a function body are locals — not surfaced.
+		if !inFunc {
+			w.handleVarDecl(n, enclosingType)
+		}
 	case "function_declaration":
 		w.addFunc(n, enclosingType)
-		w.walkChildren(n, -1)
+		w.walkChildren(n, -1, true)
 	case "test_declaration":
 		w.addTest(n)
 	default:
-		w.walkChildren(n, enclosingType)
+		w.walkChildren(n, enclosingType, inFunc)
 	}
 }
 
-func (w *zigWalk) walkChildren(n *tsg.Node, enclosingType int64) {
+func (w *zigWalk) walkChildren(n *tsg.Node, enclosingType int64, inFunc bool) {
 	for _, c := range n.Children() {
-		w.walk(c, enclosingType)
+		w.walk(c, enclosingType, inFunc)
 	}
 }
 
@@ -89,7 +92,7 @@ func (w *zigWalk) walkChildren(n *tsg.Node, enclosingType int64) {
 func (w *zigWalk) handleVarDecl(n *tsg.Node, enclosingType int64) {
 	name := w.declName(n)
 	if name == "" {
-		w.walkChildren(n, enclosingType)
+		w.walkChildren(n, enclosingType, false)
 		return
 	}
 	value := w.declValue(n)
@@ -97,7 +100,8 @@ func (w *zigWalk) handleVarDecl(n *tsg.Node, enclosingType int64) {
 		switch {
 		case zigContainerTypes[value.Type(w.lang)]:
 			idx := w.addType(n, name)
-			w.walkChildren(value, idx)
+			w.addContainerFields(value, idx, value.Type(w.lang) == "enum_declaration")
+			w.walkChildren(value, idx, false)
 			return
 		case value.Type(w.lang) == "builtin_function" && w.isImport(value):
 			w.addImport(value, n)
@@ -158,6 +162,52 @@ func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 		Path:      w.path,
 	})
 	return idx
+}
+
+// addContainerFields records the members of a container literal: struct/union
+// fields become variables, enum members become constants — each contained in
+// the type (1.0/extractor). Methods (function_declaration) are added separately
+// by the generic walk, so this only handles container_field nodes.
+func (w *zigWalk) addContainerFields(container *tsg.Node, typeIdx int64, isEnum bool) {
+	if typeIdx < 0 {
+		return
+	}
+	kind := topology.KindVariable
+	if isEnum {
+		kind = topology.KindConstant
+	}
+	for _, c := range container.Children() {
+		if c.Type(w.lang) != "container_field" {
+			continue
+		}
+		id := childByType(c, "identifier", w.lang)
+		if id == nil {
+			continue
+		}
+		w.addMember(c, kind, id.Text(w.src), typeIdx)
+	}
+}
+
+// addMember appends a member node and a certain (1.0/extractor) containment
+// edge to its enclosing type.
+func (w *zigWalk) addMember(n *tsg.Node, kind topology.NodeKind, name string, typeIdx int64) {
+	idx := int64(len(w.nodes))
+	w.nodes = append(w.nodes, topology.Node{
+		Kind:      kind,
+		Name:      name,
+		Qualified: name,
+		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
+		Language:  "zig",
+		Path:      w.path,
+	})
+	w.edges = append(w.edges, topology.Edge{
+		FromID:     typeIdx,
+		ToID:       idx,
+		Kind:       topology.EdgeContains,
+		Confidence: 1.0,
+		Source:     "extractor",
+	})
 }
 
 func (w *zigWalk) addFunc(n *tsg.Node, enclosingType int64) {

@@ -174,3 +174,38 @@ func TestPython_LanguageAndPath(t *testing.T) {
 		}
 	}
 }
+
+func TestPython_ModuleAndClassBindings(t *testing.T) {
+	src := []byte(`MAX_SIZE = 100
+threshold = 0.5
+
+class Service:
+    LIMIT = 10
+    name = "svc"
+
+    def run(self):
+        local = 1
+        return local
+`)
+	nodes, edges, err := NewPython().Extract(context.Background(), "svc.py", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"MAX_SIZE", "LIMIT"} {
+		if !slices.Contains(names(nodes, topology.KindConstant), c) {
+			t.Errorf("ALL_CAPS %q should be a constant; consts=%v", c, names(nodes, topology.KindConstant))
+		}
+	}
+	for _, v := range []string{"threshold", "name"} {
+		if !slices.Contains(names(nodes, topology.KindVariable), v) {
+			t.Errorf("%q should be a variable; vars=%v", v, names(nodes, topology.KindVariable))
+		}
+	}
+	if slices.Contains(names(nodes, topology.KindVariable), "local") ||
+		slices.Contains(names(nodes, topology.KindConstant), "local") {
+		t.Error("function-local binding 'local' must not be extracted")
+	}
+	if conf, ok := containedAt(nodes, edges, "LIMIT"); !ok || conf != 1.0 {
+		t.Errorf("class attr LIMIT should be contained at 1.0; got conf=%v ok=%v", conf, ok)
+	}
+}

@@ -18,9 +18,11 @@ const (
 	KindImport   NodeKind = "import"
 	KindClass    NodeKind = "class"
 	KindTest     NodeKind = "test"
-	// KindField is a member of a structured declaration that is neither a
-	// method nor a standalone variable: a SQL column, a config-table key, a
-	// struct/record field. Used by the config/markup tree-sitter extractors.
+	// KindField is a key/column of a data-format file: a SQL column, a TOML or
+	// YAML key. Used by the config/markup tree-sitter extractors. NOTE: a member
+	// field/property of a *code* type (struct field, class property) is NOT a
+	// KindField — it is a KindConstant (when declared immutable) or KindVariable,
+	// per the extractor conventions in docs/internal/extractor-conventions.md.
 	KindField NodeKind = "field"
 	// KindSection is a document heading (a Markdown section). Used by the
 	// markup tree-sitter extractors for navigable document outlines.

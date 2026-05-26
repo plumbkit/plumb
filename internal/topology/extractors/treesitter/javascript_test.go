@@ -211,3 +211,25 @@ func TestJavaScript_Extensions(t *testing.T) {
 		}
 	}
 }
+
+func TestJavaScript_ClassFields(t *testing.T) {
+	src := []byte(`class Service {
+  count = 0;
+  #secret = 1;
+  static MAX = 9;
+  greet() { return this.count; }
+}
+`)
+	nodes, edges, err := NewJavaScript().Extract(context.Background(), "s.js", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"count", "#secret", "MAX"} {
+		if !slices.Contains(names(nodes, topology.KindVariable), f) {
+			t.Errorf("class field %q not a variable; vars=%v", f, names(nodes, topology.KindVariable))
+		}
+	}
+	if conf, ok := containedAt(nodes, edges, "count"); !ok || conf != 1.0 {
+		t.Errorf("field count should be contained at 1.0; got conf=%v ok=%v", conf, ok)
+	}
+}

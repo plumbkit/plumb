@@ -222,3 +222,35 @@ func TestRust_Extensions(t *testing.T) {
 		t.Error(".rs missing from Rust Extensions()")
 	}
 }
+
+func TestRust_StructFieldsAndImplAssoc(t *testing.T) {
+	src := []byte(`pub struct Point {
+    pub x: i32,
+    y: i32,
+}
+
+impl Point {
+    const ORIGIN: i32 = 0;
+    type Unit = i32;
+    fn area(&self) -> i32 { 0 }
+}
+`)
+	nodes, edges, err := NewRust().Extract(context.Background(), "p.rs", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"x", "y"} {
+		if !slices.Contains(names(nodes, topology.KindVariable), f) {
+			t.Errorf("struct field %q not a variable; vars=%v", f, names(nodes, topology.KindVariable))
+		}
+		if conf, ok := containedAt(nodes, edges, f); !ok || conf != 1.0 {
+			t.Errorf("field %q should be contained at 1.0; got conf=%v ok=%v", f, conf, ok)
+		}
+	}
+	if !slices.Contains(names(nodes, topology.KindConstant), "ORIGIN") {
+		t.Errorf("impl associated const ORIGIN missing; consts=%v", names(nodes, topology.KindConstant))
+	}
+	if !slices.Contains(names(nodes, topology.KindType), "Unit") {
+		t.Errorf("impl associated type Unit missing; types=%v", names(nodes, topology.KindType))
+	}
+}

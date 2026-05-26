@@ -61,6 +61,52 @@ func TestTopologyAffected_ColocatedTests(t *testing.T) {
 	}
 }
 
+// TestTopologyAffected_FileRootSeedsColocation proves the files: input path:
+// a changed file resolved by its exact path (SymbolsInFile, not an FTS5
+// path-string search) seeds its directory, so co-located sibling tests surface
+// even though no dependency edge connects them.
+func TestTopologyAffected_FileRootSeedsColocation(t *testing.T) {
+	ws := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(ws, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("demo.go", "package demo\n\nfunc HandleRequest() {}\n")
+	write("demo_test.go", "package demo\n\nimport \"testing\"\n\nfunc TestUnrelated(t *testing.T) {}\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n1, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "demo.go"))
+		n2, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "demo_test.go"))
+		if len(n1) > 0 && len(n2) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := tools.NewTopologyAffected(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"files": []string{"demo.go"}})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "TestUnrelated") {
+		t.Errorf("files input should surface co-located test TestUnrelated; got:\n%s", out)
+	}
+	if !strings.Contains(out, "co-located") {
+		t.Errorf("output should label the co-located reason; got:\n%s", out)
+	}
+}
+
 // TestTopologyAffected_TestsInDirs unit-checks the store query that backs the
 // co-location booster: only tests whose immediate directory matches are returned.
 func TestTopologyAffected_TestsInDirs(t *testing.T) {

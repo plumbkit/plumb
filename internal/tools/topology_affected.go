@@ -130,22 +130,23 @@ func (t *TopologyAffected) run(ctx context.Context, store *topology.Store, a top
 	if store == nil {
 		return nil, nil
 	}
-	roots, err := resolveAffectedRoots(ctx, store, a)
+	roots, seedDirs, err := resolveAffectedRoots(ctx, store, a)
 	if err != nil {
 		return nil, err
 	}
-	return collectAffected(ctx, store, roots, a.MaxResults)
+	return collectAffected(ctx, store, roots, seedDirs, a.MaxResults)
 }
 
-// resolveAffectedRoots looks up all named symbols and file-path nodes to use as
-// inward-BFS starting points.
-func resolveAffectedRoots(ctx context.Context, store *topology.Store, a topologyAffectedArgs) ([]topology.Node, error) {
-	var roots []topology.Node
+// resolveAffectedRoots looks up the inward-BFS starting points: named symbols
+// (via search) and every symbol of each changed file (via SymbolsInFile, a
+// deterministic path lookup). It also returns each changed file's directory as a
+// co-location seed, so a file with no indexed symbols still surfaces its sibling
+// tests — the headline "I changed these files, which tests?" case.
+func resolveAffectedRoots(ctx context.Context, store *topology.Store, a topologyAffectedArgs) (roots []topology.Node, seedDirs []string, err error) {
 	for _, sym := range a.Symbols {
-		opts := topology.SearchOpts{Limit: 5}
-		results, err := store.Search(ctx, sym, opts)
-		if err != nil {
-			return nil, fmt.Errorf("topology_affected: search %q: %w", sym, err)
+		results, serr := store.Search(ctx, sym, topology.SearchOpts{Limit: 5})
+		if serr != nil {
+			return nil, nil, fmt.Errorf("topology_affected: search %q: %w", sym, serr)
 		}
 		for _, r := range results {
 			if r.Node.Name == sym {
@@ -155,10 +156,21 @@ func resolveAffectedRoots(ctx context.Context, store *topology.Store, a topology
 		}
 	}
 	for _, f := range a.Files {
-		opts := topology.SearchOpts{Limit: 5}
-		results, err := store.Search(ctx, f, opts)
-		if err != nil {
-			return nil, fmt.Errorf("topology_affected: search file %q: %w", f, err)
+		// The changed file's directory is always a co-location seed, even when the
+		// file has no indexed symbols.
+		seedDirs = append(seedDirs, filepath.Dir(f))
+		nodes, ferr := store.SymbolsInFile(ctx, f)
+		if ferr != nil {
+			return nil, nil, fmt.Errorf("topology_affected: symbols in %q: %w", f, ferr)
+		}
+		if len(nodes) > 0 {
+			roots = append(roots, nodes...)
+			continue
+		}
+		// Fallback: not found by exact path; try an FTS5 search and suffix-match.
+		results, serr := store.Search(ctx, f, topology.SearchOpts{Limit: 5})
+		if serr != nil {
+			return nil, nil, fmt.Errorf("topology_affected: search file %q: %w", f, serr)
 		}
 		for _, r := range results {
 			if r.Node.Path == f || strings.HasSuffix(r.Node.Path, f) {
@@ -167,11 +179,14 @@ func resolveAffectedRoots(ctx context.Context, store *topology.Store, a topology
 			}
 		}
 	}
-	return roots, nil
+	return roots, seedDirs, nil
 }
 
-func collectAffected(ctx context.Context, store *topology.Store, roots []topology.Node, maxResults int) (*affectedResult, error) {
+func collectAffected(ctx context.Context, store *topology.Store, roots []topology.Node, seedDirs []string, maxResults int) (*affectedResult, error) {
 	g := &affectedGather{store: store, maxResults: maxResults, seen: map[int64]bool{}, dirs: map[string]bool{}}
+	for _, d := range seedDirs {
+		g.dirs[d] = true
+	}
 	for _, root := range roots {
 		g.dirs[filepath.Dir(root.Path)] = true
 		g.fromGraph(ctx, root)

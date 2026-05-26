@@ -8,6 +8,7 @@ package treesitter
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
@@ -32,16 +33,18 @@ func NewPython() *PythonExtractor {
 func (e *PythonExtractor) Language() string     { return "python" }
 func (e *PythonExtractor) Extensions() []string { return []string{".py"} }
 
-// Extract parses src and returns Python classes, functions, methods, tests and
-// imports, plus class→method containment edges and intra-file call edges.
-// Returns (nil, nil, nil) when the source cannot be parsed.
+// Extract parses src and returns Python classes, functions, methods, tests,
+// imports, and module- and class-level bindings (ALL_CAPS → constant, else
+// variable), plus class→member containment edges and intra-file call edges.
+// Function-local bindings are not surfaced. Returns (nil, nil, nil) when the
+// source cannot be parsed.
 func (e *PythonExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	tree, err := tsg.NewParser(e.lang).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
 	w := &pyWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
-	w.walk(tree.RootNode(), -1)
+	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil
 }
@@ -64,26 +67,82 @@ func (w *pyWalk) fieldName(n *tsg.Node) string {
 	return ""
 }
 
-func (w *pyWalk) walk(n *tsg.Node, enclosingClass int64) {
+func (w *pyWalk) walk(n *tsg.Node, enclosingClass int64, inFunc bool) {
 	switch n.Type(w.lang) {
 	case "class_definition":
 		idx := w.addClass(n)
-		w.walkChildren(n, idx)
+		w.walkChildren(n, idx, inFunc)
 	case "function_definition":
 		w.addFunc(n, enclosingClass)
-		// Definitions nested inside a function are not methods of enclosingClass.
-		w.walkChildren(n, -1)
+		// Definitions and bindings nested in a function are locals, not
+		// methods/attributes of enclosingClass.
+		w.walkChildren(n, -1, true)
 	case "import_statement", "import_from_statement":
 		w.addImports(n)
+	case "assignment":
+		if !inFunc {
+			w.maybeAssignment(n, enclosingClass)
+		}
 	default:
-		w.walkChildren(n, enclosingClass)
+		w.walkChildren(n, enclosingClass, inFunc)
 	}
 }
 
-func (w *pyWalk) walkChildren(n *tsg.Node, enclosingClass int64) {
+func (w *pyWalk) walkChildren(n *tsg.Node, enclosingClass int64, inFunc bool) {
 	for _, c := range n.Children() {
-		w.walk(c, enclosingClass)
+		w.walk(c, enclosingClass, inFunc)
 	}
+}
+
+// maybeAssignment records a module- or class-level binding from an `assignment`
+// node: KindConstant when the name is ALL_CAPS (Python's constant convention),
+// else KindVariable. Only simple identifier targets are recorded (tuple,
+// attribute and subscript targets are skipped). A class-level binding gains a
+// certain (1.0/extractor) containment edge.
+func (w *pyWalk) maybeAssignment(asn *tsg.Node, enclosingClass int64) {
+	left := asn.ChildByFieldName("left", w.lang)
+	if left == nil || left.Type(w.lang) != "identifier" {
+		return
+	}
+	name := left.Text(w.src)
+	kind := topology.KindVariable
+	if isConstName(name) {
+		kind = topology.KindConstant
+	}
+	idx := int64(len(w.nodes))
+	w.nodes = append(w.nodes, topology.Node{
+		Kind:      kind,
+		Name:      name,
+		Qualified: name,
+		StartLine: line(asn.StartPoint()),
+		EndLine:   line(asn.EndPoint()),
+		Language:  "python",
+		Path:      w.path,
+	})
+	if enclosingClass >= 0 {
+		w.edges = append(w.edges, topology.Edge{
+			FromID:     enclosingClass,
+			ToID:       idx,
+			Kind:       topology.EdgeContains,
+			Confidence: 1.0,
+			Source:     "extractor",
+		})
+	}
+}
+
+// isConstName reports whether a Python name follows the ALL_CAPS constant
+// convention (every cased letter is upper-case, with at least one letter).
+func isConstName(name string) bool {
+	hasLetter := false
+	for _, r := range name {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+			if !unicode.IsUpper(r) {
+				return false
+			}
+		}
+	}
+	return hasLetter
 }
 
 func (w *pyWalk) addClass(n *tsg.Node) int64 {

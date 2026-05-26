@@ -96,7 +96,7 @@ func ByPath(path string) (Language, bool) {
 	base := strings.ToLower(filepath.Base(path))
 	for _, l := range registry {
 		for _, e := range l.Extensions {
-			if matchExtPattern(e, ext, base) {
+			if MatchExtPattern(e, ext, base) {
 				return l, true
 			}
 		}
@@ -104,10 +104,13 @@ func ByPath(path string) (Language, bool) {
 	return Language{}, false
 }
 
-// matchExtPattern reports whether a registry pattern matches a file's extension
-// or basename. Dot-prefixed patterns match the extension; bare patterns match
-// the basename exactly or as a dotted prefix/suffix.
-func matchExtPattern(pat, ext, base string) bool {
+// MatchExtPattern reports whether a registry-style pattern matches a file's
+// extension or basename. Dot-prefixed patterns (".go") match the extension; bare
+// patterns ("dockerfile") match the basename exactly or as a dotted
+// prefix/suffix ("Dockerfile", "Dockerfile.prod", "prod.dockerfile"). It is the
+// single source of truth for this rule, shared with the topology extractor
+// matcher so the two cannot drift.
+func MatchExtPattern(pat, ext, base string) bool {
 	if strings.HasPrefix(pat, ".") {
 		return pat == ext
 	}

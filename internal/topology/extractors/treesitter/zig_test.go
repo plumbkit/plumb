@@ -182,3 +182,31 @@ func TestZig_Extensions(t *testing.T) {
 		t.Error(".zig missing from Zig Extensions()")
 	}
 }
+
+func TestZig_ContainerFieldsAndEnumMembers(t *testing.T) {
+	src := []byte(`const Point = struct {
+    x: i32,
+    y: i32,
+    pub fn init() Point { return Point{}; }
+};
+
+const Color = enum { red, green };
+`)
+	nodes, edges, err := NewZig().Extract(context.Background(), "p.zig", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"x", "y"} {
+		if !slices.Contains(names(nodes, topology.KindVariable), f) {
+			t.Errorf("struct field %q not a variable; vars=%v", f, names(nodes, topology.KindVariable))
+		}
+		if conf, ok := containedAt(nodes, edges, f); !ok || conf != 1.0 {
+			t.Errorf("field %q should be contained at 1.0; got conf=%v ok=%v", f, conf, ok)
+		}
+	}
+	for _, c := range []string{"red", "green"} {
+		if !slices.Contains(names(nodes, topology.KindConstant), c) {
+			t.Errorf("enum member %q not a constant; consts=%v", c, names(nodes, topology.KindConstant))
+		}
+	}
+}

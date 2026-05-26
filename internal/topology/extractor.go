@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/golimpio/plumb/internal/langsupport"
 )
 
 // Extractor parses source files and returns nodes and edges.
@@ -57,20 +59,10 @@ func findExtractor(relPath string, exts []Extractor) Extractor {
 	base := strings.ToLower(filepath.Base(relPath))
 	for _, e := range exts {
 		for _, pat := range e.Extensions() {
-			if matchExtPattern(pat, ext, base) {
+			if langsupport.MatchExtPattern(pat, ext, base) {
 				return e
 			}
 		}
 	}
 	return nil
-}
-
-// matchExtPattern reports whether a pattern matches a file's extension or
-// basename. Dot-prefixed patterns match the extension; bare patterns match the
-// basename exactly or as a dotted prefix/suffix.
-func matchExtPattern(pat, ext, base string) bool {
-	if strings.HasPrefix(pat, ".") {
-		return pat == ext
-	}
-	return base == pat || strings.HasPrefix(base, pat+".") || strings.HasSuffix(base, "."+pat)
 }

@@ -53,6 +53,43 @@ func TestReadSymbol_TopologyFallback(t *testing.T) {
 	}
 }
 
+// TestReadSymbol_TopologyFallback_ReceiverSegmentNotSubstring guards that a
+// dotted ReceiverType.Method name resolves on a whole-segment match, not a
+// substring: "User.Save" must resolve (User).Save and never (SuperUser).Save.
+func TestReadSymbol_TopologyFallback_ReceiverSegmentNotSubstring(t *testing.T) {
+	ws := t.TempDir()
+	src := "package demo\n\n" +
+		"type User struct{}\n\n" +
+		"func (u User) Save() int { return 1 }\n\n" +
+		"type SuperUser struct{}\n\n" +
+		"func (s SuperUser) Save() int { return 2 }\n"
+	fpath := filepath.Join(ws, "user.go")
+	if err := os.WriteFile(fpath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+		WithTopologyFallback(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"path": "file://" + fpath, "name": "User.Save"})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected topology fallback to succeed, got: %v", err)
+	}
+	if !strings.Contains(out, "return 1") {
+		t.Errorf("read_symbol User.Save should resolve (User).Save (return 1):\n%s", out)
+	}
+	if strings.Contains(out, "return 2") {
+		t.Errorf("read_symbol User.Save must not match (SuperUser).Save (return 2):\n%s", out)
+	}
+}
+
 func TestReplaceSymbolBody_TopologyFallback(t *testing.T) {
 	store, fpath, uri := fallbackFixture(t)
 	tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).

@@ -222,3 +222,36 @@ func TestTypeScript_Extensions(t *testing.T) {
 		}
 	}
 }
+
+func TestTypeScript_ClassAndInterfaceFields(t *testing.T) {
+	src := []byte(`export class Service {
+  readonly name: string = "x";
+  count = 0;
+  greet(): string { return this.name; }
+}
+
+export interface Point {
+  x: number;
+  readonly y: number;
+}
+`)
+	nodes, edges, err := NewTypeScript().Extract(context.Background(), "s.ts", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(names(nodes, topology.KindConstant), "name") {
+		t.Errorf("readonly field name should be a constant; consts=%v", names(nodes, topology.KindConstant))
+	}
+	if !slices.Contains(names(nodes, topology.KindVariable), "count") {
+		t.Errorf("mutable field count should be a variable; vars=%v", names(nodes, topology.KindVariable))
+	}
+	if !slices.Contains(names(nodes, topology.KindConstant), "y") {
+		t.Errorf("readonly interface prop y should be a constant; consts=%v", names(nodes, topology.KindConstant))
+	}
+	if !slices.Contains(names(nodes, topology.KindVariable), "x") {
+		t.Errorf("interface prop x should be a variable; vars=%v", names(nodes, topology.KindVariable))
+	}
+	if conf, ok := containedAt(nodes, edges, "count"); !ok || conf != 1.0 {
+		t.Errorf("field count should be contained at 1.0; got conf=%v ok=%v", conf, ok)
+	}
+}

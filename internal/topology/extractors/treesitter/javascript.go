@@ -145,19 +145,61 @@ func (w *jsWalk) addClass(n *tsg.Node) {
 		Path:      w.path,
 	})
 	if body := childByType(n, "class_body", w.lang); body != nil {
-		w.addMethods(body, idx)
+		w.addClassMembers(body, idx)
 	}
 }
 
-func (w *jsWalk) addMethods(body *tsg.Node, classIdx int64) {
+// addClassMembers records a class body's methods (as methods) and field
+// definitions (as variables — plain JS has no immutability marker), each
+// contained in the class (1.0/extractor).
+func (w *jsWalk) addClassMembers(body *tsg.Node, classIdx int64) {
 	for _, m := range body.Children() {
-		if m.Type(w.lang) != "method_definition" {
-			continue
-		}
-		if name := w.methodName(m); name != "" {
-			w.appendFunc(name, m, classIdx)
+		switch m.Type(w.lang) {
+		case "method_definition":
+			if name := w.methodName(m); name != "" {
+				w.appendFunc(name, m, classIdx)
+			}
+		case "field_definition":
+			if name := w.fieldDefName(m); name != "" {
+				w.addMember(m, classIdx, name)
+			}
 		}
 	}
+}
+
+// fieldDefName returns a class field's name (public or #private).
+func (w *jsWalk) fieldDefName(m *tsg.Node) string {
+	if id := m.ChildByFieldName("name", w.lang); id != nil {
+		return id.Text(w.src)
+	}
+	for _, typ := range []string{"property_identifier", "private_property_identifier"} {
+		if id := childByType(m, typ, w.lang); id != nil {
+			return id.Text(w.src)
+		}
+	}
+	return ""
+}
+
+// addMember appends a class field (KindVariable) and a certain (1.0/extractor)
+// containment edge to its class.
+func (w *jsWalk) addMember(rng *tsg.Node, classIdx int64, name string) {
+	idx := int64(len(w.nodes))
+	w.nodes = append(w.nodes, topology.Node{
+		Kind:      topology.KindVariable,
+		Name:      name,
+		Qualified: name,
+		StartLine: line(rng.StartPoint()),
+		EndLine:   line(rng.EndPoint()),
+		Language:  "javascript",
+		Path:      w.path,
+	})
+	w.edges = append(w.edges, topology.Edge{
+		FromID:     classIdx,
+		ToID:       idx,
+		Kind:       topology.EdgeContains,
+		Confidence: 1.0,
+		Source:     "extractor",
+	})
 }
 
 func (w *jsWalk) methodName(m *tsg.Node) string {

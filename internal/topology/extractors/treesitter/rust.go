@@ -45,7 +45,7 @@ func (e *RustExtractor) Extract(_ context.Context, relPath string, src []byte) (
 		funcIdx: map[string]int64{},
 		typeIdx: map[string]int64{},
 	}
-	w.walk(tree.RootNode(), -1)
+	w.walk(tree.RootNode(), -1, false)
 	w.resolveImplContains()
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil
@@ -64,7 +64,7 @@ type rustWalk struct {
 
 type rustImplContains struct {
 	typeName string
-	methodID int64
+	memberID int64
 }
 
 func (w *rustWalk) fieldText(n *tsg.Node, field string) string {
@@ -74,38 +74,62 @@ func (w *rustWalk) fieldText(n *tsg.Node, field string) string {
 	return ""
 }
 
-func (w *rustWalk) walk(n *tsg.Node, enclosingType int64) {
+// walk descends the tree. Inside a function body (inFunc) only nested `fn`s and
+// `use` imports surface (matching the other extractors); every other
+// declaration there is a local and is skipped. Top-level declarations are
+// handled by walkItem.
+func (w *rustWalk) walk(n *tsg.Node, enclosingType int64, inFunc bool) {
 	switch n.Type(w.lang) {
 	case "function_item", "function_signature_item":
 		w.addFunc(n, enclosingType)
-		w.walkChildren(n, -1)
-	case "struct_item", "enum_item", "union_item", "type_item":
+		w.walkChildren(n, -1, true)
+		return
+	case "use_declaration":
+		w.addImport(n)
+		return
+	}
+	if inFunc {
+		w.walkChildren(n, enclosingType, true)
+		return
+	}
+	w.walkItem(n, enclosingType)
+}
+
+// walkItem records a top-level (non-function) declaration. Only reached outside
+// a function body, so no inFunc guard is needed here.
+func (w *rustWalk) walkItem(n *tsg.Node, enclosingType int64) {
+	switch n.Type(w.lang) {
+	case "struct_item", "union_item":
+		idx := w.addType(n)
+		w.addStructFields(n, idx)
+	case "enum_item":
+		idx := w.addType(n)
+		w.addEnumVariants(n, idx)
+	case "type_item":
 		w.addType(n)
 	case "trait_item":
 		idx := w.addType(n)
 		if body := n.ChildByFieldName("body", w.lang); body != nil {
-			w.walkChildren(body, idx)
+			w.walkChildren(body, idx, false)
 		}
 	case "const_item":
 		w.addBinding(n, topology.KindConstant)
 	case "static_item":
 		w.addBinding(n, topology.KindVariable)
-	case "use_declaration":
-		w.addImport(n)
 	case "impl_item":
 		w.walkImpl(n)
 	case "mod_item":
 		if body := n.ChildByFieldName("body", w.lang); body != nil {
-			w.walkChildren(body, -1)
+			w.walkChildren(body, -1, false)
 		}
 	default:
-		w.walkChildren(n, enclosingType)
+		w.walkChildren(n, enclosingType, false)
 	}
 }
 
-func (w *rustWalk) walkChildren(n *tsg.Node, enclosingType int64) {
+func (w *rustWalk) walkChildren(n *tsg.Node, enclosingType int64, inFunc bool) {
 	for _, c := range n.Children() {
-		w.walk(c, enclosingType)
+		w.walk(c, enclosingType, inFunc)
 	}
 }
 
@@ -177,15 +201,93 @@ func (w *rustWalk) walkImpl(n *tsg.Node) {
 		return
 	}
 	for _, c := range body.Children() {
-		if c.Type(w.lang) != "function_item" {
+		var id int64 = -1
+		switch c.Type(w.lang) {
+		case "function_item":
+			id = w.addMethod(c)
+			w.walkChildren(c, -1, true)
+		case "const_item":
+			id = w.addBinding(c, topology.KindConstant)
+		case "type_item":
+			if name := w.fieldText(c, "name"); name != "" {
+				id = w.addContained(c, topology.KindType, name, -1)
+			}
+		default:
 			continue
 		}
-		id := w.addMethod(c)
 		if id >= 0 && typeName != "" {
-			w.pending = append(w.pending, rustImplContains{typeName: typeName, methodID: id})
+			w.pending = append(w.pending, rustImplContains{typeName: typeName, memberID: id})
 		}
-		w.walkChildren(c, -1)
 	}
+}
+
+// addStructFields records each named field of a struct/union as a KindVariable
+// contained in the type (Rust fields carry no per-field mutability marker).
+// Tuple-struct fields (ordered_field_declaration_list) and enum-variant fields
+// are deliberately skipped — they have no field name.
+func (w *rustWalk) addStructFields(n *tsg.Node, typeIdx int64) {
+	if typeIdx < 0 {
+		return
+	}
+	body := n.ChildByFieldName("body", w.lang)
+	if body == nil || body.Type(w.lang) != "field_declaration_list" {
+		return
+	}
+	for _, c := range body.Children() {
+		if c.Type(w.lang) != "field_declaration" {
+			continue
+		}
+		if name := w.fieldText(c, "name"); name != "" {
+			w.addContained(c, topology.KindVariable, name, typeIdx)
+		}
+	}
+}
+
+// addEnumVariants records each enum variant as a KindConstant contained in the
+// enum type, matching the enum-member handling of the other extractors. A
+// struct-variant's inner fields (the `{ x: i32 }`) are not surfaced.
+func (w *rustWalk) addEnumVariants(n *tsg.Node, typeIdx int64) {
+	if typeIdx < 0 {
+		return
+	}
+	body := n.ChildByFieldName("body", w.lang)
+	if body == nil || body.Type(w.lang) != "enum_variant_list" {
+		return
+	}
+	for _, c := range body.Children() {
+		if c.Type(w.lang) != "enum_variant" {
+			continue
+		}
+		if name := w.fieldText(c, "name"); name != "" {
+			w.addContained(c, topology.KindConstant, name, typeIdx)
+		}
+	}
+}
+
+// addContained appends a member node and a certain (1.0/extractor) containment
+// edge to its enclosing type. With parent < 0 it adds the node only (the impl
+// path defers the heuristic 0.8 edge to resolveImplContains).
+func (w *rustWalk) addContained(n *tsg.Node, kind topology.NodeKind, name string, parent int64) int64 {
+	idx := int64(len(w.nodes))
+	w.nodes = append(w.nodes, topology.Node{
+		Kind:      kind,
+		Name:      name,
+		Qualified: name,
+		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
+		Language:  "rust",
+		Path:      w.path,
+	})
+	if parent >= 0 {
+		w.edges = append(w.edges, topology.Edge{
+			FromID:     parent,
+			ToID:       idx,
+			Kind:       topology.EdgeContains,
+			Confidence: 1.0,
+			Source:     "extractor",
+		})
+	}
+	return idx
 }
 
 func (w *rustWalk) addMethod(n *tsg.Node) int64 {
@@ -211,11 +313,12 @@ func (w *rustWalk) addMethod(n *tsg.Node) int64 {
 	return idx
 }
 
-func (w *rustWalk) addBinding(n *tsg.Node, kind topology.NodeKind) {
+func (w *rustWalk) addBinding(n *tsg.Node, kind topology.NodeKind) int64 {
 	name := w.fieldText(n, "name")
 	if name == "" {
-		return
+		return -1
 	}
+	idx := int64(len(w.nodes))
 	w.nodes = append(w.nodes, topology.Node{
 		Kind:      kind,
 		Name:      name,
@@ -225,6 +328,7 @@ func (w *rustWalk) addBinding(n *tsg.Node, kind topology.NodeKind) {
 		Language:  "rust",
 		Path:      w.path,
 	})
+	return idx
 }
 
 func (w *rustWalk) addImport(n *tsg.Node) {
@@ -249,7 +353,7 @@ func (w *rustWalk) resolveImplContains() {
 		}
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     tid,
-			ToID:       p.methodID,
+			ToID:       p.memberID,
 			Kind:       topology.EdgeContains,
 			Confidence: 0.8,
 			Source:     "heuristic",

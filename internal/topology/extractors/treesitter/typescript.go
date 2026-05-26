@@ -145,10 +145,13 @@ func (w *tsWalk) addClass(n *tsg.Node) {
 	idx := w.appendNode(topology.KindClass, name, n)
 	if body := childByType(n, "class_body", w.lang); body != nil {
 		for _, m := range body.Children() {
-			if m.Type(w.lang) == "method_definition" {
+			switch m.Type(w.lang) {
+			case "method_definition":
 				if mn := w.memberName(m); mn != "" {
 					w.appendFunc(mn, m, idx)
 				}
+			case "public_field_definition":
+				w.addField(m, idx)
 			}
 		}
 	}
@@ -162,13 +165,44 @@ func (w *tsWalk) addInterface(n *tsg.Node) {
 	idx := w.appendNode(topology.KindType, name, n)
 	if body := childByType(n, "interface_body", w.lang); body != nil {
 		for _, m := range body.Children() {
-			if m.Type(w.lang) == "method_signature" {
+			switch m.Type(w.lang) {
+			case "method_signature":
 				if mn := w.memberName(m); mn != "" {
 					w.appendFunc(mn, m, idx)
 				}
+			case "property_signature":
+				w.addField(m, idx)
 			}
 		}
 	}
+}
+
+// addField records a class property or interface property signature as a member
+// of its type: KindConstant when declared readonly, else KindVariable.
+func (w *tsWalk) addField(m *tsg.Node, enclosing int64) {
+	name := w.memberName(m)
+	if name == "" {
+		return
+	}
+	kind := topology.KindVariable
+	if w.fieldReadonly(m) {
+		kind = topology.KindConstant
+	}
+	w.containment(enclosing, w.appendNode(kind, name, m))
+}
+
+// fieldReadonly reports whether a `readonly` modifier precedes the member name.
+func (w *tsWalk) fieldReadonly(m *tsg.Node) bool {
+	name := childByType(m, "property_identifier", w.lang)
+	if name == nil {
+		return false
+	}
+	for _, tok := range strings.Fields(string(w.src[m.StartByte():name.StartByte()])) {
+		if tok == "readonly" {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *tsWalk) addNamedType(n *tsg.Node) {

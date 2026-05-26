@@ -112,3 +112,23 @@ func TestYAML_Extensions(t *testing.T) {
 		}
 	}
 }
+
+func TestYAML_QualifiedDottedPath(t *testing.T) {
+	src := []byte("services:\n  web:\n    image: nginx\n")
+	nodes, _, err := NewYAML().Extract(context.Background(), "c.yaml", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, n := range nodes {
+		if n.Name == "image" {
+			found = true
+			if n.Qualified != "services.web.image" {
+				t.Errorf("image Qualified=%q, want services.web.image", n.Qualified)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("image key not found")
+	}
+}

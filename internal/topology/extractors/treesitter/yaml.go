@@ -30,16 +30,18 @@ func (e *YAMLExtractor) Extensions() []string { return []string{".yaml", ".yml"}
 
 // Extract parses src and returns each block-mapping key as a field, linked to
 // its enclosing key by a certain (1.0) containment edge so the config tree is
-// navigable (e.g. services → web → image for docker-compose). Keys reached
-// through a block sequence (lists of objects) are attached to the nearest
-// enclosing key. Returns (nil, nil, nil) when src cannot be parsed.
+// navigable (e.g. services → web → image for docker-compose). Each field's
+// Qualified is the dotted path of its enclosing keys (services.web.image),
+// matching the SQL/TOML convention. Keys reached through a block sequence
+// (lists of objects) are attached to the nearest enclosing key. Returns
+// (nil, nil, nil) when src cannot be parsed.
 func (e *YAMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	tree, err := tsg.NewParser(e.lang).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
 	w := &yamlWalk{lang: e.lang, src: src, path: relPath}
-	w.walkNode(tree.RootNode(), -1)
+	w.walkNode(tree.RootNode(), -1, "")
 	return w.nodes, w.edges, nil
 }
 
@@ -54,29 +56,33 @@ type yamlWalk struct {
 // walkNode descends the tree, emitting a field per mapping key. Non-pair nodes
 // (documents, sequences, block/flow wrappers) are transparent — children are
 // visited with the same parent.
-func (w *yamlWalk) walkNode(n *tsg.Node, parent int64) {
+func (w *yamlWalk) walkNode(n *tsg.Node, parent int64, prefix string) {
 	if n.Type(w.lang) == "block_mapping_pair" {
-		w.handlePair(n, parent)
+		w.handlePair(n, parent, prefix)
 		return
 	}
 	for _, c := range n.Children() {
-		w.walkNode(c, parent)
+		w.walkNode(c, parent, prefix)
 	}
 }
 
-func (w *yamlWalk) handlePair(n *tsg.Node, parent int64) {
+func (w *yamlWalk) handlePair(n *tsg.Node, parent int64, prefix string) {
 	key := w.keyText(n)
 	if key == "" {
 		for _, c := range n.Children() {
-			w.walkNode(c, parent)
+			w.walkNode(c, parent, prefix)
 		}
 		return
+	}
+	qualified := key
+	if prefix != "" {
+		qualified = prefix + "." + key
 	}
 	idx := int64(len(w.nodes))
 	w.nodes = append(w.nodes, topology.Node{
 		Kind:      topology.KindField,
 		Name:      key,
-		Qualified: key,
+		Qualified: qualified,
 		StartLine: line(n.StartPoint()),
 		EndLine:   line(n.EndPoint()),
 		Language:  "yaml",
@@ -92,7 +98,7 @@ func (w *yamlWalk) handlePair(n *tsg.Node, parent int64) {
 		})
 	}
 	if val := w.valueNode(n); val != nil {
-		w.walkNode(val, idx)
+		w.walkNode(val, idx, qualified)
 	}
 }
 

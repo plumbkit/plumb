@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 	"github.com/golimpio/plumb/internal/topology"
@@ -119,7 +120,7 @@ func topologyNodesByName(nodes []topology.Node, name string) []topology.Node {
 	if parent, child, ok := strings.Cut(name, "."); ok {
 		var out []topology.Node
 		for _, n := range nodes {
-			if n.Name == child && strings.Contains(n.Qualified, parent) {
+			if n.Name == child && qualifiedHasSegment(n.Qualified, parent) {
 				out = append(out, n)
 			}
 		}
@@ -150,7 +151,7 @@ func topologyNodeByPath(nodes []topology.Node, namePath string) *topology.Node {
 		if n.Name != leaf {
 			continue
 		}
-		if parent == "" || strings.Contains(n.Qualified, parent) {
+		if parent == "" || qualifiedHasSegment(n.Qualified, parent) {
 			return n
 		}
 		if fallback == nil {
@@ -158,4 +159,24 @@ func topologyNodeByPath(nodes []topology.Node, namePath string) *topology.Node {
 		}
 	}
 	return fallback
+}
+
+// qualifiedHasSegment reports whether parent appears as a whole identifier
+// segment of qualified, where segments are the maximal runs of identifier runes
+// (letters, digits, underscore). This matches a receiver/parent name without the
+// substring false positives strings.Contains would allow: "User" matches
+// "(User).Save" and "(*User).Save" but NOT "SuperUser.Save".
+func qualifiedHasSegment(qualified, parent string) bool {
+	if parent == "" {
+		return false
+	}
+	segs := strings.FieldsFunc(qualified, func(r rune) bool {
+		return r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for _, seg := range segs {
+		if seg == parent {
+			return true
+		}
+	}
+	return false
 }
