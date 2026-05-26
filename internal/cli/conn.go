@@ -148,6 +148,19 @@ func (s *connSession) workspace() string {
 	return s.acquiredRoot
 }
 
+// acquiredLanguageName returns the LSP language attached to this session, or ""
+// when none is (LanguageNone, or not yet attached). session_start uses it to
+// distinguish a real "LSP is available" from a marker-detected project whose
+// server is opt-in/off/missing — it must not advertise LSP tools that error.
+func (s *connSession) acquiredLanguageName() string {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.acquiredLanguage == "" || s.acquiredLanguage == LanguageNone {
+		return ""
+	}
+	return s.acquiredLanguage
+}
+
 // sessionName returns the current human-readable session name.
 func (s *connSession) sessionName() string {
 	s.stateMu.Lock()
@@ -676,7 +689,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 		}))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).WithTopology(topoFn))
+	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).WithTopology(topoFn).WithLSPLanguage(s.acquiredLanguageName))
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))

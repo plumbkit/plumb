@@ -67,6 +67,7 @@ type SessionStart struct {
 	clientNameFn func() string     // may be nil; returns current MCP client name
 	topo         topologyStoreFn   // may be nil; returns the live topology store, or nil when disabled
 	gitPolicyFn  func() GitPolicy  // may be nil; git policy section skipped when nil
+	lspLangFn    func() string     // may be nil; the LSP language attached to this session ("" when none)
 }
 
 // WithTopology wires the topology store accessor so session_start can lead its
@@ -81,6 +82,21 @@ func (t *SessionStart) WithTopology(fn topologyStoreFn) *SessionStart {
 // topologyActive reports whether a topology store is wired and live.
 func (t *SessionStart) topologyActive() bool {
 	return t.topo != nil && t.topo() != nil
+}
+
+// WithLSPLanguage wires an accessor for the LSP language actually attached to
+// this session ("" when no language server is attached). It lets session_start
+// tell "LSP is available" apart from a marker-detected project whose server is
+// off or absent, instead of assuming a server exists whenever a diagnostics
+// source is wired (which it always is). Nil-safe. Returns the receiver.
+func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
+	t.lspLangFn = fn
+	return t
+}
+
+// lspAttached reports whether a language server is attached for this session.
+func (t *SessionStart) lspAttached() bool {
+	return t.lspLangFn != nil && t.lspLangFn() != ""
 }
 
 // NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted
@@ -115,11 +131,11 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
-	lang := detectLanguage(ws)
+	lang, lspKey := detectLanguageInfo(ws)
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
 	t.writeSessionIdentity(&sb, ws, lang)
-	t.writeSessionRecommendedStart(&sb, hasErrors, lang)
+	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	writeSessionContext(&sb, ws)
 	writeSessionCommits(&sb, ws)
 	t.writeSessionGitPolicy(&sb, ws)
@@ -187,17 +203,41 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang string
 	sb.WriteString("\n")
 }
 
-func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErrors bool, lang string) {
+func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErrors bool, lang, lspKey string) {
 	sb.WriteString("## Recommended first step\n\n")
 	switch {
 	case hasErrors:
 		sb.WriteString("Active errors detected — start with `diagnostics` to review them.\n\n")
-	case t.diag != nil && lang != "":
+	case t.lspAttached():
 		sb.WriteString("LSP is available — use `workspace_symbols` to survey the codebase.\n\n")
+	case t.topologyActive():
+		sb.WriteString("No language server is attached, but the topology index is active — use " +
+			"`topology_search` and `file_outline` for discovery and structure. " +
+			"(`get_definition`/`find_references` still need a language server.)\n\n")
 	case lang != "":
-		sb.WriteString("No language server attached — use `list_files` to explore, then `search_in_files` to find relevant code.\n\n")
+		t.writeNoLSPGuidance(sb, lang, lspKey)
 	default:
 		sb.WriteString("Use `list_files` to explore the codebase.\n\n")
+	}
+}
+
+// writeNoLSPGuidance covers a recognised project with neither a language server
+// nor a topology index — the case that misled a Java agent into thinking the
+// semantic tools were broken. It names the concrete next step rather than
+// silently advertising LSP tools that will error.
+func (t *SessionStart) writeNoLSPGuidance(sb *strings.Builder, lang, lspKey string) {
+	fmt.Fprintf(sb, "No language server is attached for %s. ", lang)
+	switch lspKey {
+	case "":
+		sb.WriteString("plumb has no language server for it yet — use `search_in_files` and `list_files`, " +
+			"or enable the topology index (`[topology] enabled = true`) for indexed symbol search.\n\n")
+	case "go", "python":
+		sb.WriteString("Its server ships on by default, so it likely isn't installed or failed to start — " +
+			"check the server binary is on PATH. Meanwhile use `search_in_files`/`list_files`, or enable " +
+			"`[topology] enabled = true` for indexed search.\n\n")
+	default:
+		fmt.Fprintf(sb, "Its adapter is opt-in — set `[lsp.%s] enabled = true` and ensure the server is on PATH. "+
+			"For language-server-free symbol search, enable the topology index (`[topology] enabled = true`).\n\n", lspKey)
 	}
 }
 
@@ -561,30 +601,34 @@ func countWorkspaceFiles(ws string, exts []string) (total, langCount int) {
 	return total, langCount
 }
 
-// detectLanguage returns a human-readable language label by probing for
-// well-known project-root markers.
-func detectLanguage(ws string) string {
+// detectLanguageInfo returns a human-readable language label and, when a plumb
+// LSP adapter exists for it, that adapter's config key ([lsp.<key>]). Both are
+// "" when no root marker matches; the key alone is "" for a recognised language
+// plumb has no server for (C/C++, Elixir, Ruby). The key lets session_start
+// name the exact knob to enable when a server is expected but not attached.
+func detectLanguageInfo(ws string) (label, key string) {
 	markers := []struct {
-		file string
-		lang string
+		file  string
+		label string
+		key   string
 	}{
-		{"go.mod", "Go"},
-		{"package.json", "JavaScript/TypeScript"},
-		{"Cargo.toml", "Rust"},
-		{"pyproject.toml", "Python"},
-		{"setup.py", "Python"},
-		{"pom.xml", "Java (Maven)"},
-		{"build.gradle", "Java/Kotlin (Gradle)"},
-		{"CMakeLists.txt", "C/C++ (CMake)"},
-		{"mix.exs", "Elixir"},
-		{"Gemfile", "Ruby"},
+		{"go.mod", "Go", "go"},
+		{"package.json", "JavaScript/TypeScript", "typescript"},
+		{"Cargo.toml", "Rust", "rust"},
+		{"pyproject.toml", "Python", "python"},
+		{"setup.py", "Python", "python"},
+		{"pom.xml", "Java (Maven)", "java"},
+		{"build.gradle", "Java/Kotlin (Gradle)", "java"},
+		{"CMakeLists.txt", "C/C++ (CMake)", ""},
+		{"mix.exs", "Elixir", ""},
+		{"Gemfile", "Ruby", ""},
 	}
 	for _, m := range markers {
 		if _, err := os.Stat(filepath.Join(ws, m.file)); err == nil {
-			return m.lang
+			return m.label, m.key
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // gitBranch returns the current branch name, or "" if not a git repo / git

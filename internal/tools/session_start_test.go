@@ -220,6 +220,29 @@ func mapKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+// TestSessionStart_NoLSPGuidance covers a recognised project whose language
+// server is not attached: session_start must not claim "LSP is available" and
+// must name the opt-in knob. This is the Java/Maven case that misled an agent.
+func TestSessionStart_NoLSPGuidance(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "pom.xml"), []byte("<project/>\n"), 0o644); err != nil {
+		t.Fatalf("write pom.xml: %v", err)
+	}
+	// diag is wired (it always is) but no LSP language is attached and no topology.
+	tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+		WithLSPLanguage(func() string { return "" })
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "LSP is available") {
+		t.Errorf("must not claim LSP is available when none is attached\n%s", out)
+	}
+	if !strings.Contains(out, "[lsp.java]") {
+		t.Errorf("want the opt-in [lsp.java] knob named\n%s", out)
+	}
+}
+
 func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	// writes a minimal go.mod so detectLanguage returns "Go" for the temp workspace.
 	makeGoWorkspace := func(t *testing.T) string {
@@ -249,7 +272,8 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	t.Run("LSP available no errors suggests workspace_symbols", func(t *testing.T) {
 		ws := makeGoWorkspace(t)
 		diag := &stubDiagnostics{all: nil}
-		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "go" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -259,7 +283,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		}
 	})
 
-	t.Run("no LSP with language suggests list_files", func(t *testing.T) {
+	t.Run("no LSP with language suggests next steps", func(t *testing.T) {
 		ws := makeGoWorkspace(t)
 		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -288,7 +312,8 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
 			"file:///ws/main.go": {makeDiag(1, 0, "unused variable", protocol.SevWarning)},
 		}}
-		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil)
+		tool := NewSessionStart(func() string { return ws }, diag, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "go" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
