@@ -25,6 +25,17 @@ func activeTopology(fn topologyStoreFn) *topology.Store {
 	return fn()
 }
 
+// topologyDisabledMessage is the single response every topology_* tool returns
+// when the index is genuinely unavailable — topology disabled in config, or the
+// workspace not yet attached (storeFn returns nil). It is deliberately distinct
+// from a successful query that simply matched nothing: those return a
+// tool-specific "no results"/"not found" message, so an agent is never told
+// topology is off when it is actually indexed and working.
+func topologyDisabledMessage() string {
+	return "topology indexing is disabled for this session\n" +
+		"Set [topology] enabled = true in .plumb/config.toml to enable."
+}
+
 // filterTopologyByName returns nodes whose name contains query (case-insensitive),
 // mirroring the substring matching of find_symbol's LSP path.
 func filterTopologyByName(nodes []topology.Node, query string) []topology.Node {

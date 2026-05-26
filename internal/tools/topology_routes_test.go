@@ -41,8 +41,11 @@ func TestTopologyRoutes_FormatEmpty(t *testing.T) {
 func TestTopologyRoutes_FormatNilResult(t *testing.T) {
 	a := topologyRoutesArgs{Limit: 20}
 	out := formatRoutesResult(nil, a)
-	if !strings.Contains(out, "disabled") {
-		t.Errorf("nil result should produce disabled message, got: %s", out)
+	if strings.Contains(out, "disabled") {
+		t.Errorf("nil routes is a no-results case, not 'disabled'; got: %s", out)
+	}
+	if !strings.Contains(out, "no route patterns matched") {
+		t.Errorf("expected no-results message, got: %s", out)
 	}
 }
 

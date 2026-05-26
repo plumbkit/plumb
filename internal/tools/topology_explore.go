@@ -87,6 +87,9 @@ func (t *TopologyExplore) Execute(ctx context.Context, raw json.RawMessage) (str
 		return "", err
 	}
 	store := t.storeFn()
+	if store == nil {
+		return topologyDisabledMessage(), nil
+	}
 	nb, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
@@ -114,7 +117,7 @@ func (a *topologyExploreArgs) validate() error {
 
 func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topologyExploreArgs) (*topology.Neighbourhood, error) {
 	if store == nil {
-		return nil, nil // nil signals "disabled" to the formatter; not an error
+		return nil, nil // defensive; Execute pre-checks a nil store
 	}
 	opts := topology.ExploreOpts{
 		Depth:         a.Depth,
@@ -128,8 +131,7 @@ func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topo
 
 func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreArgs) string {
 	if nb == nil {
-		return "topology indexing is disabled for this session\n" +
-			"Set [topology] enabled = true in .plumb/config.toml to enable."
+		return fmt.Sprintf("topology_explore: symbol %q not found in the index", a.Name)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "topology explore: %s %q (source=topology)\n", string(nb.Centre.Kind), nb.Centre.Name)

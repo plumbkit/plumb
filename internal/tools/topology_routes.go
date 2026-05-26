@@ -70,6 +70,9 @@ func (t *TopologyRoutes) Execute(ctx context.Context, raw json.RawMessage) (stri
 		return "", err
 	}
 	store := t.storeFn()
+	if store == nil {
+		return topologyDisabledMessage(), nil
+	}
 	routes, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
@@ -191,10 +194,6 @@ func isRouteCandidate(n topology.Node, p routePattern, pathPrefix string) bool {
 }
 
 func formatRoutesResult(routes []routeEntry, a topologyRoutesArgs) string {
-	if routes == nil {
-		return "topology indexing is disabled for this session\n" +
-			"Set [topology] enabled = true in .plumb/config.toml to enable."
-	}
 	if len(routes) == 0 {
 		msg := "topology_routes: no route patterns matched"
 		if a.Framework != "" {

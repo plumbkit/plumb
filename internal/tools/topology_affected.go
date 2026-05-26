@@ -98,6 +98,9 @@ func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (st
 		return "", err
 	}
 	store := t.storeFn()
+	if store == nil {
+		return topologyDisabledMessage(), nil
+	}
 	result, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
@@ -284,8 +287,7 @@ func incidentConfidence(edges []topology.Edge) map[int64]float64 {
 
 func formatAffectedResult(result *affectedResult, a topologyAffectedArgs) string {
 	if result == nil {
-		return "topology indexing is disabled for this session\n" +
-			"Set [topology] enabled = true in .plumb/config.toml to enable."
+		return "topology_affected: none of the given files or symbols are in the index"
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "topology affected: %d files, %d symbols changed\n",

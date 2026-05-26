@@ -41,8 +41,11 @@ func TestTopologyAffected_Defaults(t *testing.T) {
 func TestTopologyAffected_FormatNilResult(t *testing.T) {
 	a := topologyAffectedArgs{Symbols: []string{"foo"}, MaxResults: 50}
 	out := formatAffectedResult(nil, a)
-	if !strings.Contains(out, "disabled") {
-		t.Errorf("nil result should produce disabled message, got: %s", out)
+	if strings.Contains(out, "disabled") {
+		t.Errorf("nil result is a not-found case, not 'disabled'; got: %s", out)
+	}
+	if !strings.Contains(out, "none of the given files or symbols are in the index") {
+		t.Errorf("expected not-found message, got: %s", out)
 	}
 }
 

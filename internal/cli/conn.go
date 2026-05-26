@@ -570,13 +570,39 @@ func (s *connSession) startTopologyIndexer(workspace string) {
 	if s.topologyStore != nil {
 		return
 	}
-	if !s.store.Current().Topology.Enabled {
-		return
-	}
 	if s.topologyPool == nil {
 		return
 	}
+	if !s.topologyEnabledFor(workspace) {
+		return
+	}
 	s.topologyStore = s.topologyPool.Acquire(workspace)
+}
+
+// topologyEnabledFor reports whether topology indexing is enabled for workspace,
+// honouring a per-project [topology] override. LoadProject merges the project
+// config (<workspace>/.plumb/config.toml) onto the global base, so an explicit
+// project opt-out (enabled = false) wins over a global default-on, and a project
+// opt-in wins over a global default-off. Falls back to the global setting when
+// the project config cannot be read.
+func (s *connSession) topologyEnabledFor(workspace string) bool {
+	base := s.store.Current()
+	cfg, err := config.LoadProject(base, workspace)
+	if err != nil {
+		return base.Topology.Enabled
+	}
+	return cfg.Topology.Enabled
+}
+
+// topologyStoreLive returns the session's topology store, or nil when topology
+// is disabled or the workspace has not yet attached. It reads under stateMu so
+// it reflects a store attached after tool registration: registerAllTools — which
+// builds the write-tool deps and the topology accessor — runs before the client
+// handshake attaches the workspace.
+func (s *connSession) topologyStoreLive() *topology.Store {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.topologyStore
 }
 
 // startQualityRunner creates and starts the quality runner when the [quality]
@@ -621,9 +647,15 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 	if r := s.qualityRunner; r != nil {
 		qualityReport = r.Report
 	}
-	var topologyNotify tools.TopologyNotifyFn
-	if store := s.topologyStore; store != nil {
-		topologyNotify = func(path string) { store.Enqueue(path) }
+	// Resolve the topology store lazily on each write: buildWriteDeps runs during
+	// tool registration, before the client handshake attaches the workspace, so
+	// capturing s.topologyStore eagerly here would always capture nil and silently
+	// disable write-triggered re-indexing. Reading it per-write picks up the store
+	// once the session attaches.
+	topologyNotify := func(path string) {
+		if store := s.topologyStoreLive(); store != nil {
+			store.Enqueue(path)
+		}
 	}
 	return tools.WriteDeps{
 		Client:                s.sessionProxy,
@@ -646,11 +678,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 // registerAllTools registers every MCP tool with srv.
 func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Time) {
 	lspTimeout := s.store.Current().LSPQuery.Timeout.Duration
-	topoFn := func() *topology.Store {
-		s.stateMu.Lock()
-		defer s.stateMu.Unlock()
-		return s.topologyStore
-	}
+	topoFn := s.topologyStoreLive
 	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))

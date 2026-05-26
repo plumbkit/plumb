@@ -81,6 +81,9 @@ func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (stri
 		return "", err
 	}
 	store := t.storeFn()
+	if store == nil {
+		return topologyDisabledMessage(), nil
+	}
 	result, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
@@ -130,8 +133,7 @@ func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topol
 
 func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs) string {
 	if result == nil {
-		return "topology indexing is disabled for this session\n" +
-			"Set [topology] enabled = true in .plumb/config.toml to enable."
+		return fmt.Sprintf("topology_impact: symbol %q not found in the index", a.Name)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "topology impact: %s %q (source=topology, depth=%d, edge_kinds=%v)\n",

@@ -81,6 +81,9 @@ func (t *TopologySearch) Execute(ctx context.Context, raw json.RawMessage) (stri
 		return "", err
 	}
 	store := t.storeFn()
+	if store == nil {
+		return topologyDisabledMessage(), nil
+	}
 	results, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
@@ -120,10 +123,6 @@ func (t *TopologySearch) run(ctx context.Context, store *topology.Store, a topol
 }
 
 func formatTopologySearchResults(results []topology.SearchResult, a topologySearchArgs) string {
-	if results == nil {
-		return "topology indexing is disabled for this session\n" +
-			"Set [topology] enabled = true in .plumb/config.toml to enable."
-	}
 	if len(results) == 0 {
 		return fmt.Sprintf("topology_search: no results for %q", a.Query)
 	}

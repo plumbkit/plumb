@@ -47,7 +47,10 @@ func TestTopologyImpact_Defaults(t *testing.T) {
 func TestTopologyImpact_FormatNilResult(t *testing.T) {
 	a := topologyImpactArgs{Name: "foo", Depth: 3, EdgeKinds: []string{"calls"}}
 	out := formatImpactResult(nil, a)
-	if !strings.Contains(out, "disabled") {
-		t.Errorf("nil result should produce disabled message, got: %s", out)
+	if strings.Contains(out, "disabled") {
+		t.Errorf("nil result is a not-found case, not 'disabled'; got: %s", out)
+	}
+	if !strings.Contains(out, "not found in the index") {
+		t.Errorf("expected not-found message, got: %s", out)
 	}
 }
