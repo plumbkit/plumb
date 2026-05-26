@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +62,7 @@ func TestCloseEntry_BoundsHungShutdown(t *testing.T) {
 func detectTestPool() *workspacePool {
 	return &workspacePool{
 		entries: make(map[string]*poolEntry),
+		baseCtx: context.Background(),
 		langs: []langConfig{
 			{name: "go", cfg: config.LSPConfig{
 				RootMarkers: []string{"go.mod"},
@@ -493,5 +496,134 @@ func mustMkdir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// missingPoolCommand is a path that cannot exist, so the language-server spawn
+// fails immediately.
+const missingPoolCommand = "/nonexistent/plumb-pool-test-binary"
+
+// sleepCommand returns a long-lived no-op command, so acquireLang spawns a real
+// process that never completes the LSP handshake — the entry stays "warming".
+func sleepCommand(t *testing.T) (string, []string) {
+	t.Helper()
+	path, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no 'sleep' binary on PATH")
+	}
+	return path, []string{"30"}
+}
+
+// warmingPool builds a pool whose "go" language server is the given command.
+func warmingPool(baseCtx context.Context, command string, args []string) *workspacePool {
+	return &workspacePool{
+		entries:  make(map[string]*poolEntry),
+		baseCtx:  baseCtx,
+		cacheTTL: 5 * time.Minute,
+		langs: []langConfig{
+			{name: "go", cfg: config.LSPConfig{
+				Command:     command,
+				Args:        args,
+				RootMarkers: []string{"go.mod"},
+				Enabled:     true,
+			}},
+		},
+	}
+}
+
+// TestAcquireLang_ConcurrentReusesSingleEntry verifies that concurrent acquires
+// for the same cold root reuse one warming entry and never spawn a second
+// language server — the entry is published into the map before the pool lock is
+// released, so racing callers all observe it.
+func TestAcquireLang_ConcurrentReusesSingleEntry(t *testing.T) {
+	cmd, args := sleepCommand(t)
+	pool := warmingPool(context.Background(), cmd, args)
+	defer pool.close()
+
+	const root = "/tmp/plumb-acquire-concurrent-root"
+	const n = 8
+	var wg sync.WaitGroup
+	results := make([]*poolEntry, n)
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			e, err := pool.acquireLang(context.Background(), root, "go")
+			if err != nil {
+				t.Errorf("acquireLang: %v", err)
+				return
+			}
+			results[i] = e
+		}(i)
+	}
+	wg.Wait()
+
+	first := results[0]
+	if first == nil {
+		t.Fatal("nil entry from acquireLang")
+	}
+	for i, e := range results {
+		if e != first {
+			t.Fatalf("result[%d] differs from result[0]; concurrent acquire spawned more than one LS", i)
+		}
+	}
+	if got := len(pool.entries); got != 1 {
+		t.Fatalf("pool has %d entries, want 1", got)
+	}
+	// Still warming: the handshake never completed against the no-op process.
+	if first.proxy.get() != nil {
+		t.Fatal("expected a not-yet-ready proxy for the no-op language server")
+	}
+}
+
+// TestAcquireLang_FirstStartFailureRemovesEntry verifies that a spawn failure
+// (missing binary) returns fast, surfaces the error, and removes the dead entry
+// so a later acquire can retry — preserving the missing-binary degrade path.
+func TestAcquireLang_FirstStartFailureRemovesEntry(t *testing.T) {
+	pool := warmingPool(context.Background(), missingPoolCommand, nil)
+	defer pool.close()
+
+	const root = "/tmp/plumb-acquire-fail-root"
+	start := time.Now()
+	if _, err := pool.acquireLang(context.Background(), root, "go"); err == nil {
+		t.Fatal("expected error for a missing language-server binary")
+	}
+	if elapsed := time.Since(start); elapsed >= firstStartGrace {
+		t.Fatalf("acquireLang blocked %s on a fast spawn failure; want well under the %s grace", elapsed, firstStartGrace)
+	}
+	if e := pool.lookup(root); e != nil {
+		t.Fatal("failed entry was not removed; a later acquire cannot retry")
+	}
+}
+
+// TestAcquireLang_CancelledCtxKeepsWarming is the regression test for the
+// latent lifetime bug: the supervisor runs on the pool's base context, not the
+// caller's request ctx, so a cancelled request returns the warming entry
+// immediately and leaves the language server warming in the pool.
+func TestAcquireLang_CancelledCtxKeepsWarming(t *testing.T) {
+	cmd, args := sleepCommand(t)
+	pool := warmingPool(context.Background(), cmd, args)
+	defer pool.close()
+
+	const root = "/tmp/plumb-acquire-cancel-root"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // request context already gone before the call
+
+	start := time.Now()
+	e, err := pool.acquireLang(ctx, root, "go")
+	if err != nil {
+		t.Fatalf("acquireLang: %v", err)
+	}
+	if e == nil {
+		t.Fatal("nil entry from acquireLang")
+	}
+	if elapsed := time.Since(start); elapsed >= firstStartGrace {
+		t.Fatalf("acquireLang waited %s despite a cancelled request ctx", elapsed)
+	}
+	if got := pool.lookup(root); got != e {
+		t.Fatal("entry missing after cancelled-ctx acquire; supervisor lifetime leaked to the request ctx")
+	}
+	if e.sup == nil {
+		t.Fatal("expected a live supervisor on the warming entry")
 	}
 }

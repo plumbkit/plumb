@@ -127,6 +127,7 @@ func setupTwoProjects(t *testing.T) (string, string) {
 func newTestPool() *workspacePool {
 	return &workspacePool{
 		entries: make(map[string]*poolEntry),
+		baseCtx: context.Background(),
 		langs: []langConfig{
 			{name: "go", cfg: config.LSPConfig{
 				RootMarkers: []string{"go.mod"},

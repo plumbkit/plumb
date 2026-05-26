@@ -87,16 +87,24 @@ func NewSupervisor(command string, args, env []string, opts SupervisorOptions) *
 	}
 }
 
-// Start spawns the process and begins the supervision loop.
-// It returns after the process is running and OnStart has succeeded.
-// Cancelling ctx stops the loop; call Stop for a clean shutdown.
-func (s *Supervisor) Start(ctx context.Context) error {
+// StartAsync spawns the process and begins the supervision loop, returning
+// immediately without waiting for the first OnStart to complete. The returned
+// channel receives exactly one value: nil once the process is running and the
+// first OnStart has succeeded, or a non-nil error if the first spawn/OnStart
+// fails (the loop does not retry a first-start failure). The channel is
+// buffered (cap 1) so the loop's single send never blocks even if the caller
+// stops reading; callers may abandon the channel at any time.
+//
+// ctx is the supervisor's lifetime and must outlive any single request — pass
+// the daemon root context, never a per-tool-call context. Cancelling ctx (or
+// calling Stop) stops the loop.
+func (s *Supervisor) StartAsync(ctx context.Context) (<-chan error, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	if s.state != StateStopped {
 		s.mu.Unlock()
 		cancel()
-		return fmt.Errorf("supervisor: already running (state=%s)", s.state)
+		return nil, fmt.Errorf("supervisor: already running (state=%s)", s.state)
 	}
 	s.cancel = cancel
 	s.mu.Unlock()
@@ -104,11 +112,28 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	readyCh := make(chan error, 1)
 	s.wg.Add(1)
 	go s.loop(ctx, readyCh)
+	return readyCh, nil
+}
 
+// Start spawns the process and blocks until the first OnStart has succeeded or
+// failed. Cancelling ctx stops the loop; call Stop for a clean shutdown.
+// Retained for synchronous callers and tests; the daemon hot path uses
+// StartAsync so a slow cold-start handshake never blocks a tool call.
+func (s *Supervisor) Start(ctx context.Context) error {
+	readyCh, err := s.StartAsync(ctx)
+	if err != nil {
+		return err
+	}
+	s.mu.RLock()
+	cancel := s.cancel
+	s.mu.RUnlock()
 	select {
 	case err := <-readyCh:
 		return err
 	case <-ctx.Done():
+		if cancel != nil {
+			cancel()
+		}
 		return ctx.Err()
 	}
 }

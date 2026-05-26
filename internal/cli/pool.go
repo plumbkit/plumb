@@ -40,6 +40,13 @@ type workspacePool struct {
 	entries  map[string]*poolEntry // key: root path; one LS per root
 	langs    []langConfig          // enabled languages, deterministic order
 	cacheTTL time.Duration
+
+	// baseCtx is the supervisor lifetime context — the daemon root context, not
+	// any single connection or tool-call context. Language servers are shared
+	// across all sessions, so tying one to a caller's context would let that
+	// caller's disconnect tear it down for everyone. Never nil after
+	// newWorkspacePool (guarded to context.Background()).
+	baseCtx context.Context
 }
 
 type langConfig struct {
@@ -56,7 +63,14 @@ type poolEntry struct {
 	sup      *lsp.Supervisor
 }
 
-func newWorkspacePool(cfg config.Config) *workspacePool {
+// newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that
+// supervisors run on; pass the daemon root context. Detect-only call sites (the
+// CLI workspace resolver) may pass context.Background() — it is only used when
+// acquireLang starts a language server.
+func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool {
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
 	var langs []langConfig
 	for name, lspCfg := range cfg.LSP {
 		if lspCfg.Enabled {
@@ -77,6 +91,7 @@ func newWorkspacePool(cfg config.Config) *workspacePool {
 		entries:  make(map[string]*poolEntry),
 		langs:    langs,
 		cacheTTL: cfg.Cache.TTL.Duration,
+		baseCtx:  baseCtx,
 	}
 }
 
@@ -237,74 +252,149 @@ func resolveCLIWorkspace(start string, cfg config.Config) (string, error) {
 	if !info.IsDir() {
 		abs = filepath.Dir(abs)
 	}
-	root, _, err := newWorkspacePool(cfg).Detect(abs)
+	root, _, err := newWorkspacePool(context.Background(), cfg).Detect(abs)
 	if err != nil {
 		return abs, nil
 	}
 	return root, nil
 }
 
-// acquireLang returns (or starts) the shared workspace state for root.
-// Pass "" for language to detect from root markers; otherwise the named
-// adapter is used directly.
+// firstStartGrace bounds the inline wait for a freshly started language server.
+// A fast/warm server (small module) finishes Initialize+Initialized well inside
+// this window, so the first tool call still gets full LSP results inline. A slow
+// cold-start (large workspace) returns here within the grace as a not-yet-ready
+// entry and keeps warming in the background, so the tool falls back to the
+// tree-sitter index instead of blocking until the MCP client times out.
+const firstStartGrace = 2 * time.Second
+
+// acquireLang returns (or starts) the shared workspace state for root, never
+// blocking on a slow cold-start. Pass "" for language to detect from root
+// markers; otherwise the named adapter is used directly.
+//
+// The returned entry may not yet be ready: a cold language server keeps warming
+// in the background (on the pool's base context) and proxy.get() stays nil until
+// the handshake completes, which the routing proxy surfaces as "LSP server not
+// yet ready". Callers that need the server immediately should treat a nil
+// proxy.get() as a transient miss, not a failure.
 func (p *workspacePool) acquireLang(ctx context.Context, root, language string) (*poolEntry, error) {
+	e, readyCh, err := p.startOrReuse(root, language)
+	if err != nil {
+		return nil, err
+	}
+	if readyCh == nil {
+		return e, nil // reused an existing entry — no warm-up to wait on
+	}
+	return p.awaitReady(ctx, root, e, readyCh)
+}
+
+// startOrReuse returns the existing entry for root, or builds a new one and
+// begins warming its language server in the background. For a reused entry the
+// returned channel is nil (nothing to wait on); for a freshly started one it
+// delivers the first-start outcome (see Supervisor.StartAsync). The pool mutex
+// is never held across the warm-up: the entry is published into the map before
+// the lock is released, so concurrent callers for the same root reuse it and a
+// language server is never spawned twice.
+func (p *workspacePool) startOrReuse(root, language string) (*poolEntry, <-chan error, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if e, ok := p.entries[root]; ok {
 		slog.Info("pool: reusing LS", "root", root, "language", e.language)
-		return e, nil
+		return e, nil, nil
 	}
 
 	if language == "" {
 		language = p.detectLanguageAt(root)
 		if language == "" {
-			return nil, fmt.Errorf("no enabled language matches %s", root)
+			return nil, nil, fmt.Errorf("no enabled language matches %s", root)
 		}
 	}
-
 	lspCfg, ok := p.cfgFor(language)
 	if !ok {
-		return nil, fmt.Errorf("language %q not configured or not enabled", language)
+		return nil, nil, fmt.Errorf("language %q not configured or not enabled", language)
 	}
 
 	rootURI := protocol.FileURI(root)
 	c := cache.New(p.cacheTTL)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
-
 	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c}
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
-		OnStart: func(startCtx context.Context, conn *jsonrpc.Conn) error {
-			ad, err := newAdapter(language, conn)
-			if err != nil {
-				return err
-			}
-			// Subscribe BEFORE initialized so the first publishDiagnostics
-			// burst (sent within ms of initialized) is not lost.
-			ad.Subscribe(inv.Handle)
-			if _, err := ad.Initialize(startCtx, initParamsFor(language, rootURI)); err != nil {
-				return fmt.Errorf("initialize: %w", err)
-			}
-			if err := ad.Initialized(startCtx); err != nil {
-				return fmt.Errorf("initialized: %w", err)
-			}
-			proxy.set(ad)
-			slog.Info("pool: LS ready", "root", root, "language", language)
-			return nil
-		},
+		OnStart: poolOnStart(language, root, rootURI, inv, proxy),
 	})
-
-	if err := sup.Start(ctx); err != nil {
+	// Warm up on the pool's base (daemon-lifetime) context, not a request ctx.
+	readyCh, err := sup.StartAsync(p.baseCtx)
+	if err != nil {
 		c.Close()
-		return nil, fmt.Errorf("starting %s for %s: %w", language, root, err)
+		return nil, nil, fmt.Errorf("starting %s for %s: %w", language, root, err)
 	}
 	e.sup = sup
-
 	p.entries[root] = e
-	slog.Info("pool: new workspace", "root", root, "language", language)
-	return e, nil
+	slog.Info("pool: new workspace (warming)", "root", root, "language", language)
+	return e, readyCh, nil
+}
+
+// awaitReady waits up to firstStartGrace for a freshly started entry to become
+// ready. A first-start failure (e.g. a missing binary, which the supervisor
+// will not retry) removes the entry so a later call re-spawns, and surfaces the
+// error so attachWorkspace degrades to LanguageNone. On grace or request-context
+// expiry the not-yet-ready entry is returned and the supervisor keeps warming.
+func (p *workspacePool) awaitReady(ctx context.Context, root string, e *poolEntry, readyCh <-chan error) (*poolEntry, error) {
+	select {
+	case startErr := <-readyCh:
+		if startErr != nil {
+			p.removeFailed(root, e)
+			return nil, fmt.Errorf("starting %s for %s: %w", e.language, root, startErr)
+		}
+		return e, nil
+	case <-time.After(firstStartGrace):
+		return e, nil
+	case <-ctx.Done():
+		return e, nil
+	}
+}
+
+// poolOnStart builds the supervisor OnStart hook: construct the adapter,
+// subscribe the invalidator BEFORE initialized (so the first publishDiagnostics
+// burst — sent within ms of initialized — is not lost), run the handshake, and
+// publish the ready client into proxy.
+func poolOnStart(language, root, rootURI string, inv *cache.Invalidator, proxy *clientProxy) func(context.Context, *jsonrpc.Conn) error {
+	return func(startCtx context.Context, conn *jsonrpc.Conn) error {
+		ad, err := newAdapter(language, conn)
+		if err != nil {
+			return err
+		}
+		ad.Subscribe(inv.Handle)
+		if _, err := ad.Initialize(startCtx, initParamsFor(language, rootURI)); err != nil {
+			return fmt.Errorf("initialize: %w", err)
+		}
+		if err := ad.Initialized(startCtx); err != nil {
+			return fmt.Errorf("initialized: %w", err)
+		}
+		proxy.set(ad)
+		slog.Info("pool: LS ready", "root", root, "language", language)
+		return nil
+	}
+}
+
+// removeFailed deletes a dead entry — one whose first start failed and which the
+// supervisor will not retry — from the pool so a later acquire re-spawns, then
+// tears down its supervisor and cache. The identity check guards against
+// deleting a different entry a concurrent caller may have inserted for the same
+// root.
+func (p *workspacePool) removeFailed(root string, e *poolEntry) {
+	p.mu.Lock()
+	if cur, ok := p.entries[root]; ok && cur == e {
+		delete(p.entries, root)
+	}
+	p.mu.Unlock()
+	if e.sup != nil {
+		e.sup.Stop()
+	}
+	if e.cache != nil {
+		e.cache.Close()
+	}
 }
 
 func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {

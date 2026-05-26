@@ -184,7 +184,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	statsStore := newStatsStore()
 	defer statsStore.Close()
 
-	pool := newWorkspacePool(cfg)
+	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()
 
 	topoPool := newTopologyPool(cfg.Topology)
