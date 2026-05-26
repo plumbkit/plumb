@@ -299,7 +299,26 @@ func startDaemonProcess() error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	go reapAfterExit(cmd, logFile)
+	return nil
+}
+
+// reapAfterExit drops the spawner's copy of the log handle (the child dup'd its
+// own fd at exec) and waits on cmd so the daemon is reaped on exit instead of
+// lingering as a zombie. Setsid detaches the controlling terminal but does NOT
+// reparent the child — it stays a child of the long-lived `plumb serve` that
+// spawned it, so without this Wait a `plumb restart` SIGTERM leaves a <defunct>
+// process (and `stopByPID`'s kill-0 liveness check then misreports it as still
+// running). Runs in its own goroutine in production; the short-lived restart/stop
+// callers exit before the daemon dies, so the child reparents to init and is
+// reaped there.
+func reapAfterExit(cmd *exec.Cmd, logFile *os.File) {
+	_ = logFile.Close()
+	_ = cmd.Wait()
 }
 
 // daemonLogPath returns the OS-appropriate path for daemon log output.

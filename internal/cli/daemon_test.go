@@ -3,7 +3,9 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -239,5 +241,37 @@ func TestAutoAttach_MaterialisePlumbDir_NestedRoot(t *testing.T) {
 	plumbDir := filepath.Join(nested, ".plumb")
 	if info, err := os.Stat(plumbDir); err != nil || !info.IsDir() {
 		t.Fatalf(".plumb/ not created under nested path %s", plumbDir)
+	}
+}
+
+// TestReapAfterExit verifies the daemon-spawn reaper waits on the child (so it
+// is reaped rather than left a zombie) and closes the spawner's copy of the log
+// handle. Run synchronously here so the read of ProcessState is race-free.
+func TestReapAfterExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX helper command")
+	}
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "child.log"))
+	if err != nil {
+		t.Fatalf("create log: %v", err)
+	}
+
+	cmd := exec.Command("true")
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start helper: %v", err)
+	}
+
+	reapAfterExit(cmd, logFile)
+
+	if cmd.ProcessState == nil {
+		t.Fatal("child was not reaped (ProcessState nil after reapAfterExit)")
+	}
+	if !cmd.ProcessState.Exited() {
+		t.Errorf("child did not exit cleanly: %v", cmd.ProcessState)
+	}
+	if _, err := logFile.WriteString("x"); err == nil {
+		t.Error("spawner's log handle should be closed after reapAfterExit")
 	}
 }
