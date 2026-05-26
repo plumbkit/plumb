@@ -241,3 +241,29 @@ func TestSave_AtomicLeavesNoTempFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestStore_NotifiesInRegistrationOrder pins the deterministic notification
+// order the topology reconcile relies on: the daemon-level subscriber, which is
+// registered before any connection, must run before every per-session one.
+func TestStore_NotifiesInRegistrationOrder(t *testing.T) {
+	s := NewStore(Defaults())
+	var mu sync.Mutex
+	var order []int
+	for i := 0; i < 5; i++ {
+		idx := i
+		s.Subscribe(func(Config) {
+			mu.Lock()
+			order = append(order, idx)
+			mu.Unlock()
+		})
+	}
+	s.set(Defaults())
+	if len(order) != 5 {
+		t.Fatalf("got %d notifications, want 5", len(order))
+	}
+	for i, got := range order {
+		if got != i {
+			t.Errorf("notification %d came from subscriber %d; want registration order", i, got)
+		}
+	}
+}

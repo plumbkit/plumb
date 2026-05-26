@@ -122,6 +122,7 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, store *config.S
 	s.unsubscribe = store.Subscribe(func(config.Config) {
 		if ws := s.workspace(); ws != "" {
 			s.applyProjectConfig(ws)
+			s.reconcileTopologyStore(ws)
 			slog.Info("daemon: global config changed — session re-applied", "workspace", ws)
 		}
 	})
@@ -603,6 +604,28 @@ func (s *connSession) topologyStoreLive() *topology.Store {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	return s.topologyStore
+}
+
+// reconcileTopologyStore refreshes the session's topology store after a global
+// config reload. The daemon-level subscriber (notified first — see config.Store's
+// registration-order guarantee) runs topoPool.Reconcile, which may have closed or
+// re-opened the pooled store for this root, leaving s.topologyStore on a closed
+// handle; and a live enable/disable changes whether a store should exist at all.
+// Re-acquiring (or clearing) here keeps the session's topology tools on a live
+// store, so enabling/disabling topology takes effect on the current session, not
+// only the next one. The project-config read happens before stateMu is taken.
+func (s *connSession) reconcileTopologyStore(workspace string) {
+	if s.topologyPool == nil {
+		return
+	}
+	enabled := s.topologyEnabledFor(workspace)
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if !enabled {
+		s.topologyStore = nil
+		return
+	}
+	s.topologyStore = s.topologyPool.Acquire(workspace)
 }
 
 // startQualityRunner creates and starts the quality runner when the [quality]

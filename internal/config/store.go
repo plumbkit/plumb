@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,9 +12,9 @@ import (
 // Listener is notified with the freshly-published global base config whenever
 // the Store changes. Listeners run synchronously on the goroutine that called
 // Reload/set, after the Store's listener lock is released, so a Listener may
-// safely call back into Current, Generation, or LoadProject. A Listener must
-// not block for long and must not call Reload re-entrantly (it would deadlock
-// on the publish lock).
+// safely call back into Current, Generation, or LoadProject; they are invoked
+// in registration (Subscribe) order. A Listener must not block for long and
+// must not call Reload re-entrantly (it would deadlock on the publish lock).
 type Listener func(Config)
 
 // Store is the daemon-singleton source of truth for the global base config
@@ -134,9 +135,19 @@ func (s *Store) set(cfg Config) {
 
 	s.mu.Lock()
 	s.lastReloaded = time.Now()
-	subs := make([]Listener, 0, len(s.listeners))
-	for _, fn := range s.listeners {
-		subs = append(subs, fn)
+	// Snapshot listeners in registration (id) order so notification is
+	// deterministic: the daemon-level subscriber (registered first, before any
+	// connection) runs before every per-session subscriber. Topology relies on
+	// this ordering — the daemon reconciles the shared pool first, then each
+	// session re-acquires the now-fresh store.
+	ids := make([]int, 0, len(s.listeners))
+	for id := range s.listeners {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	subs := make([]Listener, 0, len(ids))
+	for _, id := range ids {
+		subs = append(subs, s.listeners[id])
 	}
 	s.mu.Unlock()
 

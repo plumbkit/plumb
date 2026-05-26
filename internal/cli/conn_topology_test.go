@@ -69,3 +69,40 @@ func TestTopologyStoreLive_ReflectsLateAttach(t *testing.T) {
 	}
 	wd.TopologyNotify("/after/attach.go") // now resolves to the live store — must not panic
 }
+
+// TestReconcileTopologyStore_EnableDisable is the F5/F7 regression: a live config
+// reload must refresh the session's topology store — acquiring one when enabled,
+// and clearing it (not leaving a stale/closed handle) on a per-project opt-out —
+// so topology enable/disable takes effect on the current session.
+func TestReconcileTopologyStore_EnableDisable(t *testing.T) {
+	base := config.Defaults()
+	base.Topology.Enabled = true
+	base.Topology.Watch = false // no OS watcher in a unit test
+	ws := t.TempDir()
+	s := &connSession{
+		store:        config.NewStore(base),
+		topologyPool: newTopologyPool(base.Topology),
+	}
+	defer s.topologyPool.StopAll()
+
+	// Enabled globally, no project override -> the session acquires a store.
+	s.reconcileTopologyStore(ws)
+	if s.topologyStore == nil {
+		t.Fatal("expected a topology store when enabled")
+	}
+
+	// Per-project opt-out -> the session clears its store, so its topology tools
+	// report "disabled" rather than erroring on a stale handle.
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[topology]\nenabled = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.reconcileTopologyStore(ws)
+	if s.topologyStore != nil {
+		t.Error("expected nil topology store after a per-project opt-out")
+	}
+}

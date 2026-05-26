@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.8 (unreleased)
+
+### Fixed
+- **A live topology enable/disable now takes effect on already-connected sessions, instead of stranding them on a closed index.** When the global config reloads, the daemon-level subscriber runs `topoPool.Reconcile` (which can close or re-open the shared per-root store) — but a session's cached `s.topologyStore` pointer was never refreshed, so after a reconcile its `topology_*` tools operated on a **closed** SQLite handle until the session reconnected; and a live *enable* never attached a store to an already-running session at all. Two parts: (1) `config.Store` now notifies listeners in **registration order** (`internal/config/store.go`), so the daemon-level subscriber — registered before any connection — always reconciles the pool *before* any per-session subscriber runs; (2) each session's reload subscriber calls the new `connSession.reconcileTopologyStore` (`internal/cli/conn.go`), which re-acquires the fresh pooled store when topology is enabled for the workspace (honouring the per-project merge) or clears the pointer when it is disabled. This also makes the TUI Settings "Topology = live" reload tier **accurate** — enabling or disabling topology (including from the Settings screen) now applies to the current session, not only the next one — so no label change was needed. Guards: `TestStore_NotifiesInRegistrationOrder`, `TestReconcileTopologyStore_EnableDisable`.
+
 ## 0.8.7 (unreleased)
 
 ### Added
