@@ -217,7 +217,7 @@ func (m Model) setLogFormat(format string) Model {
 	if m.persist(func(c *config.Config) { c.LogFormat = format }) {
 		m.settingsCfg.LogFormat = format
 		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = restartStatus("log format → " + format)
+		m.settingsStatus = settingStatus(skLogFormat, "log format → "+format)
 	}
 	return m
 }
@@ -229,7 +229,7 @@ func (m Model) setRateLimit(n int) Model {
 	if m.persist(func(c *config.Config) { c.Edits.RateLimitPerMinute = n }) {
 		m.settingsCfg.Edits.RateLimitPerMinute = n
 		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = restartStatus("rate limit → " + rateLimitValue(n))
+		m.settingsStatus = settingStatus(skRateLimit, "rate limit → "+rateLimitValue(n))
 	}
 	return m
 }
@@ -245,7 +245,7 @@ func (m Model) toggleBool(key settingKey) Model {
 	if m.persist(func(c *config.Config) { *boolField(c, key) = v }) {
 		*boolField(&m.settingsCfg, key) = v
 		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = restartStatus(toggleLabel(key) + " " + onOff(v))
+		m.settingsStatus = settingStatus(key, toggleLabel(key)+" "+onOff(v))
 	}
 	return m
 }
@@ -281,7 +281,7 @@ func (m Model) setCacheMaxSize(n int) Model {
 	if m.persist(func(c *config.Config) { c.Cache.MaxSize = n }) {
 		m.settingsCfg.Cache.MaxSize = n
 		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = restartStatus(fmt.Sprintf("cache max size → %d", n))
+		m.settingsStatus = settingStatus(skCacheMaxSize, fmt.Sprintf("cache max size → %d", n))
 	}
 	return m
 }
@@ -311,7 +311,7 @@ func (m Model) setDuration(key settingKey, dir int) Model {
 	if m.persist(func(c *config.Config) { p, _ := durField(c, key); p.Duration = d }) {
 		ptr.Duration = d
 		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = restartStatus(durLabel(key) + " → " + next)
+		m.settingsStatus = settingStatus(key, durLabel(key)+" → "+next)
 	}
 	return m
 }
@@ -467,8 +467,18 @@ func (m Model) setPathStyle(style string) Model {
 	return m
 }
 
-func restartStatus(change string) string {
-	return change + " · applies on next daemon start"
+// settingStatus formats the transient status line for a changed setting,
+// reflecting when the change takes effect. Driven by reloadTierFor so the
+// wording always matches the row's reload-tier marker.
+func settingStatus(key settingKey, change string) string {
+	switch reloadTierFor(key) {
+	case reloadNextSession:
+		return change + " · applies to new sessions"
+	case reloadRestart:
+		return change + " · applies on next daemon start"
+	default:
+		return change + " · applied live"
+	}
 }
 
 func toggleLabel(key settingKey) string {

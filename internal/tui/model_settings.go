@@ -44,8 +44,37 @@ const (
 	skPathStyle
 )
 
+// reloadTier classifies when a change to a setting takes effect. It mirrors
+// config.RestartSensitiveEqual — the daemon's single source of truth — under
+// which only log format and cache need a restart; edits/git/topology hot-reload
+// into running sessions (the TUI pushes reload-config on every change), and
+// quality/auto_attach/lsp_query apply on the next workspace attach.
+type reloadTier int
+
+const (
+	reloadLive        reloadTier = iota // applies to running sessions immediately
+	reloadNextSession                   // applies on next attach / new session
+	reloadRestart                       // needs a daemon restart
+)
+
+// reloadTierFor maps a settings row to when its change takes effect. Single
+// source of truth shared by the row marker and the status line, so the two can
+// never disagree. The reloadRestart set must stay in lock-step with the fields
+// config.RestartSensitiveEqual compares (log format + cache).
+func reloadTierFor(key settingKey) reloadTier {
+	switch key {
+	case skLogFormat, skCacheTTL, skCacheMaxSize:
+		return reloadRestart
+	case skQuality, skAutoAttach, skLSPTimeout:
+		return reloadNextSession
+	default: // theme, path style, log level, strict, show write diff, rate limit, topology, git
+		return reloadLive
+	}
+}
+
 // settingItem is one selectable row on the Settings screen. Group headers are
-// not items — they are derived from the group field during rendering.
+// not items — they are derived from the group field during rendering. The
+// reload tier is computed from key via reloadTierFor, not stored.
 type settingItem struct {
 	group   string
 	label   string
@@ -53,8 +82,6 @@ type settingItem struct {
 	key     settingKey
 	value   string   // formatted current value
 	options []string // option set for settingCycle
-	live    bool     // change takes effect immediately (no daemon restart)
-	restart bool     // change applies only on next daemon start
 }
 
 var (
@@ -102,22 +129,22 @@ func pathStyleValue(s string) string {
 // the supplied config snapshot.
 func buildSettingItems(cfg config.Config) []settingItem {
 	return []settingItem{
-		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName, live: true},
-		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions, live: true},
-		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions, live: true},
-		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions, restart: true},
-		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict), restart: true},
-		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff), restart: true},
-		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute), restart: true},
-		{group: "Indexing", label: "Topology", kind: settingToggle, key: skTopology, value: onOff(cfg.Topology.Enabled), restart: true},
-		{group: "Indexing", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled), restart: true},
-		{group: "Git", label: "git allow_writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites), restart: true},
-		{group: "Git", label: "git allow_destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive), restart: true},
-		{group: "Git", label: "git allow_push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush), restart: true},
-		{group: "Others", label: "cache ttl", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions, restart: true},
-		{group: "Others", label: "cache max_size", kind: settingNumber, key: skCacheMaxSize, value: fmt.Sprintf("%d", cfg.Cache.MaxSize), restart: true},
-		{group: "Others", label: "lsp_query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions, restart: true},
-		{group: "Others", label: "workspace auto_attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach), restart: true},
+		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName},
+		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions},
+		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions},
+		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions},
+		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict)},
+		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
+		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute)},
+		{group: "Indexing", label: "Topology", kind: settingToggle, key: skTopology, value: onOff(cfg.Topology.Enabled)},
+		{group: "Indexing", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled)},
+		{group: "Git", label: "git allow_writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites)},
+		{group: "Git", label: "git allow_destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive)},
+		{group: "Git", label: "git allow_push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush)},
+		{group: "Others", label: "cache ttl", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions},
+		{group: "Others", label: "cache max_size", kind: settingNumber, key: skCacheMaxSize, value: fmt.Sprintf("%d", cfg.Cache.MaxSize)},
+		{group: "Others", label: "lsp_query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions},
+		{group: "Others", label: "workspace auto_attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
 	}
 }
 
@@ -274,7 +301,7 @@ func settingsHeaderDisplay(group string, innerW int) string {
 }
 
 // settingsRowDisplay renders one aligned settings row: 3-space gap, cursor,
-// fixed-width label and value columns, the control, then live/restart marks.
+// fixed-width label and value columns, the control, then the reload-tier mark.
 func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string {
 	label := fmt.Sprintf("%-*s", labelW, it.label)
 	value := fmt.Sprintf("%-*s", valueW, it.value)
@@ -287,10 +314,12 @@ func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string
 		core = "  " + ItemStyle.Render(label) + DetailStyle.Render(value) + MutedStyle.Render(ctrl)
 	}
 	out := "   " + core
-	if it.live {
+	switch reloadTierFor(it.key) {
+	case reloadLive:
 		out += " " + OkStyle.Render("live")
-	}
-	if it.restart {
+	case reloadNextSession:
+		out += " " + MutedStyle.Render("next session")
+	case reloadRestart:
 		out += " " + HintStyle.Render("*")
 	}
 	return out
@@ -324,7 +353,7 @@ func statusBarLine(content string, innerW int, isOverlay bool) string {
 // settingsHintContent builds the hint bar: the restart legend on the left and
 // the navigation shortcuts (brighter keys) on the right.
 func settingsHintContent(contentW int) string {
-	legend := "* applies on next daemon start"
+	legend := "* needs daemon restart  ·  \"next session\" applies on reconnect"
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
 		SettingsBarKeyStyle.Render("enter") + SettingsBarStyle.Render(" toggle/open")

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -30,29 +31,45 @@ func TestBuildSettingItems_ShapeAndFlags(t *testing.T) {
 	if len(items) != 16 {
 		t.Fatalf("len(items) = %d, want 16", len(items))
 	}
-	if items[0].key != skTheme || items[0].kind != settingPopup || !items[0].live {
-		t.Errorf("first item should be the live Theme popup, got %+v", items[0])
+	if items[0].key != skTheme || items[0].kind != settingPopup {
+		t.Errorf("first item should be the Theme popup, got %+v", items[0])
 	}
 	if items[0].value != ActiveThemeName {
 		t.Errorf("Theme value = %q, want live ActiveThemeName %q", items[0].value, ActiveThemeName)
 	}
+}
 
-	byKey := map[settingKey]settingItem{}
-	for _, it := range items {
-		byKey[it.key] = it
+// TestReloadTierFor pins each settings key to its reload tier. The reloadRestart
+// set must stay in lock-step with the fields config.RestartSensitiveEqual
+// compares (log format + cache) — anything else the daemon hot-reloads, so
+// marking it restart-needed would mislead the user (the bug this fixes).
+func TestReloadTierFor(t *testing.T) {
+	want := map[settingKey]reloadTier{
+		skTheme:          reloadLive,
+		skPathStyle:      reloadLive,
+		skLogLevel:       reloadLive,
+		skStrict:         reloadLive,
+		skShowWriteDiff:  reloadLive,
+		skRateLimit:      reloadLive,
+		skTopology:       reloadLive,
+		skGitWrites:      reloadLive,
+		skGitDestructive: reloadLive,
+		skGitPush:        reloadLive,
+		skQuality:        reloadNextSession,
+		skAutoAttach:     reloadNextSession,
+		skLSPTimeout:     reloadNextSession,
+		skLogFormat:      reloadRestart,
+		skCacheTTL:       reloadRestart,
+		skCacheMaxSize:   reloadRestart,
 	}
-	if ll := byKey[skLogLevel]; !ll.live || ll.restart {
-		t.Errorf("log level should be live and not restart-gated, got %+v", ll)
-	}
-	if ps := byKey[skPathStyle]; !ps.live || ps.restart {
-		t.Errorf("path style should be live and not restart-gated, got %+v", ps)
-	}
-	for _, k := range []settingKey{
-		skLogFormat, skStrict, skShowWriteDiff, skRateLimit, skTopology, skQuality,
-		skGitWrites, skGitDestructive, skGitPush, skCacheTTL, skCacheMaxSize, skLSPTimeout, skAutoAttach,
-	} {
-		if !byKey[k].restart {
-			t.Errorf("setting %v should be marked restart", k)
+	for _, it := range buildSettingItems(config.Defaults()) {
+		w, ok := want[it.key]
+		if !ok {
+			t.Errorf("key %v missing from reload-tier expectations", it.key)
+			continue
+		}
+		if got := reloadTierFor(it.key); got != w {
+			t.Errorf("reloadTierFor(%v) = %d, want %d", it.key, got, w)
 		}
 	}
 }
@@ -213,7 +230,7 @@ func TestSelectSettingAtBodyRow_MapsClickToRow(t *testing.T) {
 	}
 }
 
-func TestSettingsToggle_PersistsAndMarksRestart(t *testing.T) {
+func TestSettingsToggle_PersistsAndMarksLive(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newSettingsModel()
 	m.settingsCursor = cursorFor(m.settingsItems, skStrict)
@@ -226,8 +243,9 @@ func TestSettingsToggle_PersistsAndMarksRestart(t *testing.T) {
 	if v := m.settingsItems[cursorFor(m.settingsItems, skStrict)].value; v != "on" {
 		t.Errorf("strict row value = %q, want \"on\"", v)
 	}
-	if m.settingsStatus == "" {
-		t.Error("status should be set after a toggle")
+	// Strict edits hot-reload, so the status must say so — not "restart".
+	if !strings.Contains(m.settingsStatus, "applied live") {
+		t.Errorf("strict status = %q, want it to mention \"applied live\"", m.settingsStatus)
 	}
 	got, err := config.Load()
 	if err != nil {
@@ -235,6 +253,19 @@ func TestSettingsToggle_PersistsAndMarksRestart(t *testing.T) {
 	}
 	if !got.Edits.Strict {
 		t.Error("toggle should have persisted Strict=true to disk")
+	}
+}
+
+// TestSettingsLogFormat_StatusMarksRestart confirms a genuinely restart-bound
+// setting still tells the user a restart is needed.
+func TestSettingsLogFormat_StatusMarksRestart(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newSettingsModel()
+	m.settingsCursor = cursorFor(m.settingsItems, skLogFormat)
+
+	m = m.setLogFormat("json")
+	if !strings.Contains(m.settingsStatus, "next daemon start") {
+		t.Errorf("log format status = %q, want it to mention a daemon restart", m.settingsStatus)
 	}
 }
 
