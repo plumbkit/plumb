@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golimpio/plumb/internal/stats"
 )
 
 func TestDaemonInfo_OmitsConfigStatusWhenUnset(t *testing.T) {
@@ -47,5 +49,41 @@ func TestDaemonInfo_RestartNeededNo(t *testing.T) {
 	}
 	if !strings.Contains(out, "restart needed:    no") {
 		t.Errorf("expected restart-needed no:\n%s", out)
+	}
+}
+
+func TestFormatSessionLatency(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	calls := []stats.Call{
+		{SessionID: "sess-x", Workspace: "/w", Tool: "read_file", CalledAt: now, DurationMs: 5, Success: true},
+		{SessionID: "sess-x", Workspace: "/w", Tool: "edit_file", CalledAt: now, DurationMs: 280, Success: true},
+		{SessionID: "other", Workspace: "/w", Tool: "git", CalledAt: now, DurationMs: 900, Success: true},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record %s: %v", c.Tool, err)
+		}
+	}
+
+	out := formatSessionLatency("sess-x")
+	if !strings.Contains(out, "this session:") || !strings.Contains(out, "2 tool call(s)") {
+		t.Fatalf("want session header with 2 calls:\n%s", out)
+	}
+	if !strings.Contains(out, "edit_file") || !strings.Contains(out, "280ms") {
+		t.Fatalf("want slowest edit_file/280ms:\n%s", out)
+	}
+	if strings.Contains(out, "git") {
+		t.Fatalf("another session's call leaked into the sess-x block:\n%s", out)
+	}
+	if formatSessionLatency("") != "" {
+		t.Fatalf("empty session id should yield an empty block")
 	}
 }

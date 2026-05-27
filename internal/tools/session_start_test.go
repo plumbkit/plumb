@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/golimpio/plumb/internal/stats"
 )
 
 // stubDiagnostics implements diagnosticsSource for tests.
@@ -63,6 +64,38 @@ func TestSessionStart_DiagnosticsStalenessNote(t *testing.T) {
 	}
 	if !strings.Contains(out, "modified") {
 		t.Fatalf("expected a staleness note in output:\n%s", out)
+	}
+}
+
+// TestWriteSessionStats_IncludesP95 verifies the per-tool stats line now carries
+// p95 alongside the average.
+func TestWriteSessionStats_IncludesP95(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	for i := range 5 {
+		if err := db.Record(stats.Call{
+			SessionID: "s", Workspace: "/ws", Tool: "edit_file",
+			CalledAt: now, DurationMs: int64(100 + i*10), Success: true,
+		}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	var sb strings.Builder
+	writeSessionStats(&sb, "/ws", "claude-code")
+	out := sb.String()
+	if !strings.Contains(out, "Most-used tools") {
+		t.Fatalf("missing stats header:\n%s", out)
+	}
+	if !strings.Contains(out, "p95") {
+		t.Fatalf("expected p95 in the tool line:\n%s", out)
 	}
 }
 
