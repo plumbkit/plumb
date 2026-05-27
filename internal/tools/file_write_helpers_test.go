@@ -115,6 +115,44 @@ func TestAwaitDiagnosticsRefresh_FeedsEstimator(t *testing.T) {
 	}
 }
 
+// TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite is the empirical
+// proof for the 0.8.16 latency change: a write the server never re-publishes for
+// (the clean-write case) waits the full ceiling with no estimator, but only the
+// adaptive window once the estimator has learned the server's typical latency.
+func TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite(t *testing.T) {
+	const ceiling = 300 * time.Millisecond
+
+	// Baseline: no estimator. The stub never signals, so the wait runs to the
+	// full ceiling.
+	base := newStubDiag()
+	base.set(errDiag("unchanged"))
+	start := time.Now()
+	_ = awaitDiagnosticsRefresh(base, "file:///foo.go", ceiling, nil)
+	baseline := time.Since(start)
+	if baseline < ceiling {
+		t.Fatalf("nil estimator returned in %v, expected the full %v ceiling", baseline, ceiling)
+	}
+
+	// Warmed estimator: the server has been re-publishing in ~40ms, so the
+	// effective window is 3×40 = 120ms — the same clean write returns in ~that,
+	// well under the ceiling.
+	est := NewDiagWaitEstimator()
+	for range 10 {
+		est.record(40 * time.Millisecond)
+	}
+	warm := newStubDiag()
+	warm.set(errDiag("unchanged"))
+	start = time.Now()
+	_ = awaitDiagnosticsRefresh(warm, "file:///foo.go", ceiling, est)
+	adaptive := time.Since(start)
+	if adaptive >= 200*time.Millisecond {
+		t.Fatalf("warmed estimator waited %v, expected well under the %v ceiling", adaptive, ceiling)
+	}
+	if adaptive < 80*time.Millisecond {
+		t.Fatalf("warmed estimator returned in %v, expected ~120ms (3×40ms) adaptive window", adaptive)
+	}
+}
+
 func TestAwaitDiagnosticsRefresh_TimesOut(t *testing.T) {
 	src := newStubDiag()
 	src.set(errDiag("unchanged"))
