@@ -309,7 +309,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | `git_init` | Initialise a repo; `init_plumb: true` also creates `.plumb/context.md`. |
 | `file_diff` | Unified diff between two arbitrary files (`diff -U`). |
 | `version` | Server version, Go runtime, OS/arch. |
-| `daemon_info` | Session name + ID, daemon version, start time, uptime. |
+| `daemon_info` | Session name + ID, daemon version, start time, uptime; live config state (generation, last reload, restart-needed); plus this session's tool-call count and its slowest calls. |
 | `rename_session` | Rename the current MCP session (letters/digits/`-`, ≤25 chars). |
 
 **Topology** — SQLite/FTS5 index at `<workspace>/.plumb/topology.db`; on by default (opt out with `[topology] enabled = false`).

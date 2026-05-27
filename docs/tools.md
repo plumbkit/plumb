@@ -57,7 +57,7 @@ enabled), and active diagnostics. Idempotent.
 workspace, then a cwd walk).
 
 ### `daemon_info`
-Current session name and ID, daemon version, start time, and uptime.
+Current session name and ID, daemon version, start time, and uptime; live config-store state (generation, last reload time, whether a restart is needed); and this session's tool-call count plus its slowest calls (per-call durations from recorded stats).
 **Inputs:** none.
 
 ### `rename_session`
