@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -13,18 +14,20 @@ import (
 //
 // Concurrency: Handle and all accessor methods are safe for concurrent use.
 type Invalidator struct {
-	cache   *Cache
-	diagsMu sync.RWMutex
-	diags   map[string][]protocol.Diagnostic // keyed by document URI
-	subs    map[string][]chan struct{}       // WaitDiagnostics subscribers
+	cache     *Cache
+	diagsMu   sync.RWMutex
+	diags     map[string][]protocol.Diagnostic // keyed by document URI
+	diagTimes map[string]time.Time             // last publishDiagnostics time per URI
+	subs      map[string][]chan struct{}       // WaitDiagnostics subscribers
 }
 
 // NewInvalidator creates an Invalidator backed by c.
 // Register its Handle method via adapter.Subscribe to receive notifications.
 func NewInvalidator(c *Cache) *Invalidator {
 	return &Invalidator{
-		cache: c,
-		diags: make(map[string][]protocol.Diagnostic),
+		cache:     c,
+		diags:     make(map[string][]protocol.Diagnostic),
+		diagTimes: make(map[string]time.Time),
 	}
 }
 
@@ -46,6 +49,7 @@ func (inv *Invalidator) Handle(method string, params json.RawMessage) {
 
 	inv.diagsMu.Lock()
 	inv.diags[p.URI] = p.Diagnostics
+	inv.diagTimes[p.URI] = time.Now()
 	for _, ch := range inv.subs[p.URI] {
 		select {
 		case ch <- struct{}{}:
@@ -157,6 +161,15 @@ func (inv *Invalidator) WaitNextDiagnostics(ctx context.Context, uri string) ([]
 	}
 }
 
+// Tracked reports whether the language server has ever published diagnostics
+// for uri. It is cheaper than AllDiagnostics()[uri] for an existence check.
+func (inv *Invalidator) Tracked(uri string) bool {
+	inv.diagsMu.RLock()
+	defer inv.diagsMu.RUnlock()
+	_, ok := inv.diags[uri]
+	return ok
+}
+
 // AllDiagnostics returns a copy of every URI → diagnostics entry received so far.
 func (inv *Invalidator) AllDiagnostics() map[string][]protocol.Diagnostic {
 	inv.diagsMu.RLock()
@@ -166,6 +179,19 @@ func (inv *Invalidator) AllDiagnostics() map[string][]protocol.Diagnostic {
 		cp := make([]protocol.Diagnostic, len(d))
 		copy(cp, d)
 		out[uri] = cp
+	}
+	return out
+}
+
+// AllDiagnosticTimes returns a copy of the last-received timestamp for each
+// tracked URI. Use alongside AllDiagnostics to detect entries that may be
+// stale relative to the file's current mtime.
+func (inv *Invalidator) AllDiagnosticTimes() map[string]time.Time {
+	inv.diagsMu.RLock()
+	defer inv.diagsMu.RUnlock()
+	out := make(map[string]time.Time, len(inv.diagTimes))
+	for k, v := range inv.diagTimes {
+		out[k] = v
 	}
 	return out
 }

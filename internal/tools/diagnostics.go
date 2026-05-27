@@ -17,6 +17,14 @@ import (
 type diagnosticsSource interface {
 	Diagnostics(uri string) []protocol.Diagnostic
 	AllDiagnostics() map[string][]protocol.Diagnostic
+	Tracked(uri string) bool
+}
+
+// timedDiagnosticsSource extends diagnosticsSource with per-URI timestamps so
+// the tool can warn about entries that may be stale relative to the file mtime.
+type timedDiagnosticsSource interface {
+	diagnosticsSource
+	AllDiagnosticTimes() map[string]time.Time
 }
 
 // waitableDiagnosticsSource extends diagnosticsSource with on-demand analysis.
@@ -99,6 +107,9 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 
 	switch len(a.URIs) {
 	case 0:
+		if ts, ok := t.inv.(timedDiagnosticsSource); ok {
+			return formatDiagnosticsWithTimes(t.inv.AllDiagnostics(), ts.AllDiagnosticTimes()), nil
+		}
 		return formatDiagnostics(t.inv.AllDiagnostics()), nil
 	case 1:
 		return t.singleURI(ctx, a.URIs[0]), nil
@@ -111,7 +122,7 @@ func (t *Diagnostics) singleURI(ctx context.Context, uri string) string {
 	diags := t.inv.Diagnostics(uri)
 	if len(diags) == 0 {
 		// Distinguish "analysed and clean" from "never reported on".
-		if _, tracked := t.inv.AllDiagnostics()[uri]; !tracked {
+		if !t.inv.Tracked(uri) {
 			if t.opener != nil {
 				return t.openAndWait(ctx, uri)
 			}
@@ -181,6 +192,67 @@ func (t *Diagnostics) multiURI(uris []string) string {
 // without going through the MCP tool layer.
 func FormatDiagnostics(byURI map[string][]protocol.Diagnostic) string {
 	return formatDiagnostics(byURI)
+}
+
+// formatDiagnosticsWithTimes renders diagnostics with a staleness warning for
+// files that have been modified on disk after their last publishDiagnostics.
+func formatDiagnosticsWithTimes(byURI map[string][]protocol.Diagnostic, times map[string]time.Time) string {
+	if len(byURI) == 0 {
+		return "No diagnostics received yet. The language server may still be indexing."
+	}
+
+	uris := make([]string, 0, len(byURI))
+	for uri := range byURI {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+
+	total := 0
+	for _, uri := range uris {
+		total += len(byURI[uri])
+	}
+	if total == 0 {
+		return "No issues found — all tracked files are clean."
+	}
+
+	// Identify files with errors whose mtime is newer than the diagnostic timestamp.
+	staleURIs := make(map[string]bool)
+	for uri, diagTime := range times {
+		if len(byURI[uri]) == 0 {
+			continue
+		}
+		path := strings.TrimPrefix(uri, "file://")
+		fi, err := os.Stat(path)
+		if err == nil && fi.ModTime().After(diagTime) {
+			staleURIs[uri] = true
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%d issue(s) across %d file(s)\n", total, len(byURI))
+	if len(staleURIs) > 0 {
+		fmt.Fprintf(&sb, "Note: %d file(s) modified since last analysis — diagnostics may not reflect current state.\n", len(staleURIs))
+	}
+
+	for _, uri := range uris {
+		diags := byURI[uri]
+		if len(diags) == 0 {
+			continue
+		}
+		path := strings.TrimPrefix(uri, "file://")
+		if staleURIs[uri] {
+			fmt.Fprintf(&sb, "\n%s  (file modified after last analysis — may be stale)\n", path)
+		} else {
+			fmt.Fprintf(&sb, "\n%s\n", path)
+		}
+		for _, d := range diags {
+			sev := severityLabel(d.Severity)
+			line := d.Range.Start.Line + 1
+			col := d.Range.Start.Character + 1
+			fmt.Fprintf(&sb, "  %s  %d:%d  %s\n", sev, line, col, d.Message)
+		}
+	}
+	return sb.String()
 }
 
 func formatDiagnostics(byURI map[string][]protocol.Diagnostic) string {

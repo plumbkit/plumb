@@ -19,6 +19,7 @@ type stubDiagnostics struct {
 
 func (s *stubDiagnostics) Diagnostics(uri string) []protocol.Diagnostic     { return s.all[uri] }
 func (s *stubDiagnostics) AllDiagnostics() map[string][]protocol.Diagnostic { return s.all }
+func (s *stubDiagnostics) Tracked(uri string) bool                          { _, ok := s.all[uri]; return ok }
 
 func makeDiag(line, col uint32, msg string, sev protocol.DiagnosticSeverity) protocol.Diagnostic {
 	return protocol.Diagnostic{

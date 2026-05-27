@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/lsp"
@@ -334,6 +335,32 @@ func (r *routingInvProxy) setPrimary(root string, inv *cache.Invalidator) {
 	}
 }
 
+// uriUnderRoot reports whether uri (file:// form) refers to a path under root.
+func uriUnderRoot(uri, root string) bool {
+	path := strings.TrimPrefix(uri, "file://")
+	return path == root || strings.HasPrefix(path, root+"/")
+}
+
+func (r *routingInvProxy) Tracked(uri string) bool {
+	r.mu.RLock()
+	primaryRoot := r.primaryRoot
+	primary := r.primary
+	r.mu.RUnlock()
+
+	if uri == "" || primary == nil {
+		return false
+	}
+	path := strings.TrimPrefix(uri, "file://")
+	root, _, err := r.pool.Detect(filepath.Dir(path))
+	if err != nil || root == primaryRoot {
+		return primary.Tracked(uri)
+	}
+	if e := r.pool.lookup(root); e != nil {
+		return e.inv.Tracked(uri)
+	}
+	return false
+}
+
 func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
@@ -363,11 +390,45 @@ func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 func (r *routingInvProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
 	r.mu.RLock()
 	p := r.primary
+	root := r.primaryRoot
 	r.mu.RUnlock()
 	if p == nil {
 		return nil
 	}
-	return p.AllDiagnostics()
+	all := p.AllDiagnostics()
+	if root == "" {
+		return all
+	}
+	out := make(map[string][]protocol.Diagnostic, len(all))
+	for uri, diags := range all {
+		if uriUnderRoot(uri, root) {
+			out[uri] = diags
+		}
+	}
+	return out
+}
+
+// AllDiagnosticTimes returns the last-received diagnostic timestamp for each
+// tracked URI under the primary workspace root.
+func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
+	r.mu.RLock()
+	p := r.primary
+	root := r.primaryRoot
+	r.mu.RUnlock()
+	if p == nil {
+		return nil
+	}
+	all := p.AllDiagnosticTimes()
+	if root == "" {
+		return all
+	}
+	out := make(map[string]time.Time, len(all))
+	for uri, t := range all {
+		if uriUnderRoot(uri, root) {
+			out[uri] = t
+		}
+	}
+	return out
 }
 
 func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {

@@ -116,6 +116,66 @@ func TestInvalidator_WaitDiagnostics_ContextCancelled(t *testing.T) {
 	}
 }
 
+func TestInvalidator_Tracked(t *testing.T) {
+	c := cache.New(time.Hour)
+	defer c.Close()
+	inv := cache.NewInvalidator(c)
+
+	uri := "file:///p/main.go"
+	if inv.Tracked(uri) {
+		t.Fatal("expected Tracked=false before any notification")
+	}
+
+	params, _ := json.Marshal(protocol.PublishDiagnosticsParams{
+		URI:         uri,
+		Diagnostics: []protocol.Diagnostic{},
+	})
+	inv.Handle(protocol.MethodPublishDiagnostics, params)
+
+	if !inv.Tracked(uri) {
+		t.Fatal("expected Tracked=true after publishDiagnostics")
+	}
+	if inv.Tracked("file:///p/other.go") {
+		t.Fatal("Tracked should return false for a URI that was never reported")
+	}
+}
+
+func TestInvalidator_AllDiagnosticTimes(t *testing.T) {
+	c := cache.New(time.Hour)
+	defer c.Close()
+	inv := cache.NewInvalidator(c)
+
+	if len(inv.AllDiagnosticTimes()) != 0 {
+		t.Fatal("expected empty AllDiagnosticTimes before any notifications")
+	}
+
+	before := time.Now()
+	uri := "file:///p/main.go"
+	params, _ := json.Marshal(protocol.PublishDiagnosticsParams{
+		URI:         uri,
+		Diagnostics: []protocol.Diagnostic{{Severity: protocol.SevError, Message: "boom"}},
+	})
+	inv.Handle(protocol.MethodPublishDiagnostics, params)
+	after := time.Now()
+
+	times := inv.AllDiagnosticTimes()
+	ts, ok := times[uri]
+	if !ok {
+		t.Fatal("expected timestamp entry after publishDiagnostics")
+	}
+	if ts.Before(before) || ts.After(after) {
+		t.Errorf("timestamp %v not within [%v, %v]", ts, before, after)
+	}
+
+	// A second notification for the same URI should update the timestamp.
+	time.Sleep(2 * time.Millisecond)
+	inv.Handle(protocol.MethodPublishDiagnostics, params)
+	times2 := inv.AllDiagnosticTimes()
+	if !times2[uri].After(ts) {
+		t.Error("expected updated timestamp after second notification")
+	}
+}
+
 func TestInvalidator_EmptyURI_noEviction(t *testing.T) {
 	c := cache.New(time.Hour)
 	defer c.Close()

@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +213,82 @@ func TestDiagnostics_URIsField_MultipleFiles_AllClean(t *testing.T) {
 	}
 	if !strings.Contains(out, "clean") {
 		t.Errorf("expected clean message, got: %q", out)
+	}
+}
+
+// TestDiagnostics_Staleness verifies that formatDiagnosticsWithTimes emits a
+// staleness note when a file's on-disk mtime is newer than the diagnostic
+// timestamp stored in the invalidator.
+func TestDiagnostics_Staleness(t *testing.T) {
+	// Create a real temp file so os.Stat succeeds inside formatDiagnosticsWithTimes.
+	f, err := os.CreateTemp(t.TempDir(), "stale*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	f.Close()
+	uri := "file://" + path
+
+	inv := newTestInvalidator(t)
+	// Push diagnostics first — the invalidator records time.Now() as the
+	// diagnostic timestamp.
+	pushDiagnostics(t, inv, uri, []protocol.Diagnostic{
+		{Severity: protocol.SevError, Message: "stale error"},
+	})
+
+	// Advance the file's mtime to after the diagnostic timestamp.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := tools.NewDiagnostics(inv)
+	raw, _ := json.Marshal(map[string]any{})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("diagnostics: %v", err)
+	}
+	if !strings.Contains(out, "modified after last analysis") {
+		t.Errorf("expected staleness note in output:\n%s", out)
+	}
+	if !strings.Contains(out, "stale error") {
+		t.Errorf("expected original error in output:\n%s", out)
+	}
+}
+
+// TestDiagnostics_NoStaleness verifies that no staleness note appears when the
+// file has not changed since the last diagnostic push.
+func TestDiagnostics_NoStaleness(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "fresh*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	f.Close()
+
+	// Set the file's mtime to the past before pushing diagnostics.
+	past := time.Now().Add(-2 * time.Second)
+	if err := os.Chtimes(path, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	inv := newTestInvalidator(t)
+	uri := "file://" + path
+	pushDiagnostics(t, inv, uri, []protocol.Diagnostic{
+		{Severity: protocol.SevError, Message: "fresh error"},
+	})
+
+	tool := tools.NewDiagnostics(inv)
+	raw, _ := json.Marshal(map[string]any{})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("diagnostics: %v", err)
+	}
+	if strings.Contains(out, "modified after last analysis") {
+		t.Errorf("unexpected staleness note when file is current:\n%s", out)
+	}
+	if !strings.Contains(out, "fresh error") {
+		t.Errorf("expected error in output:\n%s", out)
 	}
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.12 (unreleased)
+
+### Fixed
+- **The `diagnostics` tool no longer returns stale or out-of-scope errors when called with no URI arguments.** Two independent bugs caused false positives that blocked production releases: (1) `routingInvProxy.AllDiagnostics()` returned the primary workspace's entire diagnostic map without filtering by workspace root — gopls can emit `publishDiagnostics` for files it transitively analyses (dependency packages, stdlib, or files accessed during indexing that lie outside the workspace root), and all of these accumulated in the invalidator unfiltered. `AllDiagnostics()` now restricts the returned map to URIs whose path falls under the primary workspace root (`uriUnderRoot`, same logic as the per-URI routing already used by `Diagnostics(uri)`). (2) The `Invalidator` stored diagnostics without timestamps, so if a file changed on disk (e.g. after a successful `make build`) before gopls had re-published a clean `publishDiagnostics` notification, the cached stale errors were returned with no warning whatsoever. The `Invalidator` now records a `time.Time` per URI on every `publishDiagnostics` push (`diagTimes` map); when `diagnostics` is called with no arguments, it compares each file's current on-disk mtime against its diagnostic timestamp and annotates any file whose mtime is newer with `(file modified after last analysis — may be stale)`, plus a workspace-level `Note: N file(s) modified since last analysis` header so the caller knows to wait for the language server to finish re-analysing. The `timedDiagnosticsSource` interface opt-in (type assertion) keeps the new staleness path invisible to test stubs that implement only the base `diagnosticsSource`. Minor efficiency fix: `singleURI` now uses the new `Tracked(uri) bool` method to check whether a URI has ever been reported on, instead of copying the entire diagnostic map via `AllDiagnostics()` just to do a key lookup.
+
 ## 0.8.11 (unreleased)
 
 ### Added
