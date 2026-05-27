@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func errDiag(msg string) []protocol.Diagnostic {
 }
 
 func TestAwaitDiagnosticsRefresh_NilSource(t *testing.T) {
-	got := awaitDiagnosticsRefresh(nil, "file:///foo.go", 50*time.Millisecond, nil)
+	got, _ := awaitDiagnosticsRefresh(nil, "file:///foo.go", 50*time.Millisecond, nil)
 	if got != nil {
 		t.Errorf("nil source: want nil, got %v", got)
 	}
@@ -84,7 +85,7 @@ func TestAwaitDiagnosticsRefresh_Disabled(t *testing.T) {
 	src.set(errDiag("old error"))
 
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", -1, nil)
+	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", -1, nil)
 	elapsed := time.Since(start)
 
 	if elapsed > 20*time.Millisecond {
@@ -106,7 +107,7 @@ func TestAwaitDiagnosticsRefresh_FeedsEstimator(t *testing.T) {
 	}()
 
 	ceiling := 500 * time.Millisecond
-	_ = awaitDiagnosticsRefresh(src, "file:///foo.go", ceiling, est)
+	_, _ = awaitDiagnosticsRefresh(src, "file:///foo.go", ceiling, est)
 
 	// A publish was observed, so the estimator now holds a sample and bounds the
 	// next effective window below the ceiling.
@@ -127,7 +128,7 @@ func TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite(t *testing.T) 
 	base := newStubDiag()
 	base.set(errDiag("unchanged"))
 	start := time.Now()
-	_ = awaitDiagnosticsRefresh(base, "file:///foo.go", ceiling, nil)
+	_, _ = awaitDiagnosticsRefresh(base, "file:///foo.go", ceiling, nil)
 	baseline := time.Since(start)
 	if baseline < ceiling {
 		t.Fatalf("nil estimator returned in %v, expected the full %v ceiling", baseline, ceiling)
@@ -143,7 +144,7 @@ func TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite(t *testing.T) 
 	warm := newStubDiag()
 	warm.set(errDiag("unchanged"))
 	start = time.Now()
-	_ = awaitDiagnosticsRefresh(warm, "file:///foo.go", ceiling, est)
+	_, _ = awaitDiagnosticsRefresh(warm, "file:///foo.go", ceiling, est)
 	adaptive := time.Since(start)
 	if adaptive >= 200*time.Millisecond {
 		t.Fatalf("warmed estimator waited %v, expected well under the %v ceiling", adaptive, ceiling)
@@ -153,13 +154,52 @@ func TestAwaitDiagnosticsRefresh_AdaptiveWindowShortensCleanWrite(t *testing.T) 
 	}
 }
 
+func TestAwaitDiagnosticsRefresh_FreshFlag(t *testing.T) {
+	// A publish during the wait → fresh (the diagnostics reflect this write).
+	src := newStubDiag()
+	src.set(errDiag("before"))
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		src.set(errDiag("after"))
+	}()
+	if _, fresh := awaitDiagnosticsRefresh(src, "file:///foo.go", 500*time.Millisecond, nil); !fresh {
+		t.Fatalf("expected fresh=true when the server publishes during the wait")
+	}
+
+	// Timeout with no publish → not fresh.
+	quiet := newStubDiag()
+	quiet.set(errDiag("unchanged"))
+	if _, fresh := awaitDiagnosticsRefresh(quiet, "file:///foo.go", 40*time.Millisecond, nil); fresh {
+		t.Fatalf("expected fresh=false on timeout with no publish")
+	}
+
+	// Disabled wait → not fresh (returned without waiting).
+	if _, fresh := awaitDiagnosticsRefresh(quiet, "file:///foo.go", -1, nil); fresh {
+		t.Fatalf("expected fresh=false when the wait is disabled")
+	}
+}
+
+func TestFormatPostWriteDiagnostics_StaleNote(t *testing.T) {
+	diags := errDiag("undefined: Foo")
+	stale := formatPostWriteDiagnostics(diags, false)
+	if !strings.Contains(stale, "undefined: Foo") {
+		t.Fatalf("missing diagnostic:\n%s", stale)
+	}
+	if !strings.Contains(stale, "re-analys") {
+		t.Fatalf("expected a staleness note when not fresh:\n%s", stale)
+	}
+	if strings.Contains(formatPostWriteDiagnostics(diags, true), "re-analys") {
+		t.Fatalf("fresh diagnostics should carry no staleness note")
+	}
+}
+
 func TestAwaitDiagnosticsRefresh_TimesOut(t *testing.T) {
 	src := newStubDiag()
 	src.set(errDiag("unchanged"))
 
 	window := 60 * time.Millisecond
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
+	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
 	elapsed := time.Since(start)
 
 	if elapsed < window {
@@ -182,7 +222,7 @@ func TestAwaitDiagnosticsRefresh_EarlyReturn(t *testing.T) {
 
 	window := 500 * time.Millisecond
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
+	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
 	elapsed := time.Since(start)
 
 	if elapsed >= window {
@@ -206,7 +246,7 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 		close(changed)
 	}()
 
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", 0, nil)
+	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", 0, nil)
 
 	select {
 	case <-changed:

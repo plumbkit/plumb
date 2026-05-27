@@ -313,8 +313,8 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 		}
 	}
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
-		sb.WriteString(formatPostWriteDiagnostics(fresh))
+		diags, fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
+		sb.WriteString(formatPostWriteDiagnostics(diags, fresh))
 	}
 	return sb.String()
 }
@@ -491,8 +491,8 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string
 	invalidateCache(t.deps.Cache, uri)
 	t.deps.Writes.Record(path)
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
-		sb.WriteString(formatPostWriteDiagnostics(fresh))
+		diags, fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
+		sb.WriteString(formatPostWriteDiagnostics(diags, fresh))
 	}
 }
 

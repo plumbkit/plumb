@@ -95,12 +95,19 @@ const defaultPostWriteDiagWindow = 300 * time.Millisecond
 // latency is known the wait shrinks toward it so a clean write — one the server
 // never re-publishes for — stops paying the full ceiling. Observed publish
 // latencies are fed back into est.
-func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, ceiling time.Duration, est *DiagWaitEstimator) []protocol.Diagnostic {
+//
+// The second return value, fresh, reports whether a publish arrived during the
+// wait — i.e. the returned diagnostics reflect this write. When false (timeout,
+// or the wait was disabled) the diagnostics may predate the write, and callers
+// annotate their output accordingly.
+func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, ceiling time.Duration, est *DiagWaitEstimator) (diags []protocol.Diagnostic, fresh bool) {
 	if diag == nil {
-		return nil
+		return nil, false
 	}
 	if ceiling < 0 {
-		return diag.Diagnostics(uri)
+		// Disabled: return the last-known snapshot without waiting — it may
+		// predate this write, so it is never fresh.
+		return diag.Diagnostics(uri), false
 	}
 	if ceiling == 0 {
 		ceiling = defaultPostWriteDiagWindow
@@ -108,11 +115,13 @@ func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, ceiling time.
 	ctx, cancel := context.WithTimeout(context.Background(), est.window(ceiling))
 	defer cancel()
 	start := time.Now()
-	diags, err := diag.WaitNextDiagnostics(ctx, uri)
+	d, err := diag.WaitNextDiagnostics(ctx, uri)
 	if err == nil {
+		// A publish landed during the wait, so it reflects this write.
 		est.record(time.Since(start))
+		return d, true
 	}
-	return diags
+	return d, false
 }
 
 // postWriteDiagSource is the narrow interface write/edit tools need to
@@ -124,8 +133,12 @@ type postWriteDiagSource interface {
 }
 
 // formatPostWriteDiagnostics renders up to N error/warning diagnostics as a
-// compact suffix appended to write/edit_file output. Returns "" if none.
-func formatPostWriteDiagnostics(d []protocol.Diagnostic) string {
+// compact suffix appended to write/edit_file output. Returns "" if none. When
+// fresh is false, a note warns the diagnostics may predate this write (the
+// language server had not re-analysed within the wait window) — these inline
+// diagnostics fire milliseconds after the write and are the most likely to be
+// stale.
+func formatPostWriteDiagnostics(d []protocol.Diagnostic, fresh bool) string {
 	if len(d) == 0 {
 		return ""
 	}
@@ -155,6 +168,9 @@ func formatPostWriteDiagnostics(d []protocol.Diagnostic) string {
 	}
 	render("error", errs)
 	render("warn", warns)
+	if !fresh {
+		sb.WriteString("\n  (may predate this write — the language server had not re-analysed within the wait window; re-check with diagnostics)")
+	}
 	return sb.String()
 }
 

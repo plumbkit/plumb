@@ -181,8 +181,8 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 		}
 	}
 	if t.deps.Diag != nil {
-		fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
-		sb.WriteString(formatPostWriteDiagnostics(fresh))
+		diags, fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
+		sb.WriteString(formatPostWriteDiagnostics(diags, fresh))
 	}
 	return sb.String()
 }
