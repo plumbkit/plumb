@@ -73,7 +73,7 @@ func errDiag(msg string) []protocol.Diagnostic {
 }
 
 func TestAwaitDiagnosticsRefresh_NilSource(t *testing.T) {
-	got := awaitDiagnosticsRefresh(nil, "file:///foo.go", 50*time.Millisecond)
+	got := awaitDiagnosticsRefresh(nil, "file:///foo.go", 50*time.Millisecond, nil)
 	if got != nil {
 		t.Errorf("nil source: want nil, got %v", got)
 	}
@@ -84,7 +84,7 @@ func TestAwaitDiagnosticsRefresh_Disabled(t *testing.T) {
 	src.set(errDiag("old error"))
 
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", -1)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", -1, nil)
 	elapsed := time.Since(start)
 
 	if elapsed > 20*time.Millisecond {
@@ -95,13 +95,33 @@ func TestAwaitDiagnosticsRefresh_Disabled(t *testing.T) {
 	}
 }
 
+func TestAwaitDiagnosticsRefresh_FeedsEstimator(t *testing.T) {
+	src := newStubDiag()
+	src.set(errDiag("before"))
+	est := NewDiagWaitEstimator()
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		src.set(errDiag("after"))
+	}()
+
+	ceiling := 500 * time.Millisecond
+	_ = awaitDiagnosticsRefresh(src, "file:///foo.go", ceiling, est)
+
+	// A publish was observed, so the estimator now holds a sample and bounds the
+	// next effective window below the ceiling.
+	if got := est.window(ceiling); got >= ceiling {
+		t.Fatalf("estimator did not learn from the publish: window %v >= ceiling %v", got, ceiling)
+	}
+}
+
 func TestAwaitDiagnosticsRefresh_TimesOut(t *testing.T) {
 	src := newStubDiag()
 	src.set(errDiag("unchanged"))
 
 	window := 60 * time.Millisecond
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
 	elapsed := time.Since(start)
 
 	if elapsed < window {
@@ -124,7 +144,7 @@ func TestAwaitDiagnosticsRefresh_EarlyReturn(t *testing.T) {
 
 	window := 500 * time.Millisecond
 	start := time.Now()
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", window, nil)
 	elapsed := time.Since(start)
 
 	if elapsed >= window {
@@ -148,7 +168,7 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 		close(changed)
 	}()
 
-	got := awaitDiagnosticsRefresh(src, "file:///foo.go", 0)
+	got := awaitDiagnosticsRefresh(src, "file:///foo.go", 0, nil)
 
 	select {
 	case <-changed:

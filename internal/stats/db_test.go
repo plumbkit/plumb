@@ -223,6 +223,49 @@ func TestSummaryScopesBySince(t *testing.T) {
 	}
 }
 
+func TestSlowest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	calls := []Call{
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "read_file", CalledAt: now, DurationMs: 5, Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "edit_file", CalledAt: now, DurationMs: 300, Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "git", CalledAt: now, DurationMs: 150, Success: true},
+		{SessionID: "sess-2", Workspace: "/w1", Tool: "edit_file", CalledAt: now, DurationMs: 999, Success: true},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record %s: %v", c.Tool, err)
+		}
+	}
+
+	got, err := db.Slowest(2, Filter{SessionID: "sess-1"})
+	if err != nil {
+		t.Fatalf("Slowest: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Slowest returned %d rows, want 2 (limit)", len(got))
+	}
+	if got[0].Tool != "edit_file" || got[0].DurationMs != 300 {
+		t.Fatalf("slowest[0] = %s/%dms, want edit_file/300ms", got[0].Tool, got[0].DurationMs)
+	}
+	if got[1].Tool != "git" || got[1].DurationMs != 150 {
+		t.Fatalf("slowest[1] = %s/%dms, want git/150ms", got[1].Tool, got[1].DurationMs)
+	}
+	// The 999ms sess-2 call must be excluded by the SessionID filter.
+	for _, c := range got {
+		if c.SessionID != "sess-1" {
+			t.Fatalf("Slowest leaked session %s into the sess-1 result", c.SessionID)
+		}
+	}
+}
+
 func TestFilterScopesSessionInsideWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)

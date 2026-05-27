@@ -80,28 +80,38 @@ func invalidateCache(c *cache.Cache, uri string) {
 // is zero (i.e. not explicitly configured). Empirically ~150-250ms for gopls on incremental edits.
 const defaultPostWriteDiagWindow = 300 * time.Millisecond
 
-// awaitDiagnosticsRefresh waits up to window for the language server to
-// re-publish diagnostics for uri after a write, then returns the result.
-// It subscribes to the next publishDiagnostics notification and returns the
-// instant the server responds — not after a fixed sleep cycle. If the server
-// does not respond within window, the most-recent diagnostics for uri are
-// returned (which may predate the write).
+// awaitDiagnosticsRefresh waits for the language server to re-publish
+// diagnostics for uri after a write, then returns the result. It subscribes to
+// the next publishDiagnostics notification and returns the instant the server
+// responds — not after a fixed sleep cycle. If the server does not respond in
+// time, the most-recent diagnostics for uri are returned (which may predate the
+// write).
 //
-// window semantics: 0 → use defaultPostWriteDiagWindow; negative → disabled,
+// ceiling semantics: 0 → use defaultPostWriteDiagWindow; negative → disabled,
 // return current diagnostics immediately without waiting.
-func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, window time.Duration) []protocol.Diagnostic {
+//
+// est (nil-safe) adapts the effective wait to how quickly this server actually
+// re-publishes: the configured ceiling is an upper bound, and once a typical
+// latency is known the wait shrinks toward it so a clean write — one the server
+// never re-publishes for — stops paying the full ceiling. Observed publish
+// latencies are fed back into est.
+func awaitDiagnosticsRefresh(diag postWriteDiagSource, uri string, ceiling time.Duration, est *DiagWaitEstimator) []protocol.Diagnostic {
 	if diag == nil {
 		return nil
 	}
-	if window < 0 {
+	if ceiling < 0 {
 		return diag.Diagnostics(uri)
 	}
-	if window == 0 {
-		window = defaultPostWriteDiagWindow
+	if ceiling == 0 {
+		ceiling = defaultPostWriteDiagWindow
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), window)
+	ctx, cancel := context.WithTimeout(context.Background(), est.window(ceiling))
 	defer cancel()
-	diags, _ := diag.WaitNextDiagnostics(ctx, uri)
+	start := time.Now()
+	diags, err := diag.WaitNextDiagnostics(ctx, uri)
+	if err == nil {
+		est.record(time.Since(start))
+	}
 	return diags
 }
 

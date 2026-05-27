@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/golimpio/plumb/internal/stats"
 )
 
 // ConfigStatus is a snapshot of the live config store, surfaced by daemon_info.
@@ -56,6 +59,8 @@ func (t *daemonInfo) Description() string {
 		"session name (e.g. swift-falcon), session ID, daemon version, start timestamp, and uptime, " +
 		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
 		"for a pending restart-bound change). " +
+		"It also reports this session's total tool-call count and its slowest calls " +
+		"(per-call durations from recorded stats). " +
 		"Use this to identify which session you are operating in or to verify the daemon state."
 }
 
@@ -98,5 +103,53 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 			restart,
 		)
 	}
+	out += formatSessionLatency(t.sessID)
 	return out, nil
+}
+
+// formatSessionLatency renders this session's call count and slowest calls from
+// the global stats DB, scoped by session id (the session_id column equals the
+// value daemon_info holds, so the filter is exact). Returns "" when stats are
+// unavailable or this session has no recorded calls yet (e.g. daemon_info is the
+// first call of the session).
+func formatSessionLatency(sessID string) string {
+	if sessID == "" {
+		return ""
+	}
+	db, err := stats.OpenReadOnly()
+	if err != nil || db == nil {
+		return ""
+	}
+	defer db.Close()
+	filter := stats.Filter{SessionID: sessID}
+	summary, err := db.Summary(filter)
+	if err != nil || len(summary) == 0 {
+		return ""
+	}
+	var calls int64
+	for _, s := range summary {
+		calls += s.Calls
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\n\nthis session:   %d tool call(s)", calls)
+	if slow, err := db.Slowest(5, filter); err == nil && len(slow) > 0 {
+		sb.WriteString("\nslowest calls:")
+		now := time.Now()
+		for _, c := range slow {
+			fmt.Fprintf(&sb, "\n  %-18s %5dms  (%s ago)", c.Tool, c.DurationMs, humaniseAge(now.Sub(c.CalledAt)))
+		}
+	}
+	return sb.String()
+}
+
+// humaniseAge renders a duration as a compact age string (e.g. "5s", "3m", "2h").
+func humaniseAge(d time.Duration) string {
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
 }

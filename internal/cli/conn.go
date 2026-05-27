@@ -695,6 +695,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Reads:                 s.readTracker,
 		Writes:                s.writeTracker,
 		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(s.editsConfig()) },
+		DiagWait:              tools.NewDiagWaitEstimator(),
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspace,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },

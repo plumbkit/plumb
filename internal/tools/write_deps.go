@@ -68,6 +68,11 @@ type WriteDeps struct {
 	// time. The daemon uses this so project config loaded after tool
 	// registration affects subsequent writes.
 	PostWriteDiagWindowFn func() time.Duration
+	// DiagWait, when non-nil, adapts the post-write diagnostics wait to the
+	// language server's observed re-publish latency — the configured window is
+	// treated as a ceiling. Shared per connection so all write tools learn
+	// together. nil disables adaptation (the full window is always used).
+	DiagWait *DiagWaitEstimator
 	// ConcurrentWriteSkew is the clock-skew allowance for edit_file's
 	// post-rename mtime check. Zero falls back to the 100 ms compiled-in
 	// default. Increase on slow filesystems (network mounts, FUSE).

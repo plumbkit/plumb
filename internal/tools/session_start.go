@@ -409,7 +409,7 @@ func writeSessionStats(sb *strings.Builder, ws, clientName string) {
 	limit := min(len(toolStats), 5)
 	var totalSaved int64
 	for _, s := range toolStats[:limit] {
-		fmt.Fprintf(sb, "- %s: %d calls, avg %dms\n", s.Tool, s.Calls, int64(s.AvgMs))
+		fmt.Fprintf(sb, "- %s: %d calls, avg %dms, p95 %dms\n", s.Tool, s.Calls, int64(s.AvgMs), s.P95Ms)
 		totalSaved += s.TokensSaved
 	}
 	if totalSaved > 0 {
@@ -518,7 +518,17 @@ func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
 
 	sb.WriteString("## Active diagnostics (errors and warnings)\n\n")
 	if len(real) > 0 {
-		sb.WriteString(formatDiagnostics(real))
+		// Flag entries whose file mtime is newer than the last publishDiagnostics:
+		// the orientation packet is the most likely place to surface diagnostics
+		// gopls produced before reconciling in-flight edits. Mirrors the diagnostics
+		// tool's opt-in path. (Catches "edited after analysis"; a fresh-timestamp
+		// analysis against a cold module cache is handled by the go.mod partition
+		// above.)
+		if ts, ok := t.diag.(timedDiagnosticsSource); ok {
+			sb.WriteString(formatDiagnosticsWithTimes(real, ts.AllDiagnosticTimes()))
+		} else {
+			sb.WriteString(formatDiagnostics(real))
+		}
 	}
 	if coldCount > 0 {
 		sep := ""

@@ -310,6 +310,44 @@ func (d *DB) Recent(n int, filter Filter) ([]RecentCall, error) {
 	return out, rows.Err()
 }
 
+// Slowest returns the n slowest calls matching filter, ordered by duration
+// descending. Backs daemon_info's per-session "slowest calls" view. Like
+// CallsForTool it omits the large input_json / output_text columns.
+func (d *DB) Slowest(n int, filter Filter) ([]RecentCall, error) {
+	if d == nil {
+		return nil, nil
+	}
+	where, args := filter.where()
+	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
+	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
+	             error_msg, input_bytes, output_bytes
+	      FROM tool_calls` + where + ` ORDER BY duration_ms DESC LIMIT ?`
+	args = append(args, n)
+
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("stats: slowest: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RecentCall
+	for rows.Next() {
+		var c RecentCall
+		var calledMs int64
+		var success int
+		if err := rows.Scan(
+			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes,
+		); err != nil {
+			continue
+		}
+		c.CalledAt = time.UnixMilli(calledMs)
+		c.Success = success == 1
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // CallsForTool returns recorded calls for a specific tool in this database,
 // ordered newest-first. limit caps the result set (0 = no cap).
 // input_json and output_text (potentially 64 KiB each) are intentionally

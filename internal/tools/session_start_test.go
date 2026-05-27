@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
@@ -20,6 +21,50 @@ type stubDiagnostics struct {
 func (s *stubDiagnostics) Diagnostics(uri string) []protocol.Diagnostic     { return s.all[uri] }
 func (s *stubDiagnostics) AllDiagnostics() map[string][]protocol.Diagnostic { return s.all }
 func (s *stubDiagnostics) Tracked(uri string) bool                          { _, ok := s.all[uri]; return ok }
+
+// stubTimedDiagnostics implements timedDiagnosticsSource so the diagnostics
+// section can exercise the staleness annotation.
+type stubTimedDiagnostics struct {
+	all   map[string][]protocol.Diagnostic
+	times map[string]time.Time
+}
+
+func (s *stubTimedDiagnostics) Diagnostics(uri string) []protocol.Diagnostic     { return s.all[uri] }
+func (s *stubTimedDiagnostics) AllDiagnostics() map[string][]protocol.Diagnostic { return s.all }
+func (s *stubTimedDiagnostics) Tracked(uri string) bool                          { _, ok := s.all[uri]; return ok }
+func (s *stubTimedDiagnostics) AllDiagnosticTimes() map[string]time.Time         { return s.times }
+
+// TestSessionStart_DiagnosticsStalenessNote verifies the orientation packet
+// flags a diagnostic whose file mtime is newer than its last analysis — the
+// "stale errors from in-flight work" case — when the source reports times.
+func TestSessionStart_DiagnosticsStalenessNote(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "stale*.go")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	path := f.Name()
+	f.Close()
+	uri := "file://" + path
+
+	src := &stubTimedDiagnostics{
+		all: map[string][]protocol.Diagnostic{
+			uri: {makeDiag(0, 0, "stale boom", protocol.SevError)},
+		},
+		// Analysis predates the file's current mtime → stale.
+		times: map[string]time.Time{uri: time.Now().Add(-2 * time.Second)},
+	}
+
+	ss := &SessionStart{diag: src}
+	var sb strings.Builder
+	ss.writeSessionDiagnostics(&sb)
+	out := sb.String()
+	if !strings.Contains(out, "stale boom") {
+		t.Fatalf("expected the diagnostic message in output:\n%s", out)
+	}
+	if !strings.Contains(out, "modified") {
+		t.Fatalf("expected a staleness note in output:\n%s", out)
+	}
+}
 
 func makeDiag(line, col uint32, msg string, sev protocol.DiagnosticSeverity) protocol.Diagnostic {
 	return protocol.Diagnostic{
