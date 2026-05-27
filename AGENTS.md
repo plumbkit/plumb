@@ -179,6 +179,16 @@ Enabled by default (opt out with `[topology] enabled = false`, per-project or gl
 
 **Known limitation:** `topologyPool` (`internal/cli/topology_pool.go`) is built once from the daemon's *global* `cfg.Topology`; per-project config only toggles enable/disable, not tuning (interval, batch, excludes, max size). Tracked in `docs/internal/todo.md`.
 
+### `[session]` — idle detection & eviction
+
+```toml
+[session]
+idle_threshold_minutes = 30   # mark a session idle in the TUI after this long with no tool call
+eviction_ttl_minutes   = 60   # daemon force-closes a connection idle this long; 0 disables eviction
+```
+
+Global or per-project; no env override. `idle_threshold_minutes` is cosmetic — the TUI Sessions panel shows a `~` marker on a session with no tool call for longer than the threshold. `eviction_ttl_minutes` has teeth: a daemon-side reaper (fixed 5-min tick) cancels a connection whose last tool call was longer ago than the TTL, so a `plumb serve` whose agent silently disconnected (its stdio pipe held open by a parent process) is reclaimed instead of lingering. The TTL is read live (hot-reloaded); set `eviction_ttl_minutes = 0` to disable eviction entirely. A tool call is the activity signal — `LastSeenAt` is the session file's mtime, advanced by `session.Touch` after every call.
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server:

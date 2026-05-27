@@ -138,6 +138,15 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 | `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
 | `watch` | bool | `true` | OS-level file watching ([`fswatcher`](https://github.com/sgtdi/fswatcher)): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
 
+## `[session]` — idle detection & eviction
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `idle_threshold_minutes` | int | `30` | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
+| `eviction_ttl_minutes` | int | `60` | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
+
+Global or per-project; no environment override. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
+
 ## `[lsp_query]` — LSP operation timeout (global only)
 
 | Field | Type | Default | Env | Effect |
@@ -265,6 +274,10 @@ resync_batch            = 100               # files per pause during a full resy
 resync_pause_ms         = 25                # pause after each batch, ms (0 disables)
 resync_interval_minutes = 60                # periodic full resync FALLBACK (suppressed while watch is on); 0 disables
 watch                   = true              # OS-level file watching: re-index on change, whoever made it
+
+[session]
+idle_threshold_minutes = 30                 # TUI idle marker threshold (cosmetic)
+eviction_ttl_minutes   = 60                 # daemon force-closes a connection idle this long; 0 disables
 
 [lsp_query]
 timeout = "30s"          # per-operation cap; 0 disables; global only
