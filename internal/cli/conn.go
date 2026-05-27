@@ -490,8 +490,10 @@ func (s *connSession) onClientInfo(name, version string) {
 	}
 }
 
-// onAfterTool records a completed tool call in the stats store.
+// onAfterTool records a completed tool call in the stats store and refreshes
+// the session's last-seen timestamp so idle detection stays accurate.
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
+	session.Touch(s.sessID)
 	s.stateMu.Lock()
 	root := s.acquiredRoot
 	sessionName := s.sessName
@@ -740,7 +742,18 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 		}))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).WithTopology(topoFn).WithLSPLanguage(s.acquiredLanguageName))
+	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
+		WithTopology(topoFn).
+		WithLSPLanguage(s.acquiredLanguageName).
+		WithExternalID(func(externalID string) string {
+			session.SetExternalID(s.sessID, externalID)
+			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
+				if name, err := s.renameSession(prev.Name); err == nil {
+					return name
+				}
+			}
+			return ""
+		}))
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))

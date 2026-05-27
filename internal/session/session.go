@@ -21,6 +21,15 @@ import (
 	"time"
 )
 
+// endedSessionGrace is how long ended-session files are kept on disk so that
+// a reconnecting agent can inherit its previous session's name via FindEnded.
+const endedSessionGrace = 24 * time.Hour
+
+// idleSessionThreshold is the duration after the last tool call at which a
+// session is considered idle in the TUI. The session stays open but is shown
+// with a visual marker.
+const IdleSessionThreshold = 30 * time.Minute
+
 // Info describes one active plumb serve instance.
 type Info struct {
 	ID            string    `json:"id"`
@@ -31,6 +40,16 @@ type Info struct {
 	Folder        string    `json:"folder"`
 	Adapter       string    `json:"adapter"`
 	StartedAt     time.Time `json:"started_at"`
+	// LastSeenAt is populated by List from the session file's mtime.
+	// It is not stored in the JSON; Touch updates the mtime instead.
+	LastSeenAt time.Time `json:"-"`
+	// ExternalID is an opaque string set by the caller via session_start's
+	// session_id parameter. It is persisted so FindEnded can match a
+	// reconnecting agent to its previous session across plumb restarts.
+	ExternalID string `json:"external_id,omitempty"`
+	// EndedAt is set by Unregister instead of deleting the file. A non-zero
+	// value means the session has ended; zero means it is still active.
+	EndedAt       time.Time `json:"ended_at,omitempty"`
 	ClientName    string    `json:"client_name,omitempty"`
 	ClientVersion string    `json:"client_version,omitempty"`
 	// Synthetic is true when the workspace root was inferred by the
@@ -137,18 +156,91 @@ func SetClient(id, clientName, clientVersion string) {
 	})
 }
 
-// Unregister removes the session file for id. Errors are silently ignored
-// so it is safe to use as a deferred call.
-func Unregister(id string) {
+// Touch updates the last-activity timestamp for a session by setting the
+// mtime of its session file to now. List derives LastSeenAt from this mtime,
+// so callers do not need to read the JSON to check session freshness.
+func Touch(id string) {
 	dir, err := Dir()
 	if err != nil {
 		return
 	}
-	_ = os.Remove(filepath.Join(dir, id+".json"))
+	now := time.Now()
+	_ = os.Chtimes(filepath.Join(dir, id+".json"), now, now)
 }
 
-// List returns all sessions whose processes are still running,
-// sorted by StartedAt ascending. Stale files are removed automatically.
+// SetExternalID persists an opaque external identifier (e.g. an agent
+// conversation ID) on the session file. It is used by FindEnded so a
+// reconnecting agent can inherit its previous session's name.
+func SetExternalID(id, externalID string) {
+	Patch(id, func(info *Info) {
+		info.ExternalID = externalID
+	})
+}
+
+// FindEnded looks for a recently-ended session with the given externalID.
+// It scans session files for entries where ExternalID matches and either
+// EndedAt is within grace, or the recorded PID is dead (crash without Unregister).
+// Returns the most-recently-ended match, or nil when none is found.
+func FindEnded(externalID string, grace time.Duration) *Info {
+	if externalID == "" {
+		return nil
+	}
+	dir, err := Dir()
+	if err != nil {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var best *Info
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var info Info
+		if err := json.Unmarshal(data, &info); err != nil {
+			continue
+		}
+		if info.ExternalID != externalID {
+			continue
+		}
+		// Match: ended via Unregister within grace, or daemon crashed (PID dead).
+		endedAt := info.EndedAt
+		if endedAt.IsZero() {
+			if pidAlive(info.PID) {
+				continue // still active, skip
+			}
+			endedAt = info.StartedAt // use start as proxy; recency check is lenient
+		}
+		if time.Since(endedAt) > grace {
+			continue
+		}
+		if best == nil || endedAt.After(best.EndedAt) {
+			copy := info
+			best = &copy
+		}
+	}
+	return best
+}
+
+// Unregister marks the session as ended by writing EndedAt to the session file
+// instead of deleting it. The file is retained for endedSessionGrace so that
+// FindEnded can match a reconnecting agent. Errors are silently ignored.
+func Unregister(id string) {
+	Patch(id, func(info *Info) {
+		info.EndedAt = time.Now()
+	})
+}
+
+// List returns all active sessions (those not yet ended), sorted by StartedAt
+// ascending. LastSeenAt is populated from each file's mtime.
+// Stale entries (dead PID without EndedAt) are marked ended.
+// Ended sessions older than endedSessionGrace are deleted automatically.
 func List() ([]Info, error) {
 	dir, err := Dir()
 	if err != nil {
@@ -176,9 +268,21 @@ func List() ([]Info, error) {
 		if err := json.Unmarshal(data, &info); err != nil {
 			continue
 		}
-		if !pidAlive(info.PID) {
-			_ = os.Remove(path)
+		if !info.EndedAt.IsZero() {
+			// Ended session — keep for grace period, then remove.
+			if time.Since(info.EndedAt) > endedSessionGrace {
+				_ = os.Remove(path)
+			}
 			continue
+		}
+		if !pidAlive(info.PID) {
+			// Daemon crashed without calling Unregister — mark ended now.
+			Patch(info.ID, func(i *Info) { i.EndedAt = time.Now() })
+			continue
+		}
+		// Populate LastSeenAt from the file's mtime (Touch uses os.Chtimes).
+		if fi, err := os.Stat(path); err == nil {
+			info.LastSeenAt = fi.ModTime()
 		}
 		infos = append(infos, info)
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/mcp"
 	"github.com/golimpio/plumb/internal/monitor"
+	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/tools"
 )
 
@@ -245,8 +246,79 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
+// connRegistry tracks live MCP connections so the idle reaper can cancel them.
+// Concurrency: all methods are safe for concurrent use.
+type connRegistry struct {
+	mu    sync.Mutex
+	conns map[string]context.CancelFunc // sessID → cancel
+}
+
+func newConnRegistry() *connRegistry {
+	return &connRegistry{conns: make(map[string]context.CancelFunc)}
+}
+
+func (r *connRegistry) add(sessID string, cancel context.CancelFunc) {
+	r.mu.Lock()
+	r.conns[sessID] = cancel
+	r.mu.Unlock()
+}
+
+func (r *connRegistry) remove(sessID string) {
+	r.mu.Lock()
+	delete(r.conns, sessID)
+	r.mu.Unlock()
+}
+
+// evictIdle cancels connections whose sessions have been idle longer than ttl.
+// A zero or negative ttl is a no-op (eviction disabled).
+func (r *connRegistry) evictIdle(ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	infos, err := session.List()
+	if err != nil || len(infos) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, info := range infos {
+		lastSeen := info.LastSeenAt
+		if lastSeen.IsZero() {
+			lastSeen = info.StartedAt
+		}
+		if time.Since(lastSeen) < ttl {
+			continue
+		}
+		if cancel, ok := r.conns[info.ID]; ok {
+			slog.Info("daemon: evicting idle session", "session", info.Name, "last_seen", lastSeen)
+			cancel()
+		}
+	}
+}
+
+// reaperInterval is how often the idle-session reaper runs.
+const reaperInterval = 5 * time.Minute
+
 func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	var wg sync.WaitGroup
+	registry := newConnRegistry()
+
+	// Idle-session reaper: cancel connections that have not called any tool
+	// for longer than the configured eviction TTL.
+	go func() {
+		ticker := time.NewTicker(reaperInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ttlMin := store.Current().Session.EvictionTTLMinutes
+				registry.evictIdle(time.Duration(ttlMin) * time.Minute)
+			}
+		}
+	}()
+
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -274,16 +346,18 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, store, statsStore, daemonStartedAt, clientLimiters)
+			handleConn(ctx, conn, pool, topoPool, store, statsStore, daemonStartedAt, clientLimiters, registry)
 		})
 	}
 }
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map, registry *connRegistry) {
 	defer conn.Close()
 	s := newConnSession(pool, topoPool, store, statsStore, clientLimiters)
+	registry.add(s.sessID, s.cancel)
+	defer registry.remove(s.sessID)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	s.registerAllTools(srv, daemonStartedAt)

@@ -222,6 +222,18 @@ type QualityConfig struct {
 	MaxFindingsPerFile int `toml:"max_findings_per_file"`
 }
 
+// SessionConfig controls session lifecycle: idle detection and eviction of
+// connections whose agents have silently disconnected.
+// Concurrency: read-only after Load returns.
+type SessionConfig struct {
+	// IdleThresholdMinutes is how long after the last tool call a session is
+	// classified as idle and shown with a visual marker in the TUI. Default 30.
+	IdleThresholdMinutes int `toml:"idle_threshold_minutes"`
+	// EvictionTTLMinutes is how long after the last tool call the daemon
+	// force-closes an idle connection. 0 disables eviction. Default 60.
+	EvictionTTLMinutes int `toml:"eviction_ttl_minutes"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
@@ -234,6 +246,7 @@ type Config struct {
 	Walk      WalkConfig           `toml:"walk"`
 	Workspace WorkspaceConfig      `toml:"workspace"`
 	Git       GitConfig            `toml:"git"`
+	Session   SessionConfig        `toml:"session"`
 	Quality   QualityConfig        `toml:"quality"`
 	Topology  TopologyConfig       `toml:"topology"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
@@ -278,6 +291,10 @@ var defaults = Config{
 		ResyncPauseMs:         25,
 		ResyncIntervalMinutes: 60,
 		Watch:                 true,
+	},
+	Session: SessionConfig{
+		IdleThresholdMinutes: 30,
+		EvictionTTLMinutes:   60,
 	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},

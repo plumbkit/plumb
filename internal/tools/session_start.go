@@ -23,6 +23,10 @@ var sessionStartSchema = json.RawMessage(`{
     "workspace": {
       "type": "string",
       "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). Defaults to the daemon's already-resolved workspace."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Optional opaque identifier linking this plumb session to the caller's own session (e.g. a Claude Code conversation ID). When provided, plumb persists the ID and, if a recent session with the same ID ended within the last 24 h, inherits its name — so a resumed conversation keeps its session name in the TUI."
     }
   },
   "additionalProperties": false
@@ -40,7 +44,9 @@ const contextMDLines = 200
 type RootsResolver func(ctx context.Context) string
 
 // SessionStart is a bootstrap tool — call it first in every session to get
-// oriented. It returns in one round-trip:
+// oriented. Accepts an optional session_id to link the plumb session to the
+// caller's own session across reconnects (see WithExternalID). It returns in
+// one round-trip:
 //   - workspace path, detected language, current git branch
 //   - first 200 lines of .plumb/context.md (if it exists)
 //   - names and descriptions of all memories
@@ -61,13 +67,14 @@ type RootsResolver func(ctx context.Context) string
 // wrong project.
 type SessionStart struct {
 	ws           WorkspaceFn
-	diag         diagnosticsSource // may be nil; diagnostics section skipped when nil
-	roots        RootsResolver     // may be nil; roots/list fallback skipped when nil
-	refuseFn     func() bool       // may be nil; treated as false (no refusal)
-	clientNameFn func() string     // may be nil; returns current MCP client name
-	topo         topologyStoreFn   // may be nil; returns the live topology store, or nil when disabled
-	gitPolicyFn  func() GitPolicy  // may be nil; git policy section skipped when nil
-	lspLangFn    func() string     // may be nil; the LSP language attached to this session ("" when none)
+	diag         diagnosticsSource      // may be nil; diagnostics section skipped when nil
+	roots        RootsResolver          // may be nil; roots/list fallback skipped when nil
+	refuseFn     func() bool            // may be nil; treated as false (no refusal)
+	clientNameFn func() string          // may be nil; returns current MCP client name
+	topo         topologyStoreFn        // may be nil; returns the live topology store, or nil when disabled
+	gitPolicyFn  func() GitPolicy       // may be nil; git policy section skipped when nil
+	lspLangFn    func() string          // may be nil; the LSP language attached to this session ("" when none)
+	externalIDFn func(id string) string // may be nil; links session to external ID, returns inherited name
 }
 
 // WithTopology wires the topology store accessor so session_start can lead its
@@ -91,6 +98,15 @@ func (t *SessionStart) topologyActive() bool {
 // source is wired (which it always is). Nil-safe. Returns the receiver.
 func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
 	t.lspLangFn = fn
+	return t
+}
+
+// WithExternalID wires the external-ID linker: fn receives the session_id
+// argument, persists it on the session file, and may return an inherited
+// session name (non-empty when a matching ended session was found). Nil-safe.
+// Returns the receiver for chaining.
+func (t *SessionStart) WithExternalID(fn func(id string) string) *SessionStart {
+	t.externalIDFn = fn
 	return t
 }
 
@@ -131,10 +147,19 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	var inheritedName string
+	if t.externalIDFn != nil {
+		var a struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err == nil && a.SessionID != "" {
+			inheritedName = t.externalIDFn(a.SessionID)
+		}
+	}
 	lang, lspKey := detectLanguageInfo(ws)
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws, lang)
+	t.writeSessionIdentity(&sb, ws, lang, inheritedName)
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	writeSessionContext(&sb, ws)
 	writeSessionCommits(&sb, ws)
@@ -186,7 +211,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	return "", noWorkspaceError()
 }
 
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang string) {
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
 	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)
@@ -199,6 +224,9 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang string
 		if scale := workspaceScale(ws, lang); scale != "" {
 			fmt.Fprintf(sb, "Scale:    %s\n", scale)
 		}
+	}
+	if inheritedName != "" {
+		fmt.Fprintf(sb, "Session:  %s (resumed)\n", inheritedName)
 	}
 	sb.WriteString("\n")
 }

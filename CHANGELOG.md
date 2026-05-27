@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.13 (unreleased)
+
+### Added
+- **Session lifecycle: idle detection, eviction, and agent-session linking.** Three related improvements to prevent stale sessions from accumulating and allow a reconnecting agent to resume its previous session identity.
+  - **Idle detection** — every tool call updates a session's `LastSeenAt` timestamp (via `os.Chtimes` on the session file, so there is no extra JSON decode). `session.List()` populates `LastSeenAt` from the file mtime. The TUI Sessions panel shows a `~` marker on sessions idle for longer than the configurable threshold (default 30 min).
+  - **Idle eviction** — a background reaper in the daemon (5-min tick) cancels connections whose last tool call was more than the configurable eviction TTL ago (default 60 min). This closes the hanging-session problem where `plumb serve`'s stdio pipe stayed open after the agent stopped talking.
+  - **Agent-session linking** — `session_start` now accepts an optional `session_id` parameter (an opaque string the agent provides, e.g. a conversation ID). The session persists this as `ExternalID` in its on-disk JSON file. `Unregister` now marks the file with `ended_at` rather than deleting it, keeping it for a 24-hour grace period. When a reconnecting agent passes the same `session_id`, plumb calls `session.FindEnded` to locate the previous session and inherits its name — so the TUI shows session continuity across reconnects and `plumb restart`.
+  - New `[session]` config section: `idle_threshold_minutes` (default 30) and `eviction_ttl_minutes` (default 60, 0 to disable).
+
 ## 0.8.12 (unreleased)
 
 ### Fixed

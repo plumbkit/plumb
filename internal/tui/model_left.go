@@ -2,8 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/golimpio/plumb/internal/session"
 )
 
 func (m Model) leftLines() []string {
@@ -40,6 +43,9 @@ func (m Model) leftLines() []string {
 		}
 		if s.Synthetic {
 			firstLine += " (auto)"
+		}
+		if sessionIsIdle(s) {
+			firstLine += " ~"
 		}
 		path := "resolving…"
 		if s.Folder != "" {
@@ -79,6 +85,16 @@ func leftSessionRowLines(firstLine, secondLine string, selected, lf bool) []stri
 		return []string{ItemStyle.Render(firstLine), MutedStyle.Render(secondLine)}
 	}
 	return []string{FadedStyle.Render(firstLine), FadedStyle.Render(secondLine)}
+}
+
+// sessionIsIdle reports whether a session's last-seen time exceeds the idle
+// threshold. Falls back to StartedAt when LastSeenAt is not yet populated.
+func sessionIsIdle(s session.Info) bool {
+	lastSeen := s.LastSeenAt
+	if lastSeen.IsZero() {
+		lastSeen = s.StartedAt
+	}
+	return !lastSeen.IsZero() && time.Since(lastSeen) >= session.IdleSessionThreshold
 }
 
 // sessionLangLabel maps a session's internal language value to its display

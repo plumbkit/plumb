@@ -148,9 +148,98 @@ func TestList_StaleFileCleaned(t *testing.T) {
 		t.Fatalf("expected stale session to be filtered, got %d session(s)", len(sessions))
 	}
 
-	// Stale file should have been removed.
-	if _, err := os.Stat(dir + "/stale.json"); !os.IsNotExist(err) {
-		t.Error("stale session file was not cleaned up")
+	// Stale file is now marked ended_at (kept for grace period) rather than
+	// immediately deleted, so FindEnded can still match it across restarts.
+	data, readErr := os.ReadFile(dir + "/stale.json")
+	if readErr != nil {
+		t.Fatalf("stale session file unexpectedly removed: %v", readErr)
+	}
+	if !strings.Contains(string(data), "ended_at") {
+		t.Error("expected ended_at to be written to stale session file")
+	}
+}
+
+func TestUnregister_MarksEndedAt(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session.Unregister(id)
+
+	// File must still exist (kept for grace period).
+	dir, _ := session.Dir()
+	data, readErr := os.ReadFile(dir + "/" + id + ".json")
+	if readErr != nil {
+		t.Fatalf("session file removed immediately; want kept with ended_at: %v", readErr)
+	}
+	if !strings.Contains(string(data), "ended_at") {
+		t.Error("expected ended_at field in session file after Unregister")
+	}
+
+	// Must not appear in active List.
+	sessions, listErr := session.List()
+	if listErr != nil {
+		t.Fatalf("List: %v", listErr)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected 0 active sessions after Unregister, got %d", len(sessions))
+	}
+}
+
+func TestTouch_UpdatesLastSeenAt(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	time.Sleep(5 * time.Millisecond)
+	before := time.Now()
+	session.Touch(id)
+
+	sessions, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].LastSeenAt.Before(before) {
+		t.Errorf("LastSeenAt %v not updated by Touch (before=%v)", sessions[0].LastSeenAt, before)
+	}
+}
+
+func TestFindEnded_MatchesExternalID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls", Name: "BRAVE-DEER"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session.SetExternalID(id, "agent-abc")
+	session.Unregister(id)
+
+	// FindEnded should return the ended session.
+	got := session.FindEnded("agent-abc", 24*time.Hour)
+	if got == nil {
+		t.Fatal("FindEnded returned nil; expected a match")
+	}
+	if got.Name != "BRAVE-DEER" {
+		t.Errorf("Name = %q, want BRAVE-DEER", got.Name)
+	}
+
+	// Unknown external ID returns nil.
+	if got2 := session.FindEnded("no-such-id", 24*time.Hour); got2 != nil {
+		t.Errorf("FindEnded(unknown) = %v, want nil", got2)
+	}
+
+	// Expired grace returns nil.
+	if got3 := session.FindEnded("agent-abc", 0); got3 != nil {
+		t.Errorf("FindEnded(grace=0) = %v, want nil", got3)
 	}
 }
 
