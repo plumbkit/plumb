@@ -72,7 +72,7 @@ a reconnect. `[ui]`, `[lsp_query]`, and the `[lsp.*]` servers are **global-only*
 |---|---|---|---|---|
 | `strict` | bool | `false` | `PLUMB_STRICT_EDITS` | Require every `edit_file` target to have been read via `read_file` this session, with a matching mtime. |
 | `rate_limit_per_minute` | int | `120` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. |
-| `post_write_diagnostics_ms` | int | `300` | `PLUMB_POST_WRITE_DIAG_MS` | How long to wait for the LSP server to re-publish diagnostics after a write. `0` disables the wait. |
+| `post_write_diagnostics_ms` | int | `300` | `PLUMB_POST_WRITE_DIAG_MS` | Ceiling on how long to wait for the LSP server to re-publish diagnostics after a write; the effective wait adapts down to the server's observed latency. `0` disables. |
 | `concurrent_write_skew_ms` | int | `100` | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | Clock-skew allowance for `edit_file`'s concurrent-write detector. Raise on slow/network filesystems. |
 | `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
 
@@ -241,7 +241,7 @@ max_size = 1000
 [edits]
 strict                    = false   # require read_file before edit_file
 rate_limit_per_minute     = 120     # 0 disables
-post_write_diagnostics_ms = 300     # wait for LSP diagnostics after a write; 0 disables
+post_write_diagnostics_ms = 300     # ceiling; effective wait adapts down to observed latency; 0 disables
 concurrent_write_skew_ms  = 100     # clock-skew allowance for concurrent-write detection
 show_write_diff           = true    # append a unified diff to write/edit responses
 

@@ -116,7 +116,7 @@ Env vars are noted inline below as comments; values shown are defaults.
 strict = false                # PLUMB_STRICT_EDITS — require read_file (matching mtime) before edit_file. Per-session via ReadTracker
 rate_limit_per_minute = 120   # PLUMB_WRITE_RATE_LIMIT — sliding-window cap per session; 0 disables
 show_write_diff = true        # PLUMB_SHOW_WRITE_DIFF — append a unified diff to edit_file/write_file responses
-post_write_diagnostics_ms = 300 # PLUMB_POST_WRITE_DIAG_MS — how long write/edit tools wait for the next LSP publishDiagnostics notification after a write; 0 disables the wait entirely
+post_write_diagnostics_ms = 300 # PLUMB_POST_WRITE_DIAG_MS — ceiling on how long write/edit tools wait for the LSP to re-publish diagnostics after a write; the effective wait adapts down to the server's observed latency. 0 disables the wait entirely
 ```
 
 ### `[workspace]` — root detection fallback
