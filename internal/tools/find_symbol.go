@@ -138,10 +138,16 @@ func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string,
 }
 
 // resolveSymbolsByName returns all symbols in the tree matching name.
-// For dotted names like "ReceiverType.MethodName" it searches children of the
-// named parent. For plain names it matches at any depth.
+//
+// For a dotted "ReceiverType.MethodName" it matches two shapes: the nested
+// shape, where the method is a child of a type symbol (Python, Java, and the
+// tree-sitter extractors), and the flat shape, where the method is a top-level
+// symbol named "(*Recv).Method" or "(Recv).Method" (gopls' Go output — methods
+// are never nested under the receiver type). For plain names it matches at any
+// depth.
 func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protocol.DocumentSymbol {
 	if parent, child, ok := strings.Cut(name, "."); ok {
+		parentType := goReceiverType(parent)
 		var out []protocol.DocumentSymbol
 		for _, s := range syms {
 			if s.Name == parent {
@@ -150,6 +156,9 @@ func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protoco
 						out = append(out, c)
 					}
 				}
+			}
+			if recv, method, ok := goMethodReceiver(s.Name); ok && recv == parentType && method == child {
+				out = append(out, s)
 			}
 		}
 		return out
@@ -166,6 +175,31 @@ func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protoco
 	}
 	walk(syms)
 	return out
+}
+
+// goReceiverType strips Go receiver decoration so a dotted-name parent of
+// "(*Foo)", "*Foo", or "Foo" all normalise to "Foo".
+func goReceiverType(parent string) string {
+	return strings.TrimPrefix(strings.Trim(parent, "()"), "*")
+}
+
+// goMethodReceiver splits a gopls Go method symbol name — "(*Recv).Method" or
+// "(Recv).Method" — into its receiver type and method. ok is false for any name
+// not in that form (plain functions, types, fields).
+func goMethodReceiver(symName string) (recv, method string, ok bool) {
+	if !strings.HasPrefix(symName, "(") {
+		return "", "", false
+	}
+	i := strings.Index(symName, ").")
+	if i < 0 {
+		return "", "", false
+	}
+	recv = strings.TrimPrefix(symName[1:i], "*")
+	method = symName[i+2:]
+	if recv == "" || method == "" || strings.Contains(method, ".") {
+		return "", "", false
+	}
+	return recv, method, true
 }
 
 // flatFilterSymbols walks the symbol tree and returns all nodes whose name
