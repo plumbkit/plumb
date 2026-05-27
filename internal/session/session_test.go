@@ -1,13 +1,85 @@
 package session_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golimpio/plumb/internal/session"
 )
+
+// TestWriteSessionFileAtomic_NoTornReads guards that session-file writes are
+// atomic: a concurrent reader (in production, the TUI refresh racing the daemon
+// reaper across processes) must never observe a partially-written file, and no
+// temp file may be left behind. Before the temp-file+rename change, Patch used a
+// plain os.WriteFile and a reader could catch a truncated file mid-write — a
+// real hazard now that List has write side effects and is called from the TUI.
+func TestWriteSessionFileAtomic_NoTornReads(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	id, err := session.Register(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	path := filepath.Join(dir, id+".json")
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Reader: continuously read the file raw. With atomic writes it is always
+	// either the old or the new complete file, never torn.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			data, rerr := os.ReadFile(path)
+			if rerr != nil || len(data) == 0 {
+				continue
+			}
+			var in session.Info
+			if uerr := json.Unmarshal(data, &in); uerr != nil {
+				t.Errorf("observed a torn session file: %v (%q)", uerr, data)
+				return
+			}
+		}
+	}()
+
+	// Writers: many concurrent Patches to the same file.
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			session.Patch(id, func(in *session.Info) { in.Adapter = fmt.Sprintf("a%d", n) })
+		}(i)
+	}
+
+	time.Sleep(50 * time.Millisecond) // let writers and the reader overlap
+	close(stop)
+	wg.Wait()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file after atomic writes: %s", e.Name())
+		}
+	}
+}
 
 func TestRegisterUnregister(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())

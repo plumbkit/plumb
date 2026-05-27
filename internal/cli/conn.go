@@ -86,7 +86,11 @@ type connSession struct {
 
 // newConnSession initialises a connSession and registers a new MCP session.
 // Call close() when the connection ends.
-func newConnSession(pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
+// The session context is derived from parent (the daemon context) so a
+// daemon-wide shutdown cancels every session; s.cancel() additionally lets the
+// idle reaper cancel one session in isolation. handleConn drives mcp.Serve on
+// s.ctx, so either cancellation makes Serve return and the deferred cleanup run.
+func newConnSession(parent context.Context, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
 	cfg := store.Current()
 	ttl := cfg.Cache.TTL.Duration
 	sessName := session.GenerateName()
@@ -94,7 +98,7 @@ func newConnSession(pool *workspacePool, topoPool *topologyPool, store *config.S
 		Name:          sessName,
 		DaemonVersion: Version,
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	s := &connSession{
 		ctx:            ctx,
 		cancel:         cancel,

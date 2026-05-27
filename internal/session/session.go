@@ -1,11 +1,16 @@
 // Package session manages the registry of active plumb serve processes.
 //
 // Each plumb serve instance writes a JSON file to
-// $XDG_DATA_HOME/plumb/sessions/<id>.json on startup and removes it on exit.
-// Stale files left by crashed processes are cleaned up automatically by List.
+// $XDG_DATA_HOME/plumb/sessions/<id>.json on startup. On exit the session is
+// marked ended (EndedAt) rather than deleted, so a reconnecting agent can
+// inherit its previous name via FindEnded; List removes ended files after
+// endedSessionGrace and marks crashed sessions (dead PID) ended. List therefore
+// has filesystem write side effects — it is not a pure read.
 //
-// Concurrency: Register / Unregister are safe to call from any goroutine.
-// List reads from the filesystem and is safe to call concurrently.
+// Concurrency: Register / Unregister / Patch / List are safe to call from any
+// goroutine and from multiple processes at once (the daemon reaper and the TUI
+// refresh both call List). Every write goes through writeSessionFileAtomic
+// (temp file + rename), so a concurrent reader never observes a torn file.
 package session
 
 import (
@@ -81,15 +86,42 @@ func Register(info Info) (string, error) {
 	if info.StartedAt.IsZero() {
 		info.StartedAt = time.Now()
 	}
-	data, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return "", err
-	}
 	path := filepath.Join(dir, info.ID+".json")
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := writeSessionFileAtomic(path, info); err != nil {
 		return "", fmt.Errorf("writing session file: %w", err)
 	}
 	return info.ID, nil
+}
+
+// writeSessionFileAtomic marshals info and writes it to path atomically (temp
+// file + rename) so a concurrent reader — in this or another process — never
+// observes a partially-written file. The temp file is dotfile-prefixed and ends
+// in .tmp, so List and FindEnded (which match *.json) ignore it.
+func writeSessionFileAtomic(path string, info Info) error {
+	out, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // Rename validates and writes a new session name for id, returning the
@@ -113,11 +145,7 @@ func Rename(id, name string) (string, error) {
 		return "", fmt.Errorf("decoding session file: %w", err)
 	}
 	info.Name = name
-	out, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("encoding session file: %w", err)
-	}
-	if err := os.WriteFile(path, append(out, '\n'), 0o600); err != nil {
+	if err := writeSessionFileAtomic(path, info); err != nil {
 		return "", fmt.Errorf("writing session file: %w", err)
 	}
 	return name, nil
@@ -140,11 +168,7 @@ func Patch(id string, fn func(*Info)) {
 		return
 	}
 	fn(&info)
-	out, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(path, append(out, '\n'), 0o600)
+	_ = writeSessionFileAtomic(path, info)
 }
 
 // SetClient updates the ClientName and ClientVersion fields of the session

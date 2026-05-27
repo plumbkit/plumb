@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/golimpio/plumb/internal/config"
 )
 
 func TestSeedPathFromArgs(t *testing.T) {
@@ -342,4 +344,51 @@ func TestDrainConnections(t *testing.T) {
 		}
 		wg.Done() // release the internal waiter goroutine
 	})
+}
+
+// TestNewConnSession_ContextWiring guards the idle-eviction fix: the session
+// context must be a child of the daemon context (so a daemon-wide shutdown
+// cancels it) AND s.cancel() must cancel it (so the idle reaper's cancel makes
+// mcp.Serve return and the deferred Unregister run). The original bug derived
+// s.ctx from context.Background(), so the reaper's cancel reached a context
+// nothing observed and idle eviction was a silent no-op.
+func TestNewConnSession_ContextWiring(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	pool := detectTestPool()
+
+	t.Run("daemon shutdown cancels the session", func(t *testing.T) {
+		parent, cancelParent := context.WithCancel(context.Background())
+		s := newConnSession(parent, pool, nil, store, nil, &sync.Map{})
+		defer s.close()
+		cancelParent() // daemon-wide shutdown
+		select {
+		case <-s.ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("session context not cancelled when the daemon context was cancelled")
+		}
+	})
+
+	t.Run("idle eviction cancels the session", func(t *testing.T) {
+		s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+		defer s.close()
+		s.cancel() // exactly what connRegistry.evictIdle invokes via the registry
+		select {
+		case <-s.ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("session context not cancelled by s.cancel(); idle eviction would not terminate the connection")
+		}
+	})
+}
+
+// TestShutdownHardDeadlineExceedsInnerGraces guards that the shutdown watchdog
+// stays a genuine last resort: it must allow the sequential bounded teardown
+// (connection drain + pool.close handshake) to finish with headroom for the
+// still-unbounded topology/supervisor stops, so it never force-exits — and
+// truncates a topology resync — during a slow-but-normal shutdown.
+func TestShutdownHardDeadlineExceedsInnerGraces(t *testing.T) {
+	if shutdownHardDeadline <= acceptDrainGrace+poolCloseGrace {
+		t.Fatalf("shutdownHardDeadline (%s) must exceed acceptDrainGrace+poolCloseGrace (%s) so the watchdog does not trip during a slow-but-normal shutdown",
+			shutdownHardDeadline, acceptDrainGrace+poolCloseGrace)
+	}
 }

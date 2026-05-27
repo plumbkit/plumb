@@ -42,11 +42,16 @@ func (p *reconnectingProxy) runHeartbeat(ctx context.Context) {
 			continue // nothing to probe until the client has initialised
 		}
 		seq++
+		// Capture the generation we are about to probe BEFORE sending the ping.
+		// If a pump-driven reconnect bumps the generation during the ping wait,
+		// reconnect(gen) becomes a no-op (its generation guard fails) — so a hang
+		// verdict for the old generation can never SIGKILL the freshly-respawned
+		// daemon. Reading the generation after the timeout would lose this guard.
+		_, _, gen := p.current()
 		if p.ping(ctx, fmt.Sprintf("%s%d", pingIDPrefix, seq)) {
 			continue
 		}
 		slog.Warn("serve: daemon heartbeat timed out — assuming hung; killing and reconnecting")
-		_, _, gen := p.current()
 		if err := p.reconnect(ctx, gen, true); err != nil {
 			return // give-up: run() observes the pump error and exits
 		}

@@ -56,16 +56,27 @@ var daemonCmd = &cobra.Command{
 	RunE:   runDaemon,
 }
 
-// shutdownHardDeadline bounds total graceful shutdown. Once a signal cancels
-// the daemon context, armShutdownWatchdog forces process exit after this
-// deadline if the orderly teardown (bounded pool.close, connection drain,
-// topology stop) has not already returned — so a wedged language server or a
-// mid-resync can never leave the daemon hanging and holding the lifetime lock.
-const shutdownHardDeadline = 5 * time.Second
-
 // acceptDrainGrace bounds how long the accept loop waits for in-flight
 // connections to finish once shutdown begins; the watchdog backstops the rest.
 const acceptDrainGrace = 2 * time.Second
+
+// shutdownHardDeadline bounds total graceful shutdown. Once a signal cancels
+// the daemon context, armShutdownWatchdog forces process exit after this
+// deadline if the orderly teardown has not already returned — so a wedged
+// language server or a mid-resync can never leave the daemon hanging and
+// holding the lifetime lock.
+//
+// It is derived from the inner graces so it stays a genuine last resort. The
+// orderly path runs the connection drain and the pool.close handshake
+// sequentially (acceptDrainGrace + poolCloseGrace) and then the still-unbounded
+// topology/supervisor stops. A flat 5s left under 1s of headroom for those
+// unbounded steps, so a slow-but-normal shutdown could trip the watchdog and
+// truncate a topology resync (WAL-safe, but the resync is lost). The added
+// headroom covers the normal unbounded teardown while still bounding a
+// genuinely wedged step. Bounding the topology/supervisor stops outright (so
+// the orderly path is provably under this deadline) is tracked in
+// docs/internal/todo.md.
+const shutdownHardDeadline = acceptDrainGrace + poolCloseGrace + 4*time.Second
 
 // armShutdownWatchdog forces process exit shutdownHardDeadline after ctx is
 // cancelled — a last-resort backstop behind the bounded graceful teardown. exit
@@ -355,14 +366,18 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 // and behaviour live in connSession (see conn.go).
 func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map, registry *connRegistry) {
 	defer conn.Close()
-	s := newConnSession(pool, topoPool, store, statsStore, clientLimiters)
+	s := newConnSession(ctx, pool, topoPool, store, statsStore, clientLimiters)
 	registry.add(s.sessID, s.cancel)
 	defer registry.remove(s.sessID)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
 	s.registerAllTools(srv, daemonStartedAt)
 	s.registerHooks(srv)
-	_ = srv.Serve(ctx, conn, conn)
+	// Serve on the session context (a child of the daemon ctx) — NOT the bare
+	// daemon ctx — so the idle reaper's cancel() makes Serve return and the
+	// deferred registry.remove + s.close (which Unregisters) run. A daemon-wide
+	// shutdown still cancels it via the parent.
+	_ = srv.Serve(s.ctx, conn, conn)
 }
 
 // daemonSocketPath returns the Unix socket path for the plumb daemon.

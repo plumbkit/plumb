@@ -329,3 +329,27 @@ func TestProxyKillTargetsCapturedPID(t *testing.T) {
 		t.Errorf("kill targeted pid %d; want the captured 4242", killed)
 	}
 }
+
+// TestProxyReconnectStaleGenerationDoesNotKill guards the invariant the
+// heartbeat relies on by capturing the generation BEFORE the ping: a reconnect
+// request for a generation the proxy has already moved past must be a no-op and
+// must NOT kill the daemon. Otherwise a hang verdict reached after a concurrent
+// reconnect would SIGKILL the freshly-respawned, healthy daemon.
+func TestProxyReconnectStaleGenerationDoesNotKill(t *testing.T) {
+	t.Parallel()
+	var killed bool
+	p := newReconnectingProxy(proxyDeps{
+		dial:          func(context.Context) (net.Conn, error) { return nil, errors.New("no daemon") },
+		killDaemon:    func(int) { killed = true },
+		maxReconnects: 1,
+		baseBackoff:   time.Millisecond,
+	})
+	staleGen := p.generation()
+	p.publish(nil, nil) // a concurrent reconnect advanced the generation past staleGen
+	if err := p.reconnect(context.Background(), staleGen, true); err != nil {
+		t.Fatalf("stale-generation reconnect should be a no-op, got error: %v", err)
+	}
+	if killed {
+		t.Error("reconnect for a stale generation killed the daemon; the heartbeat would then SIGKILL a healthy respawned daemon")
+	}
+}
