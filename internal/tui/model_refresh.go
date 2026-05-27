@@ -233,6 +233,43 @@ func (m *Model) ensurePopupCursorVisible() {
 	}
 }
 
+// ensureLeftCursorVisible adjusts m.leftScroll so the selected left-panel row
+// (a session, or a memory in section 2) stays within the body viewport after
+// keyboard navigation. Mouse-wheel scrolling moves leftScroll directly and
+// never calls this. Mirrors ensurePopupCursorVisible.
+func (m *Model) ensureLeftCursorVisible() {
+	const headerLines = 2 // panel title + blank spacer
+	cursor, count, perItem := m.cursor, len(m.sessions), 3
+	if m.currentSection == 2 {
+		cursor, count, perItem = m.memoryCursor, len(m.memories), 4
+	}
+	if count == 0 {
+		m.leftScroll = 0
+		return
+	}
+	top := headerLines + cursor*perItem
+	bottom := top + perItem - 2 // last content line; trailing blank may be hidden
+	if cursor == 0 {
+		top = 0 // reveal the panel header above the first row
+	}
+	bodyHeight := max(m.height-6, 1)
+	totalLines := headerLines + count*perItem
+
+	if bottom >= m.leftScroll+bodyHeight {
+		m.leftScroll = bottom - bodyHeight + 1
+	}
+	if top < m.leftScroll {
+		m.leftScroll = top
+	}
+	maxScroll := max(totalLines-bodyHeight, 0)
+	if m.leftScroll > maxScroll {
+		m.leftScroll = maxScroll
+	}
+	if m.leftScroll < 0 {
+		m.leftScroll = 0
+	}
+}
+
 func (m *Model) currentDetail() (inputJSON, outputText string) {
 	if len(m.popupCalls) == 0 {
 		return

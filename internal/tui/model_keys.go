@@ -353,12 +353,13 @@ func (m Model) mainKeyUp() Model {
 				m.rightScroll = 0
 				m.memoryBodyCache = ""
 				m.memoryBodyCacheName = ""
+				m.ensureLeftCursorVisible()
 			}
 		} else if m.cursor > 0 {
 			m.cursor--
-			m.leftScroll = 0
 			m.rightScroll = 0
 			m.refreshStats()
+			m.ensureLeftCursorVisible()
 		}
 	}
 	return m
@@ -389,12 +390,13 @@ func (m Model) mainKeyDown() Model {
 				m.rightScroll = 0
 				m.memoryBodyCache = ""
 				m.memoryBodyCacheName = ""
+				m.ensureLeftCursorVisible()
 			}
 		} else if m.cursor < len(m.sessions)-1 {
 			m.cursor++
-			m.leftScroll = 0
 			m.rightScroll = 0
 			m.refreshStats()
+			m.ensureLeftCursorVisible()
 		}
 	}
 	return m
@@ -424,14 +426,15 @@ func (m Model) mainKeyPageDown() Model {
 			m.rightScroll = 0
 			m.memoryBodyCache = ""
 			m.memoryBodyCacheName = ""
+			m.ensureLeftCursorVisible()
 		} else {
 			m.cursor += pageSize
 			if m.cursor >= len(m.sessions) {
 				m.cursor = len(m.sessions) - 1
 			}
-			m.leftScroll = 0
 			m.rightScroll = 0
 			m.refreshStats()
+			m.ensureLeftCursorVisible()
 		}
 	}
 	return m
@@ -464,12 +467,14 @@ func (m Model) mainKeyPageUp() Model {
 			m.rightScroll = 0
 			m.memoryBodyCache = ""
 			m.memoryBodyCacheName = ""
+			m.ensureLeftCursorVisible()
 		} else {
 			m.cursor -= pageSize
 			if m.cursor < 0 {
 				m.cursor = 0
 			}
 			m.refreshStats()
+			m.ensureLeftCursorVisible()
 		}
 	}
 	return m

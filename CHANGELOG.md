@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.14 (unreleased)
+
+### Fixed
+- **Keyboard navigation in the TUI Sessions (and Memory) panel now scrolls the list to keep the selection on screen.** Pressing ↓ past the last visible row moved the selection cursor but the viewport stayed put — the selected row scrolled out of view while the cursor kept advancing, so the list looked frozen (mouse-wheel scrolling worked because it drives `leftScroll` directly). The four keyboard handlers (`mainKeyUp`/`mainKeyDown`/`mainKeyPageDown`/`mainKeyPageUp`, `internal/tui/model_keys.go`) reset `m.leftScroll = 0` on every cursor move — and `mainKeyPageUp` never touched it at all — so the scroll offset never followed the cursor. They now call a new `ensureLeftCursorVisible()` (`internal/tui/model_refresh.go`, beside the popup's existing `ensurePopupCursorVisible`) after the cursor moves: it advances `leftScroll` by the minimum needed to keep the selected row's content lines within the body viewport (accounting for the 2-line panel header and the per-item line count — 3 lines per session, 4 per memory), preserves the offset when the selection is already visible (so it never yanks a mouse-scrolled view), and reveals the panel header when the selection returns to the first row. The Memory section (index 2) shares `leftScroll` and the same handlers, so it is fixed by the same helper; the adjustment is keypress-only — `refresh()`'s 2 s poll never calls it, so it cannot fight a mouse scroll. Guards: `TestEnsureLeftCursorVisible` (the helper's math across both sections, incl. the already-visible no-yank and last-item clamp cases), `TestSessionsKeyboardScrollFollowsCursor` and `TestMemoryKeyboardScrollFollowsCursor` (handler wiring — holding ↓/↑/pgdn/pgup keeps the selection visible).
+
 ## 0.8.13 (unreleased)
 
 ### Added
