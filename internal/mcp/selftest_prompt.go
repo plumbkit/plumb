@@ -55,10 +55,9 @@ var (
 
 	// selftestHarnessOnly names tools (and behaviours) that are unsafe or
 	// non-deterministic to drive against the live workspace, so the agent does
-	// not run them — the integration harness (cmd/smoke) covers them instead.
-	// git_init creates a repo; the destructive/network git tiers, transaction
-	// rollback, strict-mode and rate-limit are behaviours of tools already
-	// exercised above, verified with induced failures and isolated env.
+	// not run git_init live; it creates a repo and is covered by the integration
+	// harness (cmd/smoke). Additional smoke tests cover tool-list parity, strict
+	// mode rejection, transaction rollback, and the allowed destructive reset tier.
 	selftestHarnessOnly = []string{"git_init"}
 )
 
@@ -249,8 +248,8 @@ func selftestDeferred() []string {
 		"`cmd/smoke` instead — mark them SKIP(\"integration harness\"):",
 		"",
 		"- " + toolList(selftestHarnessOnly) + " (creates a repo).",
-		"- Destructive/network `git` tiers (reset, clean, push), `transaction_apply` rollback on",
-		"  partial failure, strict-mode rejection, and the write rate-limit.",
+		"- Smoke tests also cover `transaction_apply` rollback on partial failure, strict-mode",
+		"  rejection, tool-list parity, and the allowed destructive `git reset` tier.",
 	}
 }
 
