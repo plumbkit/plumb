@@ -331,6 +331,22 @@ func newRoutingInvProxy(pool *workspacePool) *routingInvProxy {
 	return &routingInvProxy{pool: pool}
 }
 
+// timedDiagnosticsContract mirrors internal/tools' timedDiagnosticsSource
+// shape (kept private here to avoid a cross-package import that would invert
+// the existing layering). The compile-time assertion below keeps the routing
+// proxy aligned with the consumer interface: if any of these methods are
+// renamed or removed, the build fails here rather than silently disabling the
+// staleness annotation downstream (the consumer is a type-assertion fallback,
+// so a missing method would otherwise just degrade to plain formatting).
+type timedDiagnosticsContract interface {
+	Diagnostics(uri string) []protocol.Diagnostic
+	AllDiagnostics() map[string][]protocol.Diagnostic
+	Tracked(uri string) bool
+	AllDiagnosticTimes() map[string]time.Time
+}
+
+var _ timedDiagnosticsContract = (*routingInvProxy)(nil)
+
 func (r *routingInvProxy) setPrimary(root string, inv *cache.Invalidator) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

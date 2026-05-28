@@ -107,21 +107,36 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	return out, nil
 }
 
+// sessionLatencyTimeout caps how long daemon_info will wait for its optional
+// stats lookup. Beyond this, daemon_info returns core daemon metadata plus the
+// timeout sentinel rather than blocking the MCP response.
+const sessionLatencyTimeout = 250 * time.Millisecond
+
+const sessionLatencyTimeoutMsg = "\nstats:          unavailable (stats DB query timed out)"
+
 // formatSessionLatency renders this session's call count and slowest calls from
 // the global stats DB, scoped by session id (the session_id column equals the
 // value daemon_info holds, so the filter is exact). Returns "" when stats are
 // unavailable or this session has no recorded calls yet (e.g. daemon_info is the
 // first call of the session).
 func formatSessionLatency(sessID string) string {
+	return runWithTimeout(
+		func() string { return formatSessionLatencySync(sessID) },
+		sessionLatencyTimeout, sessionLatencyTimeoutMsg,
+	)
+}
+
+// runWithTimeout invokes fn on a goroutine and returns either its result or
+// timeoutMsg if fn does not return within timeout. The send channel is buffered
+// so the producer never leaks on the timeout path.
+func runWithTimeout(fn func() string, timeout time.Duration, timeoutMsg string) string {
 	done := make(chan string, 1)
-	go func() {
-		done <- formatSessionLatencySync(sessID)
-	}()
+	go func() { done <- fn() }()
 	select {
 	case out := <-done:
 		return out
-	case <-time.After(250 * time.Millisecond):
-		return "\nstats:          unavailable (stats DB query timed out)"
+	case <-time.After(timeout):
+		return timeoutMsg
 	}
 }
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.18 (2026-05-28)
+
+### Changed
+- **The 0.8.17 LSP watcher now also excludes Rust `target/` and Maven/Gradle `out/`.** The original exclude regex covered `vendor`/`node_modules`/`testdata`/`dist`/`build`/`__pycache__` (and hidden dirs), but a Rust `cargo build` or a Java `out/` rebuild can churn thousands of files and would have flooded the LSP watcher loop with `workspace/didChangeWatchedFiles` notifications for paths the language server has no interest in. Both names are now skipped in `lsp_watcher.go`'s shared exclude regex and in the per-path `lspWatchShouldSkipPath` defence-in-depth filter.
+- **`daemon_info`'s 250 ms timeout is now wrapped behind a tiny testable helper.** `formatSessionLatency` extracted its goroutine + select-with-timeout pattern into `runWithTimeout(fn, timeout, sentinel)`, with `sessionLatencyTimeout`/`sessionLatencyTimeoutMsg` constants pinned by a guard test (`TestSessionLatencyTimeoutConstants`). No behavioural change; the timeout branch is now directly tested (`TestRunWithTimeout_ReturnsSentinelOnTimeout`) instead of inferred from the happy path.
+- **`routingInvProxy` carries a compile-time contract for `timedDiagnosticsSource`.** The 0.8.12 staleness annotation in the `diagnostics` tool relies on a type assertion against an interface defined in `internal/tools/`; a refactor that dropped any of the four methods on `routingInvProxy` would silently degrade to plain (no-staleness) formatting with no test failure. A local `timedDiagnosticsContract` mirror interface in `routing_proxy.go` is now compile-time-asserted via `var _ = (*routingInvProxy)(nil)`, so the consumer contract fails at build time on drift.
+
+### Added
+- **Dedicated test files for the 0.8.17 daemon-stability changes.** Closes the test-coverage gap flagged in the review of `todo-to-review.md`'s 0.8.17 entry — the headline pieces shipped without focused tests:
+  - `internal/cli/lsp_watcher_test.go`: `TestLSPWatchShouldSkipPath` (table covering `.git`/`.plumb`/hidden/vendor/build/target/out/etc.), `TestLSPFileChangeType` (Remove > Create > Change precedence), `TestLSPWatchHasOverflow`, `TestLSPFSWatcher_StartStopLifecycle` (idempotent Stop, no goroutine leak), `TestLSPFSWatcher_NoClient_NoCrash` (warm-up safety with a nil-published proxy).
+  - `internal/cli/stats_store_test.go`: `TestStatsStore_RecordReturnsFast` (50 enqueues complete in well under the per-call BUSY floor), `TestStatsStore_CloseDrainsInFlight` (every Record before Close is visible after Close returns), `TestStatsStore_RecordAfterCloseDropped`, `TestStatsStore_ConcurrentRecord` (8×20 racing writers all land).
+  - `internal/cli/routing_proxy_watched_test.go`: `TestRoutingProxy_DidChangeWatchedFiles_SkipsLanguageNone` (the 0.8.17 regression guard — a `.git`-only LanguageNone workspace's events do not reach the primary client and do not log `acquiring none ...`), `_GroupsByWorkspace` (multi-workspace batches dispatch correctly), `_EmptyBatchIsNoOp`.
+  - `internal/tools/daemon_info_test.go`: `TestRunWithTimeout_ReturnsResultBeforeTimeout`, `TestRunWithTimeout_ReturnsSentinelOnTimeout` (slow producer abandoned within the bound), `TestSessionLatencyTimeoutConstants` (anti-drift pin on the 250 ms value).
+- **Dedicated test for the 0.8.12 workspace-root filter.** `internal/cli/routing_inv_proxy_test.go`: `TestURIUnderRoot` table (exact match, nested child, sibling-prefix false positive, file://-stripped path, trailing-slash root, no-root no-op), `TestRoutingInvProxy_AllDiagnostics_FiltersOutOfRoot` (the headline 0.8.12 regression case — a transitive-analysis URI outside the workspace root is dropped from `AllDiagnostics`), `TestRoutingInvProxy_AllDiagnosticTimes_FiltersOutOfRoot` (same guard on the staleness path), `TestRoutingInvProxy_AllDiagnostics_NoPrimary` (nil-safe before `setPrimary`).
+
 ## 0.8.17 (2026-05-28)
 
 ### Added

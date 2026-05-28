@@ -17,7 +17,7 @@ import (
 const (
 	lspWatchCooldown = 200 * time.Millisecond
 	// Directory-name regex only; no credentials are embedded here.
-	lspWatchExcludeRegex = `(^|/)(\.[^/]+|vendor|node_modules|testdata|dist|build|__pycache__)(/|$)` //nolint:gosec
+	lspWatchExcludeRegex = `(^|/)(\.[^/]+|vendor|node_modules|testdata|dist|build|target|out|__pycache__)(/|$)` //nolint:gosec
 )
 
 type lspFSWatcher struct {
@@ -120,7 +120,7 @@ func lspWatchShouldSkipPath(rel string) bool {
 			continue
 		}
 		switch part {
-		case ".git", ".plumb", "vendor", "node_modules", "testdata", "dist", "build", "__pycache__":
+		case ".git", ".plumb", "vendor", "node_modules", "testdata", "dist", "build", "target", "out", "__pycache__":
 			return true
 		}
 		if strings.HasPrefix(part, ".") {
