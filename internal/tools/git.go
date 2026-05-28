@@ -164,6 +164,7 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if tier != tierRead && !t.deps.Limiter.Allow() {
 		return "", rateLimitError("git", t.deps.Limiter)
 	}
+	a.Repo = t.defaultRepo(a.Repo)
 	if err := t.checkBoundary(a); err != nil {
 		return "", err
 	}
@@ -174,24 +175,26 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	return runGit(ctx, a.Repo, a.Subcommand, argv)
 }
 
-func (t *Git) checkBoundary(a gitToolArgs) error {
-	base := a.Repo
-	if base == "" && t.deps.WorkspaceFn != nil {
-		base = t.deps.WorkspaceFn()
+// defaultRepo returns repo, or the session workspace when repo is empty.
+// Keeps the git command targeted at the pinned project rather than the
+// daemon's cwd (shared across connections, may belong to another repository).
+func (t *Git) defaultRepo(repo string) string {
+	if repo != "" || t.deps.WorkspaceFn == nil {
+		return repo
 	}
+	return t.deps.WorkspaceFn()
+}
+
+func (t *Git) checkBoundary(a gitToolArgs) error {
 	if a.Repo != "" {
 		if err := t.deps.checkBoundary(a.Repo); err != nil {
-			return fmt.Errorf("git: %w", err)
-		}
-	} else if base != "" {
-		if err := t.deps.checkBoundary(base); err != nil {
 			return fmt.Errorf("git: %w", err)
 		}
 	}
 	for _, f := range a.Files {
 		path := f
-		if !filepath.IsAbs(path) && base != "" {
-			path = filepath.Join(base, path)
+		if !filepath.IsAbs(path) && a.Repo != "" {
+			path = filepath.Join(a.Repo, path)
 		}
 		if err := t.deps.checkBoundary(path); err != nil {
 			return fmt.Errorf("git: %w", err)

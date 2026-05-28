@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.20 (2026-05-28)
+
+### Fixed
+- **`routingInvProxy` now enforces the workspace boundary on URI-bearing diagnostics calls.** 0.8.19 wired the boundary into `routingProxy` for LSP query/edit calls and into the `diagnostics` tool at its entry, but `routingInvProxy.Diagnostics` / `Tracked` / `WaitDiagnostics` / `WaitNextDiagnostics` would still route a URI to whichever pool entry owned its workspace — relying entirely on the tool layer to reject out-of-bounds inputs. `routingInvProxy` now carries the same boundary guard as `routingProxy`: the slice/bool returns silently come back empty for out-of-bounds URIs (defence-in-depth — the diagnostics tool is the user-facing rejector), and `WaitDiagnostics` / `WaitNextDiagnostics` propagate the boundary error. `internal/cli/routing_proxy.go`, `internal/cli/conn.go`.
+- **The `git` tool now defaults `repo` to the pinned session workspace when omitted.** Previously, a bare `git status` / `git diff` checked the workspace path against the boundary (which trivially passed) but then ran `git` against the daemon's cwd — a path shared across connections that often belonged to a *different* repository, so the boundary check validated a path the command never used. The defaulting happens before both `checkBoundary` and `runGit`, so a no-`repo` call now operates on the session's project. Extracted into `Git.defaultRepo` to keep `Git.Execute` under gocyclo-15. `internal/tools/git.go`.
+
+### Changed
+- **`IsWorkspaceBoundaryError` no longer falls back to substring matching.** The 0.8.19 helper combined `errors.As` with a `strings.Contains(err.Error(), "workspace boundary violation")` net "in case" the wrapping was broken — but all call sites already wrap with `%w`, so `errors.As` alone is the contract. The substring fallback risked false-positives on unrelated errors that echo the phrase, and the call-site wrapping discipline catches the real cases. `internal/tools/boundary.go`.
+- **`markBoundaryViolation` documents why blocked sessions are sticky-not-terminating.** Each offending tool call already gets a `WorkspaceBoundaryError` back — that is the per-call enforcement contract. The `Health: blocked` flag is observability for the TUI and the dashboard alert; legitimate calls inside the pinned workspace keep working. A single confused tool call should not tear down an otherwise-working session, so the connection context is **not** cancelled on violation. `internal/cli/conn.go`.
+- **`rename_symbol.Execute` extracted its boundary-check loops into `collectRenameTargets`.** The 0.8.19 hardening added boundary checks for every URI in `WorkspaceEdit.Changes` / `DocumentChanges`, which pushed `Execute` to gocyclo 16. Splitting the URI walk into a helper restores gocyclo-15 without changing behaviour; every output URI is still validated before any edit is applied. `internal/tools/rename_symbol.go`.
+
+### Added
+- **`AGENTS.md` documents the single-workspace-per-connection contract.** Closes the 0.8.19 reviewer-focus item on public-facing docs: agents and users now have a brief in the workspace-detection section explaining that a fresh chat does not guarantee a fresh MCP connection, that out-of-workspace paths are intentionally refused after pinning, and that `Health: blocked` is observability (legitimate in-workspace calls keep working).
+
 ## 0.8.19 (2026-05-28)
 
 ### Fixed

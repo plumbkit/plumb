@@ -203,6 +203,15 @@ func (s *connSession) workspaceBoundaryGuard(path string) error {
 	return err
 }
 
+// markBoundaryViolation records the violation on the session record and is
+// deliberately sticky-not-terminating: each offending tool call already gets a
+// WorkspaceBoundaryError back, which is the per-call enforcement contract.
+// "Health: blocked" + HealthMessage is observability — the TUI and the
+// dashboard alert ("start a new MCP connection") surface it for the operator,
+// while legitimate calls inside the pinned workspace keep working. We do not
+// cancel s.ctx here: a single confused tool call (e.g. an agent fumbling a
+// path) should not tear down an otherwise-working session, and the boundary
+// error is informative enough for the caller to course-correct.
 func (s *connSession) markBoundaryViolation(message string) {
 	if message == "" {
 		return
@@ -793,6 +802,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	topoFn := s.topologyStoreLive
 	boundary := s.workspaceBoundaryGuard
 	s.sessionProxy.setBoundaryGuard(boundary)
+	s.sessionInv.setBoundaryGuard(boundary)
 	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))

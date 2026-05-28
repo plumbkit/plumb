@@ -340,10 +340,37 @@ type routingInvProxy struct {
 	mu          sync.RWMutex
 	primaryRoot string
 	primary     *cache.Invalidator
+	guard       func(string) error
 }
 
 func newRoutingInvProxy(pool *workspacePool) *routingInvProxy {
 	return &routingInvProxy{pool: pool}
+}
+
+// setBoundaryGuard wires the per-connection workspace boundary guard. Mirrors
+// routingProxy.setBoundaryGuard so cross-workspace diagnostics queries cannot
+// reach another acquired adapter through the routing fallback path. Defence in
+// depth: the diagnostics tool already enforces the boundary at its entry.
+func (r *routingInvProxy) setBoundaryGuard(guard func(string) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.guard = guard
+}
+
+// checkURI applies the boundary guard to uri's path. Empty uri is allowed
+// (callers treat "" as the workspace-aggregate request). Returns nil when no
+// guard is set or when uri is in-bounds.
+func (r *routingInvProxy) checkURI(uri string) error {
+	if uri == "" {
+		return nil
+	}
+	r.mu.RLock()
+	guard := r.guard
+	r.mu.RUnlock()
+	if guard == nil {
+		return nil
+	}
+	return guard(strings.TrimPrefix(uri, "file://"))
 }
 
 // timedDiagnosticsContract mirrors internal/tools' timedDiagnosticsSource
@@ -378,6 +405,9 @@ func uriUnderRoot(uri, root string) bool {
 }
 
 func (r *routingInvProxy) Tracked(uri string) bool {
+	if err := r.checkURI(uri); err != nil {
+		return false
+	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
 	primary := r.primary
@@ -398,6 +428,9 @@ func (r *routingInvProxy) Tracked(uri string) bool {
 }
 
 func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
+	if err := r.checkURI(uri); err != nil {
+		return nil
+	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
 	primary := r.primary
@@ -468,6 +501,9 @@ func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
 }
 
 func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	if err := r.checkURI(uri); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
 	primary := r.primary
@@ -488,6 +524,9 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 }
 
 func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
+	if err := r.checkURI(uri); err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
 	primary := r.primary

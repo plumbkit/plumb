@@ -36,9 +36,13 @@ func NewWorkspaceBoundaryError(workspace, path string) error {
 	return WorkspaceBoundaryError{Workspace: workspace, Path: path}
 }
 
+// IsWorkspaceBoundaryError reports whether err (or anything wrapped in it via
+// %w) is a WorkspaceBoundaryError. All call sites wrap with %w, so errors.As
+// alone is the contract — do not add a substring fallback, as it would
+// false-positive on unrelated errors that happen to echo the message.
 func IsWorkspaceBoundaryError(err error) bool {
 	var boundaryErr WorkspaceBoundaryError
-	return err != nil && (errors.As(err, &boundaryErr) || strings.Contains(err.Error(), "workspace boundary violation"))
+	return errors.As(err, &boundaryErr)
 }
 
 // PathWithinWorkspace reports whether path stays inside workspace after best

@@ -102,6 +102,29 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 	}, nil
 }
 
+// collectRenameTargets walks both Changes and DocumentChanges in we, boundary-
+// checks every output URI before any edit is applied, and returns the unique
+// file list plus the total edit count for the response.
+func (t *RenameSymbol) collectRenameTargets(we *protocol.WorkspaceEdit) ([]string, int, error) {
+	totalEdits := 0
+	files := []string{}
+	for uri, edits := range we.Changes {
+		if err := t.guard.check(strings.TrimPrefix(uri, "file://")); err != nil {
+			return nil, 0, fmt.Errorf("rename_symbol: %w", err)
+		}
+		totalEdits += len(edits)
+		files = append(files, strings.TrimPrefix(uri, "file://"))
+	}
+	for _, dce := range we.DocumentChanges {
+		if err := t.guard.check(strings.TrimPrefix(dce.TextDocument.URI, "file://")); err != nil {
+			return nil, 0, fmt.Errorf("rename_symbol: %w", err)
+		}
+		totalEdits += len(dce.Edits)
+		files = append(files, strings.TrimPrefix(dce.TextDocument.URI, "file://"))
+	}
+	return files, totalEdits, nil
+}
+
 func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	a, err := parseRenameSymbolArgs(args)
 	if err != nil {
@@ -126,21 +149,9 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 		return "No changes — rename returned an empty edit set (symbol may not be renameable here).", nil
 	}
 
-	totalEdits := 0
-	files := []string{}
-	for uri, edits := range we.Changes {
-		if err := t.guard.check(strings.TrimPrefix(uri, "file://")); err != nil {
-			return "", fmt.Errorf("rename_symbol: %w", err)
-		}
-		totalEdits += len(edits)
-		files = append(files, strings.TrimPrefix(uri, "file://"))
-	}
-	for _, dce := range we.DocumentChanges {
-		if err := t.guard.check(strings.TrimPrefix(dce.TextDocument.URI, "file://")); err != nil {
-			return "", fmt.Errorf("rename_symbol: %w", err)
-		}
-		totalEdits += len(dce.Edits)
-		files = append(files, strings.TrimPrefix(dce.TextDocument.URI, "file://"))
+	files, totalEdits, err := t.collectRenameTargets(we)
+	if err != nil {
+		return "", err
 	}
 	sort.Strings(files)
 
