@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/session"
 )
 
 func TestSeedPathFromArgs(t *testing.T) {
@@ -381,6 +383,70 @@ func TestNewConnSession_ContextWiring(t *testing.T) {
 	})
 }
 
+func TestIdleReaperEvictsLiveConnection(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg := config.Defaults()
+	cfg.Session.EvictionTTLMinutes = 1
+	store := config.NewStore(cfg)
+	pool := detectTestPool()
+	registry := newConnRegistry()
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		handleConn(context.Background(), serverConn, pool, nil, store, nil, time.Now(), &sync.Map{}, registry)
+		close(done)
+	}()
+
+	var sessID string
+	deadline := time.After(time.Second)
+	for sessID == "" {
+		registry.mu.Lock()
+		for id := range registry.conns {
+			sessID = id
+			break
+		}
+		registry.mu.Unlock()
+		if sessID != "" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("connection was not registered")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("session dir: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, sessID+".json"), old, old); err != nil {
+		t.Fatalf("age session file: %v", err)
+	}
+
+	reaperCtx, cancelReaper := context.WithCancel(context.Background())
+	defer cancelReaper()
+	ticks := make(chan time.Time)
+	go runIdleReaper(reaperCtx, store, registry, ticks)
+	ticks <- time.Now()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("idle reaper did not make handleConn return")
+	}
+	active, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("idle-evicted session still listed active: %#v", active)
+	}
+}
+
 // TestShutdownHardDeadlineExceedsInnerGraces guards that the shutdown watchdog
 // stays a genuine last resort: it must allow the sequential bounded teardown
 // (connection drain + pool.close handshake) to finish with headroom for the
@@ -390,5 +456,11 @@ func TestShutdownHardDeadlineExceedsInnerGraces(t *testing.T) {
 	if shutdownHardDeadline <= acceptDrainGrace+poolCloseGrace {
 		t.Fatalf("shutdownHardDeadline (%s) must exceed acceptDrainGrace+poolCloseGrace (%s) so the watchdog does not trip during a slow-but-normal shutdown",
 			shutdownHardDeadline, acceptDrainGrace+poolCloseGrace)
+	}
+}
+
+func TestDaemonStopWaitExceedsShutdownHardDeadline(t *testing.T) {
+	if daemonStopWait <= shutdownHardDeadline {
+		t.Fatalf("daemonStopWait (%s) must exceed shutdownHardDeadline (%s)", daemonStopWait, shutdownHardDeadline)
 	}
 }

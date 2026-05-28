@@ -190,6 +190,11 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 	}
 	groups := make(map[lsp.Client][]protocol.FileEvent, 1)
 	for _, ev := range params.Changes {
+		path := strings.TrimPrefix(ev.URI, "file://")
+		_, language, err := r.pool.Detect(filepath.Dir(path))
+		if err == nil && language == LanguageNone {
+			continue
+		}
 		c, err := r.route(ctx, ev.URI)
 		if err != nil {
 			return err

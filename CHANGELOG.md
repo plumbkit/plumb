@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.17 (2026-05-28)
+
+### Added
+- **LSP adapters now receive live filesystem change notifications for external edits.** Each acquired workspace starts an OS-level watcher that sends `DidChangeWatchedFiles` to the workspace's language-server proxy when files are created, changed, or deleted outside plumb's write tools, with common generated/hidden directories excluded and watcher cleanup wired into pool teardown. The routing proxy now skips `LanguageNone` paths when batching watched-file notifications so non-LSP workspaces do not poison a multi-file change batch. `internal/cli/lsp_watcher.go`, `internal/cli/pool.go`, `internal/cli/routing_proxy.go`.
+
+### Fixed
+- **Session registry updates now serialize read-modify-write operations across processes.** The 0.8.15 fix made session JSON writes atomic, preventing torn files, but `Patch`/`Rename`/`Unregister`/`List` still performed unlocked read-modify-write cycles. Concurrent metadata updates from the daemon and TUI could therefore overwrite each other even though each individual rename was atomic. Mutating session operations now take a session-directory `flock` before reading and writing, while preserving the existing temp-file + rename write path. `List` also marks crashed sessions ended under the same lock instead of recursively calling `Patch`. Guard: `TestSessionPatchesSerializeReadModifyWrite`. `internal/session/session.go`.
+- **Idle eviction now has an end-to-end guard proving the reaper closes a live connection.** The reaper loop is factored behind an injectable tick channel for tests, and `TestIdleReaperEvictsLiveConnection` drives a real `handleConn` over a `net.Pipe`, ages the session file past the TTL, ticks the reaper, and asserts `handleConn` returns and the session no longer lists as active. This closes the 0.8.15 review gap where only context wiring was unit-tested. `internal/cli/daemon.go`.
+- **`plumb stop` now waits longer than the daemon shutdown watchdog before warning.** `stopByPID` previously warned after a fixed 5 seconds while the daemon's internal `shutdownHardDeadline` is 8 seconds, so a slow-but-normal shutdown could look suspicious even though the daemon was still inside its own bounded graceful path. The stop wait is now derived from `shutdownHardDeadline + 1s`, and the warning prints the actual wait. Guard: `TestDaemonStopWaitExceedsShutdownHardDeadline`. `internal/cli/stop.go`.
+- **`daemon_info` can no longer hang indefinitely on a slow stats query, and tool-call stats recording no longer blocks the tool response path.** Session latency formatting now runs behind a 250 ms timeout and reports stats as temporarily unavailable if the DB is slow; stats recording is dispatched asynchronously with shutdown draining so `Close` waits for in-flight writes before closing the DB. `internal/tools/daemon_info.go`, `internal/cli/stats_store.go`.
+
 ## 0.8.16 (2026-05-28)
 
 ### Added

@@ -286,7 +286,11 @@ func findPIDViaSocket(socketPath string) int {
 	return 0
 }
 
-// stopByPID sends SIGTERM to pid and waits up to 5 seconds for it to exit.
+// daemonStopWait must stay longer than shutdownHardDeadline so the daemon's
+// own watchdog wins the race before the CLI warns about a slow graceful stop.
+const daemonStopWait = shutdownHardDeadline + time.Second
+
+// stopByPID sends SIGTERM to pid and waits up to daemonStopWait for it to exit.
 func stopByPID(pid int, leadingBlank bool) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil || proc.Signal(syscall.Signal(0)) != nil {
@@ -303,7 +307,7 @@ func stopByPID(pid int, leadingBlank bool) error {
 		fmt.Println()
 	}
 	fmt.Printf("Stopping daemon (PID %d) ...", pid)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(daemonStopWait)
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 		if proc.Signal(syscall.Signal(0)) != nil {
@@ -313,7 +317,7 @@ func stopByPID(pid int, leadingBlank bool) error {
 		fmt.Print(".")
 	}
 	fmt.Println()
-	fmt.Printf("Warning: daemon (PID %d) did not stop within 5 seconds; it may still be running.\n", pid)
+	fmt.Printf("Warning: daemon (PID %d) did not stop within %s; it may still be running.\n", pid, daemonStopWait)
 	return nil
 }
 

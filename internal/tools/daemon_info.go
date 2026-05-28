@@ -113,6 +113,19 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 // unavailable or this session has no recorded calls yet (e.g. daemon_info is the
 // first call of the session).
 func formatSessionLatency(sessID string) string {
+	done := make(chan string, 1)
+	go func() {
+		done <- formatSessionLatencySync(sessID)
+	}()
+	select {
+	case out := <-done:
+		return out
+	case <-time.After(250 * time.Millisecond):
+		return "\nstats:          unavailable (stats DB query timed out)"
+	}
+}
+
+func formatSessionLatencySync(sessID string) string {
 	if sessID == "" {
 		return ""
 	}

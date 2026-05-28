@@ -310,6 +310,21 @@ func (r *connRegistry) evictIdle(ttl time.Duration) {
 // reaperInterval is how often the idle-session reaper runs.
 const reaperInterval = 5 * time.Minute
 
+func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegistry, ticks <-chan time.Time) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-ticks:
+			if !ok {
+				return
+			}
+			ttlMin := store.Current().Session.EvictionTTLMinutes
+			registry.evictIdle(time.Duration(ttlMin) * time.Minute)
+		}
+	}
+}
+
 func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
 	var wg sync.WaitGroup
 	registry := newConnRegistry()
@@ -319,15 +334,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 	go func() {
 		ticker := time.NewTicker(reaperInterval)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				ttlMin := store.Current().Session.EvictionTTLMinutes
-				registry.evictIdle(time.Duration(ttlMin) * time.Minute)
-			}
-		}
+		runIdleReaper(ctx, store, registry, ticker.C)
 	}()
 
 	go func() {

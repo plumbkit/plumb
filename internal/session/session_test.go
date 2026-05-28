@@ -81,6 +81,77 @@ func TestWriteSessionFileAtomic_NoTornReads(t *testing.T) {
 	}
 }
 
+func TestSessionPatchesSerializeReadModifyWrite(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	id, err := session.Register(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	firstEntered := make(chan struct{})
+	firstRelease := make(chan struct{})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		session.Patch(id, func(in *session.Info) {
+			close(firstEntered)
+			<-firstRelease
+			in.ClientName = "codex"
+		})
+	}()
+
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first patch did not enter")
+	}
+
+	secondEntered := make(chan struct{})
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		session.Patch(id, func(in *session.Info) {
+			close(secondEntered)
+			in.ExternalID = "agent-1"
+		})
+	}()
+
+	select {
+	case <-secondEntered:
+		t.Fatal("second patch entered while first patch held the session lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(firstRelease)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first patch did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second patch did not finish")
+	}
+
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	var got session.Info
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal session: %v", err)
+	}
+	if got.ClientName != "codex" || got.ExternalID != "agent-1" {
+		t.Fatalf("patches lost updates: ClientName=%q ExternalID=%q", got.ClientName, got.ExternalID)
+	}
+}
+
 func TestRegisterUnregister(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 

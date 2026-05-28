@@ -11,8 +11,10 @@ import (
 //
 // Concurrency: safe for concurrent Record / RenameSession / Close.
 type statsStore struct {
-	mu  sync.Mutex
-	dbs map[string]*stats.DB
+	mu      sync.Mutex
+	dbs     map[string]*stats.DB
+	closing bool
+	wg      sync.WaitGroup
 }
 
 func newStatsStore() *statsStore {
@@ -24,6 +26,20 @@ func (s *statsStore) Record(workspace string, call stats.Call) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		s.recordSync(workspace, call)
+	}()
+}
+
+func (s *statsStore) recordSync(workspace string, call stats.Call) {
 	s.mu.Lock()
 	db, ok := s.dbs["global"]
 	if !ok {
@@ -77,6 +93,10 @@ func (s *statsStore) Close() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	s.wg.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, db := range s.dbs {

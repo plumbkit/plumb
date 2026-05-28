@@ -61,6 +61,7 @@ type poolEntry struct {
 	inv      *cache.Invalidator
 	cache    *cache.Cache
 	sup      *lsp.Supervisor
+	watcher  *lspFSWatcher
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that
@@ -330,6 +331,12 @@ func (p *workspacePool) startOrReuse(root, language string) (*poolEntry, <-chan 
 		return nil, nil, fmt.Errorf("starting %s for %s: %w", language, root, err)
 	}
 	e.sup = sup
+	if watcher, err := newLSPFSWatcher(root, proxy); err != nil {
+		slog.Warn("lsp: file watcher unavailable", "root", root, "language", language, "err", err)
+	} else {
+		e.watcher = watcher
+		watcher.Start()
+	}
 	p.entries[root] = e
 	slog.Info("pool: new workspace (warming)", "root", root, "language", language)
 	return e, readyCh, nil
@@ -391,6 +398,9 @@ func (p *workspacePool) removeFailed(root string, e *poolEntry) {
 	p.mu.Unlock()
 	if e.sup != nil {
 		e.sup.Stop()
+	}
+	if e.watcher != nil {
+		e.watcher.Stop()
 	}
 	if e.cache != nil {
 		e.cache.Close()
@@ -525,6 +535,9 @@ func closeEntry(ctx context.Context, e *poolEntry) {
 	}
 	if e.sup != nil {
 		e.sup.Stop()
+	}
+	if e.watcher != nil {
+		e.watcher.Stop()
 	}
 	if e.cache != nil {
 		e.cache.Close()

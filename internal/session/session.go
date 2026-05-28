@@ -9,8 +9,10 @@
 //
 // Concurrency: Register / Unregister / Patch / List are safe to call from any
 // goroutine and from multiple processes at once (the daemon reaper and the TUI
-// refresh both call List). Every write goes through writeSessionFileAtomic
-// (temp file + rename), so a concurrent reader never observes a torn file.
+// refresh both call List). Mutating operations take a session-directory flock
+// before writing; every JSON write then goes through writeSessionFileAtomic
+// (temp file + rename), so concurrent writers do not lose read-modify-write
+// updates and concurrent readers never observe a torn file.
 package session
 
 import (
@@ -87,10 +89,28 @@ func Register(info Info) (string, error) {
 		info.StartedAt = time.Now()
 	}
 	path := filepath.Join(dir, info.ID+".json")
-	if err := writeSessionFileAtomic(path, info); err != nil {
+	if err := withSessionDirLock(dir, func() error {
+		return writeSessionFileAtomic(path, info)
+	}); err != nil {
 		return "", fmt.Errorf("writing session file: %w", err)
 	}
 	return info.ID, nil
+}
+
+func withSessionDirLock(dir string, fn func() error) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, ".sessions.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	return fn()
 }
 
 // writeSessionFileAtomic marshals info and writes it to path atomically (temp
@@ -136,17 +156,22 @@ func Rename(id, name string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, id+".json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("reading session file: %w", err)
-	}
-	var info Info
-	if err := json.Unmarshal(data, &info); err != nil {
-		return "", fmt.Errorf("decoding session file: %w", err)
-	}
-	info.Name = name
-	if err := writeSessionFileAtomic(path, info); err != nil {
-		return "", fmt.Errorf("writing session file: %w", err)
+	if err := withSessionDirLock(dir, func() error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading session file: %w", err)
+		}
+		var info Info
+		if err := json.Unmarshal(data, &info); err != nil {
+			return fmt.Errorf("decoding session file: %w", err)
+		}
+		info.Name = name
+		if err := writeSessionFileAtomic(path, info); err != nil {
+			return fmt.Errorf("writing session file: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return "", err
 	}
 	return name, nil
 }
@@ -159,16 +184,18 @@ func Patch(id string, fn func(*Info)) {
 		return
 	}
 	path := filepath.Join(dir, id+".json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	var info Info
-	if err := json.Unmarshal(data, &info); err != nil {
-		return
-	}
-	fn(&info)
-	_ = writeSessionFileAtomic(path, info)
+	_ = withSessionDirLock(dir, func() error {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var info Info
+		if err := json.Unmarshal(data, &info); err != nil {
+			return err
+		}
+		fn(&info)
+		return writeSessionFileAtomic(path, info)
+	})
 }
 
 // SetClient updates the ClientName and ClientVersion fields of the session
@@ -189,7 +216,9 @@ func Touch(id string) {
 		return
 	}
 	now := time.Now()
-	_ = os.Chtimes(filepath.Join(dir, id+".json"), now, now)
+	_ = withSessionDirLock(dir, func() error {
+		return os.Chtimes(filepath.Join(dir, id+".json"), now, now)
+	})
 }
 
 // SetExternalID persists an opaque external identifier (e.g. an agent
@@ -270,45 +299,51 @@ func List() ([]Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading session dir: %w", err)
-	}
-
 	var infos []Info
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	if err := withSessionDirLock(dir, func() error {
+		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) {
+			return nil
 		}
-		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			return fmt.Errorf("reading session dir: %w", err)
 		}
-		var info Info
-		if err := json.Unmarshal(data, &info); err != nil {
-			continue
-		}
-		if !info.EndedAt.IsZero() {
-			// Ended session — keep for grace period, then remove.
-			if time.Since(info.EndedAt) > endedSessionGrace {
-				_ = os.Remove(path)
+
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".json") {
+				continue
 			}
-			continue
+			path := filepath.Join(dir, e.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var info Info
+			if err := json.Unmarshal(data, &info); err != nil {
+				continue
+			}
+			if !info.EndedAt.IsZero() {
+				// Ended session — keep for grace period, then remove.
+				if time.Since(info.EndedAt) > endedSessionGrace {
+					_ = os.Remove(path)
+				}
+				continue
+			}
+			if !pidAlive(info.PID) {
+				// Daemon crashed without calling Unregister — mark ended now.
+				info.EndedAt = time.Now()
+				_ = writeSessionFileAtomic(path, info)
+				continue
+			}
+			// Populate LastSeenAt from the file's mtime (Touch uses os.Chtimes).
+			if fi, err := os.Stat(path); err == nil {
+				info.LastSeenAt = fi.ModTime()
+			}
+			infos = append(infos, info)
 		}
-		if !pidAlive(info.PID) {
-			// Daemon crashed without calling Unregister — mark ended now.
-			Patch(info.ID, func(i *Info) { i.EndedAt = time.Now() })
-			continue
-		}
-		// Populate LastSeenAt from the file's mtime (Touch uses os.Chtimes).
-		if fi, err := os.Stat(path); err == nil {
-			info.LastSeenAt = fi.ModTime()
-		}
-		infos = append(infos, info)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	sort.Slice(infos, func(i, j int) bool {
