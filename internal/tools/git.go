@@ -164,11 +164,40 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if tier != tierRead && !t.deps.Limiter.Allow() {
 		return "", rateLimitError("git", t.deps.Limiter)
 	}
+	if err := t.checkBoundary(a); err != nil {
+		return "", err
+	}
 	argv, err := buildGitArgv(a)
 	if err != nil {
 		return "", err
 	}
 	return runGit(ctx, a.Repo, a.Subcommand, argv)
+}
+
+func (t *Git) checkBoundary(a gitToolArgs) error {
+	base := a.Repo
+	if base == "" && t.deps.WorkspaceFn != nil {
+		base = t.deps.WorkspaceFn()
+	}
+	if a.Repo != "" {
+		if err := t.deps.checkBoundary(a.Repo); err != nil {
+			return fmt.Errorf("git: %w", err)
+		}
+	} else if base != "" {
+		if err := t.deps.checkBoundary(base); err != nil {
+			return fmt.Errorf("git: %w", err)
+		}
+	}
+	for _, f := range a.Files {
+		path := f
+		if !filepath.IsAbs(path) && base != "" {
+			path = filepath.Join(base, path)
+		}
+		if err := t.deps.checkBoundary(path); err != nil {
+			return fmt.Errorf("git: %w", err)
+		}
+	}
+	return nil
 }
 
 func parseGitArgs(raw json.RawMessage) (gitToolArgs, error) {

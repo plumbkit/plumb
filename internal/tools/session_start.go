@@ -75,6 +75,7 @@ type SessionStart struct {
 	gitPolicyFn  func() GitPolicy       // may be nil; git policy section skipped when nil
 	lspLangFn    func() string          // may be nil; the LSP language attached to this session ("" when none)
 	externalIDFn func(id string) string // may be nil; links session to external ID, returns inherited name
+	pinConflict  func(requested string) // may be nil; records a same-connection workspace switch attempt
 }
 
 // WithTopology wires the topology store accessor so session_start can lead its
@@ -107,6 +108,14 @@ func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
 // Returns the receiver for chaining.
 func (t *SessionStart) WithExternalID(fn func(id string) string) *SessionStart {
 	t.externalIDFn = fn
+	return t
+}
+
+// WithPinConflict wires a callback invoked when the caller asks session_start
+// to switch an already-pinned connection to a different workspace. The tool
+// still returns an error; the callback is for session health/observability.
+func (t *SessionStart) WithPinConflict(fn func(requested string)) *SessionStart {
+	t.pinConflict = fn
 	return t
 }
 
@@ -188,6 +197,9 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	if t.ws != nil {
 		if ws := t.ws(); ws != "" {
 			if a.Workspace != "" && filepath.Clean(a.Workspace) != filepath.Clean(ws) {
+				if t.pinConflict != nil {
+					t.pinConflict(a.Workspace)
+				}
 				return "", fmt.Errorf(
 					"session_start: workspace is already pinned to %s — cannot re-pin to %s in the same connection. To switch projects, start a new MCP connection",
 					ws, a.Workspace,

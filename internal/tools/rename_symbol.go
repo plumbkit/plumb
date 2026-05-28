@@ -29,10 +29,16 @@ Recovery options:
 type RenameSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
+	guard   BoundaryGuard
 }
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
 	return &RenameSymbol{client: client, timeout: timeout}
+}
+
+func (t *RenameSymbol) WithBoundary(guard BoundaryGuard) *RenameSymbol {
+	t.guard = guard
+	return t
 }
 
 func (*RenameSymbol) Name() string { return "rename_symbol" }
@@ -101,6 +107,9 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
+	if err := t.guard.check(strings.TrimPrefix(a.URI, "file://")); err != nil {
+		return "", fmt.Errorf("rename_symbol: %w", err)
+	}
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
@@ -120,10 +129,16 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	totalEdits := 0
 	files := []string{}
 	for uri, edits := range we.Changes {
+		if err := t.guard.check(strings.TrimPrefix(uri, "file://")); err != nil {
+			return "", fmt.Errorf("rename_symbol: %w", err)
+		}
 		totalEdits += len(edits)
 		files = append(files, strings.TrimPrefix(uri, "file://"))
 	}
 	for _, dce := range we.DocumentChanges {
+		if err := t.guard.check(strings.TrimPrefix(dce.TextDocument.URI, "file://")); err != nil {
+			return "", fmt.Errorf("rename_symbol: %w", err)
+		}
 		totalEdits += len(dce.Edits)
 		files = append(files, strings.TrimPrefix(dce.TextDocument.URI, "file://"))
 	}

@@ -98,6 +98,9 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 	applyFindReplaceDefaults(&a)
+	if err := t.deps.checkBoundary(a.Path); err != nil {
+		return "", fmt.Errorf("find_replace: %w", err)
+	}
 
 	re, err := compileFindReplaceRegex(a)
 	if err != nil {

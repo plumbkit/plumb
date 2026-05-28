@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.19 (2026-05-28)
+
+### Fixed
+- **MCP sessions now enforce their pinned workspace boundary across path-bearing tools.** Once a connection is attached to a workspace, file/list/search/write/git/memory/topology-status/LSP URI operations that point outside that root are rejected with a workspace-boundary error instead of silently operating in a second project. Boundary failures also mark the session health as `blocked` so the TUI can surface the incident.
+- **`session_start` pin conflicts now leave observable session state.** Asking an already-pinned connection to switch to a different workspace still returns the existing "already pinned" error, but now records the refused workspace switch in the session health message for review and troubleshooting.
+- **The Sessions list now shows detected project language separately from attached LSP language.** A Java/Maven project with `jdtls` disabled or unavailable now shows `java` instead of `?`; `?` is reserved for truly unknown language roots. Adapter labels now cover the non-Go/Python adapters too.
+
+### Added
+- **Regression tests for workspace isolation and language display.** Covers sibling-path rejection, symlink escape rejection for new files, `find_replace` no-write outside the pinned workspace, `session_start` pin-conflict callback, Java marker detection even when the adapter is disabled, and the TUI language-label fallback.
+
 ## 0.8.18 (2026-05-28)
 
 ### Changed

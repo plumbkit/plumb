@@ -81,6 +81,11 @@ func (m Model) dashboardWorkspaceStateAlert() string {
 		}
 	}
 	for _, s := range m.sessions {
+		if s.Health == "blocked" {
+			return "Workspace boundary violation blocked; start a new MCP connection"
+		}
+	}
+	for _, s := range m.sessions {
 		if m.dashProjectFolder != "" && s.Folder != m.dashProjectFolder {
 			continue
 		}

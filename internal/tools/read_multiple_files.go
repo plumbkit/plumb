@@ -29,9 +29,16 @@ var readMultipleFilesSchema = json.RawMessage(`{
 // file doesn't block the others.
 //
 // Concurrency: Execute is safe for concurrent use.
-type ReadMultipleFiles struct{}
+type ReadMultipleFiles struct {
+	guard BoundaryGuard
+}
 
 func NewReadMultipleFiles() *ReadMultipleFiles { return &ReadMultipleFiles{} }
+
+func (t *ReadMultipleFiles) WithBoundary(guard BoundaryGuard) *ReadMultipleFiles {
+	t.guard = guard
+	return t
+}
 
 func (*ReadMultipleFiles) Name() string                 { return "read_multiple_files" }
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
@@ -69,7 +76,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		err     error
 	}
 	results := make([]result, len(a.Paths))
-	reader := &ReadFile{}
+	reader := (&ReadFile{}).WithBoundary(t.guard)
 
 	sem := make(chan struct{}, readMultipleFilesParallelism)
 	var wg sync.WaitGroup

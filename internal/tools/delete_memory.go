@@ -9,10 +9,16 @@ import (
 )
 
 type deleteMemoryTool struct {
-	ws WorkspaceFn
+	ws    WorkspaceFn
+	guard BoundaryGuard
 }
 
 func NewDeleteMemory(ws WorkspaceFn) *deleteMemoryTool { return &deleteMemoryTool{ws: ws} }
+
+func (t *deleteMemoryTool) WithBoundary(guard BoundaryGuard) *deleteMemoryTool {
+	t.guard = guard
+	return t
+}
 
 func (*deleteMemoryTool) Name() string { return "delete_memory" }
 
@@ -48,6 +54,9 @@ func (t *deleteMemoryTool) Execute(_ context.Context, args json.RawMessage) (str
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
+	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("delete_memory: %w", err)
 	}
 	if err := memory.Delete(ws, a.Name); err != nil {
 		return "", err

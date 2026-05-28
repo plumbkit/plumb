@@ -146,6 +146,9 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	path := strings.TrimPrefix(a.Path, "file://")
+	if err := t.deps.checkBoundary(path); err != nil {
+		return "", fmt.Errorf("edit_file: %w", err)
+	}
 
 	// Per-path lock: serialise all concurrent writes to this path.
 	unlock := lockPath(path)

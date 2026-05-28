@@ -11,11 +11,17 @@ import (
 )
 
 type searchMemoriesTool struct {
-	ws WorkspaceFn
+	ws    WorkspaceFn
+	guard BoundaryGuard
 }
 
 func NewSearchMemories(ws WorkspaceFn) *searchMemoriesTool {
 	return &searchMemoriesTool{ws: ws}
+}
+
+func (t *searchMemoriesTool) WithBoundary(guard BoundaryGuard) *searchMemoriesTool {
+	t.guard = guard
+	return t
 }
 
 func (*searchMemoriesTool) Name() string { return "search_memories" }
@@ -58,6 +64,9 @@ func (t *searchMemoriesTool) Execute(_ context.Context, args json.RawMessage) (s
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
+	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("search_memories: %w", err)
 	}
 
 	caseSensitive := !allLower(a.Pattern)

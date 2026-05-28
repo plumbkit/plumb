@@ -63,9 +63,17 @@ var findFilesSchema = json.RawMessage(`{
 }`)
 
 // FindFiles implements fd-like recursive file/directory finding.
-type FindFiles struct{ ws WorkspaceFn }
+type FindFiles struct {
+	ws    WorkspaceFn
+	guard BoundaryGuard
+}
 
 func NewFindFiles(ws WorkspaceFn) *FindFiles { return &FindFiles{ws: ws} }
+
+func (t *FindFiles) WithBoundary(guard BoundaryGuard) *FindFiles {
+	t.guard = guard
+	return t
+}
 
 func (t *FindFiles) Name() string                 { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
@@ -118,7 +126,7 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	ctx, cancel := applyFindFilesDeadline(ctx)
 	defer cancel()
 
-	cfg, err := buildFindFilesConfig(a, t.ws)
+	cfg, err := buildFindFilesConfig(a, t.ws, t.guard)
 	if err != nil {
 		return "", err
 	}
@@ -170,8 +178,11 @@ func applyFindFilesDeadline(ctx context.Context) (context.Context, context.Cance
 	return ctx, func() {}
 }
 
-func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn) (findFilesConfig, error) {
+func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (findFilesConfig, error) {
 	root := resolvePath(a.Path, ws)
+	if err := guard.check(root); err != nil {
+		return findFilesConfig{}, fmt.Errorf("find_files: %w", err)
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return findFilesConfig{}, fmt.Errorf("find_files: path %q: %w", root, err)

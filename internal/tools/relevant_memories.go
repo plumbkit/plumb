@@ -11,11 +11,17 @@ import (
 )
 
 type relevantMemoriesTool struct {
-	ws WorkspaceFn
+	ws    WorkspaceFn
+	guard BoundaryGuard
 }
 
 func NewRelevantMemories(ws WorkspaceFn) *relevantMemoriesTool {
 	return &relevantMemoriesTool{ws: ws}
+}
+
+func (t *relevantMemoriesTool) WithBoundary(guard BoundaryGuard) *relevantMemoriesTool {
+	t.guard = guard
+	return t
 }
 
 func (*relevantMemoriesTool) Name() string { return "relevant_memories" }
@@ -55,10 +61,16 @@ func (t *relevantMemoriesTool) Execute(_ context.Context, args json.RawMessage) 
 	if ws == "" {
 		return "", noWorkspaceError()
 	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("relevant_memories: %w", err)
+	}
 
 	// Normalise to a workspace-relative path.
 	rel := a.Path
 	if filepath.IsAbs(a.Path) {
+		if err := t.guard.check(a.Path); err != nil {
+			return "", fmt.Errorf("relevant_memories: %w", err)
+		}
 		r, err := filepath.Rel(ws, a.Path)
 		if err != nil || strings.HasPrefix(r, "..") {
 			return fmt.Sprintf("path %s is not inside workspace %s", a.Path, ws), nil

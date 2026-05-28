@@ -9,10 +9,16 @@ import (
 )
 
 type writeMemoryTool struct {
-	ws WorkspaceFn
+	ws    WorkspaceFn
+	guard BoundaryGuard
 }
 
 func NewWriteMemory(ws WorkspaceFn) *writeMemoryTool { return &writeMemoryTool{ws: ws} }
+
+func (t *writeMemoryTool) WithBoundary(guard BoundaryGuard) *writeMemoryTool {
+	t.guard = guard
+	return t
+}
 
 func (*writeMemoryTool) Name() string { return "write_memory" }
 
@@ -57,6 +63,9 @@ func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (stri
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
+	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("write_memory: %w", err)
 	}
 	if err := memory.Write(ws, a.Name, a.Content, a.Description); err != nil {
 		return "", err

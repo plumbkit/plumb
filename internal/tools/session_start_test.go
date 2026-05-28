@@ -508,13 +508,18 @@ func TestSessionStart_DesktopGuidance(t *testing.T) {
 func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	t.Run("mismatch between attached root and explicit arg returns error", func(t *testing.T) {
 		attached := t.TempDir()
-		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil)
+		var conflict string
+		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+			WithPinConflict(func(requested string) { conflict = requested })
 		_, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"/some/other/path"}`))
 		if err == nil {
 			t.Fatal("want mismatch error when explicit workspace differs from attached root, got nil")
 		}
 		if !strings.Contains(err.Error(), "already pinned") {
 			t.Errorf("error should mention pinned workspace, got: %v", err)
+		}
+		if conflict != "/some/other/path" {
+			t.Fatalf("pin conflict callback = %q, want requested workspace", conflict)
 		}
 	})
 

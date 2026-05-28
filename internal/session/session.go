@@ -39,14 +39,19 @@ const IdleSessionThreshold = 30 * time.Minute
 
 // Info describes one active plumb serve instance.
 type Info struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name,omitempty"`
-	PID           int       `json:"pid"`
-	DaemonVersion string    `json:"daemon_version,omitempty"`
-	Language      string    `json:"language"`
-	Folder        string    `json:"folder"`
-	Adapter       string    `json:"adapter"`
-	StartedAt     time.Time `json:"started_at"`
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	PID           int    `json:"pid"`
+	DaemonVersion string `json:"daemon_version,omitempty"`
+	Language      string `json:"language"`
+	// DetectedLanguage is the project language inferred from root markers,
+	// independent of whether an LSP adapter is attached. Language remains the
+	// attached LSP language and may be "none" when the adapter is disabled or
+	// unavailable.
+	DetectedLanguage string    `json:"detected_language,omitempty"`
+	Folder           string    `json:"folder"`
+	Adapter          string    `json:"adapter"`
+	StartedAt        time.Time `json:"started_at"`
 	// LastSeenAt is populated by List from the session file's mtime.
 	// It is not stored in the JSON; Touch updates the mtime instead.
 	LastSeenAt time.Time `json:"-"`
@@ -59,6 +64,8 @@ type Info struct {
 	EndedAt       time.Time `json:"ended_at,omitempty"`
 	ClientName    string    `json:"client_name,omitempty"`
 	ClientVersion string    `json:"client_version,omitempty"`
+	Health        string    `json:"health,omitempty"`
+	HealthMessage string    `json:"health_message,omitempty"`
 	// Synthetic is true when the workspace root was inferred by the
 	// auto-attach fallback (git root or seed directory) rather than discovered
 	// via a standard project marker (.plumb/, go.mod, etc.).

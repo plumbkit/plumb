@@ -46,9 +46,17 @@ var excludedDirs = map[string]bool{
 // ListFiles walks a directory tree and returns matching file paths.
 //
 // Concurrency: Execute is safe for concurrent use.
-type ListFiles struct{ ws WorkspaceFn }
+type ListFiles struct {
+	ws    WorkspaceFn
+	guard BoundaryGuard
+}
 
 func NewListFiles(ws WorkspaceFn) *ListFiles { return &ListFiles{ws: ws} }
+
+func (t *ListFiles) WithBoundary(guard BoundaryGuard) *ListFiles {
+	t.guard = guard
+	return t
+}
 
 func (t *ListFiles) Name() string                 { return "list_files" }
 func (t *ListFiles) InputSchema() json.RawMessage { return listFilesSchema }
@@ -74,6 +82,9 @@ func (t *ListFiles) Execute(_ context.Context, raw json.RawMessage) (string, err
 		return "", err
 	}
 	root := filepath.Clean(resolvePath(a.Root, t.ws))
+	if err := t.guard.check(root); err != nil {
+		return "", fmt.Errorf("list_files: %w", err)
+	}
 	paths, err := listFilesWalk(root, a)
 	if err != nil {
 		return "", err

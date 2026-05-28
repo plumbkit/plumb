@@ -104,10 +104,16 @@ type SearchInFiles struct {
 	client   lsp.Client
 	symCache *cache.Cache
 	cacheTTL time.Duration
+	guard    BoundaryGuard
 }
 
 func NewSearchInFiles(ws WorkspaceFn, client lsp.Client, c *cache.Cache, ttl time.Duration) *SearchInFiles {
 	return &SearchInFiles{ws: ws, client: client, symCache: c, cacheTTL: ttl}
+}
+
+func (t *SearchInFiles) WithBoundary(guard BoundaryGuard) *SearchInFiles {
+	t.guard = guard
+	return t
 }
 
 func (t *SearchInFiles) Name() string                 { return "search_in_files" }
@@ -160,7 +166,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	ctx, cancel := applySearchDeadline(ctx)
 	defer cancel()
 
-	root, err := resolveSearchRoot(a, t.ws)
+	root, err := resolveSearchRoot(a, t.ws, t.guard)
 	if err != nil {
 		return "", err
 	}
@@ -220,8 +226,11 @@ func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFu
 	return ctx, func() {}
 }
 
-func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn) (string, error) {
+func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (string, error) {
 	root := resolvePath(a.Path, ws)
+	if err := guard.check(root); err != nil {
+		return "", fmt.Errorf("search_in_files: %w", err)
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return "", fmt.Errorf("search_in_files: path %q: %w", root, err)

@@ -38,9 +38,16 @@ const maxFileDiffBytes = 100 * 1024 // 100 KiB
 // No git repository is required.
 //
 // Concurrency: Execute is safe for concurrent use.
-type FileDiff struct{}
+type FileDiff struct {
+	guard BoundaryGuard
+}
 
 func NewFileDiff() *FileDiff { return &FileDiff{} }
+
+func (t *FileDiff) WithBoundary(guard BoundaryGuard) *FileDiff {
+	t.guard = guard
+	return t
+}
 
 func (t *FileDiff) Name() string                 { return "file_diff" }
 func (t *FileDiff) InputSchema() json.RawMessage { return fileDiffSchema }
@@ -64,6 +71,12 @@ func (t *FileDiff) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	if a.FileA == "" || a.FileB == "" {
 		return "", fmt.Errorf("file_diff: file_a and file_b are required")
+	}
+	if err := t.guard.check(a.FileA); err != nil {
+		return "", fmt.Errorf("file_diff: %w", err)
+	}
+	if err := t.guard.check(a.FileB); err != nil {
+		return "", fmt.Errorf("file_diff: %w", err)
 	}
 
 	contextLines := 3

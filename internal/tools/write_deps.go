@@ -59,6 +59,9 @@ type WriteDeps struct {
 	// requires dirty_ok. nil disables session-awareness (every dirty file then
 	// blocks unless dirty_ok is set).
 	Writes *WriteTracker
+	// Boundary rejects paths outside the workspace pinned to this MCP
+	// connection. nil disables boundary checks (tests / unattached sessions).
+	Boundary BoundaryGuard
 	// PostWriteDiagWindow is how long write/edit tools wait for the LSP
 	// server to re-publish diagnostics after a successful write. Zero means
 	// "use the 300 ms default" (back-compat for test setups that use
@@ -143,4 +146,8 @@ func (d WriteDeps) notifyTopology(path string) {
 	if d.TopologyNotify != nil {
 		d.TopologyNotify(path)
 	}
+}
+
+func (d WriteDeps) checkBoundary(path string) error {
+	return d.Boundary.check(path)
 }

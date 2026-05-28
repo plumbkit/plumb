@@ -34,6 +34,7 @@ type routingProxy struct {
 	mu          sync.RWMutex
 	primaryRoot string
 	primary     *clientProxy
+	guard       func(string) error
 }
 
 func newRoutingProxy(pool *workspacePool) *routingProxy {
@@ -41,6 +42,12 @@ func newRoutingProxy(pool *workspacePool) *routingProxy {
 		pool:    pool,
 		primary: &clientProxy{},
 	}
+}
+
+func (r *routingProxy) setBoundaryGuard(guard func(string) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.guard = guard
 }
 
 // setPrimary records the connection's primary workspace. Idempotent — only
@@ -73,6 +80,14 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 		return r.primaryClient()
 	}
 	path := strings.TrimPrefix(uri, "file://")
+	r.mu.RLock()
+	guard := r.guard
+	r.mu.RUnlock()
+	if guard != nil {
+		if err := guard(path); err != nil {
+			return nil, err
+		}
+	}
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil {
 		return r.primaryClient()

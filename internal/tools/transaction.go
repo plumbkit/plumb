@@ -132,7 +132,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		return "", err
 	}
 
-	paths, err := txCanonicalPaths(a.Operations)
+	paths, err := t.txCanonicalPaths(a.Operations)
 	if err != nil {
 		return "", err
 	}
@@ -196,11 +196,14 @@ func (t *TransactionApply) txCheckRateLimits(a transactionApplyArgs) error {
 }
 
 // txCanonicalPaths deduplicates and lexically sorts the operation paths.
-func txCanonicalPaths(ops []txOperation) ([]string, error) {
+func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error) {
 	paths := make([]string, 0, len(ops))
 	seen := make(map[string]struct{}, len(ops))
 	for _, op := range ops {
 		p := strings.TrimPrefix(op.Path, "file://")
+		if err := t.deps.checkBoundary(p); err != nil {
+			return nil, fmt.Errorf("transaction_apply: %w", err)
+		}
 		if _, dup := seen[p]; dup {
 			return nil, &editLogicErr{fmt.Errorf(
 				"transaction_apply: path %q appears in multiple operations — combine them into one operation with multiple edits", p,

@@ -53,6 +53,7 @@ type FileOutline struct {
 	ttl     time.Duration
 	timeout time.Duration
 	topo    topologyStoreFn
+	guard   BoundaryGuard
 }
 
 // NewFileOutline constructs the tool. It shares the documentSymbol cache key
@@ -65,6 +66,11 @@ func NewFileOutline(client lsp.Client, c *cache.Cache, ttl, timeout time.Duratio
 // server errors or times out. Returns the tool for chaining.
 func (t *FileOutline) WithTopologyFallback(fn topologyStoreFn) *FileOutline {
 	t.topo = fn
+	return t
+}
+
+func (t *FileOutline) WithBoundary(guard BoundaryGuard) *FileOutline {
+	t.guard = guard
 	return t
 }
 
@@ -129,6 +135,9 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 
 func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResult, error) {
 	path := strings.TrimPrefix(a.URI, "file://")
+	if err := t.guard.check(path); err != nil {
+		return nil, fmt.Errorf("file_outline: %w", err)
+	}
 	lines, err := readSourceLines(path)
 	if err != nil {
 		return nil, fmt.Errorf("file_outline: %w", err)
@@ -149,6 +158,9 @@ func (t *FileOutline) entries(ctx context.Context, uri string) ([]outlineEntry, 
 		var out []outlineEntry
 		flattenLSPSymbols(syms, 0, &out)
 		return out, "lsp", nil
+	}
+	if IsWorkspaceBoundaryError(lspErr) {
+		return nil, "", lspErr
 	}
 	if e, ok := t.topologyEntries(ctx, uri); ok {
 		return e, "topology", nil

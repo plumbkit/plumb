@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -187,6 +188,31 @@ func (s *connSession) renameSession(name string) (string, error) {
 	return name, nil
 }
 
+// workspaceBoundaryGuard rejects path-bearing tool calls that target a
+// different project after this MCP connection has pinned a workspace.
+func (s *connSession) workspaceBoundaryGuard(path string) error {
+	ws := s.workspace()
+	if ws == "" || path == "" {
+		return nil
+	}
+	if tools.PathWithinWorkspace(ws, path) {
+		return nil
+	}
+	err := tools.NewWorkspaceBoundaryError(ws, path)
+	s.markBoundaryViolation(err.Error())
+	return err
+}
+
+func (s *connSession) markBoundaryViolation(message string) {
+	if message == "" {
+		return
+	}
+	session.Patch(s.sessID, func(info *session.Info) {
+		info.Health = "blocked"
+		info.HealthMessage = message
+	})
+}
+
 // isStrict reports whether strict mode is in effect for this session.
 func (s *connSession) isStrict() bool {
 	s.editsMu.RLock()
@@ -264,6 +290,10 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		return
 	}
 
+	detectedLanguage := language
+	if detectedLanguage == LanguageNone {
+		detectedLanguage = detectAnyLanguageAt(folder, s.store.Current())
+	}
 	adapter := ""
 	if language != LanguageNone {
 		e, err := s.pool.acquireLang(ctx, folder, language)
@@ -276,12 +306,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		} else {
 			s.sessionProxy.setPrimary(folder, e.proxy)
 			s.sessionInv.setPrimary(folder, e.inv)
-			switch language {
-			case "go":
-				adapter = "gopls"
-			case "python":
-				adapter = "pyright"
-			}
+			adapter = adapterForLanguage(language)
 		}
 	}
 	s.acquiredRoot = folder
@@ -293,6 +318,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 	session.Patch(s.sessID, func(info *session.Info) {
 		info.Folder = folder
 		info.Language = language
+		info.DetectedLanguage = detectedLanguage
 		info.Adapter = adapter
 		if cn != "" {
 			info.ClientName = cn
@@ -317,6 +343,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 	session.Patch(s.sessID, func(info *session.Info) {
 		info.Folder = root
 		info.Language = LanguageNone
+		info.DetectedLanguage = detectAnyLanguageAt(root, s.store.Current())
 		info.Adapter = ""
 		info.Synthetic = true
 		if cn != "" {
@@ -670,6 +697,60 @@ func buildAnalysers(names []string) []quality.Analyser {
 	return out
 }
 
+func adapterForLanguage(language string) string {
+	switch language {
+	case "go":
+		return "gopls"
+	case "python":
+		return "pyright"
+	case "java":
+		return "jdtls"
+	case "rust":
+		return "rust-analyzer"
+	case "swift":
+		return "sourcekit-lsp"
+	case "zig":
+		return "zls"
+	case "typescript", "javascript":
+		return "typescript-language-server"
+	case "kotlin":
+		return "kotlin-language-server"
+	default:
+		return ""
+	}
+}
+
+func detectAnyLanguageAt(dir string, cfg config.Config) string {
+	langs := make([]string, 0, len(cfg.LSP))
+	for name, lspCfg := range cfg.LSP {
+		if len(lspCfg.RootMarkers) > 0 {
+			langs = append(langs, name)
+		}
+	}
+	sort.Slice(langs, func(i, j int) bool {
+		if langs[i] == "go" {
+			return true
+		}
+		if langs[j] == "go" {
+			return false
+		}
+		return langs[i] < langs[j]
+	})
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		for _, name := range langs {
+			for _, marker := range cfg.LSP[name].RootMarkers {
+				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
+					return name
+				}
+			}
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+	}
+}
+
 // buildWriteDeps assembles the WriteDeps struct used by all write tools.
 func (s *connSession) buildWriteDeps() tools.WriteDeps {
 	var qualityReport tools.QualityReportFn
@@ -698,6 +779,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		DiagWait:              tools.NewDiagWaitEstimator(),
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspace,
+		Boundary:              s.workspaceBoundaryGuard,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
 		QualityReport:         qualityReport,
@@ -709,21 +791,23 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Time) {
 	lspTimeout := s.store.Current().LSPQuery.Timeout.Duration
 	topoFn := s.topologyStoreLive
+	boundary := s.workspaceBoundaryGuard
+	s.sessionProxy.setBoundaryGuard(boundary)
 	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
 	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
 	srv.Register(tools.NewListSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
-	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
+	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithBoundary(boundary))
 	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout))
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout))
-	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy))
-	srv.Register(tools.NewListFiles(s.workspace))
-	srv.Register(tools.NewListDirectory(s.workspace))
-	srv.Register(tools.NewReadFile(s.readTracker))
-	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn))
-	srv.Register(tools.NewReadMultipleFiles())
+	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary))
+	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewListDirectory(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary))
+	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithBoundary(boundary))
+	srv.Register(tools.NewReadMultipleFiles().WithBoundary(boundary))
 	wd := s.buildWriteDeps()
 	srv.Register(tools.NewWriteFile(wd))
 	srv.Register(tools.NewEditFile(wd))
@@ -731,11 +815,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewRenameFile(wd))
 	srv.Register(tools.NewCopyFile(wd))
 	srv.Register(tools.NewTransactionApply(wd))
-	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl))
-	srv.Register(tools.NewFindFiles(s.workspace))
+	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(boundary))
+	srv.Register(tools.NewFindFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewGit(wd, s.gitPolicy))
 	srv.Register(tools.NewGitInit(wd))
-	srv.Register(tools.NewFileDiff())
+	srv.Register(tools.NewFileDiff().WithBoundary(boundary))
 	srv.Register(tools.NewFindReplace(wd))
 	srv.Register(tools.NewVersion())
 	srv.Register(tools.NewDaemonInfoFunc(s.sessID, s.sessionName, Version, daemonStartedAt).
@@ -750,6 +834,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithLSPLanguage(s.acquiredLanguageName).
+		WithPinConflict(func(requested string) {
+			ws := s.workspace()
+			s.markBoundaryViolation(fmt.Sprintf("session_start workspace switch refused: connection is pinned to %s; requested %s", ws, requested))
+		}).
 		WithExternalID(func(externalID string) string {
 			session.SetExternalID(s.sessID, externalID)
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {
@@ -759,23 +847,23 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 			return ""
 		}))
-	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout))
+	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithBoundary(boundary))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewSafeDeleteSymbol(s.sessionProxy, lspTimeout))
-	srv.Register(tools.NewListMemories(s.workspace))
-	srv.Register(tools.NewReadMemory(s.workspace))
-	srv.Register(tools.NewWriteMemory(s.workspace))
-	srv.Register(tools.NewDeleteMemory(s.workspace))
-	srv.Register(tools.NewSearchMemories(s.workspace))
-	srv.Register(tools.NewRelevantMemories(s.workspace))
+	srv.Register(tools.NewListMemories(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewReadMemory(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewWriteMemory(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewDeleteMemory(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewSearchMemories(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewRelevantMemories(s.workspace).WithBoundary(boundary))
 	srv.Resources = memory.NewResourceProvider(s.workspace)
 	srv.RegisterPrompt(mcp.NewOrientPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewWhatsBrokenPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewRecentChangesPrompt(s.workspace))
 	srv.RegisterPrompt(mcp.NewSelftestPrompt(s.workspace))
-	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace))
+	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewTopologySearch(topoFn))
 	srv.Register(tools.NewTopologyExplore(topoFn))
 	srv.Register(tools.NewTopologyImpact(topoFn))

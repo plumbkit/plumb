@@ -103,6 +103,9 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
 	})
 	if err != nil {
+		if IsWorkspaceBoundaryError(err) {
+			return "", err
+		}
 		if out, ok := t.topologyFallback(ctx, a.URI); ok {
 			return out, nil
 		}

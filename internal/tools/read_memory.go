@@ -9,10 +9,16 @@ import (
 )
 
 type readMemoryTool struct {
-	ws WorkspaceFn
+	ws    WorkspaceFn
+	guard BoundaryGuard
 }
 
 func NewReadMemory(ws WorkspaceFn) *readMemoryTool { return &readMemoryTool{ws: ws} }
+
+func (t *readMemoryTool) WithBoundary(guard BoundaryGuard) *readMemoryTool {
+	t.guard = guard
+	return t
+}
 
 func (*readMemoryTool) Name() string { return "read_memory" }
 
@@ -48,6 +54,9 @@ func (t *readMemoryTool) Execute(_ context.Context, args json.RawMessage) (strin
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
+	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("read_memory: %w", err)
 	}
 	return memory.Read(ws, a.Name)
 }

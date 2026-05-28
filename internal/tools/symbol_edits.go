@@ -95,6 +95,9 @@ func resolveSymbolOrFallback(ctx context.Context, client lsp.Client, topo topolo
 	if lspErr == nil {
 		return sym, false, nil
 	}
+	if IsWorkspaceBoundaryError(lspErr) {
+		return nil, false, lspErr
+	}
 	nodes, ok := freshTopologyNodes(ctx, topo, uri)
 	if !ok {
 		return nil, false, lspErr

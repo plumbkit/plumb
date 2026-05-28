@@ -78,6 +78,12 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	from := strings.TrimPrefix(a.From, "file://")
 	to := strings.TrimPrefix(a.To, "file://")
+	if err := t.deps.checkBoundary(from); err != nil {
+		return "", fmt.Errorf("rename_file: %w", err)
+	}
+	if err := t.deps.checkBoundary(to); err != nil {
+		return "", fmt.Errorf("rename_file: %w", err)
+	}
 
 	// Lock both paths in lexical order to prevent deadlocks.
 	first, second := from, to

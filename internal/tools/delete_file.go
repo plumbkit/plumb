@@ -62,6 +62,9 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("delete_file: file_path is required")
 	}
 	path := strings.TrimPrefix(a.Path, "file://")
+	if err := t.deps.checkBoundary(path); err != nil {
+		return "", fmt.Errorf("delete_file: %w", err)
+	}
 
 	unlock := lockPath(path)
 	defer unlock()

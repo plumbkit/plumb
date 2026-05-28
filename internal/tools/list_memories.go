@@ -15,10 +15,16 @@ import (
 type WorkspaceFn func() string
 
 type listMemoriesTool struct {
-	ws WorkspaceFn
+	ws    WorkspaceFn
+	guard BoundaryGuard
 }
 
 func NewListMemories(ws WorkspaceFn) *listMemoriesTool { return &listMemoriesTool{ws: ws} }
+
+func (t *listMemoriesTool) WithBoundary(guard BoundaryGuard) *listMemoriesTool {
+	t.guard = guard
+	return t
+}
 
 func (*listMemoriesTool) Name() string { return "list_memories" }
 
@@ -48,6 +54,9 @@ func (t *listMemoriesTool) Execute(_ context.Context, args json.RawMessage) (str
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {
 		return "", noWorkspaceError()
+	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("list_memories: %w", err)
 	}
 	mems, err := memory.List(ws)
 	if err != nil {

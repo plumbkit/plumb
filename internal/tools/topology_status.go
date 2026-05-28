@@ -25,6 +25,7 @@ var topologyStatusSchema = json.RawMessage(`{
 type TopologyStatus struct {
 	storeFn   func() *topology.Store
 	workspace func() string
+	guard     BoundaryGuard
 }
 
 // NewTopologyStatus returns a new TopologyStatus tool.
@@ -32,6 +33,11 @@ type TopologyStatus struct {
 // workspaceFn returns the resolved workspace path for the session.
 func NewTopologyStatus(storeFn func() *topology.Store, workspaceFn func() string) *TopologyStatus {
 	return &TopologyStatus{storeFn: storeFn, workspace: workspaceFn}
+}
+
+func (t *TopologyStatus) WithBoundary(guard BoundaryGuard) *TopologyStatus {
+	t.guard = guard
+	return t
 }
 
 func (*TopologyStatus) Name() string                 { return "topology_status" }
@@ -55,6 +61,9 @@ func (t *TopologyStatus) Execute(_ context.Context, raw json.RawMessage) (string
 	ws := a.Workspace
 	if ws == "" && t.workspace != nil {
 		ws = t.workspace()
+	}
+	if err := t.guard.check(ws); err != nil {
+		return "", fmt.Errorf("topology_status: %w", err)
 	}
 	store := t.storeFn()
 	return formatTopologyStatus(store, ws), nil

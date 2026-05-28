@@ -43,6 +43,7 @@ type ReadSymbol struct {
 	timeout time.Duration
 	tracker *ReadTracker
 	topo    topologyStoreFn
+	guard   BoundaryGuard
 }
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
@@ -54,6 +55,11 @@ func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration
 // unavailable. Nil-safe; returns the tool for chaining.
 func (t *ReadSymbol) WithTopologyFallback(fn topologyStoreFn) *ReadSymbol {
 	t.topo = fn
+	return t
+}
+
+func (t *ReadSymbol) WithBoundary(guard BoundaryGuard) *ReadSymbol {
+	t.guard = guard
 	return t
 }
 
@@ -79,6 +85,9 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", err
 	}
 	fpath, uri := resolveReadSymbolPaths(a.Path)
+	if err := t.guard.check(fpath); err != nil {
+		return "", fmt.Errorf("read_symbol: %w", err)
+	}
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
 	syms, err := t.fetchReadSymbolSymbols(ctx, uri)

@@ -67,6 +67,7 @@ var diagnosticsSchema = json.RawMessage(`{
 type Diagnostics struct {
 	inv    waitableDiagnosticsSource
 	opener fileOpener // nil when no LSP client is available
+	guard  BoundaryGuard
 }
 
 func NewDiagnostics(inv waitableDiagnosticsSource) *Diagnostics {
@@ -75,6 +76,11 @@ func NewDiagnostics(inv waitableDiagnosticsSource) *Diagnostics {
 
 func NewDiagnosticsWithOpener(inv waitableDiagnosticsSource, opener fileOpener) *Diagnostics {
 	return &Diagnostics{inv: inv, opener: opener}
+}
+
+func (t *Diagnostics) WithBoundary(guard BoundaryGuard) *Diagnostics {
+	t.guard = guard
+	return t
 }
 
 func (t *Diagnostics) Name() string                 { return "diagnostics" }
@@ -103,6 +109,11 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 	// Backward-compat: scalar uri field is treated as uris:[uri].
 	if len(a.URIs) == 0 && a.URI != "" {
 		a.URIs = []string{a.URI}
+	}
+	for _, uri := range a.URIs {
+		if err := t.guard.check(strings.TrimPrefix(uri, "file://")); err != nil {
+			return "", fmt.Errorf("diagnostics: %w", err)
+		}
 	}
 
 	switch len(a.URIs) {

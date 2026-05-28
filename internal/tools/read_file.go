@@ -67,9 +67,15 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 // Concurrency: Execute is safe for concurrent use.
 type ReadFile struct {
 	tracker *ReadTracker // may be nil; strict-mode tracking disabled when nil
+	guard   BoundaryGuard
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
+
+func (t *ReadFile) WithBoundary(guard BoundaryGuard) *ReadFile {
+	t.guard = guard
+	return t
+}
 
 func (t *ReadFile) Name() string                 { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
@@ -103,6 +109,9 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 
 	// Accept both file:// URIs and plain paths.
 	fpath := strings.TrimPrefix(a.Path, "file://")
+	if err := t.guard.check(fpath); err != nil {
+		return "", fmt.Errorf("read_file: %w", err)
+	}
 
 	info, err := os.Stat(fpath)
 	if err != nil {

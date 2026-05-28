@@ -101,7 +101,7 @@ func (m Model) rightLinesDetails(rw int) []string {
 	if nm == "" {
 		nm = MutedStyle.Render("—")
 	}
-	lang := sessionLangLabel(s.Language)
+	lang := sessionLangLabel(s)
 	if lang == "" {
 		lang = MutedStyle.Render("—")
 	}
@@ -125,6 +125,13 @@ func (m Model) rightLinesDetails(rw int) []string {
 		cl = MutedStyle.Render("unknown")
 	}
 	lines = append(lines, detailRow("Client", cl))
+	if s.Health == "blocked" {
+		msg := s.HealthMessage
+		if msg == "" {
+			msg = "workspace boundary violation blocked"
+		}
+		lines = append(lines, detailRow("Health", msg))
+	}
 
 	lines = append(lines, "")
 	var totalCalls int64

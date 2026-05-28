@@ -38,8 +38,11 @@ func (m Model) leftLines() []string {
 			name = s.ID
 		}
 		firstLine := " " + indicator + " " + name
-		if badge := sessionLangLabel(s.Language); badge != "" {
+		if badge := sessionLangLabel(s); badge != "" {
 			firstLine += " " + sessionLangBadge(badge, selected, lf)
+		}
+		if s.Health == "blocked" {
+			firstLine += " !"
 		}
 		if s.Synthetic {
 			firstLine += " (auto)"
@@ -97,11 +100,14 @@ func sessionIsIdle(s session.Info) bool {
 	return !lastSeen.IsZero() && time.Since(lastSeen) >= session.IdleSessionThreshold
 }
 
-// sessionLangLabel maps a session's internal language value to its display
-// label. An empty language (workspace not yet resolved) yields no badge; the
-// LanguageNone sentinel ("none") becomes "?" — a valid session whose language
-// could not be detected but still serves language-independent calls.
-func sessionLangLabel(language string) string {
+// sessionLangLabel maps a session to its language display label. Prefer the
+// marker-detected project language so Java/Rust/etc. still show their project
+// type when no LSP adapter is attached; "?" is only for truly unknown projects.
+func sessionLangLabel(s session.Info) string {
+	language := s.DetectedLanguage
+	if language == "" {
+		language = s.Language
+	}
 	switch language {
 	case "":
 		return ""

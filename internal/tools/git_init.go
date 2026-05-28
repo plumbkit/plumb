@@ -89,6 +89,9 @@ func (t *GitInit) Execute(ctx context.Context, raw json.RawMessage) (string, err
 	if err := a.validate(); err != nil {
 		return "", err
 	}
+	if err := t.deps.checkBoundary(a.Path); err != nil {
+		return "", fmt.Errorf("git_init: %w", err)
+	}
 	return t.run(ctx, a)
 }
 

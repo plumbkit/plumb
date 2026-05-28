@@ -82,6 +82,9 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 
 	path := strings.TrimPrefix(a.Path, "file://")
+	if err := t.deps.checkBoundary(path); err != nil {
+		return "", fmt.Errorf("write_file: %w", err)
+	}
 
 	unlock := lockPath(path)
 	defer unlock()

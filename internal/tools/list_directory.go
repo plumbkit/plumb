@@ -42,9 +42,17 @@ var listDirectorySchema = json.RawMessage(`{
 // find_files for recursive traversal.
 //
 // Concurrency: Execute is safe for concurrent use.
-type ListDirectory struct{ ws WorkspaceFn }
+type ListDirectory struct {
+	ws    WorkspaceFn
+	guard BoundaryGuard
+}
 
 func NewListDirectory(ws WorkspaceFn) *ListDirectory { return &ListDirectory{ws: ws} }
+
+func (t *ListDirectory) WithBoundary(guard BoundaryGuard) *ListDirectory {
+	t.guard = guard
+	return t
+}
 
 func (*ListDirectory) Name() string                 { return "list_directory" }
 func (*ListDirectory) InputSchema() json.RawMessage { return listDirectorySchema }
@@ -75,6 +83,9 @@ func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string,
 		return "", err
 	}
 	dir := resolvePath(a.Path, t.ws)
+	if err := t.guard.check(dir); err != nil {
+		return "", fmt.Errorf("list_directory: %w", err)
+	}
 	entries, err := collectDirEntries(dir, a)
 	if err != nil {
 		return "", err

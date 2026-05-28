@@ -77,6 +77,9 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 	defer cancel()
 	out, err := t.inDocument(lspCtx, a.URI, a.Query)
 	if err != nil {
+		if IsWorkspaceBoundaryError(err) {
+			return "", err
+		}
 		if fb, ok := t.topologyFallback(ctx, a.URI, a.Query); ok {
 			return fb, nil
 		}
