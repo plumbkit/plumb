@@ -44,14 +44,21 @@ type Cache struct {
 	once   sync.Once
 }
 
-// New creates a Cache and starts a background cleanup goroutine that evicts
-// expired entries every cleanupInterval. Call Close when done.
+// New creates a Cache. When cleanupInterval is positive it starts a background
+// goroutine that proactively evicts expired entries every cleanupInterval. A
+// non-positive interval disables proactive eviction — entries still expire
+// lazily on Get, and Set clamps a non-positive TTL to one hour — which also
+// avoids the time.NewTicker panic on a zero or negative interval (e.g. a
+// misconfigured `[cache] ttl = "0s"` or a test pool that leaves cacheTTL unset).
+// Call Close when done.
 func New(cleanupInterval time.Duration) *Cache {
 	c := &Cache{stopCh: make(chan struct{})}
 	for i := range c.shards {
 		c.shards[i].entries = make(map[string]entry)
 	}
-	go c.cleanupLoop(cleanupInterval)
+	if cleanupInterval > 0 {
+		go c.cleanupLoop(cleanupInterval)
+	}
 	return c
 }
 

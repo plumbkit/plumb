@@ -135,3 +135,20 @@ func TestCache_Concurrent(t *testing.T) {
 	wg.Wait()
 	// No race — verified by go test -race.
 }
+
+// TestNew_NonPositiveInterval_NoPanic guards the cleanup-goroutine fix: a zero
+// or negative cleanup interval must not panic (time.NewTicker panics on a
+// non-positive interval from the background goroutine, which would crash the
+// whole process). A misconfigured `[cache] ttl = "0s"` or a test pool that
+// leaves cacheTTL unset reaches cache.New with 0; lazy expiry on Get still
+// works without the proactive cleanup loop.
+func TestNew_NonPositiveInterval_NoPanic(t *testing.T) {
+	for _, interval := range []time.Duration{0, -time.Second} {
+		c := cache.New(interval) // must not panic
+		c.Set("k", "v", time.Minute)
+		if got, ok := c.Get("k"); !ok || got != "v" {
+			t.Fatalf("interval %v: Get = (%v, %v), want (v, true)", interval, got, ok)
+		}
+		c.Close()
+	}
+}

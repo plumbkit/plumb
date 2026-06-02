@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.27 (unreleased)
+
+### Fixed
+- **`cache.New` no longer panics on a non-positive cleanup interval.** `cache.New` started its `cleanupLoop` goroutine unconditionally, and `time.NewTicker` panics on a zero or negative interval — from a *background goroutine*, so it crashed the whole process with a stack naming neither the caller nor (in tests) the offending test. This was a real production crash path, not just test noise: the per-session cache is built as `cache.New(cfg.Cache.TTL.Duration)` (`internal/cli/conn.go`) and there is no config validation rejecting a non-positive `[cache] ttl`, so `ttl = "0s"` (global or per-project) would have panicked on the first MCP connection. `cache.New` now only starts the cleanup goroutine when the interval is positive; a non-positive interval disables *proactive* eviction while entries still expire lazily on `Get` (and `Set` already clamps a non-positive TTL to one hour), so correctness is unchanged. Surfaced while testing 0.8.26: `detectTestPool` left `cacheTTL` at its zero value, so any cli test driving that pool through `acquireLang` → `cache.New(0)` crashed the package; `detectTestPool` now sets a positive `cacheTTL` to mirror production. Guard: `TestNew_NonPositiveInterval_NoPanic` (`internal/cache/cache_test.go`).
+
 ## 0.8.26 (unreleased)
 
 ### Fixed

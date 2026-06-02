@@ -61,8 +61,9 @@ func TestCloseEntry_BoundsHungShutdown(t *testing.T) {
 // the default plumb configuration. Used by all Detect tests below.
 func detectTestPool() *workspacePool {
 	return &workspacePool{
-		entries: make(map[string]*poolEntry),
-		baseCtx: context.Background(),
+		entries:  make(map[string]*poolEntry),
+		baseCtx:  context.Background(),
+		cacheTTL: time.Minute, // mirror production: a zero TTL would panic cache.New's ticker
 		langs: []langConfig{
 			{name: "go", cfg: config.LSPConfig{
 				RootMarkers: []string{"go.mod"},
