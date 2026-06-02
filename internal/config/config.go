@@ -100,6 +100,22 @@ type WorkspaceConfig struct {
 	// the directory resolves via the standard marker path and auto-attach is
 	// no longer needed. Implies AutoAttach. Default false.
 	AutoAttachPersist bool `toml:"auto_attach_persist"`
+	// ExtraRoots lists additional directories the session's filesystem tools may
+	// read AND write, beyond the detected workspace. Human-authored (project or
+	// global config), additive to the workspace, never replacing it. Paths may
+	// use $VAR / ${VAR} (expanded with the daemon's environment). Default empty.
+	ExtraRoots []string `toml:"extra_roots"`
+	// ReadRoots lists additional directories the session's read/search tools may
+	// read (never write), beyond the detected workspace — e.g. a vendored
+	// dependency tree or a shared library checkout. Additive; $VAR expansion as
+	// for ExtraRoots. Default empty.
+	ReadRoots []string `toml:"read_roots"`
+	// AllowDependencyReads, when true, lets read/search tools reach the language
+	// toolchain's standard dependency locations read-only (for Go: the module
+	// cache `go env GOMODCACHE` and `GOROOT`), so an agent can inspect a
+	// dependency's source without falling back to the shell. Read-only by
+	// construction — writes there are always refused. Default true.
+	AllowDependencyReads bool `toml:"allow_dependency_reads"`
 }
 
 // EditsConfig controls safety behaviour for write/edit tools. Both fields
@@ -271,6 +287,9 @@ var defaults = Config{
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,
 	},
+	Workspace: WorkspaceConfig{
+		AllowDependencyReads: true,
+	},
 	Git: GitConfig{
 		AllowWrites:       true,
 		AllowDestructive:  false,
@@ -361,6 +380,15 @@ func cloneConfig(cfg Config) Config {
 	out := cfg
 	if cfg.Topology.ExcludePatterns != nil {
 		out.Topology.ExcludePatterns = append([]string(nil), cfg.Topology.ExcludePatterns...)
+	}
+	if cfg.Quality.Analysers != nil {
+		out.Quality.Analysers = append([]string(nil), cfg.Quality.Analysers...)
+	}
+	if cfg.Workspace.ExtraRoots != nil {
+		out.Workspace.ExtraRoots = append([]string(nil), cfg.Workspace.ExtraRoots...)
+	}
+	if cfg.Workspace.ReadRoots != nil {
+		out.Workspace.ReadRoots = append([]string(nil), cfg.Workspace.ReadRoots...)
 	}
 	if cfg.Git.ProtectedBranches != nil {
 		out.Git.ProtectedBranches = append([]string(nil), cfg.Git.ProtectedBranches...)

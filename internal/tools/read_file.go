@@ -68,7 +68,8 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 type ReadFile struct {
 	tracker      *ReadTracker // may be nil; strict-mode tracking disabled when nil
 	guard        BoundaryGuard
-	clientNameFn func() string // may be nil; gates the edit-lane hint to conflict-prone clients
+	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
+	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
@@ -84,6 +85,23 @@ func (t *ReadFile) WithBoundary(guard BoundaryGuard) *ReadFile {
 func (t *ReadFile) WithClient(fn func() string) *ReadFile {
 	t.clientNameFn = fn
 	return t
+}
+
+// WithOutsideLabel wires an accessor that, given a resolved path, returns the
+// allowed-root label when the path lies outside the workspace (a read-only
+// dependency or configured read root), or "" when inside it. read_file uses it
+// to annotate out-of-workspace reads so the agent knows the content is not
+// editable. Nil-safe.
+func (t *ReadFile) WithOutsideLabel(fn func(string) string) *ReadFile {
+	t.outsideFn = fn
+	return t
+}
+
+func (t *ReadFile) outsideLabel(path string) string {
+	if t.outsideFn == nil {
+		return ""
+	}
+	return t.outsideFn(path)
 }
 
 func (t *ReadFile) Name() string                 { return "read_file" }
@@ -172,14 +190,14 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
 
-	return t.formatOutput(mtime, sha, content, truncated), nil
+	return t.formatOutput(mtime, sha, content, truncated, t.outsideLabel(fpath)), nil
 }
 
 // formatOutput assembles the read_file response: the plumb-read header line
 // (mtime + optional sha + indent), an optional edit-lane hint line for clients
 // whose native Edit tool conflicts with plumb's read-state, a blank separator,
 // then the (possibly truncated) content.
-func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool) string {
+func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool, outsideLabel string) string {
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
 	if sha != "" {
@@ -187,10 +205,15 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated 
 	} else {
 		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n", mtimeStr, classifyIndent(content))
 	}
+	if outsideLabel != "" {
+		fmt.Fprintf(&sb, "# plumb-note: read-only — outside the workspace (%s); not editable\n", outsideLabel)
+	}
 	// For clients whose native Edit tool conflicts with plumb's read-state
 	// tracking, append a copy-paste-ready pointer to edit_file at the exact
-	// moment the agent is about to act on what it just read.
-	if clientHasNativeEditConflict(t.clientNameFn) {
+	// moment the agent is about to act on what it just read. Suppressed for
+	// out-of-workspace reads — those files are not editable, so an edit hint
+	// would contradict the read-only note above.
+	if outsideLabel == "" && clientHasNativeEditConflict(t.clientNameFn) {
 		sb.WriteString(nativeEditReadHint(mtimeStr))
 	}
 	sb.WriteByte('\n')

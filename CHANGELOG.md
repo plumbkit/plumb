@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.29 (unreleased)
+
+Out-of-workspace dependency reads + a generalised path-access policy — the [out-of-workspace read/search] and [jailing] / [configurable workspace access] items from `docs/internal/todo.md`, designed in `docs/internal/path-access-design.md`.
+
+### Added
+- **Read tools can now reach the Go toolchain's dependency source read-only, without falling back to the shell.** Inspecting a dependency's internals (`$GOMODCACHE/<module>@<version>/…`) or the standard library (`$GOROOT/src/…`) was the single most-requested gap in session feedback — the workspace boundary refused those paths, forcing `grep`/`head` in Bash. `read_file`, `read_symbol`, `search_in_files`, `list_directory`, `list_files`, `find_files`, and `file_outline` now resolve paths under the Go module cache and `GOROOT` (auto-derived once per session via `go env GOMODCACHE GOROOT`, with environment/`GOPATH` fallbacks). Reads there are annotated `# plumb-note: read-only — outside the workspace (GOMODCACHE); not editable` so the agent knows the content is not editable. **Writes outside the workspace remain refused by construction** — dependency roots are granted read-only access, so a write demanding read-write can never resolve to one. Controlled by `[workspace] allow_dependency_reads` (default `true`; set `false` to restrict reads to the workspace as before). New `internal/tools/pathpolicy.go` + `internal/cli/boundary_policy.go`. Guards: `TestPathPolicy_*` (`internal/tools/pathpolicy_test.go`), `TestBuildPathPolicy_*` (`internal/cli/boundary_policy_test.go`), `TestReadFile_OutsideWorkspaceAnnotation`.
+- **`[workspace] extra_roots` and `[workspace] read_roots` extend the per-session allowlist from project or global config.** `extra_roots` grants additional read-write directories (a sibling module, a generated-output tree); `read_roots` grants read-only directories (a vendored dependency checkout, a shared library). Both are additive to the detected workspace — never replacing it — and resolved per-connection (so two connections with different project configs never see each other's roots). Paths may use `$VAR`/`${VAR}`. Layered and hot-reloaded like the rest of the config.
+
+### Changed
+- **The single-workspace boundary is now a general `PathPolicy`.** The per-connection guard that refused paths outside the pinned workspace was generalised into an allowlist of roots, each tagged read-only or read-write, enforced through the same `BoundaryGuard` seam (`internal/tools/boundary.go` extracted `canonicalRoot`/`withinRoot`, reused by `PathWithinWorkspace`). Read tools wire a read guard, write tools a read-write guard. For the default case (a workspace with no configured or dependency roots) behaviour is unchanged — the workspace is the sole read-write root, exactly as before. The boundary-violation message, the sticky `Health: blocked` flag, and the TUI alert are all preserved. The policy is rebuilt on workspace re-pin and invalidated on project-config change.
+- **`cloneConfig` now deep-copies `Quality.Analysers`, `Workspace.ExtraRoots`, and `Workspace.ReadRoots`** (`internal/config/config.go`) so a project-config merge can never alias the shared base config's slices — closing the latent footgun flagged in the 0.8.x Tier-1 review follow-ups.
+
+### Known gaps
+- The client-setup-time transport (`plumb serve --allow-dir` / `PLUMB_ALLOWED_DIRS` in the MCP client entry) is **not** implemented: configured roots are set through `<workspace>/.plumb/config.toml` or global config, which is the safe per-connection channel that reuses existing config plumbing. The client-arg transport (carrying the allowlist from the thin `plumb serve` proxy to the shared daemon per connection) remains a follow-up — see `docs/internal/todo.md`.
+
 ## 0.8.28 (unreleased)
 
 Review follow-ups for the 0.8.26 re-pin and 0.8.3 `uri` work (the three items cleared from `docs/internal/todo-to-review.md`).

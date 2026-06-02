@@ -44,7 +44,8 @@ type ReadSymbol struct {
 	tracker      *ReadTracker
 	topo         topologyStoreFn
 	guard        BoundaryGuard
-	clientNameFn func() string // may be nil; gates the edit-lane hint to conflict-prone clients
+	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
+	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
 }
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
@@ -72,6 +73,21 @@ func (t *ReadSymbol) WithBoundary(guard BoundaryGuard) *ReadSymbol {
 func (t *ReadSymbol) WithClient(fn func() string) *ReadSymbol {
 	t.clientNameFn = fn
 	return t
+}
+
+// WithOutsideLabel wires an accessor returning a root label when a path lies
+// outside the workspace (read-only dependency or configured read root), so
+// read_symbol can annotate out-of-workspace reads as not editable. Nil-safe.
+func (t *ReadSymbol) WithOutsideLabel(fn func(string) string) *ReadSymbol {
+	t.outsideFn = fn
+	return t
+}
+
+func (t *ReadSymbol) outsideLabel(path string) string {
+	if t.outsideFn == nil {
+		return ""
+	}
+	return t.outsideFn(path)
 }
 
 func (t *ReadSymbol) Name() string                 { return "read_symbol" }
@@ -198,8 +214,13 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 	}
 	// For clients whose native Edit tool conflicts with plumb's read-state
 	// tracking, point at edit_file the moment the agent has the symbol body.
-	if clientHasNativeEditConflict(t.clientNameFn) {
+	outsideLabel := t.outsideLabel(fpath)
+	// Suppress the edit-lane hint for out-of-workspace reads (not editable).
+	if outsideLabel == "" && clientHasNativeEditConflict(t.clientNameFn) {
 		sb.WriteString(nativeEditReadHint(mtimeStr))
+	}
+	if outsideLabel != "" {
+		fmt.Fprintf(&sb, "# plumb-note: read-only — outside the workspace (%s); not editable\n", outsideLabel)
 	}
 	if len(matches) > 1 {
 		fmt.Fprintf(&sb, "# %d matches for %q\n", len(matches), name)

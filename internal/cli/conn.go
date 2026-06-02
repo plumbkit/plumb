@@ -72,6 +72,18 @@ type connSession struct {
 	walkCfg      config.WalkConfig
 	gitMu        sync.RWMutex
 	gitCfg       config.GitConfig
+	wsMu         sync.RWMutex
+	wsCfg        config.WorkspaceConfig
+
+	// boundary PathPolicy cache: rebuilt lazily when the pinned workspace
+	// changes (policyRoot != workspace) and invalidated by applyProjectConfig
+	// when configured roots change. depRoots* memoise the Go toolchain's
+	// read-only dependency roots for the session lifetime. See boundary_policy.go.
+	policyMu     sync.Mutex
+	policy       *tools.PathPolicy
+	policyRoot   string
+	depRootsOnce sync.Once
+	depRootsVal  []tools.AllowedRoot
 
 	// applyMu serialises applyProjectConfig across the three paths that call it
 	// (workspace attach, the 30s poll, and the global-config store subscription)
@@ -120,6 +132,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		editsCfg:       cfg.Edits,
 		walkCfg:        cfg.Walk,
 		gitCfg:         cfg.Git,
+		wsCfg:          cfg.Workspace,
 	}
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
@@ -186,21 +199,6 @@ func (s *connSession) renameSession(name string) (string, error) {
 	s.stateMu.Unlock()
 	s.statsStore.RenameSession(s.sessID, name)
 	return name, nil
-}
-
-// workspaceBoundaryGuard rejects path-bearing tool calls that target a
-// different project after this MCP connection has pinned a workspace.
-func (s *connSession) workspaceBoundaryGuard(path string) error {
-	ws := s.workspace()
-	if ws == "" || path == "" {
-		return nil
-	}
-	if tools.PathWithinWorkspace(ws, path) {
-		return nil
-	}
-	err := tools.NewWorkspaceBoundaryError(ws, path)
-	s.markBoundaryViolation(err.Error())
-	return err
 }
 
 // markBoundaryViolation records the violation on the session record and is
@@ -506,6 +504,10 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	s.gitMu.Lock()
 	s.gitCfg = projectCfg.Git
 	s.gitMu.Unlock()
+	s.wsMu.Lock()
+	s.wsCfg = projectCfg.Workspace
+	s.wsMu.Unlock()
+	s.invalidateBoundaryPolicy()
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
 	if projectCfg.Edits.Strict != base.Edits.Strict ||
 		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
@@ -908,7 +910,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		DiagWait:              tools.NewDiagWaitEstimator(),
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspace,
-		Boundary:              s.workspaceBoundaryGuard,
+		Boundary:              s.writeBoundaryGuard,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
 		QualityReport:         qualityReport,
@@ -920,7 +922,12 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Time) {
 	lspTimeout := s.store.Current().LSPQuery.Timeout.Duration
 	topoFn := s.topologyStoreLive
-	boundary := s.workspaceBoundaryGuard
+	// Read tools (reads/searches) admit any allowed root including read-only
+	// dependency roots; write/semantic-write tools demand read-write access.
+	boundary := s.readBoundaryGuard
+	writeBoundary := s.writeBoundaryGuard
+	// The LSP routing proxies guard cross-workspace diagnostics queries, which
+	// are reads.
 	s.sessionProxy.setBoundaryGuard(boundary)
 	s.sessionInv.setBoundaryGuard(boundary)
 	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn))
@@ -935,8 +942,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary))
 	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewListDirectory(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr))
-	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithBoundary(boundary).WithClient(s.clientNameStr))
+	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel))
+	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel))
 	srv.Register(tools.NewReadMultipleFiles().WithBoundary(boundary))
 	wd := s.buildWriteDeps()
 	srv.Register(tools.NewWriteFile(wd))
@@ -978,7 +985,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 			return ""
 		}))
-	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithBoundary(boundary))
+	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithBoundary(writeBoundary))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))

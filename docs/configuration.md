@@ -249,8 +249,11 @@ show_write_diff           = true    # append a unified diff to write/edit respon
 refuse_home_roots = true            # macOS TCC guard; no-op elsewhere
 
 [workspace]
-auto_attach         = false         # synthetic-root fallback when no marker found
-auto_attach_persist = false         # create .plumb/ at the synthetic root (implies auto_attach)
+auto_attach            = false      # synthetic-root fallback when no marker found
+auto_attach_persist    = false      # create .plumb/ at the synthetic root (implies auto_attach)
+allow_dependency_reads = true       # read/search the Go module cache (GOMODCACHE) + GOROOT read-only; writes there always refused
+extra_roots            = []         # additional read-WRITE directories, additive to the workspace ($VAR-expanded)
+read_roots             = []         # additional read-ONLY directories (vendored deps, shared libs), additive ($VAR-expanded)
 
 [git]
 allow_writes       = true                   # add, commit, switch, branch/tag create, stash

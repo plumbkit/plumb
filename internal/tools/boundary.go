@@ -58,27 +58,32 @@ func PathWithinWorkspace(workspace, path string) bool {
 	if workspace == "" || path == "" {
 		return true
 	}
-	ws, err := canonicalExistingPath(workspace)
-	if err != nil {
-		ws = filepath.Clean(workspace)
+	return withinRoot(canonicalRoot(workspace), canonicalRoot(path))
+}
+
+// canonicalRoot resolves path for boundary comparison: symlinks are followed
+// for the path and its nearest existing ancestor (so a not-yet-created file
+// resolves against its real parent), falling back to a lexical clean when
+// resolution fails entirely. Both PathPolicy roots and candidate paths pass
+// through it, so matching is always on resolved paths.
+func canonicalRoot(path string) string {
+	if path == "" {
+		return ""
 	}
-	p, err := canonicalPathForBoundary(path)
-	if err != nil {
-		p = filepath.Clean(path)
+	if p, err := canonicalPathForBoundary(path); err == nil {
+		return p
 	}
-	rel, err := filepath.Rel(ws, p)
+	return filepath.Clean(cleanToolPath(path))
+}
+
+// withinRoot reports whether the already-canonicalised path lies within root
+// (or is root itself). Both arguments must be resolved by canonicalRoot first.
+func withinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
-
-func canonicalExistingPath(path string) (string, error) {
-	abs, err := filepath.Abs(cleanToolPath(path))
-	if err != nil {
-		return "", err
-	}
-	return filepath.EvalSymlinks(abs)
 }
 
 func canonicalPathForBoundary(path string) (string, error) {
