@@ -296,8 +296,8 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | Tool | Notes |
 |---|---|
 | `write_file` | Atomic create/overwrite (tmpdir + rename, EXDEV fallback); symlink-aware; permissions preserved. |
-| `edit_file` | str_replace (each `old_string` must be unique); CRLF-tolerant; all-or-nothing; optional `expected_mtime` concurrency check; strict-mode read check; `apply_partial` applies each edit independently. |
-| `delete_file` | Refuses directories. |
+| `edit_file` | Two modes per edit item: str_replace (`old_string` must appear exactly once) or range (`start_line`/`end_line` to replace/delete a block; `start_line: -1` appends at EOF; `end_line: -1` extends to last line). CRLF-tolerant; all-or-nothing; optional `expected_mtime` concurrency check; `apply_partial` applies each edit independently. |
+| `delete_file` | Refuses directories by default; `allow_dir: true` deletes an empty directory (non-empty always rejected). |
 | `rename_file` | **Primary move tool.** Atomic; refuses overwrite without `overwrite=true`. Distinct from `rename_symbol`. |
 | `copy_file` | Duplicate preserving permissions; cross-device safe; refuses overwrite without `overwrite=true`. |
 | `transaction_apply` | Multi-file atomic edits (≤50 ops): validate in memory → write under locks → roll back on partial failure. For cross-file refactors. |
@@ -418,7 +418,7 @@ You are likely an AI agent reading this through plumb. Most common patterns:
 - **One-shot file create:** `write_file({file_path, content})`.
 - **Targeted edit:** `edit_file({file_path, edits: [{old_string, new_string}], expected_mtime})`. `old_string` must appear exactly once. CRLF differences are tolerated automatically.
 - **Cross-file refactor:** `transaction_apply({operations: [{file_path, edits, expected_mtime}]})`. All-or-nothing.
-- **Delete:** `delete_file({file_path})`. Refuses directories.
+- **Delete:** `delete_file({file_path})`. Refuses directories by default; `allow_dir: true` removes an empty directory.
 - **Move/rename:** `rename_file({from, to})` — primary move tool. Distinct from `rename_symbol` (LSP-semantic identifier rename).
 - **Copy:** `copy_file({from, to})`. Preserves permissions; cross-device safe. Use when you want to keep the source.
 - **Discover what changed:** `git({subcommand: "status"})` or `git({subcommand: "log", args: ["-10", "--oneline"]})`.

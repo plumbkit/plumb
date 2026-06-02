@@ -479,3 +479,84 @@ func TestEditFile_ApplyPartial_AllFail(t *testing.T) {
 		t.Error("file should be unchanged when all edits fail")
 	}
 }
+
+func TestEditFile_RangeEdit_DeleteMiddle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("line1\nline2\nline3\nline4\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"start_line": 2, "end_line": 3, "new_string": ""}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "line1\nline4\n" {
+		t.Errorf("want %q, got %q", "line1\nline4\n", string(got))
+	}
+}
+
+func TestEditFile_RangeEdit_ReplaceLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"start_line": 2, "end_line": 2, "new_string": "replaced\n"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "line1\nreplaced\nline3\n" {
+		t.Errorf("want %q, got %q", "line1\nreplaced\nline3\n", string(got))
+	}
+}
+
+func TestEditFile_RangeEdit_AppendEOF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("line1\nline2\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"start_line": -1, "new_string": "line3\n"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "line1\nline2\nline3\n" {
+		t.Errorf("want %q, got %q", "line1\nline2\nline3\n", string(got))
+	}
+}
+
+func TestEditFile_RangeEdit_DeleteToEOF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"start_line": 2, "end_line": -1, "new_string": ""}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "line1\n" {
+		t.Errorf("want %q, got %q", "line1\n", string(got))
+	}
+}
+
+func TestEditFile_RangeEdit_OutOfRange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("line1\nline2\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"start_line": 99, "new_string": "x\n"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected out-of-range error, got: %v", err)
+	}
+}

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.22 (unreleased)
+
+### Added
+- **`edit_file` now supports range-mode edits alongside the existing str_replace mode.** Each edit item can carry `start_line`/`end_line` (1-based, inclusive) instead of `old_string` to replace or delete an exact line range — no unique anchor required. Special sentinels: `start_line: -1` appends `new_string` at end of file (inserting a `\n` separator when the file has no trailing newline); `end_line: -1` extends the range to the last line of the file; `end_line` defaults to `start_line` (single-line op) when absent. This closes the recurring gap where deleting a large block or appending to a file required awkward workarounds (`sed`, `python3` line-drop scripts, or a full `write_file` rewrite). Schema: `old_string` is now optional at the item level (required only when `start_line` is not set). Works in both normal and `apply_partial` mode. Unit tests in `range_edit_test.go` + integration tests in `edit_file_test.go`. New helpers: `applyRangeEdit`/`lineOffsets` in `internal/tools/range_edit.go`.
+- **`delete_file` can now delete an empty directory with `allow_dir: true`.** Without the flag, directory targets are still refused (unchanged). With `allow_dir: true`, `os.Remove` is called — which succeeds only for empty directories; a non-empty directory returns an OS error. Use case: cleaning up throwaway probe directories without falling back to the shell (`rmdir`). Guard: `TestDeleteFile_AllowDir_EmptyDir` / `TestDeleteFile_AllowDir_NonEmptyDir` / `TestDeleteFile_AllowDir_WithoutFlag`.
+
+### Fixed
+- **`search_in_files` now returns an explicit error when `glob` contains brace alternation** (`{}`). Previously `filepath.Match` silently treated `{` as a literal character, returning zero results with no indication of why — the worst possible failure mode. The new error names the invalid glob and suggests splitting into multiple searches. Guard: `TestSearchInFiles_BraceGlobReturnsError`.
+- **`search_in_files` now emits a note when `path` points to a file instead of a directory.** The tool already fell back to the file's parent directory, but did so silently — callers had no way to know the scope had broadened. The note reads `Note: path was a file — searching its containing directory (…) instead.` Guard: `TestSearchInFiles_FilePathSearchesDirectoryWithNote`.
+
+### Changed
+- **`git` description and `args` schema now explicitly document `diff --cached` / `diff --staged`.** The staged-diff view was always available (diff is a read-tier subcommand and `--cached` is a normal flag), but was undiscoverable: no example mentioned it. The tool description now leads with `diff --cached (equivalently diff --staged) shows staged changes ready to be committed`; the `args` field description adds `["--cached"] or ["--staged"] for diff` as an explicit example. No logic change.
+
 ## 0.8.21 (unreleased)
 
 ### Fixed

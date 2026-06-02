@@ -414,3 +414,41 @@ func BenchmarkSearchInFiles_WarmCall(b *testing.B) {
 		}
 	}
 }
+
+func TestSearchInFiles_BraceGlobReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "hello",
+		"path":    dir,
+		"glob":    "*.{go,ts}",
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "brace alternation") {
+		t.Fatalf("expected brace-alternation error, got: %v", err)
+	}
+}
+
+func TestSearchInFiles_FilePathSearchesDirectoryWithNote(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "a.go"), []byte("needle\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "b.go"), []byte("needle\n"), 0o644)
+	targetFile := filepath.Join(dir, "a.go")
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+	args, _ := json.Marshal(map[string]any{
+		"pattern": "needle",
+		"path":    targetFile,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Both files found because the whole directory was searched.
+	if !strings.Contains(out, "a.go") || !strings.Contains(out, "b.go") {
+		t.Errorf("expected both files when path is a file; got:\n%s", out)
+	}
+	// A redirect note must be present.
+	if !strings.Contains(out, "Note:") || !strings.Contains(out, "containing directory") {
+		t.Errorf("expected path-redirect note in output; got:\n%s", out)
+	}
+}

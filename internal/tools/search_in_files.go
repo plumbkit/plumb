@@ -166,7 +166,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	ctx, cancel := applySearchDeadline(ctx)
 	defer cancel()
 
-	root, err := resolveSearchRoot(a, t.ws, t.guard)
+	root, pathNote, err := resolveSearchRoot(a, t.ws, t.guard)
 	if err != nil {
 		return "", err
 	}
@@ -184,16 +184,16 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	cancelled := errors.Is(walkErr, context.Canceled)
 	if len(results) == 0 {
 		if timedOut {
-			return fmt.Sprintf("Search for %q timed out before any matches were found (budget %s — narrow with path/glob, or set a tighter pattern).", a.Pattern, searchDefaultDeadline), nil
+			return pathNote + fmt.Sprintf("Search for %q timed out before any matches were found (budget %s — narrow with path/glob, or set a tighter pattern).", a.Pattern, searchDefaultDeadline), nil
 		}
 		if cancelled {
 			return "", walkErr
 		}
-		return fmt.Sprintf("No matches for %q.", a.Pattern), nil
+		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern), nil
 	}
 
 	ann := t.annotateWithSymbols(ctx, a, results)
-	return formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped), nil
+	return pathNote + formatSearchOutput(results, ann, a, timedOut, truncated, totalLines, totalSkipped), nil
 }
 
 func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
@@ -203,6 +203,13 @@ func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
 	}
 	if a.Pattern == "" {
 		return a, fmt.Errorf("search_in_files: pattern must not be empty")
+	}
+	if strings.ContainsAny(a.Glob, "{}") {
+		return a, fmt.Errorf(
+			"search_in_files: glob %q contains brace alternation {...} which filepath.Match does not support; "+
+				"run separate searches for each extension instead (e.g. two calls with \"*.go\" and \"*.ts\")",
+			a.Glob,
+		)
 	}
 	return a, nil
 }
@@ -226,19 +233,24 @@ func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFu
 	return ctx, func() {}
 }
 
-func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (string, error) {
-	root := resolvePath(a.Path, ws)
-	if err := guard.check(root); err != nil {
-		return "", fmt.Errorf("search_in_files: %w", err)
+// resolveSearchRoot resolves the search root directory. When a is a path to a
+// file rather than a directory, it falls back to the file's parent directory
+// and returns a non-empty note explaining the redirect.
+func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, note string, err error) {
+	root = resolvePath(a.Path, ws)
+	if checkErr := guard.check(root); checkErr != nil {
+		return "", "", fmt.Errorf("search_in_files: %w", checkErr)
 	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return "", fmt.Errorf("search_in_files: path %q: %w", root, err)
+	info, statErr := os.Stat(root)
+	if statErr != nil {
+		return "", "", fmt.Errorf("search_in_files: path %q: %w", root, statErr)
 	}
 	if !info.IsDir() {
-		root = filepath.Dir(root)
+		dir := filepath.Dir(root)
+		note = fmt.Sprintf("Note: path was a file — searching its containing directory (%s) instead.\n\n", dir)
+		root = dir
 	}
-	return root, nil
+	return root, note, nil
 }
 
 func compileSearchRegex(a searchInFilesArgs) (*regexp.Regexp, error) {

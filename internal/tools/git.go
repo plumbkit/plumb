@@ -21,7 +21,7 @@ var gitSchema = json.RawMessage(`{
     "args": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Flags and arguments passed directly to git for all subcommands except add and commit, e.g. [\"--oneline\", \"-10\"] for log or [\"--staged\"] for restore. Ignored when subcommand is \"add\" (use files) or \"commit\" (use message)."
+      "description": "Flags and arguments passed directly to git for all subcommands except add and commit. Examples: [\"--oneline\", \"-10\"] for log; [\"--cached\"] or [\"--staged\"] for diff (shows staged changes ready to commit); [\"--staged\"] for restore. Ignored when subcommand is \"add\" (use files) or \"commit\" (use message)."
     },
     "files": {
       "type": "array",
@@ -110,6 +110,7 @@ func (t *Git) Name() string                 { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
 	return "Run git through one tiered tool. Read subcommands (status, log, diff, show, blame, shortlog, branch/tag/stash listing) always run. " +
+		"diff --cached (equivalently diff --staged) shows staged changes ready to be committed — use args: [\"--cached\"] or args: [\"--staged\"] to verify staged content after a selective git add. " +
 		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) run when [git] allow_writes is enabled (default on). " +
 		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) require [git] allow_destructive AND confirm:true. " +
 		"Network subcommands (push, fetch, pull) require [git] allow_push AND confirm:true; force-pushing a protected branch is always refused, as is pushing to an ad-hoc URL. " +

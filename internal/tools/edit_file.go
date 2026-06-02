@@ -28,14 +28,22 @@ var editFileSchema = json.RawMessage(`{
         "properties": {
           "old_string": {
             "type": "string",
-            "description": "Exact string to find. Must appear EXACTLY ONCE in the current file content — edit is rejected if the string is absent or appears more than once. CRLF / LF differences between old_string and the file are tolerated automatically."
+            "description": "Exact string to find. Required when start_line is not set. Must appear EXACTLY ONCE in the current file content — edit is rejected if absent or ambiguous. CRLF / LF differences are tolerated automatically."
           },
           "new_string": {
             "type": "string",
-            "description": "Replacement string. Use empty string to delete old_string."
+            "description": "Replacement text. Use empty string to delete. When start_line is set, replaces the specified line range (or appends at end of file when start_line is -1)."
+          },
+          "start_line": {
+            "type": "integer",
+            "description": "First line to replace (1-based, inclusive). When set, old_string is not used. Use -1 to append new_string at end of file. Use end_line: -1 to extend the range to the last line."
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "Last line to replace (1-based, inclusive). Defaults to start_line when absent (single-line operation). Use -1 for end of file. Only used when start_line is set."
           }
         },
-        "required": ["old_string", "new_string"],
+        "required": ["new_string"],
         "additionalProperties": false
       },
       "minItems": 1
@@ -110,21 +118,24 @@ func (t *EditFile) isStrict() bool {
 func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
-	return "Apply one or more str_replace edits to an existing file. Each edit specifies " +
-		"an old_string that must appear EXACTLY ONCE in the file — if it is absent or " +
-		"ambiguous the edit is rejected. CRLF differences between old_string and the file " +
-		"are tolerated automatically — detection uses the first CRLF found in the file; " +
-		"files with mixed line endings have undefined matching behaviour (normalise with " +
-		"dos2unix or unix2dos first). All edits are applied sequentially in memory, then " +
-		"written atomically (temp file + rename). A per-path lock serialises " +
-		"concurrent edits to the same file from any session. Optionally pass " +
-		"expected_mtime (from a prior read_file header) to guarantee the file hasn't " +
-		"changed since you read it. The response includes a line-range summary of what changed."
+	return "Apply one or more edits to an existing file. Two edit modes per item: " +
+		"(1) str_replace mode (default): set old_string to the text that must appear EXACTLY ONCE — " +
+		"rejected if absent or ambiguous. " +
+		"(2) range mode: set start_line (1-based) to replace lines start_line..end_line with new_string; " +
+		"use start_line: -1 to append at end of file; end_line: -1 to delete or replace through the last line. " +
+		"Range mode is the clean solution for deleting a block of lines (no unique anchor needed) and for " +
+		"appending to a file. " +
+		"CRLF differences between old_string and the file are tolerated automatically. " +
+		"All edits are applied sequentially in memory then written atomically (temp file + rename). " +
+		"A per-path lock serialises concurrent edits. Optionally pass expected_mtime (from a prior " +
+		"read_file header) to guarantee the file hasn't changed since you read it."
 }
 
 type strEdit struct {
-	OldStr string `json:"old_string"`
-	NewStr string `json:"new_string"`
+	OldStr    string `json:"old_string"`
+	NewStr    string `json:"new_string"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
 }
 
 type editFileArgs struct {
@@ -352,9 +363,20 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 	content := original
 
 	for i, edit := range edits {
+		if edit.StartLine != 0 {
+			newStr := matchLineEndings(edit.NewStr, content)
+			var rerr error
+			content, rerr = applyRangeEdit(content, edit.StartLine, edit.EndLine, newStr)
+			if rerr != nil {
+				return writeResult{}, "", "", &editLogicErr{
+					fmt.Errorf("edit_file: edit[%d]: %w", i, rerr),
+				}
+			}
+			continue
+		}
 		if edit.OldStr == "" {
 			return writeResult{}, "", "", &editLogicErr{
-				fmt.Errorf("edit_file: edit[%d]: old_string must not be empty — use write_file to replace the entire file", i),
+				fmt.Errorf("edit_file: edit[%d]: old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range", i),
 			}
 		}
 		// CRLF tolerance: if the file uses CRLF and old_string doesn't (or
@@ -525,10 +547,25 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 
 	results := make([]partialEditResult, len(edits))
 	for i, edit := range edits {
+		if edit.StartLine != 0 {
+			newStr := matchLineEndings(edit.NewStr, content)
+			updated, rerr := applyRangeEdit(content, edit.StartLine, edit.EndLine, newStr)
+			if rerr != nil {
+				results[i] = partialEditResult{index: i, err: rerr}
+				continue
+			}
+			results[i] = partialEditResult{
+				index:     i,
+				applied:   true,
+				lineRange: summariseLineChanges(content, updated),
+			}
+			content = updated
+			continue
+		}
 		if edit.OldStr == "" {
 			results[i] = partialEditResult{
 				index: i,
-				err:   fmt.Errorf("old_string must not be empty — use write_file to replace the entire file"),
+				err:   fmt.Errorf("old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range"),
 			}
 			continue
 		}
