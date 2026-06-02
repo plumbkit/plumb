@@ -353,7 +353,7 @@ func statusBarLine(content string, innerW int, isOverlay bool) string {
 // settingsHintContent builds the hint bar: the restart legend on the left and
 // the navigation shortcuts (brighter keys) on the right.
 func settingsHintContent(contentW int) string {
-	legend := "* needs daemon restart  ·  \"next session\" applies on reconnect"
+	legend := "live = immediate  ·  \"next session\" = new sessions  ·  * = daemon restart"
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
 		SettingsBarKeyStyle.Render("enter") + SettingsBarStyle.Render(" toggle/open")

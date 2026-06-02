@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.21 (unreleased)
+
+### Fixed
+- **TUI Settings: path style now shows "· applied live" in the status bar** instead of the blank suffix it had before. `setPathStyle` was the only setter that bypassed `settingStatus`; it now goes through the same path as every other live-tier row (`model_settings_keys.go`). Guard: `TestSettingsPathStyle_StatusMarksLive`.
+- **TUI Settings: legend now explains all three reload tiers**, including `live`. The old legend described only `*` (restart) and `"next session"`, leaving the most common tier unexplained. Wording is now consistent with the status bar ("new sessions" in both places, replacing the legend's prior "reconnect"). (`model_settings.go`).
+- **`session_start` no-LSP guidance now covers Swift, Zig, Kotlin, TypeScript (tsconfig), and plain JavaScript (jsconfig)** — projects detected via those markers previously fell through to the generic "Use `list_files`" default instead of naming the concrete opt-in knob (`[lsp.swift]` etc.). `detectLanguageInfo` now carries entries for all six adapters shipped in 0.7.18, and `langFileProfile` has the matching file-count profiles. Existing Java, Rust, Python coverage unchanged. Guards: expanded `TestSessionStart_NoLSPGuidance` now runs sub-tests for each newly added marker type and for the Go "binary likely not installed" branch.
+- **`topology_status` now surfaces the per-project tuning limitation** inline: users who write per-project `[topology]` tuning (`resync_interval`, `batch`, `excludes`, `max_file_size`) would otherwise be silently surprised that only `enabled`/`disabled` is honoured per-project. The note appears at the end of every active-topology status output (`topology_status.go`).
+- **`search_memories` refactored below gocyclo-15** — `Execute` extracted into `buildMemoryRegex` + `runMemorySearch`; no behaviour change, lint now passes cleanly.
+
 ## 0.8.20 (2026-05-28)
 
 ### Fixed

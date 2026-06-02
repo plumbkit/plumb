@@ -601,10 +601,20 @@ func langFileProfile(lang string) (exts []string, label string) {
 		return []string{".go"}, "Go"
 	case "Python":
 		return []string{".py"}, "Python"
+	case "TypeScript":
+		return []string{".ts", ".tsx"}, "TypeScript"
+	case "JavaScript":
+		return []string{".js", ".mjs", ".cjs", ".jsx"}, "JavaScript"
 	case "JavaScript/TypeScript":
 		return []string{".ts", ".js", ".tsx", ".jsx"}, "JS/TS"
 	case "Rust":
 		return []string{".rs"}, "Rust"
+	case "Swift":
+		return []string{".swift"}, "Swift"
+	case "Zig":
+		return []string{".zig"}, "Zig"
+	case "Kotlin":
+		return []string{".kt", ".kts"}, "Kotlin"
 	case "Java (Maven)":
 		return []string{".java"}, "Java"
 	case "Java/Kotlin (Gradle)":
@@ -663,11 +673,17 @@ func detectLanguageInfo(ws string) (label, key string) {
 		key   string
 	}{
 		{"go.mod", "Go", "go"},
+		{"tsconfig.json", "TypeScript", "typescript"},
+		{"jsconfig.json", "JavaScript", "typescript"},
 		{"package.json", "JavaScript/TypeScript", "typescript"},
 		{"Cargo.toml", "Rust", "rust"},
 		{"pyproject.toml", "Python", "python"},
 		{"setup.py", "Python", "python"},
+		{"Package.swift", "Swift", "swift"},
+		{"build.zig", "Zig", "zig"},
 		{"pom.xml", "Java (Maven)", "java"},
+		{"settings.gradle.kts", "Kotlin", "kotlin"},
+		{"build.gradle.kts", "Kotlin", "kotlin"},
 		{"build.gradle", "Java/Kotlin (Gradle)", "java"},
 		{"CMakeLists.txt", "C/C++ (CMake)", ""},
 		{"mix.exs", "Elixir", ""},

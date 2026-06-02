@@ -68,31 +68,39 @@ func (t *searchMemoriesTool) Execute(_ context.Context, args json.RawMessage) (s
 	if err := t.guard.check(ws); err != nil {
 		return "", fmt.Errorf("search_memories: %w", err)
 	}
-
-	caseSensitive := !allLower(a.Pattern)
-	if a.CaseSensitive != nil {
-		caseSensitive = *a.CaseSensitive
+	re, err := buildMemoryRegex(a.Pattern, a.UseRegex, a.CaseSensitive)
+	if err != nil {
+		return "", err
 	}
-	var re *regexp.Regexp
+	return runMemorySearch(re, a.Pattern, ws)
+}
+
+// buildMemoryRegex compiles the search pattern. Smart-case applies when
+// caseSensitive is nil: case-insensitive iff the pattern is all lowercase.
+func buildMemoryRegex(pattern string, useRegex bool, caseSensitive *bool) (*regexp.Regexp, error) {
+	cs := !allLower(pattern)
+	if caseSensitive != nil {
+		cs = *caseSensitive
+	}
 	flags := ""
-	if !caseSensitive {
+	if !cs {
 		flags = "(?i)"
 	}
-	if a.UseRegex {
-		var err error
-		re, err = regexp.Compile(flags + a.Pattern)
+	if useRegex {
+		re, err := regexp.Compile(flags + pattern)
 		if err != nil {
-			return "", fmt.Errorf("invalid regex: %w", err)
+			return nil, fmt.Errorf("invalid regex: %w", err)
 		}
-	} else {
-		re = regexp.MustCompile(flags + regexp.QuoteMeta(a.Pattern))
+		return re, nil
 	}
+	return regexp.MustCompile(flags + regexp.QuoteMeta(pattern)), nil
+}
 
+func runMemorySearch(re *regexp.Regexp, pattern, ws string) (string, error) {
 	mems, err := memory.List(ws)
 	if err != nil {
 		return "", err
 	}
-
 	var sb strings.Builder
 	hits := 0
 	for _, m := range mems {
@@ -103,7 +111,7 @@ func (t *searchMemoriesTool) Execute(_ context.Context, args json.RawMessage) (s
 		for i, line := range strings.Split(body, "\n") {
 			if re.MatchString(line) {
 				if hits == 0 {
-					fmt.Fprintf(&sb, "Matches for %q in %s/.plumb/memories/:\n\n", a.Pattern, ws)
+					fmt.Fprintf(&sb, "Matches for %q in %s/.plumb/memories/:\n\n", pattern, ws)
 				}
 				fmt.Fprintf(&sb, "  %s:%d  %s\n", m.Name, i+1, strings.TrimSpace(line))
 				hits++
@@ -111,7 +119,7 @@ func (t *searchMemoriesTool) Execute(_ context.Context, args json.RawMessage) (s
 		}
 	}
 	if hits == 0 {
-		return fmt.Sprintf("No matches for %q in any memory.", a.Pattern), nil
+		return fmt.Sprintf("No matches for %q in any memory.", pattern), nil
 	}
 	fmt.Fprintf(&sb, "\n%d match(es) across %d memor(ies).", hits, countMemoriesWithMatches(re, ws))
 	return sb.String(), nil

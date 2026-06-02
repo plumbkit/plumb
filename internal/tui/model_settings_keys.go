@@ -462,7 +462,7 @@ func (m Model) setPathStyle(style string) Model {
 	if m.persist(func(c *config.Config) { c.UI.PathStyle = style }) {
 		m.settingsCfg.UI.PathStyle = style
 		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = "path style → " + style
+		m.settingsStatus = settingStatus(skPathStyle, "path style → "+style)
 	}
 	return m
 }

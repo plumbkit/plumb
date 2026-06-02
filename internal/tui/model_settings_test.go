@@ -269,6 +269,23 @@ func TestSettingsLogFormat_StatusMarksRestart(t *testing.T) {
 	}
 }
 
+// TestSettingsPathStyle_StatusMarksLive confirms path style (a live-tier
+// setting) now shows the "applied live" suffix, not a stale blank.
+func TestSettingsPathStyle_StatusMarksLive(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newSettingsModel()
+	m.settingsCursor = cursorFor(m.settingsItems, skPathStyle)
+
+	m, _ = m.adjustSetting(1)
+
+	if !strings.Contains(m.settingsStatus, "applied live") {
+		t.Errorf("path style status = %q, want it to mention \"applied live\"", m.settingsStatus)
+	}
+	if !strings.Contains(m.settingsStatus, "path style") {
+		t.Errorf("path style status = %q, want it to mention \"path style\"", m.settingsStatus)
+	}
+}
+
 func TestSettingsRateLimit_StepAndFloor(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newSettingsModel()

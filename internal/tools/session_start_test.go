@@ -299,27 +299,69 @@ func mapKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// TestSessionStart_NoLSPGuidance covers a recognised project whose language
-// server is not attached: session_start must not claim "LSP is available" and
-// must name the opt-in knob. This is the Java/Maven case that misled an agent.
+// TestSessionStart_NoLSPGuidance covers recognised projects whose language
+// server is not attached. Must never claim "LSP is available" and must name
+// the concrete next step (opt-in knob or binary-path guidance).
 func TestSessionStart_NoLSPGuidance(t *testing.T) {
-	ws := t.TempDir()
-	if err := os.WriteFile(filepath.Join(ws, "pom.xml"), []byte("<project/>\n"), 0o644); err != nil {
-		t.Fatalf("write pom.xml: %v", err)
+	// run creates a workspace with one marker file and asserts the output
+	// contains wantStr and does not claim LSP is available.
+	run := func(t *testing.T, markerFile, markerContent, wantStr string) {
+		t.Helper()
+		ws := t.TempDir()
+		if err := os.WriteFile(filepath.Join(ws, markerFile), []byte(markerContent), 0o644); err != nil {
+			t.Fatalf("write %s: %v", markerFile, err)
+		}
+		tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "LSP is available") {
+			t.Errorf("must not claim LSP is available\n%s", out)
+		}
+		if !strings.Contains(out, wantStr) {
+			t.Errorf("want %q in output\n%s", wantStr, out)
+		}
 	}
-	// diag is wired (it always is) but no LSP language is attached and no topology.
-	tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
-		WithLSPLanguage(func() string { return "" })
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if strings.Contains(out, "LSP is available") {
-		t.Errorf("must not claim LSP is available when none is attached\n%s", out)
-	}
-	if !strings.Contains(out, "[lsp.java]") {
-		t.Errorf("want the opt-in [lsp.java] knob named\n%s", out)
-	}
+
+	t.Run("java/maven names opt-in knob", func(t *testing.T) {
+		run(t, "pom.xml", "<project/>", "[lsp.java]")
+	})
+	t.Run("swift names opt-in knob", func(t *testing.T) {
+		run(t, "Package.swift", "// swift-tools-version:5.9", "[lsp.swift]")
+	})
+	t.Run("zig names opt-in knob", func(t *testing.T) {
+		run(t, "build.zig", "const std = @import(\"std\");", "[lsp.zig]")
+	})
+	t.Run("kotlin/settings.gradle.kts names opt-in knob", func(t *testing.T) {
+		run(t, "settings.gradle.kts", "rootProject.name = \"app\"", "[lsp.kotlin]")
+	})
+	t.Run("typescript/tsconfig names opt-in knob", func(t *testing.T) {
+		run(t, "tsconfig.json", "{}", "[lsp.typescript]")
+	})
+	// Go adapter ships on-by-default: the message explains the binary is likely not installed.
+	t.Run("go names binary-path guidance not opt-in knob", func(t *testing.T) {
+		ws := t.TempDir()
+		if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module test\ngo 1.21\n"), 0o644); err != nil {
+			t.Fatalf("write go.mod: %v", err)
+		}
+		tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{all: nil}, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "" })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "LSP is available") {
+			t.Errorf("must not claim LSP is available\n%s", out)
+		}
+		if !strings.Contains(out, "isn't installed") {
+			t.Errorf("want binary-path guidance for Go (on-by-default adapter)\n%s", out)
+		}
+		if strings.Contains(out, "[lsp.go]") {
+			t.Errorf("Go should not show opt-in knob (it ships enabled)\n%s", out)
+		}
+	})
 }
 
 func TestSessionStart_RecommendedFirstStep(t *testing.T) {
@@ -362,15 +404,24 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		}
 	})
 
-	t.Run("no LSP with language suggests next steps", func(t *testing.T) {
+	t.Run("no LSP with Go language names binary path guidance", func(t *testing.T) {
 		ws := makeGoWorkspace(t)
-		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil)
+		// No LSP attached, no topology — topology is wired but returns nil store.
+		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
+		if strings.Contains(out, "LSP is available") {
+			t.Errorf("must not claim LSP is available\n%s", out)
+		}
+		// Go adapter is on-by-default, so the message should explain it's likely not installed.
+		if !strings.Contains(out, "isn't installed") {
+			t.Errorf("want binary-path guidance for Go\n%s", out)
+		}
 		if !strings.Contains(out, "list_files") {
-			t.Errorf("want 'list_files' in output\n%s", out)
+			t.Errorf("want fallback mention of list_files\n%s", out)
 		}
 	})
 

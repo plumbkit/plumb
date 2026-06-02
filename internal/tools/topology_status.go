@@ -83,5 +83,8 @@ func formatTopologyStatus(store *topology.Store, workspace string) string {
 			"Set [topology] enabled = true in .plumb/config.toml or ~/.config/plumb/config.toml to enable."
 	}
 	s := store.Status()
-	return topology.FormatStatus(s, workspace)
+	out := topology.FormatStatus(s, workspace)
+	out += "\nNote: topology tuning (resync_interval, batch, excludes, max_file_size) is pool-global — " +
+		"per-project overrides for these fields are not yet honoured; only enable/disable is per-project."
+	return out
 }
