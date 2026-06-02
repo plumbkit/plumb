@@ -37,13 +37,14 @@ var readSymbolSchema = json.RawMessage(`{
 //
 // Concurrency: Execute is safe for concurrent use.
 type ReadSymbol struct {
-	client  lsp.Client
-	cache   *cache.Cache
-	ttl     time.Duration
-	timeout time.Duration
-	tracker *ReadTracker
-	topo    topologyStoreFn
-	guard   BoundaryGuard
+	client       lsp.Client
+	cache        *cache.Cache
+	ttl          time.Duration
+	timeout      time.Duration
+	tracker      *ReadTracker
+	topo         topologyStoreFn
+	guard        BoundaryGuard
+	clientNameFn func() string // may be nil; gates the edit-lane hint to conflict-prone clients
 }
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
@@ -60,6 +61,16 @@ func (t *ReadSymbol) WithTopologyFallback(fn topologyStoreFn) *ReadSymbol {
 
 func (t *ReadSymbol) WithBoundary(guard BoundaryGuard) *ReadSymbol {
 	t.guard = guard
+	return t
+}
+
+// WithClient wires the MCP client-name accessor so read_symbol can append the
+// edit-lane hint only for clients whose native Edit tool conflicts with plumb's
+// read-state (see edit_lane.go). read_symbol returns a symbol body the agent is
+// about to edit, so it is as much an edit precursor as read_file. Nil-safe;
+// without it no hint is emitted.
+func (t *ReadSymbol) WithClient(fn func() string) *ReadSymbol {
+	t.clientNameFn = fn
 	return t
 }
 
@@ -179,10 +190,16 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 	}
 
 	var sb strings.Builder
+	mtimeStr := mtime.Format(time.RFC3339Nano)
 	if sha != "" {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s\n", mtime.Format(time.RFC3339Nano), sha)
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s\n", mtimeStr, sha)
 	} else {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s\n", mtime.Format(time.RFC3339Nano))
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s\n", mtimeStr)
+	}
+	// For clients whose native Edit tool conflicts with plumb's read-state
+	// tracking, point at edit_file the moment the agent has the symbol body.
+	if clientHasNativeEditConflict(t.clientNameFn) {
+		sb.WriteString(nativeEditReadHint(mtimeStr))
 	}
 	if len(matches) > 1 {
 		fmt.Fprintf(&sb, "# %d matches for %q\n", len(matches), name)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.25 (unreleased)
+
+### Changed
+- **`read_symbol` now carries the same edit-lane hint as `read_file`.** Follow-up to 0.8.24's native-Edit-footgun guidance: `read_symbol` returns a symbol body the agent is about to edit, so it is as much a read-before-edit precursor as `read_file` — but it was emitting the `# plumb-read` header without the `edit_file(... expected_mtime=<mtime>)` call-to-action. It now appends the hint as a second header comment line for clients with the native-edit conflict (Claude Code only), via the same `clientHasNativeEditConflict` predicate and `nativeEditReadHint` helper in `internal/tools/edit_lane.go` — no new mechanism, just parity. Wired through a new `ReadSymbol.WithClient` builder (`internal/cli/conn.go`). Other clients keep the lean header. `read_multiple_files` remains deliberately hint-free (bulk orientation reads, not targeted edit precursors). Guards: `read_symbol_test.go` (`TestReadSymbol_EditLaneHint_ClaudeCode` — hint present as the second line with a matching mtime, body intact; `TestReadSymbol_NoEditLaneHint_OtherClients` — suppressed for nil/Desktop/vscode).
+
 ## 0.8.24 (unreleased)
 
 ### Changed
