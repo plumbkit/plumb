@@ -557,7 +557,7 @@ func TestSessionStart_DesktopGuidance(t *testing.T) {
 // arg is honoured only when nothing is attached, and nothing-resolves errors
 // (no daemon-cwd guess).
 func TestSessionStart_WorkspaceResolution(t *testing.T) {
-	t.Run("mismatch between attached root and explicit arg returns error", func(t *testing.T) {
+	t.Run("mismatch without repin callback falls back to error", func(t *testing.T) {
 		attached := t.TempDir()
 		var conflict string
 		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
@@ -571,6 +571,30 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		}
 		if conflict != "/some/other/path" {
 			t.Fatalf("pin conflict callback = %q, want requested workspace", conflict)
+		}
+	})
+
+	t.Run("explicit arg re-pins when repin callback wired", func(t *testing.T) {
+		attached := t.TempDir()
+		target := t.TempDir()
+		var got string
+		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+			WithRepin(func(_ context.Context, ws string) (string, error) {
+				got = ws
+				return ws, nil
+			})
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+target+`"}`))
+		if err != nil {
+			t.Fatalf("Execute should re-pin, got error: %v", err)
+		}
+		if got != target {
+			t.Fatalf("repin callback received %q, want %q", got, target)
+		}
+		if !strings.Contains(out, "# Workspace: "+target) {
+			t.Errorf("output should show the new workspace %q\n%s", target, out)
+		}
+		if !strings.Contains(out, "Re-pinned this connection: "+attached+" → "+target) {
+			t.Errorf("output should announce the re-pin\n%s", out)
 		}
 	})
 

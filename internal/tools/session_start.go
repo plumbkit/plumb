@@ -22,7 +22,7 @@ var sessionStartSchema = json.RawMessage(`{
   "properties": {
     "workspace": {
       "type": "string",
-      "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). Defaults to the daemon's already-resolved workspace."
+      "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). If this connection is already pinned to a different project, passing a workspace here re-pins it to the new project — this is how you switch projects on a connection reused across conversations. Defaults to the daemon's already-resolved workspace."
     },
     "session_id": {
       "type": "string",
@@ -67,15 +67,16 @@ type RootsResolver func(ctx context.Context) string
 // wrong project.
 type SessionStart struct {
 	ws           WorkspaceFn
-	diag         diagnosticsSource      // may be nil; diagnostics section skipped when nil
-	roots        RootsResolver          // may be nil; roots/list fallback skipped when nil
-	refuseFn     func() bool            // may be nil; treated as false (no refusal)
-	clientNameFn func() string          // may be nil; returns current MCP client name
-	topo         topologyStoreFn        // may be nil; returns the live topology store, or nil when disabled
-	gitPolicyFn  func() GitPolicy       // may be nil; git policy section skipped when nil
-	lspLangFn    func() string          // may be nil; the LSP language attached to this session ("" when none)
-	externalIDFn func(id string) string // may be nil; links session to external ID, returns inherited name
-	pinConflict  func(requested string) // may be nil; records a same-connection workspace switch attempt
+	diag         diagnosticsSource                                           // may be nil; diagnostics section skipped when nil
+	roots        RootsResolver                                               // may be nil; roots/list fallback skipped when nil
+	refuseFn     func() bool                                                 // may be nil; treated as false (no refusal)
+	clientNameFn func() string                                               // may be nil; returns current MCP client name
+	topo         topologyStoreFn                                             // may be nil; returns the live topology store, or nil when disabled
+	gitPolicyFn  func() GitPolicy                                            // may be nil; git policy section skipped when nil
+	lspLangFn    func() string                                               // may be nil; the LSP language attached to this session ("" when none)
+	externalIDFn func(id string) string                                      // may be nil; links session to external ID, returns inherited name
+	pinConflict  func(requested string)                                      // may be nil; records a same-connection workspace switch attempt
+	repin        func(ctx context.Context, workspace string) (string, error) // may be nil; re-pins the connection to an explicit workspace
 }
 
 // WithTopology wires the topology store accessor so session_start can lead its
@@ -119,6 +120,17 @@ func (t *SessionStart) WithPinConflict(fn func(requested string)) *SessionStart 
 	return t
 }
 
+// WithRepin wires the deliberate workspace-switch callback. When the connection
+// is already pinned and the caller passes an explicit `workspace` that differs,
+// session_start re-pins the connection to it (via fn) instead of refusing. fn
+// returns the resolved root. Nil-safe: with no callback wired, session_start
+// falls back to the historical "start a new connection" refusal. Returns the
+// receiver for chaining.
+func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace string) (string, error)) *SessionStart {
+	t.repin = fn
+	return t
+}
+
 // lspAttached reports whether a language server is attached for this session.
 func (t *SessionStart) lspAttached() bool {
 	return t.lspLangFn != nil && t.lspLangFn() != ""
@@ -152,7 +164,7 @@ func (*SessionStart) Description() string {
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
 func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-	ws, err := t.resolveSessionWorkspace(ctx, raw)
+	ws, repinnedFrom, err := t.resolveSessionWorkspace(ctx, raw)
 	if err != nil {
 		return "", err
 	}
@@ -168,7 +180,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	lang, lspKey := detectLanguageInfo(ws)
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
-	t.writeSessionIdentity(&sb, ws, lang, inheritedName)
+	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom)
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
 	writeSessionContext(&sb, ws)
 	writeSessionCommits(&sb, ws)
@@ -185,7 +197,10 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	return sb.String(), nil
 }
 
-func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.RawMessage) (string, error) {
+// resolveSessionWorkspace resolves the workspace for this call. repinnedFrom is
+// the previous root when an explicit `workspace` argument switched an
+// already-pinned connection to a different project; it is empty otherwise.
+func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.RawMessage) (ws string, repinnedFrom string, err error) {
 	var a struct {
 		Workspace string `json:"workspace"`
 	}
@@ -195,17 +210,11 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// (seedPathFromArgs reads it) — before Execute runs, so preferring it keeps
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
-		if ws := t.ws(); ws != "" {
-			if a.Workspace != "" && filepath.Clean(a.Workspace) != filepath.Clean(ws) {
-				if t.pinConflict != nil {
-					t.pinConflict(a.Workspace)
-				}
-				return "", fmt.Errorf(
-					"session_start: workspace is already pinned to %s — cannot re-pin to %s in the same connection. To switch projects, start a new MCP connection",
-					ws, a.Workspace,
-				)
+		if current := t.ws(); current != "" {
+			if a.Workspace != "" && filepath.Clean(a.Workspace) != filepath.Clean(current) {
+				return t.repinExplicit(ctx, current, a.Workspace)
 			}
-			return ws, nil
+			return current, "", nil
 		}
 	}
 	// Not attached yet: honour an explicit arg, then ask the client for roots.
@@ -213,18 +222,45 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// a reliable per-session signal (it is shared across all connections), and
 	// guessing it produced confidently-wrong "workspaces".
 	if a.Workspace != "" {
-		return a.Workspace, nil
+		return a.Workspace, "", nil
 	}
 	if t.roots != nil {
 		if ws := t.roots(ctx); ws != "" {
-			return ws, nil
+			return ws, "", nil
 		}
 	}
-	return "", noWorkspaceError()
+	return "", "", noWorkspaceError()
 }
 
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName string) {
+// repinExplicit switches an already-pinned connection to a different workspace
+// when the caller passes an explicit `workspace` argument. A deliberate
+// session_start argument is an unambiguous intent to work elsewhere, so plumb
+// honours it (tearing down and re-attaching the new root) instead of refusing —
+// otherwise a connection reused across conversations stays welded to the first
+// project it touched, with no in-session escape. When no re-pin callback is
+// wired (older wiring / tests), it falls back to the historical refusal.
+func (t *SessionStart) repinExplicit(ctx context.Context, current, requested string) (string, string, error) {
+	if t.repin == nil {
+		if t.pinConflict != nil {
+			t.pinConflict(requested)
+		}
+		return "", "", fmt.Errorf(
+			"session_start: workspace is already pinned to %s — cannot re-pin to %s in the same connection. To switch projects, start a new MCP connection",
+			current, requested,
+		)
+	}
+	newRoot, err := t.repin(ctx, requested)
+	if err != nil {
+		return "", "", fmt.Errorf("session_start: re-pinning to %s: %w", requested, err)
+	}
+	return newRoot, current, nil
+}
+
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
+	if repinnedFrom != "" {
+		fmt.Fprintf(sb, "Re-pinned this connection: %s → %s\n\n", repinnedFrom, ws)
+	}
 	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)
 	}

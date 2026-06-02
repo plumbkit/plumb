@@ -18,7 +18,12 @@ type WorkspaceBoundaryError struct {
 }
 
 func (e WorkspaceBoundaryError) Error() string {
-	return fmt.Sprintf("workspace boundary violation: connection is pinned to %s; refusing path %s outside that workspace", e.Workspace, e.Path)
+	return fmt.Sprintf(
+		"workspace boundary violation: this connection is pinned to %s; %s is in a different project. "+
+			"To work there, call session_start with workspace set to that project's root — it will re-pin this connection. "+
+			"Do not browse other projects on disk.",
+		e.Workspace, e.Path,
+	)
 }
 
 func (g BoundaryGuard) check(path string) error {

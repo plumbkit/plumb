@@ -62,6 +62,18 @@ func (r *routingProxy) setPrimary(root string, p *clientProxy) {
 	}
 }
 
+// resetPrimary unconditionally repoints the primary workspace. Unlike
+// setPrimary (first-wins, kept stable for the connection's lifetime), this is
+// used by a deliberate workspace re-pin — session_start called with an explicit
+// workspace that differs from the current one — to switch the connection's LSP
+// routing to a different project.
+func (r *routingProxy) resetPrimary(root string, p *clientProxy) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.primaryRoot = root
+	r.primary = p
+}
+
 // primaryClient returns the primary workspace's adapter or an error.
 func (r *routingProxy) primaryClient() (lsp.Client, error) {
 	r.mu.RLock()
@@ -396,6 +408,15 @@ func (r *routingInvProxy) setPrimary(root string, inv *cache.Invalidator) {
 		r.primaryRoot = root
 		r.primary = inv
 	}
+}
+
+// resetPrimary unconditionally repoints the primary diagnostic invalidator,
+// mirroring routingProxy.resetPrimary for a deliberate workspace re-pin.
+func (r *routingInvProxy) resetPrimary(root string, inv *cache.Invalidator) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.primaryRoot = root
+	r.primary = inv
 }
 
 // uriUnderRoot reports whether uri (file:// form) refers to a path under root.

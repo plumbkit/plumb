@@ -199,3 +199,54 @@ func TestRoutingProxy_NoPrimaryReturnsNotReady(t *testing.T) {
 		t.Error("expected error when no primary is set")
 	}
 }
+
+// TestRoutingProxy_ResetPrimaryOverridesFirstWins guards the re-pin path:
+// setPrimary is first-wins (stable for the connection's lifetime), but a
+// deliberate workspace switch must be able to repoint the primary. Without an
+// overriding reset, LSP routing would stay welded to the original project even
+// after session_start re-pins.
+func TestRoutingProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
+	rootA, rootB := setupTwoProjects(t)
+	pool := newTestPool()
+	clientA := &stubClient{id: "A"}
+	clientB := &stubClient{id: "B"}
+	installEntry(pool, rootA, clientA)
+	installEntry(pool, rootB, clientB)
+
+	rp := newRoutingProxy(pool)
+	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	// setPrimary is first-wins: a second setPrimary must not change the primary.
+	rp.setPrimary(rootB, pool.entries[rootB].proxy)
+	if rp.primaryRoot != rootA {
+		t.Fatalf("setPrimary should be first-wins: got %s, want %s", rp.primaryRoot, rootA)
+	}
+	// resetPrimary IS allowed to switch (deliberate re-pin).
+	rp.resetPrimary(rootB, pool.entries[rootB].proxy)
+	if rp.primaryRoot != rootB {
+		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", rp.primaryRoot, rootB)
+	}
+	c, err := rp.primaryClient()
+	if err != nil {
+		t.Fatalf("primaryClient after reset: %v", err)
+	}
+	if c != clientB {
+		t.Fatalf("primaryClient should be clientB after reset")
+	}
+}
+
+// TestRoutingInvProxy_ResetPrimaryOverridesFirstWins mirrors the LSP-proxy test
+// for the diagnostic-invalidator proxy.
+func TestRoutingInvProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
+	rootA, rootB := setupTwoProjects(t)
+	pool := newTestPool()
+	ri := newRoutingInvProxy(pool)
+	ri.setPrimary(rootA, nil)
+	ri.setPrimary(rootB, nil) // first-wins: ignored
+	if ri.primaryRoot != rootA {
+		t.Fatalf("setPrimary should be first-wins: got %s, want %s", ri.primaryRoot, rootA)
+	}
+	ri.resetPrimary(rootB, nil)
+	if ri.primaryRoot != rootB {
+		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", ri.primaryRoot, rootB)
+	}
+}

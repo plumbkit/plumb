@@ -363,6 +363,94 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 	slog.Info("daemon: session auto-attached (synthetic)", "root", root)
 }
 
+// repinWorkspace deliberately switches the connection to a different workspace.
+// Unlike attachWorkspace (idempotent, first-wins — the safe default for
+// auto-resolution), this is driven only by an explicit session_start workspace
+// argument: an unambiguous declaration of intent. It tears down the previous
+// workspace's per-session subsystems (quality runner, topology store, LSP
+// routing) and re-attaches the new root, so a connection reused across
+// conversations (e.g. Claude Desktop) is no longer permanently welded to the
+// first project it touched. The ad-hoc boundary guard on other path tools is
+// unaffected — only this deliberate bootstrap call re-pins.
+//
+// folder may be any absolute path inside the target project. It is resolved to
+// a workspace root via pool.Detect; when no marker is found the folder itself
+// becomes the workspace (SynthesiseRoot), so an explicit pin always succeeds.
+// Returns the resolved root.
+func (s *connSession) repinWorkspace(ctx context.Context, folder string) (string, error) {
+	folder = strings.TrimPrefix(folder, "file://")
+	if folder == "" || folder == "/" {
+		return "", fmt.Errorf("repin: empty workspace path %q", folder)
+	}
+	root, language, err := s.pool.Detect(folder)
+	if err != nil {
+		// No .plumb/marker/.git found — the folder itself becomes the workspace.
+		root = s.pool.SynthesiseRoot(folder)
+		language = LanguageNone
+	}
+	if s.attachOrRepinTo(ctx, root, language) {
+		s.applyProjectConfig(root)
+	}
+	return root, nil
+}
+
+// attachOrRepinTo points the connection at root, tearing down any previous
+// workspace's per-session subsystems first so the start* helpers (which no-op
+// when already started) re-create them for the new root. Takes stateMu. Returns
+// true when the root actually changed (false on a no-op re-pin to the same
+// root). language is the LSP language for root, or LanguageNone.
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	prev := s.acquiredRoot
+	if root == prev {
+		return false
+	}
+	if s.qualityRunner != nil {
+		s.qualityRunner.Stop()
+		s.qualityRunner = nil
+	}
+	s.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
+
+	adapter := ""
+	if language != LanguageNone {
+		if e, aerr := s.pool.acquireLang(ctx, root, language); aerr != nil {
+			slog.Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
+			language = LanguageNone
+		} else {
+			s.sessionProxy.resetPrimary(root, e.proxy)
+			s.sessionInv.resetPrimary(root, e.inv)
+			adapter = adapterForLanguage(language)
+		}
+	}
+	detectedLanguage := language
+	if detectedLanguage == LanguageNone {
+		detectedLanguage = detectAnyLanguageAt(root, s.store.Current())
+	}
+	s.acquiredRoot = root
+	s.acquiredLanguage = language
+	s.lastCfgMtime = time.Time{}
+	s.startQualityRunner(root)
+	s.startTopologyIndexer(root)
+	recoverWorkspaceTxlog(root, txlog.Scan)
+	cn, cv := s.clientName, s.clientVersion
+	session.Patch(s.sessID, func(info *session.Info) {
+		info.Folder = root
+		info.Language = language
+		info.DetectedLanguage = detectedLanguage
+		info.Adapter = adapter
+		info.Synthetic = false
+		info.Health = ""
+		info.HealthMessage = ""
+		if cn != "" {
+			info.ClientName = cn
+			info.ClientVersion = cv
+		}
+	})
+	slog.Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
+	return true
+}
+
 // applyProjectConfig loads <workspace>/.plumb/config.toml and applies it to
 // the live session (rate limit, strict mode, walk config).
 func (s *connSession) applyProjectConfig(workspace string) {
@@ -844,6 +932,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithLSPLanguage(s.acquiredLanguageName).
+		WithRepin(s.repinWorkspace).
 		WithPinConflict(func(requested string) {
 			ws := s.workspace()
 			s.markBoundaryViolation(fmt.Sprintf("session_start workspace switch refused: connection is pinned to %s; requested %s", ws, requested))
