@@ -118,7 +118,11 @@ func (t *EditFile) isStrict() bool {
 func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
-	return "Apply one or more edits to an existing file. Two edit modes per item: " +
+	return "Apply one or more edits to an existing file. " +
+		"Use this tool — not Claude Code's native Edit/Write — for every in-workspace file change: " +
+		"plumb and the Claude Code harness track read-state separately, so a native Edit after a plumb " +
+		"read_file fails with \"File has not been read yet\". Pair read_file with edit_file and stay in one lane. " +
+		"Two edit modes per item: " +
 		"(1) str_replace mode (default): set old_string to the text that must appear EXACTLY ONCE — " +
 		"rejected if absent or ambiguous. " +
 		"(2) range mode: set start_line (1-based) to replace lines start_line..end_line with new_string; " +

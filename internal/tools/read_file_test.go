@@ -227,6 +227,93 @@ func TestReadFile_OutputHasMtimeHeader(t *testing.T) {
 	}
 }
 
+// TestReadFile_EditLaneHint_ClaudeCode verifies that a Claude Code client gets
+// the edit_file call-to-action as a second header comment line, carrying the
+// exact mtime so the follow-up edit is copy-paste ready. The plumb-read header
+// must remain the first line (other tooling parses it).
+func TestReadFile_EditLaneHint_ClaudeCode(t *testing.T) {
+	path := writeTextFile(t, "hello\nworld\n")
+	raw, _ := json.Marshal(map[string]any{"file_path": path})
+	tool := NewReadFile(nil).WithClient(func() string { return "claude-code" })
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(out, "# plumb-read mtime=") {
+		t.Fatalf("plumb-read header must remain the first line, got: %q", out)
+	}
+	lines := strings.SplitN(out, "\n", 3)
+	if len(lines) < 2 || !strings.HasPrefix(lines[1], "# ") {
+		t.Fatalf("expected the edit-lane hint as the second comment line, got: %q", out)
+	}
+	hintLine := lines[1]
+	for _, want := range []string{"edit_file", "native Edit", "expected_mtime"} {
+		if !strings.Contains(hintLine, want) {
+			t.Errorf("hint line missing %q: %q", want, hintLine)
+		}
+	}
+	// The mtime in the hint must equal the mtime in the header (copy-paste ready).
+	headerMtime := extractMtime(t, lines[0])
+	if headerMtime != "" && !strings.Contains(hintLine, headerMtime) {
+		t.Errorf("hint mtime should match header mtime %q: %q", headerMtime, hintLine)
+	}
+	// Content must still be present after the header block.
+	if !strings.Contains(out, "hello") || !strings.Contains(out, "world") {
+		t.Errorf("file content missing from output:\n%s", out)
+	}
+}
+
+// TestReadFile_NoEditLaneHint_OtherClients verifies the hint is suppressed for
+// clients without the native-edit conflict (and when no client is wired), so
+// their read output stays lean: header line, blank line, then content.
+func TestReadFile_NoEditLaneHint_OtherClients(t *testing.T) {
+	cases := []struct {
+		name   string
+		client func() string
+	}{
+		{"nil client", nil},
+		{"claude desktop", func() string { return "claude-ai" }},
+		{"vscode", func() string { return "vscode" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := writeTextFile(t, "hello\n")
+			raw, _ := json.Marshal(map[string]any{"file_path": path})
+			tool := NewReadFile(nil)
+			if c.client != nil {
+				tool = tool.WithClient(c.client)
+			}
+			out, err := tool.Execute(context.Background(), raw)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.Contains(out, "edit_file") || strings.Contains(out, "native Edit") {
+				t.Errorf("non-conflict client must not get the edit-lane hint:\n%s", out)
+			}
+			// Lean format: header line, then blank line, then content.
+			lines := strings.SplitN(out, "\n", 3)
+			if len(lines) < 2 || lines[1] != "" {
+				t.Errorf("expected a blank line after the header, got: %q", out)
+			}
+		})
+	}
+}
+
+// extractMtime pulls the mtime= value out of a plumb-read header line.
+func extractMtime(t *testing.T, header string) string {
+	t.Helper()
+	const key = "mtime="
+	i := strings.Index(header, key)
+	if i < 0 {
+		return ""
+	}
+	rest := header[i+len(key):]
+	if j := strings.IndexByte(rest, ' '); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
 func TestReadFile_HeaderIncludesIndentStyle(t *testing.T) {
 	cases := []struct {
 		name    string

@@ -815,7 +815,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary))
 	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewListDirectory(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary))
+	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr))
 	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithBoundary(boundary))
 	srv.Register(tools.NewReadMultipleFiles().WithBoundary(boundary))
 	wd := s.buildWriteDeps()

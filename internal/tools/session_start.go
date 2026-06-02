@@ -445,6 +445,7 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 // with a one-line pointer to enabling the index.
 func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("## Tool guidance (Claude Code)\n\n")
+	sb.WriteString(nativeEditLaneWarning)
 	if t.topologyActive() {
 		sb.WriteString("Two complementary layers. **Topology (the Map)** is the primary path for " +
 			"discovery, structure, and impact — it answers instantly, tolerates broken code, and " +

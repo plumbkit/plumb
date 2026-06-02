@@ -66,14 +66,23 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 //
 // Concurrency: Execute is safe for concurrent use.
 type ReadFile struct {
-	tracker *ReadTracker // may be nil; strict-mode tracking disabled when nil
-	guard   BoundaryGuard
+	tracker      *ReadTracker // may be nil; strict-mode tracking disabled when nil
+	guard        BoundaryGuard
+	clientNameFn func() string // may be nil; gates the edit-lane hint to conflict-prone clients
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
 
 func (t *ReadFile) WithBoundary(guard BoundaryGuard) *ReadFile {
 	t.guard = guard
+	return t
+}
+
+// WithClient wires the MCP client-name accessor so read_file can append the
+// edit-lane hint only for clients whose native Edit tool conflicts with plumb's
+// read-state (see edit_lane.go). Nil-safe; without it no hint is emitted.
+func (t *ReadFile) WithClient(fn func() string) *ReadFile {
+	t.clientNameFn = fn
 	return t
 }
 
@@ -163,19 +172,33 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
 
+	return t.formatOutput(mtime, sha, content, truncated), nil
+}
+
+// formatOutput assembles the read_file response: the plumb-read header line
+// (mtime + optional sha + indent), an optional edit-lane hint line for clients
+// whose native Edit tool conflicts with plumb's read-state, a blank separator,
+// then the (possibly truncated) content.
+func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool) string {
 	var sb strings.Builder
+	mtimeStr := mtime.Format(time.RFC3339Nano)
 	if sha != "" {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s\n\n",
-			mtime.Format(time.RFC3339Nano), sha, classifyIndent(content))
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s\n", mtimeStr, sha, classifyIndent(content))
 	} else {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n\n",
-			mtime.Format(time.RFC3339Nano), classifyIndent(content))
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n", mtimeStr, classifyIndent(content))
 	}
+	// For clients whose native Edit tool conflicts with plumb's read-state
+	// tracking, append a copy-paste-ready pointer to edit_file at the exact
+	// moment the agent is about to act on what it just read.
+	if clientHasNativeEditConflict(t.clientNameFn) {
+		sb.WriteString(nativeEditReadHint(mtimeStr))
+	}
+	sb.WriteByte('\n')
 	sb.WriteString(content)
 	if truncated {
 		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")
 	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 // resolveLineWindow reconciles plumb's absolute start_line/end_line range with

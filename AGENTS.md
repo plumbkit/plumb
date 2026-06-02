@@ -415,6 +415,7 @@ You are likely an AI agent reading this through plumb. Most common patterns:
 
 - **First call:** `session_start({})`. Returns the orientation packet.
 - **Read before edit:** call `read_file`, copy its `mtime` header value, pass it as `expected_mtime` to `edit_file`. Mandatory under strict mode; recommended always.
+- **Common mistake — mixing plumb reads with the native Edit tool:** after a plumb `read_file`, always edit with plumb `edit_file` — **not** Claude Code's native `Edit`/`Write`. plumb and the Claude Code harness track file read-state *separately*: a plumb `read_file` does not satisfy the harness's read-before-edit rule, so a native `Edit` after a plumb `read_file` fails with "File has not been read yet" (and "File has been modified since read" after any external change). These look like plumb errors but come from mixing the two toolsets. Stay in one lane: `read_file` → `edit_file`.
 - **One-shot file create:** `write_file({file_path, content})`.
 - **Targeted edit:** `edit_file({file_path, edits: [{old_string, new_string}], expected_mtime})`. `old_string` must appear exactly once. CRLF differences are tolerated automatically.
 - **Cross-file refactor:** `transaction_apply({operations: [{file_path, edits, expected_mtime}]})`. All-or-nothing.
@@ -424,7 +425,7 @@ You are likely an AI agent reading this through plumb. Most common patterns:
 - **Discover what changed:** `git({subcommand: "status"})` or `git({subcommand: "log", args: ["-10", "--oneline"]})`.
 - **See your own activity:** `plumb` TUI's right panel shows "Recent Edits" for the selected session.
 - **Throttled?** You hit the rate limit (default 120/min). Wait or set `PLUMB_WRITE_RATE_LIMIT=0`.
-- **Rejected for "has not been read"?** Strict mode is on. Call `read_file` first.
+- **Rejected for "has not been read"?** Two different sources: plumb's *strict mode* (`[edits].strict = true`) requires a prior plumb `read_file` — call it first. Claude Code's harness "File has not been read yet" instead means you used the *native* `Edit` after a plumb `read_file`; switch to plumb `edit_file` (see the common-mistake note above).
 - **Rejected for "uncommitted changes"?** The target file was dirty in git *before* plumb touched it this session — re-editing a file plumb already wrote this session is never blocked (the dirty-guard is session-aware). Review and commit the pre-existing changes, or pass `dirty_ok: true` to overwrite anyway.
 - **Too much log noise from the daemon?** `plumb log-level warn` raises the floor instantly; `plumb log-level reset` restores the config-file default.
 

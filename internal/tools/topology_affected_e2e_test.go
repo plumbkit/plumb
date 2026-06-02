@@ -212,3 +212,84 @@ func TestSessionStart_LSPLedGuidanceWhenTopologyOff(t *testing.T) {
 		t.Errorf("LSP-led guidance should tip enabling topology:\n%s", out)
 	}
 }
+
+// editLaneWarningSubstrings are the load-bearing phrases the Claude Code
+// edit-lane warning must carry: it must name the anti-pattern, the exact harness
+// error an agent will have already seen, and the correct plumb tool.
+var editLaneWarningSubstrings = []string{
+	"Edit lane",
+	"File has not been read yet",
+	"File has been modified since read",
+	"edit_file",
+	"native",
+}
+
+// TestSessionStart_EditLaneWarning_ClaudeCode proves the warning is present for
+// a Claude Code client in BOTH the topology-led and LSP-led guidance branches
+// (it is written before the branch, so it must survive either path). This is
+// the structural guard for the harness/plumb read-state mismatch fix.
+func TestSessionStart_EditLaneWarning_ClaudeCode(t *testing.T) {
+	newTool := func(ws string, topoOn bool) *tools.SessionStart {
+		tool := tools.NewSessionStart(
+			func() string { return ws }, nil, nil,
+			func() bool { return false },
+			func() string { return "claude-code" },
+			nil,
+		)
+		if topoOn {
+			s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+				[]topology.Extractor{goext.New()})
+			if err != nil {
+				t.Fatalf("topology.Open: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			tool = tool.WithTopology(func() *topology.Store { return s })
+		}
+		return tool
+	}
+
+	for _, topoOn := range []bool{false, true} {
+		name := "topology-off"
+		if topoOn {
+			name = "topology-on"
+		}
+		t.Run(name, func(t *testing.T) {
+			ws := t.TempDir()
+			if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module demo\n\ngo 1.22\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := newTool(ws, topoOn).Execute(context.Background(), json.RawMessage(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range editLaneWarningSubstrings {
+				if !strings.Contains(out, want) {
+					t.Errorf("edit-lane warning missing %q (topoOn=%v):\n%s", want, topoOn, out)
+				}
+			}
+		})
+	}
+}
+
+// TestSessionStart_EditLaneWarning_AbsentForDesktop proves the warning does NOT
+// fire for Claude Desktop: Desktop has no native Edit tool, so the warning would
+// be wrong (and the Desktop guidance already says all file ops go through plumb).
+func TestSessionStart_EditLaneWarning_AbsentForDesktop(t *testing.T) {
+	ws := t.TempDir()
+	tool := tools.NewSessionStart(
+		func() string { return ws }, nil, nil,
+		func() bool { return false },
+		func() string { return "claude-ai" },
+		nil,
+	)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "## Tool guidance (Claude Desktop)") {
+		t.Fatalf("expected Desktop guidance:\n%s", out)
+	}
+	if strings.Contains(out, "File has not been read yet") {
+		t.Errorf("Desktop guidance must NOT carry the native-Edit warning:\n%s", out)
+	}
+}

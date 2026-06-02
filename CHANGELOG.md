@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.24 (unreleased)
+
+### Changed
+- **`session_start`, `read_file`, `edit_file`, and `AGENTS.md` now actively steer Claude Code agents away from the native-Edit footgun.** The recurring friction (logged in every `internal/feedbacks.md` entry since 0.8.11): plumb and the Claude Code harness track file read-state *separately*, so a plumb `read_file` followed by the harness's native `Edit` fails with "File has not been read yet" (and "File has been modified since read" after any external change). These look like plumb errors but are produced by mixing the two toolsets — plumb cannot satisfy the harness's tracker from the MCP side, so the fix is guidance that makes the plumb lane (`read_file` → `edit_file`) the obvious path. Four touch-points, single source of truth in `internal/tools/edit_lane.go`: (1) `session_start`'s Claude Code tool-guidance block now opens with a prominent edit-lane warning naming the anti-pattern and the exact harness errors — and it is *suppressed for Claude Desktop*, which has no native Edit tool; (2) `read_file` appends a copy-paste-ready `edit_file(... expected_mtime=<mtime>)` hint as a second header comment line, but *only* for clients with the conflict (Claude Code), keeping other clients' output lean; (3) `edit_file`'s description names itself as the tool to use instead of native Edit; (4) `AGENTS.md` quick reference gains a "Common mistake" entry and disambiguates the two distinct "has not been read" sources (plumb strict mode vs the harness). Guards: `edit_lane_test.go`, `read_file_test.go` (hint present for Claude Code, absent for others), and `topology_affected_e2e_test.go` (warning present in both guidance branches, absent for Desktop). The client-scoping reuses the existing `isClaudeCode` matcher via a new `clientHasNativeEditConflict` predicate — the extension point as other agentic CLIs are validated.
+
 ## 0.8.23 (unreleased)
 
 ### Fixed
