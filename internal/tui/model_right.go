@@ -130,7 +130,13 @@ func (m Model) rightLinesDetails(rw int) []string {
 		if msg == "" {
 			msg = "workspace boundary violation blocked"
 		}
-		lines = append(lines, detailRow("Health", msg))
+		for i, w := range wrapText(msg, max(rw-kw-2, 8)) {
+			if i == 0 {
+				lines = append(lines, detailRow("Health", w))
+			} else {
+				lines = append(lines, detailRow("", w))
+			}
+		}
 	}
 
 	lines = append(lines, "")

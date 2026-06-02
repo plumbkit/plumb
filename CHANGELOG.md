@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.23 (unreleased)
+
+### Fixed
+- **TUI Sessions panel: long health-status messages now wrap** instead of overflowing the panel width. The `Health` detail row in the session detail view uses the same `wrapText` helper as other long fields, so "workspace boundary violation blocked" and similar messages render cleanly at any terminal width (`internal/tui/model_right.go`).
+
 ## 0.8.22 (unreleased)
 
 ### Added
