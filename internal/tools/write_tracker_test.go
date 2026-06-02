@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteTracker_RecordWrote(t *testing.T) {
@@ -34,6 +35,43 @@ func TestWriteTracker_NilSafe(t *testing.T) {
 	w.Record("/tmp/does-not-matter") // must not panic
 	if w.Wrote("/tmp/does-not-matter") {
 		t.Fatal("a nil tracker should report nothing written")
+	}
+	w.Reset() // must not panic on a nil tracker
+}
+
+// TestWriteTracker_Reset proves a re-pin's clean slate: after Reset the tracker
+// reports nothing written, so the dirty-guard re-arms for the new workspace.
+func TestWriteTracker_Reset(t *testing.T) {
+	w := NewWriteTracker()
+	w.Record("/tmp/a.go")
+	w.Record("/tmp/b.go")
+	w.Reset()
+	if w.Wrote("/tmp/a.go") || w.Wrote("/tmp/b.go") {
+		t.Fatal("Reset should forget every recorded path")
+	}
+	// The tracker stays usable after a reset.
+	w.Record("/tmp/c.go")
+	if !w.Wrote("/tmp/c.go") {
+		t.Fatal("tracker should still record after Reset")
+	}
+}
+
+// TestReadTracker_Reset mirrors the write-tracker reset for strict-mode read
+// state, including nil-safety.
+func TestReadTracker_Reset(t *testing.T) {
+	var nilTracker *ReadTracker
+	nilTracker.Reset() // must not panic
+
+	r := NewReadTracker()
+	now := time.Now()
+	r.Record("/tmp/a.go", now)
+	r.Reset()
+	if !r.Mtime("/tmp/a.go").IsZero() {
+		t.Fatal("Reset should forget every recorded mtime")
+	}
+	r.Record("/tmp/b.go", now)
+	if r.Mtime("/tmp/b.go").IsZero() {
+		t.Fatal("tracker should still record after Reset")
 	}
 }
 

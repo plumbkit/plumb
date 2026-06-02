@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/session"
@@ -106,5 +107,78 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	}
 	if newRoot != bare || s.workspace() != bare {
 		t.Fatalf("marker-less repin: workspace = %s (returned %s), want %s", s.workspace(), newRoot, bare)
+	}
+}
+
+// TestRepinWorkspace_ResetsTrackers verifies a re-pin clears the per-session
+// read/write tracking: paths plumb touched in project A must not carry over to
+// project B, where plumb has written and read nothing yet (so B's dirty-guard
+// and strict-mode read check start clean).
+func TestRepinWorkspace_ResetsTrackers(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	pool := detectTestPool()
+
+	rootA := freshTempDir(t)
+	rootB := freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+	defer s.close()
+	s.attachWorkspace(context.Background(), "file://"+rootA)
+
+	writtenA := filepath.Join(rootA, "touched.go")
+	readA := filepath.Join(rootA, "seen.go")
+	s.writeTracker.Record(writtenA)
+	s.readTracker.Record(readA, time.Now())
+	if !s.writeTracker.Wrote(writtenA) || s.readTracker.Mtime(readA).IsZero() {
+		t.Fatal("precondition: tracker should hold the recorded paths before re-pin")
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), rootB); err != nil {
+		t.Fatalf("repin: %v", err)
+	}
+	if s.writeTracker.Wrote(writtenA) {
+		t.Error("write tracker should be cleared on re-pin")
+	}
+	if !s.readTracker.Mtime(readA).IsZero() {
+		t.Error("read tracker should be cleared on re-pin")
+	}
+}
+
+// TestOnRootsChanged_RepinsOnChange covers the roots/list_changed path: the
+// first reported root pins the connection, a later *different* root re-pins it
+// (an editor switching folders), and an empty root leaves the current pin
+// untouched rather than tearing the workspace down.
+func TestOnRootsChanged_RepinsOnChange(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	pool := detectTestPool()
+
+	rootA := freshTempDir(t)
+	rootB := freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+	defer s.close()
+
+	// First report pins A (connection not yet attached).
+	s.onRootsChanged(context.Background(), "file://"+rootA)
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("first roots change: workspace = %s, want %s", got, rootA)
+	}
+
+	// A genuinely different root re-pins to B.
+	s.onRootsChanged(context.Background(), "file://"+rootB)
+	if got := s.workspace(); got != rootB {
+		t.Fatalf("changed roots: workspace = %s, want %s", got, rootB)
+	}
+
+	// An empty root (client cannot satisfy roots/list) keeps the current pin.
+	s.onRootsChanged(context.Background(), "")
+	if got := s.workspace(); got != rootB {
+		t.Fatalf("empty roots change should keep pin: workspace = %s, want %s", got, rootB)
 	}
 }

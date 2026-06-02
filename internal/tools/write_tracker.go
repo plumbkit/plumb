@@ -39,6 +39,19 @@ func (w *WriteTracker) Record(path string) {
 	w.mu.Unlock()
 }
 
+// Reset forgets every recorded path. Called on a deliberate workspace re-pin so
+// the dirty-guard starts clean for the new project — plumb has written nothing
+// there yet, so a file already dirty in the new workspace must still require
+// dirty_ok. nil-safe.
+func (w *WriteTracker) Reset() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.written = make(map[string]struct{})
+	w.mu.Unlock()
+}
+
 // Wrote reports whether plumb has written path this session. nil-safe (false).
 func (w *WriteTracker) Wrote(path string) bool {
 	if w == nil {

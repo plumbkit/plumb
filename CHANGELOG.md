@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.28 (unreleased)
+
+Review follow-ups for the 0.8.26 re-pin and 0.8.3 `uri` work (the three items cleared from `docs/internal/todo-to-review.md`).
+
+### Fixed
+- **A workspace re-pin now resets the per-session read/write trackers.** `attachOrRepinTo` (`internal/cli/conn.go`) tore down the quality runner, topology store, and LSP routing on a switch but left the `ReadTracker` and `WriteTracker` holding the *old* project's paths. The workspace boundary made this harmless (a stale path can never be matched once it is out of bounds), but it was conceptually wrong: plumb has read and written nothing in the new project, so its dirty-guard and strict-mode read check should start clean. Both trackers gained a nil-safe `Reset()` (`internal/tools/{read,write}_tracker.go`), called on every successful re-pin. Guards: `TestWriteTracker_Reset`, `TestReadTracker_Reset` (`internal/tools/write_tracker_test.go`), and `TestRepinWorkspace_ResetsTrackers` (`internal/cli/repin_test.go`).
+- **`OnRootsChanged` now follows a genuine workspace switch instead of being ignored.** An editor client that *changes* its reported roots (opening a different folder) previously hit the first-wins `attachWorkspace`, so the connection stayed welded to the first root — the same gap the 0.8.26 `session_start` re-pin closed for clients that never report roots. `OnRootsChanged` now routes through a new `connSession.onRootsChanged` (`internal/cli/conn.go`): it pins on the first attach, re-pins when an already-pinned connection reports a *different* root, and leaves the current pin untouched on an empty or unchanged root (so a spurious notification, or a `roots/list` the client cannot satisfy, never tears the workspace down — `repinWorkspace` no-ops when the resolved root matches). Guard: `TestOnRootsChanged_RepinsOnChange` (`internal/cli/repin_test.go`).
+
+### Added
+- **Contract test enforcing that every `uri`-taking tool normalises plain paths.** The 0.8.3 change that let `uri` tools accept a plain absolute path (via `toFileURI`) had no automated guard, so a *new* `uri` tool could silently forget the normalisation and reject plain paths. `TestURITools_NormalisePlainPaths` (`internal/tools/uri_contract_test.go`) scans the package source, auto-discovers every tool whose `InputSchema` declares a `"uri"` property, and fails if it does not also call `toFileURI` — closing the drift gap without a hand-maintained list.
+
 ## 0.8.27 (unreleased)
 
 ### Fixed

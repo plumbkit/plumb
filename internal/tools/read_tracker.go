@@ -34,6 +34,19 @@ func (r *ReadTracker) Record(path string, mtime time.Time) {
 	r.mu.Unlock()
 }
 
+// Reset forgets every recorded mtime. Called on a deliberate workspace re-pin so
+// strict-mode read tracking starts clean for the new project: a read of a file
+// in the old workspace must not satisfy the read-before-edit check for a
+// different project. nil-safe.
+func (r *ReadTracker) Reset() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.mtimes = make(map[string]time.Time)
+	r.mu.Unlock()
+}
+
 // Mtime returns the mtime that was last recorded for path, or the zero
 // time.Time if read_file has never been called for it on this tracker.
 // nil-safe (returns zero).

@@ -394,6 +394,33 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder string) (string
 	return root, nil
 }
 
+// onRootsChanged applies a client's updated workspace roots (the
+// notifications/roots/list_changed path). On the first attach it pins the root,
+// like OnInit. When the connection is already pinned and the client reports a
+// different root — an editor that genuinely switched folders — it re-pins to
+// follow the switch, closing the same "welded connection" gap that the
+// session_start re-pin fixed for clients that never report roots (Claude
+// Desktop). An empty or unchanged root is left alone: repinWorkspace no-ops when
+// the resolved root matches the current pin, so a spurious notification (or a
+// roots/list the client cannot satisfy) never tears the workspace down.
+func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
+	s.stateMu.Lock()
+	pinned := s.acquiredRoot != ""
+	s.stateMu.Unlock()
+	if !pinned {
+		s.attachWorkspace(ctx, rootURI)
+		s.applyProjectConfig(s.workspace())
+		return
+	}
+	folder := strings.TrimPrefix(rootURI, "file://")
+	if folder == "" || folder == "/" {
+		return // client reported no usable root — keep the current pin
+	}
+	if _, err := s.repinWorkspace(ctx, folder); err != nil {
+		slog.Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
+	}
+}
+
 // attachOrRepinTo points the connection at root, tearing down any previous
 // workspace's per-session subsystems first so the start* helpers (which no-op
 // when already started) re-create them for the new root. Takes stateMu. Returns
@@ -411,6 +438,11 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.qualityRunner = nil
 	}
 	s.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
+	// Per-session read/write tracking is workspace-relative: plumb has read and
+	// written nothing in the new project yet, so the dirty-guard and strict-mode
+	// read check must start clean rather than inherit the old root's paths.
+	s.readTracker.Reset()
+	s.writeTracker.Reset()
 
 	adapter := ""
 	if language != LanguageNone {
@@ -987,8 +1019,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
 		s.setClientRequest(request)
 		slog.Info("daemon: roots changed — re-fetching workspace root")
-		s.attachWorkspace(initCtx, rootFromRoots(initCtx, request))
-		s.applyProjectConfig(s.workspace())
+		s.onRootsChanged(initCtx, rootFromRoots(initCtx, request))
 		s.startConfigWatcher()
 	}
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage) {
