@@ -549,7 +549,7 @@ func TestAcquireLang_ConcurrentReusesSingleEntry(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			e, err := pool.acquireLang(context.Background(), root, "go")
+			e, err := pool.acquireLang(context.Background(), root, "go", false)
 			if err != nil {
 				t.Errorf("acquireLang: %v", err)
 				return
@@ -586,7 +586,7 @@ func TestAcquireLang_FirstStartFailureRemovesEntry(t *testing.T) {
 
 	const root = "/tmp/plumb-acquire-fail-root"
 	start := time.Now()
-	if _, err := pool.acquireLang(context.Background(), root, "go"); err == nil {
+	if _, err := pool.acquireLang(context.Background(), root, "go", false); err == nil {
 		t.Fatal("expected error for a missing language-server binary")
 	}
 	if elapsed := time.Since(start); elapsed >= firstStartGrace {
@@ -611,7 +611,7 @@ func TestAcquireLang_CancelledCtxKeepsWarming(t *testing.T) {
 	cancel() // request context already gone before the call
 
 	start := time.Now()
-	e, err := pool.acquireLang(ctx, root, "go")
+	e, err := pool.acquireLang(ctx, root, "go", false)
 	if err != nil {
 		t.Fatalf("acquireLang: %v", err)
 	}
@@ -626,5 +626,134 @@ func TestAcquireLang_CancelledCtxKeepsWarming(t *testing.T) {
 	}
 	if e.sup == nil {
 		t.Fatal("expected a live supervisor on the warming entry")
+	}
+}
+
+// poolRefs returns the pinned refcount for root under the pool lock, or -1 when
+// no entry exists. Race-safe for assertions in the refcount tests.
+func poolRefs(p *workspacePool, root string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.entries[root]; ok {
+		return e.refs
+	}
+	return -1
+}
+
+// waitEntryGone polls until root's entry is reclaimed or the deadline passes.
+// Teardown is asynchronous (a time.AfterFunc grace timer), so the assertion
+// must poll rather than read once.
+func waitEntryGone(t *testing.T, p *workspacePool, root string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if p.lookup(root) == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("entry for %s still present after %s; idle teardown did not fire", root, within)
+}
+
+// fastWarmingPool builds a warming pool with a short idle grace and returns it
+// alongside a pre-cancelled context, so a pinned acquire of a never-ready
+// (sleep) server returns immediately instead of waiting out firstStartGrace.
+func fastWarmingPool(t *testing.T, grace time.Duration) (*workspacePool, context.Context) {
+	t.Helper()
+	cmd, args := sleepCommand(t)
+	pool := warmingPool(context.Background(), cmd, args)
+	pool.idleGrace = grace
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return pool, ctx
+}
+
+// TestPool_RefcountKeepsSharedEntryAlive verifies the shared-workspace contract:
+// two sessions pinning the same root share one entry (refs=2), and a single
+// session leaving does not tear down the server the other still uses.
+func TestPool_RefcountKeepsSharedEntryAlive(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, 20*time.Millisecond)
+	defer pool.close()
+
+	const root = "/tmp/plumb-refcount-shared-root"
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
+		t.Fatalf("first pinned acquire: %v", err)
+	}
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
+		t.Fatalf("second pinned acquire: %v", err)
+	}
+	if got := poolRefs(pool, root); got != 2 {
+		t.Fatalf("refs = %d, want 2 after two pinned acquires", got)
+	}
+
+	pool.release(root) // one session leaves; the other still holds the entry
+	if got := poolRefs(pool, root); got != 1 {
+		t.Fatalf("refs = %d, want 1 after one release", got)
+	}
+	time.Sleep(3 * pool.idleGrace)
+	if pool.lookup(root) == nil {
+		t.Fatal("entry torn down while a session still holds it (refs > 0)")
+	}
+}
+
+// TestPool_GraceTeardownAfterLastSession verifies the last-leaver reclaim: once
+// the final pinned reference is released, the language server is torn down after
+// the idle grace.
+func TestPool_GraceTeardownAfterLastSession(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, 20*time.Millisecond)
+	defer pool.close()
+
+	const root = "/tmp/plumb-grace-teardown-root"
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
+		t.Fatalf("pinned acquire: %v", err)
+	}
+	pool.release(root) // last (only) session leaves -> schedule idle teardown
+	waitEntryGone(t, pool, root, 2*time.Second)
+}
+
+// TestPool_PinDuringGraceCancelsTeardown verifies that a re-attach inside the
+// grace window cancels the pending teardown (the Claude Desktop
+// disconnect-then-reconnect case) so the warm server is reused, not killed.
+func TestPool_PinDuringGraceCancelsTeardown(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, 200*time.Millisecond)
+	defer pool.close()
+
+	const root = "/tmp/plumb-grace-cancel-root"
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
+		t.Fatalf("pinned acquire: %v", err)
+	}
+	pool.release(root) // schedule teardown after the grace window
+	time.Sleep(30 * time.Millisecond)
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil { // re-pin before grace fires
+		t.Fatalf("re-pin acquire: %v", err)
+	}
+	time.Sleep(3 * pool.idleGrace)
+	if pool.lookup(root) == nil {
+		t.Fatal("entry torn down despite a re-pin during the grace window")
+	}
+	if got := poolRefs(pool, root); got != 1 {
+		t.Fatalf("refs = %d, want 1 after release + re-pin", got)
+	}
+}
+
+// TestPool_UnpinnedAcquireNeverScheduledForTeardown verifies that an on-demand
+// routing acquire (pin=false) holds no reference and is never reclaimed by the
+// refcount path — release is a no-op for a never-pinned entry, matching the
+// pre-refcount "lives until shutdown" behaviour.
+func TestPool_UnpinnedAcquireNeverScheduledForTeardown(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, 20*time.Millisecond)
+	defer pool.close()
+
+	const root = "/tmp/plumb-unpinned-root"
+	if _, err := pool.acquireLang(ctx, root, "go", false); err != nil {
+		t.Fatalf("unpinned acquire: %v", err)
+	}
+	if got := poolRefs(pool, root); got != 0 {
+		t.Fatalf("refs = %d, want 0 for an unpinned acquire", got)
+	}
+	pool.release(root) // defensive no-op: refs already 0, must not schedule teardown
+	time.Sleep(3 * pool.idleGrace)
+	if pool.lookup(root) == nil {
+		t.Fatal("unpinned entry was reclaimed; release must be a no-op when refs == 0")
 	}
 }

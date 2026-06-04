@@ -115,7 +115,10 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 			return c, nil
 		}
 	}
-	e, err := r.pool.acquireLang(ctx, root, language)
+	// On-demand routing acquire: not a pinned primary workspace, so pass
+	// pin=false. The entry is never torn down by the refcount path for a
+	// never-pinned root; it lives until daemon shutdown (pre-refcount behaviour).
+	e, err := r.pool.acquireLang(ctx, root, language, false)
 	if err != nil {
 		return nil, fmt.Errorf("acquiring %s for %s: %w", language, root, err)
 	}

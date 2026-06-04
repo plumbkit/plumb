@@ -50,9 +50,16 @@ type connSession struct {
 	stateMu          sync.Mutex
 	acquiredRoot     string
 	acquiredLanguage string
-	clientName       string
-	clientVersion    string
-	lastCfgMtime     time.Time
+	// lsRefRoot is the workspace root for which this session holds a PINNED
+	// reference on the shared language-server pool entry (set on a successful
+	// attach / re-pin, "" when the session attached without LSP). It is released
+	// on re-pin (old root) and on close so the pool can reclaim an idle server
+	// once its last session leaves. Distinct from acquiredRoot, which is also set
+	// for LanguageNone workspaces that hold no LS reference.
+	lsRefRoot     string
+	clientName    string
+	clientVersion string
+	lastCfgMtime  time.Time
 
 	sessionProxy *routingProxy
 	sessionInv   *routingInvProxy
@@ -163,6 +170,15 @@ func (s *connSession) close() {
 	s.sessionCache.Close()
 	if s.qualityRunner != nil {
 		s.qualityRunner.Stop()
+	}
+	// Release this session's pinned language-server reference so the pool can
+	// reclaim the server once its last session leaves (after the idle grace).
+	s.stateMu.Lock()
+	ref := s.lsRefRoot
+	s.lsRefRoot = ""
+	s.stateMu.Unlock()
+	if ref != "" {
+		s.pool.release(ref)
 	}
 	session.Unregister(s.sessID)
 }
@@ -320,7 +336,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 	}
 	adapter := ""
 	if language != LanguageNone {
-		e, err := s.pool.acquireLang(ctx, folder, language)
+		e, err := s.pool.acquireLang(ctx, folder, language, true)
 		if err != nil {
 			// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
 			// rather than aborting. The workspace is still attached for filesystem
@@ -330,6 +346,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		} else {
 			s.sessionProxy.setPrimary(folder, e.proxy)
 			s.sessionInv.setPrimary(folder, e.inv)
+			s.lsRefRoot = folder
 			adapter = adapterForLanguage(language)
 		}
 	}
@@ -449,6 +466,11 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 	if root == prev {
 		return false
 	}
+	// The pinned LS reference (if any) for the workspace we are leaving; released
+	// at the end once the new root is acquired, so the pool can reclaim the old
+	// server after its idle grace if no other session holds it.
+	prevRef := s.lsRefRoot
+	s.lsRefRoot = ""
 	if s.qualityRunner != nil {
 		s.qualityRunner.Stop()
 		s.qualityRunner = nil
@@ -462,14 +484,20 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 
 	adapter := ""
 	if language != LanguageNone {
-		if e, aerr := s.pool.acquireLang(ctx, root, language); aerr != nil {
+		if e, aerr := s.pool.acquireLang(ctx, root, language, true); aerr != nil {
 			s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
 			language = LanguageNone
 		} else {
 			s.sessionProxy.resetPrimary(root, e.proxy)
 			s.sessionInv.resetPrimary(root, e.inv)
+			s.lsRefRoot = root
 			adapter = adapterForLanguage(language)
 		}
+	}
+	// Acquire-before-release: the new root is pinned above before we drop the old
+	// one, so even a re-pin back to a recently-left root never races teardown.
+	if prevRef != "" {
+		s.pool.release(prevRef)
 	}
 	detectedLanguage := language
 	if detectedLanguage == LanguageNone {

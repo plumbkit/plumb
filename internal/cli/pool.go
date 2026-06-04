@@ -41,6 +41,12 @@ type workspacePool struct {
 	langs    []langConfig          // enabled languages, deterministic order
 	cacheTTL time.Duration
 
+	// idleGrace is how long a pinned entry lingers after its last session
+	// detaches before the language server is torn down. The delay absorbs a
+	// client disconnect+reconnect (Claude Desktop) and a quick re-attach without
+	// re-paying cold start. A field (not a const) so tests can shorten it.
+	idleGrace time.Duration
+
 	// baseCtx is the supervisor lifetime context — the daemon root context, not
 	// any single connection or tool-call context. Language servers are shared
 	// across all sessions, so tying one to a caller's context would let that
@@ -62,6 +68,18 @@ type poolEntry struct {
 	cache    *cache.Cache
 	sup      *lsp.Supervisor
 	watcher  *lspFSWatcher
+
+	// refs counts the sessions that hold this root as their PINNED primary
+	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
+	// for a non-primary URI) deliberately do NOT pin, so a route target is never
+	// prematurely reclaimed mid-call and a never-pinned entry simply lives until
+	// daemon shutdown (the pre-refcount behaviour). graceTimer fires teardown
+	// after refs falls to zero; a new pin cancels it. closeOnce makes teardown
+	// idempotent across the grace reaper and daemon shutdown. All three are
+	// guarded by workspacePool.mu (closeOnce is self-synchronising).
+	refs       int
+	graceTimer *time.Timer
+	closeOnce  sync.Once
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that
@@ -89,12 +107,17 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		return langs[i].name < langs[j].name
 	})
 	return &workspacePool{
-		entries:  make(map[string]*poolEntry),
-		langs:    langs,
-		cacheTTL: cfg.Cache.TTL.Duration,
-		baseCtx:  baseCtx,
+		entries:   make(map[string]*poolEntry),
+		langs:     langs,
+		cacheTTL:  cfg.Cache.TTL.Duration,
+		idleGrace: poolIdleGrace,
+		baseCtx:   baseCtx,
 	}
 }
+
+// poolIdleGrace is the default delay before a pinned entry whose last session
+// detached is torn down. See workspacePool.idleGrace.
+const poolIdleGrace = 90 * time.Second
 
 // LanguageNone is the sentinel language returned by Detect for workspaces
 // that are explicitly marked (via .plumb/) but have no enabled LSP language.
@@ -277,8 +300,13 @@ const firstStartGrace = 2 * time.Second
 // the handshake completes, which the routing proxy surfaces as "LSP server not
 // yet ready". Callers that need the server immediately should treat a nil
 // proxy.get() as a transient miss, not a failure.
-func (p *workspacePool) acquireLang(ctx context.Context, root, language string) (*poolEntry, error) {
-	e, readyCh, err := p.startOrReuse(root, language)
+//
+// pin records a long-lived session reference on the entry (see poolEntry.refs):
+// pass true from a workspace attach / re-pin, false from an on-demand routing
+// acquire. A pinned entry is kept alive until its last session releases it (and
+// then for idleGrace); an unpinned acquire never affects the refcount.
+func (p *workspacePool) acquireLang(ctx context.Context, root, language string, pin bool) (*poolEntry, error) {
+	e, readyCh, err := p.startOrReuse(root, language, pin)
 	if err != nil {
 		return nil, err
 	}
@@ -295,12 +323,15 @@ func (p *workspacePool) acquireLang(ctx context.Context, root, language string) 
 // is never held across the warm-up: the entry is published into the map before
 // the lock is released, so concurrent callers for the same root reuse it and a
 // language server is never spawned twice.
-func (p *workspacePool) startOrReuse(root, language string) (*poolEntry, <-chan error, error) {
+func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntry, <-chan error, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if e, ok := p.entries[root]; ok {
-		slog.Info("pool: reusing LS", "root", root, "language", e.language)
+		if pin {
+			p.pinLocked(e)
+		}
+		slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
 		return e, nil, nil
 	}
 
@@ -337,9 +368,67 @@ func (p *workspacePool) startOrReuse(root, language string) (*poolEntry, <-chan 
 		e.watcher = watcher
 		watcher.Start()
 	}
+	if pin {
+		p.pinLocked(e)
+	}
 	p.entries[root] = e
-	slog.Info("pool: new workspace (warming)", "root", root, "language", language)
+	slog.Info("pool: new workspace (warming)", "root", root, "language", language, "refs", e.refs)
 	return e, readyCh, nil
+}
+
+// pinLocked increments an entry's session refcount and cancels any pending
+// idle-teardown timer (a re-pin during the grace window keeps the server
+// alive). Caller must hold p.mu.
+func (p *workspacePool) pinLocked(e *poolEntry) {
+	e.refs++
+	if e.graceTimer != nil {
+		e.graceTimer.Stop()
+		e.graceTimer = nil
+	}
+}
+
+// release drops one pinned session reference on root (paired with an
+// acquireLang(pin=true)). When the last reference goes, the entry is scheduled
+// for teardown after idleGrace rather than torn down immediately, so a client
+// reconnect or quick re-attach reuses the warm server. A no-op when root has no
+// entry or no outstanding pins (defensive: a session that attached without LSP,
+// LanguageNone, holds no pin and must not decrement a sibling's count).
+func (p *workspacePool) release(root string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[root]
+	if !ok || e.refs <= 0 {
+		return
+	}
+	e.refs--
+	if e.refs > 0 {
+		return
+	}
+	if e.graceTimer != nil {
+		e.graceTimer.Stop()
+	}
+	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(root, e) })
+	slog.Info("pool: last session detached — scheduling idle teardown", "root", root, "grace", p.idleGrace)
+}
+
+// reapEntry tears down an entry whose grace window elapsed, but only if it is
+// still the mapped entry for root and still has no pins (a pin during the grace
+// window cancels the timer, but the callback may already be running). Teardown
+// happens outside p.mu — closeEntry performs a bounded LSP shutdown handshake we
+// must not hold the pool lock across.
+func (p *workspacePool) reapEntry(root string, e *poolEntry) {
+	p.mu.Lock()
+	cur, ok := p.entries[root]
+	if !ok || cur != e || e.refs > 0 {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.entries, root)
+	p.mu.Unlock()
+	slog.Info("pool: tearing down idle LS", "root", root, "language", e.language)
+	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
+	defer cancel()
+	e.closeOnce.Do(func() { closeEntry(ctx, e) })
 }
 
 // awaitReady waits up to firstStartGrace for a freshly started entry to become
@@ -396,15 +485,19 @@ func (p *workspacePool) removeFailed(root string, e *poolEntry) {
 		delete(p.entries, root)
 	}
 	p.mu.Unlock()
-	if e.sup != nil {
-		e.sup.Stop()
-	}
-	if e.watcher != nil {
-		e.watcher.Stop()
-	}
-	if e.cache != nil {
-		e.cache.Close()
-	}
+	// closeOnce guards against the rare race where a parallel reapEntry for the
+	// same entry already started teardown (a pin-then-immediate-fail sequence).
+	e.closeOnce.Do(func() {
+		if e.sup != nil {
+			e.sup.Stop()
+		}
+		if e.watcher != nil {
+			e.watcher.Stop()
+		}
+		if e.cache != nil {
+			e.cache.Close()
+		}
+	})
 }
 
 func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
@@ -504,20 +597,33 @@ const poolCloseGrace = 2 * time.Second
 // close shuts down all LS processes. Safe to call from multiple goroutines
 // but intended to be called once at daemon shutdown. Entries are torn down
 // concurrently under a bounded deadline so one slow language server cannot
-// stall the others or daemon exit.
+// stall the others or daemon exit. Pending grace timers are cancelled so idle
+// entries are shut down immediately rather than after their grace window.
 func (p *workspacePool) close() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	// Snapshot entries and cancel any pending grace timers while holding the lock.
+	entries := make([]*poolEntry, 0, len(p.entries))
+	for _, e := range p.entries {
+		if e.graceTimer != nil {
+			e.graceTimer.Stop()
+			e.graceTimer = nil
+		}
+		entries = append(entries, e)
+	}
+	p.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
 	defer cancel()
 
 	var wg sync.WaitGroup
-	for _, e := range p.entries {
+	for _, e := range entries {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			closeEntry(ctx, e)
+			// closeOnce ensures a reapEntry goroutine already running for this
+			// entry (race between grace timer firing and daemon shutdown) does
+			// not double-close the supervisor and cache.
+			e.closeOnce.Do(func() { closeEntry(ctx, e) })
 		}()
 	}
 	wg.Wait()
