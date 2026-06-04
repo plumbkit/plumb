@@ -69,6 +69,7 @@ var registry = []Language{
 	{Name: "toml", Extensions: []string{".toml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "yaml", Extensions: []string{".yaml", ".yml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: ""},
+	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server"},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.

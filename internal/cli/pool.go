@@ -15,6 +15,7 @@ import (
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/adapters/gopls"
+	htmlls "github.com/golimpio/plumb/internal/lsp/adapters/html"
 	"github.com/golimpio/plumb/internal/lsp/adapters/jdtls"
 	"github.com/golimpio/plumb/internal/lsp/adapters/kotlin"
 	"github.com/golimpio/plumb/internal/lsp/adapters/pyright"
@@ -528,6 +529,8 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
 		return tsls.New(conn), nil
 	case "kotlin":
 		return kotlin.New(conn), nil
+	case "html":
+		return htmlls.New(conn), nil
 	default:
 		return nil, fmt.Errorf("no adapter registered for language %q", language)
 	}
@@ -550,6 +553,8 @@ func initParamsFor(language, rootURI string) protocol.InitializeParams {
 		return tsls.DefaultInitParams(rootURI)
 	case "kotlin":
 		return kotlin.DefaultInitParams(rootURI)
+	case "html":
+		return htmlls.DefaultInitParams(rootURI)
 	default:
 		return gopls.DefaultInitParams(rootURI)
 	}

@@ -173,6 +173,7 @@ func detectDiagnosticsLang(ws string) (glob, label string) {
 		{"setup.py", "*.py", "Python"},
 		{"tsconfig.json", "*.ts", "TypeScript"},
 		{"package.json", "*.ts", "TypeScript/JavaScript"},
+		{"index.html", "*.html", "HTML"},
 	}
 	for _, m := range markers {
 		if _, err := os.Stat(filepath.Join(ws, m.file)); err == nil {
@@ -325,7 +326,7 @@ func styleDiagnostics(raw string) string {
 // isSourceFilePath reports whether a diagnostics output line looks like a
 // source file path (used to decide whether to render it as a bold heading).
 func isSourceFilePath(s string) bool {
-	exts := []string{".go", ".swift", ".rs", ".py", ".ts", ".js", ".kt", ".java"}
+	exts := []string{".go", ".swift", ".rs", ".py", ".ts", ".js", ".kt", ".java", ".html", ".htm"}
 	for _, e := range exts {
 		if strings.HasSuffix(s, e) {
 			return true

@@ -367,6 +367,12 @@ var defaults = Config{
 			RootMarkers: []string{"settings.gradle.kts", "build.gradle.kts"},
 			Enabled:     false,
 		},
+		"html": {
+			Command:     "vscode-html-language-server",
+			Args:        []string{"--stdio"},
+			RootMarkers: []string{"index.html"},
+			Enabled:     false,
+		},
 	},
 }
 

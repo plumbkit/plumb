@@ -35,6 +35,8 @@ func TestByPath(t *testing.T) {
 		"ci.yml":              "yaml",
 		"README.md":           "markdown",
 		"docs/guide.markdown": "markdown",
+		"site/index.html":     "html",
+		"page.htm":            "html",
 		"Makefile":            "",
 	}
 	for path, want := range cases {
@@ -74,7 +76,8 @@ func TestByName(t *testing.T) {
 		{"toml", EngineTreeSitter, ""},
 		{"yaml", EngineTreeSitter, ""},
 		{"markdown", EngineTreeSitter, ""},
-		{"java", EngineTreeSitter, "jdtls"}, // tree-sitter Map + jdtls GPS
+		{"html", EngineTreeSitter, "vscode-html-language-server"}, // tree-sitter Map + vscode-html GPS
+		{"java", EngineTreeSitter, "jdtls"},                       // tree-sitter Map + jdtls GPS
 	}
 	for _, c := range cases {
 		l, ok := ByName(c.name)

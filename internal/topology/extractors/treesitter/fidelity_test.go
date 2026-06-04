@@ -86,6 +86,17 @@ Some text.
 
 ## Section B
 `, "Section B"},
+		{"html", grammars.HtmlLanguage, func() topology.Extractor { return NewHTML() }, `<!DOCTYPE html>
+<html>
+<body>
+  <h1>Welcome</h1>
+  <section id="intro">
+    <h2>Getting Started</h2>
+  </section>
+  <footer id="footer">end</footer>
+</body>
+</html>
+`, "footer"},
 		{"java", grammars.JavaLanguage, func() topology.Extractor { return NewJava() }, `package demo;
 
 import java.util.List;
