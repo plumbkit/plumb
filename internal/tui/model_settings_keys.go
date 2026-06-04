@@ -23,12 +23,17 @@ func (m *Model) enterSettings() {
 		cfg = config.Defaults()
 		m.settingsStatus = "config unreadable; showing defaults"
 	} else {
-		m.settingsStatus = "theme → " + ActiveThemeName
+		m.settingsStatus = ""
 	}
 	m.settingsCfg = cfg
-	m.settingsItems = buildSettingItems(cfg)
+	m.settingsScopes = m.collectSettingsScopes()
+	if m.settingsScopeCursor >= len(m.settingsScopes) {
+		m.settingsScopeCursor = 0
+	}
+	m.settingsItems = m.buildScopeItems()
 	m.settingsCursor = 0
 	m.settingsScroll = 0
+	m.settingsScopeFocus = false
 	m.showThemePicker = false
 	m.syncThemeCursor()
 }
@@ -128,9 +133,16 @@ func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 // handleSettingsNavKey handles the in-list navigation and edit keys, kept
-// separate from the section/global keys to keep each handler simple.
+// separate from the section/global keys to keep each handler simple. When the
+// Scope column is focused it routes to handleScopeNavKey instead.
 func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
+	if m.settingsScopeFocus {
+		return m.handleScopeNavKey(key)
+	}
 	switch key {
+	case "tab":
+		m.settingsScopeFocus = true
+		return m, nil
 	case "up", "k":
 		if m.settingsCursor > 0 {
 			m.settingsCursor--
@@ -157,8 +169,41 @@ func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
 		return m.afterSettingChange(m.adjustSetting(-1))
 	case "right", "+", "=":
 		return m.afterSettingChange(m.adjustSetting(1))
+	case "backspace", "delete":
+		// In a workspace scope, reset the focused row to inherit (no-op in Global).
+		return m.afterSettingChange(m.resetToInherit(), nil)
 	}
 	return m, nil
+}
+
+// handleScopeNavKey drives the Scope column: up/down pick a scope (reloading the
+// rows for it), tab/right/enter return focus to the rows pane.
+func (m Model) handleScopeNavKey(key string) (Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.settingsScopeCursor > 0 {
+			m.settingsScopeCursor--
+			m.selectScope()
+		}
+	case "down", "j":
+		if m.settingsScopeCursor < len(m.settingsScopes)-1 {
+			m.settingsScopeCursor++
+			m.selectScope()
+		}
+	case "tab", "right", "l", "enter", " ":
+		m.settingsScopeFocus = false
+	}
+	return m, nil
+}
+
+// selectScope reloads the rows for the newly-selected scope and resets the row
+// cursor/scroll so navigation starts at the top of the new scope's settings.
+func (m *Model) selectScope() {
+	m.settingsStatus = ""
+	m.settingsCursor = 0
+	m.settingsScroll = 0
+	m.settingsScopeScroll = clampOffset(m.settingsScopeScroll, len(m.settingsScopes)+2, m.settingsScrollHeight())
+	m.settingsItems = m.buildScopeItems()
 }
 
 // activateSetting handles enter/space: opens the theme picker for the popup row
@@ -178,7 +223,7 @@ func (m Model) activateSetting() Model {
 		m.syncThemeCursor()
 		return m
 	case settingToggle:
-		return m.toggleBool(it.key)
+		return m.toggleBool(it.key, it.value == "on")
 	default:
 		return m
 	}
@@ -194,35 +239,22 @@ func (m Model) adjustSetting(dir int) (Model, tea.Cmd) {
 	it := m.settingsItems[m.settingsCursor]
 	switch it.kind {
 	case settingToggle:
-		return m.toggleBool(it.key), nil
+		return m.toggleBool(it.key, it.value == "on"), nil
 	case settingNumber:
-		return m.adjustNumber(it.key, dir)
+		return m.setNumber(it, dir), nil
 	case settingCycle:
-		return m.adjustCycle(it.key, dir)
+		return m.adjustCycle(it, dir)
 	default:
 		return m, nil
 	}
 }
 
-// adjustNumber routes numeric rows: the two original rows keep their bespoke
-// setters (preserving the rate-limit "off" wording and the cache step), every
-// other int field flows through the generic setNumber.
-func (m Model) adjustNumber(key settingKey, dir int) (Model, tea.Cmd) {
-	switch key {
-	case skRateLimit:
-		return m.setRateLimit(m.settingsCfg.Edits.RateLimitPerMinute + dir*10), nil
-	case skCacheMaxSize:
-		return m.setCacheMaxSize(m.settingsCfg.Cache.MaxSize + dir*100), nil
-	default:
-		return m.setNumber(key, dir), nil
-	}
-}
-
-// adjustCycle routes cycle rows: log level applies live, durations use the
-// duration setter, the original string cycles keep their setters, and any new
-// string cycle (e.g. quality mode) flows through the generic setCycle.
-func (m Model) adjustCycle(key settingKey, dir int) (Model, tea.Cmd) {
-	switch key {
+// adjustCycle routes cycle rows. The global-only cycles (log level applies live,
+// log format / path style, the cache/lsp durations) keep their bespoke setters
+// and are only ever reached in Global scope; every project-overridable string
+// cycle (quality mode) flows through the scope-aware setCycle.
+func (m Model) adjustCycle(it settingItem, dir int) (Model, tea.Cmd) {
+	switch it.key {
 	case skLogLevel:
 		return m.setLogLevel(cycleOption(logLevelOptions, m.settingsCfg.LogLevel, dir))
 	case skLogFormat:
@@ -230,54 +262,59 @@ func (m Model) adjustCycle(key settingKey, dir int) (Model, tea.Cmd) {
 	case skPathStyle:
 		return m.setPathStyle(cycleOption(pathStyleOptions, m.settingsCfg.UI.PathStyle, dir)), nil
 	case skCacheTTL, skLSPTimeout:
-		return m.setDuration(key, dir), nil
+		return m.setDuration(it.key, dir), nil
 	default:
-		return m.setCycle(key, dir), nil
+		return m.setCycle(it, dir), nil
 	}
 }
 
-// setNumber adjusts a generic integer field by its per-field step and persists.
-func (m Model) setNumber(key settingKey, dir int) Model {
-	step, label := numberMeta(key)
-	if key == skTopoMaxFileSize { // the only int64 field
-		n := m.settingsCfg.Topology.MaxFileSizeBytes + int64(dir*step)
+// setNumber adjusts a numeric field by its per-field step and persists it in the
+// current scope (global config or the workspace's project config). The current
+// value is read from the focused row, so it reflects the merged effective value
+// in a workspace scope, not the global snapshot.
+func (m Model) setNumber(it settingItem, dir int) Model {
+	step, label := numberMeta(it.key)
+	if it.key == skTopoMaxFileSize { // the only int64 field
+		var cur int64
+		_, _ = fmt.Sscanf(it.value, "%d", &cur)
+		n := cur + int64(dir*step)
 		if n < 0 {
 			n = 0
 		}
-		if m.persist(func(c *config.Config) { c.Topology.MaxFileSizeBytes = n }) {
-			m.settingsCfg.Topology.MaxFileSizeBytes = n
-			m.settingsItems = buildSettingItems(m.settingsCfg)
-			m.settingsStatus = settingStatus(key, fmt.Sprintf("%s → %d", label, n))
+		if m.applyScopedSetting(it.key, n, func(c *config.Config) { c.Topology.MaxFileSizeBytes = n }) {
+			m.settingsStatus = m.scopedStatus(it.key, fmt.Sprintf("%s → %d", label, n))
 		}
 		return m
 	}
-	ptr := intField(&m.settingsCfg, key)
-	if ptr == nil {
-		return m
+	cur := 0
+	if it.value != "off" { // rate limit renders 0 as "off"
+		_, _ = fmt.Sscanf(it.value, "%d", &cur)
 	}
-	n := *ptr + dir*step
+	n := cur + dir*step
 	if n < 0 {
 		n = 0
 	}
-	if m.persist(func(c *config.Config) { *intField(c, key) = n }) {
-		*intField(&m.settingsCfg, key) = n
-		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = settingStatus(key, fmt.Sprintf("%s → %d", label, n))
+	apply := func(c *config.Config) {
+		if p := intField(c, it.key); p != nil {
+			*p = n
+		}
+	}
+	if m.applyScopedSetting(it.key, n, apply) {
+		m.settingsStatus = m.scopedStatus(it.key, fmt.Sprintf("%s → %d", label, n))
 	}
 	return m
 }
 
-// setCycle cycles a generic string-enum field and persists.
-func (m Model) setCycle(key settingKey, dir int) Model {
-	cur, opts, set, label := cycleMeta(&m.settingsCfg, key)
+// setCycle cycles a generic string-enum field from its current effective value
+// and persists it in the current scope.
+func (m Model) setCycle(it settingItem, dir int) Model {
+	opts, set, label := cycleMeta(it.key)
 	if set == nil {
 		return m
 	}
-	next := cycleOption(opts, cur, dir)
-	if m.persist(func(c *config.Config) { set(c, next) }) {
-		set(&m.settingsCfg, next)
-		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = settingStatus(key, label+" → "+next)
+	next := cycleOption(opts, it.value, dir)
+	if m.applyScopedSetting(it.key, next, func(c *config.Config) { set(c, next) }) {
+		m.settingsStatus = m.scopedStatus(it.key, label+" → "+next)
 	}
 	return m
 }
@@ -285,6 +322,10 @@ func (m Model) setCycle(key settingKey, dir int) Model {
 // numberMeta returns the adjust step and status label for a numeric setting.
 func numberMeta(key settingKey) (int, string) {
 	switch key {
+	case skRateLimit:
+		return 10, "rate limit"
+	case skCacheMaxSize:
+		return 100, "cache max_size"
 	case skPostWriteDiagMs:
 		return 50, "post-write diag (ms)"
 	case skConcurrentSkewMs:
@@ -314,6 +355,10 @@ func numberMeta(key settingKey) (int, string) {
 // (excluding the two bespoke ones and the int64 topology cap).
 func intField(c *config.Config, key settingKey) *int {
 	switch key {
+	case skRateLimit:
+		return &c.Edits.RateLimitPerMinute
+	case skCacheMaxSize:
+		return &c.Cache.MaxSize
 	case skPostWriteDiagMs:
 		return &c.Edits.PostWriteDiagnosticsMs
 	case skConcurrentSkewMs:
@@ -337,15 +382,15 @@ func intField(c *config.Config, key settingKey) *int {
 	}
 }
 
-// cycleMeta returns the current value, option set, setter, and label for a
-// generic string-enum setting.
-func cycleMeta(c *config.Config, key settingKey) (string, []string, func(*config.Config, string), string) {
+// cycleMeta returns the option set, setter, and label for a generic string-enum
+// setting. The current value comes from the focused row, so this need not read
+// any config snapshot (which would be the global one, wrong in a workspace scope).
+func cycleMeta(key settingKey) ([]string, func(*config.Config, string), string) {
 	switch key {
 	case skQualityMode:
-		return qualityModeValue(c.Quality.Mode), qualityModeOptions,
-			func(c *config.Config, v string) { c.Quality.Mode = v }, "quality mode"
+		return qualityModeOptions, func(c *config.Config, v string) { c.Quality.Mode = v }, "quality mode"
 	default:
-		return "", nil, nil, ""
+		return nil, nil, ""
 	}
 }
 
@@ -369,30 +414,17 @@ func (m Model) setLogFormat(format string) Model {
 	return m
 }
 
-func (m Model) setRateLimit(n int) Model {
-	if n < 0 {
-		n = 0
+// toggleBool flips a boolean setting (cur is the current effective value from
+// the focused row) and persists it in the current scope.
+func (m Model) toggleBool(key settingKey, cur bool) Model {
+	v := !cur
+	apply := func(c *config.Config) {
+		if p := boolField(c, key); p != nil {
+			*p = v
+		}
 	}
-	if m.persist(func(c *config.Config) { c.Edits.RateLimitPerMinute = n }) {
-		m.settingsCfg.Edits.RateLimitPerMinute = n
-		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = settingStatus(skRateLimit, "rate limit → "+rateLimitValue(n))
-	}
-	return m
-}
-
-// toggleBool flips one of the boolean settings, persists it, and refreshes the
-// rows. boolField centralises the key→field mapping so this stays small.
-func (m Model) toggleBool(key settingKey) Model {
-	cur := boolField(&m.settingsCfg, key)
-	if cur == nil {
-		return m
-	}
-	v := !*cur
-	if m.persist(func(c *config.Config) { *boolField(c, key) = v }) {
-		*boolField(&m.settingsCfg, key) = v
-		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = settingStatus(key, toggleLabel(key)+" "+onOff(v))
+	if m.applyScopedSetting(key, v, apply) {
+		m.settingsStatus = m.scopedStatus(key, toggleLabel(key)+" "+onOff(v))
 	}
 	return m
 }
@@ -429,18 +461,6 @@ func boolField(c *config.Config, key settingKey) *bool {
 	default:
 		return nil
 	}
-}
-
-func (m Model) setCacheMaxSize(n int) Model {
-	if n < 0 {
-		n = 0
-	}
-	if m.persist(func(c *config.Config) { c.Cache.MaxSize = n }) {
-		m.settingsCfg.Cache.MaxSize = n
-		m.settingsItems = buildSettingItems(m.settingsCfg)
-		m.settingsStatus = settingStatus(skCacheMaxSize, fmt.Sprintf("cache max size → %d", n))
-	}
-	return m
 }
 
 // durField returns the duration config field a cycle row edits and its presets.
@@ -499,11 +519,36 @@ func (m *Model) persist(apply func(*config.Config)) bool {
 // persisted setting changed, so live-reloadable settings take effect without a
 // restart. Theme and log level use their own live paths and leave the flag clear.
 func (m Model) afterSettingChange(next Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	if next.pendingProjectReload != "" {
+		ws := next.pendingProjectReload
+		next.pendingProjectReload = ""
+		return next, tea.Batch(cmd, next.applyProjectReloadLive(ws))
+	}
 	if !next.pendingReload {
 		return next, cmd
 	}
 	next.pendingReload = false
 	return next, tea.Batch(cmd, next.applyConfigReloadLive())
+}
+
+// applyProjectReloadLive pushes a reload-project command to the running daemon
+// so a just-saved per-workspace setting takes effect immediately for the
+// sessions on that workspace (and only those). Best-effort, mirroring
+// applyConfigReloadLive.
+func (m Model) applyProjectReloadLive(ws string) tea.Cmd {
+	ctrlPath := m.ctrlPath
+	return func() tea.Msg {
+		conn, err := net.Dial("unix", ctrlPath)
+		if err != nil {
+			return settingsStatusMsg{text: "saved (daemon not running)"}
+		}
+		defer conn.Close()
+		if _, err := fmt.Fprintf(conn, "reload-project %s\n", ws); err != nil {
+			return settingsStatusMsg{text: "saved (daemon unreachable)"}
+		}
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		return nil
+	}
 }
 
 // applyConfigReloadLive pushes a reload-config command to the running daemon so

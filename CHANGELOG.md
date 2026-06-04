@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.44 (unreleased)
+
+TUI Settings becomes per-workspace: a left Scope column switches between the global config and each active workspace's `.plumb/config.toml`, with an inherit model that never shadows the global config, applied immediately and in isolation.
+
+### Added
+
+- **Per-workspace settings scope (`internal/tui/model_settings_scope.go`).** The Settings screen gains a left **Scope column**: `● Global` first, then one entry per active workspace (deduped from sessions + the TUI launch dir, reusing the Memory section's `collectMemoryWorkspaces`). Selecting a workspace edits *that project's* `.plumb/config.toml`; `tab` switches focus between the Scope column and the rows, the two panes mirror the Memory section's frame.
+- **Inherit model.** In a workspace scope each row is either an **override** (`● set`, written to the project file) or **inherited** (effective value shown, `inherited` mark) — a key absent from the file falls through to global/default. Editing a value writes a sparse override (`config.SetProjectValue`, only that key); `⌫`/`delete` resets the focused row to inherit (`config.UnsetProjectValue`). Picking a concrete value never shadows the global config because only the touched key is written. Only the project-overridable settings appear in a workspace scope (`edits`, `walk`, `git`, `topology`, `quality`, `workspace`); global-only sections (`[ui]`, logging, cache, `lsp_query`, `session`) are hidden there. `settingTOMLPaths` is the single source of truth for the key→path mapping + the scope filter.
+- **Immediate, isolated per-workspace apply.** A new `reload-project <workspace>` control-socket command re-applies the project config to the sessions pinned to that workspace **and only those** — a change in one project never touches a session in another. The daemon's `connRegistry` now stores a per-session handle (`connHandle{cancel, workspace, reloadProject}`) and exposes `reloadProject(ws)` (trailing-slash-tolerant via `filepath.Clean`); the TUI pushes the command after a workspace write (`applyProjectReloadLive`), with the existing 30s project-config poll as the fallback. The registry is now created in `runDaemon` (so the control socket can reach it) and threaded into the accept loop.
+- **Scope-aware setting dispatch.** `applyScopedSetting` branches persistence by scope (global → `config.Save` + `reload-config`; workspace → sparse write + `reload-project`); the generic `toggleBool`/`setNumber`/`setCycle` read the current value from the focused row so they reflect the merged effective value in a workspace scope, not the global snapshot.
+- **Tests.** `model_settings_scope_test.go` (tomlPath project-vs-global, workspace filter+annotate, sparse write + reset, scope list). `daemon_test.go` `TestConnRegistry_ReloadProject_OnlyMatchingWorkspace`. `log_level_test.go` `TestHandleCtrlConn_ReloadProject{,NilFn}`.
+
+### Known gap
+
+- **List-valued settings still edit via `config.toml`.** `workspace.extra_roots` / `read_roots`, `git.protected_branches`, `topology.exclude_patterns`, and `quality.analysers` (plus per-language `[lsp.<lang>]`) need the inline list editor, which is the next increment. Until then they are edited directly in the file. The scalar/bool/enum settings are fully editable per-workspace now.
+
 ## 0.8.43 (unreleased)
 
 TUI Settings: every config field is now editable in the screen, each row carries a one-line help, and the layout is tightened. Plus the foundation (a sparse per-project config writer) for the upcoming per-workspace settings scope.

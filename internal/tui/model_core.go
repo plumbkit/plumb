@@ -120,14 +120,19 @@ type Model struct {
 	memoryMemWidth      int            // Memories pane width override; 0 = percentage default
 
 	// Settings section (section 4) — grouped settings screen + theme popup.
-	settingsCfg       config.Config // global config snapshot, loaded on entering the section
-	settingsItems     []settingItem // selectable rows (group headers excluded)
-	settingsCursor    int           // index into settingsItems for the highlighted row
-	settingsScroll    int           // first visible scrollable line in the settings list
-	settingsStatus    string        // transient status line ("saved", "applies on restart", …)
-	pendingReload     bool          // a persisted setting changed; push reload-config to the daemon
-	showThemePicker   bool          // theme-picker popup overlay open
-	themePickerCursor int           // index into ThemeNames() for the highlighted theme
+	settingsCfg          config.Config  // global config snapshot, loaded on entering the section
+	settingsItems        []settingItem  // selectable rows (group headers excluded)
+	settingsCursor       int            // index into settingsItems for the highlighted row
+	settingsScroll       int            // first visible scrollable line in the settings list
+	settingsStatus       string         // transient status line ("saved", "applies on restart", …)
+	pendingReload        bool           // a persisted setting changed; push reload-config to the daemon
+	showThemePicker      bool           // theme-picker popup overlay open
+	themePickerCursor    int            // index into ThemeNames() for the highlighted theme
+	settingsScopes       []settingScope // Global (index 0) then one entry per active workspace
+	settingsScopeCursor  int            // index into settingsScopes for the selected scope
+	settingsScopeScroll  int            // first visible row in the scope column
+	settingsScopeFocus   bool           // true = scope column focused, false = rows pane
+	pendingProjectReload string         // workspace folder whose project config changed (reload-project)
 
 	// Dashboard section (section 0).
 	dashLifetimeCalls       int64

@@ -96,13 +96,14 @@ func reloadTierFor(key settingKey) reloadTier {
 // not items — they are derived from the group field during rendering. The
 // reload tier is computed from key via reloadTierFor, not stored.
 type settingItem struct {
-	group   string
-	label   string
-	kind    settingKind
-	key     settingKey
-	value   string   // formatted current value
-	options []string // option set for settingCycle
-	help    string   // one-line description, shown on the status bar's second line
+	group      string
+	label      string
+	kind       settingKind
+	key        settingKey
+	value      string   // formatted current value
+	options    []string // option set for settingCycle
+	help       string   // one-line description, shown on the status bar's second line
+	overridden bool     // workspace scope: the key is set in the project config (not inherited)
 }
 
 var (
@@ -394,60 +395,122 @@ func (m Model) renderSettingsSection() string {
 	return m.applyOverlays(sb.String())
 }
 
-// renderSettingsBody renders the scrollable list rows plus the pinned footer.
+// settingsScopeWidth is the width of the left Scope column.
+func (m Model) settingsScopeWidth() int {
+	return clampWidth(m.width*18/100, 14, max(m.width/3, 14))
+}
+
+// renderSettingsBody renders the two-pane Settings layout: the Scope column
+// (Global + workspaces) on the left, the settings rows for the selected scope on
+// the right, and the pinned footer (hint + status/help) spanning both below.
 func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string {
 	sepStyle := SepStyle
 	if isOverlay {
 		sepStyle = SepInactiveStyle
 	}
 	scrollH := max(bodyHeight-settingsFooterRows, 1)
+	scopeW := m.settingsScopeWidth()
+	rowsW := max(innerW-1-scopeW, 10)
 
-	lines := m.settingsDisplayLines(innerW)
-	offset := m.settingsScroll
-	if maxOff := max(len(lines)-scrollH, 0); offset > maxOff {
-		offset = maxOff
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	visible := lines[offset:]
-	rBar := scrollbarCol(len(lines), scrollH, offset, isOverlay)
+	rowLines := m.settingsDisplayLines(rowsW)
+	rowOff := clampOffset(m.settingsScroll, len(rowLines), scrollH)
+	rowVis := rowLines[rowOff:]
+	rowBar := scrollbarCol(len(rowLines), scrollH, rowOff, isOverlay)
+
+	scopeLines := m.settingsScopeLines(scopeW)
+	scopeOff := clampOffset(m.settingsScopeScroll, len(scopeLines), scrollH)
+	scopeVis := scopeLines[scopeOff:]
+	scopeBar := scrollbarCol(len(scopeLines), scrollH, scopeOff, isOverlay)
 
 	var sb strings.Builder
 	for i := range bodyHeight {
-		if i < scrollH {
-			l := ""
-			if i < len(visible) {
-				l = visible[i]
-			}
-			rBarChar := sepStyle.Render("│")
-			if rBar != nil && i < len(rBar) {
-				rBarChar = rBar[i]
-			}
-			padded := lipgloss.NewStyle().Width(innerW).Render(l)
-			if isOverlay {
-				padded = InactiveStyle.Render(ansi.Strip(padded))
-			}
-			sb.WriteString(sepStyle.Render("│") + padded + rBarChar + "\n")
+		if i >= scrollH {
+			sb.WriteString(sepStyle.Render("│") + m.settingsFooterRow(i-scrollH, innerW, isOverlay) + sepStyle.Render("│") + "\n")
 			continue
 		}
-		sb.WriteString(sepStyle.Render("│") + m.settingsFooterRow(i-scrollH, innerW, isOverlay) + sepStyle.Render("│") + "\n")
+		scope, _ := bodyColumn(scopeVis, scopeBar, i)
+		row, rightEdge := bodyColumn(rowVis, rowBar, i)
+		div := SepStyle.Render("┆")
+		if scopeBar != nil && i < len(scopeBar) {
+			div = scopeBar[i]
+		}
+		scopeCell := lipgloss.NewStyle().Width(scopeW).Render(ansi.Truncate(scope, scopeW-1, "…") + " ")
+		rowCell := lipgloss.NewStyle().Width(rowsW).Render(row)
+		if isOverlay {
+			scopeCell = InactiveStyle.Render(ansi.Strip(scopeCell))
+			rowCell = InactiveStyle.Render(ansi.Strip(rowCell))
+			div = SepInactiveStyle.Render("┆")
+		}
+		sb.WriteString(sepStyle.Render("│") + scopeCell + div + rowCell + rightEdge + "\n")
 	}
 	return sb.String()
 }
 
-// settingsDisplayLines renders the scrollable logical lines to display strings.
-func (m Model) settingsDisplayLines(innerW int) []string {
+// clampOffset bounds a scroll offset to [0, total-visible].
+func clampOffset(off, total, visible int) int {
+	if maxOff := max(total-visible, 0); off > maxOff {
+		off = maxOff
+	}
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
+// settingsScopeLines renders the left Scope column: Global first (filled dot),
+// then one row per active workspace. The selected scope drives which config the
+// rows on the right edit.
+func (m Model) settingsScopeLines(w int) []string {
+	focused := m.settingsScopeFocus
+	titleStyle := PanelHeaderFadedStyle
+	if focused {
+		titleStyle = PanelHeaderStyle
+	}
+	lines := []string{titleStyle.Render(" Scope"), ""}
+	for i, sc := range m.settingsScopes {
+		selected := i == m.settingsScopeCursor
+		indicator := "○"
+		if selected {
+			indicator = "❯"
+		}
+		dot := "·"
+		if sc.global {
+			dot = "●"
+		}
+		label := sc.label
+		avail := max(w-6, 4)
+		if r := []rune(label); len(r) > avail {
+			label = string(r[:avail-1]) + "…"
+		}
+		line := " " + indicator + " " + dot + " " + label
+		switch {
+		case selected:
+			lines = append(lines, SelectedStyle.Render(line))
+		case focused:
+			lines = append(lines, ItemStyle.Render(line))
+		default:
+			lines = append(lines, FadedStyle.Render(line))
+		}
+	}
+	return lines
+}
+
+// settingsDisplayLines renders the scrollable logical lines to display strings
+// for the rows pane (width rowsW). In a workspace scope each row shows whether
+// it is a workspace override or inherited; in Global scope it shows the reload
+// tier.
+func (m Model) settingsDisplayLines(rowsW int) []string {
 	labelW, valueW := settingsColumnWidths(m.settingsItems)
 	logical := settingsLogicalLines(m.settingsItems)
+	wsScope := !m.currentScope().global
 	out := make([]string, len(logical))
 	for i, ln := range logical {
 		switch ln.kind {
 		case slHeader:
-			out[i] = settingsHeaderDisplay(ln.group, innerW)
+			out[i] = settingsHeaderDisplay(ln.group, rowsW)
 		case slRow:
 			it := m.settingsItems[ln.item]
-			out[i] = settingsRowDisplay(it, ln.item == m.settingsCursor, labelW, valueW)
+			out[i] = settingsRowDisplay(it, ln.item == m.settingsCursor, wsScope, labelW, valueW)
 		default:
 			out[i] = ""
 		}
@@ -464,8 +527,8 @@ func settingsHeaderDisplay(group string, innerW int) string {
 }
 
 // settingsRowDisplay renders one aligned settings row: 1-space gap, cursor,
-// fixed-width label and value columns, the control, then the reload-tier mark.
-func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string {
+// fixed-width label and value columns, the control, then the trailing mark.
+func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW int) string {
 	label := fmt.Sprintf("%-*s", labelW, it.label)
 	value := fmt.Sprintf("%-*s", valueW, it.value)
 	ctrl := settingControl(it)
@@ -476,16 +539,27 @@ func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string
 	} else {
 		core = "  " + ItemStyle.Render(label) + DetailStyle.Render(value) + MutedStyle.Render(ctrl)
 	}
-	out := " " + core
-	switch reloadTierFor(it.key) {
-	case reloadLive:
-		out += " " + OkStyle.Render("live")
-	case reloadNextSession:
-		out += " " + MutedStyle.Render("next session")
-	case reloadRestart:
-		out += " " + HintStyle.Render("*")
+	return " " + core + " " + settingsRowMark(it, wsScope)
+}
+
+// settingsRowMark renders the trailing marker. In a workspace scope it shows
+// whether the row is a workspace override (● set) or inherited; in Global scope
+// it shows the reload tier (live / next session / *).
+func settingsRowMark(it settingItem, wsScope bool) string {
+	if wsScope {
+		if it.overridden {
+			return OkStyle.Render("● set")
+		}
+		return MutedStyle.Render("inherited")
 	}
-	return out
+	switch reloadTierFor(it.key) {
+	case reloadNextSession:
+		return MutedStyle.Render("next session")
+	case reloadRestart:
+		return HintStyle.Render("*")
+	default:
+		return OkStyle.Render("live")
+	}
 }
 
 // settingsFooterRow renders one of the three pinned footer rows: a blank
@@ -494,7 +568,7 @@ func (m Model) settingsFooterRow(idx, innerW int, isOverlay bool) string {
 	contentW := max(innerW-4, 0)
 	switch idx {
 	case 1:
-		return statusBarLine(settingsHintContent(contentW), innerW, isOverlay)
+		return statusBarLine(settingsHintContent(contentW, !m.currentScope().global), innerW, isOverlay)
 	case 2:
 		return statusBarLine(settingsStatusContent(m.settingsStatusOrHelp(), contentW), innerW, isOverlay)
 	default:
@@ -526,14 +600,18 @@ func statusBarLine(content string, innerW int, isOverlay bool) string {
 	return " " + SettingsBarStyle.Render(" ") + content + SettingsBarStyle.Render(" ") + " "
 }
 
-// settingsHintContent builds the hint bar: the restart legend on the left and
-// the navigation shortcuts (brighter keys) on the right.
-func settingsHintContent(contentW int) string {
+// settingsHintContent builds the hint bar: a legend on the left (the reload
+// tiers in Global scope, the inherit/override key in a workspace scope) and the
+// navigation shortcuts (brighter keys) on the right.
+func settingsHintContent(contentW int, wsScope bool) string {
 	legend := "live = immediate  ·  \"next session\" = new sessions  ·  * = daemon restart"
+	if wsScope {
+		legend = "● set = workspace override  ·  inherited = from Global  ·  ⌫ reset to inherit"
+	}
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
-		SettingsBarKeyStyle.Render("enter") + SettingsBarStyle.Render(" toggle/open")
-	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  enter toggle/open")
+		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" scope")
+	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  tab scope")
 	gap := max(contentW-lipgloss.Width(legend)-shortcutW, 1)
 	return SettingsBarStyle.Render(legend) + SettingsBarStyle.Render(strings.Repeat(" ", gap)) + shortcut
 }

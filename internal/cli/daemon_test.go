@@ -17,6 +17,25 @@ import (
 	"github.com/golimpio/plumb/internal/session"
 )
 
+// TestConnRegistry_ReloadProject_OnlyMatchingWorkspace verifies the per-workspace
+// reload targets only the sessions pinned to that workspace (trailing-slash
+// tolerant) and never touches a session in another project.
+func TestConnRegistry_ReloadProject_OnlyMatchingWorkspace(t *testing.T) {
+	r := newConnRegistry()
+	var aCount, bCount int
+	r.add("a", connHandle{workspace: func() string { return "/repoA" }, reloadProject: func() { aCount++ }})
+	r.add("a2", connHandle{workspace: func() string { return "/repoA/" }, reloadProject: func() { aCount++ }})
+	r.add("b", connHandle{workspace: func() string { return "/repoB" }, reloadProject: func() { bCount++ }})
+
+	r.reloadProject("/repoA")
+	if aCount != 2 {
+		t.Errorf("repoA sessions reloaded %d times, want 2 (trailing slash tolerant)", aCount)
+	}
+	if bCount != 0 {
+		t.Errorf("repoB must not reload on a repoA change; got %d", bCount)
+	}
+}
+
 func TestSeedPathFromArgs(t *testing.T) {
 	tests := []struct {
 		name string

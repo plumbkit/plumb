@@ -215,6 +215,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		}
 	})
 
+	// The connection registry is created here (not in the accept loop) so the
+	// control socket can reach it for the reload-project command, which targets
+	// the per-workspace config reload at the sessions on that workspace.
+	registry := newConnRegistry()
+
 	ctrlPath := daemonCtrlSocketPath()
 	_ = os.Remove(ctrlPath)
 	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
@@ -234,7 +239,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			}
 			return tools.FormatDiagnostics(e.inv.AllDiagnostics())
 		}
-		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn, store.Reload)
+		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn, store.Reload, registry.reloadProject)
 	}
 
 	daemonStartedAt := time.Now()
@@ -256,25 +261,58 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, budgets)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, budgets, registry)
 	return nil
 }
 
-// connRegistry tracks live MCP connections so the idle reaper can cancel them.
+// connHandle is the per-connection state the registry tracks: the cancel func
+// (idle reaper / shutdown), and the session's workspace + project-config reload
+// hook (the reload-project control command).
+type connHandle struct {
+	cancel        context.CancelFunc
+	workspace     func() string
+	reloadProject func()
+}
+
+// connRegistry tracks live MCP connections so the idle reaper can cancel them
+// and the control socket can target a per-workspace config reload.
 // Concurrency: all methods are safe for concurrent use.
 type connRegistry struct {
 	mu    sync.Mutex
-	conns map[string]context.CancelFunc // sessID → cancel
+	conns map[string]connHandle // sessID → handle
 }
 
 func newConnRegistry() *connRegistry {
-	return &connRegistry{conns: make(map[string]context.CancelFunc)}
+	return &connRegistry{conns: make(map[string]connHandle)}
 }
 
-func (r *connRegistry) add(sessID string, cancel context.CancelFunc) {
+func (r *connRegistry) add(sessID string, h connHandle) {
 	r.mu.Lock()
-	r.conns[sessID] = cancel
+	r.conns[sessID] = h
 	r.mu.Unlock()
+}
+
+// reloadProject re-applies the project config to every live session pinned to
+// workspace ws — and only those — so a per-workspace config change takes effect
+// immediately for that project and never touches a session in another. The
+// reload hooks are collected under the lock and invoked outside it, since
+// applyProjectConfig may take per-session locks of its own.
+func (r *connRegistry) reloadProject(ws string) {
+	target := filepath.Clean(ws)
+	r.mu.Lock()
+	var hits []func()
+	for _, h := range r.conns {
+		if h.workspace == nil || h.reloadProject == nil {
+			continue
+		}
+		if filepath.Clean(h.workspace()) == target {
+			hits = append(hits, h.reloadProject)
+		}
+	}
+	r.mu.Unlock()
+	for _, fn := range hits {
+		fn()
+	}
 }
 
 func (r *connRegistry) remove(sessID string) {
@@ -303,9 +341,9 @@ func (r *connRegistry) evictIdle(ttl time.Duration) {
 		if time.Since(lastSeen) < ttl {
 			continue
 		}
-		if cancel, ok := r.conns[info.ID]; ok {
+		if h, ok := r.conns[info.ID]; ok && h.cancel != nil {
 			slog.Info("daemon: evicting idle session", "session", info.Name, "last_seen", lastSeen)
-			cancel()
+			h.cancel()
 		}
 	}
 }
@@ -328,9 +366,8 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 	}
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	var wg sync.WaitGroup
-	registry := newConnRegistry()
 
 	// Idle-session reaper: cancel connections that have not called any tool
 	// for longer than the configured eviction TTL.
@@ -377,7 +414,11 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	defer conn.Close()
 	s := newConnSession(ctx, pool, topoPool, store, statsStore, budgets)
-	registry.add(s.sessID, s.cancel)
+	registry.add(s.sessID, connHandle{
+		cancel:        s.cancel,
+		workspace:     s.workspace,
+		reloadProject: func() { s.applyProjectConfig(s.workspace()) },
+	})
 	defer registry.remove(s.sessID)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})

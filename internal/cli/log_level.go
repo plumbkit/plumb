@@ -82,17 +82,17 @@ func validLogLevelCommand(level string) bool {
 // own goroutine. It returns when ln is closed (daemon shutdown).
 // diagsFn returns live formatted diagnostics for the given workspace path;
 // pass nil if the daemon has no workspace pool (e.g. in tests that don't need it).
-func serveControlSocket(ln net.Listener, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error) {
+func serveControlSocket(ln net.Listener, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error, reloadProjectFn func(string)) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go handleCtrlConn(conn, configLevel, logFormat, diagsFn, reloadFn)
+		go handleCtrlConn(conn, configLevel, logFormat, diagsFn, reloadFn, reloadProjectFn)
 	}
 }
 
-func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error) {
+func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error, reloadProjectFn func(string)) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -110,6 +110,19 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 
 	if line == "reload-config" {
 		handleReloadConfig(conn, reloadFn)
+		return
+	}
+
+	// reload-project <workspace>: re-apply the per-project config to the sessions
+	// pinned to that workspace (and only those), so a workspace settings change
+	// made in the TUI takes effect at once for that project.
+	if ws, ok := strings.CutPrefix(line, "reload-project "); ok {
+		ws = strings.TrimSpace(ws)
+		if reloadProjectFn != nil {
+			reloadProjectFn(ws)
+		}
+		slog.Info("daemon: project config reloaded via control socket", "workspace", ws)
+		fmt.Fprint(conn, "ok\n")
 		return
 	}
 
