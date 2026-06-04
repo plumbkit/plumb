@@ -13,11 +13,19 @@ import (
 type BoundaryGuard func(path string) error
 
 type WorkspaceBoundaryError struct {
-	Workspace string
-	Path      string
+	Workspace    string
+	Path         string
+	ReadOnlyRoot string // non-empty when the path is under a read-only root; indicates a write was attempted
 }
 
 func (e WorkspaceBoundaryError) Error() string {
+	if e.ReadOnlyRoot != "" {
+		return fmt.Sprintf(
+			"path access denied: %s is under a read-only root (%s) and cannot be modified. "+
+				"Dependency source is not editable; copy the file into your workspace to make changes.",
+			e.Path, e.ReadOnlyRoot,
+		)
+	}
 	return fmt.Sprintf(
 		"workspace boundary violation: this connection is pinned to %s; %s is in a different project. "+
 			"To work there, call session_start with workspace set to that project's root — it will re-pin this connection. "+

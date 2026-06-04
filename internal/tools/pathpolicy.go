@@ -76,16 +76,27 @@ func (p *PathPolicy) match(path string) (AllowedRoot, bool) {
 
 // Check resolves path and returns the longest-prefix root that contains it,
 // provided that root grants at least want. A nil policy or empty path is
-// allowed (no-op), preserving unattached/test setups. On denial it returns a
-// WorkspaceBoundaryError naming the primary workspace root.
+// allowed (no-op), preserving unattached/test setups.
+//
+// Two distinct denials are possible:
+//   - Path falls under a known root, but that root is read-only and a write
+//     was requested: returns WorkspaceBoundaryError with ReadOnlyRoot set.
+//   - Path falls under no allowed root at all: returns the generic
+//     WorkspaceBoundaryError naming the primary workspace.
 func (p *PathPolicy) Check(path string, want Access) (AllowedRoot, error) {
 	if p == nil || path == "" {
 		return AllowedRoot{}, nil
 	}
-	if r, ok := p.match(path); ok && r.Access >= want {
+	r, ok := p.match(path)
+	if ok && r.Access >= want {
 		return r, nil
 	}
-	return AllowedRoot{}, NewWorkspaceBoundaryError(p.primary, cleanToolPath(path))
+	cleaned := cleanToolPath(path)
+	if ok {
+		// Matched a root, but its access level is insufficient (e.g. write to a read-only dep root).
+		return AllowedRoot{}, WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, ReadOnlyRoot: r.Label}
+	}
+	return AllowedRoot{}, NewWorkspaceBoundaryError(p.primary, cleaned)
 }
 
 // OutsideWorkspaceLabel returns the matched root's label when path resolves

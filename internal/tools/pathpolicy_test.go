@@ -104,6 +104,40 @@ func TestPathPolicy_SymlinkEscapeBlocked(t *testing.T) {
 	}
 }
 
+func TestPathPolicy_ReadOnlyWriteDenialMessage(t *testing.T) {
+	ws := t.TempDir()
+	dep := t.TempDir()
+	pol := NewPathPolicy(ws, []AllowedRoot{
+		{Path: ws, Access: AccessReadWrite, Label: "workspace"},
+		{Path: dep, Access: AccessRead, Label: "GOMODCACHE"},
+	})
+	depFile := filepath.Join(dep, "lib.go")
+	_, err := pol.Check(depFile, AccessReadWrite)
+	if err == nil {
+		t.Fatal("expected denial for write to read-only root")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "read-only root (GOMODCACHE)") {
+		t.Errorf("denial message should name the read-only root; got: %s", msg)
+	}
+	if strings.Contains(msg, "different project") {
+		t.Errorf("denial for a known read-only root must not say 'different project'; got: %s", msg)
+	}
+	// The error must still be a WorkspaceBoundaryError so IsWorkspaceBoundaryError holds.
+	if !IsWorkspaceBoundaryError(err) {
+		t.Errorf("error should still satisfy IsWorkspaceBoundaryError")
+	}
+	// A fully-outside path (no match) should still produce the generic message.
+	outside := filepath.Join(t.TempDir(), "x.go")
+	_, errOut := pol.Check(outside, AccessRead)
+	if errOut == nil {
+		t.Fatal("expected denial for path outside all roots")
+	}
+	if !strings.Contains(errOut.Error(), "different project") {
+		t.Errorf("unmatched-path denial should say 'different project'; got: %s", errOut.Error())
+	}
+}
+
 func TestReadFile_OutsideWorkspaceAnnotation(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "lib.go")
