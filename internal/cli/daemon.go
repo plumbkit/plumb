@@ -247,10 +247,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	tools.StartPathLockSweep(ctx)
 	monitor.StartSnapshotWriter(ctx, monitor.SnapshotPath(), 2*time.Second, daemonStartedAt)
 
-	// clientLimiters holds one RateLimiter per MCP client identity
-	// (ClientName+"/"+ClientVersion). Connections from the same client share
-	// this budget so opening multiple connections cannot multiply the allowed
-	// write rate.
+	// clientLimiters holds one shared RateLimiter per (MCP client identity,
+	// workspace) pair (key: ClientName+"/"+ClientVersion+NUL+root). Connections
+	// from the same client working the same workspace share this budget so
+	// opening multiple connections cannot multiply the allowed write rate;
+	// connections on different workspaces never share, so a burst in one project
+	// cannot throttle a session in another. See bindWriteLimiterParent.
 	var clientLimiters sync.Map // map[string]*tools.RateLimiter
 
 	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, &clientLimiters)

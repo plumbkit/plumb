@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.35 (unreleased)
+
+Session isolation: the write rate-limit budget is now scoped per `(client, workspace)`, so two sessions on different workspaces never throttle each other.
+
+### Fixed
+
+- **Cross-workspace write-throttle interference removed.** The shared write rate-limit budget was keyed by MCP client identity alone (`ClientName+"/"+ClientVersion`), so a write burst in one session could throttle a *sibling* session on an entirely different workspace whenever both came from the same client (e.g. two Claude Code chats). The shared budget is now keyed by `(client identity, workspace root)` — `ClientName+"/"+ClientVersion+NUL+root`. This keeps the anti-bypass guarantee *within* a project (a client still cannot multiply its write rate by opening several connections to one workspace) while making different workspaces fully independent: two sessions on two different roots now behave as isolated processes for rate limiting. The binding moved out of `onClientInfo` (where the workspace is not yet known) into a new `bindWriteLimiterParent` helper called from both `onClientInfo` and `applyProjectConfig` — the chokepoint every attach / re-pin / config-reload path funnels through — so it links as soon as both the client identity and the pinned workspace are known, and atomically repoints on a re-pin (`internal/cli/conn.go`, `internal/cli/daemon.go`). Writes cannot occur before a workspace is pinned (the boundary guard refuses them), so no budget is needed pre-attach. Guards: `TestBindWriteLimiterParent_DifferentWorkspacesIsolated`, `TestBindWriteLimiterParent_SameWorkspaceShared`, `TestBindWriteLimiterParent_NoOpUntilAttached` (`internal/cli/conn_ratelimit_test.go`).
+
 ## 0.8.34 (unreleased)
 
 Topology: per-project `[topology]` tuning is now honoured by the pool, not just enable/disable.

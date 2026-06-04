@@ -549,6 +549,9 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		s.lastCfgMtime = info.ModTime()
 		s.stateMu.Unlock()
 	}
+	// The workspace is now known (attach / re-pin / reload all funnel here), so
+	// link the per-(client, workspace) shared write budget. Idempotent.
+	s.bindWriteLimiterParent()
 }
 
 // startConfigWatcher launches a background goroutine that polls for config file
@@ -663,12 +666,42 @@ func (s *connSession) onClientInfo(name, version string) {
 	s.stateMu.Unlock()
 	s.log().Info("daemon: client identified", "client", name, "version", version)
 	session.SetClient(s.sessID, name, version)
-	if s.clientLimiters != nil {
-		key := name + "/" + version
-		shared, _ := s.clientLimiters.LoadOrStore(key,
-			tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute))
-		s.writeLimiter.SetParent(shared.(*tools.RateLimiter))
+	// Client identity may arrive before or after the workspace is pinned; bind
+	// here too so the shared budget links as soon as both are known.
+	s.bindWriteLimiterParent()
+}
+
+// bindWriteLimiterParent links the session's write limiter to the budget shared
+// by all connections from the same client identity working the SAME workspace.
+//
+// Keying on (client, workspace) — rather than client identity alone — preserves
+// the anti-bypass guarantee within a project (a client cannot multiply its
+// write budget by opening several connections to one workspace) while keeping
+// different workspaces fully independent: a write burst in one project never
+// throttles a sibling session in another. This is the cross-workspace isolation
+// contract — two sessions on two different roots behave as isolated processes.
+//
+// No-op until both the client identity and the workspace are known. Writes
+// cannot occur before a workspace is pinned (the boundary guard refuses them),
+// so no shared budget is needed pre-attach. Idempotent: LoadOrStore + SetParent
+// are safe to repeat, so it is called both on client-info and from
+// applyProjectConfig (every attach / re-pin / config-reload path). On a re-pin
+// SetParent atomically repoints this session at the new root's budget; the old
+// root's shared limiter stays referenced by any sibling sessions still there.
+func (s *connSession) bindWriteLimiterParent() {
+	if s.clientLimiters == nil {
+		return
 	}
+	s.stateMu.Lock()
+	name, version, root := s.clientName, s.clientVersion, s.acquiredRoot
+	s.stateMu.Unlock()
+	if name == "" || root == "" {
+		return
+	}
+	key := name + "/" + version + "\x00" + root
+	shared, _ := s.clientLimiters.LoadOrStore(key,
+		tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute))
+	s.writeLimiter.SetParent(shared.(*tools.RateLimiter))
 }
 
 // onAfterTool records a completed tool call in the stats store and refreshes
