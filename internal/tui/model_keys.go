@@ -282,10 +282,13 @@ func (m Model) mainKeyEnter() Model {
 
 func (m Model) mainKeyTab() Model {
 	if m.currentSection == 2 {
-		if m.focusPanel == focusSessions {
-			m.focusPanel = focusDetails
-		} else {
+		switch m.focusPanel {
+		case focusWorkspaces:
 			m.focusPanel = focusSessions
+		case focusSessions:
+			m.focusPanel = focusDetails
+		default:
+			m.focusPanel = focusWorkspaces
 		}
 		m.rightScroll = 0
 		return m
@@ -305,10 +308,13 @@ func (m Model) mainKeyTab() Model {
 
 func (m Model) mainKeyShiftTab() Model {
 	if m.currentSection == 2 {
-		if m.focusPanel == focusSessions {
+		switch m.focusPanel {
+		case focusWorkspaces:
 			m.focusPanel = focusDetails
-		} else {
+		case focusDetails:
 			m.focusPanel = focusSessions
+		default:
+			m.focusPanel = focusWorkspaces
 		}
 		m.rightScroll = 0
 		return m
@@ -334,6 +340,11 @@ func (m Model) mainKeyUp() Model {
 		return m
 	}
 	switch m.focusPanel {
+	case focusWorkspaces:
+		if m.workspaceCursor > 0 {
+			m.selectWorkspace(m.workspaceCursor - 1)
+			m.ensureWorkspaceCursorVisible()
+		}
 	case focusToolStats:
 		if m.toolStatsCursor > 0 {
 			m.toolStatsCursor--
@@ -373,6 +384,11 @@ func (m Model) mainKeyDown() Model {
 		return m
 	}
 	switch m.focusPanel {
+	case focusWorkspaces:
+		if m.workspaceCursor < len(m.memoryWorkspaces)-1 {
+			m.selectWorkspace(m.workspaceCursor + 1)
+			m.ensureWorkspaceCursorVisible()
+		}
 	case focusToolStats:
 		if m.toolStatsCursor < len(m.toolStats)-1 {
 			m.toolStatsCursor++
@@ -405,6 +421,9 @@ func (m Model) mainKeyDown() Model {
 func (m Model) mainKeyPageDown() Model {
 	pageSize := max(m.height-6, 1)
 	switch m.focusPanel {
+	case focusWorkspaces:
+		m.selectWorkspace(min(m.workspaceCursor+pageSize, max(len(m.memoryWorkspaces)-1, 0)))
+		m.ensureWorkspaceCursorVisible()
 	case focusToolStats:
 		m.toolStatsCursor += pageSize
 		if m.toolStatsCursor >= len(m.toolStats) {
@@ -443,6 +462,9 @@ func (m Model) mainKeyPageDown() Model {
 func (m Model) mainKeyPageUp() Model {
 	pageSize := max(m.height-6, 1)
 	switch m.focusPanel {
+	case focusWorkspaces:
+		m.selectWorkspace(max(m.workspaceCursor-pageSize, 0))
+		m.ensureWorkspaceCursorVisible()
 	case focusToolStats:
 		m.toolStatsCursor -= pageSize
 		if m.toolStatsCursor < 0 {

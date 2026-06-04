@@ -2,12 +2,61 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 
 	"github.com/golimpio/plumb/internal/memory"
 )
+
+// memWorkspace is one row in the Memory section's Workspaces pane. Memory is
+// per-workspace, not per-session, so two sessions on the same folder collapse to
+// a single entry (Sessions == 2). Launch is set for the workspace the TUI was
+// opened in, which appears even when no session is currently attached there.
+type memWorkspace struct {
+	Folder   string // absolute path; empty folders are never stored
+	Label    string // filepath.Base(Folder) for display
+	Sessions int    // live sessions on this folder; 0 means launch-only
+	Launch   bool   // the TUI's own launch-cwd workspace
+}
+
+// collectMemoryWorkspaces builds the deduplicated Workspaces list: every live
+// session's folder (tallied), plus the launch-cwd workspace when it is not
+// already present. The order is stable (sorted by folder) so the cursor never
+// jumps between polls.
+func (m *Model) collectMemoryWorkspaces() []memWorkspace {
+	byFolder := make(map[string]*memWorkspace)
+	var order []string
+	for _, s := range m.sessions {
+		if s.Folder == "" {
+			continue
+		}
+		ws, ok := byFolder[s.Folder]
+		if !ok {
+			ws = &memWorkspace{Folder: s.Folder, Label: filepath.Base(s.Folder)}
+			byFolder[s.Folder] = ws
+			order = append(order, s.Folder)
+		}
+		ws.Sessions++
+	}
+	if m.dashProjectFolder != "" {
+		ws, ok := byFolder[m.dashProjectFolder]
+		if !ok {
+			ws = &memWorkspace{Folder: m.dashProjectFolder, Label: filepath.Base(m.dashProjectFolder)}
+			byFolder[m.dashProjectFolder] = ws
+			order = append(order, m.dashProjectFolder)
+		}
+		ws.Launch = true
+	}
+	sort.Strings(order)
+	out := make([]memWorkspace, 0, len(order))
+	for _, f := range order {
+		out = append(out, *byFolder[f])
+	}
+	return out
+}
 
 // memDetailRow renders a key/value pair with a 2-space gap. Keys are padded to
 // 4 chars so Name/Desc/Size align; longer keys (Paths) get 1 space gap.
@@ -104,7 +153,7 @@ func leftMemoryRowLines(firstLine, secondLine, thirdLine string, selected, lf bo
 }
 
 func (m *Model) memoryRightLines(rw int) []string {
-	rf := m.focusPanel != focusSessions
+	rf := m.focusPanel == focusDetails
 	var headerStyle lipgloss.Style
 	if rf {
 		headerStyle = PanelHeaderStyle
@@ -163,7 +212,7 @@ func (m *Model) currentMemoryBody() string {
 	if m.memoryBodyCacheName == name && m.memoryBodyCache != "" {
 		return m.memoryBodyCache
 	}
-	ws := m.dashProjectFolder
+	ws := m.memoryFolder
 	if ws == "" {
 		return ""
 	}
@@ -177,7 +226,22 @@ func (m *Model) currentMemoryBody() string {
 }
 
 func (m *Model) refreshMemories() {
-	ws := m.dashProjectFolder
+	m.memoryWorkspaces = m.collectMemoryWorkspaces()
+	if m.workspaceCursor >= len(m.memoryWorkspaces) {
+		m.workspaceCursor = max(len(m.memoryWorkspaces)-1, 0)
+	}
+
+	ws := ""
+	if len(m.memoryWorkspaces) > 0 {
+		ws = m.memoryWorkspaces[m.workspaceCursor].Folder
+	}
+	if ws != m.memoryFolder {
+		m.memoryFolder = ws
+		m.memoryCursor = 0
+		m.leftScroll = 0
+		m.memoryBodyCache = ""
+		m.memoryBodyCacheName = ""
+	}
 	if ws == "" {
 		m.memories = nil
 		return
@@ -221,4 +285,75 @@ func (m *Model) selectMemoryAtBodyRow(row int) {
 	m.memoryBodyCacheName = ""
 	m.focusPanel = focusSessions
 	m.rightScroll = 0
+}
+
+// memoryWorkspaceLines renders the Workspaces pane: one line per active
+// workspace, the label truncated to fit while the session-count / launch suffix
+// stays visible.
+func (m Model) memoryWorkspaceLines(wsW int) []string {
+	wf := m.focusPanel == focusWorkspaces
+
+	titleStyle := PanelHeaderFadedStyle
+	if wf {
+		titleStyle = PanelHeaderStyle
+	}
+	lines := []string{titleStyle.Render(fmt.Sprintf(" Workspaces (%d)", len(m.memoryWorkspaces))), ""}
+	if len(m.memoryWorkspaces) == 0 {
+		msg := " No active workspaces."
+		if wf {
+			lines = append(lines, MutedStyle.Render(msg))
+		} else {
+			lines = append(lines, InactiveStyle.Render(msg))
+		}
+		return lines
+	}
+
+	for i, ws := range m.memoryWorkspaces {
+		selected := i == m.workspaceCursor
+		indicator := "○"
+		if selected {
+			indicator = "❯"
+		}
+		suffix := ""
+		if ws.Sessions > 0 {
+			suffix = fmt.Sprintf(" ·%d", ws.Sessions)
+		} else if ws.Launch {
+			suffix = " ⌂"
+		}
+
+		label := ws.Label
+		avail := max(wsW-len([]rune(suffix))-4, 4) // " ❯ " prefix + trailing margin
+		if labelRunes := []rune(label); len(labelRunes) > avail {
+			label = string(labelRunes[:avail-1]) + "…"
+		}
+		line := " " + indicator + " " + label + suffix
+
+		switch {
+		case selected:
+			lines = append(lines, SelectedStyle.Render(line))
+		case wf:
+			lines = append(lines, ItemStyle.Render(line))
+		default:
+			lines = append(lines, FadedStyle.Render(line))
+		}
+	}
+	return lines
+}
+
+// selectWorkspace switches the Workspaces cursor and reloads memories for the
+// newly-selected folder (refreshMemories resets the memory cursor and body cache
+// when the folder actually changes).
+func (m *Model) selectWorkspace(idx int) {
+	if idx < 0 || idx >= len(m.memoryWorkspaces) {
+		return
+	}
+	m.workspaceCursor = idx
+	m.rightScroll = 0
+	m.refreshMemories()
+}
+
+func (m *Model) selectWorkspaceAtBodyRow(row int) {
+	// Header + blank spacer precede the first workspace row.
+	m.focusPanel = focusWorkspaces
+	m.selectWorkspace(row - 2)
 }

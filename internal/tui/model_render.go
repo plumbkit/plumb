@@ -57,13 +57,7 @@ func (m Model) render() string {
 	for i := range 3 {
 		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
-	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
-
-	allLeftLines := m.leftLines()
-	allRightLines := (&m).rightLines(rightWidth)
-	sb.WriteString(m.renderBodySection(allLeftLines, allRightLines, bodyHeight, rightWidth, isOverlay))
-
-	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
+	sb.WriteString(m.renderMainBody(bodyHeight, rightWidth, isOverlay))
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
 	final := sb.String()
@@ -91,6 +85,22 @@ func (m Model) applyOverlays(final string) string {
 		final = m.renderThemePicker(final)
 	}
 	return final
+}
+
+// renderMainBody draws the bordered two- or three-pane body. The Memory section
+// (section 2) is a dedicated three-pane layout; every other bordered section
+// uses the generic left/right split.
+func (m Model) renderMainBody(bodyHeight, rightWidth int, isOverlay bool) string {
+	if m.currentSection == 2 {
+		return m.renderMemoryPanels(bodyHeight, isOverlay)
+	}
+	var sb strings.Builder
+	sb.WriteString(m.renderTopBorder(rightWidth, isOverlay) + "\n")
+	allLeftLines := m.leftLines()
+	allRightLines := (&m).rightLines(rightWidth)
+	sb.WriteString(m.renderBodySection(allLeftLines, allRightLines, bodyHeight, rightWidth, isOverlay))
+	sb.WriteString(m.renderBottomBorder(rightWidth, isOverlay) + "\n")
+	return sb.String()
 }
 
 func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeight, rightWidth int, isOverlay bool) string {
@@ -387,6 +397,7 @@ func (m Model) renderHelp(bg string) string {
 			title: "Panels",
 			items: []helpItem{
 				{key: "tab / shift+tab", desc: "Switch focus: sessions, details, tools, recent"},
+				{key: "tab (Memory)", desc: "Cycle workspaces → memories → detail"},
 				{key: "[  ]", desc: "Resize columns"},
 			},
 		},

@@ -112,6 +112,10 @@ type Model struct {
 	memoryCursor        int
 	memoryBodyCache     string
 	memoryBodyCacheName string
+	memoryWorkspaces    []memWorkspace // active workspaces (deduped sessions + launch dir)
+	workspaceCursor     int            // index into memoryWorkspaces for the selected workspace
+	workspaceScroll     int            // first visible row in the Workspaces pane
+	memoryFolder        string         // folder the current m.memories/body cache was loaded from
 
 	// Settings section (section 4) — grouped settings screen + theme popup.
 	settingsCfg       config.Config // global config snapshot, loaded on entering the section

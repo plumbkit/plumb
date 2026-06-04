@@ -134,24 +134,38 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 }
 
 func (m *Model) handleBodyAreaClick(x, y int) {
-	if m.currentSection == 2 && m.onLeftPanel(x, y) {
-		m.selectMemoryAtBodyRow(y - bodyStartRow)
+	if m.currentSection == 2 {
+		m.handleMemoryClick(x, y)
 		return
 	}
-	if m.currentSection != 2 && m.onSessionsPanel(x, y) {
+	if m.onSessionsPanel(x, y) {
 		m.selectSessionAtBodyRow(y - bodyStartRow)
 		return
 	}
 	if y == bodyStartRow && x > m.leftWidth+1 {
-		if m.currentSection == 2 {
-			m.focusPanel = focusDetails
-		} else {
-			m.handleTabBarClick(x)
-		}
+		m.handleTabBarClick(x)
 		return
 	}
 	if y > bodyStartRow && x > m.leftWidth+1 {
 		m.handleRightPanelClick(y - bodyStartRow + m.rightScroll)
+	}
+}
+
+// handleMemoryClick routes a body-area click in the three-pane Memory section to
+// the column under the cursor: Workspaces, Memories, or Detail.
+func (m *Model) handleMemoryClick(x, y int) {
+	if y < bodyStartRow {
+		return
+	}
+	wsW, memW, _ := m.memoryColumnWidths()
+	row := y - bodyStartRow
+	switch {
+	case x >= 1 && x <= wsW:
+		m.selectWorkspaceAtBodyRow(row)
+	case x >= wsW+2 && x <= wsW+1+memW:
+		m.selectMemoryAtBodyRow(row)
+	case x >= wsW+3+memW:
+		m.focusPanel = focusDetails
 	}
 }
 
@@ -275,7 +289,9 @@ func (m Model) maxLeftWidth() int {
 }
 
 func (m Model) onDivider(x int) bool {
-	return x == m.leftWidth+1
+	// The Memory section is a three-pane layout with its own divider columns;
+	// the single-divider drag does not apply there.
+	return m.currentSection != 2 && x == m.leftWidth+1
 }
 
 func (m Model) onSessionsPanel(x, y int) bool {
@@ -283,10 +299,6 @@ func (m Model) onSessionsPanel(x, y int) bool {
 		return false
 	}
 	return len(m.sessions) > 0
-}
-
-func (m Model) onLeftPanel(x, y int) bool {
-	return y >= bodyStartRow && x > 0 && x <= m.leftWidth
 }
 
 func (m *Model) setLeftWidthFromMouse(x int) {
@@ -412,15 +424,27 @@ func (m *Model) handleMouseWheelBody(mouse tea.Mouse, delta int) {
 	if mouse.Y < bodyStartRow || mouse.Y >= bodyStartRow+bodyHeight {
 		return
 	}
-	if mouse.X <= m.leftWidth+1 {
-		m.leftScroll += delta
-		if m.leftScroll < 0 {
-			m.leftScroll = 0
-		}
+	if m.currentSection == 2 {
+		m.handleMemoryWheel(mouse.X, delta)
 		return
 	}
-	m.rightScroll += delta
-	if m.rightScroll < 0 {
-		m.rightScroll = 0
+	if mouse.X <= m.leftWidth+1 {
+		m.leftScroll = max(m.leftScroll+delta, 0)
+		return
+	}
+	m.rightScroll = max(m.rightScroll+delta, 0)
+}
+
+// handleMemoryWheel scrolls the column under the cursor in the three-pane Memory
+// section: Workspaces, Memories (m.leftScroll), or Detail (m.rightScroll).
+func (m *Model) handleMemoryWheel(x, delta int) {
+	wsW, memW, _ := m.memoryColumnWidths()
+	switch {
+	case x <= wsW+1:
+		m.workspaceScroll = max(m.workspaceScroll+delta, 0)
+	case x <= wsW+2+memW:
+		m.leftScroll = max(m.leftScroll+delta, 0)
+	default:
+		m.rightScroll = max(m.rightScroll+delta, 0)
 	}
 }

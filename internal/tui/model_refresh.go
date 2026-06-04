@@ -238,36 +238,49 @@ func (m *Model) ensurePopupCursorVisible() {
 // keyboard navigation. Mouse-wheel scrolling moves leftScroll directly and
 // never calls this. Mirrors ensurePopupCursorVisible.
 func (m *Model) ensureLeftCursorVisible() {
-	const headerLines = 2 // panel title + blank spacer
 	cursor, count, perItem := m.cursor, len(m.sessions), 3
 	if m.currentSection == 2 {
 		cursor, count, perItem = m.memoryCursor, len(m.memories), 4
 	}
+	m.leftScroll = scrollToCursor(cursor, count, perItem, max(m.height-6, 1), m.leftScroll)
+}
+
+// ensureWorkspaceCursorVisible keeps the selected Workspaces row (one line each)
+// within the body viewport after keyboard navigation.
+func (m *Model) ensureWorkspaceCursorVisible() {
+	m.workspaceScroll = scrollToCursor(m.workspaceCursor, len(m.memoryWorkspaces), 1, max(m.height-6, 1), m.workspaceScroll)
+}
+
+// scrollToCursor returns the scroll offset that keeps the cursor's row visible
+// within bodyHeight, given perItem lines per row (plus a 2-line panel header).
+// perItem == 1 rows have no trailing blank, so the last content line is the row
+// itself; multi-line rows reserve one line that may scroll off.
+func scrollToCursor(cursor, count, perItem, bodyHeight, scroll int) int {
+	const headerLines = 2 // panel title + blank spacer
 	if count == 0 {
-		m.leftScroll = 0
-		return
+		return 0
 	}
 	top := headerLines + cursor*perItem
-	bottom := top + perItem - 2 // last content line; trailing blank may be hidden
+	bottom := top + max(perItem-2, 0) // last content line; trailing blank may be hidden
 	if cursor == 0 {
 		top = 0 // reveal the panel header above the first row
 	}
-	bodyHeight := max(m.height-6, 1)
 	totalLines := headerLines + count*perItem
 
-	if bottom >= m.leftScroll+bodyHeight {
-		m.leftScroll = bottom - bodyHeight + 1
+	if bottom >= scroll+bodyHeight {
+		scroll = bottom - bodyHeight + 1
 	}
-	if top < m.leftScroll {
-		m.leftScroll = top
+	if top < scroll {
+		scroll = top
 	}
 	maxScroll := max(totalLines-bodyHeight, 0)
-	if m.leftScroll > maxScroll {
-		m.leftScroll = maxScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
 	}
-	if m.leftScroll < 0 {
-		m.leftScroll = 0
+	if scroll < 0 {
+		scroll = 0
 	}
+	return scroll
 }
 
 func (m *Model) currentDetail() (inputJSON, outputText string) {

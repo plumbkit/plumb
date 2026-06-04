@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.41 (unreleased)
+
+TUI Memory section is now workspace-aware: a new **Workspaces** column replaces the silent launch-cwd pinning, so the memories you see always belong to the workspace you select.
+
+### Fixed
+
+- **TUI Memory section listed the wrong workspace's memories (`internal/tui/model_memory.go`).** The Memories panel resolved its workspace from `dashProjectFolder` — the directory the TUI process was launched from, captured once at startup and never updated — so it showed *that* directory's `.plumb/memories/` regardless of which session you had selected, while every other session-scoped panel (stats, diagnostics, topology) already followed `m.sessions[m.cursor].Folder`. The empty-state "No memories in this workspace" silently meant the launch dir. `refreshMemories`/`currentMemoryBody` now key on an explicitly-selected workspace (`m.memoryFolder`) instead.
+
+### Added
+
+- **Workspaces column — three-pane Memory layout (`internal/tui/model_memory_render.go`).** Because memory is per-*workspace*, not per-session (two sessions can share one workspace), the Memory section gains a left-most **Workspaces** pane: `Workspaces │ Memories ┆ Detail`. It lists every active workspace, deduplicated from the live sessions' folders with a `·N` session count, plus the workspace the TUI was opened in (shown with a `⌂` marker even when no session is attached there). Navigating the pane (`tab`/`shift+tab` cycles Workspaces → Memories → Detail; `↑/↓`, page keys, mouse click, and wheel all column-aware) reloads the middle pane's memories for the chosen folder and resets the memory cursor + body cache on a switch. `collectMemoryWorkspaces` builds the deduplicated, stably-sorted list; the dedicated `renderMemoryPanels` three-pane frame mirrors the per-section renderers used by Dashboard/Logs/Settings (the generic two-column body can't express three panes). Guards: `TestCollectMemoryWorkspaces*`, `TestMemoryWorkspaceSwitchReloadsAndInvalidates`, `TestRenderMemorySectionThreeColumns` (`model_memory_test.go`).
+
 ## 0.8.40 (unreleased)
 
 Phase 2 — per-session mutation lane: the seven fine-grained locks guarding `connSession` are replaced by one immutable snapshot for lock-free reads and one mutex for serialised mutations (the same pattern `internal/config/store.go` uses).

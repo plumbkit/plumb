@@ -25,12 +25,13 @@ var sectionMenuItems = []string{"Dashboard", "Sessions", "Memory", "Logs", "Sett
 type panelFocus int
 
 const (
-	focusSessions    panelFocus = iota // j/k moves the session cursor (default)
+	focusSessions    panelFocus = iota // j/k moves the session cursor (default); in Memory it moves the memories list
 	focusToolStats                     // j/k moves the Tool Statistics cursor
 	focusStats                         // j/k moves the Recent calls cursor
 	focusDetails                       // j/k scrolls the Details panel
 	focusDiagnostics                   // j/k scrolls the Diagnostics panel
 	focusLogs                          // j/k scrolls the log viewer (Logs section)
+	focusWorkspaces                    // j/k moves the Workspaces cursor (Memory section only)
 )
 
 type callKey struct {
