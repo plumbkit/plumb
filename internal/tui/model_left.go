@@ -47,7 +47,7 @@ func (m Model) leftLines() []string {
 		if s.Synthetic {
 			firstLine += " (auto)"
 		}
-		if sessionIsIdle(s) {
+		if sessionIsIdle(s, idleThreshold(m.settingsCfg.Session.IdleThresholdMinutes)) {
 			firstLine += " ~"
 		}
 		path := "resolving…"
@@ -90,14 +90,24 @@ func leftSessionRowLines(firstLine, secondLine string, selected, lf bool) []stri
 	return []string{FadedStyle.Render(firstLine), FadedStyle.Render(secondLine)}
 }
 
-// sessionIsIdle reports whether a session's last-seen time exceeds the idle
+// idleThreshold converts the configured minute value to a duration, falling
+// back to session.IdleSessionThreshold when the value is zero or negative
+// (unset / invalid config).
+func idleThreshold(minutes int) time.Duration {
+	if minutes > 0 {
+		return time.Duration(minutes) * time.Minute
+	}
+	return session.IdleSessionThreshold
+}
+
+// sessionIsIdle reports whether a session's last-seen time exceeds the given
 // threshold. Falls back to StartedAt when LastSeenAt is not yet populated.
-func sessionIsIdle(s session.Info) bool {
+func sessionIsIdle(s session.Info, threshold time.Duration) bool {
 	lastSeen := s.LastSeenAt
 	if lastSeen.IsZero() {
 		lastSeen = s.StartedAt
 	}
-	return !lastSeen.IsZero() && time.Since(lastSeen) >= session.IdleSessionThreshold
+	return !lastSeen.IsZero() && time.Since(lastSeen) >= threshold
 }
 
 // sessionLangLabel maps a session to its language display label. Prefer the

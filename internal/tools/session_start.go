@@ -211,7 +211,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
 		if current := t.ws(); current != "" {
-			if a.Workspace != "" && filepath.Clean(a.Workspace) != filepath.Clean(current) {
+			if a.Workspace != "" && !sameDir(a.Workspace, current) {
 				return t.repinExplicit(ctx, current, a.Workspace)
 			}
 			return current, "", nil
@@ -823,4 +823,18 @@ func isClaudeDesktop(fn func() string) bool {
 	n := strings.ToLower(fn())
 	return n == "claude-ai" || strings.HasPrefix(n, "claude-ai/") ||
 		n == "claude-desktop" || strings.HasPrefix(n, "claude-desktop/")
+}
+
+// sameDir reports whether paths a and b refer to the same directory on the
+// filesystem, using os.SameFile for identity (handles symlinks and macOS
+// firmlinks such as /var→/private/var). Falls back to filepath.Clean
+// string comparison when either path cannot be stat'd (e.g. not-yet-created
+// directory in a test).
+func sameDir(a, b string) bool {
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(ia, ib)
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }

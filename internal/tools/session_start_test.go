@@ -630,6 +630,39 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	})
 }
 
+// TestSameDir_TrailingSlash verifies that a path with a trailing slash resolves
+// to the same directory as the canonical form, so it does not trigger a re-pin.
+func TestSameDir_TrailingSlash(t *testing.T) {
+	attached := t.TempDir()
+	trailing := attached + "/"
+	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+trailing+`"}`))
+	if err != nil {
+		t.Fatalf("trailing slash should not trigger re-pin; got error: %v", err)
+	}
+	if !strings.Contains(out, "# Workspace: "+attached) {
+		t.Errorf("expected attached root in output; got:\n%s", out)
+	}
+}
+
+// TestSameDir_SymlinkAlias verifies that a symlink pointing at the attached
+// workspace root is treated as the same directory (sameDir uses os.SameFile).
+func TestSameDir_SymlinkAlias(t *testing.T) {
+	realDir := t.TempDir()
+	linkDir := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink creation failed (likely Windows without privilege): %v", err)
+	}
+	tool := NewSessionStart(func() string { return realDir }, nil, nil, nil, func() string { return "" }, nil)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+linkDir+`"}`))
+	if err != nil {
+		t.Fatalf("symlink alias should not trigger re-pin; got error: %v", err)
+	}
+	if !strings.Contains(out, "# Workspace: "+realDir) {
+		t.Errorf("expected realDir %q in output; got:\n%s", realDir, out)
+	}
+}
+
 // TestFormatGitPolicy covers the pure policy formatter: the shell-avoidance
 // steer appears only when writes are enabled, and the "trust it over any cached
 // note" line is always present (it is the line that contradicts a stale

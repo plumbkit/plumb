@@ -545,3 +545,74 @@ func TestSaveTheme_RefusesBrokenConfig(t *testing.T) {
 		t.Errorf("SaveTheme overwrote a broken config; file changed to:\n%s", after)
 	}
 }
+
+// TestCloneConfig_SliceMapIndependence asserts that every slice and map field
+// in the cloned Config is a fresh allocation that does not share backing
+// memory with the source. A mutation to the clone must not affect the source.
+// This guards against future cloneConfig omissions — if a new slice/map field
+// is added but forgotten in cloneConfig, the append/write below will mutate
+// the source and the assertion will catch it.
+func TestCloneConfig_SliceMapIndependence(t *testing.T) {
+	src := Config{
+		Topology: TopologyConfig{
+			ExcludePatterns: []string{"a", "b"},
+		},
+		Quality: QualityConfig{
+			Analysers: []string{"golangci-lint"},
+		},
+		Workspace: WorkspaceConfig{
+			ExtraRoots: []string{"/extra"},
+			ReadRoots:  []string{"/read"},
+		},
+		Git: GitConfig{
+			ProtectedBranches: []string{"main"},
+		},
+		LSP: map[string]LSPConfig{
+			"go": {
+				Command: "gopls",
+				Args:    []string{"-rpc.trace"},
+				Env:     map[string]string{"GOPATH": "/go"},
+			},
+		},
+	}
+
+	clone := cloneConfig(src)
+
+	// Mutate every slice/map in the clone.
+	clone.Topology.ExcludePatterns = append(clone.Topology.ExcludePatterns, "c")
+	clone.Quality.Analysers = append(clone.Quality.Analysers, "extra")
+	clone.Workspace.ExtraRoots = append(clone.Workspace.ExtraRoots, "/extra2")
+	clone.Workspace.ReadRoots = append(clone.Workspace.ReadRoots, "/read2")
+	clone.Git.ProtectedBranches = append(clone.Git.ProtectedBranches, "dev")
+	clone.LSP["py"] = LSPConfig{Command: "pyright"}
+	lspGo := clone.LSP["go"]
+	lspGo.Args = append(lspGo.Args, "-extra")
+	lspGo.Env["EXTRA"] = "1"
+	clone.LSP["go"] = lspGo
+
+	// Assert source is unchanged.
+	if got := len(src.Topology.ExcludePatterns); got != 2 {
+		t.Errorf("Topology.ExcludePatterns: source mutated, len=%d want 2", got)
+	}
+	if got := len(src.Quality.Analysers); got != 1 {
+		t.Errorf("Quality.Analysers: source mutated, len=%d want 1", got)
+	}
+	if got := len(src.Workspace.ExtraRoots); got != 1 {
+		t.Errorf("Workspace.ExtraRoots: source mutated, len=%d want 1", got)
+	}
+	if got := len(src.Workspace.ReadRoots); got != 1 {
+		t.Errorf("Workspace.ReadRoots: source mutated, len=%d want 1", got)
+	}
+	if got := len(src.Git.ProtectedBranches); got != 1 {
+		t.Errorf("Git.ProtectedBranches: source mutated, len=%d want 1", got)
+	}
+	if _, ok := src.LSP["py"]; ok {
+		t.Error("LSP map: source mutated (py key added)")
+	}
+	if got := len(src.LSP["go"].Args); got != 1 {
+		t.Errorf("LSP[go].Args: source mutated, len=%d want 1", got)
+	}
+	if _, ok := src.LSP["go"].Env["EXTRA"]; ok {
+		t.Error("LSP[go].Env: source mutated (EXTRA key added)")
+	}
+}

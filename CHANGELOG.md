@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.33 (unreleased)
+
+Review follow-ups: `session_start` re-pin identity, TUI idle threshold, `cloneConfig` guard.
+
+### Fixed
+
+- **`session_start` re-pin guard uses filesystem identity (`os.SameFile`), not string comparison.** `resolveSessionWorkspace` previously rejected a workspace argument as "already pinned to a different project" when `filepath.Clean(arg) != filepath.Clean(current)`. That misses symlink and macOS firmlink aliases (`/var/…` vs `/private/var/…` are the same directory yet compare unequal), causing a spurious error. The comparison is now delegated to a new `sameDir(a, b string) bool` helper in `internal/tools/session_start.go` that stats both paths and compares with `os.SameFile`, falling back to the `filepath.Clean` compare when either stat fails (handles not-yet-created directory arguments). New guards: `TestSameDir_TrailingSlash` and `TestSameDir_SymlinkAlias`.
+
+- **TUI idle marker now respects `[session] idle_threshold_minutes` config.** `sessionIsIdle` in `internal/tui/model_left.go` hard-referenced the constant `session.IdleSessionThreshold` (30 m) and ignored the configured `IdleThresholdMinutes`, so the config knob was dead. `sessionIsIdle` now takes an explicit `threshold time.Duration` parameter. Its single caller reads the threshold via a new `idleThreshold(minutes int)` helper that falls back to `session.IdleSessionThreshold` when the config value is ≤ 0. The marker now tracks config on the TUI’s snapshot cadence. New guards: `TestSessionIsIdle_ThresholdRespected`, `TestIdleThreshold_FallsBackToConst`.
+
+### Added
+
+- **`cloneConfig` clone-independence regression test.** `TestCloneConfig_SliceMapIndependence` (`internal/config/config_test.go`) builds a `Config` with all six slice/map fields populated, clones it, mutates every field in the clone, and asserts the source is unchanged. Guards against future `cloneConfig` omissions (a forgotten deep-copy fails CI).
+
 ## 0.8.32 (unreleased)
 
 Session-id log tagging; `setup claude-code` installs user-scoped Claude Code skill files.
