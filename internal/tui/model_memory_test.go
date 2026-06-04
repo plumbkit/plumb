@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/golimpio/plumb/internal/memory"
 	"github.com/golimpio/plumb/internal/session"
@@ -136,7 +138,7 @@ func TestRenderMemorySectionThreeColumns(t *testing.T) {
 		ready:          true,
 		currentSection: 2,
 		focusPanel:     focusWorkspaces,
-		width:          100,
+		width:          160,
 		height:         24,
 		leftWidth:      defaultLeftWidth,
 		scrollBounds:   &scrollBounds{},
@@ -171,5 +173,87 @@ func TestRenderMemorySectionThreeColumns(t *testing.T) {
 	}
 	if !strings.Contains(joined, "Memory Detail") {
 		t.Fatalf("render missing Memory Detail header:\n%s", joined)
+	}
+}
+
+// TestMemorySectionRowWidthInvariant guards against the three-pane assembler
+// ever producing a body row wider (or narrower) than the terminal — the visual
+// symptom would be a scrollbar character spilling outside the right border. It
+// exercises overflowing memories AND detail across several scroll positions.
+func TestMemorySectionRowWidthInvariant(t *testing.T) {
+	RebuildStyles()
+	ws := t.TempDir()
+	body := strings.Repeat("the quick brown fox jumps over the lazy dog\n", 60)
+	for i := range 12 {
+		if err := memory.Write(ws, fmt.Sprintf("mem-%02d", i), body, fmt.Sprintf("description number %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := Model{
+		ready:          true,
+		currentSection: 2,
+		focusPanel:     focusDetails,
+		width:          120,
+		height:         20,
+		leftWidth:      defaultLeftWidth,
+		scrollBounds:   &scrollBounds{},
+		sessions:       []session.Info{{ID: "1", Folder: ws}},
+	}
+	m.refreshMemories()
+
+	for _, rs := range []int{0, 3, 999} {
+		for _, ls := range []int{0, 5, 999} {
+			m.rightScroll, m.leftScroll = rs, ls
+			assertMemoryRowWidths(t, m, rs, ls)
+		}
+	}
+}
+
+func TestMemoryResizeFocusedColumn(t *testing.T) {
+	m := Model{currentSection: 2, width: 160, leftWidth: defaultLeftWidth}
+
+	baseWs, baseMem, _ := m.memoryColumnWidths()
+
+	// Focus the Workspaces pane: [/] resize the 1st column, not the 2nd.
+	m.focusPanel = focusWorkspaces
+	m.resizeFocusedColumn(2)
+	gotWs, gotMem, _ := m.memoryColumnWidths()
+	if gotWs != baseWs+2 {
+		t.Fatalf("workspaces width = %d, want %d (resized 1st column)", gotWs, baseWs+2)
+	}
+	if gotMem != baseMem {
+		t.Fatalf("memories width = %d, want unchanged %d", gotMem, baseMem)
+	}
+
+	// Focus the Memories pane: [/] resize the 2nd column.
+	m.focusPanel = focusSessions
+	m.resizeFocusedColumn(-2)
+	gotWs2, gotMem2, _ := m.memoryColumnWidths()
+	if gotMem2 != baseMem-2 {
+		t.Fatalf("memories width = %d, want %d (resized 2nd column)", gotMem2, baseMem-2)
+	}
+	if gotWs2 != baseWs+2 {
+		t.Fatalf("workspaces width = %d, want it to stay at %d", gotWs2, baseWs+2)
+	}
+
+	// Detail focus also resizes the Memories column (Detail is the remainder).
+	m.focusPanel = focusDetails
+	m.resizeFocusedColumn(2)
+	if _, gotMem3, _ := m.memoryColumnWidths(); gotMem3 != baseMem {
+		t.Fatalf("memories width = %d, want %d (Detail focus resizes Memories)", gotMem3, baseMem)
+	}
+}
+
+func assertMemoryRowWidths(t *testing.T, m Model, rs, ls int) {
+	t.Helper()
+	bodyHeight := max(m.height-6, 1)
+	lines := strings.Split(m.render(), "\n")
+	// Layout: 3 header rows, top border, bodyHeight body rows, bottom border.
+	for i := 4; i < 4+bodyHeight && i < len(lines); i++ {
+		plain := ansiStripForTest(lines[i])
+		if w := utf8.RuneCountInString(plain); w != m.width {
+			t.Fatalf("body row %d width = %d, want %d (rightScroll=%d leftScroll=%d):\n%q",
+				i, w, m.width, rs, ls, plain)
+		}
 	}
 }

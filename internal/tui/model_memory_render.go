@@ -15,15 +15,28 @@ import (
 // (mirroring how Dashboard/Logs/Settings each own their renderer).
 
 // memoryColumnWidths splits the body width into the three panes. The Workspaces
-// pane is a modest fixed share; the Memories pane tracks m.leftWidth so the
-// [/] resize keys still adjust it; the Detail pane takes the remainder. The four
-// separator columns (│ ┆ ┆ │) are accounted for so the row width equals m.width.
+// panes default to ~15% / ~25% / ~60% of the body width; the [/] keys override
+// the Workspaces or Memories width (memoryWsWidth/memoryMemWidth) and the Detail
+// pane absorbs the remainder, so the four separator columns │ ┆ ┆ │ are accounted
+// for and the row width equals m.width. Widths are clamped to legible bounds that
+// also survive a terminal resize (an absolute override no longer matches a new
+// width, so it is re-clamped on read).
 func (m Model) memoryColumnWidths() (int, int, int) {
-	wsW := min(max(m.width/5, 18), 32)
-	memW := m.leftWidth
+	wsW := m.memoryWsWidth
+	if wsW <= 0 {
+		wsW = m.width * 15 / 100
+	}
+	memW := m.memoryMemWidth
+	if memW <= 0 {
+		memW = m.width * 25 / 100
+	}
+	wsW = clampWidth(wsW, 12, max(m.width/3, 12))
+	memW = clampWidth(memW, 16, max(m.width/2, 16))
 	detW := max(m.width-wsW-memW-4, 10)
 	return wsW, memW, detW
 }
+
+func clampWidth(v, lo, hi int) int { return min(max(v, lo), hi) }
 
 func (m Model) renderMemoryPanels(bodyHeight int, isOverlay bool) string {
 	wsW, memW, detW := m.memoryColumnWidths()

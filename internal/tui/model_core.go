@@ -116,6 +116,8 @@ type Model struct {
 	workspaceCursor     int            // index into memoryWorkspaces for the selected workspace
 	workspaceScroll     int            // first visible row in the Workspaces pane
 	memoryFolder        string         // folder the current m.memories/body cache was loaded from
+	memoryWsWidth       int            // Workspaces pane width override; 0 = percentage default
+	memoryMemWidth      int            // Memories pane width override; 0 = percentage default
 
 	// Settings section (section 4) — grouped settings screen + theme popup.
 	settingsCfg       config.Config // global config snapshot, loaded on entering the section

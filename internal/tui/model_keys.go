@@ -528,17 +528,29 @@ func (m Model) handleMainKeySimple(key string) Model {
 	case "a":
 		m.refresh()
 	case "[":
-		m.leftWidth -= 2
-		if m.leftWidth < minLeftWidth {
-			m.leftWidth = minLeftWidth
-		}
+		m.resizeFocusedColumn(-2)
 	case "]":
-		m.leftWidth += 2
-		if maxLeft := m.maxLeftWidth(); m.leftWidth > maxLeft {
-			m.leftWidth = maxLeft
-		}
+		m.resizeFocusedColumn(2)
 	}
 	return m
+}
+
+// resizeFocusedColumn adjusts column width with [/]. Outside the Memory section
+// it resizes the single left column (m.leftWidth). In the Memory section it
+// resizes the focused column: the Workspaces pane when it has focus, otherwise
+// the Memories pane (the Detail pane is the remainder, so resizing Memories with
+// Detail focused widens or narrows Detail in the obvious way).
+func (m *Model) resizeFocusedColumn(delta int) {
+	if m.currentSection != 2 {
+		m.leftWidth = clampWidth(m.leftWidth+delta, minLeftWidth, m.maxLeftWidth())
+		return
+	}
+	wsW, memW, _ := m.memoryColumnWidths()
+	if m.focusPanel == focusWorkspaces {
+		m.memoryWsWidth = clampWidth(wsW+delta, 12, max(m.width/3, 12))
+	} else {
+		m.memoryMemWidth = clampWidth(memW+delta, 16, max(m.width/2, 16))
+	}
 }
 
 func (m Model) handleRenameSessionKey() Model {
