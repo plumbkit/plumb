@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.30 (unreleased)
+
+Review-pass follow-ups for 0.8.29 (PathPolicy / out-of-workspace dependency reads).
+
+### Changed
+- **Writes to read-only roots now produce a specific error message.** Previously a write attempt under `$GOMODCACHE` or another read-only root returned the generic "is in a different project" message, which was technically correct but confusing. `PathPolicy.Check` now distinguishes the two denial cases: when the path matches a known root whose access level is insufficient, it returns a `WorkspaceBoundaryError` with `ReadOnlyRoot` set, and `Error()` says "path access denied: ... is under a read-only root (GOMODCACHE) and cannot be modified. Dependency source is not editable; copy the file into your workspace to make changes." `IsWorkspaceBoundaryError` / `errors.As` still work unchanged. Guard: `TestPathPolicy_ReadOnlyWriteDenialMessage`.
+- **Go dependency roots are now pre-warmed asynchronously on workspace attach.** `computeGoDependencyRoots` shells out to `go env GOMODCACHE GOROOT` (5 s timeout, memoised via `sync.Once`). Previously it ran lazily on the first guard check, potentially stalling the first `read_file` call on a fresh Go session while holding the policy mutex. A new `warmDepRoots(language)` fires a background goroutine immediately after `acquiredLanguage` is set on both the initial attach and re-pin paths (`internal/cli/conn.go`).
+
+### Added
+- **D10 registration-time contract test.** `TestBoundaryGuardWiringComplete` (`internal/cli/boundary_contract_test.go`) scans `registerAllTools` in `conn.go` and asserts that every `tools.New*` constructor is classified in an explicit guard map (guard/writedeps/proxy/none). A developer adding a path-bearing tool without the correct `.WithBoundary` wiring sees "unknown tool" and must update the map. Closes design doc decision D10.
+
 ## 0.8.29 (unreleased)
 
 Out-of-workspace dependency reads + a generalised path-access policy — the [out-of-workspace read/search] and [jailing] / [configurable workspace access] items from `docs/internal/todo.md`, designed in `docs/internal/path-access-design.md`.
