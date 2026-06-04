@@ -136,8 +136,8 @@ flowchart TD
     SV -->|Unix socket| SOCK["plumb.sock"]
     SOCK --> D["plumb daemon (one shared process)"]
     D --> WP["workspacePool — one language server per root"]
-    WP --> PE1["poolEntry · /projects/foo (gopls + cache + invalidator)"]
-    WP --> PE2["poolEntry · /projects/bar (pyright + cache + invalidator)"]
+    WP --> PE1["poolEntry · /projects/foo (gopls + cache + invalidator + refcount)"]
+    WP --> PE2["poolEntry · /projects/bar (pyright + cache + invalidator + refcount)"]
     D --> HC["handleConn — per-connection MCP session"]
 ```
 
@@ -155,8 +155,11 @@ Key design properties:
   path from the first. Lock release is automatic via fd close on process
   exit (clean or crash) — see `internal/cli/lock.go`.
 - **One gopls per workspace root** — multiple MCP connections to the same
-  project share gopls, its cache, and its diagnostic stream. Gopls stays warm
-  between conversations.
+  project share gopls, its cache, and its diagnostic stream. Each connection
+  that attaches a workspace as its primary holds a reference; when the last
+  session on a root detaches, the language server is torn down after a 90 s
+  idle grace so it stays warm across a quick disconnect-reconnect but is
+  eventually reclaimed when the workspace is idle.
 - **Per-connection sessions** — `handleConn` registers a `session.Info`
   immediately on connection (with `Folder=""` until workspace resolves). The
   session is then patched as workspace and client identity become known.

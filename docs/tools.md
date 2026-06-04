@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **47** structured tools to AI assistants. Every write tool is
+Plumb exposes **48** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -63,6 +63,29 @@ Current session name and ID, daemon version, start time, and uptime; live config
 ### `rename_session`
 Rename the current MCP session. **Inputs:** `name` (string — letters, digits,
 and `-` only; user-provided case is preserved; max 25 chars).
+
+### `workspace_sessions`
+Same-workspace peer awareness: lists active sessions on this workspace and recent
+mutating operations. Useful before editing a file a concurrent agent may have
+touched.
+
+**Inputs:** `recent_limit` (integer, optional, 1–50, default 10) — max
+recent-write entries to return.
+
+**Output sections:**
+- `you` — this session's name.
+- `active_sessions` — sessions currently connected to this workspace with their
+  client identity and idle status. A single session with `is_self=true` means
+  you are the only agent here — your view of the workspace is authoritative.
+- `recent_writes` — the last N write/edit/rename/git/… operations by any
+  session on this workspace, showing the session name, tool, relative file path,
+  and age. If a file you are about to edit appears here, re-read it first.
+
+Read-only. Workspace-boundary-guarded (no other workspace's session data is
+ever exposed). Backed by `internal/session` (session files) and
+`stats.RecentWritesByWorkspace` (the `tool_calls` stats table). Both data
+sources are read under a 500 ms hard timeout so the tool never blocks the MCP
+response.
 
 ---
 

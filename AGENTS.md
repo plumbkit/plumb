@@ -42,8 +42,8 @@ Key packages:
 |---|---|
 | `internal/mcp/` | MCP server, tool registry, prompts, stdio transport |
 | `internal/lsp/` | LSPClient interface, JSON-RPC 2.0 (with server-request support), process supervisor |
-| `internal/lsp/adapters/{gopls,pyright,jdtls,rust,swift,zig,typescript,kotlin}/` | Go, Python, Java, Rust, Swift (validated), Zig + TypeScript/JS + Kotlin (experimental — unit-tested, integration pending binary install). All non-Go/Python adapters are opt-in via `[lsp.<lang>] enabled = true`. |
-| `internal/topology/` | SQLite/FTS5 semantic graph; background indexer; Go AST, tree-sitter Python/JavaScript/TypeScript/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown, and a TSX/JSX (`.tsx`/`.jsx`) regex extractor; search + BFS explore/impact/affected/routes |
+| `internal/lsp/adapters/{gopls,pyright,jdtls,rust,swift,zig,typescript,kotlin,html}/` | Go, Python, Java, Rust, Swift (validated), Zig + TypeScript/JS + Kotlin + HTML (experimental — unit-tested, integration pending binary install). All non-Go/Python adapters are opt-in via `[lsp.<lang>] enabled = true`. |
+| `internal/topology/` | SQLite/FTS5 semantic graph; background indexer; Go AST, tree-sitter Python/JavaScript/TypeScript/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown/HTML, and a TSX/JSX (`.tsx`/`.jsx`) regex extractor; search + BFS explore/impact/affected/routes |
 | `internal/topology/extractors/golang/` | Go extractor (`go/parser`+`go/ast`; no CGo) |
 | `internal/topology/extractors/treesitter/` | gotreesitter extractors (pure-Go, no CGo): **Python, JavaScript, TypeScript, Rust, Zig, Kotlin, Swift, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML, Markdown live** (the config/IaC/markup grammars extract their named declarations — Bash functions, HCL/SQL/Dockerfile/TOML/YAML config, Markdown headings; TOML/YAML/Markdown index the nesting tree via containment edges; Dockerfile matches by basename via the extensionless-file matcher in `findExtractor`). **JavaScript (`.js`/`.mjs`/`.cjs`) and TypeScript (`.ts`)** are on tree-sitter; the TS lex-states gap is closed by `ts_lex_states.go` (the missing `typescriptExternalLexStates` table regenerated via gotreesitter's `ts2go` and supplied through the exported `grammars.RegisterExternalLexStates` — no fork). **TSX/JSX (`.tsx`/`.jsx`) stay on the regex extractor**: gotreesitter v0.19.1's TSX grammar still cascades on typed arrow params even with the regenerated TSX lex-states (the table is generated + registered, ready for an upstream fix). Embeds the `grammars` package (206 blobs + runtime, ~+26 MB; ~46 MB binary). See `docs/internal/treesitter-plan.md`. |
 | `internal/topology/extractors/typescript/` | TSX/JSX (`.tsx`/`.jsx`) regex extractor; no CGo. TypeScript (`.ts`) and JavaScript moved to tree-sitter. |
@@ -70,14 +70,15 @@ Claude Desktop / Claude Code / Codex / Gemini CLI
   └── plumb serve  (per conversation — dials Unix socket, frame-aware proxy)
         └── ~/Library/Caches/plumb/plumb.sock  (macOS; os.UserCacheDir())
               └── plumb daemon  (one process, shared across all conversations)
-                    ├── workspacePool  (one gopls per workspace root)
-                    │     └── poolEntry{proxy, inv, cache} per root
+                    ├── workspacePool  (one gopls per workspace root; refcounted — torn down after idle grace once last session leaves)
+                    │     └── poolEntry{proxy, inv, cache, refs, graceTimer} per root
                     └── handleConn()  (per-connection MCP session)
                           ├── readTracker        (per-connection strict-mode state)
-                          ├── writeLimiter       (per-connection limit + shared client budget parent)
+                          ├── writeLimiter       (per-connection limit + shared budget parent, keyed by (client, workspace))
                           ├── editsCfg + strictFn (resolved per-project [edits])
                           ├── gitCfg + gitPolicyFn (resolved per-project [git])
-                          └── sessionCache       (per-connection symbol cache)
+                          ├── sessionCache       (per-connection symbol cache)
+                          └── lsRefRoot          (workspace root for this session's pinned LSP reference)
 ```
 
 On daemon start the binary writes these files under `os.UserCacheDir()/plumb` (e.g. `~/Library/Caches/plumb/` on macOS, `~/.cache/plumb/` on Linux):
@@ -114,7 +115,7 @@ Env vars are noted inline below as comments; values shown are defaults.
 ```toml
 [edits]
 strict = false                # PLUMB_STRICT_EDITS — require read_file (matching mtime) before edit_file. Per-session via ReadTracker
-rate_limit_per_minute = 120   # PLUMB_WRITE_RATE_LIMIT — sliding-window cap per session; 0 disables
+rate_limit_per_minute = 120   # PLUMB_WRITE_RATE_LIMIT — sliding-window cap per session; 0 disables. A shared parent budget (keyed by (client identity, workspace)) additionally caps the combined rate across all connections from the same client to one project — but two clients on different workspaces never share a budget (cross-workspace isolation).
 show_write_diff = true        # PLUMB_SHOW_WRITE_DIFF — append a unified diff to edit_file/write_file responses
 post_write_diagnostics_ms = 300 # PLUMB_POST_WRITE_DIAG_MS — ceiling on how long write/edit tools wait for the LSP to re-publish diagnostics after a write; the effective wait adapts down to the server's observed latency. 0 disables the wait entirely
 ```
@@ -238,6 +239,7 @@ Cold-start resolution in `session_start`: the daemon's already-attached root (au
 | `zls` | **Experimental** — mock-transport unit tests pass; the real-binary integration test (`testdata/zig-fixture/`) is written and gated `//go:build integration` but **skips until `zls` is on PATH** (not installed on the validation machine). Enable with `[lsp.zig] enabled = true`; root markers `build.zig`/`build.zig.zon`. Pairs with the tree-sitter Zig Map. zls + tree-sitter-zig track the Zig language version (pre-1.0; ongoing maintenance surface). |
 | `typescript-language-server` | **Experimental** — mock-transport unit tests pass; the real-binary integration test (`testdata/typescript-fixture/`) is written and gated `//go:build integration` but **skips until `typescript-language-server` is on PATH** (`npm install -g typescript-language-server typescript`). Enable with `[lsp.typescript] enabled = true`; root markers `tsconfig.json`/`jsconfig.json`/`package.json`. Serves **both** TypeScript and JavaScript (the `typescript` and `javascript` `langsupport` rows both name it). Pairs with the regex TS Map and the tree-sitter JS Map. |
 | `kotlin-language-server` | **Experimental** — mock-transport unit tests pass; the real-binary integration test (`testdata/kotlin-fixture/`) is written and gated `//go:build integration` but **skips until `kotlin-language-server` is on PATH** (`brew install kotlin-language-server`). Enable with `[lsp.kotlin] enabled = true`; root markers `settings.gradle.kts`/`build.gradle.kts` (the `build.gradle.kts` marker overlaps Java's — with both enabled, alphabetical detect order makes Java win; both are opt-in). Pairs with the tree-sitter Kotlin Map. |
+| `vscode-html-language-server` | **Experimental** — mock-transport unit tests pass; the real-binary integration test (`testdata/html-fixture/`) is written and gated `//go:build integration` but **skips until `vscode-html-language-server` is on PATH** (`npm install -g vscode-langservers-extracted`). Enable with `[lsp.html] enabled = true`; root marker `index.html` (only consulted while html is enabled, so it never fragments a non-HTML repo by default). Serves document symbols, hover, completion, and embedded-CSS/JS validation; does **not** implement workspace/symbol, call hierarchy, or type hierarchy. Pairs with the tree-sitter HTML Map. |
 
 Real-binary validation has been exercised on macOS only; Linux/Windows is pre-v1 hardening work.
 
@@ -261,7 +263,7 @@ Pyright is the worked example.
 5. Unit-test in `internal/tools/<name>_test.go`; `WriteDeps{}` is the nil-safe setup.
 6. Document in `docs/tools.md` and update the tool table below.
 
-## Available tools (48)
+## Available tools (49)
 
 Concise index — each tool's full behaviour, inputs, and steering live in its MCP description (`tools/list`). Source files follow the `internal/tools/<name>.go` convention.
 
@@ -320,6 +322,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | `version` | Server version, Go runtime, OS/arch. |
 | `daemon_info` | Session name + ID, daemon version, start time, uptime; live config state (generation, last reload, restart-needed); plus this session's tool-call count and its slowest calls. |
 | `rename_session` | Rename the current MCP session (letters/digits/`-`, ≤25 chars). |
+| `workspace_sessions` | Same-workspace peer awareness: lists other active sessions on this workspace (name, client, idle status) and the recent write/edit operations any session made here. Call before editing a file a peer recently touched. `recent_limit` caps the write feed (default 10, max 50). Read-only; workspace-boundary-guarded. |
 
 **Topology** — SQLite/FTS5 index at `<workspace>/.plumb/topology.db`; on by default (opt out with `[topology] enabled = false`).
 
