@@ -16,13 +16,16 @@ func TestBuildPathPolicy_ExtraAndReadRoots(t *testing.T) {
 	extra := t.TempDir()
 	readonly := t.TempDir()
 	s := &connSession{}
-	s.wsCfg = config.WorkspaceConfig{
-		ExtraRoots:           []string{extra},
-		ReadRoots:            []string{readonly},
-		AllowDependencyReads: false,
+	v := &sessionView{
+		acquiredRoot: ws,
+		ws: config.WorkspaceConfig{
+			ExtraRoots:           []string{extra},
+			ReadRoots:            []string{readonly},
+			AllowDependencyReads: false,
+		},
 	}
 
-	pol := s.buildPathPolicy(ws)
+	pol := s.buildPathPolicy(v)
 
 	if _, err := pol.Check(filepath.Join(ws, "a.go"), tools.AccessReadWrite); err != nil {
 		t.Errorf("workspace should be writable: %v", err)
@@ -47,10 +50,14 @@ func TestBuildPathPolicy_GoDependencyReads(t *testing.T) {
 
 	ws := t.TempDir()
 	s := &connSession{ctx: context.Background()}
-	s.wsCfg = config.WorkspaceConfig{AllowDependencyReads: true}
-	s.acquiredLanguage = "go"
+	v := &sessionView{
+		acquiredRoot:     ws,
+		acquiredLanguage: "go",
+		ws:               config.WorkspaceConfig{AllowDependencyReads: true},
+		depRoots:         computeGoDependencyRoots(context.Background()),
+	}
 
-	pol := s.buildPathPolicy(ws)
+	pol := s.buildPathPolicy(v)
 
 	if _, err := pol.Check(stdlib, tools.AccessRead); err != nil {
 		t.Errorf("GOROOT stdlib should be readable with dependency reads on: %v", err)
@@ -72,10 +79,14 @@ func TestBuildPathPolicy_NonGoSkipsDependencyReads(t *testing.T) {
 	}
 	ws := t.TempDir()
 	s := &connSession{ctx: context.Background()}
-	s.wsCfg = config.WorkspaceConfig{AllowDependencyReads: true}
-	s.acquiredLanguage = "python"
+	v := &sessionView{
+		acquiredRoot:     ws,
+		acquiredLanguage: "python",
+		ws:               config.WorkspaceConfig{AllowDependencyReads: true},
+		depRoots:         computeGoDependencyRoots(context.Background()),
+	}
 
-	pol := s.buildPathPolicy(ws)
+	pol := s.buildPathPolicy(v)
 	if _, err := pol.Check(stdlib, tools.AccessRead); err == nil {
 		t.Error("non-Go session must not gain Go dependency read roots")
 	}

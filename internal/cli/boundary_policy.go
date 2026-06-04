@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/tools"
 )
 
@@ -26,10 +25,11 @@ func (s *connSession) writeBoundaryGuard(path string) error {
 	return s.checkBoundary(path, tools.AccessReadWrite)
 }
 
-// checkBoundary consults the live PathPolicy. An unattached session (no pinned
-// workspace) has a nil policy and allows everything, preserving the prior
-// behaviour and nil-safe test setups. A denial is recorded as a (sticky,
-// non-terminating) boundary violation for the dashboard, exactly as before.
+// checkBoundary consults the live PathPolicy from the session snapshot. An
+// unattached session (no pinned workspace) has a nil policy and allows
+// everything, preserving the prior behaviour and nil-safe test setups. A denial
+// is recorded as a (sticky, non-terminating) boundary violation for the
+// dashboard, exactly as before.
 func (s *connSession) checkBoundary(path string, want tools.Access) error {
 	pol := s.boundaryPolicy()
 	if pol == nil || path == "" {
@@ -49,92 +49,64 @@ func (s *connSession) outsideWorkspaceLabel(path string) string {
 	return s.boundaryPolicy().OutsideWorkspaceLabel(path)
 }
 
-// boundaryPolicy returns the connection's PathPolicy, rebuilding it when the
-// pinned workspace changes. Returns nil while the session is unattached (the
-// guards then no-op). The cache is invalidated by applyProjectConfig when
-// configured roots may have changed.
+// boundaryPolicy returns the connection's PathPolicy from the lock-free snapshot.
+// The policy is built eagerly on the mutation path (attach / re-pin /
+// applyProjectConfig — see conn.go) and refreshed off-lane with the Go
+// dependency roots by warmDepRoots, so the guard never builds on read. Returns
+// nil while the session is unattached (the guards then no-op).
 func (s *connSession) boundaryPolicy() *tools.PathPolicy {
-	ws := s.workspace()
+	return s.view().policy
+}
+
+// buildPathPolicy assembles the allowlist for v's pinned workspace: the
+// workspace (read-write), configured extra roots (read-write), configured read
+// roots (read-only), and — for a Go session with dependency reads enabled — the
+// Go toolchain's module cache and GOROOT (read-only, from v.depRoots, which
+// warmDepRoots populates off the mutation lane). Returns nil when no workspace is
+// pinned. Call only from within a mutate fn — it reads the snapshot being built.
+func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
+	ws := v.acquiredRoot
 	if ws == "" {
 		return nil
 	}
-	s.policyMu.Lock()
-	defer s.policyMu.Unlock()
-	if s.policy != nil && s.policyRoot == ws {
-		return s.policy
-	}
-	s.policy = s.buildPathPolicy(ws)
-	s.policyRoot = ws
-	return s.policy
-}
-
-// invalidateBoundaryPolicy drops the cached policy so the next guard call
-// rebuilds it. Called when configured roots change.
-func (s *connSession) invalidateBoundaryPolicy() {
-	s.policyMu.Lock()
-	s.policy = nil
-	s.policyRoot = ""
-	s.policyMu.Unlock()
-}
-
-// buildPathPolicy assembles the allowlist for ws: the workspace (read-write),
-// configured extra roots (read-write), configured read roots (read-only), and
-// — for a Go session with dependency reads enabled — the Go toolchain's module
-// cache and GOROOT (read-only).
-func (s *connSession) buildPathPolicy(ws string) *tools.PathPolicy {
-	wc := s.workspaceConfig()
 	roots := []tools.AllowedRoot{{Path: ws, Access: tools.AccessReadWrite, Label: "workspace"}}
-	for _, r := range wc.ExtraRoots {
+	for _, r := range v.ws.ExtraRoots {
 		if p := os.ExpandEnv(r); p != "" {
 			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessReadWrite, Label: "configured"})
 		}
 	}
-	for _, r := range wc.ReadRoots {
+	for _, r := range v.ws.ReadRoots {
 		if p := os.ExpandEnv(r); p != "" {
 			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessRead, Label: "read-root"})
 		}
 	}
-	if wc.AllowDependencyReads && s.languageIsGo() {
-		roots = append(roots, s.goDependencyRoots()...)
+	if v.ws.AllowDependencyReads && v.acquiredLanguage == "go" {
+		roots = append(roots, v.depRoots...)
 	}
 	return tools.NewPathPolicy(ws, roots)
 }
 
-// workspaceConfig returns the session's resolved [workspace] config.
-func (s *connSession) workspaceConfig() config.WorkspaceConfig {
-	s.wsMu.RLock()
-	defer s.wsMu.RUnlock()
-	return s.wsCfg
-}
-
-// languageIsGo reports whether the pinned workspace attached as a Go project.
-func (s *connSession) languageIsGo() bool {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	return s.acquiredLanguage == "go"
-}
-
-// warmDepRoots pre-populates the Go dependency roots in the background so the
-// first guard check on a Go session does not stall waiting for `go env`. It
-// fires at most once per session (sync.Once inside goDependencyRoots ensures
-// idempotency). Called immediately after acquiredLanguage is set on both the
-// initial attach and re-pin paths.
+// warmDepRoots computes the Go toolchain's read-only dependency roots off the
+// mutation lane and folds them into the session's PathPolicy once known. The
+// eager policy built on attach excludes them (so attach never blocks on
+// `go env`); this one extra mutate from the warm goroutine rebuilds the policy
+// with dep roots. No-op for a non-Go session or when no roots resolve. Dep roots
+// are workspace-independent (GOMODCACHE/GOROOT are global), so a re-pin to
+// another Go project reuses whatever a prior warm already folded in.
 func (s *connSession) warmDepRoots(language string) {
 	if language != "go" {
 		return
 	}
-	go s.goDependencyRoots() // populates depRootsOnce/depRootsVal
-}
-
-// goDependencyRoots memoises the Go toolchain's read-only dependency roots for
-// the session lifetime. GOMODCACHE/GOROOT are global (workspace-independent),
-// so computing them once is correct even across a re-pin; buildPathPolicy gates
-// inclusion on the current language and config each rebuild.
-func (s *connSession) goDependencyRoots() []tools.AllowedRoot {
-	s.depRootsOnce.Do(func() {
-		s.depRootsVal = computeGoDependencyRoots(s.ctx)
-	})
-	return s.depRootsVal
+	go func() {
+		roots := computeGoDependencyRoots(s.ctx)
+		if len(roots) == 0 {
+			return
+		}
+		s.mutate(func(v *sessionView) {
+			v.depRoots = roots
+			v.policy = s.buildPathPolicy(v)
+		})
+	}()
 }
 
 // computeGoDependencyRoots resolves GOMODCACHE and GOROOT (via `go env`, with

@@ -60,9 +60,7 @@ func TestTopologyStoreLive_ReflectsLateAttach(t *testing.T) {
 		t.Fatalf("opening topology store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	s.stateMu.Lock()
-	s.topologyStore = st
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) { v.topologyStore = st })
 
 	if s.topologyStoreLive() != st {
 		t.Fatal("a store attached after buildWriteDeps must be visible via topologyStoreLive")
@@ -87,7 +85,7 @@ func TestReconcileTopologyStore_EnableDisable(t *testing.T) {
 
 	// Enabled globally, no project override -> the session acquires a store.
 	s.reconcileTopologyStore(ws)
-	if s.topologyStore == nil {
+	if s.view().topologyStore == nil {
 		t.Fatal("expected a topology store when enabled")
 	}
 
@@ -102,7 +100,7 @@ func TestReconcileTopologyStore_EnableDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.reconcileTopologyStore(ws)
-	if s.topologyStore != nil {
+	if s.view().topologyStore != nil {
 		t.Error("expected nil topology store after a per-project opt-out")
 	}
 }
@@ -133,7 +131,7 @@ func TestReconcileTopologyStore_ProjectTuningHonoured(t *testing.T) {
 	}
 
 	s.reconcileTopologyStore(ws)
-	if s.topologyStore == nil {
+	if s.view().topologyStore == nil {
 		t.Fatal("expected a topology store when enabled")
 	}
 	if got := s.topologyPool.openedConfig(ws).MaxFileSizeBytes; got != 131072 {

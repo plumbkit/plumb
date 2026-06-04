@@ -28,15 +28,11 @@ func TestCheckAndReloadConfig_DeduplicatesOnMtime(t *testing.T) {
 
 	s := &connSession{ctx: ctx, store: config.NewStore(*getDefaultTestConfig())}
 
-	s.stateMu.Lock()
-	s.acquiredRoot = tmpdir
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) { v.acquiredRoot = tmpdir })
 
 	s.checkAndReloadConfig()
 
-	s.stateMu.Lock()
-	mtime1 := s.lastCfgMtime
-	s.stateMu.Unlock()
+	mtime1 := s.view().lastCfgMtime
 
 	if mtime1.IsZero() {
 		t.Errorf("expected lastCfgMtime to be set after first call")
@@ -44,9 +40,7 @@ func TestCheckAndReloadConfig_DeduplicatesOnMtime(t *testing.T) {
 
 	s.checkAndReloadConfig()
 
-	s.stateMu.Lock()
-	mtime2 := s.lastCfgMtime
-	s.stateMu.Unlock()
+	mtime2 := s.view().lastCfgMtime
 
 	if !mtime1.Equal(mtime2) {
 		t.Errorf("expected lastCfgMtime unchanged on dedup: %v vs %v", mtime1, mtime2)
@@ -70,15 +64,11 @@ func TestCheckAndReloadConfig_AppliesOnNewMtime(t *testing.T) {
 
 	s := &connSession{ctx: ctx, store: config.NewStore(*getDefaultTestConfig())}
 
-	s.stateMu.Lock()
-	s.acquiredRoot = tmpdir
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) { v.acquiredRoot = tmpdir })
 
 	s.checkAndReloadConfig()
 
-	s.stateMu.Lock()
-	mtime1 := s.lastCfgMtime
-	s.stateMu.Unlock()
+	mtime1 := s.view().lastCfgMtime
 
 	time.Sleep(100 * time.Millisecond)
 	if err := os.WriteFile(configPath, []byte("[edits]\nstrict = true\n"), 0o644); err != nil {
@@ -87,9 +77,7 @@ func TestCheckAndReloadConfig_AppliesOnNewMtime(t *testing.T) {
 
 	s.checkAndReloadConfig()
 
-	s.stateMu.Lock()
-	mtime2 := s.lastCfgMtime
-	s.stateMu.Unlock()
+	mtime2 := s.view().lastCfgMtime
 
 	if mtime1.Equal(mtime2) {
 		t.Errorf("expected lastCfgMtime to change after file modification")
@@ -108,11 +96,9 @@ func TestCheckAndReloadConfig_SkipsWhenWorkspaceUnresolved(t *testing.T) {
 
 	s.checkAndReloadConfig()
 
-	s.stateMu.Lock()
-	if !s.lastCfgMtime.IsZero() {
+	if !s.view().lastCfgMtime.IsZero() {
 		t.Errorf("expected lastCfgMtime to remain zero when workspace unresolved")
 	}
-	s.stateMu.Unlock()
 }
 
 func TestStartConfigWatcher_StartsOnce(t *testing.T) {
@@ -140,11 +126,9 @@ func TestApplyProjectConfig_SeedsLastCfgMtime(t *testing.T) {
 
 	s := &connSession{store: config.NewStore(*getDefaultTestConfig())}
 
-	s.stateMu.Lock()
-	if !s.lastCfgMtime.IsZero() {
+	if !s.view().lastCfgMtime.IsZero() {
 		t.Errorf("expected lastCfgMtime to be zero before apply")
 	}
-	s.stateMu.Unlock()
 
 	s.applyProjectConfig(tmpdir)
 
@@ -154,9 +138,7 @@ func TestApplyProjectConfig_SeedsLastCfgMtime(t *testing.T) {
 	}
 	expectedMtime := info.ModTime()
 
-	s.stateMu.Lock()
-	actualMtime := s.lastCfgMtime
-	s.stateMu.Unlock()
+	actualMtime := s.view().lastCfgMtime
 
 	if !actualMtime.Equal(expectedMtime) {
 		t.Errorf("expected lastCfgMtime=%v, got %v", expectedMtime, actualMtime)
@@ -172,9 +154,7 @@ func TestApplyProjectConfig_UsesLiveGlobalBase(t *testing.T) {
 
 	store := config.NewStore(config.Defaults())
 	s := &connSession{store: store}
-	s.stateMu.Lock()
-	s.acquiredRoot = ws
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
 
 	s.applyProjectConfig(ws)
 	if s.isStrict() {
@@ -201,9 +181,7 @@ func TestGlobalConfigChange_ReappliesSession(t *testing.T) {
 
 	store := config.NewStore(config.Defaults())
 	s := &connSession{store: store}
-	s.stateMu.Lock()
-	s.acquiredRoot = ws
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
 
 	unsub := store.Subscribe(func(config.Config) {
 		if w := s.workspace(); w != "" {
@@ -240,6 +218,9 @@ func writeGlobalConfig(t *testing.T, body string) {
 	}
 }
 
+// TestLastCfgMtimeThreadSafety hammers the snapshot's lastCfgMtime from several
+// readers (lock-free view loads) while a writer drives it through the mutation
+// lane — the race detector verifies the snapshot model is data-race free.
 func TestLastCfgMtimeThreadSafety(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -258,9 +239,7 @@ func TestLastCfgMtimeThreadSafety(t *testing.T) {
 				case <-done:
 					return
 				default:
-					s.stateMu.Lock()
-					_ = s.lastCfgMtime
-					s.stateMu.Unlock()
+					_ = s.view().lastCfgMtime
 				}
 			}
 		}()
@@ -274,9 +253,7 @@ func TestLastCfgMtimeThreadSafety(t *testing.T) {
 			case <-done:
 				return
 			default:
-				s.stateMu.Lock()
-				s.lastCfgMtime = time.Now()
-				s.stateMu.Unlock()
+				s.mutate(func(v *sessionView) { v.lastCfgMtime = time.Now() })
 			}
 		}
 	}()

@@ -18,14 +18,17 @@ import (
 func newLimiterTestSession(budgets *sharedBudgets, client, version, root string, limit int) *connSession {
 	base := config.Defaults()
 	base.Edits.RateLimitPerMinute = limit
-	return &connSession{
-		store:         config.NewStore(base),
-		budgets:       budgets,
-		clientName:    client,
-		clientVersion: version,
-		acquiredRoot:  root,
-		writeLimiter:  tools.NewRateLimiter(limit, time.Minute),
+	s := &connSession{
+		store:        config.NewStore(base),
+		budgets:      budgets,
+		writeLimiter: tools.NewRateLimiter(limit, time.Minute),
 	}
+	s.mutate(func(v *sessionView) {
+		v.clientName = client
+		v.clientVersion = version
+		v.acquiredRoot = root
+	})
+	return s
 }
 
 // TestBindWriteLimiterParent_DifferentWorkspacesIsolated is the cross-workspace
@@ -110,7 +113,7 @@ func TestBindWriteLimiterParent_RepinReleasesOldBudget(t *testing.T) {
 		t.Fatalf("a repeat bind on the same key must not create a budget; got %d", n)
 	}
 	// Re-pin to a different workspace: the old reference is released.
-	s.acquiredRoot = "/repoB"
+	s.mutate(func(v *sessionView) { v.acquiredRoot = "/repoB" })
 	s.bindWriteLimiterParent()
 	if n := budgets.len(); n != 1 {
 		t.Fatalf("re-pin must release the old budget; want 1 entry, got %d", n)

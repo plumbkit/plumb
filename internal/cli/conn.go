@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golimpio/plumb/internal/cache"
@@ -33,38 +34,69 @@ import (
 	"github.com/golimpio/plumb/internal/topology"
 )
 
-// connSession holds all mutable per-connection state for an MCP session.
-// All exported methods are safe for concurrent use.
+// sessionView is an immutable snapshot of a connSession's mutable state.
+// Readers load it lock-free via connSession.state (an atomic.Pointer); mutators
+// copy-on-write under muMutate (see mutate). A loaded *sessionView is treated as
+// read-only — never mutate one in place.
+type sessionView struct {
+	acquiredRoot     string
+	acquiredLanguage string
+	// lsRefRoot is the workspace root for which this session holds a PINNED
+	// reference on the shared language-server pool entry (set on a successful
+	// attach / re-pin, "" when the session attached without LSP). Released on
+	// re-pin (old root) and on close so the pool can reclaim an idle server once
+	// its last session leaves. Distinct from acquiredRoot, which is also set for
+	// LanguageNone workspaces that hold no LS reference.
+	lsRefRoot     string
+	clientName    string
+	clientVersion string
+	sessName      string
+	lastCfgMtime  time.Time
+	// boundBudgetKey is the (client, workspace) key of the shared write budget
+	// this session currently holds a reference on (see sharedBudgets), or "" when
+	// none is held. Released and re-acquired on re-pin, released on close, so a
+	// budget entry is reclaimed once its last session leaves.
+	boundBudgetKey string
+
+	edits config.EditsConfig
+	walk  config.WalkConfig
+	git   config.GitConfig
+	ws    config.WorkspaceConfig
+
+	// Live subsystem handles are pointers — cheap to copy into the snapshot and
+	// swapped (never mutated) on attach / re-pin / reconcile.
+	qualityRunner *quality.Runner
+	topologyStore *topology.Store
+	policy        *tools.PathPolicy // built eagerly on the mutation path; see boundary_policy.go
+
+	// depRoots holds the Go toolchain's read-only dependency roots (GOMODCACHE,
+	// GOROOT). They are workspace-independent (global), computed off the mutation
+	// lane by warmDepRoots and folded into policy once known.
+	depRoots []tools.AllowedRoot
+}
+
+// connSession holds all per-connection state for an MCP session. The mutable,
+// copyable part lives in an immutable sessionView loaded lock-free via state
+// (atomic.Pointer); every mutation goes through mutate, which serialises on
+// muMutate, shallow-copies the current view, applies the change, and atomically
+// swaps in the new pointer. Readers therefore never block and never observe a
+// torn view; mutations (attach, re-pin, config reload, rename) are rare and run
+// one at a time through the single lane. requestMu (the client-request callback)
+// and watcherOnce are orthogonal and kept as-is. All exported methods are safe
+// for concurrent use.
 type connSession struct {
 	pool       *workspacePool
 	store      *config.Store
 	statsStore *statsStore
 	budgets    *sharedBudgets
 
-	sessID   string
-	sessName string
+	sessID string
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	stateMu          sync.Mutex
-	acquiredRoot     string
-	acquiredLanguage string
-	// lsRefRoot is the workspace root for which this session holds a PINNED
-	// reference on the shared language-server pool entry (set on a successful
-	// attach / re-pin, "" when the session attached without LSP). It is released
-	// on re-pin (old root) and on close so the pool can reclaim an idle server
-	// once its last session leaves. Distinct from acquiredRoot, which is also set
-	// for LanguageNone workspaces that hold no LS reference.
-	lsRefRoot     string
-	clientName    string
-	clientVersion string
-	lastCfgMtime  time.Time
-	// boundBudgetKey is the (client, workspace) key of the shared write budget
-	// this session currently holds a reference on (see sharedBudgets), or "" when
-	// none is held. Released and re-acquired on re-pin, released on close, so a
-	// budget entry is reclaimed once its last session leaves. Guarded by stateMu.
-	boundBudgetKey string
+	state    atomic.Pointer[sessionView] // lock-free reads of the session snapshot
+	muMutate sync.Mutex                  // the single mutation lane (see mutate)
 
 	sessionProxy *routingProxy
 	sessionInv   *routingInvProxy
@@ -73,34 +105,8 @@ type connSession struct {
 	writeTracker *tools.WriteTracker
 	ttl          time.Duration
 
-	qualityRunner *quality.Runner
-	topologyPool  *topologyPool
-	topologyStore *topology.Store
-
+	topologyPool *topologyPool
 	writeLimiter *tools.RateLimiter
-	editsMu      sync.RWMutex
-	editsCfg     config.EditsConfig
-	walkMu       sync.RWMutex
-	walkCfg      config.WalkConfig
-	gitMu        sync.RWMutex
-	gitCfg       config.GitConfig
-	wsMu         sync.RWMutex
-	wsCfg        config.WorkspaceConfig
-
-	// boundary PathPolicy cache: rebuilt lazily when the pinned workspace
-	// changes (policyRoot != workspace) and invalidated by applyProjectConfig
-	// when configured roots change. depRoots* memoise the Go toolchain's
-	// read-only dependency roots for the session lifetime. See boundary_policy.go.
-	policyMu     sync.Mutex
-	policy       *tools.PathPolicy
-	policyRoot   string
-	depRootsOnce sync.Once
-	depRootsVal  []tools.AllowedRoot
-
-	// applyMu serialises applyProjectConfig across the three paths that call it
-	// (workspace attach, the 30s poll, and the global-config store subscription)
-	// so their field swaps cannot interleave.
-	applyMu sync.Mutex
 
 	watcherOnce sync.Once
 	unsubscribe func() // removes the store-change listener on close
@@ -113,6 +119,29 @@ type connSession struct {
 	// log calls (pool lifecycle, config watcher, start/stop) keep using the
 	// package-level slog functions and are intentionally not tagged.
 	logger *slog.Logger
+}
+
+// view returns the current session snapshot, or a zero sessionView when none has
+// been installed yet (struct-literal construction in tests). Never returns nil.
+func (s *connSession) view() sessionView {
+	if v := s.state.Load(); v != nil {
+		return *v
+	}
+	return sessionView{}
+}
+
+// mutate serialises a copy-on-write update of the session snapshot: it copies the
+// current view, applies fn, and atomically stores the result. fn MUST NOT call
+// mutate again (re-entrant deadlock) — compose all field writes for one logical
+// change into a single fn. Slow work fn performs (LSP acquire, session.Patch,
+// quality teardown) runs under muMutate exactly as the prior stateMu did, but
+// readers are lock-free and never block on it.
+func (s *connSession) mutate(fn func(v *sessionView)) {
+	s.muMutate.Lock()
+	defer s.muMutate.Unlock()
+	cur := s.view()
+	fn(&cur)
+	s.state.Store(&cur)
 }
 
 // newConnSession initialises a connSession and registers a new MCP session.
@@ -139,7 +168,6 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		statsStore:   statsStore,
 		budgets:      budgets,
 		sessID:       sessID,
-		sessName:     sessName,
 		ttl:          ttl,
 		sessionProxy: newRoutingProxy(pool),
 		sessionInv:   newRoutingInvProxy(pool),
@@ -147,12 +175,15 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		readTracker:  tools.NewReadTracker(),
 		writeTracker: tools.NewWriteTracker(),
 		writeLimiter: tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
-		editsCfg:     cfg.Edits,
-		walkCfg:      cfg.Walk,
-		gitCfg:       cfg.Git,
-		wsCfg:        cfg.Workspace,
 		logger:       slog.Default().With("session_id", sessID),
 	}
+	s.state.Store(&sessionView{
+		sessName: sessName,
+		edits:    cfg.Edits,
+		walk:     cfg.Walk,
+		git:      cfg.Git,
+		ws:       cfg.Workspace,
+	})
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
 	// to every live session without a daemon restart.
@@ -173,18 +204,21 @@ func (s *connSession) close() {
 	}
 	s.cancel()
 	s.sessionCache.Close()
-	if s.qualityRunner != nil {
-		s.qualityRunner.Stop()
-	}
-	// Release this session's pinned language-server reference so the pool can
-	// reclaim the server once its last session leaves (after the idle grace), and
-	// drop its shared write-budget reference so that entry is reclaimed too.
-	s.stateMu.Lock()
-	ref := s.lsRefRoot
-	s.lsRefRoot = ""
-	budgetKey := s.boundBudgetKey
-	s.boundBudgetKey = ""
-	s.stateMu.Unlock()
+	// Stop the quality runner, release this session's pinned language-server
+	// reference so the pool can reclaim the server once its last session leaves
+	// (after the idle grace), and drop its shared write-budget reference so that
+	// entry is reclaimed too — all under the one mutation lane.
+	var ref, budgetKey string
+	s.mutate(func(v *sessionView) {
+		if v.qualityRunner != nil {
+			v.qualityRunner.Stop()
+			v.qualityRunner = nil
+		}
+		ref = v.lsRefRoot
+		v.lsRefRoot = ""
+		budgetKey = v.boundBudgetKey
+		v.boundBudgetKey = ""
+	})
 	if ref != "" {
 		s.pool.release(ref)
 	}
@@ -206,9 +240,7 @@ func (s *connSession) log() *slog.Logger {
 
 // workspace returns the resolved workspace root for the session.
 func (s *connSession) workspace() string {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	return s.acquiredRoot
+	return s.view().acquiredRoot
 }
 
 // acquiredLanguageName returns the LSP language attached to this session, or ""
@@ -216,19 +248,16 @@ func (s *connSession) workspace() string {
 // distinguish a real "LSP is available" from a marker-detected project whose
 // server is opt-in/off/missing — it must not advertise LSP tools that error.
 func (s *connSession) acquiredLanguageName() string {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if s.acquiredLanguage == "" || s.acquiredLanguage == LanguageNone {
+	lang := s.view().acquiredLanguage
+	if lang == "" || lang == LanguageNone {
 		return ""
 	}
-	return s.acquiredLanguage
+	return lang
 }
 
 // sessionName returns the current human-readable session name.
 func (s *connSession) sessionName() string {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	return s.sessName
+	return s.view().sessName
 }
 
 // renameSession renames the session, persisting the new name in the session
@@ -238,9 +267,7 @@ func (s *connSession) renameSession(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.stateMu.Lock()
-	s.sessName = name
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) { v.sessName = name })
 	s.statsStore.RenameSession(s.sessID, name)
 	return name, nil
 }
@@ -266,28 +293,23 @@ func (s *connSession) markBoundaryViolation(message string) {
 
 // isStrict reports whether strict mode is in effect for this session.
 func (s *connSession) isStrict() bool {
-	s.editsMu.RLock()
-	defer s.editsMu.RUnlock()
-	return s.editsCfg.Strict
+	return s.view().edits.Strict
 }
 
 // editsConfig returns the current resolved edits config.
 func (s *connSession) editsConfig() config.EditsConfig {
-	s.editsMu.RLock()
-	defer s.editsMu.RUnlock()
-	return s.editsCfg
+	return s.view().edits
 }
 
 // gitConfig returns the current resolved git tool config.
 func (s *connSession) gitConfig() config.GitConfig {
-	s.gitMu.RLock()
-	defer s.gitMu.RUnlock()
-	return s.gitCfg
+	return s.view().git
 }
 
 // gitPolicy returns the connection's current resolved git policy. Reads the
-// live gitCfg (hot-reloaded under its RWMutex) and is the single source of
-// truth shared by the git tool's gate and session_start's policy report.
+// live git config off the lock-free snapshot (hot-reloaded via mutate) and is
+// the single source of truth shared by the git tool's gate and session_start's
+// policy report.
 func (s *connSession) gitPolicy() tools.GitPolicy {
 	c := s.gitConfig()
 	return tools.GitPolicy{
@@ -300,16 +322,12 @@ func (s *connSession) gitPolicy() tools.GitPolicy {
 
 // refuseHomeRoots reports whether the session refuses home-directory roots.
 func (s *connSession) refuseHomeRoots() bool {
-	s.walkMu.RLock()
-	defer s.walkMu.RUnlock()
-	return s.walkCfg.RefuseHomeRoots
+	return s.view().walk.RefuseHomeRoots
 }
 
 // clientNameStr returns the MCP client name for the session.
 func (s *connSession) clientNameStr() string {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	return s.clientName
+	return s.view().clientName
 }
 
 // setClientRequest stores the latest MCP RequestFn for subsequent rootsFn calls.
@@ -335,76 +353,77 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		folder = projectRoot
 	}
 
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if s.acquiredRoot != "" {
-		return
-	}
-
-	detectedLanguage := language
-	if detectedLanguage == LanguageNone {
-		detectedLanguage = detectAnyLanguageAt(folder, s.store.Current())
-	}
-	adapter := ""
-	if language != LanguageNone {
-		e, err := s.pool.acquireLang(ctx, folder, language, true)
-		if err != nil {
-			// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
-			// rather than aborting. The workspace is still attached for filesystem
-			// tools and stat tracking; LSP tools will surface their own errors.
-			s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
-			language = LanguageNone
-		} else {
-			s.sessionProxy.setPrimary(folder, e.proxy)
-			s.sessionInv.setPrimary(folder, e.inv)
-			s.lsRefRoot = folder
-			adapter = adapterForLanguage(language)
+	s.mutate(func(v *sessionView) {
+		if v.acquiredRoot != "" {
+			return
 		}
-	}
-	s.acquiredRoot = folder
-	s.acquiredLanguage = language
-	s.warmDepRoots(language)
-	s.startQualityRunner(folder)
-	s.startTopologyIndexer(folder)
-	recoverWorkspaceTxlog(folder, txlog.Scan)
-	cn, cv := s.clientName, s.clientVersion
-	session.Patch(s.sessID, func(info *session.Info) {
-		info.Folder = folder
-		info.Language = language
-		info.DetectedLanguage = detectedLanguage
-		info.Adapter = adapter
-		if cn != "" {
-			info.ClientName = cn
-			info.ClientVersion = cv
+		detectedLanguage := language
+		if detectedLanguage == LanguageNone {
+			detectedLanguage = detectAnyLanguageAt(folder, s.store.Current())
 		}
+		adapter := ""
+		if language != LanguageNone {
+			e, err := s.pool.acquireLang(ctx, folder, language, true)
+			if err != nil {
+				// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
+				// rather than aborting. The workspace is still attached for filesystem
+				// tools and stat tracking; LSP tools will surface their own errors.
+				s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
+				language = LanguageNone
+			} else {
+				s.sessionProxy.setPrimary(folder, e.proxy)
+				s.sessionInv.setPrimary(folder, e.inv)
+				v.lsRefRoot = folder
+				adapter = adapterForLanguage(language)
+			}
+		}
+		v.acquiredRoot = folder
+		v.acquiredLanguage = language
+		s.startQualityRunner(v, folder)
+		s.startTopologyIndexer(v, folder)
+		v.policy = s.buildPathPolicy(v)
+		s.warmDepRoots(language)
+		recoverWorkspaceTxlog(folder, txlog.Scan)
+		cn, cv := v.clientName, v.clientVersion
+		session.Patch(s.sessID, func(info *session.Info) {
+			info.Folder = folder
+			info.Language = language
+			info.DetectedLanguage = detectedLanguage
+			info.Adapter = adapter
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		s.log().Info("daemon: session attached", "root", folder, "language", language, "adapter", adapter)
 	})
-	s.log().Info("daemon: session attached", "root", folder, "language", language, "adapter", adapter)
 }
 
 // attachSynthetic records a synthetic workspace root when pool.Detect fails.
 func (s *connSession) attachSynthetic(_ context.Context, root string) {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if s.acquiredRoot != "" {
-		return
-	}
-	s.acquiredRoot = root
-	s.startQualityRunner(root)
-	s.startTopologyIndexer(root)
-	recoverWorkspaceTxlog(root, txlog.Scan)
-	cn, cv := s.clientName, s.clientVersion
-	session.Patch(s.sessID, func(info *session.Info) {
-		info.Folder = root
-		info.Language = LanguageNone
-		info.DetectedLanguage = detectAnyLanguageAt(root, s.store.Current())
-		info.Adapter = ""
-		info.Synthetic = true
-		if cn != "" {
-			info.ClientName = cn
-			info.ClientVersion = cv
+	s.mutate(func(v *sessionView) {
+		if v.acquiredRoot != "" {
+			return
 		}
+		v.acquiredRoot = root
+		s.startQualityRunner(v, root)
+		s.startTopologyIndexer(v, root)
+		v.policy = s.buildPathPolicy(v)
+		recoverWorkspaceTxlog(root, txlog.Scan)
+		cn, cv := v.clientName, v.clientVersion
+		session.Patch(s.sessID, func(info *session.Info) {
+			info.Folder = root
+			info.Language = LanguageNone
+			info.DetectedLanguage = detectAnyLanguageAt(root, s.store.Current())
+			info.Adapter = ""
+			info.Synthetic = true
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		s.log().Info("daemon: session auto-attached (synthetic)", "root", root)
 	})
-	s.log().Info("daemon: session auto-attached (synthetic)", "root", root)
 }
 
 // repinWorkspace deliberately switches the connection to a different workspace.
@@ -448,10 +467,7 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder string) (string
 // the resolved root matches the current pin, so a spurious notification (or a
 // roots/list the client cannot satisfy) never tears the workspace down.
 func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
-	s.stateMu.Lock()
-	pinned := s.acquiredRoot != ""
-	s.stateMu.Unlock()
-	if !pinned {
+	if s.view().acquiredRoot == "" {
 		s.attachWorkspace(ctx, rootURI)
 		s.applyProjectConfig(s.workspace())
 		return
@@ -467,76 +483,80 @@ func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
 
 // attachOrRepinTo points the connection at root, tearing down any previous
 // workspace's per-session subsystems first so the start* helpers (which no-op
-// when already started) re-create them for the new root. Takes stateMu. Returns
-// true when the root actually changed (false on a no-op re-pin to the same
-// root). language is the LSP language for root, or LanguageNone.
+// when already started) re-create them for the new root. Returns true when the
+// root actually changed (false on a no-op re-pin to the same root). language is
+// the LSP language for root, or LanguageNone. The whole teardown-and-reattach
+// runs under the one mutation lane so readers never see a half-switched view.
 func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string) bool {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	prev := s.acquiredRoot
-	if root == prev {
-		return false
-	}
-	// The pinned LS reference (if any) for the workspace we are leaving; released
-	// at the end once the new root is acquired, so the pool can reclaim the old
-	// server after its idle grace if no other session holds it.
-	prevRef := s.lsRefRoot
-	s.lsRefRoot = ""
-	if s.qualityRunner != nil {
-		s.qualityRunner.Stop()
-		s.qualityRunner = nil
-	}
-	s.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
-	// Per-session read/write tracking is workspace-relative: plumb has read and
-	// written nothing in the new project yet, so the dirty-guard and strict-mode
-	// read check must start clean rather than inherit the old root's paths.
-	s.readTracker.Reset()
-	s.writeTracker.Reset()
+	changed := false
+	s.mutate(func(v *sessionView) {
+		prev := v.acquiredRoot
+		if root == prev {
+			return
+		}
+		changed = true
+		// The pinned LS reference (if any) for the workspace we are leaving;
+		// released at the end once the new root is acquired, so the pool can reclaim
+		// the old server after its idle grace if no other session holds it.
+		prevRef := v.lsRefRoot
+		v.lsRefRoot = ""
+		if v.qualityRunner != nil {
+			v.qualityRunner.Stop()
+			v.qualityRunner = nil
+		}
+		v.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
+		// Per-session read/write tracking is workspace-relative: plumb has read and
+		// written nothing in the new project yet, so the dirty-guard and strict-mode
+		// read check must start clean rather than inherit the old root's paths.
+		s.readTracker.Reset()
+		s.writeTracker.Reset()
 
-	adapter := ""
-	if language != LanguageNone {
-		if e, aerr := s.pool.acquireLang(ctx, root, language, true); aerr != nil {
-			s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
-			language = LanguageNone
-		} else {
-			s.sessionProxy.resetPrimary(root, e.proxy)
-			s.sessionInv.resetPrimary(root, e.inv)
-			s.lsRefRoot = root
-			adapter = adapterForLanguage(language)
+		adapter := ""
+		if language != LanguageNone {
+			if e, aerr := s.pool.acquireLang(ctx, root, language, true); aerr != nil {
+				s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
+				language = LanguageNone
+			} else {
+				s.sessionProxy.resetPrimary(root, e.proxy)
+				s.sessionInv.resetPrimary(root, e.inv)
+				v.lsRefRoot = root
+				adapter = adapterForLanguage(language)
+			}
 		}
-	}
-	// Acquire-before-release: the new root is pinned above before we drop the old
-	// one, so even a re-pin back to a recently-left root never races teardown.
-	if prevRef != "" {
-		s.pool.release(prevRef)
-	}
-	detectedLanguage := language
-	if detectedLanguage == LanguageNone {
-		detectedLanguage = detectAnyLanguageAt(root, s.store.Current())
-	}
-	s.acquiredRoot = root
-	s.acquiredLanguage = language
-	s.warmDepRoots(language)
-	s.lastCfgMtime = time.Time{}
-	s.startQualityRunner(root)
-	s.startTopologyIndexer(root)
-	recoverWorkspaceTxlog(root, txlog.Scan)
-	cn, cv := s.clientName, s.clientVersion
-	session.Patch(s.sessID, func(info *session.Info) {
-		info.Folder = root
-		info.Language = language
-		info.DetectedLanguage = detectedLanguage
-		info.Adapter = adapter
-		info.Synthetic = false
-		info.Health = ""
-		info.HealthMessage = ""
-		if cn != "" {
-			info.ClientName = cn
-			info.ClientVersion = cv
+		// Acquire-before-release: the new root is pinned above before we drop the
+		// old one, so even a re-pin back to a recently-left root never races teardown.
+		if prevRef != "" {
+			s.pool.release(prevRef)
 		}
+		detectedLanguage := language
+		if detectedLanguage == LanguageNone {
+			detectedLanguage = detectAnyLanguageAt(root, s.store.Current())
+		}
+		v.acquiredRoot = root
+		v.acquiredLanguage = language
+		v.lastCfgMtime = time.Time{}
+		s.startQualityRunner(v, root)
+		s.startTopologyIndexer(v, root)
+		v.policy = s.buildPathPolicy(v)
+		s.warmDepRoots(language)
+		recoverWorkspaceTxlog(root, txlog.Scan)
+		cn, cv := v.clientName, v.clientVersion
+		session.Patch(s.sessID, func(info *session.Info) {
+			info.Folder = root
+			info.Language = language
+			info.DetectedLanguage = detectedLanguage
+			info.Adapter = adapter
+			info.Synthetic = false
+			info.Health = ""
+			info.HealthMessage = ""
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
 	})
-	s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
-	return true
+	return changed
 }
 
 // applyProjectConfig loads <workspace>/.plumb/config.toml and applies it to
@@ -545,27 +565,31 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	if workspace == "" {
 		return
 	}
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
 	base := s.store.Current()
 	projectCfg, err := config.LoadProject(base, workspace)
 	if err != nil {
 		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
 		return
 	}
-	s.editsMu.Lock()
-	s.editsCfg = projectCfg.Edits
-	s.editsMu.Unlock()
-	s.walkMu.Lock()
-	s.walkCfg = projectCfg.Walk
-	s.walkMu.Unlock()
-	s.gitMu.Lock()
-	s.gitCfg = projectCfg.Git
-	s.gitMu.Unlock()
-	s.wsMu.Lock()
-	s.wsCfg = projectCfg.Workspace
-	s.wsMu.Unlock()
-	s.invalidateBoundaryPolicy()
+	configPath := filepath.Join(workspace, ".plumb", "config.toml")
+	var cfgMtime time.Time
+	if info, statErr := os.Stat(configPath); statErr == nil {
+		cfgMtime = info.ModTime()
+	}
+	// One mutation: swap the four config blocks, seed the config mtime, and rebuild
+	// the boundary policy eagerly (configured roots may have changed). muMutate
+	// subsumes the former applyMu — the lane already serialises config apply across
+	// attach / the 30s poll / the global-config subscription.
+	s.mutate(func(v *sessionView) {
+		v.edits = projectCfg.Edits
+		v.walk = projectCfg.Walk
+		v.git = projectCfg.Git
+		v.ws = projectCfg.Workspace
+		if !cfgMtime.IsZero() {
+			v.lastCfgMtime = cfgMtime
+		}
+		v.policy = s.buildPathPolicy(v)
+	})
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
 	if projectCfg.Edits.Strict != base.Edits.Strict ||
 		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
@@ -581,12 +605,6 @@ func (s *connSession) applyProjectConfig(workspace string) {
 			"git.allow_writes", projectCfg.Git.AllowWrites,
 			"git.allow_destructive", projectCfg.Git.AllowDestructive,
 			"git.allow_push", projectCfg.Git.AllowPush)
-	}
-	configPath := filepath.Join(workspace, ".plumb", "config.toml")
-	if info, err := os.Stat(configPath); err == nil {
-		s.stateMu.Lock()
-		s.lastCfgMtime = info.ModTime()
-		s.stateMu.Unlock()
 	}
 	// The workspace is now known (attach / re-pin / reload all funnel here), so
 	// link the per-(client, workspace) shared write budget. Idempotent.
@@ -630,12 +648,13 @@ func (s *connSession) checkAndReloadConfig() {
 		return
 	}
 	mtime := info.ModTime()
-	s.stateMu.Lock()
-	alreadySeen := mtime.Equal(s.lastCfgMtime)
-	if !alreadySeen {
-		s.lastCfgMtime = mtime
-	}
-	s.stateMu.Unlock()
+	alreadySeen := false
+	s.mutate(func(v *sessionView) {
+		alreadySeen = mtime.Equal(v.lastCfgMtime)
+		if !alreadySeen {
+			v.lastCfgMtime = mtime
+		}
+	})
 	if alreadySeen {
 		return
 	}
@@ -646,9 +665,7 @@ func (s *connSession) checkAndReloadConfig() {
 // javaPostWriteNotify sends DidOpen + DidClose to jdtls after a write so that
 // it publishes fresh diagnostics. No-op for non-Java workspaces.
 func (s *connSession) javaPostWriteNotify(ctx context.Context, path string) error {
-	s.stateMu.Lock()
-	lang := s.acquiredLanguage
-	s.stateMu.Unlock()
+	lang := s.view().acquiredLanguage
 	if lang != "java" {
 		return nil
 	}
@@ -699,10 +716,10 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 // onClientInfo handles the MCP clientInfo notification: stores client identity,
 // updates the session record, and links the shared client rate-limiter budget.
 func (s *connSession) onClientInfo(name, version string) {
-	s.stateMu.Lock()
-	s.clientName = name
-	s.clientVersion = version
-	s.stateMu.Unlock()
+	s.mutate(func(v *sessionView) {
+		v.clientName = name
+		v.clientVersion = version
+	})
 	s.log().Info("daemon: client identified", "client", name, "version", version)
 	session.SetClient(s.sessID, name, version)
 	// Client identity may arrive before or after the workspace is pinned; bind
@@ -733,9 +750,8 @@ func (s *connSession) bindWriteLimiterParent() {
 	if s.budgets == nil {
 		return
 	}
-	s.stateMu.Lock()
-	name, version, root := s.clientName, s.clientVersion, s.acquiredRoot
-	s.stateMu.Unlock()
+	v := s.view()
+	name, version, root := v.clientName, v.clientVersion, v.acquiredRoot
 	if name == "" || root == "" {
 		return
 	}
@@ -745,10 +761,11 @@ func (s *connSession) bindWriteLimiterParent() {
 	_, limit, _ := s.writeLimiter.Snapshot()
 	key := name + "/" + version + "\x00" + root
 
-	s.stateMu.Lock()
-	prevKey := s.boundBudgetKey
-	s.boundBudgetKey = key
-	s.stateMu.Unlock()
+	var prevKey string
+	s.mutate(func(v *sessionView) {
+		prevKey = v.boundBudgetKey
+		v.boundBudgetKey = key
+	})
 
 	// Same key (a reload or a repeat bind on the same workspace): refresh the cap
 	// without touching the refcount or re-parenting.
@@ -769,12 +786,11 @@ func (s *connSession) bindWriteLimiterParent() {
 // the session's last-seen timestamp so idle detection stays accurate.
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 	session.Touch(s.sessID)
-	s.stateMu.Lock()
-	root := s.acquiredRoot
-	sessionName := s.sessName
-	clientName := s.clientName
-	clientVersion := s.clientVersion
-	s.stateMu.Unlock()
+	v := s.view()
+	root := v.acquiredRoot
+	sessionName := v.sessName
+	clientName := v.clientName
+	clientVersion := v.clientVersion
 	if w := workspaceFromArgs(s.pool, args); w != "" {
 		root = w
 	}
@@ -802,10 +818,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 // session has no primary workspace yet. Applies auto-attach and auto-attach-
 // persist when configured.
 func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.RawMessage) {
-	s.stateMu.Lock()
-	hasPrimary := s.acquiredRoot != ""
-	s.stateMu.Unlock()
-	if hasPrimary {
+	if s.view().acquiredRoot != "" {
 		return
 	}
 	seedPath := seedPathFromArgs(args)
@@ -843,9 +856,10 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 }
 
 // startTopologyIndexer acquires the topology store for the workspace when
-// topology is enabled. Must be called under stateMu. No-op if already started.
-func (s *connSession) startTopologyIndexer(workspace string) {
-	if s.topologyStore != nil {
+// topology is enabled, writing it into the snapshot being built. Call only from
+// within a mutate fn (it reads and writes v). No-op if already started.
+func (s *connSession) startTopologyIndexer(v *sessionView, workspace string) {
+	if v.topologyStore != nil {
 		return
 	}
 	if s.topologyPool == nil {
@@ -855,7 +869,7 @@ func (s *connSession) startTopologyIndexer(workspace string) {
 	if !cfg.Enabled {
 		return
 	}
-	s.topologyStore = s.topologyPool.Acquire(workspace, cfg)
+	v.topologyStore = s.topologyPool.Acquire(workspace, cfg)
 }
 
 // topologyConfigFor returns the merged per-project [topology] config for
@@ -881,14 +895,12 @@ func (s *connSession) topologyEnabledFor(workspace string) bool {
 }
 
 // topologyStoreLive returns the session's topology store, or nil when topology
-// is disabled or the workspace has not yet attached. It reads under stateMu so
-// it reflects a store attached after tool registration: registerAllTools — which
+// is disabled or the workspace has not yet attached. It reads the snapshot so it
+// reflects a store attached after tool registration: registerAllTools — which
 // builds the write-tool deps and the topology accessor — runs before the client
 // handshake attaches the workspace.
 func (s *connSession) topologyStoreLive() *topology.Store {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	return s.topologyStore
+	return s.view().topologyStore
 }
 
 // reconcileTopologyStore refreshes the session's topology store after a global
@@ -898,26 +910,27 @@ func (s *connSession) topologyStoreLive() *topology.Store {
 // handle; and a live enable/disable changes whether a store should exist at all.
 // Re-acquiring (or clearing) here keeps the session's topology tools on a live
 // store, so enabling/disabling topology takes effect on the current session, not
-// only the next one. The project-config read happens before stateMu is taken.
+// only the next one. The project-config read happens before the mutation lane is
+// entered.
 func (s *connSession) reconcileTopologyStore(workspace string) {
 	if s.topologyPool == nil {
 		return
 	}
 	cfg := s.topologyConfigFor(workspace)
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if !cfg.Enabled {
-		s.topologyStore = nil
-		return
-	}
-	s.topologyStore = s.topologyPool.Acquire(workspace, cfg)
+	s.mutate(func(v *sessionView) {
+		if !cfg.Enabled {
+			v.topologyStore = nil
+			return
+		}
+		v.topologyStore = s.topologyPool.Acquire(workspace, cfg)
+	})
 }
 
 // startQualityRunner creates and starts the quality runner when the [quality]
-// block is enabled. Must be called under stateMu (it is called only during
-// workspace attach while stateMu is held). No-op if already started.
-func (s *connSession) startQualityRunner(workspace string) {
-	if s.qualityRunner != nil {
+// block is enabled, writing it into the snapshot being built. Call only from
+// within a mutate fn (it reads and writes v). No-op if already started.
+func (s *connSession) startQualityRunner(v *sessionView, workspace string) {
+	if v.qualityRunner != nil {
 		return
 	}
 	q := s.store.Current().Quality
@@ -933,7 +946,7 @@ func (s *connSession) startQualityRunner(workspace string) {
 		MaxFindingsPerFile: q.MaxFindingsPerFile,
 	})
 	r.Start()
-	s.qualityRunner = r
+	v.qualityRunner = r
 }
 
 // buildAnalysers constructs the Analyser list from the configured names.
@@ -1006,7 +1019,7 @@ func detectAnyLanguageAt(dir string, cfg config.Config) string {
 // buildWriteDeps assembles the WriteDeps struct used by all write tools.
 func (s *connSession) buildWriteDeps() tools.WriteDeps {
 	var qualityReport tools.QualityReportFn
-	if r := s.qualityRunner; r != nil {
+	if r := s.view().qualityRunner; r != nil {
 		qualityReport = r.Report
 	}
 	// Resolve the topology store lazily on each write: buildWriteDeps runs during

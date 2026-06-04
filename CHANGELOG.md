@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.40 (unreleased)
+
+Phase 2 — per-session mutation lane: the seven fine-grained locks guarding `connSession` are replaced by one immutable snapshot for lock-free reads and one mutex for serialised mutations (the same pattern `internal/config/store.go` uses).
+
+### Changed
+
+- **`connSession` concurrency model rewritten (`internal/cli/conn.go`).** The hot, copyable per-session state (`acquiredRoot`, `acquiredLanguage`, `lsRefRoot`, client identity, session name, `lastCfgMtime`, `boundBudgetKey`, the four config blocks, the live quality runner / topology store / boundary policy, and the Go dep roots) now lives in an immutable `sessionView` loaded lock-free via `state atomic.Pointer[sessionView]`. Every mutation funnels through one `mutate(func(*sessionView))` helper that serialises on `muMutate`, shallow-copies the current view, applies the change, and atomically swaps in the new pointer — so readers (`workspace()`, `isStrict()`, `gitConfig()`, `gitPolicy()`, `refuseHomeRoots()`, `acquiredLanguageName()`, `clientNameStr()`, `sessionName()`, `topologyStoreLive()`, the boundary guard) never block and never observe a torn view. This removes the seven locks `stateMu`, `editsMu`, `walkMu`, `gitMu`, `wsMu`, `policyMu`, `applyMu` and the `depRootsOnce`/`policyRoot` memoisation fields; `requestMu` (the client-request callback) and `watcherOnce` are orthogonal and kept. The attach / re-pin / config-reload / rename / topology-reconcile mutators each compose their field writes into a single `mutate` call (never nested), so the check-and-set that made `attachWorkspace`/`attachSynthetic` idempotent and the teardown-and-reattach in `attachOrRepinTo` stay atomic.
+- **`PathPolicy` is now built eagerly on the mutation path (`internal/cli/boundary_policy.go`).** The boundary policy was previously built lazily on first *read* and memoised under `policyMu`/`depRootsOnce` — incompatible with a lock-free snapshot. It is now rebuilt inside `mutate` at the end of attach / re-pin and whenever `applyProjectConfig` changes roots, and stored in the snapshot; the guard becomes a lock-free `s.view().policy.Check(...)`. `warmDepRoots` resolves the Go module-cache/GOROOT dependency roots off the mutation lane (so attach never blocks on `go env`) and folds them into the policy with one extra `mutate`; the eager build before warming simply omits them. `buildPathPolicy` now takes the `*sessionView` being built rather than reading session fields.
+
+### Notes
+
+- Behaviour is unchanged — the existing per-session isolation, config-hot-reload, topology-late-attach, re-pin, and rate-limit tests are the oracle and pass unchanged in intent (white-box tests that poked the removed fields were ported to `mutate`/`view`). New `TestSessionView_ConcurrentReadsDuringMutation` drives attach→re-pin→reload while eight reader goroutines hammer the accessors; green under `-race`. `TestTopologyStoreLive_ReflectsLateAttach` (the late-attach oracle) stays green — `topologyNotify` reads `s.view().topologyStore` per write, so a store attached after `buildWriteDeps` is still visible.
+
 ## 0.8.39 (unreleased)
 
 HTML support: a tree-sitter HTML extractor for the topology Map and an opt-in `vscode-html-language-server` adapter for the LSP GPS.
