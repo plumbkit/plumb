@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -108,15 +109,25 @@ func availableCommandNameWidth(cmd *cobra.Command) int {
 }
 
 // Execute runs the root command and returns any error.
+// silentExitError is returned by commands that already printed their own
+// failure summary and only need a non-zero exit code — Execute must not
+// render a duplicate diagnostic for these.
+type silentExitError struct{}
+
+func (silentExitError) Error() string { return "" }
+
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
-		printLogoIfNeeded(os.Stderr)
-		printCLIDiagnostic(os.Stderr, cliDiagnostic{
-			Kind:        "error",
-			Title:       "error",
-			Body:        err.Error(),
-			Suggestions: diagnosticSuggestions(err),
-		})
+		var silent silentExitError
+		if !errors.As(err, &silent) {
+			printLogoIfNeeded(os.Stderr)
+			printCLIDiagnostic(os.Stderr, cliDiagnostic{
+				Kind:        "error",
+				Title:       "error",
+				Body:        err.Error(),
+				Suggestions: diagnosticSuggestions(err),
+			})
+		}
 		return err
 	}
 	return nil

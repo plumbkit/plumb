@@ -101,7 +101,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Printf("%s  %d check(s) need attention — see hints above.\n",
 		tui.WarnStyle.Render("✗"), failures)
-	return fmt.Errorf("%d check(s) need attention", failures)
+	return silentExitError{}
 }
 
 // jsonCheckResult is the JSON serialisation shape for a single doctor check.
@@ -333,8 +333,11 @@ func checkLSPs(ws string) []checkResult {
 			continue
 		}
 		results = append(results, checkLSPBinary(lang, lspCfg))
-		if lang == "java" {
+		switch lang {
+		case "java":
 			results = append(results, checkJavaRuntime())
+		case "swift":
+			results = append(results, checkSwiftToolchain())
 		}
 	}
 	return results
@@ -370,6 +373,35 @@ func checkLSPBinary(lang string, lspCfg config.LSPConfig) checkResult {
 		detail += "  (disabled — enable in config.toml to activate)"
 	}
 	return checkResult{name: lang, ok: true, detail: detail}
+}
+
+// checkSwiftToolchain checks that the Swift compiler is on PATH. sourcekit-lsp
+// ships with the Swift toolchain (Xcode or a standalone swift.org build), so a
+// missing `swift` binary means sourcekit-lsp is also unavailable.
+func checkSwiftToolchain() checkResult {
+	path, err := exec.LookPath("swift")
+	if err != nil {
+		return checkResult{
+			name:   "swift toolchain",
+			ok:     false,
+			detail: "swift compiler not found on PATH",
+			fix:    "install Xcode or the Swift toolchain from https://swift.org/download",
+		}
+	}
+	out, err := commandOutputTimeout(path, "--version")
+	if err != nil || len(out) == 0 {
+		return checkResult{
+			name:   "swift toolchain",
+			ok:     true,
+			detail: contractConfigPath(path) + "  (version unknown)",
+		}
+	}
+	firstLine, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return checkResult{
+		name:   "swift toolchain",
+		ok:     true,
+		detail: contractConfigPath(path) + "\n" + firstLine,
+	}
 }
 
 // checkJavaRuntime checks that a Java 21+ runtime is on PATH.
