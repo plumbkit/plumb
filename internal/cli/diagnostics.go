@@ -208,7 +208,7 @@ func startScanProgress(ctx context.Context, total int) (setProgress func(i int),
 	if !stdoutIsTerminal() {
 		return func(int) {}, func() {}
 	}
-	var current atomic.Int32
+	var current atomic.Int64
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	go func() {
@@ -240,7 +240,7 @@ func startScanProgress(ctx context.Context, total int) (setProgress func(i int),
 			}
 		}
 	}()
-	return func(i int) { current.Store(int32(i)) },
+	return func(i int) { current.Store(int64(i)) },
 		func() { close(done); <-stopped; fmt.Printf("\r\033[K") }
 }
 

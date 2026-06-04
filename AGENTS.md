@@ -330,7 +330,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | `topology_explore` | BFS neighbourhood around a named symbol; `depth`/`max_nodes`/`include_source`/`edge_kinds`. |
 | `topology_impact` | Bidirectional blast radius (depends-on + depended-by) around a symbol. |
 | `topology_affected` | Likely affected files + tests for changed files/symbols; run after writing. |
-| `topology_routes` | Framework-aware entry-point scanner (`go`/`python`/`cobra`); heuristic, confidence-annotated. |
+| `topology_routes` | Framework-aware entry-point scanner (`go`/`python`/`swift`/`cobra`/`vapor`/`argument-parser`); heuristic, confidence-annotated. |
 
 **Memory** — per-workspace markdown at `<workspace>/.plumb/memories/`, also exposed as MCP resources: `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories` (pattern search), `relevant_memories` (path-based relevance).
 

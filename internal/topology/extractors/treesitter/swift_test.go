@@ -3,6 +3,7 @@ package treesitter
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/golimpio/plumb/internal/topology"
@@ -252,5 +253,37 @@ func TestSwift_LanguageAndPath(t *testing.T) {
 func TestSwift_Extensions(t *testing.T) {
 	if !slices.Contains(NewSwift().Extensions(), ".swift") {
 		t.Error(".swift missing from Swift Extensions()")
+	}
+}
+
+func TestSwift_Signature(t *testing.T) {
+	// Vapor-style function — signature must contain the parameter type so that
+	// topology_routes can pattern-match on "RoutesBuilder" or "Application".
+	src := []byte(`
+struct Routes: RouteCollection {
+    func boot(routes: RoutesBuilder) throws {
+        routes.get("ping") { _ in "pong" }
+    }
+}
+`)
+	nodes, _, err := NewSwift().Extract(context.Background(), "Sources/Routes.swift", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boot *topology.Node
+	for i := range nodes {
+		if nodes[i].Name == "boot" {
+			boot = &nodes[i]
+			break
+		}
+	}
+	if boot == nil {
+		t.Fatal("boot method not extracted")
+	}
+	if boot.Signature == "" {
+		t.Error("Signature is empty — funcSignature not wired into addFunc")
+	}
+	if !strings.Contains(boot.Signature, "RoutesBuilder") {
+		t.Errorf("Signature %q does not contain 'RoutesBuilder'", boot.Signature)
 	}
 }

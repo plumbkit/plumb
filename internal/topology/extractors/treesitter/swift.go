@@ -148,6 +148,7 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
+		Signature: w.funcSignature(n),
 		StartLine: line(n.StartPoint()),
 		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
@@ -155,6 +156,23 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 	})
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
+}
+
+// funcSignature returns the function head text — everything before the opening
+// brace of the body. For protocol declarations (no body), the full node text is
+// returned. The result is used for pattern-matching in topology_routes and
+// similar tools (e.g. detecting "RoutesBuilder" in a Vapor RouteCollection).
+func (w *swiftWalk) funcSignature(n *tsg.Node) string {
+	var parts []string
+	for _, c := range n.Children() {
+		if c.Type(w.lang) == "function_body" {
+			break
+		}
+		if t := strings.TrimSpace(c.Text(w.src)); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // addProperty records a member or top-level property. let → constant, var →

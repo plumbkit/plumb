@@ -14,7 +14,7 @@ var topologyRoutesSchema = json.RawMessage(`{
   "properties": {
     "framework": {
       "type": "string",
-      "description": "Optional framework hint: 'gin', 'chi', 'mux', 'echo', 'cobra', 'fastapi', 'flask'. Omit to scan all known patterns."
+      "description": "Optional framework hint: 'gin', 'chi', 'mux', 'echo', 'cobra', 'fastapi', 'flask', 'vapor', 'argument-parser'. Omit to scan all known patterns."
     },
     "path_prefix": {
       "type": "string",
@@ -45,8 +45,9 @@ func (*TopologyRoutes) Name() string                 { return "topology_routes" 
 func (*TopologyRoutes) InputSchema() json.RawMessage { return topologyRoutesSchema }
 func (*TopologyRoutes) Description() string {
 	return "Scans topology nodes to identify HTTP handler and CLI entry-point functions. " +
-		"Matches Go patterns (http.HandleFunc, r.GET/POST, mux.Handle, Cobra cmd.Run/RunE) and " +
-		"Python patterns (@app.route, @router.get, FastAPI path decorators). " +
+		"Matches Go patterns (http.HandleFunc, r.GET/POST, mux.Handle, Cobra cmd.Run/RunE), " +
+		"Python patterns (@app.route, @router.get, FastAPI path decorators), and " +
+		"Swift/Vapor patterns (RouteCollection.boot, configure(_:Application), ParsableCommand.run). " +
 		"Results carry confidence annotations — these are pattern-matched, not type-resolved. " +
 		"Returns a clear message when no routes match or topology is disabled."
 }
@@ -152,6 +153,12 @@ func routePatterns(framework string) []routePattern {
 		{query: "route", name: "@app.route", confidence: 0.7},
 		{query: "get", name: "@router.get", confidence: 0.65},
 		{query: "post", name: "@router.post", confidence: 0.65},
+		// Swift/Vapor patterns — match against function signatures stored by the
+		// Swift tree-sitter extractor (e.g. "RoutesBuilder" in boot(routes:)).
+		{query: "RoutesBuilder", name: "vapor.RouteCollection", confidence: 0.75},
+		{query: "Application", name: "vapor.configure", confidence: 0.65},
+		// Swift ArgumentParser — ParsableCommand conformance in the type signature.
+		{query: "ParsableCommand", name: "argument-parser.run", confidence: 0.70},
 	}
 	if framework == "" {
 		return all
@@ -179,6 +186,10 @@ func matchesFramework(patternName, framework string) bool {
 		return strings.Contains(patternName, "mux") || strings.Contains(patternName, "HandleFunc")
 	case "fastapi", "flask":
 		return strings.Contains(patternName, "@")
+	case "vapor":
+		return strings.Contains(patternName, "vapor.")
+	case "argument-parser":
+		return strings.Contains(patternName, "argument-parser.")
 	default:
 		return true
 	}

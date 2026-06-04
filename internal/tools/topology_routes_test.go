@@ -65,6 +65,49 @@ func TestTopologyRoutes_PatternsCobra(t *testing.T) {
 	}
 }
 
+func TestTopologyRoutes_PatternsVapor(t *testing.T) {
+	patterns := routePatterns("vapor")
+	if len(patterns) == 0 {
+		t.Fatal("vapor filter returned no patterns")
+	}
+	for _, p := range patterns {
+		if !strings.Contains(p.name, "vapor.") {
+			t.Errorf("vapor filter returned non-vapor pattern: %s", p.name)
+		}
+	}
+}
+
+func TestTopologyRoutes_PatternsArgumentParser(t *testing.T) {
+	patterns := routePatterns("argument-parser")
+	if len(patterns) == 0 {
+		t.Fatal("argument-parser filter returned no patterns")
+	}
+	for _, p := range patterns {
+		if !strings.Contains(p.name, "argument-parser.") {
+			t.Errorf("argument-parser filter returned non-argument-parser pattern: %s", p.name)
+		}
+	}
+}
+
+func TestTopologyRoutes_SwiftRoutesCandidateBySignature(t *testing.T) {
+	// Verify that a node with "RoutesBuilder" in its signature is matched by the
+	// vapor.RouteCollection pattern — the key enabler for Swift/Vapor route detection.
+	node := topology.Node{
+		Kind:      topology.KindMethod,
+		Name:      "boot",
+		Path:      "Sources/Routes.swift",
+		StartLine: 3,
+		Signature: "func boot (routes: RoutesBuilder) throws",
+		Language:  "swift",
+	}
+	for _, p := range routePatterns("vapor") {
+		if p.query == "RoutesBuilder" && isRouteCandidate(node, p, "") {
+			return
+		}
+	}
+	t.Error("boot(routes: RoutesBuilder) not matched by vapor.RouteCollection pattern")
+}
+
 func TestTopologyRoutes_FormatWithEntry(t *testing.T) {
 	routes := []routeEntry{
 		{
