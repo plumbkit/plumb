@@ -1,10 +1,23 @@
 # Changelog
 
+## 0.8.37 (unreleased)
+
+Swift: full support — function signatures in the tree-sitter extractor, Vapor/ArgumentParser patterns in `topology_routes`, Swift toolchain check in `plumb doctor`, and language-aware `plumb diagnostics`.
+
+### Added
+
+- **Swift tree-sitter extractor now stores function signatures.** `addFunc` in `internal/topology/extractors/treesitter/swift.go` now populates `Node.Signature` with the function head text (everything before the opening brace of the body). Previously all Swift function and method nodes had an empty `Signature`, which prevented pattern-based tools such as `topology_routes` from matching on parameter types. `funcSignature(n)` iterates the children of a `function_declaration` or `protocol_function_declaration` node, concatenating their text until it reaches a `function_body` child — for a protocol declaration (no body) it returns all children. Concrete example: `func boot(routes: RoutesBuilder) throws` produces signature `"func boot (routes: RoutesBuilder) throws"` — the `RoutesBuilder` text is now available for downstream matching.
+- **`topology_routes` gains Swift/Vapor and ArgumentParser patterns.** Three new patterns added to `routePatterns`: `vapor.RouteCollection` (query: `"RoutesBuilder"`, conf 0.75) matches Vapor `RouteCollection.boot(routes:)` implementations via the new signature field; `vapor.configure` (query: `"Application"`, conf 0.65) matches Vapor `configure(_:Application)` and `routes(_:Application)` functions; `argument-parser.run` (query: `"ParsableCommand"`, conf 0.70) is reserved for ArgumentParser CLI entry points (see known limitation below). Two new `framework` filter values accepted: `"vapor"` and `"argument-parser"`. `matchesFramework` updated accordingly. Tool description and JSON schema updated.
+- **`plumb doctor` checks the Swift toolchain when `[lsp.swift]` is configured.** New `checkSwiftToolchain()` function (analogous to `checkJavaRuntime()` for Java): runs `swift --version` via `commandOutputTimeout`; fails the check when `swift` is not on PATH (with a hint to install Xcode or the swift.org toolchain); reports the resolved path and first version line on success. `checkLSPs` now switches on language name to call the right auxiliary check (Java → `checkJavaRuntime`, Swift → `checkSwiftToolchain`).
+- **`plumb diagnostics` is now language-aware.** `runDiagOnWorkspace` previously hard-coded `*.go` and described the scan as “Go file(s)”. A new `detectDiagnosticsLang(ws string)` helper checks for root markers in the CWD (`Package.swift` → Swift, `Cargo.toml` → Rust, `pyproject.toml`/`setup.py` → Python, `tsconfig.json`/`package.json` → TypeScript, falling back to Go) and returns the corresponding `find_files` glob and display label. The “not tracked” note now refers to “the language server” rather than `gopls`. `parseGoFileList` renamed to `parseFileList` (generic). `styleDiagnostics` now recognises source file extensions beyond `.go` (`.swift`, `.rs`, `.py`, `.ts`, `.js`, `.kt`, `.java`) for path-line highlighting via `isSourceFilePath`.
+
+### Known limitation
+
+- **`argument-parser.run` pattern is currently a no-op.** Swift ArgumentParser CLI entry points are `run()` methods on types conforming to `ParsableCommand`. The conformance lives on the *type* declaration, not on the function node, so neither the function's `Signature` (`"func run () throws"`) nor its `Name` (`"run"`) contains `"ParsableCommand"`. The FTS5 search returns no results for this query and `isRouteCandidate` is never reached. The pattern is kept as scaffolding for a future fix (e.g. propagating the enclosing type's inheritance into the method's `Signature`, or adding a separate conformance edge query path).
+
 ## 0.8.36 (unreleased)
 
 Workspace pool: language servers are now reference-counted and reclaimed after their last session leaves, instead of living for the daemon's lifetime.
-
-Swift: full support — function signatures in the tree-sitter extractor, Vapor/ArgumentParser patterns in `topology_routes`, Swift toolchain check in `plumb doctor`, and language-aware `plumb diagnostics`.
 
 ### Added
 
