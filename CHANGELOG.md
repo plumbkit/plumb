@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.31 (unreleased)
+
+`search_in_files` gains `use_regex` — literal text is now the default.
+
+### Changed
+
+- **`search_in_files` now defaults to literal text search.** Previously `pattern` was always compiled as a Go RE2 regular expression, so agents searching for `foo.bar`, `plumb.daemon.lock`, or `internal/cli` silently got regex semantics. The new `use_regex` parameter (boolean, default `false`) mirrors the same field on `find_replace`, `find_files`, and `search_memories`. With `use_regex:false` (the default), the pattern is wrapped in `regexp.QuoteMeta` so every character is treated literally; regex behaviour is preserved by passing `use_regex:true`. Smart-case continues to apply in both modes. **Migration:** any caller relying on regex patterns without the new field must add `"use_regex": true` to keep current behaviour. Callers searching for literal text gain correctness without any change. Documented in `AGENTS.md` Quick reference and the tool description.
+
 ## 0.8.30 (unreleased)
 
 Review-pass follow-ups for 0.8.29 (PathPolicy / out-of-workspace dependency reads).

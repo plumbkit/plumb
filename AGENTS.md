@@ -294,7 +294,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | `list_directory` | Immediate children with `[FILE]`/`[DIR]`, sizes, mtimes; glob + sort. |
 | `list_files` | Recursive; glob filter; depth control; respects `.gitignore`. |
 | `find_files` | Glob/regex finder; honours `.gitignore`. |
-| `search_in_files` | ripgrep-style content search; smart-case; `.gitignore`-aware; `exclude` globs; `include_enclosing_symbol` annotates each match with the deepest LSP symbol. |
+| `search_in_files` | Exact content scan; **literal text by default** (`use_regex:false`); set `use_regex:true` for Go RE2 regex. Smart-case; `.gitignore`-aware; `exclude` globs; `include_enclosing_symbol` annotates each match with the deepest LSP symbol. |
 
 **Filesystem writes** — all take `WriteDeps`, hold per-path locks, check git dirty state (`dirty_ok` to override), notify the LSP via `didChangeWatchedFiles`, invalidate the symbol cache, and consume one rate-limit slot.
 

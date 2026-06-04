@@ -156,10 +156,93 @@ func TestSearchInFiles_InvalidRegex(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewSearchInFiles(nil, nil, nil, 0)
 
-	args, _ := json.Marshal(map[string]any{"pattern": "[invalid", "path": dir})
+	// An invalid regex is only rejected when use_regex:true.
+	// With the default literal mode, "[invalid" is a perfectly valid literal string.
+	args, _ := json.Marshal(map[string]any{"pattern": "[invalid", "path": dir, "use_regex": true})
 	_, err := tool.Execute(context.Background(), args)
 	if err == nil {
-		t.Error("expected error for invalid regex")
+		t.Error("expected error for invalid regex with use_regex:true")
+	}
+}
+
+// TestSearchInFiles_LiteralMode verifies that patterns containing regex
+// metacharacters are treated as plain text when use_regex is false (the
+// default). A literal search for "a.b" must not match "acb" the way a regex
+// would.
+func TestSearchInFiles_LiteralMode(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// File with the literal string; file with a regex-wildcard expansion that
+	// should NOT match in literal mode.
+	write("match.txt", "foo.bar and more\n")
+	write("nomatch.txt", "fooXbar\n")
+
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+
+	// Default: no use_regex field → literal.
+	for _, tc := range []struct {
+		pattern string
+		want    string
+		nowant  string
+	}{
+		{"foo.bar", "match.txt", "nomatch.txt"},
+		{"plumb.daemon.lock", "", ""},
+		{"foo(x)", "", ""},
+		{"[bracket", "", ""},
+	} {
+		args, _ := json.Marshal(map[string]any{"pattern": tc.pattern, "path": dir})
+		out, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Errorf("pattern %q: unexpected error: %v", tc.pattern, err)
+			continue
+		}
+		if tc.want != "" && !strings.Contains(out, tc.want) {
+			t.Errorf("pattern %q: expected %q in output:\n%s", tc.pattern, tc.want, out)
+		}
+		if tc.nowant != "" && strings.Contains(out, tc.nowant) {
+			t.Errorf("pattern %q: %q should not appear in output:\n%s", tc.pattern, tc.nowant, out)
+		}
+	}
+
+	// Explicit use_regex:false also yields literal behaviour.
+	args, _ := json.Marshal(map[string]any{"pattern": "foo.bar", "path": dir, "use_regex": false})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("use_regex:false: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "match.txt") {
+		t.Errorf("use_regex:false: expected match.txt:\n%s", out)
+	}
+	if strings.Contains(out, "nomatch.txt") {
+		t.Errorf("use_regex:false: nomatch.txt should not appear:\n%s", out)
+	}
+}
+
+// TestSearchInFiles_UseRegex verifies that use_regex:true restores regex
+// semantics, including wildcard expansions and anchors.
+func TestSearchInFiles_UseRegex(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("foobar\nfoo123bar\nbaz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+
+	args, _ := json.Marshal(map[string]any{"pattern": "foo.*bar", "path": dir, "use_regex": true})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Both foobar and foo123bar match the regex; baz does not.
+	if strings.Count(out, "> ") < 2 {
+		t.Errorf("expected 2 regex matches (foobar + foo123bar), got:\n%s", out)
+	}
+	if strings.Contains(out, "baz") {
+		t.Errorf("baz should not match foo.*bar:\n%s", out)
 	}
 }
 

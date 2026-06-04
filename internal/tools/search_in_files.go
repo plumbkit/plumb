@@ -47,7 +47,12 @@ var searchInFilesSchema = json.RawMessage(`{
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Regular expression (or literal string) to search for"
+      "description": "Plain text to search for by default; regular expression when use_regex is true."
+    },
+    "use_regex": {
+      "type": "boolean",
+      "default": false,
+      "description": "Treat pattern as a regular expression (Go RE2). Default false — pattern is literal text."
     },
     "path": {
       "type": "string",
@@ -119,10 +124,11 @@ func (t *SearchInFiles) WithBoundary(guard BoundaryGuard) *SearchInFiles {
 func (t *SearchInFiles) Name() string                 { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
 func (t *SearchInFiles) Description() string {
-	return "Workspace-scoped regex content search across file contents. " +
+	return "Exact scan of current file contents — literal text by default, regex when use_regex=true. " +
+		"Use search_in_files when you need every occurrence, exact verification, audits, or safe replacement prep. " +
+		"For broad conceptual discovery (\"where is daemon locking handled?\"), prefer topology_search instead. " +
 		"For symbol name lookups (finding a function, type, or variable by name), prefer workspace_symbols — " +
 		"it uses the LSP index and returns results instantly. " +
-		"Use search_in_files for content patterns, string literals, comments, or arbitrary text. " +
 		"Prefer this over shelling out to grep/rg: " +
 		"results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
 		"binary files are skipped (null-byte sniff of the first 8 KB), files larger than max_file_bytes (50 MiB default) are skipped before opening, " +
@@ -132,6 +138,7 @@ func (t *SearchInFiles) Description() string {
 
 type searchInFilesArgs struct {
 	Pattern                string   `json:"pattern"`
+	UseRegex               bool     `json:"use_regex"`
 	Path                   string   `json:"path"`
 	Glob                   string   `json:"glob"`
 	Exclude                []string `json:"exclude"`
@@ -254,19 +261,25 @@ func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard)
 }
 
 func compileSearchRegex(a searchInFilesArgs) (*regexp.Regexp, error) {
+	// Smart-case: case-sensitive when the pattern contains any uppercase letter
+	// or when the caller forces it; case-insensitive otherwise.
 	caseSensitive := a.CaseSensitive != nil && *a.CaseSensitive
 	if !caseSensitive && !allLower(a.Pattern) {
 		caseSensitive = true
 	}
-	reStr := a.Pattern
+	flags := ""
 	if !caseSensitive {
-		reStr = "(?i)" + reStr
+		flags = "(?i)"
 	}
-	re, err := regexp.Compile(reStr)
-	if err != nil {
-		return nil, fmt.Errorf("search_in_files: invalid pattern %q: %w", a.Pattern, err)
+	if a.UseRegex {
+		re, err := regexp.Compile(flags + a.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("search_in_files: invalid regex %q: %w", a.Pattern, err)
+		}
+		return re, nil
 	}
-	return re, nil
+	// Literal mode (default): QuoteMeta so metacharacters match themselves.
+	return regexp.MustCompile(flags + regexp.QuoteMeta(a.Pattern)), nil
 }
 
 func (t *SearchInFiles) collectSearchPaths(ctx context.Context, a searchInFilesArgs, root string) ([]searchPathPair, error) {
