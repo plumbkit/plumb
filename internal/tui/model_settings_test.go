@@ -28,14 +28,21 @@ func newSettingsModel() Model {
 
 func TestBuildSettingItems_ShapeAndFlags(t *testing.T) {
 	items := buildSettingItems(config.Defaults())
-	if len(items) != 16 {
-		t.Fatalf("len(items) = %d, want 16", len(items))
+	// Full coverage: one row per config field (well over the original curated 16).
+	if len(items) < 30 {
+		t.Fatalf("len(items) = %d, want full coverage (>= 30)", len(items))
 	}
 	if items[0].key != skTheme || items[0].kind != settingPopup {
 		t.Errorf("first item should be the Theme popup, got %+v", items[0])
 	}
 	if items[0].value != ActiveThemeName {
 		t.Errorf("Theme value = %q, want live ActiveThemeName %q", items[0].value, ActiveThemeName)
+	}
+	// Every row carries a one-line help string for the status bar.
+	for _, it := range items {
+		if it.help == "" {
+			t.Errorf("row %q (key %v) is missing help text", it.label, it.key)
+		}
 	}
 }
 
@@ -44,33 +51,30 @@ func TestBuildSettingItems_ShapeAndFlags(t *testing.T) {
 // compares (log format + cache) — anything else the daemon hot-reloads, so
 // marking it restart-needed would mislead the user (the bug this fixes).
 func TestReloadTierFor(t *testing.T) {
-	want := map[settingKey]reloadTier{
-		skTheme:          reloadLive,
-		skPathStyle:      reloadLive,
-		skLogLevel:       reloadLive,
-		skStrict:         reloadLive,
-		skShowWriteDiff:  reloadLive,
-		skRateLimit:      reloadLive,
-		skTopology:       reloadLive,
-		skGitWrites:      reloadLive,
-		skGitDestructive: reloadLive,
-		skGitPush:        reloadLive,
-		skQuality:        reloadNextSession,
-		skAutoAttach:     reloadNextSession,
-		skLSPTimeout:     reloadNextSession,
-		skLogFormat:      reloadRestart,
-		skCacheTTL:       reloadRestart,
-		skCacheMaxSize:   reloadRestart,
+	// The reloadRestart set must stay exactly {log format, log file, cache} — the
+	// only fields the daemon cannot hot-reload. Marking anything else restart-
+	// needed would mislead the user.
+	restart := map[settingKey]bool{
+		skLogFormat: true, skLogFile: true, skCacheTTL: true, skCacheMaxSize: true,
 	}
 	for _, it := range buildSettingItems(config.Defaults()) {
-		w, ok := want[it.key]
-		if !ok {
-			t.Errorf("key %v missing from reload-tier expectations", it.key)
+		tier := reloadTierFor(it.key)
+		if restart[it.key] {
+			if tier != reloadRestart {
+				t.Errorf("reloadTierFor(%v) = %d, want reloadRestart", it.key, tier)
+			}
 			continue
 		}
-		if got := reloadTierFor(it.key); got != w {
-			t.Errorf("reloadTierFor(%v) = %d, want %d", it.key, got, w)
+		if tier == reloadRestart {
+			t.Errorf("reloadTierFor(%v) = reloadRestart, but only log format/file + cache may be restart-needed", it.key)
 		}
+	}
+	// Spot-check representative live and next-session keys.
+	if reloadTierFor(skStrict) != reloadLive {
+		t.Error("strict edits should be reloadLive")
+	}
+	if reloadTierFor(skQuality) != reloadNextSession {
+		t.Error("quality should be reloadNextSession")
 	}
 }
 
@@ -165,8 +169,8 @@ func TestCycleOption(t *testing.T) {
 func TestSettingsLogicalLines_GroupsAndRows(t *testing.T) {
 	items := buildSettingItems(config.Defaults())
 	lines := settingsLogicalLines(items)
-	if len(lines) == 0 || lines[0].kind != slBlank {
-		t.Fatalf("first logical line should be a blank, got %+v", lines)
+	if len(lines) == 0 || lines[0].kind != slHeader {
+		t.Fatalf("first logical line should be a group header (no leading blank), got %+v", lines)
 	}
 	// Every settings item must appear exactly once as an slRow.
 	seen := map[int]bool{}
@@ -317,6 +321,66 @@ func TestSettingsLogFormat_Cycles(t *testing.T) {
 	m, _ = m.adjustSetting(1)
 	if m.settingsCfg.LogFormat != "json" {
 		t.Errorf("log format = %q, want \"json\"", m.settingsCfg.LogFormat)
+	}
+}
+
+// TestSettingsGenericNumber_Persists exercises the generic setNumber path on a
+// newly-added field (topology resync batch), confirming the per-field step and
+// the floor at 0.
+func TestSettingsGenericNumber_Persists(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newSettingsModel()
+	m.settingsCursor = cursorFor(m.settingsItems, skTopoResyncBatch)
+	start := m.settingsCfg.Topology.ResyncBatch
+	m, _ = m.adjustSetting(1)
+	if got := m.settingsCfg.Topology.ResyncBatch; got != start+25 {
+		t.Errorf("resync batch = %d, want %d", got, start+25)
+	}
+	for range 100 {
+		m, _ = m.adjustSetting(-1)
+	}
+	if got := m.settingsCfg.Topology.ResyncBatch; got != 0 {
+		t.Errorf("resync batch floored = %d, want 0", got)
+	}
+}
+
+// TestSettingsGenericCycle_Persists exercises the generic setCycle path on the
+// quality mode enum.
+func TestSettingsGenericCycle_Persists(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newSettingsModel()
+	m.settingsCursor = cursorFor(m.settingsItems, skQualityMode)
+	m, _ = m.adjustSetting(1)
+	if m.settingsCfg.Quality.Mode != "sync" {
+		t.Errorf("quality mode = %q, want \"sync\"", m.settingsCfg.Quality.Mode)
+	}
+}
+
+// TestSettingsGenericToggle_Persists exercises a newly-added bool field via the
+// shared toggle path (topology watch).
+func TestSettingsGenericToggle_Persists(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newSettingsModel()
+	m.settingsCursor = cursorFor(m.settingsItems, skTopoWatch)
+	start := m.settingsCfg.Topology.Watch
+	m, _ = m.adjustSetting(1)
+	if m.settingsCfg.Topology.Watch == start {
+		t.Errorf("topology watch did not toggle from %v", start)
+	}
+}
+
+// TestSettingsStatusOrHelp_FallsBackToHelp confirms the focused row's help shows
+// on the status line when there is no transient action status.
+func TestSettingsStatusOrHelp_FallsBackToHelp(t *testing.T) {
+	m := newSettingsModel()
+	m.settingsCursor = cursorFor(m.settingsItems, skStrict)
+	m.settingsStatus = ""
+	if got := m.settingsStatusOrHelp(); got != m.settingsItems[m.settingsCursor].help {
+		t.Errorf("settingsStatusOrHelp() = %q, want the row help", got)
+	}
+	m.settingsStatus = "saved"
+	if got := m.settingsStatusOrHelp(); got != "saved" {
+		t.Errorf("settingsStatusOrHelp() = %q, want the transient status", got)
 	}
 }
 

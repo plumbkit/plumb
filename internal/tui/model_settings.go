@@ -29,11 +29,24 @@ const (
 	skTheme settingKey = iota
 	skLogLevel
 	skLogFormat
+	skLogFile
 	skStrict
 	skShowWriteDiff
 	skRateLimit
+	skPostWriteDiagMs
+	skConcurrentSkewMs
+	skRefuseHomeRoots
 	skTopology
+	skTopoResyncOnAttach
+	skTopoWatch
+	skTopoMaxFileSize
+	skTopoResyncBatch
+	skTopoResyncPauseMs
+	skTopoResyncIntervalMin
 	skQuality
+	skQualityMode
+	skQualityTimeoutMs
+	skQualityMaxFindings
 	skGitWrites
 	skGitDestructive
 	skGitPush
@@ -41,6 +54,10 @@ const (
 	skCacheMaxSize
 	skLSPTimeout
 	skAutoAttach
+	skAutoAttachPersist
+	skAllowDependencyReads
+	skIdleThresholdMin
+	skEvictionTTLMin
 	skPathStyle
 )
 
@@ -63,11 +80,14 @@ const (
 // config.RestartSensitiveEqual compares (log format + cache).
 func reloadTierFor(key settingKey) reloadTier {
 	switch key {
-	case skLogFormat, skCacheTTL, skCacheMaxSize:
+	case skLogFormat, skLogFile, skCacheTTL, skCacheMaxSize:
 		return reloadRestart
-	case skQuality, skAutoAttach, skLSPTimeout:
+	case skQuality, skQualityMode, skQualityTimeoutMs, skQualityMaxFindings,
+		skAutoAttach, skAutoAttachPersist, skAllowDependencyReads, skLSPTimeout,
+		skTopoResyncOnAttach, skTopoWatch, skTopoMaxFileSize,
+		skTopoResyncBatch, skTopoResyncPauseMs, skTopoResyncIntervalMin:
 		return reloadNextSession
-	default: // theme, path style, log level, strict, show write diff, rate limit, topology, git
+	default: // theme, path style, log level, edits, walk, topology enable, git, session
 		return reloadLive
 	}
 }
@@ -82,14 +102,16 @@ type settingItem struct {
 	key     settingKey
 	value   string   // formatted current value
 	options []string // option set for settingCycle
+	help    string   // one-line description, shown on the status bar's second line
 }
 
 var (
-	logLevelOptions   = []string{"debug", "info", "warn", "error"}
-	logFormatOptions  = []string{"text", "json"}
-	cacheTTLOptions   = []string{"1m", "5m", "10m", "30m", "1h"}
-	lspTimeoutOptions = []string{"0s", "10s", "30s", "1m", "2m"}
-	pathStyleOptions  = []string{"compact", "truncate-middle", "full"}
+	logLevelOptions    = []string{"debug", "info", "warn", "error"}
+	logFormatOptions   = []string{"text", "json"}
+	cacheTTLOptions    = []string{"1m", "5m", "10m", "30m", "1h"}
+	lspTimeoutOptions  = []string{"0s", "10s", "30s", "1m", "2m"}
+	pathStyleOptions   = []string{"compact", "truncate-middle", "full"}
+	qualityModeOptions = []string{"background", "sync"}
 )
 
 // durValue formats a duration as its matching preset string when one exists,
@@ -124,28 +146,170 @@ func pathStyleValue(s string) string {
 	return s
 }
 
-// buildSettingItems returns the curated, editable settings rows in display
-// order. Theme reflects the live ActiveThemeName; everything else comes from
-// the supplied config snapshot.
+// buildSettingItems returns the full set of editable settings rows in display
+// order, one per config field. Theme reflects the live ActiveThemeName;
+// everything else comes from the supplied config snapshot. Each row carries a
+// one-line help string shown on the status bar's second line when focused.
 func buildSettingItems(cfg config.Config) []settingItem {
+	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
 	return []settingItem{
-		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName},
-		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions},
-		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions},
-		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions},
-		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict)},
-		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
-		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute)},
-		{group: "Indexing", label: "Topology", kind: settingToggle, key: skTopology, value: onOff(cfg.Topology.Enabled)},
-		{group: "Indexing", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled)},
-		{group: "Git", label: "git allow_writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites)},
-		{group: "Git", label: "git allow_destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive)},
-		{group: "Git", label: "git allow_push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush)},
-		{group: "Others", label: "cache ttl", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions},
-		{group: "Others", label: "cache max_size", kind: settingNumber, key: skCacheMaxSize, value: fmt.Sprintf("%d", cfg.Cache.MaxSize)},
-		{group: "Others", label: "lsp_query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions},
-		{group: "Others", label: "workspace auto_attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
+		{
+			group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName,
+			help: "Colour theme for the TUI and `plumb config show` syntax highlighting.",
+		},
+		{
+			group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions,
+			help: "How workspace folder paths are abbreviated in the Sessions sidebar.",
+		},
+
+		{
+			group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions,
+			help: "Daemon log verbosity. Applies live via the control socket.",
+		},
+		{
+			group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions,
+			help: "Daemon log encoding: human-readable text or structured JSON.",
+		},
+		{
+			group: "Logging", label: "Log file", kind: settingPopup, key: skLogFile, value: pathOrDefault(cfg.LogFile),
+			help: "Path the daemon writes logs to. Enter to edit; blank uses the default cache dir.",
+		},
+
+		{
+			group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict),
+			help: "Require a prior read_file (matching mtime) before edit_file.",
+		},
+		{
+			group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff),
+			help: "Append a unified diff to edit_file/write_file responses.",
+		},
+		{
+			group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute),
+			help: "Max write ops per session per minute. 0 disables limiting.",
+		},
+		{
+			group: "Editing", label: "Post-write diag (ms)", kind: settingNumber, key: skPostWriteDiagMs, value: itoa(cfg.Edits.PostWriteDiagnosticsMs),
+			help: "How long write tools wait for the LSP to re-publish diagnostics. 0 disables.",
+		},
+		{
+			group: "Editing", label: "Concurrent skew (ms)", kind: settingNumber, key: skConcurrentSkewMs, value: itoa(cfg.Edits.ConcurrentWriteSkewMs),
+			help: "Clock-skew allowance for edit_file's concurrent-write detector. Raise on network mounts.",
+		},
+		{
+			group: "Editing", label: "Refuse home roots", kind: settingToggle, key: skRefuseHomeRoots, value: onOff(cfg.Walk.RefuseHomeRoots),
+			help: "Refuse walks rooted at $HOME or a protected dir (macOS TCC prompt guard).",
+		},
+
+		{
+			group: "Indexing", label: "Topology", kind: settingToggle, key: skTopology, value: onOff(cfg.Topology.Enabled),
+			help: "Enable the SQLite/FTS5 semantic index at <ws>/.plumb/topology.db.",
+		},
+		{
+			group: "Indexing", label: "Resync on attach", kind: settingToggle, key: skTopoResyncOnAttach, value: onOff(cfg.Topology.ResyncOnAttach),
+			help: "Trigger a full topology resync each time the workspace attaches.",
+		},
+		{
+			group: "Indexing", label: "Watch files", kind: settingToggle, key: skTopoWatch, value: onOff(cfg.Topology.Watch),
+			help: "OS-level file watching: re-index a file the moment it changes on disk.",
+		},
+		{
+			group: "Indexing", label: "Max file size (B)", kind: settingNumber, key: skTopoMaxFileSize, value: itoa(int(cfg.Topology.MaxFileSizeBytes)),
+			help: "Cap on file size considered for extraction (bytes). 0 uses the 512 KiB default.",
+		},
+		{
+			group: "Indexing", label: "Resync batch", kind: settingNumber, key: skTopoResyncBatch, value: itoa(cfg.Topology.ResyncBatch),
+			help: "Files a full resync extracts before pausing. 0 disables pacing.",
+		},
+		{
+			group: "Indexing", label: "Resync pause (ms)", kind: settingNumber, key: skTopoResyncPauseMs, value: itoa(cfg.Topology.ResyncPauseMs),
+			help: "Pause inserted after each resync batch (ms). 0 disables pacing.",
+		},
+		{
+			group: "Indexing", label: "Resync interval (min)", kind: settingNumber, key: skTopoResyncIntervalMin, value: itoa(cfg.Topology.ResyncIntervalMinutes),
+			help: "Periodic full-resync fallback interval. Suppressed while watching; 0 disables.",
+		},
+
+		{
+			group: "Quality", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled),
+			help: "Run offline post-write analysers (golangci-lint, …) on changed files.",
+		},
+		{
+			group: "Quality", label: "Mode", kind: settingCycle, key: skQualityMode, value: qualityModeValue(cfg.Quality.Mode), options: qualityModeOptions,
+			help: "background: findings on next request. sync: block and append inline.",
+		},
+		{
+			group: "Quality", label: "Timeout (ms)", kind: settingNumber, key: skQualityTimeoutMs, value: itoa(cfg.Quality.TimeoutMs),
+			help: "Per-analyser run timeout in milliseconds.",
+		},
+		{
+			group: "Quality", label: "Max findings/file", kind: settingNumber, key: skQualityMaxFindings, value: itoa(cfg.Quality.MaxFindingsPerFile),
+			help: "Cap on findings appended per file to keep responses bounded.",
+		},
+
+		{
+			group: "Git", label: "git allow_writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites),
+			help: "Gate the safe-write tier (add, commit, switch, branch/tag create, stash).",
+		},
+		{
+			group: "Git", label: "git allow_destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive),
+			help: "Gate reset/clean/checkout/restore/rebase/revert (each call also needs confirm).",
+		},
+		{
+			group: "Git", label: "git allow_push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush),
+			help: "Gate push/fetch/pull (each call also needs confirm). Protected branches stay safe.",
+		},
+
+		{
+			group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes),
+			help: "Minutes with no tool call before a session shows the idle marker (cosmetic).",
+		},
+		{
+			group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes),
+			help: "Minutes idle before the daemon force-closes a connection. 0 disables eviction.",
+		},
+
+		{
+			group: "Workspace", label: "auto_attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach),
+			help: "Fall back to the nearest .git/ or seed dir when no marker is found (LSP unavailable).",
+		},
+		{
+			group: "Workspace", label: "auto_attach_persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist),
+			help: "Create .plumb/ at the synthetic root on first auto-attach (implies auto_attach).",
+		},
+		{
+			group: "Workspace", label: "allow_dependency_reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads),
+			help: "Let read/search tools reach the Go module cache + GOROOT read-only.",
+		},
+
+		{
+			group: "Others", label: "cache ttl", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions,
+			help: "Session symbol-cache time-to-live. Needs a daemon restart.",
+		},
+		{
+			group: "Others", label: "cache max_size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize),
+			help: "Max entries in the session symbol cache. Needs a daemon restart.",
+		},
+		{
+			group: "Others", label: "lsp_query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
+			help: "Cap on a single LSP tool call when the caller carries no deadline. 0 disables.",
+		},
 	}
+}
+
+// pathOrDefault renders a path field, showing "(default)" when empty.
+func pathOrDefault(s string) string {
+	if s == "" {
+		return "(default)"
+	}
+	return s
+}
+
+// qualityModeValue defaults an empty mode to "background".
+func qualityModeValue(s string) string {
+	if s == "" {
+		return "background"
+	}
+	return s
 }
 
 // settingsFooterRows is the number of body rows reserved at the bottom for the
@@ -169,11 +333,10 @@ type settingsLine struct {
 	item  int    // slRow: index into settingsItems
 }
 
-// settingsLogicalLines describes the scrollable list: a blank line at the top,
-// then each group as a header followed by its rows, with a blank line between
-// groups.
+// settingsLogicalLines describes the scrollable list: each group as a header
+// followed by its rows, with a blank line between groups (no leading blank).
 func settingsLogicalLines(items []settingItem) []settingsLine {
-	out := []settingsLine{{kind: slBlank}}
+	out := []settingsLine{}
 	last := ""
 	for i, it := range items {
 		if it.group != last {
@@ -293,14 +456,14 @@ func (m Model) settingsDisplayLines(innerW int) []string {
 }
 
 // settingsHeaderDisplay renders a group header as the name followed by a faded
-// dotted rule that fills to the right gap (3 spaces from each border).
+// dotted rule that fills to the right gap (1 space from each border).
 func settingsHeaderDisplay(group string, innerW int) string {
-	used := 3 + lipgloss.Width(group) + 1 // "   " + name + " "
-	dots := max(innerW-3-used, 0)
-	return "   " + PanelHeaderFadedStyle.Render(group) + " " + SepStyle.Render(strings.Repeat("╌", dots))
+	used := 1 + lipgloss.Width(group) + 1 // " " + name + " "
+	dots := max(innerW-1-used, 0)
+	return " " + PanelHeaderFadedStyle.Render(group) + " " + SepStyle.Render(strings.Repeat("╌", dots))
 }
 
-// settingsRowDisplay renders one aligned settings row: 3-space gap, cursor,
+// settingsRowDisplay renders one aligned settings row: 1-space gap, cursor,
 // fixed-width label and value columns, the control, then the reload-tier mark.
 func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string {
 	label := fmt.Sprintf("%-*s", labelW, it.label)
@@ -313,7 +476,7 @@ func settingsRowDisplay(it settingItem, focused bool, labelW, valueW int) string
 	} else {
 		core = "  " + ItemStyle.Render(label) + DetailStyle.Render(value) + MutedStyle.Render(ctrl)
 	}
-	out := "   " + core
+	out := " " + core
 	switch reloadTierFor(it.key) {
 	case reloadLive:
 		out += " " + OkStyle.Render("live")
@@ -333,10 +496,23 @@ func (m Model) settingsFooterRow(idx, innerW int, isOverlay bool) string {
 	case 1:
 		return statusBarLine(settingsHintContent(contentW), innerW, isOverlay)
 	case 2:
-		return statusBarLine(settingsStatusContent(m.settingsStatus, contentW), innerW, isOverlay)
+		return statusBarLine(settingsStatusContent(m.settingsStatusOrHelp(), contentW), innerW, isOverlay)
 	default:
 		return lipgloss.NewStyle().Width(innerW).Render("")
 	}
+}
+
+// settingsStatusOrHelp returns the transient action status when one is set,
+// otherwise the focused row's one-line help — so the second status-bar line
+// describes the highlighted setting whenever the user is just navigating.
+func (m Model) settingsStatusOrHelp() string {
+	if m.settingsStatus != "" {
+		return m.settingsStatus
+	}
+	if m.settingsCursor >= 0 && m.settingsCursor < len(m.settingsItems) {
+		return m.settingsItems[m.settingsCursor].help
+	}
+	return ""
 }
 
 // statusBarLine frames footer content on a subtle background bar: a 1-space

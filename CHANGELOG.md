@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.43 (unreleased)
+
+TUI Settings: every config field is now editable in the screen, each row carries a one-line help, and the layout is tightened. Plus the foundation (a sparse per-project config writer) for the upcoming per-workspace settings scope.
+
+### Added
+
+- **Full settings coverage in the TUI (`internal/tui/model_settings.go`).** `buildSettingItems` now emits a row for **every** config field (33 rows, up from the curated 16). New rows: `edits.post_write_diagnostics_ms`, `edits.concurrent_write_skew_ms`, `walk.refuse_home_roots`, all of `[topology]` (`resync_on_attach`, `watch`, `max_file_size_bytes`, `resync_batch`, `resync_pause_ms`, `resync_interval_minutes`), all of `[quality]` (`mode`, `timeout_ms`, `max_findings_per_file`), `[session]` (`idle_threshold_minutes`, `eviction_ttl_minutes`), `workspace.auto_attach_persist`, `workspace.allow_dependency_reads`, and a view-only `log_file`. Grouped under Appearance / Logging / Editing / Indexing / Quality / Git / Session / Workspace / Others.
+- **Per-row help text.** Each `settingItem` carries a one-line `help` string; the focused row's help renders on the Settings status bar's **second line** when no transient action status is showing (cleared on navigation). `settingsStatusOrHelp` picks status-or-help.
+- **`config.SetProjectValue` / `config.UnsetProjectValue` / `config.LoadProjectRaw` / `config.ProjectValuePresent` (`internal/config/project_write.go`) — sparse per-project config writes.** Unlike `Save` (which re-encodes the whole resolved `Config`), these touch only the single key the caller changed, so a per-project override never silently shadows a global value the user did not set: a key absent from `<ws>/.plumb/config.toml` inherits from global/default, a key present is an explicit override. The file is created on first override and removed when it becomes empty. `writeConfigAtomic` was generalised to `writeTOMLAtomic(path, any)` (shared tmp-file+rename, perms preserved) so both the global struct save and the project map save use one atomic writer. This is the foundation for the per-workspace settings scope (see todo-to-review).
+
+### Changed
+
+- **Settings dispatch is kind-driven.** `adjustSetting` now routes by `settingKind` (toggle/number/cycle) through `adjustNumber`/`adjustCycle` + generic `setNumber`/`setCycle` with `intField`/`numberMeta`/`cycleMeta` mappers, so adding a setting extends a mapper rather than the dispatch switch (every handler stays well under gocyclo 15).
+- **Settings layout tightened.** Removed the blank line at the top of the list; the left/right content gap is now 1 space (was 3).
+
 ## 0.8.42 (unreleased)
 
 TSX/JSX moves onto the **canonical** tree-sitter grammar via WASM — the last fragile regex extractor is retired, and the whole TypeScript family is decoupled from gotreesitter version churn. This closes the tree-sitter roadmap's "last phase".

@@ -803,12 +803,20 @@ func Save(apply func(*Config)) error {
 	return writeConfigAtomic(path, cfg)
 }
 
-// writeConfigAtomic encodes cfg to a temp file in the target's directory, then
+// writeConfigAtomic encodes cfg and writes it atomically over path. Thin
+// wrapper over writeTOMLAtomic kept for call-site clarity (global Save).
+func writeConfigAtomic(path string, cfg Config) error {
+	return writeTOMLAtomic(path, cfg)
+}
+
+// writeTOMLAtomic encodes v to a temp file in the target's directory, then
 // renames it over path. The rename is atomic on a single filesystem. The temp
 // name is dotfile-prefixed so a directory watcher filtering on the "config.toml"
 // basename ignores the staging writes and reacts only to the final rename.
-// Existing file permissions are preserved; a new file is created 0o644.
-func writeConfigAtomic(path string, cfg Config) error {
+// Existing file permissions are preserved; a new file is created 0o644. Shared
+// by the global Save (a Config struct) and the per-project sparse writers (a
+// map[string]any) — see project_write.go.
+func writeTOMLAtomic(path string, v any) error {
 	dir := filepath.Dir(path)
 	mode := os.FileMode(0o644)
 	if fi, statErr := os.Stat(path); statErr == nil {
@@ -820,7 +828,7 @@ func writeConfigAtomic(path string, cfg Config) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
-	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+	if err := toml.NewEncoder(tmp).Encode(v); err != nil {
 		tmp.Close()
 		return fmt.Errorf("encoding config: %w", err)
 	}
