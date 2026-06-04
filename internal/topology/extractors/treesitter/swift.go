@@ -34,14 +34,16 @@ func (e *SwiftExtractor) Extensions() []string { return []string{".swift"} }
 // imports, and XCTest tests (methods named test… inside an XCTestCase subclass),
 // plus container → member containment edges and intra-file call edges.
 // Containment is lexical and certain (1.0/extractor); intra-file calls are
-// name-resolved heuristics (0.8). Returns (nil, nil, nil) when src cannot be
-// parsed.
+// name-resolved heuristics (0.8). A method's signature is suffixed with the
+// enclosing type's conformance list, so pattern tools can see a type's protocol
+// conformance (e.g. ParsableCommand) on its methods. Returns (nil, nil, nil)
+// when src cannot be parsed.
 func (e *SwiftExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	tree, err := tsg.NewParser(e.lang).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &swiftWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &swiftWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
 	w.walk(tree.RootNode(), -1, false, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil
@@ -54,6 +56,7 @@ type swiftWalk struct {
 	nodes   []topology.Node
 	edges   []topology.Edge
 	funcIdx map[string]int64 // function/method/test name → node index, for call edges
+	conf    map[int64]string // type node index → its conformance list text, for method signatures
 }
 
 // walk descends the tree. enclosing is the node index of the lexically enclosing
@@ -127,6 +130,9 @@ func (w *swiftWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, en
 		Language:  "swift",
 		Path:      w.path,
 	})
+	if c := w.typeConformance(n); c != "" {
+		w.conf[idx] = c
+	}
 	w.containedBy(enclosing, idx)
 	return idx
 }
@@ -148,7 +154,7 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
-		Signature: w.funcSignature(n),
+		Signature: w.methodSignature(n, enclosing),
 		StartLine: line(n.StartPoint()),
 		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
@@ -156,6 +162,20 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 	})
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
+}
+
+// methodSignature returns the function head, suffixed with the enclosing type's
+// conformance list when this is a method of a conforming type. This surfaces a
+// type's protocol conformance (e.g. ParsableCommand) on its methods so pattern
+// tools like topology_routes can match an entry point by the type it conforms to.
+func (w *swiftWalk) methodSignature(n *tsg.Node, enclosing int64) string {
+	sig := w.funcSignature(n)
+	if enclosing >= 0 {
+		if c := w.conf[enclosing]; c != "" {
+			return strings.TrimSpace(sig + " " + c)
+		}
+	}
+	return sig
 }
 
 // funcSignature returns the function head text — everything before the opening
@@ -318,6 +338,22 @@ func (w *swiftWalk) isTestClass(n *tsg.Node) bool {
 		}
 	}
 	return false
+}
+
+// typeConformance returns the text of a type declaration's inheritance/conformance
+// specifiers (superclass + protocols), joined by spaces. Empty when the type
+// declares no conformances.
+func (w *swiftWalk) typeConformance(n *tsg.Node) string {
+	var parts []string
+	for _, c := range n.Children() {
+		if c.Type(w.lang) != "inheritance_specifier" {
+			continue
+		}
+		if t := strings.TrimSpace(c.Text(w.src)); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in

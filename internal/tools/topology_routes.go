@@ -134,6 +134,7 @@ type routePattern struct {
 	query      string
 	name       string
 	confidence float64
+	nameEquals string // when set, the candidate's symbol name must equal this exactly
 }
 
 // routePatterns returns the patterns relevant to the given framework hint.
@@ -157,8 +158,9 @@ func routePatterns(framework string) []routePattern {
 		// Swift tree-sitter extractor (e.g. "RoutesBuilder" in boot(routes:)).
 		{query: "RoutesBuilder", name: "vapor.RouteCollection", confidence: 0.75},
 		{query: "Application", name: "vapor.configure", confidence: 0.65},
-		// Swift ArgumentParser — ParsableCommand conformance in the type signature.
-		{query: "ParsableCommand", name: "argument-parser.run", confidence: 0.70},
+		// Swift ArgumentParser — ParsableCommand conformance is propagated onto the
+		// type's methods by the Swift extractor; the entry point is the run() method.
+		{query: "ParsableCommand", name: "argument-parser.run", confidence: 0.70, nameEquals: "run"},
 	}
 	if framework == "" {
 		return all
@@ -196,6 +198,9 @@ func matchesFramework(patternName, framework string) bool {
 }
 
 func isRouteCandidate(n topology.Node, p routePattern, pathPrefix string) bool {
+	if p.nameEquals != "" && n.Name != p.nameEquals {
+		return false
+	}
 	if pathPrefix != "" && !strings.Contains(n.Signature, pathPrefix) &&
 		!strings.Contains(n.Name, strings.Trim(pathPrefix, "/")) {
 		return false

@@ -108,6 +108,41 @@ func TestTopologyRoutes_SwiftRoutesCandidateBySignature(t *testing.T) {
 	t.Error("boot(routes: RoutesBuilder) not matched by vapor.RouteCollection pattern")
 }
 
+func TestTopologyRoutes_ArgumentParserRunCandidate(t *testing.T) {
+	// The Swift extractor propagates the enclosing type's ParsableCommand
+	// conformance onto its methods' signatures. The argument-parser.run pattern
+	// must match the run() entry point — and ONLY run(), not sibling methods of
+	// the same command type (the nameEquals guard).
+	var pat routePattern
+	for _, p := range routePatterns("argument-parser") {
+		if p.name == "argument-parser.run" {
+			pat = p
+		}
+	}
+	if pat.name == "" {
+		t.Fatal("argument-parser.run pattern not found")
+	}
+
+	run := topology.Node{
+		Kind:      topology.KindMethod,
+		Name:      "run",
+		Path:      "Sources/Hello.swift",
+		Signature: "func run () throws : ParsableCommand",
+		Language:  "swift",
+	}
+	if !isRouteCandidate(run, pat, "") {
+		t.Error("run() of a ParsableCommand type not matched by argument-parser.run pattern")
+	}
+
+	// A sibling method of the same command type carries the same conformance in
+	// its signature but must NOT be flagged — only run() is the entry point.
+	validate := run
+	validate.Name = "validate"
+	if isRouteCandidate(validate, pat, "") {
+		t.Error("validate() must not match argument-parser.run (nameEquals guard failed)")
+	}
+}
+
 func TestTopologyRoutes_FormatWithEntry(t *testing.T) {
 	routes := []routeEntry{
 		{

@@ -287,3 +287,35 @@ struct Routes: RouteCollection {
 		t.Errorf("Signature %q does not contain 'RoutesBuilder'", boot.Signature)
 	}
 }
+
+func TestSwift_ParsableCommandConformanceInMethodSignature(t *testing.T) {
+	// An ArgumentParser command conforms to ParsableCommand on the TYPE; its entry
+	// point is run(). The extractor must surface that conformance on the method's
+	// signature so topology_routes can detect the CLI entry point.
+	src := []byte(`
+struct Hello: ParsableCommand {
+    func run() throws {
+        print("hi")
+    }
+
+    func validate() throws {}
+}
+`)
+	nodes, _, err := NewSwift().Extract(context.Background(), "Sources/Hello.swift", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run *topology.Node
+	for i := range nodes {
+		if nodes[i].Name == "run" {
+			run = &nodes[i]
+			break
+		}
+	}
+	if run == nil {
+		t.Fatal("run method not extracted")
+	}
+	if !strings.Contains(run.Signature, "ParsableCommand") {
+		t.Errorf("run Signature %q does not carry the enclosing type's ParsableCommand conformance", run.Signature)
+	}
+}
