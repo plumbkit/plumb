@@ -63,7 +63,7 @@ func TestByName(t *testing.T) {
 		{"go", EngineNativeAST, "gopls"},
 		{"python", EngineTreeSitter, "pyright-langserver"},
 		{"typescript", EngineTreeSitter, "typescript-language-server"}, // .ts on tree-sitter
-		{"tsx", EngineRegex, "typescript-language-server"},             // .tsx/.jsx still regex (TSX cascade)
+		{"tsx", EngineTreeSitter, "typescript-language-server"},        // .tsx/.jsx on canonical tree-sitter via WASM
 		{"javascript", EngineTreeSitter, ""},
 		{"rust", EngineTreeSitter, ""},
 		{"zig", EngineTreeSitter, ""},

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.42 (unreleased)
+
+TSX/JSX moves onto the **canonical** tree-sitter grammar via WASM — the last fragile regex extractor is retired, and the whole TypeScript family is decoupled from gotreesitter version churn. This closes the tree-sitter roadmap's "last phase".
+
+### Added
+
+- **`internal/topology/extractors/wasmts/` — TypeScript/TSX/JSX structural extraction via canonical tree-sitter compiled to WASM, driven by [wazero](https://github.com/tetratelabs/wazero) (pure-Go, `CGO_ENABLED=0`).** The pure-Go `gotreesitter` runtime cascades ERROR nodes on typed arrow parameters in TSX (`(x: number): number =>`) in **every** version (empirically confirmed on v0.19.1 and v0.20.1 — identical 5/9/8/7-ERROR cascades; only JSX-without-types parses clean), so `.tsx`/`.jsx` were stuck on the heuristic regex extractor. The canonical `tree-sitter-typescript` grammar parses these correctly. The new package embeds a 2.9 MB `ts.wasm` (tree-sitter runtime + typescript + tsx grammars, built from vendored C in `csrc/` via `make ts-wasm`; Zig is needed only to regenerate it, not to build or run plumb) and walks the canonical tree to emit the same nodes/edges as before (functions, classes + methods, interfaces/enums → `KindType`, fields, imports, `describe`/`it`/`test` → `KindTest`; containment 1.0, intra-file calls 0.8). `NewTypeScript` (`.ts`, typescript grammar) and `NewTSX` (`.tsx`/`.jsx`, tsx grammar) each lazily build their own wazero runtime on first use; both label nodes language `"typescript"` so `.ts`/`.tsx` symbols search together. If the runtime fails to initialise, Extract degrades to the legacy regex extractor and logs once. Tests in `internal/topology/extractors/wasmts/`.
+
+### Changed
+
+- **`tsx` langsupport row flips `EngineRegex` → `EngineTreeSitter`** (`internal/langsupport/langsupport.go`); `topology_pool.go` `extractorCtors` points `typescript` and `tsx` at `wasmts.NewTypeScript`/`NewTSX`.
+- **gotreesitter bumped v0.19.1 → v0.20.1** — now safe because the TS family no longer depends on it (the bump regressed the gotreesitter `.ts` extractor, since v0.20's GLR runtime changed external-lex-states sourcing and desynced the hand-supplied tables — the fragility this change removes). v0.20 brings a deferred parent-link race fix, a Kotlin object-declaration fix, and GLR parse-speed wins. All other dependencies updated to latest (bubbletea v2.0.7, cobra v1.10.2, chroma v2.26.1, modernc sqlite v1.51.0, …).
+
+### Removed
+
+- **`internal/topology/extractors/treesitter/typescript.go` and `ts_lex_states.go`** — the gotreesitter TS extractor and its hand-maintained `typescriptExternalLexStates`/`tsxExternalLexStates` tables. The version-fragile lex-states hack is gone; TS/TSX correctness now rides the canonical grammar. The regex extractor (`internal/topology/extractors/typescript/`) is kept only as the wasmts init-failure fallback.
+
 ## 0.8.41 (unreleased)
 
 TUI Memory section is now workspace-aware: a new **Workspaces** column replaces the silent launch-cwd pinning, so the memories you see always belong to the workspace you select.

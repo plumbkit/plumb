@@ -10,7 +10,7 @@ import (
 	"github.com/golimpio/plumb/internal/topology"
 	"github.com/golimpio/plumb/internal/topology/extractors/golang"
 	"github.com/golimpio/plumb/internal/topology/extractors/treesitter"
-	"github.com/golimpio/plumb/internal/topology/extractors/typescript"
+	"github.com/golimpio/plumb/internal/topology/extractors/wasmts"
 )
 
 // topologyPool manages one topology.Store per workspace root.
@@ -156,8 +156,8 @@ func (p *topologyPool) StopAll() {
 var extractorCtors = map[string]func() topology.Extractor{
 	"go":         func() topology.Extractor { return golang.New() },
 	"python":     func() topology.Extractor { return treesitter.NewPython() },
-	"typescript": func() topology.Extractor { return treesitter.NewTypeScript() },
-	"tsx":        func() topology.Extractor { return typescript.New() },
+	"typescript": func() topology.Extractor { return wasmts.NewTypeScript() },
+	"tsx":        func() topology.Extractor { return wasmts.NewTSX() },
 	"javascript": func() topology.Extractor { return treesitter.NewJavaScript() },
 	"rust":       func() topology.Extractor { return treesitter.NewRust() },
 	"zig":        func() topology.Extractor { return treesitter.NewZig() },

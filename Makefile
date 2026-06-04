@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.golimpio.plumb
 
-.PHONY: build test test-race integration-test build-integration lint verify run clean tidy install-hooks codesign
+.PHONY: build test test-race integration-test build-integration lint verify run clean tidy install-hooks codesign ts-wasm
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -75,6 +75,12 @@ clean:
 
 tidy:
 	go mod tidy
+
+# ts-wasm regenerates the embedded TypeScript/TSX tree-sitter wasm from the
+# vendored C sources. Dev-only — requires `zig`; building/running plumb needs
+# only Go + wazero. Run after updating the vendored grammar or runtime.
+ts-wasm:
+	bash internal/topology/extractors/wasmts/csrc/build.sh
 
 # verify is the definition of "ready to commit": build + test + lint + an
 # integration-tag compile pass (build-integration) in one target.

@@ -181,23 +181,6 @@ class Service {
   }
 }
 `, "Service"},
-		{"typescript", grammars.TypescriptLanguage, func() topology.Extractor { return NewTypeScript() }, `import { readFile } from "fs";
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export class Service {
-  greet(name: string): string {
-    return ` + "`hi ${name}`" + `;
-  }
-}
-
-export function add(a: number, b: number): number {
-  return a + b;
-}
-`, "add"},
 	}
 }
 
@@ -207,11 +190,6 @@ export function add(a: number, b: number): number {
 // trailing declaration — together catching the lex-states cascade class of bug
 // generically, not just for TypeScript.
 func TestExtractors_ParseFidelity(t *testing.T) {
-	// TypeScript's external lex-states must be registered before its grammar is
-	// loaded (NewTypeScript does this; call it explicitly so the raw parse below
-	// uses the configured grammar regardless of table order).
-	registerTSLexStates()
-
 	for _, tc := range fidelityCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			tree, err := tsg.NewParser(tc.grammar()).Parse([]byte(tc.src))
@@ -336,11 +314,6 @@ func TestExtractors_MemberConventions(t *testing.T) {
 			"IMMUT", "mutv", "localc",
 		},
 		{
-			"typescript", func() topology.Extractor { return NewTypeScript() }, "c.ts",
-			"const IMMUT = 1;\nlet mutv = 2;\nfunction f(): void { const localc = 3; }\n",
-			"IMMUT", "mutv", "localc",
-		},
-		{
 			"python", func() topology.Extractor { return NewPython() }, "c.py",
 			"IMMUT_C = 1\nmutv = 2\ndef f():\n    localc = 3\n",
 			"IMMUT_C", "mutv", "localc",
@@ -386,24 +359,5 @@ func TestRust_UnionFieldsAndEnumVariants(t *testing.T) {
 	}
 	if hasNodeNamed(nodes, "inner") {
 		t.Errorf("struct-variant inner field should not be surfaced; nodes=%v", nodeNames(nodes))
-	}
-}
-
-// TestTypeScript_PrivateAndStaticFields confirms accessibility/static modifiers
-// don't hide a class field, and readonly still wins for const classification.
-func TestTypeScript_PrivateAndStaticFields(t *testing.T) {
-	src := []byte("class C {\n  private id: number = 0;\n  static readonly KIND = \"c\";\n  protected name = \"x\";\n}\n")
-	nodes, _, err := NewTypeScript().Extract(context.Background(), "c.ts", src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(names(nodes, topology.KindVariable), "id") {
-		t.Errorf("private field id should be KindVariable; vars=%v", names(nodes, topology.KindVariable))
-	}
-	if !slices.Contains(names(nodes, topology.KindVariable), "name") {
-		t.Errorf("protected field name should be KindVariable; vars=%v", names(nodes, topology.KindVariable))
-	}
-	if !slices.Contains(names(nodes, topology.KindConstant), "KIND") {
-		t.Errorf("static readonly field KIND should be KindConstant; consts=%v", names(nodes, topology.KindConstant))
 	}
 }

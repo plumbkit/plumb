@@ -168,7 +168,7 @@ func TestBuildExtractorsCoversRegistry(t *testing.T) {
 
 // TestExtractorRegistryAlignment pins each extractor's Extensions() to its
 // langsupport row and its Language() label. The labels match the row Name except
-// the intentional tsx alias: the regex TSX/JSX extractor labels its nodes
+// the intentional tsx alias: the WASM TSX/JSX extractor labels its nodes
 // "typescript" so .ts and .tsx symbols search together under one language.
 func TestExtractorRegistryAlignment(t *testing.T) {
 	langOverride := map[string]string{"tsx": "typescript"}

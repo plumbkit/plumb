@@ -55,7 +55,7 @@ var registry = []Language{
 	{Name: "go", Extensions: []string{".go"}, Structural: EngineNativeAST, LSPAdapter: "gopls"},
 	{Name: "python", Extensions: []string{".py"}, Structural: EngineTreeSitter, LSPAdapter: "pyright-langserver"},
 	{Name: "typescript", Extensions: []string{".ts"}, Structural: EngineTreeSitter, LSPAdapter: "typescript-language-server"},
-	{Name: "tsx", Extensions: []string{".tsx", ".jsx"}, Structural: EngineRegex, LSPAdapter: "typescript-language-server"},
+	{Name: "tsx", Extensions: []string{".tsx", ".jsx"}, Structural: EngineTreeSitter, LSPAdapter: "typescript-language-server"},
 	{Name: "javascript", Extensions: []string{".js", ".mjs", ".cjs"}, Structural: EngineTreeSitter, LSPAdapter: "typescript-language-server"},
 	{Name: "java", Extensions: []string{".java"}, Structural: EngineTreeSitter, LSPAdapter: "jdtls"},
 	{Name: "rust", Extensions: []string{".rs"}, Structural: EngineTreeSitter, LSPAdapter: "rust-analyzer"},
