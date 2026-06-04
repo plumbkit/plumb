@@ -14,41 +14,63 @@ import (
 )
 
 // topologyPool manages one topology.Store per workspace root.
-// The first call to Acquire for a given root creates and starts the store;
-// subsequent calls return the existing instance. Stores run until StopAll.
+// The first Acquire for a given root creates and starts the store with the
+// per-project config the caller passes; subsequent calls return the existing
+// instance, re-opening it when the caller's config changed (so per-project
+// tuning takes effect on attach and after a config reload). Stores run until
+// StopAll.
+//
+// cfg is the global topology config, used only by Reconcile on a global reload.
+// cfgs records the effective config each open store was opened with, so Acquire
+// can tell when a re-open is needed.
 //
 // Concurrency: all methods are safe for concurrent use.
 type topologyPool struct {
 	mu     sync.Mutex
 	stores map[string]*topology.Store
+	cfgs   map[string]config.TopologyConfig
 	cfg    config.TopologyConfig
 }
 
 func newTopologyPool(cfg config.TopologyConfig) *topologyPool {
 	return &topologyPool{
 		stores: make(map[string]*topology.Store),
+		cfgs:   make(map[string]config.TopologyConfig),
 		cfg:    cfg,
 	}
 }
 
-// Acquire returns the Store for root, creating and starting it if necessary.
-// Returns nil when topology is disabled or the store cannot be opened.
-func (p *topologyPool) Acquire(root string) *topology.Store {
+// Acquire returns the Store for root, creating and starting it with cfg when
+// necessary. cfg is the merged per-project topology config for root; when an
+// existing store was opened with a different config, it is closed and re-opened
+// so the new tuning (resync interval, excludes, size caps) takes effect.
+// Returns nil when root is empty or the store cannot be opened.
+func (p *topologyPool) Acquire(root string, cfg config.TopologyConfig) *topology.Store {
 	if root == "" {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if s, ok := p.stores[root]; ok {
-		return s
+		if reflect.DeepEqual(p.cfgs[root], cfg) {
+			return s
+		}
+		// Config differs from what the store was opened with — a first attach
+		// carrying project tuning, or a post-reload re-acquire. Re-open so the
+		// new settings take effect.
+		if err := s.Close(); err != nil {
+			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
+		}
+		delete(p.stores, root)
+		delete(p.cfgs, root)
 	}
-	exts := buildExtractors()
-	s, err := topology.Open(root, p.cfg, exts)
+	s, err := topology.Open(root, cfg, buildExtractors())
 	if err != nil {
 		slog.Error("topology: failed to open store", "root", root, "err", err)
 		return nil
 	}
 	p.stores[root] = s
+	p.cfgs[root] = cfg
 	slog.Info("topology: store opened", "root", root)
 	return s
 }
@@ -78,6 +100,7 @@ func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 				slog.Warn("topology: close on disable", "root", root, "err", err)
 			}
 			delete(p.stores, root)
+			delete(p.cfgs, root)
 		}
 		slog.Info("topology: disabled via config reload; stores closed")
 		return
@@ -90,7 +113,11 @@ func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 		return
 	}
 
-	// Still enabled, tuning changed: re-open each store with the new config.
+	// Still enabled, tuning changed: re-open each store with the new global
+	// config. A root with a per-project override is re-tuned afterwards by its
+	// session's reconcileTopologyStore (which re-acquires with the merged
+	// config); a root with no live session stays on the global config until its
+	// next attach.
 	for root, s := range p.stores {
 		if err := s.Close(); err != nil {
 			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
@@ -99,9 +126,11 @@ func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 		if err != nil {
 			slog.Error("topology: reopen on reconcile failed", "root", root, "err", err)
 			delete(p.stores, root)
+			delete(p.cfgs, root)
 			continue
 		}
 		p.stores[root] = ns
+		p.cfgs[root] = cfg
 	}
 	slog.Info("topology: reconfigured via config reload", "roots", len(p.stores))
 }
@@ -115,6 +144,7 @@ func (p *topologyPool) StopAll() {
 			slog.Warn("topology: close store", "root", root, "err", err)
 		}
 		delete(p.stores, root)
+		delete(p.cfgs, root)
 	}
 }
 

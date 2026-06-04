@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.34 (unreleased)
+
+Topology: per-project `[topology]` tuning is now honoured by the pool, not just enable/disable.
+
+### Fixed
+
+- **Per-project `[topology]` tuning now reaches the index.** `topologyPool.Acquire` opened every store with the daemon's *global* `cfg.Topology`; the session only consulted the merged per-project config to decide *whether* to attach. So per-project `resync_interval_minutes`, `resync_batch`, `exclude_patterns`, `max_file_size_bytes`, `resync_pause_ms`, `resync_on_attach`, and `watch` were silently ignored — only enable/disable was honoured per-project. `Acquire(root)` is now `Acquire(root, cfg config.TopologyConfig)`: the pool records the effective config each store was opened with (`cfgs map[string]config.TopologyConfig`) and re-opens the store when a later acquire carries a different config — so per-project tuning applies on first attach and is re-applied when a session re-acquires after a config reload. `internal/cli/conn.go` gains `topologyConfigFor(workspace)` (the merged per-project topology config; `topologyEnabledFor` now delegates to it), and `startTopologyIndexer` / `reconcileTopologyStore` pass that config through. `Reconcile` (global reload) and `StopAll` keep `cfgs` in sync. **Known edge:** a root with no live session keeps whatever tuning a *global* reload applied until its next attach re-tunes it (an orphaned store has no consumer — benign). Guards: `TestTopologyPool_AcquireReopensOnConfigChange`, `TestTopologyPool_AcquireSameConfigReturnsSameStore` (`internal/cli/topology_pool_test.go`), and `TestReconcileTopologyStore_ProjectTuningHonoured` (`internal/cli/conn_topology_test.go`).
+
 ## 0.8.33 (unreleased)
 
 Review follow-ups: `session_start` re-pin identity, TUI idle threshold, `cloneConfig` guard.

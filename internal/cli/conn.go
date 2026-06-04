@@ -757,25 +757,33 @@ func (s *connSession) startTopologyIndexer(workspace string) {
 	if s.topologyPool == nil {
 		return
 	}
-	if !s.topologyEnabledFor(workspace) {
+	cfg := s.topologyConfigFor(workspace)
+	if !cfg.Enabled {
 		return
 	}
-	s.topologyStore = s.topologyPool.Acquire(workspace)
+	s.topologyStore = s.topologyPool.Acquire(workspace, cfg)
 }
 
-// topologyEnabledFor reports whether topology indexing is enabled for workspace,
-// honouring a per-project [topology] override. LoadProject merges the project
-// config (<workspace>/.plumb/config.toml) onto the global base, so an explicit
-// project opt-out (enabled = false) wins over a global default-on, and a project
-// opt-in wins over a global default-off. Falls back to the global setting when
-// the project config cannot be read.
-func (s *connSession) topologyEnabledFor(workspace string) bool {
+// topologyConfigFor returns the merged per-project [topology] config for
+// workspace. LoadProject merges the project config
+// (<workspace>/.plumb/config.toml) onto the global base, so per-project tuning
+// (resync interval, batch, excludes, size caps) and an explicit enable/disable
+// both win over the global default. Falls back to the global config when the
+// project config cannot be read.
+func (s *connSession) topologyConfigFor(workspace string) config.TopologyConfig {
 	base := s.store.Current()
 	cfg, err := config.LoadProject(base, workspace)
 	if err != nil {
-		return base.Topology.Enabled
+		return base.Topology
 	}
-	return cfg.Topology.Enabled
+	return cfg.Topology
+}
+
+// topologyEnabledFor reports whether topology indexing is enabled for workspace,
+// honouring a per-project [topology] override (an opt-out wins over a global
+// default-on, an opt-in over a global default-off).
+func (s *connSession) topologyEnabledFor(workspace string) bool {
+	return s.topologyConfigFor(workspace).Enabled
 }
 
 // topologyStoreLive returns the session's topology store, or nil when topology
@@ -801,14 +809,14 @@ func (s *connSession) reconcileTopologyStore(workspace string) {
 	if s.topologyPool == nil {
 		return
 	}
-	enabled := s.topologyEnabledFor(workspace)
+	cfg := s.topologyConfigFor(workspace)
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
-	if !enabled {
+	if !cfg.Enabled {
 		s.topologyStore = nil
 		return
 	}
-	s.topologyStore = s.topologyPool.Acquire(workspace)
+	s.topologyStore = s.topologyPool.Acquire(workspace, cfg)
 }
 
 // startQualityRunner creates and starts the quality runner when the [quality]

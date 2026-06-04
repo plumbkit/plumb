@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
@@ -24,12 +25,19 @@ func (p *topologyPool) storeCount() int {
 	return len(p.stores)
 }
 
+// openedConfig returns the effective config the store for root was opened with.
+func (p *topologyPool) openedConfig(root string) config.TopologyConfig {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cfgs[root]
+}
+
 func TestTopologyPool_ReconcileDisableClosesStores(t *testing.T) {
 	dir := t.TempDir()
 	p := newTopologyPool(enabledTopologyConfig())
 	t.Cleanup(p.StopAll)
 
-	if s := p.Acquire(dir); s == nil {
+	if s := p.Acquire(dir, enabledTopologyConfig()); s == nil {
 		t.Fatal("expected a store from an enabled pool")
 	}
 	if got := p.storeCount(); got != 1 {
@@ -49,14 +57,14 @@ func TestTopologyPool_ReconcileNoOpKeepsStore(t *testing.T) {
 	p := newTopologyPool(cfg)
 	t.Cleanup(p.StopAll)
 
-	s1 := p.Acquire(dir)
+	s1 := p.Acquire(dir, cfg)
 	if s1 == nil {
 		t.Fatal("expected a store")
 	}
 
 	p.Reconcile(cfg) // identical config → no-op
 
-	s2 := p.Acquire(dir)
+	s2 := p.Acquire(dir, cfg)
 	if s1 != s2 {
 		t.Error("an unchanged reconcile must keep the same store instance")
 	}
@@ -67,7 +75,7 @@ func TestTopologyPool_ReconcileReopensOnTuningChange(t *testing.T) {
 	p := newTopologyPool(enabledTopologyConfig())
 	t.Cleanup(p.StopAll)
 
-	s1 := p.Acquire(dir)
+	s1 := p.Acquire(dir, enabledTopologyConfig())
 	if s1 == nil {
 		t.Fatal("expected a store")
 	}
@@ -79,9 +87,57 @@ func TestTopologyPool_ReconcileReopensOnTuningChange(t *testing.T) {
 	if got := p.storeCount(); got != 1 {
 		t.Fatalf("store count = %d, want 1 after re-open", got)
 	}
-	s2 := p.Acquire(dir)
+	s2 := p.Acquire(dir, changed)
 	if s1 == s2 {
 		t.Error("a tuning change should re-open the store (new instance)")
+	}
+}
+
+// TestTopologyPool_AcquireReopensOnConfigChange is the per-project-config
+// regression: Acquire opens the store with the caller's merged config, and a
+// later Acquire carrying a different config (the per-project tuning case) closes
+// and re-opens the store so the new settings take effect — rather than silently
+// returning the store opened with the global config.
+func TestTopologyPool_AcquireReopensOnConfigChange(t *testing.T) {
+	dir := t.TempDir()
+	p := newTopologyPool(enabledTopologyConfig())
+	t.Cleanup(p.StopAll)
+
+	s1 := p.Acquire(dir, enabledTopologyConfig())
+	if s1 == nil {
+		t.Fatal("expected a store")
+	}
+
+	projectTuned := enabledTopologyConfig()
+	projectTuned.MaxFileSizeBytes = 256 * 1024 // per-project override
+	s2 := p.Acquire(dir, projectTuned)
+	if s2 == nil {
+		t.Fatal("expected a store after re-acquire")
+	}
+	if s1 == s2 {
+		t.Error("Acquire with a different per-project config must re-open the store")
+	}
+	if got := p.openedConfig(dir); !reflect.DeepEqual(got, projectTuned) {
+		t.Errorf("pool tracked config = %+v, want the per-project config %+v", got, projectTuned)
+	}
+	if got := p.storeCount(); got != 1 {
+		t.Errorf("store count = %d, want 1", got)
+	}
+}
+
+// TestTopologyPool_AcquireSameConfigReturnsSameStore pins the idempotent fast
+// path: re-acquiring a root with an unchanged config must reuse the instance,
+// not churn the store.
+func TestTopologyPool_AcquireSameConfigReturnsSameStore(t *testing.T) {
+	dir := t.TempDir()
+	cfg := enabledTopologyConfig()
+	p := newTopologyPool(cfg)
+	t.Cleanup(p.StopAll)
+
+	s1 := p.Acquire(dir, cfg)
+	s2 := p.Acquire(dir, cfg)
+	if s1 == nil || s1 != s2 {
+		t.Error("Acquire with an unchanged config must return the same store instance")
 	}
 }
 

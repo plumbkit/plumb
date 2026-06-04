@@ -106,3 +106,37 @@ func TestReconcileTopologyStore_EnableDisable(t *testing.T) {
 		t.Error("expected nil topology store after a per-project opt-out")
 	}
 }
+
+// TestReconcileTopologyStore_ProjectTuningHonoured is the 0.8.34 regression:
+// per-project [topology] *tuning* (not just enable/disable) must reach the
+// store. The session passes the merged per-project config to the pool, so a
+// project overriding e.g. max_file_size_bytes opens its store with that value
+// rather than the global default — which the pool previously always used.
+func TestReconcileTopologyStore_ProjectTuningHonoured(t *testing.T) {
+	base := config.Defaults()
+	base.Topology.Enabled = true
+	base.Topology.Watch = false // no OS watcher in a unit test
+	ws := t.TempDir()
+	s := &connSession{
+		store:        config.NewStore(base),
+		topologyPool: newTopologyPool(base.Topology),
+	}
+	defer s.topologyPool.StopAll()
+
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[topology]\nmax_file_size_bytes = 131072\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s.reconcileTopologyStore(ws)
+	if s.topologyStore == nil {
+		t.Fatal("expected a topology store when enabled")
+	}
+	if got := s.topologyPool.openedConfig(ws).MaxFileSizeBytes; got != 131072 {
+		t.Errorf("store opened with max_file_size_bytes = %d, want the per-project 131072 (global default %d)", got, base.Topology.MaxFileSizeBytes)
+	}
+}
