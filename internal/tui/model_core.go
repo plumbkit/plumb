@@ -133,6 +133,7 @@ type Model struct {
 	settingsScopeScroll  int            // first visible row in the scope column
 	settingsScopeFocus   bool           // true = scope column focused, false = rows pane
 	pendingProjectReload string         // workspace folder whose project config changed (reload-project)
+	settingsListEditor   *listEditor    // non-nil while the list-value editor popup is open
 
 	// Dashboard section (section 0).
 	dashLifetimeCalls       int64

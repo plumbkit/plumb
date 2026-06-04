@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.45 (unreleased)
+
+The Settings list-valued settings are now editable inline (so `read_roots`/`extra_roots` and friends can be set per-workspace in the TUI), and the reload-tier indicators are colour-coded numerals.
+
+### Added
+
+- **Inline list editor (`internal/tui/model_settings_listeditor.go`).** A popup for editing `[]string` settings — `workspace.extra_roots`, `workspace.read_roots`, `git.protected_branches`, `topology.exclude_patterns`, `quality.analysers`. `enter`/`a` on a `‹ edit ›` row opens it seeded with the effective list for the current scope; `a` adds an entry (text input), `d`/`backspace` removes the selected one, `esc` commits. On commit it persists scope-aware (global → `config.Save`; workspace → sparse `SetProjectValue` with the array) and pushes the matching reload. This unblocks setting the boundary-widening roots per-workspace (e.g. `read_roots` to read-compare another project) from the TUI rather than editing `config.toml` by hand. Routed as an overlay in `handleOverlayKey`; rendered over the dimmed Settings via `renderModal`. Guard: `TestListEditor_AddRemoveCommitWritesWorkspace`.
+
+### Changed
+
+- **Reload-tier indicators are colour-coded numerals.** The per-row mark and the status-bar legend now use `¹` (green = applies live), `²` (yellow = next session), `³` (purple = needs a daemon restart) instead of `live` / `next session` / `*`. New theme-independent `RestartStyle` (purple) in `styles.go`; the legend renders each numeral in its colour on the status bar.
+- `handleKeyMsg` overlay dispatch extracted into `handleOverlayKey` (rename modal / list editor / popup / theme picker) to keep it under gocyclo 15; `handleRenameModalKey` now returns just `Model`.
+
 ## 0.8.44 (unreleased)
 
 TUI Settings becomes per-workspace: a left Scope column switches between the global config and each active workspace's `.plumb/config.toml`, with an inherit model that never shadows the global config, applied immediately and in isolation.

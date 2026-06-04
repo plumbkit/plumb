@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/golimpio/plumb/internal/config"
 )
 
@@ -91,6 +93,52 @@ func TestApplyScopedSetting_WorkspaceWritesSparse(t *testing.T) {
 	m = m.resetToInherit()
 	if present, _ := config.ProjectValuePresent(ws, []string{"edits", "strict"}); present {
 		t.Error("resetToInherit should remove edits.strict")
+	}
+}
+
+// TestListEditor_AddRemoveCommitWritesWorkspace exercises the list editor end to
+// end in a workspace scope: open read_roots, add two entries, remove one, commit,
+// and confirm only the surviving entry is written to the project file.
+func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	m := Model{
+		settingsCfg:         config.Defaults(),
+		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
+		settingsScopeCursor: 1,
+	}
+	m.settingsItems = m.buildScopeItems()
+	m.settingsCursor = cursorFor(m.settingsItems, skReadRoots)
+	if m.settingsCursor < 0 {
+		t.Fatal("read_roots row missing from workspace scope")
+	}
+
+	m = m.activateSetting()
+	if m.settingsListEditor == nil {
+		t.Fatal("activating read_roots should open the list editor")
+	}
+	for _, entry := range []string{"/a", "/b"} {
+		m.settingsListEditor.adding = true
+		m.settingsListEditor.input = entry
+		m.settingsListEditor.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	}
+	if got := len(m.settingsListEditor.entries); got != 2 {
+		t.Fatalf("entries after add = %d, want 2", got)
+	}
+	m.settingsListEditor.cursor = 0
+	m.settingsListEditor.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace})) // remove selected entry
+	m = m.commitListEditor()
+	if m.settingsListEditor != nil {
+		t.Error("commit should close the editor")
+	}
+	if m.pendingProjectReload != ws {
+		t.Errorf("pendingProjectReload = %q, want %q", m.pendingProjectReload, ws)
+	}
+	merged, err := config.LoadProject(config.Defaults(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Workspace.ReadRoots) != 1 || merged.Workspace.ReadRoots[0] != "/b" {
+		t.Errorf("read_roots = %v, want [/b]", merged.Workspace.ReadRoots)
 	}
 }
 

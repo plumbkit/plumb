@@ -158,6 +158,11 @@ var settingTOMLPaths = map[settingKey][]string{
 	skAutoAttach:            {"workspace", "auto_attach"},
 	skAutoAttachPersist:     {"workspace", "auto_attach_persist"},
 	skAllowDependencyReads:  {"workspace", "allow_dependency_reads"},
+	skExtraRoots:            {"workspace", "extra_roots"},
+	skReadRoots:             {"workspace", "read_roots"},
+	skProtectedBranches:     {"git", "protected_branches"},
+	skExcludePatterns:       {"topology", "exclude_patterns"},
+	skAnalysers:             {"quality", "analysers"},
 }
 
 // tomlPath returns the TOML key path for a project-overridable setting and

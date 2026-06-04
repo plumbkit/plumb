@@ -46,6 +46,7 @@ var (
 
 	OkStyle          lipgloss.Style
 	WarnStyle        lipgloss.Style
+	RestartStyle     lipgloss.Style // purple — the "needs a daemon restart" reload tier
 	ScrollThumbStyle lipgloss.Style
 	ScrollTrackStyle lipgloss.Style
 
@@ -213,6 +214,11 @@ func RebuildStyles() {
 
 	WarnStyle = lipgloss.NewStyle().
 		Foreground(t.Warning)
+
+	// Fixed purple (theme-independent) for the daemon-restart reload tier, so it
+	// reads distinctly from live (green) and next-session (yellow) on any theme.
+	RestartStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9D7CD8"))
 
 	ScrollThumbStyle = lipgloss.NewStyle().
 		Foreground(t.ScrollThumb)

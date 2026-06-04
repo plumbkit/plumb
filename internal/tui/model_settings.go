@@ -19,6 +19,7 @@ const (
 	settingCycle                     // ←→ cycles through a fixed option set
 	settingToggle                    // enter/space flips on↔off
 	settingNumber                    // ←→ adjusts a numeric value
+	settingList                      // enter opens the list editor ([]string values)
 )
 
 // settingKey identifies which config field a settings row edits. The key
@@ -56,6 +57,11 @@ const (
 	skAutoAttach
 	skAutoAttachPersist
 	skAllowDependencyReads
+	skExtraRoots
+	skReadRoots
+	skProtectedBranches
+	skExcludePatterns
+	skAnalysers
 	skIdleThresholdMin
 	skEvictionTTLMin
 	skPathStyle
@@ -82,10 +88,10 @@ func reloadTierFor(key settingKey) reloadTier {
 	switch key {
 	case skLogFormat, skLogFile, skCacheTTL, skCacheMaxSize:
 		return reloadRestart
-	case skQuality, skQualityMode, skQualityTimeoutMs, skQualityMaxFindings,
-		skAutoAttach, skAutoAttachPersist, skAllowDependencyReads, skLSPTimeout,
+	case skQuality, skQualityMode, skQualityTimeoutMs, skQualityMaxFindings, skAnalysers,
+		skAutoAttach, skAutoAttachPersist, skAllowDependencyReads, skExtraRoots, skReadRoots, skLSPTimeout,
 		skTopoResyncOnAttach, skTopoWatch, skTopoMaxFileSize,
-		skTopoResyncBatch, skTopoResyncPauseMs, skTopoResyncIntervalMin:
+		skTopoResyncBatch, skTopoResyncPauseMs, skTopoResyncIntervalMin, skExcludePatterns:
 		return reloadNextSession
 	default: // theme, path style, log level, edits, walk, topology enable, git, session
 		return reloadLive
@@ -229,6 +235,10 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			group: "Indexing", label: "Resync interval (min)", kind: settingNumber, key: skTopoResyncIntervalMin, value: itoa(cfg.Topology.ResyncIntervalMinutes),
 			help: "Periodic full-resync fallback interval. Suppressed while watching; 0 disables.",
 		},
+		{
+			group: "Indexing", label: "exclude_patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns),
+			help: "Path globs to skip during indexing. Enter to edit the list.",
+		},
 
 		{
 			group: "Quality", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled),
@@ -246,6 +256,10 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			group: "Quality", label: "Max findings/file", kind: settingNumber, key: skQualityMaxFindings, value: itoa(cfg.Quality.MaxFindingsPerFile),
 			help: "Cap on findings appended per file to keep responses bounded.",
 		},
+		{
+			group: "Quality", label: "analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers),
+			help: "Which analysers to run (e.g. golangci-lint). Enter to edit the list.",
+		},
 
 		{
 			group: "Git", label: "git allow_writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites),
@@ -258,6 +272,10 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{
 			group: "Git", label: "git allow_push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush),
 			help: "Gate push/fetch/pull (each call also needs confirm). Protected branches stay safe.",
+		},
+		{
+			group: "Git", label: "protected_branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches),
+			help: "Branches that may never be force-pushed, even with allow_push. Enter to edit.",
 		},
 
 		{
@@ -280,6 +298,14 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{
 			group: "Workspace", label: "allow_dependency_reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads),
 			help: "Let read/search tools reach the Go module cache + GOROOT read-only.",
+		},
+		{
+			group: "Workspace", label: "extra_roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots),
+			help: "Extra dirs read+write tools may reach beyond the workspace. Enter to edit.",
+		},
+		{
+			group: "Workspace", label: "read_roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots),
+			help: "Extra read-only dirs (compare another project). Enter to edit the list.",
 		},
 
 		{
@@ -311,6 +337,15 @@ func qualityModeValue(s string) string {
 		return "background"
 	}
 	return s
+}
+
+// listSummary renders a []string setting's value column: the count and the
+// joined entries (truncated by the column width), or "(none)" when empty.
+func listSummary(items []string) string {
+	if len(items) == 0 {
+		return "(none)"
+	}
+	return fmt.Sprintf("(%d) %s", len(items), strings.Join(items, ", "))
 }
 
 // settingsFooterRows is the number of body rows reserved at the bottom for the
@@ -370,7 +405,7 @@ func settingsColumnWidths(items []settingItem) (labelW, valueW int) {
 // grouped, scrollable settings list with a pinned footer bar. Overlays (help,
 // section menu, theme picker) are composited on top.
 func (m Model) renderSettingsSection() string {
-	isOverlay := m.showHelp || m.sectionMenuOpen || m.showThemePicker
+	isOverlay := m.showHelp || m.sectionMenuOpen || m.showThemePicker || m.settingsListEditor != nil
 	bodyHeight := max(m.height-6, 1)
 	innerW := m.width - 2
 	sepStyle := SepStyle
@@ -392,7 +427,11 @@ func (m Model) renderSettingsSection() string {
 	sb.WriteString(sepStyle.Render("╰"+strings.Repeat("─", innerW)+"╯") + "\n")
 	sb.WriteString(m.renderMainStatusBar(isOverlay))
 
-	return m.applyOverlays(sb.String())
+	final := m.applyOverlays(sb.String())
+	if m.settingsListEditor != nil {
+		final = m.settingsListEditor.renderModal(final, m.width, m.height)
+	}
+	return final
 }
 
 // settingsScopeWidth is the width of the left Scope column.
@@ -544,7 +583,8 @@ func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW in
 
 // settingsRowMark renders the trailing marker. In a workspace scope it shows
 // whether the row is a workspace override (● set) or inherited; in Global scope
-// it shows the reload tier (live / next session / *).
+// it shows the reload tier as a coloured numeral: ¹ live (green), ² next session
+// (yellow), ³ daemon restart (purple). See settingsHintContent for the legend.
 func settingsRowMark(it settingItem, wsScope bool) string {
 	if wsScope {
 		if it.overridden {
@@ -554,11 +594,11 @@ func settingsRowMark(it settingItem, wsScope bool) string {
 	}
 	switch reloadTierFor(it.key) {
 	case reloadNextSession:
-		return MutedStyle.Render("next session")
+		return WarnStyle.Render("²")
 	case reloadRestart:
-		return HintStyle.Render("*")
+		return RestartStyle.Render("³")
 	default:
-		return OkStyle.Render("live")
+		return OkStyle.Render("¹")
 	}
 }
 
@@ -604,16 +644,29 @@ func statusBarLine(content string, innerW int, isOverlay bool) string {
 // tiers in Global scope, the inherit/override key in a workspace scope) and the
 // navigation shortcuts (brighter keys) on the right.
 func settingsHintContent(contentW int, wsScope bool) string {
-	legend := "live = immediate  ·  \"next session\" = new sessions  ·  * = daemon restart"
-	if wsScope {
-		legend = "● set = workspace override  ·  inherited = from Global  ·  ⌫ reset to inherit"
-	}
+	legend := settingsLegend(wsScope)
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
 		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" scope")
 	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  tab scope")
 	gap := max(contentW-lipgloss.Width(legend)-shortcutW, 1)
-	return SettingsBarStyle.Render(legend) + SettingsBarStyle.Render(strings.Repeat(" ", gap)) + shortcut
+	return legend + SettingsBarStyle.Render(strings.Repeat(" ", gap)) + shortcut
+}
+
+// settingsLegend renders the left-hand legend on the status bar. Global scope
+// explains the reload-tier numerals with matching colours (¹ green, ² yellow,
+// ³ purple); a workspace scope explains the override/inherit marks. All segments
+// carry the bar background.
+func settingsLegend(wsScope bool) string {
+	if wsScope {
+		return SettingsBarStyle.Render("● set = workspace override  ·  inherited = from Global  ·  ⌫ reset to inherit")
+	}
+	ok := SettingsBarStyle.Foreground(ActiveTheme.Success)
+	warn := SettingsBarStyle.Foreground(ActiveTheme.Warning)
+	restart := SettingsBarStyle.Foreground(lipgloss.Color("#9D7CD8"))
+	return ok.Render("¹") + SettingsBarStyle.Render(" immediate  ·  ") +
+		warn.Render("²") + SettingsBarStyle.Render(" new sessions  ·  ") +
+		restart.Render("³") + SettingsBarStyle.Render(" daemon restart")
 }
 
 // settingsStatusContent left-aligns the status message on the bar, padded with
@@ -639,6 +692,8 @@ func settingControl(it settingItem) string {
 		return "‹ " + strings.Join(it.options, "·") + " ›"
 	case settingNumber:
 		return "‹ -/+ ›"
+	case settingList:
+		return "‹ edit ›"
 	default:
 		return ""
 	}

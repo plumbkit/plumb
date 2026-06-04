@@ -35,6 +35,7 @@ func (m *Model) enterSettings() {
 	m.settingsScroll = 0
 	m.settingsScopeFocus = false
 	m.showThemePicker = false
+	m.settingsListEditor = nil
 	m.syncThemeCursor()
 }
 
@@ -224,9 +225,110 @@ func (m Model) activateSetting() Model {
 		return m
 	case settingToggle:
 		return m.toggleBool(it.key, it.value == "on")
+	case settingList:
+		return m.openListEditor(it.key)
 	default:
 		return m
 	}
+}
+
+// openListEditor opens the list-value editor for a settingList row, seeded with
+// the effective list for the current scope.
+func (m Model) openListEditor(key settingKey) Model {
+	m.settingsListEditor = newListEditor(key, listLabel(key), m.effectiveList(key))
+	return m
+}
+
+// handleListEditorKey routes a key to the open list editor. On commit it persists
+// the entries to the current scope and pushes the appropriate reload.
+func (m Model) handleListEditorKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.settingsListEditor == nil {
+		return m, nil
+	}
+	if msg.String() == "ctrl+c" {
+		return m.mainKeyQuit()
+	}
+	if committed := m.settingsListEditor.Update(msg); committed {
+		return m.afterSettingChange(m.commitListEditor(), nil)
+	}
+	return m, nil
+}
+
+// commitListEditor writes the editor's entries to the active scope and closes it.
+func (m Model) commitListEditor() Model {
+	ed := m.settingsListEditor
+	m.settingsListEditor = nil
+	if ed == nil {
+		return m
+	}
+	entries := append([]string(nil), ed.entries...)
+	apply := func(c *config.Config) {
+		if p := listField(c, ed.key); p != nil {
+			*p = entries
+		}
+	}
+	if m.applyScopedSetting(ed.key, entries, apply) {
+		m.settingsStatus = m.scopedStatus(ed.key, fmt.Sprintf("%s → %d entr%s", listLabel(ed.key), len(entries), plural(len(entries))))
+	}
+	return m
+}
+
+// effectiveList returns the list value for key in the current scope: the merged
+// project value in a workspace scope, the global snapshot in Global.
+func (m Model) effectiveList(key settingKey) []string {
+	cfg := m.settingsCfg
+	if scope := m.currentScope(); !scope.global {
+		if merged, err := config.LoadProject(m.settingsCfg, scope.folder); err == nil {
+			cfg = merged
+		}
+	}
+	if p := listField(&cfg, key); p != nil {
+		return append([]string(nil), (*p)...)
+	}
+	return nil
+}
+
+// listField returns a pointer to the []string config field a list row edits.
+func listField(c *config.Config, key settingKey) *[]string {
+	switch key {
+	case skExtraRoots:
+		return &c.Workspace.ExtraRoots
+	case skReadRoots:
+		return &c.Workspace.ReadRoots
+	case skProtectedBranches:
+		return &c.Git.ProtectedBranches
+	case skExcludePatterns:
+		return &c.Topology.ExcludePatterns
+	case skAnalysers:
+		return &c.Quality.Analysers
+	default:
+		return nil
+	}
+}
+
+// listLabel is the human label for a list setting (editor title + status line).
+func listLabel(key settingKey) string {
+	switch key {
+	case skExtraRoots:
+		return "extra_roots"
+	case skReadRoots:
+		return "read_roots"
+	case skProtectedBranches:
+		return "protected_branches"
+	case skExcludePatterns:
+		return "exclude_patterns"
+	case skAnalysers:
+		return "analysers"
+	default:
+		return ""
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // adjustSetting changes the focused row's value by dir (−1 / +1). Dispatch is

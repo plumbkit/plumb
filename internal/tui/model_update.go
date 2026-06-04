@@ -120,7 +120,7 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 		return
 	}
 	if m.currentSection == 4 {
-		if !m.showHelp && !m.showThemePicker {
+		if !m.showHelp && !m.showThemePicker && m.settingsListEditor == nil && !m.settingsScopeFocus {
 			m.selectSettingAtBodyRow(mouse.Y)
 		}
 		return
@@ -194,14 +194,8 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.waitingForQuit && key != "ctrl+c" && key != "ctrl+q" {
 		m.waitingForQuit = false
 	}
-	if m.renameModal != nil {
-		return m.handleRenameModalKey(msg)
-	}
-	if m.showPopup {
-		return m.handlePopupKey(msg)
-	}
-	if m.showThemePicker {
-		return m.handleThemePickerKey(msg)
+	if updated, cmd, handled := m.handleOverlayKey(msg); handled {
+		return updated, cmd
 	}
 	if key == "ctrl+t" {
 		return m.maybeOpenThemePicker()
@@ -218,7 +212,27 @@ func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m.handleMainKey(msg)
 }
 
-func (m Model) handleRenameModalKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+// handleOverlayKey routes a key to an open overlay (rename modal, list editor,
+// popup, theme picker), in priority order. handled is false when none is open.
+func (m Model) handleOverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
+	switch {
+	case m.renameModal != nil:
+		return m.handleRenameModalKey(msg), nil, true
+	case m.settingsListEditor != nil:
+		u, c := m.handleListEditorKey(msg)
+		return u, c, true
+	case m.showPopup:
+		u, c := m.handlePopupKey(msg)
+		return u, c, true
+	case m.showThemePicker:
+		u, c := m.handleThemePickerKey(msg)
+		return u, c, true
+	default:
+		return m, nil, false
+	}
+}
+
+func (m Model) handleRenameModalKey(msg tea.KeyPressMsg) Model {
 	modal, confirmed := m.renameModal.Update(msg)
 	m.renameModal = &modal
 	if confirmed && m.renameSessionFn != nil && m.cursor < len(m.sessions) {
@@ -231,7 +245,7 @@ func (m Model) handleRenameModalKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	} else if msg.String() == "esc" {
 		m.renameModal = nil
 	}
-	return m, nil
+	return m
 }
 
 func (m *Model) enforceScrollBounds() {
