@@ -114,6 +114,18 @@ func (s *connSession) languageIsGo() bool {
 	return s.acquiredLanguage == "go"
 }
 
+// warmDepRoots pre-populates the Go dependency roots in the background so the
+// first guard check on a Go session does not stall waiting for `go env`. It
+// fires at most once per session (sync.Once inside goDependencyRoots ensures
+// idempotency). Called immediately after acquiredLanguage is set on both the
+// initial attach and re-pin paths.
+func (s *connSession) warmDepRoots(language string) {
+	if language != "go" {
+		return
+	}
+	go s.goDependencyRoots() // populates depRootsOnce/depRootsVal
+}
+
 // goDependencyRoots memoises the Go toolchain's read-only dependency roots for
 // the session lifetime. GOMODCACHE/GOROOT are global (workspace-independent),
 // so computing them once is correct even across a re-pin; buildPathPolicy gates

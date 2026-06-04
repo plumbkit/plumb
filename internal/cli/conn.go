@@ -318,6 +318,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 	}
 	s.acquiredRoot = folder
 	s.acquiredLanguage = language
+	s.warmDepRoots(language)
 	s.startQualityRunner(folder)
 	s.startTopologyIndexer(folder)
 	recoverWorkspaceTxlog(folder, txlog.Scan)
@@ -459,6 +460,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 	}
 	s.acquiredRoot = root
 	s.acquiredLanguage = language
+	s.warmDepRoots(language)
 	s.lastCfgMtime = time.Time{}
 	s.startQualityRunner(root)
 	s.startTopologyIndexer(root)
