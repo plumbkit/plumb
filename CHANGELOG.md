@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.38 (unreleased)
+
+New `workspace_sessions` tool: same-workspace peer awareness — who else is connected, what files they recently edited.
+
+### Added
+
+- **`workspace_sessions` — same-workspace session awareness.** A new read-only MCP tool returns two pieces of information scoped to the caller's pinned workspace: (1) **active sessions** — all sessions currently connected to this workspace, their client identities, and how recently they called a tool, with a clear "you are the only active session — your view is authoritative" signal when the agent is alone; (2) **recent writes** — the last N mutating operations (`write_file`, `edit_file`, `rename_file`, `git`, etc.) by any session on this workspace, showing the session name, tool, relative file path (extracted from the call's `input_json`), and age. An agent can call this before editing a file to see whether a peer recently touched it and re-read accordingly. The `recent_limit` parameter caps the write feed (default 10, max 50). Boundary-guarded via the existing read guard (no other workspace's sessions are ever exposed). Concurrency: `Execute` holds no Go mutexes of its own; it takes the session-dir OS flock (same as `session.List`) and opens a fresh read-only SQLite connection (WAL — non-blocking readers) with a 500 ms hard timeout via `runWithTimeout`, so no MCP response can block past that ceiling regardless of filesystem latency. A concurrent stress test (`TestWorkspaceSessions_ConcurrentNoDeadlock`) confirms no deadlock under `-race`. Data sources: `internal/session` (JSON files for who is here) and `internal/stats` via a new `RecentWritesByWorkspace` query on `db_query.go` (the `tool_calls` table already records `workspace`, `tool`, and `input_json`). The boundary-contract test (`TestBoundaryGuardWiringComplete`) is updated to classify the new constructor.
+
 ## 0.8.37 (unreleased)
 
 Swift: full support — function signatures in the tree-sitter extractor, Vapor/ArgumentParser patterns in `topology_routes`, Swift toolchain check in `plumb doctor`, and language-aware `plumb diagnostics`.

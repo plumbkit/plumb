@@ -391,6 +391,61 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 	return out, rows.Err()
 }
 
+// RecentWritesByWorkspace returns the most recent mutating tool calls on a
+// workspace, newest-first, restricted to the given tool names. It backs the
+// workspace_sessions "recent writes" feed: an agent uses it to spot files a
+// co-worker session touched recently and re-read them before editing.
+//
+// Only the small columns needed for the feed are selected (input_json carries
+// the file path); output_text is deliberately omitted. The tool-name set is
+// passed in (the tools package owns the write-tool list) and rendered as a
+// parameterised IN clause, so no caller value is ever interpolated. Returns nil
+// when writeTools is empty or d is nil.
+func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limit int) ([]RecentCall, error) {
+	if d == nil || len(writeTools) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(writeTools)), ",")
+	args := make([]any, 0, len(writeTools)+2)
+	args = append(args, workspace)
+	for _, t := range writeTools {
+		args = append(args, t)
+	}
+	args = append(args, limit)
+	//nolint:gosec // G202: placeholders is only "?,?,.."; every value is a bound arg
+	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
+	             error_msg, input_bytes, output_bytes, input_json, ''
+	      FROM tool_calls
+	      WHERE workspace = ? AND tool IN (` + placeholders + `)
+	      ORDER BY called_at DESC LIMIT ?`
+
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("stats: recent writes: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RecentCall
+	for rows.Next() {
+		var c RecentCall
+		var calledMs int64
+		var success int
+		if err := rows.Scan(
+			&c.Tool, &c.SessionID, &c.SessionName, &c.Workspace, &calledMs, &c.DurationMs, &success,
+			&c.ErrorMsg, &c.InputBytes, &c.OutputBytes, &c.InputJSON, &c.OutputText,
+		); err != nil {
+			continue
+		}
+		c.CalledAt = time.UnixMilli(calledMs)
+		c.Success = success == 1
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // CallDetail fetches the full input_json and output_text for a single call
 // identified by (workspace, session_id, called_at). Returns empty strings if
 // not found.

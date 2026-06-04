@@ -1056,6 +1056,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 		}))
 	srv.Register(tools.NewRenameSession(s.renameSession))
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithLSPLanguage(s.acquiredLanguageName).

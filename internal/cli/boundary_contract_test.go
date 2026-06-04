@@ -36,6 +36,7 @@ var knownToolGuarding = map[string]string{
 	"NewSearchMemories":        "guard",
 	"NewRelevantMemories":      "guard",
 	"NewTopologyStatus":        "guard",
+	"NewWorkspaceSessions":     "guard",
 	// Guarded via WriteDeps.Boundary (wd carries the write boundary guard)
 	"NewWriteFile":        "writedeps",
 	"NewEditFile":         "writedeps",
