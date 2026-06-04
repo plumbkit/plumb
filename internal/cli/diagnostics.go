@@ -1,14 +1,18 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
@@ -71,7 +75,9 @@ func runDiagnostics(_ *cobra.Command, args []string) error {
 		}
 		return runDiagOnFile(cli, abs)
 	}
-	return runDiagOnWorkspace(cli, cwd)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return runDiagOnWorkspace(ctx, cli, cwd)
 }
 
 func runDiagOnFile(cli *mcpCliClient, abs string) error {
@@ -87,16 +93,18 @@ func runDiagOnFile(cli *mcpCliClient, abs string) error {
 	return nil
 }
 
-func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
+func runDiagOnWorkspace(ctx context.Context, cli *mcpCliClient, cwd string) error {
 	// Resolve the actual workspace root via find_files (returns paths under
 	// the project root).
 	_, _ = cli.CallTool("list_files", map[string]any{"path": cwd, "max_results": 1})
 
 	printDiagHeader(cwd)
 
-	// Walk every Go file in the workspace via find_files.
+	glob, langLabel := detectDiagnosticsLang(cwd)
+
+	// Walk every source file in the workspace via find_files.
 	listOut, err := cli.CallTool("find_files", map[string]any{
-		"pattern":     "*.go",
+		"pattern":     glob,
 		"path":        cwd,
 		"max_results": 500,
 	})
@@ -104,17 +112,21 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 		return fmt.Errorf("listing files: %w", err)
 	}
 
-	goFiles := parseGoFileList(listOut, cwd)
-	if len(goFiles) == 0 {
-		fmt.Println("No Go files found in", cwd)
+	srcFiles := parseFileList(listOut, cwd)
+	if len(srcFiles) == 0 {
+		fmt.Printf("No %s files found in %s\n", langLabel, cwd)
 		return nil
 	}
 
-	totalClean, totalIssues, totalUntracked, perFile := scanWorkspaceDiags(cli, goFiles)
-	fmt.Printf("\r\033[K") // clear the progress line
+	totalClean, totalIssues, totalUntracked, perFile := scanWorkspaceDiags(ctx, cli, srcFiles)
+	if ctx.Err() != nil {
+		fmt.Println(tui.WarnStyle.Render("! scan stopped early — partial results below"))
+		fmt.Println()
+	}
 
-	summary := fmt.Sprintf("Scanned %d Go file(s): %d clean · %d with issues · %d not tracked",
-		len(goFiles), totalClean, totalIssues, totalUntracked)
+	scanned := totalClean + totalIssues + totalUntracked
+	summary := fmt.Sprintf("Scanned %s: %d clean · %d with issues · %d not tracked",
+		pluralisedFiles(scanned, langLabel), totalClean, totalIssues, totalUntracked)
 	fmt.Println(tui.ItemStyle.Render(summary))
 
 	if totalIssues > 0 {
@@ -136,7 +148,7 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	}
 
 	if totalUntracked > 0 {
-		noteStr := fmt.Sprintf("%s 'not tracked' files have not been opened by gopls.\n%s",
+		noteStr := fmt.Sprintf("%s 'not tracked' files have not been opened by the language server.\n%s",
 			tui.ItemStyle.Bold(true).Render("Note:"),
 			tui.MutedStyle.Render("↳ Run a tool that touches each (or open in your editor) to force analysis."),
 		)
@@ -146,8 +158,32 @@ func runDiagOnWorkspace(cli *mcpCliClient, cwd string) error {
 	return nil
 }
 
-func parseGoFileList(output, cwd string) []string {
-	var goFiles []string
+// detectDiagnosticsLang returns the file glob and display label for the primary
+// source language detected in ws by checking well-known root markers. Falls
+// back to Go when no recognised marker is found.
+func detectDiagnosticsLang(ws string) (glob, label string) {
+	markers := []struct {
+		file  string
+		glob  string
+		label string
+	}{
+		{"Package.swift", "*.swift", "Swift"},
+		{"Cargo.toml", "*.rs", "Rust"},
+		{"pyproject.toml", "*.py", "Python"},
+		{"setup.py", "*.py", "Python"},
+		{"tsconfig.json", "*.ts", "TypeScript"},
+		{"package.json", "*.ts", "TypeScript/JavaScript"},
+	}
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(ws, m.file)); err == nil {
+			return m.glob, m.label
+		}
+	}
+	return "*.go", "Go"
+}
+
+func parseFileList(output, cwd string) []string {
+	var files []string
 	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") || strings.HasPrefix(line, "(") {
@@ -158,14 +194,66 @@ func parseGoFileList(output, cwd string) []string {
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(cwd, line)
 		}
-		goFiles = append(goFiles, abs)
+		files = append(files, abs)
 	}
-	return goFiles
+	return files
 }
 
-func scanWorkspaceDiags(cli *mcpCliClient, goFiles []string) (clean, issues, untracked int, perFile []string) {
+// startScanProgress starts an animating spinner for the file scan.
+// Returns a setProgress func (call with 1-based index per file) and a stop
+// func that clears the line. Both are no-ops when stdout is not a terminal.
+// When ctx is cancelled the spinner switches to a "Stopping…" message while
+// the in-flight RPC for the current file completes.
+func startScanProgress(ctx context.Context, total int) (setProgress func(i int), stop func()) {
+	if !stdoutIsTerminal() {
+		return func(int) {}, func() {}
+	}
+	var current atomic.Int32
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		spin := spinner.MiniDot
+		ticker := time.NewTicker(spin.FPS)
+		defer ticker.Stop()
+		frame := 0
+		ctxDone := ctx.Done()
+		stopping := false
+		for {
+			select {
+			case <-ctxDone:
+				stopping = true
+				ctxDone = nil
+				fmt.Println() // leave the last scanning line intact; stopping goes below
+			case <-done:
+				return
+			case <-ticker.C:
+				if stopping {
+					fmt.Printf("\r%s Stopping...",
+						tui.HintStyle.Render(spin.Frames[frame]))
+				} else {
+					i := current.Load()
+					fmt.Printf("\r%s Scanning %d/%d files...",
+						tui.HintStyle.Render(spin.Frames[frame]), i, total)
+				}
+				frame = (frame + 1) % len(spin.Frames)
+			}
+		}
+	}()
+	return func(i int) { current.Store(int32(i)) },
+		func() { close(done); <-stopped; fmt.Printf("\r\033[K") }
+}
+
+func scanWorkspaceDiags(ctx context.Context, cli *mcpCliClient, goFiles []string) (clean, issues, untracked int, perFile []string) {
+	setProgress, stopProgress := startScanProgress(ctx, len(goFiles))
+	defer stopProgress()
 	for i, f := range goFiles {
-		fmt.Printf("\r%s Scanning %d/%d files...", tui.HintStyle.Render("⟳"), i+1, len(goFiles))
+		select {
+		case <-ctx.Done():
+			return clean, issues, untracked, perFile
+		default:
+		}
+		setProgress(i + 1)
 		uri := "file://" + f
 		out, err := cli.CallTool("diagnostics", map[string]any{"uri": uri})
 		if err != nil {
@@ -197,8 +285,8 @@ func styleDiagnostics(raw string) string {
 			continue
 		}
 
-		// If it's a file path
-		if strings.HasSuffix(trimmed, ".go") {
+		// If it's a source file path
+		if isSourceFilePath(trimmed) {
 			contracted := render.ContractPath(trimmed)
 			out = append(out, "", tui.HintStyle.Bold(true).Render(contracted))
 			continue
@@ -234,6 +322,18 @@ func styleDiagnostics(raw string) string {
 	return strings.Join(out, "\n")
 }
 
+// isSourceFilePath reports whether a diagnostics output line looks like a
+// source file path (used to decide whether to render it as a bold heading).
+func isSourceFilePath(s string) bool {
+	exts := []string{".go", ".swift", ".rs", ".py", ".ts", ".js", ".kt", ".java"}
+	for _, e := range exts {
+		if strings.HasSuffix(s, e) {
+			return true
+		}
+	}
+	return false
+}
+
 // header prints the session/workspace banner so the caller knows which
 // daemon session produced the output.
 func printDiagHeader(workspace string) {
@@ -253,6 +353,13 @@ func printDiagHeader(workspace string) {
 
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println()
+}
+
+func pluralisedFiles(n int, lang string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s file", lang)
+	}
+	return fmt.Sprintf("%d %s files", n, lang)
 }
 
 // removed unused encoding/json import — keep for future use.
