@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -57,7 +56,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 	mustGitDir(t, rootA)
 	mustGitDir(t, rootB)
 
-	s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
 	defer s.close()
 
 	s.attachWorkspace(context.Background(), "file://"+rootA)
@@ -97,7 +96,7 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	mustGitDir(t, rootA)
 	bare := freshTempDir(t) // no .git, no language marker, no go.mod ancestor
 
-	s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
@@ -124,7 +123,7 @@ func TestRepinWorkspace_ResetsTrackers(t *testing.T) {
 	mustGitDir(t, rootA)
 	mustGitDir(t, rootB)
 
-	s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
@@ -161,7 +160,7 @@ func TestOnRootsChanged_RepinsOnChange(t *testing.T) {
 	mustGitDir(t, rootA)
 	mustGitDir(t, rootB)
 
-	s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
 	defer s.close()
 
 	// First report pins A (connection not yet attached).

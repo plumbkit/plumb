@@ -36,10 +36,10 @@ import (
 // connSession holds all mutable per-connection state for an MCP session.
 // All exported methods are safe for concurrent use.
 type connSession struct {
-	pool           *workspacePool
-	store          *config.Store
-	statsStore     *statsStore
-	clientLimiters *sync.Map
+	pool       *workspacePool
+	store      *config.Store
+	statsStore *statsStore
+	budgets    *sharedBudgets
 
 	sessID   string
 	sessName string
@@ -60,6 +60,11 @@ type connSession struct {
 	clientName    string
 	clientVersion string
 	lastCfgMtime  time.Time
+	// boundBudgetKey is the (client, workspace) key of the shared write budget
+	// this session currently holds a reference on (see sharedBudgets), or "" when
+	// none is held. Released and re-acquired on re-pin, released on close, so a
+	// budget entry is reclaimed once its last session leaves. Guarded by stateMu.
+	boundBudgetKey string
 
 	sessionProxy *routingProxy
 	sessionInv   *routingInvProxy
@@ -116,7 +121,7 @@ type connSession struct {
 // daemon-wide shutdown cancels every session; s.cancel() additionally lets the
 // idle reaper cancel one session in isolation. handleConn drives mcp.Serve on
 // s.ctx, so either cancellation makes Serve return and the deferred cleanup run.
-func newConnSession(parent context.Context, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, clientLimiters *sync.Map) *connSession {
+func newConnSession(parent context.Context, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, budgets *sharedBudgets) *connSession {
 	cfg := store.Current()
 	ttl := cfg.Cache.TTL.Duration
 	sessName := session.GenerateName()
@@ -126,27 +131,27 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 	})
 	ctx, cancel := context.WithCancel(parent)
 	s := &connSession{
-		ctx:            ctx,
-		cancel:         cancel,
-		pool:           pool,
-		topologyPool:   topoPool,
-		store:          store,
-		statsStore:     statsStore,
-		clientLimiters: clientLimiters,
-		sessID:         sessID,
-		sessName:       sessName,
-		ttl:            ttl,
-		sessionProxy:   newRoutingProxy(pool),
-		sessionInv:     newRoutingInvProxy(pool),
-		sessionCache:   cache.New(ttl),
-		readTracker:    tools.NewReadTracker(),
-		writeTracker:   tools.NewWriteTracker(),
-		writeLimiter:   tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
-		editsCfg:       cfg.Edits,
-		walkCfg:        cfg.Walk,
-		gitCfg:         cfg.Git,
-		wsCfg:          cfg.Workspace,
-		logger:         slog.Default().With("session_id", sessID),
+		ctx:          ctx,
+		cancel:       cancel,
+		pool:         pool,
+		topologyPool: topoPool,
+		store:        store,
+		statsStore:   statsStore,
+		budgets:      budgets,
+		sessID:       sessID,
+		sessName:     sessName,
+		ttl:          ttl,
+		sessionProxy: newRoutingProxy(pool),
+		sessionInv:   newRoutingInvProxy(pool),
+		sessionCache: cache.New(ttl),
+		readTracker:  tools.NewReadTracker(),
+		writeTracker: tools.NewWriteTracker(),
+		writeLimiter: tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
+		editsCfg:     cfg.Edits,
+		walkCfg:      cfg.Walk,
+		gitCfg:       cfg.Git,
+		wsCfg:        cfg.Workspace,
+		logger:       slog.Default().With("session_id", sessID),
 	}
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
@@ -172,13 +177,19 @@ func (s *connSession) close() {
 		s.qualityRunner.Stop()
 	}
 	// Release this session's pinned language-server reference so the pool can
-	// reclaim the server once its last session leaves (after the idle grace).
+	// reclaim the server once its last session leaves (after the idle grace), and
+	// drop its shared write-budget reference so that entry is reclaimed too.
 	s.stateMu.Lock()
 	ref := s.lsRefRoot
 	s.lsRefRoot = ""
+	budgetKey := s.boundBudgetKey
+	s.boundBudgetKey = ""
 	s.stateMu.Unlock()
 	if ref != "" {
 		s.pool.release(ref)
+	}
+	if budgetKey != "" {
+		s.budgets.release(budgetKey)
 	}
 	session.Unregister(s.sessID)
 }
@@ -711,13 +722,15 @@ func (s *connSession) onClientInfo(name, version string) {
 //
 // No-op until both the client identity and the workspace are known. Writes
 // cannot occur before a workspace is pinned (the boundary guard refuses them),
-// so no shared budget is needed pre-attach. Idempotent: LoadOrStore + SetParent
-// are safe to repeat, so it is called both on client-info and from
-// applyProjectConfig (every attach / re-pin / config-reload path). On a re-pin
-// SetParent atomically repoints this session at the new root's budget; the old
-// root's shared limiter stays referenced by any sibling sessions still there.
+// so no shared budget is needed pre-attach. Safe to repeat, so it is called both
+// on client-info and from applyProjectConfig (every attach / re-pin /
+// config-reload path): a repeat call on the same key only refreshes the cap
+// (tracking a config reload), while a re-pin acquires the new root's budget
+// before releasing the old one, so the old entry is reclaimed once its last
+// session leaves (see sharedBudgets) yet a re-pin back to a recently-left root
+// never races teardown.
 func (s *connSession) bindWriteLimiterParent() {
-	if s.clientLimiters == nil {
+	if s.budgets == nil {
 		return
 	}
 	s.stateMu.Lock()
@@ -726,10 +739,30 @@ func (s *connSession) bindWriteLimiterParent() {
 	if name == "" || root == "" {
 		return
 	}
+	// Track the same cap the per-session child currently enforces (applyProjectConfig
+	// has already SetLimit'd it to the resolved project value), so a config reload
+	// propagates to the shared budget instead of leaving it at its creation value.
+	_, limit, _ := s.writeLimiter.Snapshot()
 	key := name + "/" + version + "\x00" + root
-	shared, _ := s.clientLimiters.LoadOrStore(key,
-		tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute))
-	s.writeLimiter.SetParent(shared.(*tools.RateLimiter))
+
+	s.stateMu.Lock()
+	prevKey := s.boundBudgetKey
+	s.boundBudgetKey = key
+	s.stateMu.Unlock()
+
+	// Same key (a reload or a repeat bind on the same workspace): refresh the cap
+	// without touching the refcount or re-parenting.
+	if prevKey == key {
+		s.budgets.setLimit(key, limit)
+		return
+	}
+	// Acquire-before-release: pin the new budget before dropping the old so a
+	// re-pin back to a recently-left key never reclaims it mid-flight.
+	parent := s.budgets.acquire(key, limit)
+	if prevKey != "" {
+		s.budgets.release(prevKey)
+	}
+	s.writeLimiter.SetParent(parent)
 }
 
 // onAfterTool records a completed tool call in the stats store and refreshes

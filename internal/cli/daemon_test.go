@@ -362,7 +362,7 @@ func TestNewConnSession_ContextWiring(t *testing.T) {
 
 	t.Run("daemon shutdown cancels the session", func(t *testing.T) {
 		parent, cancelParent := context.WithCancel(context.Background())
-		s := newConnSession(parent, pool, nil, store, nil, &sync.Map{})
+		s := newConnSession(parent, pool, nil, store, nil, newSharedBudgets())
 		defer s.close()
 		cancelParent() // daemon-wide shutdown
 		select {
@@ -373,7 +373,7 @@ func TestNewConnSession_ContextWiring(t *testing.T) {
 	})
 
 	t.Run("idle eviction cancels the session", func(t *testing.T) {
-		s := newConnSession(context.Background(), pool, nil, store, nil, &sync.Map{})
+		s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
 		defer s.close()
 		s.cancel() // exactly what connRegistry.evictIdle invokes via the registry
 		select {
@@ -396,7 +396,7 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(context.Background(), serverConn, pool, nil, store, nil, time.Now(), &sync.Map{}, registry)
+		handleConn(context.Background(), serverConn, pool, nil, store, nil, time.Now(), newSharedBudgets(), registry)
 		close(done)
 	}()
 
@@ -490,7 +490,7 @@ func TestConnSession_LoggerCarriesSessionID(t *testing.T) {
 	defer slog.SetDefault(prev)
 
 	store := config.NewStore(config.Defaults())
-	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, &sync.Map{})
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, newSharedBudgets())
 	defer s.close()
 
 	// Emit one record via the session logger (session-scoped).

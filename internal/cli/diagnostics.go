@@ -100,19 +100,24 @@ func runDiagOnWorkspace(ctx context.Context, cli *mcpCliClient, cwd string) erro
 
 	printDiagHeader(cwd)
 
-	glob, langLabel := detectDiagnosticsLang(cwd)
+	globs, langLabel := detectDiagnosticsLang(cwd)
 
-	// Walk every source file in the workspace via find_files.
-	listOut, err := cli.CallTool("find_files", map[string]any{
-		"pattern":     glob,
-		"path":        cwd,
-		"max_results": 500,
-	})
-	if err != nil {
-		return fmt.Errorf("listing files: %w", err)
+	// Walk every source file in the workspace via find_files. A language may map
+	// to several globs (e.g. *.ts and *.tsx) because find_files has no brace
+	// expansion; scan each and concatenate. The extensions are disjoint, so the
+	// combined list needs no de-duplication.
+	var srcFiles []string
+	for _, glob := range globs {
+		listOut, err := cli.CallTool("find_files", map[string]any{
+			"pattern":     glob,
+			"path":        cwd,
+			"max_results": 500,
+		})
+		if err != nil {
+			return fmt.Errorf("listing files: %w", err)
+		}
+		srcFiles = append(srcFiles, parseFileList(listOut, cwd)...)
 	}
-
-	srcFiles := parseFileList(listOut, cwd)
 	if len(srcFiles) == 0 {
 		fmt.Printf("No %s files found in %s\n", langLabel, cwd)
 		return nil
@@ -158,29 +163,37 @@ func runDiagOnWorkspace(ctx context.Context, cli *mcpCliClient, cwd string) erro
 	return nil
 }
 
-// detectDiagnosticsLang returns the file glob and display label for the primary
-// source language detected in ws by checking well-known root markers. Falls
-// back to Go when no recognised marker is found.
-func detectDiagnosticsLang(ws string) (glob, label string) {
+// detectDiagnosticsLang returns the file globs and display label for the primary
+// source language detected in ws by checking well-known root markers. The go.mod
+// / go.work markers lead the list so an explicit Go project always wins over a
+// weak co-located marker (a package.json from frontend tooling, a static
+// index.html). Falls back to Go when no recognised marker is found.
+//
+// A language can map to several globs because find_files matches with
+// filepath.Match, which has no brace expansion — so .ts and .tsx are separate
+// patterns the caller scans in turn.
+func detectDiagnosticsLang(ws string) (globs []string, label string) {
 	markers := []struct {
 		file  string
-		glob  string
+		globs []string
 		label string
 	}{
-		{"Package.swift", "*.swift", "Swift"},
-		{"Cargo.toml", "*.rs", "Rust"},
-		{"pyproject.toml", "*.py", "Python"},
-		{"setup.py", "*.py", "Python"},
-		{"tsconfig.json", "*.ts", "TypeScript"},
-		{"package.json", "*.ts", "TypeScript/JavaScript"},
-		{"index.html", "*.html", "HTML"},
+		{"go.mod", []string{"*.go"}, "Go"},
+		{"go.work", []string{"*.go"}, "Go"},
+		{"Package.swift", []string{"*.swift"}, "Swift"},
+		{"Cargo.toml", []string{"*.rs"}, "Rust"},
+		{"pyproject.toml", []string{"*.py"}, "Python"},
+		{"setup.py", []string{"*.py"}, "Python"},
+		{"tsconfig.json", []string{"*.ts", "*.tsx"}, "TypeScript"},
+		{"package.json", []string{"*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"}, "TypeScript/JavaScript"},
+		{"index.html", []string{"*.html", "*.htm"}, "HTML"},
 	}
 	for _, m := range markers {
 		if _, err := os.Stat(filepath.Join(ws, m.file)); err == nil {
-			return m.glob, m.label
+			return m.globs, m.label
 		}
 	}
-	return "*.go", "Go"
+	return []string{"*.go"}, "Go"
 }
 
 func parseFileList(output, cwd string) []string {

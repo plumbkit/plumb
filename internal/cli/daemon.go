@@ -247,15 +247,16 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	tools.StartPathLockSweep(ctx)
 	monitor.StartSnapshotWriter(ctx, monitor.SnapshotPath(), 2*time.Second, daemonStartedAt)
 
-	// clientLimiters holds one shared RateLimiter per (MCP client identity,
-	// workspace) pair (key: ClientName+"/"+ClientVersion+NUL+root). Connections
-	// from the same client working the same workspace share this budget so
-	// opening multiple connections cannot multiply the allowed write rate;
-	// connections on different workspaces never share, so a burst in one project
-	// cannot throttle a session in another. See bindWriteLimiterParent.
-	var clientLimiters sync.Map // map[string]*tools.RateLimiter
+	// budgets holds one shared, reference-counted RateLimiter per (MCP client
+	// identity, workspace) pair (key: ClientName+"/"+ClientVersion+NUL+root).
+	// Connections from the same client working the same workspace share this
+	// budget so opening multiple connections cannot multiply the allowed write
+	// rate; connections on different workspaces never share, so a burst in one
+	// project cannot throttle a session in another. Entries are reclaimed once
+	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
+	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, &clientLimiters)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, budgets)
 	return nil
 }
 
@@ -327,7 +328,7 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 	}
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets) {
 	var wg sync.WaitGroup
 	registry := newConnRegistry()
 
@@ -366,16 +367,16 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, store, statsStore, daemonStartedAt, clientLimiters, registry)
+			handleConn(ctx, conn, pool, topoPool, store, statsStore, daemonStartedAt, budgets, registry)
 		})
 	}
 }
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, clientLimiters *sync.Map, registry *connRegistry) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	defer conn.Close()
-	s := newConnSession(ctx, pool, topoPool, store, statsStore, clientLimiters)
+	s := newConnSession(ctx, pool, topoPool, store, statsStore, budgets)
 	registry.add(s.sessID, s.cancel)
 	defer registry.remove(s.sessID)
 	defer s.close()
