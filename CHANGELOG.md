@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.32 (unreleased)
+
+Session-id log tagging; `setup claude-code` installs user-scoped Claude Code skill files.
+
+### Added
+
+- **`setup claude-code` installs two Claude Code skill files into `~/.claude/skills/`.** `plumb-explore` teaches the Map→GPS navigation sequence (topology first, LSP for precision, whole-file reads only when editing); `plumb-refactor` teaches semantic rename (`rename_symbol`), atomic cross-file edits (`transaction_apply`), file moves (`rename_file`), and the read→mtime→edit discipline. Skills are installed on every `setup claude-code` run and are idempotent (unchanged content is a no-op; changed content is backed up before overwrite). Re-running setup on an already-registered client validates the MCP entry and installs/refreshes skills — no separate command. Pass `--no-skill` to opt out. Skill content lives in `internal/cli/skills/` (embedded at build time). New helpers: `claudeSkillsDir` / `installSkill` in `setup_helpers.go`; `claudeCodeSkills` / `embeddedSkill` in `skills.go`.
+
+- **Per-connection log records now carry a `session_id` attribute.** `daemon.log` interleaves records from every concurrent MCP connection with no way to tell which session emitted a line. `connSession` now holds a `logger *slog.Logger` derived once in `newConnSession` via `slog.Default().With("session_id", sessID)`. The ~15 lifecycle log call sites in `internal/cli/conn.go` (workspace attach, re-pin, config reload/apply/hot-reload, client-identified, root materialisation, roots-changed) use `s.logger` instead of the package-level `slog` functions. Daemon-global records (pool lifecycle, config watcher, start/stop, stats) deliberately continue using package-level `slog` and carry no `session_id`. No call-site churn in callers of `newConnSession` — the logger is derived internally. Guard: `TestConnSession_LoggerCarriesSessionID` (`internal/cli/daemon_test.go`), which installs a capture handler on `slog.Default()`, emits one record via `s.logger` and one via `slog`, and asserts the former carries `session_id` while the latter does not. Tests must not be parallelised (mutates `slog.Default()`).
+
 ## 0.8.31 (unreleased)
 
 `search_in_files` gains `use_regex` — literal text is now the default.

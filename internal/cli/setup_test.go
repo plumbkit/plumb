@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -398,6 +399,119 @@ func TestSetupClaudeDesktopInto_InvalidMcpServers(t *testing.T) {
 	_, _, err := setupClaudeDesktopInto(path, "/usr/local/bin/plumb")
 	if err == nil {
 		t.Fatal("expected error for invalid mcpServers type, got nil")
+	}
+}
+
+// --- skill helpers ---
+
+func TestClaudeSkillsDir_NoError(t *testing.T) {
+	path, err := claudeSkillsDir()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected non-empty path")
+	}
+	if filepath.Base(path) != "skills" {
+		t.Errorf("expected 'skills' dir name, got %q", filepath.Base(path))
+	}
+	if filepath.Base(filepath.Dir(path)) != ".claude" {
+		t.Errorf("expected '.claude' parent, got %q", filepath.Base(filepath.Dir(path)))
+	}
+}
+
+func TestInstallSkill_Fresh(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\nname: test-skill\ndescription: A test skill\n---\nbody\n"
+
+	action, err := installSkill(dir, "test-skill", content)
+	if err != nil {
+		t.Fatalf("installSkill: %v", err)
+	}
+	if action != "installed" {
+		t.Errorf("action: got %q, want %q", action, "installed")
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "test-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("reading SKILL.md: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("content mismatch: got %q, want %q", string(got), content)
+	}
+}
+
+func TestInstallSkill_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\nname: test-skill\ndescription: test\n---\n"
+
+	if _, err := installSkill(dir, "test-skill", content); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+
+	action, err := installSkill(dir, "test-skill", content)
+	if err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if action != "unchanged" {
+		t.Errorf("action: got %q, want %q", action, "unchanged")
+	}
+}
+
+func TestInstallSkill_Updated(t *testing.T) {
+	dir := t.TempDir()
+	old := "---\nname: test-skill\ndescription: test\n---\nold content\n"
+	new := "---\nname: test-skill\ndescription: test\n---\nnew content\n"
+
+	if _, err := installSkill(dir, "test-skill", old); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+
+	action, err := installSkill(dir, "test-skill", new)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if action != "updated" {
+		t.Errorf("action: got %q, want %q", action, "updated")
+	}
+
+	// Backup must have been created.
+	entries, _ := os.ReadDir(filepath.Join(dir, "test-skill"))
+	var backups []string
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".bak" {
+			backups = append(backups, e.Name())
+		}
+	}
+	if len(backups) == 0 {
+		t.Error("expected a .bak backup file to be created before update")
+	}
+
+	// New content must be installed.
+	got, err := os.ReadFile(filepath.Join(dir, "test-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("reading SKILL.md after update: %v", err)
+	}
+	if string(got) != new {
+		t.Errorf("content after update: got %q, want %q", string(got), new)
+	}
+}
+
+func TestClaudeCodeSkills_HaveValidFrontmatter(t *testing.T) {
+	skills := claudeCodeSkills()
+	if len(skills) == 0 {
+		t.Fatal("expected at least one embedded skill")
+	}
+	for _, skill := range skills {
+		if skill.Name == "" {
+			t.Error("skill with empty name")
+		}
+		if !strings.Contains(skill.Content, "name: "+skill.Name) {
+			t.Errorf("skill %q: missing 'name: %s' frontmatter", skill.Name, skill.Name)
+		}
+		if !strings.Contains(skill.Content, "description:") {
+			t.Errorf("skill %q: missing 'description:' frontmatter", skill.Name)
+		}
 	}
 }
 

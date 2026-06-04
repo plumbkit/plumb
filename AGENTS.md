@@ -201,12 +201,14 @@ Global or per-project; no env override. `idle_threshold_minutes` is cosmetic —
 | Client | Command | Config target |
 |---|---|---|
 | Claude Desktop | `plumb setup claude-desktop` | Platform-specific Claude Desktop JSON config |
-| Claude Code, user scope | `plumb setup claude-code` | `~/.claude.json` |
-| Claude Code, project scope | `plumb setup claude-code --project` | `.mcp.json` in the current directory |
+| Claude Code, user scope | `plumb setup claude-code` | `~/.claude.json` + `~/.claude/skills/` (skill files) |
+| Claude Code, project scope | `plumb setup claude-code --project` | `.mcp.json` in the current directory + `~/.claude/skills/` (skill files) |
 | Codex | `plumb setup codex` | `$CODEX_HOME/config.toml`, or `~/.codex/config.toml` when unset |
 | Gemini CLI | `plumb setup gemini` | `~/.gemini/settings.json` |
 
 Setup helpers preserve existing MCP servers, back up config before modifying it, and resolve config locations via OS/user-home helpers or client env vars — no hardcoded absolute user paths.
+
+`plumb setup claude-code` also installs two user-scoped skill files into `~/.claude/skills/` (created if absent): `plumb-explore` (topology/LSP-first navigation) and `plumb-refactor` (semantic rename, atomic cross-file edits, read→mtime→edit discipline). Skills are installed on every run and are idempotent — unchanged content is a no-op, changed content is backed up then updated. Pass `--no-skill` to skip skill installation.
 
 ## Workspace detection
 
