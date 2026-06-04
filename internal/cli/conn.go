@@ -95,6 +95,12 @@ type connSession struct {
 
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex
+
+	// logger carries the session_id attribute so per-connection log records can
+	// be correlated across the interleaved daemon.log output. Global daemon-level
+	// log calls (pool lifecycle, config watcher, start/stop) keep using the
+	// package-level slog functions and are intentionally not tagged.
+	logger *slog.Logger
 }
 
 // newConnSession initialises a connSession and registers a new MCP session.
@@ -133,6 +139,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		walkCfg:        cfg.Walk,
 		gitCfg:         cfg.Git,
 		wsCfg:          cfg.Workspace,
+		logger:         slog.Default().With("session_id", sessID),
 	}
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
@@ -141,7 +148,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		if ws := s.workspace(); ws != "" {
 			s.applyProjectConfig(ws)
 			s.reconcileTopologyStore(ws)
-			slog.Info("daemon: global config changed — session re-applied", "workspace", ws)
+			s.log().Info("daemon: global config changed — session re-applied", "workspace", ws)
 		}
 	})
 	return s
@@ -158,6 +165,16 @@ func (s *connSession) close() {
 		s.qualityRunner.Stop()
 	}
 	session.Unregister(s.sessID)
+}
+
+// log returns the session-scoped logger, falling back to the process-global
+// default logger when the field has not been initialised (e.g. in tests that
+// construct connSession directly rather than via newConnSession).
+func (s *connSession) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // workspace returns the resolved workspace root for the session.
@@ -308,7 +325,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 			// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
 			// rather than aborting. The workspace is still attached for filesystem
 			// tools and stat tracking; LSP tools will surface their own errors.
-			slog.Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
+			s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
 			language = LanguageNone
 		} else {
 			s.sessionProxy.setPrimary(folder, e.proxy)
@@ -333,7 +350,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 			info.ClientVersion = cv
 		}
 	})
-	slog.Info("daemon: session attached", "root", folder, "language", language, "adapter", adapter)
+	s.log().Info("daemon: session attached", "root", folder, "language", language, "adapter", adapter)
 }
 
 // attachSynthetic records a synthetic workspace root when pool.Detect fails.
@@ -359,7 +376,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 			info.ClientVersion = cv
 		}
 	})
-	slog.Info("daemon: session auto-attached (synthetic)", "root", root)
+	s.log().Info("daemon: session auto-attached (synthetic)", "root", root)
 }
 
 // repinWorkspace deliberately switches the connection to a different workspace.
@@ -416,7 +433,7 @@ func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
 		return // client reported no usable root — keep the current pin
 	}
 	if _, err := s.repinWorkspace(ctx, folder); err != nil {
-		slog.Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
+		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
 	}
 }
 
@@ -446,7 +463,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 	adapter := ""
 	if language != LanguageNone {
 		if e, aerr := s.pool.acquireLang(ctx, root, language); aerr != nil {
-			slog.Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
+			s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
 			language = LanguageNone
 		} else {
 			s.sessionProxy.resetPrimary(root, e.proxy)
@@ -479,7 +496,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			info.ClientVersion = cv
 		}
 	})
-	slog.Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
+	s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
 	return true
 }
 
@@ -494,7 +511,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	base := s.store.Current()
 	projectCfg, err := config.LoadProject(base, workspace)
 	if err != nil {
-		slog.Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
+		s.log().Warn("daemon: project config invalid; using global", "workspace", workspace, "err", err)
 		return
 	}
 	s.editsMu.Lock()
@@ -517,7 +534,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
 		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
 		projectCfg.Git.AllowPush != base.Git.AllowPush {
-		slog.Info("daemon: project config applied",
+		s.log().Info("daemon: project config applied",
 			"workspace", workspace,
 			"strict", projectCfg.Edits.Strict,
 			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
@@ -581,7 +598,7 @@ func (s *connSession) checkAndReloadConfig() {
 		return
 	}
 	s.applyProjectConfig(workspace)
-	slog.Info("daemon: project config hot-reloaded", "workspace", workspace)
+	s.log().Info("daemon: project config hot-reloaded", "workspace", workspace)
 }
 
 // javaPostWriteNotify sends DidOpen + DidClose to jdtls after a write so that
@@ -644,7 +661,7 @@ func (s *connSession) onClientInfo(name, version string) {
 	s.clientName = name
 	s.clientVersion = version
 	s.stateMu.Unlock()
-	slog.Info("daemon: client identified", "client", name, "version", version)
+	s.log().Info("daemon: client identified", "client", name, "version", version)
 	session.SetClient(s.sessID, name, version)
 	if s.clientLimiters != nil {
 		key := name + "/" + version
@@ -708,7 +725,7 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	root, _, err := s.pool.Detect(startDir)
 	if err != nil {
 		if !s.store.Current().Workspace.AutoAttach {
-			slog.Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
+			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
 			return
 		}
 		synthRoot := s.pool.SynthesiseRoot(startDir)
@@ -716,10 +733,10 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 		if s.store.Current().Workspace.AutoAttachPersist {
 			go func() {
 				if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {
-					slog.Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
+					s.log().Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
 					return
 				}
-				slog.Info("daemon: materialised .plumb/ at synthetic root", "root", synthRoot)
+				s.log().Info("daemon: materialised .plumb/ at synthetic root", "root", synthRoot)
 			}()
 		}
 		s.applyProjectConfig(s.workspace())
@@ -1027,7 +1044,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	}
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
 		s.setClientRequest(request)
-		slog.Info("daemon: roots changed — re-fetching workspace root")
+		s.log().Info("daemon: roots changed — re-fetching workspace root")
 		s.onRootsChanged(initCtx, rootFromRoots(initCtx, request))
 		s.startConfigWatcher()
 	}

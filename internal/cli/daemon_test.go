@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -463,4 +464,87 @@ func TestDaemonStopWaitExceedsShutdownHardDeadline(t *testing.T) {
 	if daemonStopWait <= shutdownHardDeadline {
 		t.Fatalf("daemonStopWait (%s) must exceed shutdownHardDeadline (%s)", daemonStopWait, shutdownHardDeadline)
 	}
+}
+
+// TestConnSession_LoggerCarriesSessionID verifies that per-connection log
+// records emitted via s.logger carry a session_id attribute, while
+// daemon-global records (which still use package-level slog) do not.
+// This test must NOT be run in parallel — it mutates slog.Default().
+func TestConnSession_LoggerCarriesSessionID(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	type record struct {
+		msg   string
+		attrs map[string]string
+	}
+	var mu sync.Mutex
+	var records []record
+
+	h := &captureHandler{fn: func(msg string, attrs map[string]string) {
+		mu.Lock()
+		records = append(records, record{msg: msg, attrs: attrs})
+		mu.Unlock()
+	}}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	defer slog.SetDefault(prev)
+
+	store := config.NewStore(config.Defaults())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, &sync.Map{})
+	defer s.close()
+
+	// Emit one record via the session logger (session-scoped).
+	s.logger.Info("test session-scoped record")
+	// Emit one record via the global logger (daemon-global, no session_id).
+	slog.Info("test global record")
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var sessionRecord, globalRecord *record
+	for i := range records {
+		switch records[i].msg {
+		case "test session-scoped record":
+			sessionRecord = &records[i]
+		case "test global record":
+			globalRecord = &records[i]
+		}
+	}
+	if sessionRecord == nil {
+		t.Fatal("session-scoped record not emitted")
+	}
+	if globalRecord == nil {
+		t.Fatal("global record not emitted")
+	}
+	if id := sessionRecord.attrs["session_id"]; id == "" {
+		t.Error("session-scoped record missing session_id attribute")
+	}
+	if id := globalRecord.attrs["session_id"]; id != "" {
+		t.Errorf("global record should not carry session_id, got %q", id)
+	}
+}
+
+// captureHandler is a minimal slog.Handler that calls fn for every record.
+type captureHandler struct {
+	fn    func(msg string, attrs map[string]string)
+	attrs []slog.Attr
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := &captureHandler{fn: h.fn, attrs: append(h.attrs, attrs...)}
+	return next
+}
+func (h *captureHandler) WithGroup(_ string) slog.Handler { return h }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	m := make(map[string]string)
+	for _, a := range h.attrs {
+		m[a.Key] = a.Value.String()
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		m[a.Key] = a.Value.String()
+		return true
+	})
+	h.fn(r.Message, m)
+	return nil
 }
