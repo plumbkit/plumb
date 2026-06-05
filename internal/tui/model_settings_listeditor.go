@@ -9,14 +9,15 @@ import (
 
 // listEditor is the popup for editing a list-valued setting (a []string such as
 // workspace.read_roots or git.protected_branches). It edits an in-memory copy;
-// the caller persists the entries to the active scope on commit (esc).
+// the caller persists the entries to the active scope on save (enter); esc
+// cancels and discards the in-memory edits.
 //
 // Concurrency: TUI-thread only, like every other model field.
 type listEditor struct {
 	key     settingKey
 	title   string
 	entries []string
-	cursor  int    // 0..len(entries)-1 selects an entry; len(entries) is the "+ add" row
+	cursor  int    // 0..len(entries)-1 selects an entry
 	adding  bool   // true while typing a new entry
 	input   string // text buffer while adding
 }
@@ -29,44 +30,39 @@ func newListEditor(key settingKey, title string, entries []string) *listEditor {
 	}
 }
 
-// addRowIndex is the index of the synthetic "+ add entry" row below the entries.
-func (e *listEditor) addRowIndex() int { return len(e.entries) }
-
-// Update handles one key. The bool return is "committed" — true when the editor
-// should close and the caller should persist e.entries.
-func (e *listEditor) Update(msg tea.KeyPressMsg) (committed bool) {
+// Update handles one key. done is true when the editor should close; save is
+// true only when it should close AND persist e.entries (enter), false on cancel
+// (esc, the conventional "discard" action).
+func (e *listEditor) Update(msg tea.KeyPressMsg) (done, save bool) {
 	if e.adding {
 		e.updateAdding(msg)
-		return false
+		return false, false
 	}
 	switch msg.String() {
-	case "esc", "ctrl+s":
-		return true // commit & close
+	case "esc":
+		return true, false // cancel — discard changes
+	case "enter", "ctrl+s":
+		return true, true // save & close
 	case "up", "k":
 		if e.cursor > 0 {
 			e.cursor--
 		}
 	case "down", "j":
-		if e.cursor < e.addRowIndex() {
+		if e.cursor < len(e.entries)-1 {
 			e.cursor++
 		}
 	case "a", "+":
 		e.adding = true
 		e.input = ""
-	case "enter", " ":
-		if e.cursor == e.addRowIndex() {
-			e.adding = true
-			e.input = ""
-		}
 	case "d", "delete", "backspace":
 		if e.cursor < len(e.entries) {
 			e.entries = append(e.entries[:e.cursor], e.entries[e.cursor+1:]...)
-			if e.cursor > e.addRowIndex() {
-				e.cursor = e.addRowIndex()
+			if e.cursor >= len(e.entries) && e.cursor > 0 {
+				e.cursor = len(e.entries) - 1
 			}
 		}
 	}
-	return false
+	return false, false
 }
 
 // updateAdding handles keys while typing a new entry.
@@ -78,7 +74,7 @@ func (e *listEditor) updateAdding(msg tea.KeyPressMsg) {
 	case "enter":
 		if v := strings.TrimSpace(e.input); v != "" {
 			e.entries = append(e.entries, v)
-			e.cursor = len(e.entries) // park on the "+ add" row for quick repeats
+			e.cursor = len(e.entries) - 1 // park on the new entry
 		}
 		e.adding = false
 		e.input = ""
@@ -148,29 +144,23 @@ func (e *listEditor) contentRows() []string {
 		help = MutedStyle.Render("enter") + StatusStyle.Render(" add    ") + MutedStyle.Render("esc") + StatusStyle.Render(" cancel")
 	} else {
 		help = MutedStyle.Render("a") + StatusStyle.Render(" add  ") + MutedStyle.Render("d") + StatusStyle.Render(" remove  ") +
-			MutedStyle.Render("↑↓") + StatusStyle.Render(" move  ") + MutedStyle.Render("esc") + StatusStyle.Render(" save")
+			MutedStyle.Render("enter") + StatusStyle.Render(" save  ") + MutedStyle.Render("esc") + StatusStyle.Render(" cancel")
 	}
 	return append(rows, "", help)
 }
 
-// addRow renders either the editable input field (while adding) or the static
-// "+ add entry" affordance.
+// addRow renders the editable input field while adding, or a static "+ add"
+// affordance otherwise (adding is triggered by `a`, not by selecting a row).
 func (e *listEditor) addRow() string {
-	if e.adding {
-		shown := e.input
-		if r := []rune(shown); len(r) > listFieldWidth {
-			shown = string(r[len(r)-listFieldWidth:])
-		}
-		shown += strings.Repeat(" ", max(listFieldWidth-lipgloss.Width(shown), 0))
-		return "  " + SepStyle.Render("[") + DetailStyle.Render(shown) + SepStyle.Render("]")
+	if !e.adding {
+		return "  " + MutedStyle.Render("+ add (a)")
 	}
-	cursor := "  "
-	style := MutedStyle
-	if e.cursor == e.addRowIndex() {
-		cursor = "❯ "
-		style = SelectedStyle
+	shown := e.input
+	if r := []rune(shown); len(r) > listFieldWidth {
+		shown = string(r[len(r)-listFieldWidth:])
 	}
-	return cursor + style.Render("+ add entry")
+	shown += strings.Repeat(" ", max(listFieldWidth-lipgloss.Width(shown), 0))
+	return "  " + SepStyle.Render("[") + DetailStyle.Render(shown) + SepStyle.Render("]")
 }
 
 func truncList(s string) string {

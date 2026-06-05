@@ -248,9 +248,14 @@ func (m Model) handleListEditorKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m.mainKeyQuit()
 	}
-	if committed := m.settingsListEditor.Update(msg); committed {
+	done, save := m.settingsListEditor.Update(msg)
+	if !done {
+		return m, nil
+	}
+	if save {
 		return m.afterSettingChange(m.commitListEditor(), nil)
 	}
+	m.settingsListEditor = nil // esc — cancel, discard the edits
 	return m, nil
 }
 

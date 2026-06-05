@@ -142,6 +142,34 @@ func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
 	}
 }
 
+// TestListEditor_EscCancelsDiscards verifies esc closes the editor without
+// persisting (the conventional cancel) and without triggering a reload.
+func TestListEditor_EscCancelsDiscards(t *testing.T) {
+	ws := t.TempDir()
+	m := Model{
+		settingsCfg:         config.Defaults(),
+		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
+		settingsScopeCursor: 1,
+	}
+	m.settingsItems = m.buildScopeItems()
+	m.settingsCursor = cursorFor(m.settingsItems, skReadRoots)
+	m = m.activateSetting()
+	m.settingsListEditor.adding = true
+	m.settingsListEditor.input = "/x"
+	m.settingsListEditor.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})) // add /x in-memory
+
+	m, _ = m.handleListEditorKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if m.settingsListEditor != nil {
+		t.Error("esc should close the editor")
+	}
+	if m.pendingProjectReload != "" {
+		t.Error("esc cancel must not trigger a project reload")
+	}
+	if present, _ := config.ProjectValuePresent(ws, []string{"workspace", "read_roots"}); present {
+		t.Error("esc cancel must not write read_roots")
+	}
+}
+
 // TestCollectSettingsScopes_GlobalFirst verifies Global leads the scope list and
 // active workspaces follow.
 func TestCollectSettingsScopes_GlobalFirst(t *testing.T) {
