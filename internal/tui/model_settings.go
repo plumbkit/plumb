@@ -566,40 +566,55 @@ func settingsHeaderDisplay(group string, innerW int) string {
 }
 
 // settingsRowDisplay renders one aligned settings row: 1-space gap, cursor,
-// fixed-width label and value columns, the control, then the trailing mark.
+// fixed-width label and value columns, the control. In Global scope the
+// reload-tier numeral sits right after the setting name (¹ live / ² next session
+// / ³ restart — see settingsHintContent for the legend); in a workspace scope a
+// trailing mark shows override (● set) vs inherited.
 func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW int) string {
-	label := fmt.Sprintf("%-*s", labelW, it.label)
 	value := fmt.Sprintf("%-*s", valueW, it.value)
 	ctrl := settingControl(it)
 
+	numeral, numeralPlain := "", ""
+	if !wsScope {
+		numeral, numeralPlain = reloadNumeral(it.key)
+	}
+	pad := strings.Repeat(" ", max(labelW-lipgloss.Width(it.label)-lipgloss.Width(numeralPlain), 0))
+
 	var core string
 	if focused {
-		core = SelectedStyle.Render("❯ " + label + value + ctrl)
+		// The focused row renders in one SelectedStyle pass, so the numeral takes
+		// the selection colour (its tier colour is what matters on unfocused rows).
+		core = SelectedStyle.Render("❯ " + it.label + numeralPlain + pad + value + ctrl)
 	} else {
-		core = "  " + ItemStyle.Render(label) + DetailStyle.Render(value) + MutedStyle.Render(ctrl)
+		core = "  " + ItemStyle.Render(it.label) + numeral + pad + DetailStyle.Render(value) + MutedStyle.Render(ctrl)
 	}
-	return " " + core + " " + settingsRowMark(it, wsScope)
+	out := " " + core
+	if wsScope {
+		out += " " + settingsRowMark(it)
+	}
+	return out
 }
 
-// settingsRowMark renders the trailing marker. In a workspace scope it shows
-// whether the row is a workspace override (● set) or inherited; in Global scope
-// it shows the reload tier as a coloured numeral: ¹ live (green), ² next session
-// (yellow), ³ daemon restart (purple). See settingsHintContent for the legend.
-func settingsRowMark(it settingItem, wsScope bool) string {
-	if wsScope {
-		if it.overridden {
-			return OkStyle.Render("● set")
-		}
-		return MutedStyle.Render("inherited")
-	}
-	switch reloadTierFor(it.key) {
+// reloadNumeral returns the coloured reload-tier numeral and its plain rune (the
+// plain form is used in the focused row's single SelectedStyle render).
+func reloadNumeral(key settingKey) (coloured, plain string) {
+	switch reloadTierFor(key) {
 	case reloadNextSession:
-		return WarnStyle.Render("²")
+		return WarnStyle.Render("²"), "²"
 	case reloadRestart:
-		return RestartStyle.Render("³")
+		return RestartStyle.Render("³"), "³"
 	default:
-		return OkStyle.Render("¹")
+		return OkStyle.Render("¹"), "¹"
 	}
+}
+
+// settingsRowMark renders the trailing workspace-scope marker: ● set (the key is
+// a workspace override) or inherited (falls through to global/default).
+func settingsRowMark(it settingItem) string {
+	if it.overridden {
+		return OkStyle.Render("● set")
+	}
+	return MutedStyle.Render("inherited")
 }
 
 // settingsFooterRow renders one of the three pinned footer rows: a blank

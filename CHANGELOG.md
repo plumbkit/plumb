@@ -10,7 +10,7 @@ The Settings list-valued settings are now editable inline (so `read_roots`/`extr
 
 ### Changed
 
-- **Reload-tier indicators are colour-coded numerals.** The per-row mark and the status-bar legend now use `¹` (green = applies live), `²` (yellow = next session), `³` (purple = needs a daemon restart) instead of `live` / `next session` / `*`. New theme-independent `RestartStyle` (purple) in `styles.go`; the legend renders each numeral in its colour on the status bar.
+- **Reload-tier indicators are colour-coded numerals.** Each Global-scope row shows a coloured numeral **right after the setting name** — `¹` (green = applies live), `²` (yellow = next session), `³` (purple = needs a daemon restart) — explained in the status-bar legend (same numerals/colours), replacing the old `live` / `next session` / `*` trailing marks. New theme-independent `RestartStyle` (purple) in `styles.go`. (Workspace scopes keep the trailing `● set` / `inherited` mark instead.)
 - `handleKeyMsg` overlay dispatch extracted into `handleOverlayKey` (rename modal / list editor / popup / theme picker) to keep it under gocyclo 15; `handleRenameModalKey` now returns just `Model`.
 
 ## 0.8.44 (unreleased)
