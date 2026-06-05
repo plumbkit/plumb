@@ -580,13 +580,20 @@ func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW in
 	}
 	pad := strings.Repeat(" ", max(labelW-lipgloss.Width(it.label)-lipgloss.Width(numeralPlain), 0))
 
+	// In a workspace scope, dim inherited rows so the workspace overrides (● set)
+	// stand out at a glance.
+	labelStyle, valueStyle := ItemStyle, DetailStyle
+	if wsScope && !it.overridden {
+		labelStyle, valueStyle = FadedStyle, FadedStyle
+	}
+
 	var core string
 	if focused {
 		// The focused row renders in one SelectedStyle pass, so the numeral takes
 		// the selection colour (its tier colour is what matters on unfocused rows).
 		core = SelectedStyle.Render("❯ " + it.label + numeralPlain + pad + value + ctrl)
 	} else {
-		core = "  " + ItemStyle.Render(it.label) + numeral + pad + DetailStyle.Render(value) + MutedStyle.Render(ctrl)
+		core = "  " + labelStyle.Render(it.label) + numeral + pad + valueStyle.Render(value) + MutedStyle.Render(ctrl)
 	}
 	out := " " + core
 	if wsScope {
