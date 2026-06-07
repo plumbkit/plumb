@@ -58,6 +58,24 @@ func TestHTML_KindsExtracted(t *testing.T) {
 	}
 }
 
+// TestHTML_ScriptWithIdClassifiesAsImport pins the classify precedence for the
+// one attribute collision TestHTML_KindsExtracted does not cover: a <script>
+// carrying both src and id resolves to its external reference (Import), not the
+// id anchor (Constant).
+func TestHTML_ScriptWithIdClassifiesAsImport(t *testing.T) {
+	src := []byte(`<script src="/js/app.js" id="appjs"></script>` + "\n")
+	nodes, _, err := NewHTML().Extract(context.Background(), "x.html", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(names(nodes, topology.KindImport), "/js/app.js") {
+		t.Errorf("script src not classified as Import; got %v", names(nodes, topology.KindImport))
+	}
+	if slices.Contains(names(nodes, topology.KindConstant), "appjs") {
+		t.Errorf("script id must not produce a Constant anchor when src is present; got %v", names(nodes, topology.KindConstant))
+	}
+}
+
 func TestHTML_HeadingNameCollapsesInlineMarkup(t *testing.T) {
 	src := []byte("<h1>Hello <em>there</em>  world</h1>\n")
 	nodes, _, err := NewHTML().Extract(context.Background(), "x.html", src)
