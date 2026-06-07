@@ -57,6 +57,25 @@ func TestHumanAge(t *testing.T) {
 	}
 }
 
+func TestHumanBytes(t *testing.T) {
+	cases := []struct {
+		b    int64
+		want string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{1024, "1.0 KiB"},
+		{1536, "1.5 KiB"},
+		{1 << 20, "1.0 MiB"},
+		{3 * (1 << 20), "3.0 MiB"},
+	}
+	for _, tc := range cases {
+		if got := render.HumanBytes(tc.b); got != tc.want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", tc.b, got, tc.want)
+		}
+	}
+}
+
 func TestPadRight(t *testing.T) {
 	cases := []struct {
 		s     string

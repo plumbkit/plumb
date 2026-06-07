@@ -69,6 +69,21 @@ func PadRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-v)
 }
 
+// HumanBytes formats a byte count for one-line CLI/TUI output, using binary
+// (MiB/KiB) units. The shared presentation helper for byte sizes; note the
+// Intelligence-layer topology package keeps its own copy (status.formatBytes)
+// because it must not import this presentation package (layering rule).
+func HumanBytes(b int64) string {
+	switch {
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(b)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
 // PadLeft pads s with spaces on the left to the given visual width,
 // using lipgloss.Width to measure so ANSI codes are not counted.
 func PadLeft(s string, width int) string {

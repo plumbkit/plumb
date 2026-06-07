@@ -116,19 +116,3 @@ func TestTopologyIndexHealth(t *testing.T) {
 		})
 	}
 }
-
-func TestHumanBytes(t *testing.T) {
-	cases := []struct {
-		in   int64
-		want string
-	}{
-		{512, "512 B"},
-		{2048, "2.0 KiB"},
-		{3 * 1024 * 1024, "3.0 MiB"},
-	}
-	for _, c := range cases {
-		if got := humanBytes(c.in); got != c.want {
-			t.Errorf("humanBytes(%d) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}

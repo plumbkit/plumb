@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/render"
 	"github.com/golimpio/plumb/internal/topology"
 )
 
@@ -109,22 +110,10 @@ func topologyIndexHealth(st topology.Status) checkResult {
 		}
 	default:
 		detail := fmt.Sprintf("%d files, %d nodes, %d edges, %s",
-			st.IndexedFiles, st.TotalNodes, st.TotalEdges, humanBytes(st.DBSizeBytes))
+			st.IndexedFiles, st.TotalNodes, st.TotalEdges, render.HumanBytes(st.DBSizeBytes))
 		if len(st.Languages) > 0 {
 			detail += "  [" + strings.Join(st.Languages, ", ") + "]"
 		}
 		return checkResult{name: "topology", ok: true, detail: detail}
-	}
-}
-
-// humanBytes formats a byte count for one-line doctor output.
-func humanBytes(b int64) string {
-	switch {
-	case b >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
-	case b >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(b)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", b)
 	}
 }
