@@ -15,6 +15,7 @@ import (
 // Concurrency: TUI-thread only, like every other model field.
 type listEditor struct {
 	key     settingKey
+	lspLang string // non-empty when editing a per-language [lsp.<lang>] list field
 	title   string
 	entries []string
 	cursor  int    // 0..len(entries)-1 selects an entry

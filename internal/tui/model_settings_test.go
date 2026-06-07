@@ -400,8 +400,9 @@ func TestSettingsNavigation_ClampsAndSkipsNothing(t *testing.T) {
 		t.Errorf("cursor = %d after down, want 1", m.settingsCursor)
 	}
 
-	// Down past the end clamps to the last index.
-	for range 50 {
+	// Down past the end clamps to the last index (press more times than there are
+	// rows so the count of rows can grow without breaking this test).
+	for range len(m.settingsItems) + 5 {
 		m, _ = m.handleSettingsSectionKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	}
 	if want := len(m.settingsItems) - 1; m.settingsCursor != want {

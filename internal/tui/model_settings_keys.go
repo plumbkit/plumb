@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -36,6 +37,7 @@ func (m *Model) enterSettings() {
 	m.settingsScopeFocus = false
 	m.showThemePicker = false
 	m.settingsListEditor = nil
+	m.settingsTextEditor = nil
 	m.syncThemeCursor()
 }
 
@@ -100,6 +102,23 @@ func (m *Model) selectSettingAtBodyRow(y int) {
 	}
 }
 
+// selectSettingsScopeAtBodyRow focuses the Scope column and selects the scope
+// clicked at screen row y. The scope list renders as [title, blank, scope0,
+// scope1, …], so the first scope sits two rows below the body top.
+func (m *Model) selectSettingsScopeAtBodyRow(y int) {
+	row := y - bodyStartRow
+	if row < 0 || row >= m.settingsScrollHeight() {
+		return
+	}
+	idx := m.settingsScopeScroll + row - 2 // header + blank spacer precede scope rows
+	if idx < 0 || idx >= len(m.settingsScopes) {
+		return
+	}
+	m.settingsScopeFocus = true
+	m.settingsScopeCursor = idx
+	m.selectScope()
+}
+
 // syncThemeCursor points themePickerCursor at the live ActiveThemeName, using
 // the picker's grouped (dark-then-light) navigation order.
 func (m *Model) syncThemeCursor() {
@@ -137,11 +156,17 @@ func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 // separate from the section/global keys to keep each handler simple. When the
 // Scope column is focused it routes to handleScopeNavKey instead.
 func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
+	switch key { // scope-column resize works regardless of which pane is focused
+	case "[":
+		return m.adjustScopeWidth(-1), nil
+	case "]":
+		return m.adjustScopeWidth(1), nil
+	}
 	if m.settingsScopeFocus {
 		return m.handleScopeNavKey(key)
 	}
 	switch key {
-	case "tab":
+	case "tab", "shift+tab":
 		m.settingsScopeFocus = true
 		return m, nil
 	case "up", "k":
@@ -178,7 +203,7 @@ func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
 }
 
 // handleScopeNavKey drives the Scope column: up/down pick a scope (reloading the
-// rows for it), tab/right/enter return focus to the rows pane.
+// rows for it), tab/shift+tab/right/enter return focus to the rows pane.
 func (m Model) handleScopeNavKey(key string) (Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
@@ -191,7 +216,7 @@ func (m Model) handleScopeNavKey(key string) (Model, tea.Cmd) {
 			m.settingsScopeCursor++
 			m.selectScope()
 		}
-	case "tab", "right", "l", "enter", " ":
+	case "tab", "shift+tab", "right", "l", "enter", " ":
 		m.settingsScopeFocus = false
 	}
 	return m, nil
@@ -224,18 +249,36 @@ func (m Model) activateSetting() Model {
 		m.syncThemeCursor()
 		return m
 	case settingToggle:
+		if it.lspLang != "" {
+			return m.toggleLSP(it)
+		}
 		return m.toggleBool(it.key, it.value == "on")
 	case settingList:
-		return m.openListEditor(it.key)
+		return m.openListEditor(it)
+	case settingText:
+		return m.openTextEditor(it)
 	default:
 		return m
 	}
 }
 
+// toggleLSP flips a per-language [lsp.<lang>] enabled row and persists it in the
+// current scope.
+func (m Model) toggleLSP(it settingItem) Model {
+	v := it.value != "on"
+	if m.applyScopedLSP(it, v) {
+		m.settingsStatus = m.scopedStatus(it.key, it.lspLang+" enabled "+onOff(v))
+	}
+	return m
+}
+
 // openListEditor opens the list-value editor for a settingList row, seeded with
-// the effective list for the current scope.
-func (m Model) openListEditor(key settingKey) Model {
-	m.settingsListEditor = newListEditor(key, listLabel(key), m.effectiveList(key))
+// the effective list for the current scope. The row's lspLang (if any) is
+// carried so commit persists to the right [lsp.<lang>] field.
+func (m Model) openListEditor(it settingItem) Model {
+	ed := newListEditor(it.key, it.label, m.effectiveList(it))
+	ed.lspLang = it.lspLang
+	m.settingsListEditor = ed
 	return m
 }
 
@@ -267,6 +310,12 @@ func (m Model) commitListEditor() Model {
 		return m
 	}
 	entries := append([]string(nil), ed.entries...)
+	if ed.lspLang != "" {
+		if m.applyScopedLSP(settingItem{key: ed.key, lspLang: ed.lspLang}, entries) {
+			m.settingsStatus = m.scopedStatus(ed.key, fmt.Sprintf("%s → %d entr%s", ed.title, len(entries), plural(len(entries))))
+		}
+		return m
+	}
 	apply := func(c *config.Config) {
 		if p := listField(c, ed.key); p != nil {
 			*p = entries
@@ -278,16 +327,86 @@ func (m Model) commitListEditor() Model {
 	return m
 }
 
-// effectiveList returns the list value for key in the current scope: the merged
-// project value in a workspace scope, the global snapshot in Global.
-func (m Model) effectiveList(key settingKey) []string {
+// openTextEditor opens the single-line text editor for a settingText row
+// (currently the per-language [lsp.<lang>] command), seeded with the effective
+// value for the current scope.
+func (m Model) openTextEditor(it settingItem) Model {
+	m.settingsTextEditor = newTextEditor(it.key, it.lspLang, it.label, m.effectiveText(it))
+	return m
+}
+
+// handleTextEditorKey routes a key to the open text editor: enter saves, esc
+// cancels (discards).
+func (m Model) handleTextEditorKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.settingsTextEditor == nil {
+		return m, nil
+	}
+	if msg.String() == "ctrl+c" {
+		return m.mainKeyQuit()
+	}
+	done, save := m.settingsTextEditor.Update(msg)
+	if !done {
+		return m, nil
+	}
+	if save {
+		return m.afterSettingChange(m.commitTextEditor(), nil)
+	}
+	m.settingsTextEditor = nil // esc — cancel, discard
+	return m, nil
+}
+
+// commitTextEditor writes the editor's value to the active scope and closes it.
+func (m Model) commitTextEditor() Model {
+	ed := m.settingsTextEditor
+	m.settingsTextEditor = nil
+	if ed == nil {
+		return m
+	}
+	val := strings.TrimSpace(ed.input)
+	if ed.lspLang != "" {
+		if m.applyScopedLSP(settingItem{key: ed.key, lspLang: ed.lspLang}, val) {
+			m.settingsStatus = m.scopedStatus(ed.key, ed.title+" → "+pathOrDefault(val))
+		}
+	}
+	return m
+}
+
+// effectiveText returns the string value for a settingText row in the current
+// scope (currently only the per-language [lsp.<lang>] command).
+func (m Model) effectiveText(it settingItem) string {
 	cfg := m.settingsCfg
 	if scope := m.currentScope(); !scope.global {
 		if merged, err := config.LoadProject(m.settingsCfg, scope.folder); err == nil {
 			cfg = merged
 		}
 	}
-	if p := listField(&cfg, key); p != nil {
+	if it.lspLang != "" && it.key == skLSPCommand {
+		return cfg.LSP[it.lspLang].Command
+	}
+	return ""
+}
+
+// effectiveList returns the list value for a row in the current scope: the
+// merged project value in a workspace scope, the global snapshot in Global.
+// Handles both the static list fields and the per-language [lsp.<lang>] lists.
+func (m Model) effectiveList(it settingItem) []string {
+	cfg := m.settingsCfg
+	if scope := m.currentScope(); !scope.global {
+		if merged, err := config.LoadProject(m.settingsCfg, scope.folder); err == nil {
+			cfg = merged
+		}
+	}
+	if it.lspLang != "" {
+		e := cfg.LSP[it.lspLang]
+		switch it.key {
+		case skLSPArgs:
+			return append([]string(nil), e.Args...)
+		case skLSPRootMarkers:
+			return append([]string(nil), e.RootMarkers...)
+		}
+		return nil
+	}
+	if p := listField(&cfg, it.key); p != nil {
 		return append([]string(nil), (*p)...)
 	}
 	return nil
@@ -346,6 +465,9 @@ func (m Model) adjustSetting(dir int) (Model, tea.Cmd) {
 	it := m.settingsItems[m.settingsCursor]
 	switch it.kind {
 	case settingToggle:
+		if it.lspLang != "" {
+			return m.toggleLSP(it), nil
+		}
 		return m.toggleBool(it.key, it.value == "on"), nil
 	case settingNumber:
 		return m.setNumber(it, dir), nil

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ const (
 	settingToggle                    // enter/space flips on↔off
 	settingNumber                    // ←→ adjusts a numeric value
 	settingList                      // enter opens the list editor ([]string values)
+	settingText                      // enter opens a single-line text editor (string values)
 )
 
 // settingKey identifies which config field a settings row edits. The key
@@ -65,6 +67,11 @@ const (
 	skIdleThresholdMin
 	skEvictionTTLMin
 	skPathStyle
+	// Per-language [lsp.<lang>] rows carry the language in settingItem.lspLang.
+	skLSPEnabled
+	skLSPCommand
+	skLSPArgs
+	skLSPRootMarkers
 )
 
 // reloadTier classifies when a change to a setting takes effect. It mirrors
@@ -91,7 +98,8 @@ func reloadTierFor(key settingKey) reloadTier {
 	case skQuality, skQualityMode, skQualityTimeoutMs, skQualityMaxFindings, skAnalysers,
 		skAutoAttach, skAutoAttachPersist, skAllowDependencyReads, skExtraRoots, skReadRoots, skLSPTimeout,
 		skTopoResyncOnAttach, skTopoWatch, skTopoMaxFileSize,
-		skTopoResyncBatch, skTopoResyncPauseMs, skTopoResyncIntervalMin, skExcludePatterns:
+		skTopoResyncBatch, skTopoResyncPauseMs, skTopoResyncIntervalMin, skExcludePatterns,
+		skLSPEnabled, skLSPCommand, skLSPArgs, skLSPRootMarkers:
 		return reloadNextSession
 	default: // theme, path style, log level, edits, walk, topology enable, git, session
 		return reloadLive
@@ -110,6 +118,7 @@ type settingItem struct {
 	options    []string // option set for settingCycle
 	help       string   // one-line description, shown on the status bar's second line
 	overridden bool     // workspace scope: the key is set in the project config (not inherited)
+	lspLang    string   // non-empty for per-language [lsp.<lang>] rows; identifies the language
 }
 
 var (
@@ -159,7 +168,7 @@ func pathStyleValue(s string) string {
 // one-line help string shown on the status bar's second line when focused.
 func buildSettingItems(cfg config.Config) []settingItem {
 	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
-	return []settingItem{
+	return append([]settingItem{
 		{
 			group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName,
 			help: "Colour theme for the TUI and `plumb config show` syntax highlighting.",
@@ -320,7 +329,41 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			group: "Others", label: "lsp_query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
 			help: "Cap on a single LSP tool call when the caller carries no deadline. 0 disables.",
 		},
+	}, lspSettingItems(cfg)...)
+}
+
+// lspSettingItems builds the per-language [lsp.<lang>] rows (enable + command +
+// args + root_markers), one block per configured language in sorted order. Each
+// row carries its language in lspLang; the field is identified by the key.
+func lspSettingItems(cfg config.Config) []settingItem {
+	langs := make([]string, 0, len(cfg.LSP))
+	for l := range cfg.LSP {
+		langs = append(langs, l)
 	}
+	sort.Strings(langs)
+	out := make([]settingItem, 0, len(langs)*4)
+	for _, lang := range langs {
+		e := cfg.LSP[lang]
+		out = append(out,
+			settingItem{
+				group: "LSP servers", label: lang + " enabled", kind: settingToggle, key: skLSPEnabled, lspLang: lang,
+				value: onOff(e.Enabled), help: "Enable the " + lang + " language server (most non-Go/Python servers are opt-in).",
+			},
+			settingItem{
+				group: "LSP servers", label: lang + " command", kind: settingText, key: skLSPCommand, lspLang: lang,
+				value: pathOrDefault(e.Command), help: "Executable for the " + lang + " language server. Enter to edit.",
+			},
+			settingItem{
+				group: "LSP servers", label: lang + " args", kind: settingList, key: skLSPArgs, lspLang: lang,
+				value: listSummary(e.Args), help: "Command-line args passed to the " + lang + " server. Enter to edit.",
+			},
+			settingItem{
+				group: "LSP servers", label: lang + " root_markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang,
+				value: listSummary(e.RootMarkers), help: "Files that mark a " + lang + " project root. Enter to edit.",
+			},
+		)
+	}
+	return out
 }
 
 // pathOrDefault renders a path field, showing "(default)" when empty.
@@ -405,7 +448,7 @@ func settingsColumnWidths(items []settingItem) (labelW, valueW int) {
 // grouped, scrollable settings list with a pinned footer bar. Overlays (help,
 // section menu, theme picker) are composited on top.
 func (m Model) renderSettingsSection() string {
-	isOverlay := m.showHelp || m.sectionMenuOpen || m.showThemePicker || m.settingsListEditor != nil
+	isOverlay := m.showHelp || m.sectionMenuOpen || m.showThemePicker || m.settingsListEditor != nil || m.settingsTextEditor != nil
 	bodyHeight := max(m.height-6, 1)
 	innerW := m.width - 2
 	sepStyle := SepStyle
@@ -431,12 +474,47 @@ func (m Model) renderSettingsSection() string {
 	if m.settingsListEditor != nil {
 		final = m.settingsListEditor.renderModal(final, m.width, m.height)
 	}
+	if m.settingsTextEditor != nil {
+		final = m.settingsTextEditor.renderModal(final, m.width, m.height)
+	}
 	return final
 }
 
-// settingsScopeWidth is the width of the left Scope column.
+// settingsScopeWidth is the width of the left Scope column: the default (longest
+// scope label + 6) shifted by the user's [ / ] adjustment, clamped to bounds.
 func (m Model) settingsScopeWidth() int {
-	return clampWidth(m.width*18/100, 14, max(m.width/3, 14))
+	base, lo, hi := m.settingsScopeBounds()
+	return clampWidth(base+m.settingsScopeWDelta, lo, hi)
+}
+
+// settingsScopeBounds returns the default scope-column width (the widest scope
+// label plus 6 columns of breathing room) and the min/max it can be resized to.
+func (m Model) settingsScopeBounds() (base, lo, hi int) {
+	base = scopeLabelWidth(m.settingsScopes) + 6
+	lo = 10
+	hi = max(m.width-20, lo)
+	return base, lo, hi
+}
+
+// adjustScopeWidth widens (dir>0) or narrows (dir<0) the Scope column by storing
+// the delta from the default, clamped so the resulting width stays in bounds.
+func (m Model) adjustScopeWidth(dir int) Model {
+	base, lo, hi := m.settingsScopeBounds()
+	w := clampWidth(base+m.settingsScopeWDelta+dir*2, lo, hi)
+	m.settingsScopeWDelta = w - base
+	return m
+}
+
+// scopeLabelWidth returns the display width of the widest scope label (including
+// the "Scope" title), used to size the column to its content.
+func scopeLabelWidth(scopes []settingScope) int {
+	maxW := lipgloss.Width("Scope")
+	for _, sc := range scopes {
+		if n := lipgloss.Width(sc.label); n > maxW {
+			maxW = n
+		}
+	}
+	return maxW
 }
 
 // renderSettingsBody renders the two-pane Settings layout: the Scope column
@@ -479,6 +557,10 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 			scopeCell = InactiveStyle.Render(ansi.Strip(scopeCell))
 			rowCell = InactiveStyle.Render(ansi.Strip(rowCell))
 			div = SepInactiveStyle.Render("┆")
+		} else if m.settingsScopeFocus {
+			// Scope column has focus — dim the rows pane so the active pane stands out.
+			rowCell = InactiveStyle.Render(ansi.Strip(rowCell))
+			div = SepInactiveStyle.Render("┆")
 		}
 		sb.WriteString(sepStyle.Render("│") + scopeCell + div + rowCell + rightEdge + "\n")
 	}
@@ -508,20 +590,21 @@ func (m Model) settingsScopeLines(w int) []string {
 	lines := []string{titleStyle.Render(" Scope"), ""}
 	for i, sc := range m.settingsScopes {
 		selected := i == m.settingsScopeCursor
-		indicator := "○"
-		if selected {
-			indicator = "❯"
-		}
-		dot := "·"
+		// One first-column marker: the cursor (❯) when selected, otherwise the
+		// scope dot (● Global, · workspace).
+		marker := "·"
 		if sc.global {
-			dot = "●"
+			marker = "●"
+		}
+		if selected {
+			marker = "❯"
 		}
 		label := sc.label
-		avail := max(w-6, 4)
+		avail := max(w-4, 4)
 		if r := []rune(label); len(r) > avail {
 			label = string(r[:avail-1]) + "…"
 		}
-		line := " " + indicator + " " + dot + " " + label
+		line := " " + marker + " " + label
 		switch {
 		case selected:
 			lines = append(lines, SelectedStyle.Render(line))
@@ -669,8 +752,9 @@ func settingsHintContent(contentW int, wsScope bool) string {
 	legend := settingsLegend(wsScope)
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
-		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" scope")
-	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  tab scope")
+		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" scope  ·  ") +
+		SettingsBarKeyStyle.Render("[ ]") + SettingsBarStyle.Render(" width")
+	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  tab scope  ·  [ ] width")
 	gap := max(contentW-lipgloss.Width(legend)-shortcutW, 1)
 	return legend + SettingsBarStyle.Render(strings.Repeat(" ", gap)) + shortcut
 }
@@ -714,7 +798,7 @@ func settingControl(it settingItem) string {
 		return "‹ " + strings.Join(it.options, "·") + " ›"
 	case settingNumber:
 		return "‹ -/+ ›"
-	case settingList:
+	case settingList, settingText:
 		return "‹ edit ›"
 	default:
 		return ""

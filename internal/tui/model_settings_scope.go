@@ -49,7 +49,7 @@ func (m *Model) buildScopeItems() []settingItem {
 	raw, _ := config.LoadProjectRaw(scope.folder)
 	out := make([]settingItem, 0, len(buildSettingItems(merged)))
 	for _, it := range buildSettingItems(merged) {
-		path, ok := tomlPath(it.key)
+		path, ok := itemTOMLPath(it)
 		if !ok { // global-only setting: hidden in a workspace scope
 			continue
 		}
@@ -59,11 +59,84 @@ func (m *Model) buildScopeItems() []settingItem {
 	return out
 }
 
+// itemTOMLPath returns the TOML key path for a row, handling the dynamic
+// per-language [lsp.<lang>] rows (whose path depends on lspLang) and delegating
+// to the static tomlPath for everything else. The bool is false for global-only
+// settings (hidden in a workspace scope).
+func itemTOMLPath(it settingItem) ([]string, bool) {
+	if it.lspLang != "" {
+		field, ok := lspFieldName(it.key)
+		if !ok {
+			return nil, false
+		}
+		return []string{"lsp", it.lspLang, field}, true
+	}
+	return tomlPath(it.key)
+}
+
+// lspFieldName maps an LSP setting key to its TOML field name under [lsp.<lang>].
+func lspFieldName(key settingKey) (string, bool) {
+	switch key {
+	case skLSPEnabled:
+		return "enabled", true
+	case skLSPCommand:
+		return "command", true
+	case skLSPArgs:
+		return "args", true
+	case skLSPRootMarkers:
+		return "root_markers", true
+	default:
+		return "", false
+	}
+}
+
+// applyLSPField mutates the [lsp.<lang>] entry for the given field on c. Used as
+// the apply closure for both the global save and the workspace sparse write.
+func applyLSPField(c *config.Config, lang string, key settingKey, value any) {
+	if c.LSP == nil {
+		c.LSP = map[string]config.LSPConfig{}
+	}
+	e := c.LSP[lang]
+	switch key {
+	case skLSPEnabled:
+		e.Enabled, _ = value.(bool)
+	case skLSPCommand:
+		e.Command, _ = value.(string)
+	case skLSPArgs:
+		e.Args, _ = value.([]string)
+	case skLSPRootMarkers:
+		e.RootMarkers, _ = value.([]string)
+	}
+	c.LSP[lang] = e
+}
+
+// applyScopedLSP persists an LSP field change (value) for the row's language in
+// the current scope and refreshes the rows.
+func (m *Model) applyScopedLSP(it settingItem, value any) bool {
+	path, ok := itemTOMLPath(it)
+	if !ok {
+		return false
+	}
+	lang, key := it.lspLang, it.key
+	return m.applyScopedAt(path, value, func(c *config.Config) { applyLSPField(c, lang, key, value) })
+}
+
 // applyScopedSetting persists value for key in the current scope and refreshes
 // the rows. Global scope writes the whole config (apply mutates the snapshot
 // and pushes reload-config); a workspace writes only the key sparsely to its
 // .plumb/config.toml and pushes reload-project. Returns true on success.
 func (m *Model) applyScopedSetting(key settingKey, value any, apply func(*config.Config)) bool {
+	path, _ := tomlPath(key)
+	return m.applyScopedAt(path, value, apply)
+}
+
+// applyScopedAt persists value at the explicit TOML path in the current scope.
+// Global scope runs the full-config save (apply mutates the loaded config and
+// the snapshot, then pushes reload-config); a workspace writes only path
+// sparsely to its .plumb/config.toml and pushes reload-project. path may be nil
+// in Global scope (the apply closure is authoritative there); a workspace write
+// with no path is refused. Returns true on success.
+func (m *Model) applyScopedAt(path []string, value any, apply func(*config.Config)) bool {
 	scope := m.currentScope()
 	if scope.global {
 		if !m.persist(apply) {
@@ -73,8 +146,7 @@ func (m *Model) applyScopedSetting(key settingKey, value any, apply func(*config
 		m.settingsItems = m.buildScopeItems()
 		return true
 	}
-	path, ok := tomlPath(key)
-	if !ok {
+	if len(path) == 0 {
 		return false
 	}
 	if err := config.SetProjectValue(scope.folder, path, value); err != nil {
@@ -94,7 +166,7 @@ func (m Model) resetToInherit() Model {
 		return m
 	}
 	it := m.settingsItems[m.settingsCursor]
-	path, ok := tomlPath(it.key)
+	path, ok := itemTOMLPath(it)
 	if !ok {
 		return m
 	}

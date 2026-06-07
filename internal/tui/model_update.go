@@ -120,9 +120,7 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 		return
 	}
 	if m.currentSection == 4 {
-		if !m.showHelp && !m.showThemePicker && m.settingsListEditor == nil && !m.settingsScopeFocus {
-			m.selectSettingAtBodyRow(mouse.Y)
-		}
+		m.handleSettingsClick(mouse)
 		return
 	}
 	if m.onDivider(mouse.X) {
@@ -131,6 +129,22 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 		return
 	}
 	m.handleBodyAreaClick(mouse.X, mouse.Y)
+}
+
+// handleSettingsClick routes a click in the Settings section: a click in the
+// left Scope column (X within [1, scopeW], past the left border) selects a
+// scope; anywhere to its right selects a settings row. No-op while an overlay
+// or editor popup is open.
+func (m *Model) handleSettingsClick(mouse tea.Mouse) {
+	if m.showHelp || m.showThemePicker || m.settingsListEditor != nil || m.settingsTextEditor != nil {
+		return
+	}
+	if mouse.X >= 1 && mouse.X <= m.settingsScopeWidth() {
+		m.selectSettingsScopeAtBodyRow(mouse.Y)
+		return
+	}
+	m.settingsScopeFocus = false
+	m.selectSettingAtBodyRow(mouse.Y)
 }
 
 func (m *Model) handleBodyAreaClick(x, y int) {
@@ -220,6 +234,9 @@ func (m Model) handleOverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 		return m.handleRenameModalKey(msg), nil, true
 	case m.settingsListEditor != nil:
 		u, c := m.handleListEditorKey(msg)
+		return u, c, true
+	case m.settingsTextEditor != nil:
+		u, c := m.handleTextEditorKey(msg)
 		return u, c, true
 	case m.showPopup:
 		u, c := m.handlePopupKey(msg)

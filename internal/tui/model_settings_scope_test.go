@@ -40,7 +40,7 @@ func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 		t.Fatal("workspace scope produced no rows")
 	}
 	for _, it := range items {
-		if _, ok := tomlPath(it.key); !ok {
+		if _, ok := itemTOMLPath(it); !ok {
 			t.Errorf("workspace scope leaked a global-only row: %v", it.key)
 		}
 	}
@@ -167,6 +167,73 @@ func TestListEditor_EscCancelsDiscards(t *testing.T) {
 	}
 	if present, _ := config.ProjectValuePresent(ws, []string{"workspace", "read_roots"}); present {
 		t.Error("esc cancel must not write read_roots")
+	}
+}
+
+// TestLSPRows_WorkspaceEditsWriteNestedKeys exercises the per-language
+// [lsp.<lang>] rows in a workspace scope: the enable toggle and the command
+// text editor each write only their nested key, and appear in the merged config.
+func TestLSPRows_WorkspaceEditsWriteNestedKeys(t *testing.T) {
+	ws := t.TempDir()
+	m := Model{
+		settingsCfg:         config.Defaults(),
+		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
+		settingsScopeCursor: 1,
+	}
+	m.settingsItems = m.buildScopeItems()
+
+	// Find the first per-language enable row.
+	lang, enIdx := "", -1
+	for i, it := range m.settingsItems {
+		if it.lspLang != "" && it.key == skLSPEnabled {
+			lang, enIdx = it.lspLang, i
+			break
+		}
+	}
+	if enIdx < 0 {
+		t.Fatal("no per-language LSP enable row found")
+	}
+
+	// Toggle enabled → writes lsp.<lang>.enabled only.
+	want := !m.settingsCfg.LSP[lang].Enabled
+	m.settingsCursor = enIdx
+	m = m.activateSetting()
+	if present, _ := config.ProjectValuePresent(ws, []string{"lsp", lang, "enabled"}); !present {
+		t.Errorf("toggling %s enabled should write lsp.%s.enabled", lang, lang)
+	}
+	if m.pendingProjectReload != ws {
+		t.Errorf("pendingProjectReload = %q, want %q", m.pendingProjectReload, ws)
+	}
+	merged, err := config.LoadProject(config.Defaults(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.LSP[lang].Enabled != want {
+		t.Errorf("merged lsp.%s.enabled = %v, want %v", lang, merged.LSP[lang].Enabled, want)
+	}
+
+	// Edit command via the text editor → writes lsp.<lang>.command only.
+	m.settingsItems = m.buildScopeItems()
+	cmdIdx := -1
+	for i, it := range m.settingsItems {
+		if it.lspLang == lang && it.key == skLSPCommand {
+			cmdIdx = i
+			break
+		}
+	}
+	if cmdIdx < 0 {
+		t.Fatalf("no command row for %s", lang)
+	}
+	m.settingsCursor = cmdIdx
+	m = m.activateSetting()
+	if m.settingsTextEditor == nil {
+		t.Fatal("activating command should open the text editor")
+	}
+	m.settingsTextEditor.input = "/custom/bin/server"
+	m = m.commitTextEditor()
+	merged, _ = config.LoadProject(config.Defaults(), ws)
+	if merged.LSP[lang].Command != "/custom/bin/server" {
+		t.Errorf("merged lsp.%s.command = %q, want /custom/bin/server", lang, merged.LSP[lang].Command)
 	}
 }
 
