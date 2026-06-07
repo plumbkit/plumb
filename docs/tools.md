@@ -292,7 +292,13 @@ last error. **Inputs:** none.
 ### `topology_search`
 FTS5 ranked symbol/file search. **Inputs:** `query` (required), `kinds`
 (filter), `language` (filter), `limit` (default 20), `include_snippets`
-(default true).
+(default true), `rerank` (optional). When `[semantics]` is enabled (opt-in; an
+embedding API or a self-run OpenAI-compatible endpoint), results are re-ranked
+by semantic similarity to the query — the output is annotated
+`mode=fts+semantic`. FTS5 stays the authoritative spine: re-rank only re-orders
+its candidates and falls back to plain FTS5 (`mode=ranked`) on any error. Pass
+`rerank:false` to force the plain ranking, `rerank:true` to force re-rank when
+configured. See `docs/internal/semantic-search-design.md`.
 
 ### `topology_explore`
 BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`

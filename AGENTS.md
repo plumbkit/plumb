@@ -196,6 +196,22 @@ eviction_ttl_minutes   = 60   # daemon force-closes a connection idle this long;
 
 Global or per-project; no env override. `idle_threshold_minutes` is cosmetic — the TUI Sessions panel shows a `~` marker on a session with no tool call for longer than the threshold. `eviction_ttl_minutes` has teeth: a daemon-side reaper (fixed 5-min tick) cancels a connection whose last tool call was longer ago than the TTL, so a `plumb serve` whose agent silently disconnected (its stdio pipe held open by a parent process) is reclaimed instead of lingering. The TTL is read live (hot-reloaded); set `eviction_ttl_minutes = 0` to disable eviction entirely. A tool call is the activity signal — `LastSeenAt` is the session file's mtime, advanced by `session.Touch` after every call.
 
+### `[semantics]` — opt-in semantic re-rank for `topology_search`
+
+```toml
+[semantics]
+enabled           = false                    # OFF by default — zero cost until enabled
+provider          = "openai"                 # openai | voyage | jina | mistral | cohere | custom
+model             = ""                        # "" → the provider preset's default model
+base_url          = ""                        # "" → the preset's base URL; REQUIRED for custom
+api_key           = ""                        # literal key — highest precedence (see below)
+api_key_env       = ""                        # "" → the preset's default env var; the key's source when api_key is empty
+rerank_candidates = 50                        # how many FTS5 hits to re-rank
+timeout           = "10s"                      # per embedding HTTP call
+```
+
+Project-overridable, hot-reloaded. When `enabled`, `topology_search` re-ranks its FTS5 candidates by embedding similarity to the query (output annotated `mode=fts+semantic`); FTS5 stays the authoritative spine and any error falls back to the plain ranking (`mode=ranked`). **API / bring-your-own-endpoint only — plumb never bundles, downloads, or supervises a model** (the local-model spike found a small local model does not beat FTS5; see [`docs/internal/semantic-search-spike.md`](docs/internal/semantic-search-spike.md)). One OpenAI-compatible client (`internal/semantics`) covers `openai`, `voyage` (code-specialised `voyage-code-3`), `jina`, `mistral`, and any self-run OpenAI-compatible server (Ollama / llama.cpp / LM Studio / TEI / vLLM) via `provider = custom` + `base_url`; `cohere` uses a small adapter. **Key precedence:** a literal `api_key` wins; otherwise the key is read from the env var named by `api_key_env` (or the preset's default, e.g. `OPENAI_API_KEY`) — prefer the env var to keep secrets out of config files. Embeddings are cached lazily in `topology.db` (`topology_embeddings`, keyed by content hash), so only the candidates of an actual search are ever embedded — no upfront index build. No new dependencies, no build tag. Edit in the TUI Settings **Semantics** tab (the api key is masked) or `<workspace>/.plumb/config.toml`. Full design: [`docs/internal/semantic-search-design.md`](docs/internal/semantic-search-design.md).
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server:
