@@ -1,6 +1,5 @@
 # Grandfathered files awaiting a by-responsibility split (CLI/core review #15).
 # Format: <relative-path> <max-lines>. Capped at the recorded size, not 600, so
 # they cannot grow. Remove a line once the file drops under 600. Goal: empty.
-internal/cli/conn.go 1170
 internal/tui/model_settings.go 1138
 internal/tui/model_settings_keys.go 991

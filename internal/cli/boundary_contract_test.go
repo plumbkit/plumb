@@ -73,8 +73,8 @@ var knownToolGuarding = map[string]string{
 }
 
 // TestBoundaryGuardWiringComplete is the D10 registration-time contract test
-// from the path-access design doc. It scans registerAllTools in conn.go and
-// asserts:
+// from the path-access design doc. It scans registerAllTools in conn_register.go
+// and asserts:
 //  1. Every tools.New* constructor is classified in knownToolGuarding.
 //  2. Tools classified as "guard" have .WithBoundary in their registration line.
 //  3. Tools classified as "writedeps" receive wd as their first constructor arg.
@@ -84,13 +84,13 @@ var knownToolGuarding = map[string]string{
 // the map. Mirrors TestInputSchemasDeclareAdditionalProperties in internal/tools,
 // but guards the wiring layer rather than the schema layer.
 func TestBoundaryGuardWiringComplete(t *testing.T) {
-	src, err := os.ReadFile("conn.go")
+	src, err := os.ReadFile("conn_register.go")
 	if err != nil {
-		t.Fatalf("reading conn.go: %v", err)
+		t.Fatalf("reading conn_register.go: %v", err)
 	}
 	body := registerAllToolsBody(string(src))
 	if body == "" {
-		t.Fatal("could not locate registerAllTools in conn.go — was it renamed?")
+		t.Fatal("could not locate registerAllTools in conn_register.go — was it renamed?")
 	}
 
 	for _, line := range strings.Split(body, "\n") {

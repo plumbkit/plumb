@@ -1,0 +1,360 @@
+package cli
+
+// conn_attach.go — workspace attach, re-pin, and language detection.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/session"
+	"github.com/golimpio/plumb/internal/tools/txlog"
+)
+
+// attachWorkspace resolves rootURI to a project root, acquires the shared
+// language server if needed, and updates the session record.
+func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
+	folder := strings.TrimPrefix(rootURI, "file://")
+	if folder == "" || folder == "/" {
+		return
+	}
+	projectRoot, language, err := s.pool.Detect(folder)
+	if err != nil {
+		slog.Info("daemon: no project root found — deferring to first tool call", "folder", folder)
+		return
+	}
+	if projectRoot != folder {
+		folder = projectRoot
+	}
+
+	s.mutate(func(v *sessionView) {
+		if v.acquiredRoot != "" {
+			return
+		}
+		detectedLanguage := language
+		if detectedLanguage == LanguageNone {
+			detectedLanguage = detectAnyLanguageAt(folder, s.store.Current())
+		}
+		adapter := ""
+		if language != LanguageNone {
+			e, err := s.pool.acquireLang(ctx, folder, language, true)
+			if err != nil {
+				// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
+				// rather than aborting. The workspace is still attached for filesystem
+				// tools and stat tracking; LSP tools will surface their own errors.
+				s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
+				language = LanguageNone
+			} else {
+				s.sessionProxy.setPrimary(folder, e.proxy)
+				s.sessionInv.setPrimary(folder, e.inv)
+				v.lsRefRoot = folder
+				adapter = adapterForLanguage(language)
+			}
+		}
+		v.acquiredRoot = folder
+		v.acquiredLanguage = language
+		s.startQualityRunner(v, folder)
+		s.startTopologyIndexer(v, folder)
+		v.policy = s.buildPathPolicy(v)
+		s.warmDepRoots(language)
+		recoverWorkspaceTxlog(folder, txlog.Scan)
+		cn, cv := v.clientName, v.clientVersion
+		session.Patch(s.sessID, func(info *session.Info) {
+			info.Folder = folder
+			info.Language = language
+			info.DetectedLanguage = detectedLanguage
+			info.Adapter = adapter
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		s.log().Info("daemon: session attached", "root", folder, "language", language, "adapter", adapter)
+	})
+}
+
+// attachSynthetic records a synthetic workspace root when pool.Detect fails.
+func (s *connSession) attachSynthetic(_ context.Context, root string) {
+	s.mutate(func(v *sessionView) {
+		if v.acquiredRoot != "" {
+			return
+		}
+		v.acquiredRoot = root
+		s.startQualityRunner(v, root)
+		s.startTopologyIndexer(v, root)
+		v.policy = s.buildPathPolicy(v)
+		recoverWorkspaceTxlog(root, txlog.Scan)
+		cn, cv := v.clientName, v.clientVersion
+		session.Patch(s.sessID, func(info *session.Info) {
+			info.Folder = root
+			info.Language = LanguageNone
+			info.DetectedLanguage = detectAnyLanguageAt(root, s.store.Current())
+			info.Adapter = ""
+			info.Synthetic = true
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		s.log().Info("daemon: session auto-attached (synthetic)", "root", root)
+	})
+}
+
+// repinWorkspace deliberately switches the connection to a different workspace.
+// Unlike attachWorkspace (idempotent, first-wins — the safe default for
+// auto-resolution), this is driven only by an explicit session_start workspace
+// argument: an unambiguous declaration of intent. It tears down the previous
+// workspace's per-session subsystems (quality runner, topology store, LSP
+// routing) and re-attaches the new root, so a connection reused across
+// conversations (e.g. Claude Desktop) is no longer permanently welded to the
+// first project it touched. The ad-hoc boundary guard on other path tools is
+// unaffected — only this deliberate bootstrap call re-pins.
+//
+// folder may be any absolute path inside the target project. It is resolved to
+// a workspace root via pool.Detect; when no marker is found the folder itself
+// becomes the workspace (SynthesiseRoot), so an explicit pin always succeeds.
+// Returns the resolved root.
+func (s *connSession) repinWorkspace(ctx context.Context, folder string) (string, error) {
+	folder = strings.TrimPrefix(folder, "file://")
+	if folder == "" || folder == "/" {
+		return "", fmt.Errorf("repin: empty workspace path %q", folder)
+	}
+	root, language, err := s.pool.Detect(folder)
+	if err != nil {
+		// No .plumb/marker/.git found — the folder itself becomes the workspace.
+		root = s.pool.SynthesiseRoot(folder)
+		language = LanguageNone
+	}
+	if s.attachOrRepinTo(ctx, root, language) {
+		s.applyProjectConfig(root)
+	}
+	return root, nil
+}
+
+// onRootsChanged applies a client's updated workspace roots (the
+// notifications/roots/list_changed path). On the first attach it pins the root,
+// like OnInit. When the connection is already pinned and the client reports a
+// different root — an editor that genuinely switched folders — it re-pins to
+// follow the switch, closing the same "welded connection" gap that the
+// session_start re-pin fixed for clients that never report roots (Claude
+// Desktop). An empty or unchanged root is left alone: repinWorkspace no-ops when
+// the resolved root matches the current pin, so a spurious notification (or a
+// roots/list the client cannot satisfy) never tears the workspace down.
+func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
+	if s.view().acquiredRoot == "" {
+		s.attachWorkspace(ctx, rootURI)
+		s.applyProjectConfig(s.workspace())
+		return
+	}
+	folder := strings.TrimPrefix(rootURI, "file://")
+	if folder == "" || folder == "/" {
+		return // client reported no usable root — keep the current pin
+	}
+	if _, err := s.repinWorkspace(ctx, folder); err != nil {
+		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
+	}
+}
+
+// attachOrRepinTo points the connection at root, tearing down any previous
+// workspace's per-session subsystems first so the start* helpers (which no-op
+// when already started) re-create them for the new root. Returns true when the
+// root actually changed (false on a no-op re-pin to the same root). language is
+// the LSP language for root, or LanguageNone. The whole teardown-and-reattach
+// runs under the one mutation lane so readers never see a half-switched view.
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string) bool {
+	changed := false
+	s.mutate(func(v *sessionView) {
+		prev := v.acquiredRoot
+		if root == prev {
+			return
+		}
+		changed = true
+		// The pinned LS reference (if any) for the workspace we are leaving;
+		// released at the end once the new root is acquired, so the pool can reclaim
+		// the old server after its idle grace if no other session holds it.
+		prevRef := v.lsRefRoot
+		v.lsRefRoot = ""
+		if v.qualityRunner != nil {
+			v.qualityRunner.Stop()
+			v.qualityRunner = nil
+		}
+		v.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
+		// Per-session read/write tracking is workspace-relative: plumb has read and
+		// written nothing in the new project yet, so the dirty-guard and strict-mode
+		// read check must start clean rather than inherit the old root's paths.
+		s.readTracker.Reset()
+		s.writeTracker.Reset()
+
+		adapter := ""
+		if language != LanguageNone {
+			if e, aerr := s.pool.acquireLang(ctx, root, language, true); aerr != nil {
+				s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
+				language = LanguageNone
+			} else {
+				s.sessionProxy.resetPrimary(root, e.proxy)
+				s.sessionInv.resetPrimary(root, e.inv)
+				v.lsRefRoot = root
+				adapter = adapterForLanguage(language)
+			}
+		}
+		// Acquire-before-release: the new root is pinned above before we drop the
+		// old one, so even a re-pin back to a recently-left root never races teardown.
+		if prevRef != "" {
+			s.pool.release(prevRef)
+		}
+		detectedLanguage := language
+		if detectedLanguage == LanguageNone {
+			detectedLanguage = detectAnyLanguageAt(root, s.store.Current())
+		}
+		v.acquiredRoot = root
+		v.acquiredLanguage = language
+		v.lastCfgMtime = time.Time{}
+		s.startQualityRunner(v, root)
+		s.startTopologyIndexer(v, root)
+		v.policy = s.buildPathPolicy(v)
+		s.warmDepRoots(language)
+		recoverWorkspaceTxlog(root, txlog.Scan)
+		cn, cv := v.clientName, v.clientVersion
+		session.Patch(s.sessID, func(info *session.Info) {
+			info.Folder = root
+			info.Language = language
+			info.DetectedLanguage = detectedLanguage
+			info.Adapter = adapter
+			info.Synthetic = false
+			info.Health = ""
+			info.HealthMessage = ""
+			if cn != "" {
+				info.ClientName = cn
+				info.ClientVersion = cv
+			}
+		})
+		s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
+	})
+	return changed
+}
+
+// rootFromClient calls roots/list on the MCP client and resolves the first
+// root URI to a workspace path via pool.Detect.
+func (s *connSession) rootFromClient(ctx context.Context) string {
+	s.requestMu.RLock()
+	req := s.clientRequest
+	s.requestMu.RUnlock()
+	if req == nil {
+		return ""
+	}
+	uri := rootFromRoots(ctx, req)
+	if uri == "" {
+		return ""
+	}
+	folder := strings.TrimPrefix(uri, "file://")
+	if folder == "" || folder == "/" {
+		return ""
+	}
+	root, _, err := s.pool.Detect(folder)
+	if err != nil {
+		return folder
+	}
+	return root
+}
+
+// onBeforeTool resolves the workspace root from the tool arguments when the
+// session has no primary workspace yet. Applies auto-attach and auto-attach-
+// persist when configured.
+func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.RawMessage) {
+	if s.view().acquiredRoot != "" {
+		return
+	}
+	seedPath := seedPathFromArgs(args)
+	if seedPath == "" {
+		return
+	}
+	startDir := seedPath
+	if info, err := os.Stat(seedPath); err != nil || !info.IsDir() {
+		startDir = filepath.Dir(seedPath)
+	}
+	root, _, err := s.pool.Detect(startDir)
+	if err != nil {
+		if !s.store.Current().Workspace.AutoAttach {
+			s.log().Warn("daemon: cannot determine workspace root", "seed", "file://"+seedPath, "err", err)
+			return
+		}
+		synthRoot := s.pool.SynthesiseRoot(startDir)
+		s.attachSynthetic(toolCtx, synthRoot)
+		if s.store.Current().Workspace.AutoAttachPersist {
+			go func() {
+				if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {
+					s.log().Warn("daemon: failed to materialise .plumb/", "root", synthRoot, "err", mkErr)
+					return
+				}
+				s.log().Info("daemon: materialised .plumb/ at synthetic root", "root", synthRoot)
+			}()
+		}
+		s.applyProjectConfig(s.workspace())
+		s.startConfigWatcher()
+		return
+	}
+	s.attachWorkspace(toolCtx, "file://"+root)
+	s.applyProjectConfig(s.workspace())
+	s.startConfigWatcher()
+}
+
+func adapterForLanguage(language string) string {
+	switch language {
+	case "go":
+		return "gopls"
+	case "python":
+		return "pyright"
+	case "java":
+		return "jdtls"
+	case "rust":
+		return "rust-analyzer"
+	case "swift":
+		return "sourcekit-lsp"
+	case "zig":
+		return "zls"
+	case "typescript", "javascript":
+		return "typescript-language-server"
+	case "kotlin":
+		return "kotlin-language-server"
+	default:
+		return ""
+	}
+}
+
+func detectAnyLanguageAt(dir string, cfg config.Config) string {
+	langs := make([]string, 0, len(cfg.LSP))
+	for name, lspCfg := range cfg.LSP {
+		if len(lspCfg.RootMarkers) > 0 {
+			langs = append(langs, name)
+		}
+	}
+	sort.Slice(langs, func(i, j int) bool {
+		if langs[i] == "go" {
+			return true
+		}
+		if langs[j] == "go" {
+			return false
+		}
+		return langs[i] < langs[j]
+	})
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		for _, name := range langs {
+			for _, marker := range cfg.LSP[name].RootMarkers {
+				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
+					return name
+				}
+			}
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+	}
+}
