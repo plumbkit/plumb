@@ -4,4 +4,3 @@
 internal/cli/conn.go 1170
 internal/tui/model_settings.go 1138
 internal/tui/model_settings_keys.go 991
-internal/config/config.go 851
