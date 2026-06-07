@@ -25,6 +25,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: File size
+        run: ./scripts/check-file-size.sh
+
       - name: Test
         run: go test -race ./...
 

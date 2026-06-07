@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.golimpio.plumb
 
-.PHONY: build test test-race integration-test build-integration lint verify run clean tidy install-hooks codesign ts-wasm
+.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -67,6 +67,12 @@ build-integration: $(TESTCACHE)
 lint:
 	golangci-lint run
 
+# check-size fails if any non-test Go file exceeds the ~600-line rule (with a
+# grandfather baseline for files still awaiting a split). Keeps the standard
+# from regressing — see scripts/check-file-size.sh.
+check-size:
+	./scripts/check-file-size.sh
+
 run:
 	go run $(CMD)
 
@@ -83,8 +89,8 @@ ts-wasm:
 	bash internal/topology/extractors/wasmts/csrc/build.sh
 
 # verify is the definition of "ready to commit": build + test + lint + an
-# integration-tag compile pass (build-integration) in one target.
-verify: build test lint build-integration
+# integration-tag compile pass (build-integration) + the file-size guard.
+verify: build test lint build-integration check-size
 
 install-hooks:
 	cp scripts/pre-commit .git/hooks/pre-commit
