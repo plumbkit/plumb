@@ -55,10 +55,11 @@ type sessionView struct {
 	// budget entry is reclaimed once its last session leaves.
 	boundBudgetKey string
 
-	edits config.EditsConfig
-	walk  config.WalkConfig
-	git   config.GitConfig
-	ws    config.WorkspaceConfig
+	edits     config.EditsConfig
+	walk      config.WalkConfig
+	git       config.GitConfig
+	ws        config.WorkspaceConfig
+	semantics config.SemanticsConfig
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.
@@ -175,11 +176,12 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		logger:       slog.Default().With("session_id", sessID),
 	}
 	s.state.Store(&sessionView{
-		sessName: sessName,
-		edits:    cfg.Edits,
-		walk:     cfg.Walk,
-		git:      cfg.Git,
-		ws:       cfg.Workspace,
+		sessName:  sessName,
+		edits:     cfg.Edits,
+		walk:      cfg.Walk,
+		git:       cfg.Git,
+		ws:        cfg.Workspace,
+		semantics: cfg.Semantics,
 	})
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates

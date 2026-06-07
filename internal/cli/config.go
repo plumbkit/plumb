@@ -204,6 +204,18 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"timeout", projectCfg.LSPQuery.Timeout.String(), sourceFor("timeout", defaultsCfg.LSPQuery.Timeout, globalCfg.LSPQuery.Timeout, projectCfg.LSPQuery.Timeout)},
 	})
 
+	sem, gsem, dsem := projectCfg.Semantics, globalCfg.Semantics, defaultsCfg.Semantics
+	addConfigSection(cfgTable, "semantics", [][]string{
+		{"enabled", fmt.Sprintf("%v", sem.Enabled), sourceFor("enabled", dsem.Enabled, gsem.Enabled, sem.Enabled)},
+		{"provider", sem.Provider, sourceFor("provider", dsem.Provider, gsem.Provider, sem.Provider)},
+		{"model", sem.Model, sourceFor("model", dsem.Model, gsem.Model, sem.Model)},
+		{"base_url", sem.BaseURL, sourceFor("base_url", dsem.BaseURL, gsem.BaseURL, sem.BaseURL)},
+		{"api_key", maskConfigKey(sem.APIKey), sourceFor("api_key", dsem.APIKey, gsem.APIKey, sem.APIKey)},
+		{"api_key_env", sem.APIKeyEnv, sourceFor("api_key_env", dsem.APIKeyEnv, gsem.APIKeyEnv, sem.APIKeyEnv)},
+		{"rerank_candidates", fmt.Sprintf("%d", sem.RerankCandidates), sourceFor("rerank_candidates", dsem.RerankCandidates, gsem.RerankCandidates, sem.RerankCandidates)},
+		{"timeout", sem.Timeout.String(), sourceFor("timeout", dsem.Timeout, gsem.Timeout, sem.Timeout)},
+	})
+
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]
@@ -329,6 +341,15 @@ func registeredIcon(path string) string {
 		return tui.OkStyle.Render("✓")
 	}
 	return tui.WarnStyle.Render("✗")
+}
+
+// maskConfigKey renders a literal API key for `config show` without leaking it:
+// only whether one is set.
+func maskConfigKey(k string) string {
+	if k == "" {
+		return ""
+	}
+	return "(set)"
 }
 
 func contractConfigPath(p string) string {

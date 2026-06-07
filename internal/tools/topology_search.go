@@ -34,6 +34,10 @@ var topologySearchSchema = json.RawMessage(`{
       "type": "boolean",
       "description": "Include a short snippet showing the matching text. Default true.",
       "default": true
+    },
+    "rerank": {
+      "type": "boolean",
+      "description": "Re-rank FTS5 results by semantic similarity to the query (needs [semantics] enabled + an API key). Defaults to the [semantics].enabled config; pass false to force the plain FTS5 ranking, true to force re-rank when configured."
     }
   },
   "required": ["query"],
@@ -45,12 +49,28 @@ var topologySearchSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type TopologySearch struct {
 	storeFn func() *topology.Store
+	semFn   func() SemanticRerankConfig // nil-safe; semantic re-rank disabled when unset
 }
 
 // NewTopologySearch returns a new TopologySearch tool.
 // storeFn returns the current topology.Store for the session, or nil if disabled.
 func NewTopologySearch(storeFn func() *topology.Store) *TopologySearch {
 	return &TopologySearch{storeFn: storeFn}
+}
+
+// WithSemantics wires the semantic re-rank accessor (resolved live from
+// [semantics] config by the daemon). Nil-safe; when unset, topology_search is
+// the pure FTS5 baseline. Returns the receiver for chaining.
+func (t *TopologySearch) WithSemantics(fn func() SemanticRerankConfig) *TopologySearch {
+	t.semFn = fn
+	return t
+}
+
+func (t *TopologySearch) semanticConfig() SemanticRerankConfig {
+	if t.semFn == nil {
+		return SemanticRerankConfig{}
+	}
+	return t.semFn()
 }
 
 func (*TopologySearch) Name() string                 { return "topology_search" }
@@ -70,6 +90,7 @@ type topologySearchArgs struct {
 	Language        string   `json:"language"`
 	Limit           int      `json:"limit"`
 	IncludeSnippets bool     `json:"include_snippets"`
+	Rerank          *bool    `json:"rerank"` // nil = follow config; non-nil = force on/off
 }
 
 func (t *TopologySearch) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -84,11 +105,28 @@ func (t *TopologySearch) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if store == nil {
 		return topologyDisabledMessage(), nil
 	}
-	results, runErr := t.run(ctx, store, a)
+
+	// Re-rank when semantics is active and the caller did not opt out. When
+	// re-ranking, over-fetch FTS5 candidates so the cosine pass has a pool.
+	sem := t.semanticConfig()
+	doRerank := sem.active() && (a.Rerank == nil || *a.Rerank)
+	fetchLimit := a.Limit
+	if doRerank && sem.candidates() > fetchLimit {
+		fetchLimit = sem.candidates()
+	}
+
+	results, runErr := t.run(ctx, store, a, fetchLimit)
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatTopologySearchResults(results, a), nil
+	reranked := false
+	if doRerank {
+		results, reranked = rerankSearchResults(ctx, store, sem.Embedder, a.Query, results)
+	}
+	if len(results) > a.Limit {
+		results = results[:a.Limit]
+	}
+	return formatTopologySearchResults(results, a, reranked), nil
 }
 
 func parseTopologySearchArgs(raw json.RawMessage) (topologySearchArgs, error) {
@@ -109,25 +147,29 @@ func (a *topologySearchArgs) validate() error {
 	return nil
 }
 
-func (t *TopologySearch) run(ctx context.Context, store *topology.Store, a topologySearchArgs) ([]topology.SearchResult, error) {
+func (t *TopologySearch) run(ctx context.Context, store *topology.Store, a topologySearchArgs, fetchLimit int) ([]topology.SearchResult, error) {
 	if store == nil {
 		return nil, nil
 	}
 	opts := topology.SearchOpts{
 		Kinds:    a.Kinds,
 		Language: a.Language,
-		Limit:    a.Limit,
+		Limit:    fetchLimit,
 		Snippets: a.IncludeSnippets,
 	}
 	return store.Search(ctx, a.Query, opts)
 }
 
-func formatTopologySearchResults(results []topology.SearchResult, a topologySearchArgs) string {
+func formatTopologySearchResults(results []topology.SearchResult, a topologySearchArgs, reranked bool) string {
 	if len(results) == 0 {
 		return fmt.Sprintf("topology_search: no results for %q", a.Query)
 	}
+	mode := "ranked"
+	if reranked {
+		mode = "fts+semantic"
+	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "topology search: %d result(s) for %q (source=topology, mode=ranked)\n\n", len(results), a.Query)
+	fmt.Fprintf(&sb, "topology search: %d result(s) for %q (source=topology, mode=%s)\n\n", len(results), a.Query, mode)
 	for _, r := range results {
 		formatSearchResult(&sb, r, a.IncludeSnippets)
 	}

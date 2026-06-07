@@ -38,6 +38,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.walk = projectCfg.Walk
 		v.git = projectCfg.Git
 		v.ws = projectCfg.Workspace
+		v.semantics = projectCfg.Semantics
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}
