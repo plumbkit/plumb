@@ -147,6 +147,19 @@ func (m Model) commitTextEditor() Model {
 		if m.applyScopedLSP(settingItem{key: ed.key, lspLang: ed.lspLang}, val) {
 			m.settingsStatus = m.scopedStatus(ed.key, ed.title+" → "+pathOrDefault(val))
 		}
+		return m
+	}
+	apply := func(c *config.Config) {
+		if p := stringField(c, ed.key); p != nil {
+			*p = val
+		}
+	}
+	if m.applyScopedSetting(ed.key, val, apply) {
+		disp := pathOrDefault(val)
+		if ed.key == skSemAPIKey {
+			disp = maskedKey(val) // never echo the secret in the status line
+		}
+		m.settingsStatus = m.scopedStatus(ed.key, ed.title+" → "+disp)
 	}
 	return m
 }
@@ -163,7 +176,27 @@ func (m Model) effectiveText(it settingItem) string {
 	if it.lspLang != "" && it.key == skLSPCommand {
 		return cfg.LSP[it.lspLang].Command
 	}
+	if p := stringField(&cfg, it.key); p != nil {
+		return *p
+	}
 	return ""
+}
+
+// stringField returns a pointer to the string config field a settingText row
+// edits (the [semantics] text fields). Returns nil for non-string keys.
+func stringField(c *config.Config, key settingKey) *string {
+	switch key {
+	case skSemModel:
+		return &c.Semantics.Model
+	case skSemBaseURL:
+		return &c.Semantics.BaseURL
+	case skSemAPIKeyEnv:
+		return &c.Semantics.APIKeyEnv
+	case skSemAPIKey:
+		return &c.Semantics.APIKey
+	default:
+		return nil
+	}
 }
 
 // effectiveList returns the list value for a row in the current scope: the

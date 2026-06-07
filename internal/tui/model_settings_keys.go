@@ -68,11 +68,12 @@ func (m *Model) refreshSettingsItems() {
 // the three stops: the Scope column, the General tab, and the LSP tab. Switching
 // tab rebuilds the rows and resets the row cursor/scroll.
 func (m Model) settingsCycleFocus(dir int) Model {
-	pos := 0 // 0 = Scope, 1 = General, 2 = LSP
+	n := len(settingsTabNames) + 1 // stops: Scope + one per tab
+	pos := 0                       // 0 = Scope; 1+tab = that tab
 	if !m.settingsScopeFocus {
 		pos = 1 + m.settingsTab
 	}
-	pos = (pos + dir + 3) % 3
+	pos = (pos + dir + n) % n
 	if pos == 0 {
 		m.settingsScopeFocus = true
 		return m

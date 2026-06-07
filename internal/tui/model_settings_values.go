@@ -48,7 +48,7 @@ func (m Model) adjustCycle(it settingItem, dir int) (Model, tea.Cmd) {
 		return m.setLogFormat(cycleOption(logFormatOptions, m.settingsCfg.LogFormat, dir)), nil
 	case skPathStyle:
 		return m.setPathStyle(cycleOption(pathStyleOptions, m.settingsCfg.UI.PathStyle, dir)), nil
-	case skCacheTTL, skLSPTimeout:
+	case skCacheTTL, skLSPTimeout, skSemTimeout:
 		return m.setDuration(it.key, dir), nil
 	default:
 		return m.setCycle(it, dir), nil
@@ -133,6 +133,8 @@ func numberMeta(key settingKey) (int, string) {
 		return 5, "idle threshold (min)"
 	case skEvictionTTLMin:
 		return 5, "eviction ttl (min)"
+	case skSemRerankCandidates:
+		return 10, "rerank candidates"
 	default:
 		return 1, ""
 	}
@@ -164,6 +166,8 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Session.IdleThresholdMinutes
 	case skEvictionTTLMin:
 		return &c.Session.EvictionTTLMinutes
+	case skSemRerankCandidates:
+		return &c.Semantics.RerankCandidates
 	default:
 		return nil
 	}
@@ -176,6 +180,8 @@ func cycleMeta(key settingKey) ([]string, func(*config.Config, string), string) 
 	switch key {
 	case skQualityMode:
 		return qualityModeOptions, func(c *config.Config, v string) { c.Quality.Mode = v }, "quality mode"
+	case skSemProvider:
+		return config.SemanticsProviders, func(c *config.Config, v string) { c.Semantics.Provider = v }, "provider"
 	default:
 		return nil, nil, ""
 	}
@@ -234,6 +240,8 @@ func boolField(c *config.Config, key settingKey) *bool {
 		return &c.Git.AllowPush
 	case skAutoAttach:
 		return &c.Workspace.AutoAttach
+	case skSemEnabled:
+		return &c.Semantics.Enabled
 	default:
 		return nil
 	}
@@ -246,6 +254,8 @@ func durField(c *config.Config, key settingKey) (*config.Duration, []string) {
 		return &c.Cache.TTL, cacheTTLOptions
 	case skLSPTimeout:
 		return &c.LSPQuery.Timeout, lspTimeoutOptions
+	case skSemTimeout:
+		return &c.Semantics.Timeout, lspTimeoutOptions
 	default:
 		return nil, nil
 	}
@@ -275,6 +285,8 @@ func durLabel(key settingKey) string {
 		return "cache ttl"
 	case skLSPTimeout:
 		return "lsp query timeout"
+	case skSemTimeout:
+		return "semantics timeout"
 	default:
 		return ""
 	}
@@ -347,6 +359,8 @@ func toggleLabel(key settingKey) string {
 		return "git allow push"
 	case skAutoAttach:
 		return "workspace auto-attach"
+	case skSemEnabled:
+		return "semantics"
 	default:
 		return ""
 	}

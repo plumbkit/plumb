@@ -8,6 +8,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -76,6 +77,15 @@ const (
 	skLSPCommand
 	skLSPArgs
 	skLSPRootMarkers
+	// [semantics] rows (the Semantics tab).
+	skSemEnabled
+	skSemProvider
+	skSemModel
+	skSemBaseURL
+	skSemAPIKeyEnv
+	skSemAPIKey
+	skSemRerankCandidates
+	skSemTimeout
 )
 
 // reloadTier classifies when a change to a setting takes effect. It mirrors
@@ -125,6 +135,7 @@ type settingItem struct {
 	lspLang    string   // non-empty for per-language [lsp.<lang>] rows; identifies the language
 	lspMissing bool     // enabled LSP server whose command is not on PATH
 	list       []string // raw entries for settingList rows; rendered one per line
+	tab        int      // which rows-pane tab owns this row (settingsTabGeneral/LSP/Semantics)
 }
 
 var (
@@ -174,7 +185,7 @@ func pathStyleValue(s string) string {
 // one-line help string shown on the status bar's second line when focused.
 func buildSettingItems(cfg config.Config) []settingItem {
 	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
-	return append([]settingItem{
+	return append(append([]settingItem{
 		{
 			group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName,
 			help: "Colour theme for the TUI and `plumb config show` syntax highlighting.",
@@ -335,7 +346,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			group: "Others", label: "LSP query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
 			help: "Cap on a single LSP tool call when the caller carries no deadline. 0 disables.",
 		},
-	}, lspSettingItems(cfg)...)
+	}, lspSettingItems(cfg)...), semanticsSettingItems(cfg)...)
 }
 
 // lspSettingItems builds the per-language [lsp.<lang>] rows (enable + command +
@@ -375,7 +386,82 @@ func lspSettingItems(cfg config.Config) []settingItem {
 			},
 		)
 	}
+	for i := range out {
+		out[i].tab = settingsTabLSP
+	}
 	return out
+}
+
+// semanticsSettingItems builds the [semantics] rows (the Semantics tab): opt-in
+// API-backed semantic re-rank for topology_search. The api key row is masked.
+func semanticsSettingItems(cfg config.Config) []settingItem {
+	sem := cfg.Semantics
+	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
+	out := []settingItem{
+		{
+			group: "Semantics", label: "enabled", kind: settingToggle, key: skSemEnabled, value: onOff(sem.Enabled),
+			help: "Re-rank topology_search results by meaning, via your chosen embedding API. Off by default.",
+		},
+		{
+			group: "Semantics", label: "provider", kind: settingCycle, key: skSemProvider, value: semProviderValue(sem.Provider), options: config.SemanticsProviders,
+			help: "openai | voyage (code) | jina | mistral | cohere | custom (your own OpenAI-compatible endpoint).",
+		},
+		{
+			group: "Semantics", label: "model", kind: settingText, key: skSemModel, value: pathOrDefault(sem.Model),
+			help: "Embedding model id. Blank uses the provider's default (e.g. voyage-code-3).",
+		},
+		{
+			group: "Semantics", label: "base url", kind: settingText, key: skSemBaseURL, value: pathOrDefault(sem.BaseURL),
+			help: "API base URL. Blank uses the provider preset; required for custom (e.g. http://localhost:11434/v1).",
+		},
+		{
+			group: "Semantics", label: "api key env", kind: settingText, key: skSemAPIKeyEnv, value: semKeyEnvValue(sem),
+			help: "Name of the env var holding the API key (used when 'api key' is blank). ✓ = the var is set.",
+		},
+		{
+			group: "Semantics", label: "api key", kind: settingText, key: skSemAPIKey, value: maskedKey(sem.APIKey),
+			help: "Key stored in config; takes precedence over the env var. Prefer the env var to keep secrets out of files.",
+		},
+		{
+			group: "Semantics", label: "rerank candidates", kind: settingNumber, key: skSemRerankCandidates, value: itoa(sem.RerankCandidates),
+			help: "How many FTS5 hits to re-rank semantically. Default 50.",
+		},
+		{
+			group: "Semantics", label: "timeout", kind: settingCycle, key: skSemTimeout, value: durValue(sem.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
+			help: "Cap on a single embedding API call. Default 10s.",
+		},
+	}
+	for i := range out {
+		out[i].tab = settingsTabSemantics
+	}
+	return out
+}
+
+func semProviderValue(p string) string {
+	if p == "" {
+		return "openai"
+	}
+	return p
+}
+
+// maskedKey renders the api_key row: never the value, only whether one is set.
+func maskedKey(k string) string {
+	if k == "" {
+		return "(unset — using env)"
+	}
+	return "•••• (set in config)"
+}
+
+// semKeyEnvValue shows the resolved key env var name and whether it is set.
+func semKeyEnvValue(s config.SemanticsConfig) string {
+	env := s.KeySourceEnv()
+	if env == "" {
+		return "(none)"
+	}
+	if os.Getenv(env) != "" {
+		return env + " ✓"
+	}
+	return env + " ✗"
 }
 
 // lspOnPath reports whether cmd resolves to an executable on PATH (or via an
@@ -416,20 +502,20 @@ func listSummary(items []string) string {
 const (
 	settingsTabGeneral = iota
 	settingsTabLSP
+	settingsTabSemantics
 )
 
 // settingsTabHeaderRows is the height reserved at the top of the rows pane for
 // the tab bar plus the blank line beneath it.
 const settingsTabHeaderRows = 2
 
-var settingsTabNames = []string{"General", "LSP"}
+var settingsTabNames = []string{"General", "LSP", "Semantics"}
 
-// filterSettingsByTab keeps only the rows for the active tab. LSP rows are keyed
-// off a non-empty lspLang, so the split survives any change to the group label.
+// filterSettingsByTab keeps only the rows whose tab matches the active one.
 func filterSettingsByTab(items []settingItem, tab int) []settingItem {
 	out := make([]settingItem, 0, len(items))
 	for _, it := range items {
-		if (it.lspLang != "") == (tab == settingsTabLSP) {
+		if it.tab == tab {
 			out = append(out, it)
 		}
 	}
