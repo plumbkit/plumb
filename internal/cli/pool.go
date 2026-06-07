@@ -2,11 +2,8 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -14,18 +11,14 @@ import (
 	"github.com/golimpio/plumb/internal/cache"
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/lsp"
-	"github.com/golimpio/plumb/internal/lsp/adapters/gopls"
-	htmlls "github.com/golimpio/plumb/internal/lsp/adapters/html"
-	"github.com/golimpio/plumb/internal/lsp/adapters/jdtls"
-	"github.com/golimpio/plumb/internal/lsp/adapters/kotlin"
-	"github.com/golimpio/plumb/internal/lsp/adapters/pyright"
-	"github.com/golimpio/plumb/internal/lsp/adapters/rust"
-	"github.com/golimpio/plumb/internal/lsp/adapters/swift"
-	tsls "github.com/golimpio/plumb/internal/lsp/adapters/typescript"
-	"github.com/golimpio/plumb/internal/lsp/adapters/zig"
 	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 )
+
+// The pool is split across files by concern: workspace detection + the CLI
+// resolver live in pool_detect.go; per-language adapter construction and init
+// params in pool_adapters.go. This file holds the pool state and the
+// acquire/release/teardown lifecycle.
 
 // workspacePool keeps one language-server process alive per workspace root.
 // Multiple MCP sessions targeting the same root share a single LS process,
@@ -120,170 +113,6 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 // detached is torn down. See workspacePool.idleGrace.
 const poolIdleGrace = 90 * time.Second
 
-// LanguageNone is the sentinel language returned by Detect for workspaces
-// that are explicitly marked (via .plumb/) but have no enabled LSP language.
-// Filesystem tools, stats attribution, and project config all still work for
-// these workspaces; LSP tools fail with "LSP server not yet ready".
-const LanguageNone = "none"
-
-// Detect walks up from start looking for a workspace root, with three
-// markers tried in priority order at each directory (nearest directory wins,
-// since the walk returns on the first match):
-//
-//  1. A `.plumb/` marker. If an LSP language is also detectable from this
-//     directory or any ancestor, return (root, language). Otherwise return
-//     (root, "none") — the user marked this directory as a workspace, so we
-//     respect that even without LSP support.
-//  2. A configured language's root marker (`go.mod`, `pyproject.toml`, ...).
-//     Returns (root, language).
-//  3. A `.git/` directory. A git repository is an unambiguous project
-//     boundary, so a repo with no language marker (a scripts / multi-language
-//     repo) still resolves — returned as (root, "none"). This is what lets
-//     such workspaces attach in the default config; without it the session
-//     never resolves and the TUI shows "resolving…" forever. The user's $HOME
-//     is excluded: a dotfiles repo at $HOME must not turn all of $HOME into a
-//     workspace.
-//
-// If no marker is found, walk up to the parent. If we walk past the filesystem
-// root, return an error.
-func (p *workspacePool) Detect(start string) (root, language string, err error) {
-	// Stat $HOME once so the .git guard below can compare by filesystem
-	// identity (os.SameFile) rather than by string — a raw compare is defeated
-	// by a trailing slash or a symlink/firmlink alias of $HOME.
-	var homeInfo os.FileInfo
-	if home, herr := os.UserHomeDir(); herr == nil && home != "" {
-		homeInfo, _ = os.Stat(home)
-	}
-	d := filepath.Clean(start)
-	for {
-		// Highest priority: explicit .plumb marker. Honour it even when no
-		// LSP language matches — the user has declared this directory a
-		// plumb workspace, and stats / project config should follow that
-		// declaration regardless of whether gopls or pyright can attach.
-		if _, err := os.Stat(filepath.Join(d, ".plumb")); err == nil {
-			if lang := p.detectLanguageAt(d); lang != "" {
-				return d, lang, nil
-			}
-			return d, LanguageNone, nil
-		}
-		// Next: first language whose root marker exists.
-		for _, l := range p.langs {
-			for _, marker := range l.cfg.RootMarkers {
-				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
-					return d, l.name, nil
-				}
-			}
-		}
-		// Lowest priority: a .git directory marks a project boundary even
-		// without a language. Skip $HOME (by filesystem identity, so a
-		// non-canonical spelling cannot defeat the guard) so a dotfiles repo
-		// there does not capture the whole home directory, and skip the
-		// filesystem root.
-		if d != filepath.Dir(d) && !sameDirAs(d, homeInfo) {
-			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-				return d, LanguageNone, nil
-			}
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return "", "", fmt.Errorf("no project root found in or above %s", start)
-		}
-		d = parent
-	}
-}
-
-// sameDirAs reports whether dir refers to the same directory as info (typically
-// the user's $HOME), comparing by filesystem identity via os.SameFile. This is
-// robust to trailing slashes, "."/".." segments, and symlink / macOS-firmlink
-// aliasing, where a raw string compare against $HOME would be defeated by any
-// non-canonical spelling. Returns false when info is nil (home undeterminable)
-// or dir cannot be stat'd, leaving the .git guard inert rather than refusing a
-// legitimate repo in those cases.
-func sameDirAs(dir string, info os.FileInfo) bool {
-	if info == nil {
-		return false
-	}
-	di, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	return os.SameFile(di, info)
-}
-
-// SynthesiseRoot returns a synthetic workspace root for seedDir, used as a
-// last resort when Detect has already failed. It walks up from seedDir
-// looking for a .git directory (the conventional project-root signal for
-// unrecognised languages). If found, that directory is returned. If the
-// filesystem root is reached without finding .git, seedDir itself is
-// returned as the safest approximation.
-//
-// SynthesiseRoot must only be called on the Detect error path in
-// OnBeforeTool — never inside route() or LSP-routing paths.
-func (p *workspacePool) SynthesiseRoot(seedDir string) string {
-	d := seedDir
-	for {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return d
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return seedDir // reached filesystem root — use the seed itself
-		}
-		d = parent
-	}
-}
-
-// detectLanguageAt returns the language for dir based on which root marker
-// is present at dir or any ancestor. Used after a .plumb/ marker is found
-// to determine which adapter to start.
-func (p *workspacePool) detectLanguageAt(dir string) string {
-	d := dir
-	for {
-		for _, l := range p.langs {
-			for _, marker := range l.cfg.RootMarkers {
-				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
-					return l.name
-				}
-			}
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return ""
-		}
-		d = parent
-	}
-}
-
-// resolveCLIWorkspace resolves start to the same workspace root the daemon
-// would use, without acquiring or starting a language server. If no project
-// marker exists, it returns start unchanged so explicit non-project inspection
-// paths keep their current behaviour.
-func resolveCLIWorkspace(start string, cfg config.Config) (string, error) {
-	if start == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("getwd: %w", err)
-		}
-		start = cwd
-	}
-	abs, err := filepath.Abs(start)
-	if err != nil {
-		return "", fmt.Errorf("resolving workspace path %s: %w", start, err)
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return "", fmt.Errorf("stat workspace path %s: %w", abs, err)
-	}
-	if !info.IsDir() {
-		abs = filepath.Dir(abs)
-	}
-	root, _, err := newWorkspacePool(context.Background(), cfg).Detect(abs)
-	if err != nil {
-		return abs, nil
-	}
-	return root, nil
-}
-
 // firstStartGrace bounds the inline wait for a freshly started language server.
 // A fast/warm server (small module) finishes Initialize+Initialized well inside
 // this window, so the first tool call still gets full LSP results inline. A slow
@@ -291,6 +120,13 @@ func resolveCLIWorkspace(start string, cfg config.Config) (string, error) {
 // entry and keeps warming in the background, so the tool falls back to the
 // tree-sitter index instead of blocking until the MCP client times out.
 const firstStartGrace = 2 * time.Second
+
+// poolCloseGrace bounds the LSP graceful-shutdown handshake per entry during
+// pool.close(). jsonrpc Call/Notify honour their context, so a cold or hung
+// language server unblocks at this deadline instead of stalling daemon exit;
+// sup.Stop() then kills the process regardless. The daemon's shutdown watchdog
+// (shutdownHardDeadline) is the outer backstop.
+const poolCloseGrace = 2 * time.Second
 
 // acquireLang returns (or starts) the shared workspace state for root, never
 // blocking on a slow cold-start. Pass "" for language to detect from root
@@ -510,80 +346,6 @@ func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
 	return config.LSPConfig{}, false
 }
 
-// newAdapter constructs the right adapter for a language.
-func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
-	switch language {
-	case "go":
-		return gopls.New(conn), nil
-	case "java":
-		return jdtls.New(conn), nil
-	case "python":
-		return pyright.New(conn), nil
-	case "rust":
-		return rust.New(conn), nil
-	case "swift":
-		return swift.New(conn), nil
-	case "zig":
-		return zig.New(conn), nil
-	case "typescript":
-		return tsls.New(conn), nil
-	case "kotlin":
-		return kotlin.New(conn), nil
-	case "html":
-		return htmlls.New(conn), nil
-	default:
-		return nil, fmt.Errorf("no adapter registered for language %q", language)
-	}
-}
-
-// initParamsFor builds the Initialize params for a language.
-func initParamsFor(language, rootURI string) protocol.InitializeParams {
-	switch language {
-	case "java":
-		return jdtls.DefaultInitParams(rootURI)
-	case "python":
-		return pyright.DefaultInitParams(rootURI)
-	case "rust":
-		return rust.DefaultInitParams(rootURI)
-	case "swift":
-		return swift.DefaultInitParams(rootURI)
-	case "zig":
-		return zig.DefaultInitParams(rootURI)
-	case "typescript":
-		return tsls.DefaultInitParams(rootURI)
-	case "kotlin":
-		return kotlin.DefaultInitParams(rootURI)
-	case "html":
-		return htmlls.DefaultInitParams(rootURI)
-	default:
-		return gopls.DefaultInitParams(rootURI)
-	}
-}
-
-// argsFor returns the supervisor args for the given language and workspace root.
-// For most languages this is lspCfg.Args verbatim. Java is special: jdtls
-// requires a -data <dir> argument pointing to an Eclipse workspace storage
-// directory. Using a per-root directory prevents classpath conflicts when
-// multiple Java projects are open simultaneously.
-func argsFor(language, root string, lspCfg config.LSPConfig) []string {
-	if language != "java" {
-		return lspCfg.Args
-	}
-	dataDir := jdtlsDataDir(root)
-	_ = os.MkdirAll(dataDir, 0o700)
-	out := make([]string, len(lspCfg.Args), len(lspCfg.Args)+2)
-	copy(out, lspCfg.Args)
-	return append(out, "-data", dataDir)
-}
-
-// jdtlsDataDir returns a per-workspace Eclipse workspace data directory for
-// jdtls. The directory name is derived from a hash of the workspace root so
-// each project gets isolated Eclipse state.
-func jdtlsDataDir(root string) string {
-	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(config.CacheDir(), "jdtls-data", fmt.Sprintf("%x", sum[:8]))
-}
-
 // lookup returns the entry for root if it has already been acquired, or nil
 // if no entry exists. Unlike acquire, lookup never starts a new LS.
 func (p *workspacePool) lookup(root string) *poolEntry {
@@ -591,13 +353,6 @@ func (p *workspacePool) lookup(root string) *poolEntry {
 	defer p.mu.Unlock()
 	return p.entries[root]
 }
-
-// poolCloseGrace bounds the LSP graceful-shutdown handshake per entry during
-// pool.close(). jsonrpc Call/Notify honour their context, so a cold or hung
-// language server unblocks at this deadline instead of stalling daemon exit;
-// sup.Stop() then kills the process regardless. The daemon's shutdown watchdog
-// (shutdownHardDeadline) is the outer backstop.
-const poolCloseGrace = 2 * time.Second
 
 // close shuts down all LS processes. Safe to call from multiple goroutines
 // but intended to be called once at daemon shutdown. Entries are torn down
