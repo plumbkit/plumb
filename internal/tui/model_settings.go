@@ -245,7 +245,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			help: "Periodic full-resync fallback interval. Suppressed while watching; 0 disables.",
 		},
 		{
-			group: "Indexing", label: "exclude_patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns),
+			group: "Indexing", label: "Exclude patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns),
 			help: "Path globs to skip during indexing. Enter to edit the list.",
 		},
 
@@ -266,24 +266,24 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			help: "Cap on findings appended per file to keep responses bounded.",
 		},
 		{
-			group: "Quality", label: "analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers),
+			group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers),
 			help: "Which analysers to run (e.g. golangci-lint). Enter to edit the list.",
 		},
 
 		{
-			group: "Git", label: "git allow_writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites),
+			group: "Git", label: "Git allow writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites),
 			help: "Gate the safe-write tier (add, commit, switch, branch/tag create, stash).",
 		},
 		{
-			group: "Git", label: "git allow_destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive),
+			group: "Git", label: "Git allow destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive),
 			help: "Gate reset/clean/checkout/restore/rebase/revert (each call also needs confirm).",
 		},
 		{
-			group: "Git", label: "git allow_push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush),
+			group: "Git", label: "Git allow push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush),
 			help: "Gate push/fetch/pull (each call also needs confirm). Protected branches stay safe.",
 		},
 		{
-			group: "Git", label: "protected_branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches),
+			group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches),
 			help: "Branches that may never be force-pushed, even with allow_push. Enter to edit.",
 		},
 
@@ -297,36 +297,36 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		},
 
 		{
-			group: "Workspace", label: "auto_attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach),
+			group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach),
 			help: "Fall back to the nearest .git/ or seed dir when no marker is found (LSP unavailable).",
 		},
 		{
-			group: "Workspace", label: "auto_attach_persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist),
+			group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist),
 			help: "Create .plumb/ at the synthetic root on first auto-attach (implies auto_attach).",
 		},
 		{
-			group: "Workspace", label: "allow_dependency_reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads),
+			group: "Workspace", label: "Allow dependency reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads),
 			help: "Let read/search tools reach the Go module cache + GOROOT read-only.",
 		},
 		{
-			group: "Workspace", label: "extra_roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots),
+			group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots),
 			help: "Extra dirs read+write tools may reach beyond the workspace. Enter to edit.",
 		},
 		{
-			group: "Workspace", label: "read_roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots),
+			group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots),
 			help: "Extra read-only dirs (compare another project). Enter to edit the list.",
 		},
 
 		{
-			group: "Others", label: "cache ttl", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions,
+			group: "Others", label: "Cache TTL", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions,
 			help: "Session symbol-cache time-to-live. Needs a daemon restart.",
 		},
 		{
-			group: "Others", label: "cache max_size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize),
+			group: "Others", label: "Cache max size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize),
 			help: "Max entries in the session symbol cache. Needs a daemon restart.",
 		},
 		{
-			group: "Others", label: "lsp_query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
+			group: "Others", label: "LSP query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
 			help: "Cap on a single LSP tool call when the caller carries no deadline. 0 disables.",
 		},
 	}, lspSettingItems(cfg)...)
@@ -358,7 +358,7 @@ func lspSettingItems(cfg config.Config) []settingItem {
 				value: listSummary(e.Args), help: "Command-line args passed to the " + lang + " server. Enter to edit.",
 			},
 			settingItem{
-				group: "LSP servers", label: lang + " root_markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang,
+				group: "LSP servers", label: lang + " root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang,
 				value: listSummary(e.RootMarkers), help: "Files that mark a " + lang + " project root. Enter to edit.",
 			},
 		)
@@ -481,18 +481,20 @@ func (m Model) renderSettingsSection() string {
 }
 
 // settingsScopeWidth is the width of the left Scope column: the default (longest
-// scope label + 6) shifted by the user's [ / ] adjustment, clamped to bounds.
+// scope label + 3) shifted by the user's [ / ] adjustment, clamped to bounds.
 func (m Model) settingsScopeWidth() int {
 	base, lo, hi := m.settingsScopeBounds()
 	return clampWidth(base+m.settingsScopeWDelta, lo, hi)
 }
 
-// settingsScopeBounds returns the default scope-column width (the widest scope
-// label plus 6 columns of breathing room) and the min/max it can be resized to.
+// settingsScopeBounds returns the default scope-column width and the min/max it
+// can be resized to. The default is the widest scope label plus 3 columns of
+// breathing room, but capped at 30% of the screen so long workspace names do not
+// crowd out the settings pane; [ / ] can still widen it up to hi.
 func (m Model) settingsScopeBounds() (base, lo, hi int) {
-	base = scopeLabelWidth(m.settingsScopes) + 6
 	lo = 10
 	hi = max(m.width-20, lo)
+	base = min(scopeLabelWidth(m.settingsScopes)+3, max(m.width*30/100, lo))
 	return base, lo, hi
 }
 
@@ -542,7 +544,14 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 	var sb strings.Builder
 	for i := range bodyHeight {
 		if i >= scrollH {
-			sb.WriteString(sepStyle.Render("│") + m.settingsFooterRow(i-scrollH, innerW, isOverlay) + sepStyle.Render("│") + "\n")
+			footerIdx := i - scrollH
+			footer := m.settingsFooterRow(footerIdx, innerW, isOverlay)
+			if footerIdx == 0 {
+				// Extend the scope/rows divider one row into the blank separator so the
+				// vertical line reaches the footer instead of stopping a row short.
+				footer = settingsBlankDividerRow(scopeW, innerW, isOverlay || m.settingsScopeFocus)
+			}
+			sb.WriteString(sepStyle.Render("│") + footer + sepStyle.Render("│") + "\n")
 			continue
 		}
 		scope, _ := bodyColumn(scopeVis, scopeBar, i)
@@ -565,6 +574,20 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 		sb.WriteString(sepStyle.Render("│") + scopeCell + div + rowCell + rightEdge + "\n")
 	}
 	return sb.String()
+}
+
+// settingsBlankDividerRow renders a blank separator row that still carries the
+// scope/rows divider, so the vertical line extends one row below the last
+// settings row to meet the footer (no gap). The divider dims when the rows pane
+// is inactive (overlay or scope-focused), matching the body divider.
+func settingsBlankDividerRow(scopeW, innerW int, dim bool) string {
+	div := SepStyle.Render("┆")
+	if dim {
+		div = SepInactiveStyle.Render("┆")
+	}
+	left := lipgloss.NewStyle().Width(scopeW).Render("")
+	right := lipgloss.NewStyle().Width(max(innerW-scopeW-1, 0)).Render("")
+	return left + div + right
 }
 
 // clampOffset bounds a scroll offset to [0, total-visible].

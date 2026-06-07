@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.46 (unreleased)
+
+Settings gains per-language `[lsp.<lang>]` editing and a resizable, focus-aware Scope column.
+
+### Added
+
+- **Per-language `[lsp.<lang>]` editing in Settings.** Each enabled language gets enable / command / args / root-markers rows; string fields (command) open a new single-line text editor (`internal/tui/model_settings_texteditor.go`, `settingText` kind) and the list fields reuse the inline list editor. Settings mouse handling is now column-aware, mapping clicks to the correct pane and row across the Scope and rows columns.
+- **Resizable Scope column.** `[` / `]` narrow / widen the Settings Scope column from either pane (`adjustScopeWidth`, stored as a delta from the default in `settingsScopeWDelta`). The default width is the widest scope label **+ 3**, capped at **30% of the screen** so long workspace names never crowd out the settings rows; `]` can still widen past that up to `width-20`. The hint bar advertises `[ ] width`.
+
+### Changed
+
+- **Single Scope-column marker.** The cursor and the scope dot collapse into one first-column marker — `❯` on the selected scope, otherwise `●` (Global) / `·` (workspace) — so the selected row reads `❯ Global` instead of `❯ ● Global`.
+- **Focus-aware Settings panes.** While the Scope column has focus the rows pane (and its divider) render dimmed (`InactiveStyle`), so the active pane stands out. `shift+tab` now also returns focus to the Scope column (previously only `tab`), and toggles back to the rows pane. The scope/rows divider now extends one row into the blank footer separator (`settingsBlankDividerRow`) so the vertical line reaches the footer instead of stopping a row short.
+- **Plain-English Settings labels.** The remaining snake_case row labels are normalised to the screen's sentence-case convention — e.g. `auto_attach` → `Auto attach`, `extra_roots` → `Extra roots`, `git allow_writes` → `Git allow writes`, `protected_branches` → `Protected branches`, `lsp_query timeout` → `LSP query timeout`, and the per-language `root_markers` → `root markers`.
+
 ## 0.8.45 (unreleased)
 
 The Settings list-valued settings are now editable inline (so `read_roots`/`extra_roots` and friends can be set per-workspace in the TUI), and the reload-tier indicators are colour-coded numerals.
@@ -60,6 +75,10 @@ TSX/JSX moves onto the **canonical** tree-sitter grammar via WASM — the last f
 ### Removed
 
 - **`internal/topology/extractors/treesitter/typescript.go` and `ts_lex_states.go`** — the gotreesitter TS extractor and its hand-maintained `typescriptExternalLexStates`/`tsxExternalLexStates` tables. The version-fragile lex-states hack is gone; TS/TSX correctness now rides the canonical grammar. The regex extractor (`internal/topology/extractors/typescript/`) is kept only as the wasmts init-failure fallback.
+
+### Fixed
+
+- **`plumb diagnostics` scanned the wrong language, and the shared write-budget ignored rate-limit reloads (`a5cdd67`, backfilled).** `detectDiagnosticsLang` (`internal/cli/diagnostics.go`) now leads with `go.mod`/`go.work`, so a Go repo with a co-located `package.json`/`tsconfig.json`/`index.html` is no longer misdetected as TS/HTML and reported with zero Go diagnostics; it also returns a per-language **glob list** (`*.ts`/`*.tsx`/`*.js`/`*.jsx`/`*.mjs`/`*.cjs` for the JS/TS family, `*.html`/`*.htm` for HTML), so a `.js`-only project is actually scanned (was a single `*.ts`). Separately, the shared `(client, workspace)` write-rate-limit parent is now a refcounted registry (`internal/cli/shared_budgets.go`): it re-applies the session's resolved limit on every bind so an `[edits].rate_limit_per_minute` reload propagates to the shared cap without a daemon restart, and entries are released when their last session leaves instead of leaking until restart. Guards: `TestDetectDiagnosticsLang`, `TestSharedBudgets_AcquireReleaseRefcount`, `TestSharedBudgets_AcquireUpdatesLimit`, `TestBindWriteLimiterParent_RepinReleasesOldBudget`.
 
 ## 0.8.41 (unreleased)
 
