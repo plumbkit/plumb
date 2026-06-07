@@ -83,11 +83,21 @@ func main() {
 	dbPath := flag.String("db", "../../.plumb/topology.db", "path to plumb's topology.db")
 	k := flag.Int("k", 10, "rank cutoff for recall@k / MRR")
 	out := flag.String("out", "", "optional path to write the markdown report")
+	embedderFlag := flag.String("embedder", "openai", "openai | local")
+	pyBin := flag.String("py", "/tmp/semvenv/bin/python", "python interpreter for the local embedder")
+	pyScript := flag.String("pyscript", "embed_local.py", "local embedder script")
 	flag.Parse()
 
+	local := *embedderFlag == "local"
+	cache := "embeddings-cache.json"
+	var pyCmd []string
 	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "OPENAI_API_KEY is required")
+	if local {
+		embedModel = "bge-small-en-v1.5 (local)"
+		cache = "embeddings-cache-local.json"
+		pyCmd = []string{*pyBin, *pyScript}
+	} else if key == "" {
+		fmt.Fprintln(os.Stderr, "OPENAI_API_KEY is required (or pass -embedder local)")
 		os.Exit(1)
 	}
 
@@ -103,7 +113,7 @@ func main() {
 	fmt.Printf("corpus: %d code symbols (function/method/type) from %s\n", len(corpus), *dbPath)
 
 	// Embed the corpus + queries (cached to disk so re-runs are free).
-	emb := newEmbedder(key, "embeddings-cache.json")
+	emb := newEmbedder(key, cache, local, pyCmd)
 	docs := make([]string, len(corpus))
 	for i, s := range corpus {
 		docs[i] = s.doc()

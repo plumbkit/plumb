@@ -16,7 +16,7 @@ Maintainability + tooling pass: every non-test Go file is now within the ~600-li
 
 ### Docs
 
-- **Semantic-search spike (tree-sitter Phase 7 gate).** Recorded a real eval (`spike/semsearch/`, findings in `docs/internal/semantic-search-spike.md`): semantic re-rank beats the FTS5 baseline by +0.125 recall@10 over plumb's own index — a clear win — recommending the opt-in hybrid (FTS5 authoritative spine + semantic re-rank).
+- **Semantic-search spike (tree-sitter Phase 7 gate).** Recorded a real eval (`spike/semsearch/`, findings in `docs/internal/semantic-search-spike.md`) over plumb's own index, against both embedder classes: a strong hosted model (`text-embedding-3-small`) beats FTS5 by +0.125 recall@10, but a small *local* model (`bge-small-en-v1.5`) does **not** (−0.067 recall). The win needs a strong (hosted/large) model — against plumb's offline-lean identity — so the recommendation is **not** to build it as a default/offline feature; at most a deliberately-opt-in hosted-API backend. The spike caught this before any production effort.
 
 ## 0.8.46 (unreleased)
 

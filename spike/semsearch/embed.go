@@ -10,23 +10,29 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 )
 
-const embedModel = "text-embedding-3-small"
+// embedModel labels the active embedder; it is part of the cache key so the
+// OpenAI and local-model caches never collide. Set in main from the -embedder flag.
+var embedModel = "text-embedding-3-small"
 
-// embedder calls the OpenAI embeddings API, caching results to disk by content
-// hash so re-runs cost nothing and only changed corpus entries are re-embedded.
+// embedder produces vectors, caching results to disk by content hash so re-runs
+// cost nothing. Two backends: the OpenAI embeddings API, or a local model driven
+// by a Python subprocess (embed_local.py).
 type embedder struct {
 	key       string
 	cachePath string
+	local     bool
+	pyCmd     []string
 	cache     map[string][]float32
 	newCount  int
 	hitCount  int
 }
 
-func newEmbedder(key, cachePath string) *embedder {
-	e := &embedder{key: key, cachePath: cachePath, cache: map[string][]float32{}}
+func newEmbedder(key, cachePath string, local bool, pyCmd []string) *embedder {
+	e := &embedder{key: key, cachePath: cachePath, local: local, pyCmd: pyCmd, cache: map[string][]float32{}}
 	if data, err := os.ReadFile(cachePath); err == nil {
 		_ = json.Unmarshal(data, &e.cache)
 	}
@@ -39,22 +45,24 @@ func cacheKey(text string) string {
 }
 
 // embedAll returns one vector per input text, in order. Cached texts are served
-// from disk; the rest are embedded in batches and the cache is persisted.
+// from disk; the rest are embedded and the cache is persisted.
 func (e *embedder) embedAll(texts []string) ([][]float32, error) {
 	var missing []string
 	seen := map[string]bool{}
 	for _, t := range texts {
 		k := cacheKey(t)
-		if _, ok := e.cache[k]; ok {
-			continue
-		}
-		if seen[k] {
+		if _, ok := e.cache[k]; ok || seen[k] {
 			continue
 		}
 		seen[k] = true
 		missing = append(missing, t)
 	}
-	const batch = 100
+	// The local model loads once per subprocess call, so embed everything in one
+	// shot; the OpenAI API has per-request limits, so batch it.
+	batch := 100
+	if e.local {
+		batch = max(len(missing), 1)
+	}
 	for i := 0; i < len(missing); i += batch {
 		end := min(i+batch, len(missing))
 		vecs, err := e.call(missing[i:end])
@@ -69,8 +77,7 @@ func (e *embedder) embedAll(texts []string) ([][]float32, error) {
 	}
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
-		v := e.cache[cacheKey(t)]
-		out[i] = v
+		out[i] = e.cache[cacheKey(t)]
 		if !seen[cacheKey(t)] {
 			e.hitCount++
 		}
@@ -84,9 +91,11 @@ func (e *embedder) persist() {
 	}
 }
 
-type embedReq struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
+func (e *embedder) call(input []string) ([][]float32, error) {
+	if e.local {
+		return e.localEmbed(input)
+	}
+	return e.openaiEmbed(input)
 }
 
 type embedResp struct {
@@ -99,14 +108,30 @@ type embedResp struct {
 	} `json:"error"`
 }
 
-func (e *embedder) call(input []string) ([][]float32, error) {
-	body, _ := json.Marshal(embedReq{Model: embedModel, Input: input})
+// localEmbed pipes the texts to embed_local.py and reads back the vectors.
+func (e *embedder) localEmbed(input []string) ([][]float32, error) {
+	body, _ := json.Marshal(map[string][]string{"input": input})
+	cmd := exec.Command(e.pyCmd[0], e.pyCmd[1:]...)
+	cmd.Stdin = bytes.NewReader(body)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("local embedder: %w (%s)", err, tailBytes(out, 400))
+	}
+	var er embedResp
+	if err := json.Unmarshal(out, &er); err != nil {
+		return nil, fmt.Errorf("local decode: %w", err)
+	}
+	return orderByIndex(er, len(input)), nil
+}
+
+func (e *embedder) openaiEmbed(input []string) ([][]float32, error) {
+	reqBody, _ := json.Marshal(map[string]any{"model": embedModel, "input": input})
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * time.Second)
 		}
-		req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/embeddings", bytes.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/embeddings", bytes.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+e.key)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
@@ -117,7 +142,7 @@ func (e *embedder) call(input []string) ([][]float32, error) {
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("openai status %d: %s", resp.StatusCode, raw)
+			lastErr = fmt.Errorf("openai status %d", resp.StatusCode)
 			continue
 		}
 		var er embedResp
@@ -127,19 +152,29 @@ func (e *embedder) call(input []string) ([][]float32, error) {
 		if er.Error != nil {
 			return nil, fmt.Errorf("openai: %s", er.Error.Message)
 		}
-		out := make([][]float32, len(input))
-		for _, d := range er.Data {
-			if d.Index >= 0 && d.Index < len(out) {
-				out[d.Index] = d.Embedding
-			}
-		}
-		return out, nil
+		return orderByIndex(er, len(input)), nil
 	}
 	return nil, fmt.Errorf("openai embeddings failed after retries: %w", lastErr)
 }
 
-// cosine returns the cosine similarity of two vectors (both are L2-normalised by
-// OpenAI, but we normalise defensively so the metric is well-defined).
+func orderByIndex(er embedResp, n int) [][]float32 {
+	out := make([][]float32, n)
+	for _, d := range er.Data {
+		if d.Index >= 0 && d.Index < n {
+			out[d.Index] = d.Embedding
+		}
+	}
+	return out
+}
+
+func tailBytes(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[len(b)-n:])
+}
+
+// cosine returns the cosine similarity of two vectors.
 func cosine(a, b []float32) float64 {
 	if len(a) == 0 || len(b) == 0 || len(a) != len(b) {
 		return 0
