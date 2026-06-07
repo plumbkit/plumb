@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.47 (unreleased)
+
+Maintainability + tooling pass: every non-test Go file is now within the ~600-line rule (enforced), a new `structural_query` tool lands, and the semantic-search spike returns a verdict.
+
+### Added
+
+- **`structural_query` tool.** Curated find-by-shape checks over the topology index — `undocumented-exports` (exported symbols with no doc comment), `long-functions` (over `min_lines`, default 80), and `unused-context` (Go functions taking `context.Context` whose body never references it). Named queries only, never raw tree-sitter S-expressions. Adds `topology.Store.NodesByKind`. Tool count 49 → 50.
+
+### Internal
+
+- **~600-line file rule enforced.** `scripts/check-file-size.sh` caps non-test Go files at 600 lines (permanent exemption: `internal/lsp/protocol/types.go`), wired into `make verify`, the pre-commit hook, and CI. The rule had silently regressed to 11 offenders.
+- **11 oversized files split by responsibility** (no behaviour change): `git.go`, `search_in_files.go`, `edit_file.go`, `session_start.go` (tools); `conn.go`, `pool.go`, `daemon.go`, `doctor.go` (cli); `config.go`; `model_settings.go`, `model_settings_keys.go` (tui) — each decomposed into concern-scoped same-package files (e.g. `git_classify.go` / `git_policy.go` / `git_exec.go`), so agents working different facets of a file touch disjoint files.
+- **`render.HumanBytes`** consolidates the duplicated byte formatter (CLI/core review #14, the last movable CLI presentation helper).
+
+### Docs
+
+- **Semantic-search spike (tree-sitter Phase 7 gate).** Recorded a real eval (`spike/semsearch/`, findings in `docs/internal/semantic-search-spike.md`): semantic re-rank beats the FTS5 baseline by +0.125 recall@10 over plumb's own index — a clear win — recommending the opt-in hybrid (FTS5 authoritative spine + semantic re-rank).
+
 ## 0.8.46 (unreleased)
 
 Settings becomes a two-tab editor (General / LSP) with per-language server config, a resizable focus-aware Scope column, and consistent, auto-saving pop-up editors.
