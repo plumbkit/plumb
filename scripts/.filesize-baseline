@@ -8,4 +8,3 @@ internal/config/config.go 851
 internal/tools/session_start.go 840
 internal/tools/edit_file.go 785
 internal/cli/doctor.go 748
-internal/cli/daemon.go 638

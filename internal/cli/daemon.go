@@ -2,18 +2,14 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,9 +19,13 @@ import (
 	"github.com/golimpio/plumb/internal/config"
 	"github.com/golimpio/plumb/internal/mcp"
 	"github.com/golimpio/plumb/internal/monitor"
-	"github.com/golimpio/plumb/internal/session"
 	"github.com/golimpio/plumb/internal/tools"
 )
+
+// The daemon is split across files by concern: the connection registry + idle
+// reaper live in daemon_registry.go; runtime-file paths and the detached-process
+// spawn in daemon_paths.go; workspace-seed resolution from tool args / roots in
+// daemon_workspace.go. This file holds the daemon entry point and accept loop.
 
 func recoverWorkspaceTxlog(folder string, scan func(string)) {
 	scan(folder)
@@ -265,107 +265,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// connHandle is the per-connection state the registry tracks: the cancel func
-// (idle reaper / shutdown), and the session's workspace + project-config reload
-// hook (the reload-project control command).
-type connHandle struct {
-	cancel        context.CancelFunc
-	workspace     func() string
-	reloadProject func()
-}
-
-// connRegistry tracks live MCP connections so the idle reaper can cancel them
-// and the control socket can target a per-workspace config reload.
-// Concurrency: all methods are safe for concurrent use.
-type connRegistry struct {
-	mu    sync.Mutex
-	conns map[string]connHandle // sessID → handle
-}
-
-func newConnRegistry() *connRegistry {
-	return &connRegistry{conns: make(map[string]connHandle)}
-}
-
-func (r *connRegistry) add(sessID string, h connHandle) {
-	r.mu.Lock()
-	r.conns[sessID] = h
-	r.mu.Unlock()
-}
-
-// reloadProject re-applies the project config to every live session pinned to
-// workspace ws — and only those — so a per-workspace config change takes effect
-// immediately for that project and never touches a session in another. The
-// reload hooks are collected under the lock and invoked outside it, since
-// applyProjectConfig may take per-session locks of its own.
-func (r *connRegistry) reloadProject(ws string) {
-	target := filepath.Clean(ws)
-	r.mu.Lock()
-	var hits []func()
-	for _, h := range r.conns {
-		if h.workspace == nil || h.reloadProject == nil {
-			continue
-		}
-		if filepath.Clean(h.workspace()) == target {
-			hits = append(hits, h.reloadProject)
-		}
-	}
-	r.mu.Unlock()
-	for _, fn := range hits {
-		fn()
-	}
-}
-
-func (r *connRegistry) remove(sessID string) {
-	r.mu.Lock()
-	delete(r.conns, sessID)
-	r.mu.Unlock()
-}
-
-// evictIdle cancels connections whose sessions have been idle longer than ttl.
-// A zero or negative ttl is a no-op (eviction disabled).
-func (r *connRegistry) evictIdle(ttl time.Duration) {
-	if ttl <= 0 {
-		return
-	}
-	infos, err := session.List()
-	if err != nil || len(infos) == 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, info := range infos {
-		lastSeen := info.LastSeenAt
-		if lastSeen.IsZero() {
-			lastSeen = info.StartedAt
-		}
-		if time.Since(lastSeen) < ttl {
-			continue
-		}
-		if h, ok := r.conns[info.ID]; ok && h.cancel != nil {
-			slog.Info("daemon: evicting idle session", "session", info.Name, "last_seen", lastSeen)
-			h.cancel()
-		}
-	}
-}
-
-// reaperInterval is how often the idle-session reaper runs.
-const reaperInterval = 5 * time.Minute
-
-func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegistry, ticks <-chan time.Time) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case _, ok := <-ticks:
-			if !ok {
-				return
-			}
-			ttlMin := store.Current().Session.EvictionTTLMinutes
-			registry.evictIdle(time.Duration(ttlMin) * time.Minute)
-		}
-	}
-}
-
 func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	var wg sync.WaitGroup
 
@@ -429,210 +328,4 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	// deferred registry.remove + s.close (which Unregisters) run. A daemon-wide
 	// shutdown still cancels it via the parent.
 	_ = srv.Serve(s.ctx, conn, conn)
-}
-
-// daemonSocketPath returns the Unix socket path for the plumb daemon.
-func daemonSocketPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.sock")
-}
-
-// daemonCtrlSocketPath returns the Unix socket path for daemon admin commands
-// (log level changes). Separate from the MCP socket so it never appears in the
-// tool list and cannot be reached by MCP clients.
-func daemonCtrlSocketPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.ctrl.sock")
-}
-
-// daemonPIDPath returns the path where the daemon writes its PID.
-func daemonPIDPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.pid")
-}
-
-// daemonVersionPath returns the path where the daemon publishes its build
-// version (read by `plumb serve` to detect a stale daemon).
-func daemonVersionPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.version")
-}
-
-// plumbRuntimeDir returns the directory used for daemon runtime files
-// (socket, PID). It uses os.UserCacheDir so the path is stable and consistent
-// regardless of how the process was launched — critical on macOS where
-// os.TempDir() follows $TMPDIR, which differs between GUI apps and terminals.
-func plumbRuntimeDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		// os.UserCacheDir only fails if $HOME is unset; fall back to os.TempDir
-		// which is the best we can do in that degenerate case.
-		base = os.TempDir()
-	}
-	dir := filepath.Join(base, "plumb")
-	_ = os.MkdirAll(dir, 0o700)
-	return dir
-}
-
-// startDaemonProcess launches a detached plumb daemon subprocess.
-// Logs are written to daemonLogPath(); the process is detached with Setsid so
-// it outlives the calling plumb serve process.
-func startDaemonProcess() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolving executable path: %w", err)
-	}
-
-	logPath := daemonLogPath()
-	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		logFile, _ = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	}
-
-	cmd := exec.Command(exe, "daemon")
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		return err
-	}
-	go reapAfterExit(cmd, logFile)
-	return nil
-}
-
-// reapAfterExit drops the spawner's copy of the log handle (the child dup'd its
-// own fd at exec) and waits on cmd so the daemon is reaped on exit instead of
-// lingering as a zombie. Setsid detaches the controlling terminal but does NOT
-// reparent the child — it stays a child of the long-lived `plumb serve` that
-// spawned it, so without this Wait a `plumb restart` SIGTERM leaves a <defunct>
-// process (and `stopByPID`'s kill-0 liveness check then misreports it as still
-// running). Runs in its own goroutine in production; the short-lived restart/stop
-// callers exit before the daemon dies, so the child reparents to init and is
-// reaped there.
-func reapAfterExit(cmd *exec.Cmd, logFile *os.File) {
-	_ = logFile.Close()
-	_ = cmd.Wait()
-}
-
-// daemonLogPath returns the OS-appropriate path for daemon log output.
-//   - macOS : ~/Library/Logs/plumb/daemon.log
-//   - Linux : $XDG_STATE_HOME/plumb/daemon.log  (fallback: ~/.local/state/plumb/daemon.log)
-//   - other : $TMPDIR/plumb/daemon.log
-func daemonLogPath() string {
-	switch runtime.GOOS {
-	case "darwin":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			break
-		}
-		return filepath.Join(home, "Library", "Logs", "plumb", "daemon.log")
-	case "linux":
-		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-			return filepath.Join(xdg, "plumb", "daemon.log")
-		}
-		home, err := os.UserHomeDir()
-		if err != nil {
-			break
-		}
-		return filepath.Join(home, ".local", "state", "plumb", "daemon.log")
-	}
-	return filepath.Join(os.TempDir(), "plumb", "daemon.log")
-}
-
-// rootFromRoots calls roots/list on the MCP client and returns the first root
-// URI, or "" if the client does not support roots/list or returns no roots.
-func rootFromRoots(ctx context.Context, request mcp.RequestFn) string {
-	raw, err := request(ctx, "roots/list", nil)
-	if err != nil {
-		slog.Info("roots/list not supported by client — deferring to OnBeforeTool", "err", err)
-		return ""
-	}
-
-	var resp struct {
-		Roots []struct {
-			URI string `json:"uri"`
-		} `json:"roots"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		slog.Warn("parsing roots/list response", "err", err)
-		return ""
-	}
-	if len(resp.Roots) == 0 {
-		slog.Info("roots/list returned no roots — deferring to OnBeforeTool")
-		return ""
-	}
-
-	root := resp.Roots[0].URI
-	slog.Info("workspace root from MCP client", "rootURI", root)
-	return root
-}
-
-// workspaceFromArgs returns the resolved workspace root for a tool call's raw
-// JSON arguments. Returns "" if no path-bearing field is present or the path
-// doesn't sit under a discoverable project root.
-func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
-	seed := seedPathFromArgs(args)
-	if seed == "" {
-		return ""
-	}
-	// If seed is already a directory, use it directly — filepath.Dir would
-	// strip the last component and miss the project root marker.
-	startDir := seed
-	if info, err := os.Stat(seed); err != nil || !info.IsDir() {
-		startDir = filepath.Dir(seed)
-	}
-	root, _, err := pool.Detect(startDir)
-	if err != nil {
-		return ""
-	}
-	return root
-}
-
-// seedPathFromArgs extracts a single filesystem path from a tool call's raw
-// JSON arguments. Probes the argument shapes plumb's tools use:
-//
-//	{"uri": "file:///..."}                      — LSP tools
-//	{"file_path": "/..."}                       — file-content tools (read/write/edit/delete)
-//	{"path": "/..."}                            — search/dir tools (list_directory, find_files, …)
-//	{"root": "/..."}                            — list_files
-//	{"workspace": "/..."}                       — session_start
-//	{"paths": ["/...", ...]}                    — read_multiple_files
-//	{"operations": [{"path": "/..."}, ...]}     — transaction_apply
-//
-// Returns "" if no shape matches. Any leading file:// is stripped so the
-// caller gets a plain filesystem path.
-func seedPathFromArgs(args json.RawMessage) string {
-	var a struct {
-		URI        string   `json:"uri"`
-		FilePath   string   `json:"file_path"`
-		Path       string   `json:"path"`
-		Root       string   `json:"root"`
-		Workspace  string   `json:"workspace"`
-		Paths      []string `json:"paths"`
-		Operations []struct {
-			FilePath string `json:"file_path"`
-			Path     string `json:"path"`
-		} `json:"operations"`
-	}
-	if json.Unmarshal(args, &a) != nil {
-		return ""
-	}
-	switch {
-	case a.URI != "":
-		return strings.TrimPrefix(a.URI, "file://")
-	case a.FilePath != "":
-		return a.FilePath
-	case a.Path != "":
-		return a.Path
-	case a.Root != "":
-		return a.Root
-	case a.Workspace != "":
-		return a.Workspace
-	case len(a.Paths) > 0:
-		return a.Paths[0]
-	case len(a.Operations) > 0:
-		if a.Operations[0].FilePath != "" {
-			return a.Operations[0].FilePath
-		}
-		return a.Operations[0].Path
-	}
-	return ""
 }
