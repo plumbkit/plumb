@@ -264,7 +264,7 @@ Pyright is the worked example.
 5. Unit-test in `internal/tools/<name>_test.go`; `WriteDeps{}` is the nil-safe setup.
 6. Document in `docs/tools.md` and update the tool table below.
 
-## Available tools (49)
+## Available tools (50)
 
 Concise index — each tool's full behaviour, inputs, and steering live in its MCP description (`tools/list`). Source files follow the `internal/tools/<name>.go` convention.
 
@@ -335,6 +335,7 @@ Concise index — each tool's full behaviour, inputs, and steering live in its M
 | `topology_impact` | Bidirectional blast radius (depends-on + depended-by) around a symbol. |
 | `topology_affected` | Likely affected files + tests for changed files/symbols; run after writing. |
 | `topology_routes` | Framework-aware entry-point scanner (`go`/`python`/`swift`/`cobra`/`vapor`/`argument-parser`); heuristic, confidence-annotated. |
+| `structural_query` | Curated find-by-shape checks over the topology index (`undocumented-exports`, `long-functions`, `unused-context`); a small named set, never raw tree-sitter S-expr queries. |
 
 **Memory** — per-workspace markdown at `<workspace>/.plumb/memories/`, also exposed as MCP resources: `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories` (pattern search), `relevant_memories` (path-based relevance).
 

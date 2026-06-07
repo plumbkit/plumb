@@ -141,6 +141,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTopologyImpact(topoFn))
 	srv.Register(tools.NewTopologyAffected(topoFn))
 	srv.Register(tools.NewTopologyRoutes(topoFn))
+	srv.Register(tools.NewStructuralQuery(topoFn, s.workspace))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.

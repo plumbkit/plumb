@@ -70,6 +70,7 @@ var knownToolGuarding = map[string]string{
 	"NewTopologyImpact":   "none",
 	"NewTopologyAffected": "none", // queries the topology DB by symbol/file name; no direct FS access
 	"NewTopologyRoutes":   "none",
+	"NewStructuralQuery":  "none", // queries the topology DB; reads bodies only under the pinned workspace root, no user path input
 }
 
 // TestBoundaryGuardWiringComplete is the D10 registration-time contract test

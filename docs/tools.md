@@ -321,6 +321,25 @@ Framework-aware entry-point scanner (Go HTTP handlers, Cobra commands, Python
 `framework` (optional: `go` | `python` | `cobra`), `path_prefix` (optional),
 `limit` (default 20).
 
+### `structural_query`
+Find symbols by **shape**, not name — a curated set of named structural checks
+over the topology index, complementing `topology_search` (by name) and
+`search_in_files` (by text). No raw tree-sitter S-expression queries are exposed
+(an LLM cannot reliably name per-grammar node types); the surface is a small
+vetted set. **Inputs:** `query` (required, one of `undocumented-exports` |
+`long-functions` | `unused-context`), `language` (optional filter), `min_lines`
+(long-functions threshold, default 80), `limit` (default 50). The checks:
+- `undocumented-exports` — exported functions/methods/types/constants with no
+  doc comment (index-only; "exported" = leading-uppercase, or non-`_`-prefixed
+  for Python).
+- `long-functions` — functions/methods spanning ≥ `min_lines` lines, longest
+  first — decomposition candidates (index-only).
+- `unused-context` — Go functions taking a `context.Context` parameter whose
+  body never references it (reads the body under the pinned workspace; skips
+  grouped/anonymous params rather than false-flag).
+Results are `source=topology` (approximate). Returns a clear message when the
+index is disabled or empty.
+
 ---
 
 ## VCS & utilities

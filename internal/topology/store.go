@@ -161,6 +161,50 @@ func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) 
 	return out, rows.Err()
 }
 
+// NodesByKind returns every indexed node of the given kinds, with docstrings
+// populated, ordered by path then start line. It is the enumeration primitive
+// behind the curated structural_query checks (undocumented exports, long
+// functions, …) that scan the index by symbol category rather than by name.
+// Returns an empty slice when no kinds are supplied or none match.
+func (s *Store) NodesByKind(ctx context.Context, kinds ...NodeKind) ([]Node, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(kinds))
+	args := make([]any, len(kinds))
+	for i, k := range kinds {
+		placeholders[i] = "?"
+		args[i] = string(k)
+	}
+	// G202 is a false positive here: the only thing concatenated into the SQL is
+	// the "?,?,…" placeholder list; the kind values are bound parameters (args),
+	// never interpolated.
+	//nolint:gosec // G202: placeholders are bound-parameter markers, not user data.
+	query := `
+		SELECT n.kind, n.name, n.qualified, n.signature, n.docstring, n.start_line, n.end_line, n.language, f.path
+		FROM topology_nodes n
+		JOIN topology_files f ON f.id = n.file_id
+		WHERE n.kind IN (` + strings.Join(placeholders, ",") + `)
+		ORDER BY f.path, n.start_line`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("topology: nodes by kind: %w", err)
+	}
+	defer rows.Close()
+	var out []Node
+	for rows.Next() {
+		var n Node
+		var kind string
+		if scanErr := rows.Scan(&kind, &n.Name, &n.Qualified, &n.Signature, &n.Docstring,
+			&n.StartLine, &n.EndLine, &n.Language, &n.Path); scanErr != nil {
+			continue
+		}
+		n.Kind = NodeKind(kind)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // ExtractFile re-parses the CURRENT content of path with the matching
 // structural extractor and returns its nodes, WITHOUT touching the persisted
 // index. Unlike SymbolsInFile (which reads the possibly-stale index), this
