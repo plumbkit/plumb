@@ -155,7 +155,7 @@ func TestLeftLines_RenderSessionsAsTwoLineRows(t *testing.T) {
 	for _, want := range []string{
 		" ❯ CRAZY-PLUMB  go ",
 		"    ╰─ .",
-		" ○ SUPER-FRIEND  go ",
+		" ∙ SUPER-FRIEND  go ",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("leftLines missing %q in:\n%s", want, joined)
@@ -1007,8 +1007,8 @@ func TestDashboardDaemonVersionAlert(t *testing.T) {
 
 	m := Model{sessions: []session.Info{{DaemonVersion: "0.6.9"}}}
 	got := m.dashboardDaemonVersionAlert()
-	if !strings.Contains(got, "running 0.6.9") || !strings.Contains(got, "run plumb stop") {
-		t.Fatalf("dashboardDaemonVersionAlert = %q, want mismatch with refresh hint", got)
+	if !strings.Contains(got, "running 0.6.9") || !strings.Contains(got, "run plumb restart") {
+		t.Fatalf("dashboardDaemonVersionAlert = %q, want mismatch with restart hint", got)
 	}
 }
 

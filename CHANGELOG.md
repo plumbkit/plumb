@@ -2,18 +2,23 @@
 
 ## 0.8.46 (unreleased)
 
-Settings gains per-language `[lsp.<lang>]` editing and a resizable, focus-aware Scope column.
+Settings becomes a two-tab editor (General / LSP) with per-language server config, a resizable focus-aware Scope column, and consistent, auto-saving pop-up editors.
 
 ### Added
 
-- **Per-language `[lsp.<lang>]` editing in Settings.** Each enabled language gets enable / command / args / root-markers rows; string fields (command) open a new single-line text editor (`internal/tui/model_settings_texteditor.go`, `settingText` kind) and the list fields reuse the inline list editor. Settings mouse handling is now column-aware, mapping clicks to the correct pane and row across the Scope and rows columns.
-- **Resizable Scope column.** `[` / `]` narrow / widen the Settings Scope column from either pane (`adjustScopeWidth`, stored as a delta from the default in `settingsScopeWDelta`). The default width is the widest scope label **+ 3**, capped at **30% of the screen** so long workspace names never crowd out the settings rows; `]` can still widen past that up to `width-20`. The hint bar advertises `[ ] width`.
+- **General / LSP tabs.** The Settings rows pane splits into `[General]` and `[LSP]` tabs (blank line beneath the bar). `tab` cycles Scope → General → LSP → Scope and `shift+tab` reverses (`settingsCycleFocus`); a pinned 2-line header keeps the tab bar visible while the rows scroll. The LSP tab groups the per-language `[lsp.<lang>]` rows under one section per language (Go, Python, …), each with `enabled / command / args / root markers`.
+- **Per-language `[lsp.<lang>]` editing.** String fields (command) open a single-line text editor (`internal/tui/model_settings_texteditor.go`, `settingText` kind); list fields (args, root markers) use the inline list editor. Settings mouse handling is column-aware. Enabled servers whose command is not on `PATH` are flagged: a red `*` on the language header, the block's label+value in red, and a `(!) … not found on PATH` description (`exec.LookPath`).
+- **Resizable Scope column.** `[` / `]` narrow / widen the Scope column from either pane (`adjustScopeWidth`, stored as a delta in `settingsScopeWDelta`); the default width is the widest scope label **+ 5**, capped at **30% of the screen**, and a `┬` joins the divider to the top border. The hint bar advertises `[ ] width`.
 
 ### Changed
 
-- **Single Scope-column marker.** The cursor and the scope dot collapse into one first-column marker — `❯` on the selected scope, otherwise `●` (Global) / `·` (workspace) — so the selected row reads `❯ Global` instead of `❯ ● Global`.
-- **Focus-aware Settings panes.** While the Scope column has focus the rows pane (and its divider) render dimmed (`InactiveStyle`), so the active pane stands out. `shift+tab` now also returns focus to the Scope column (previously only `tab`), and toggles back to the rows pane. The scope/rows divider now extends one row into the blank footer separator (`settingsBlankDividerRow`) so the vertical line reaches the footer instead of stopping a row short.
-- **Plain-English Settings labels.** The remaining snake_case row labels are normalised to the screen's sentence-case convention — e.g. `auto_attach` → `Auto attach`, `extra_roots` → `Extra roots`, `git allow_writes` → `Git allow writes`, `protected_branches` → `Protected branches`, `lsp_query timeout` → `LSP query timeout`, and the per-language `root_markers` → `root markers`.
+- **Multi-line list values.** List settings (exclude patterns, args, root markers, …) move the count to the label (`root markers (4)`) and stack one entry per line aligned under the value column, with `‹ edit ›` only on the first line.
+- **Workspace scope markers.** A workspace scope now shows the `¹²³` reload-tier numerals (as Global does) plus a superscript `⁴` (override) / `⁵` (inherited) after the numeral; the legend gains `⁴ override · ⁵ inherited` (replacing the old `● set` / `inherited` trailing marks).
+- **Pop-up editors** share one frame (`editorModalBox`): bold frame title, blank line, content indented 3 columns / status bar indented 1, a real reverse-video input cursor, and a standard `key label  ·  …` shortcut legend (`editorHints`). List editors **auto-save on close**; `enter` edits the selected entry in place, `a` adds, `d` removes; empty lists read `(inherits — no entries)`. Entries get a muted `∙` bullet (`❯` when selected).
+- **Esc focuses the home panel** instead of opening the section menu (which stays on `/`): Settings → Scope, Sessions → Sessions, Memory → Workspaces — a no-op when already there (`sectionHomeFocus`).
+- **`∙` replaces `●` / `○` app-wide** in list markers (Settings Scope, Sessions, Memory, tool stats, call-detail popup) for a consistent muted bullet; the selected row keeps `❯`.
+- **Plain-English Settings labels** — snake_case row labels normalised to sentence case (`auto_attach` → `Auto attach`, `extra_roots` → `Extra roots`, `git allow_writes` → `Git allow writes`, `lsp_query timeout` → `LSP query timeout`, …). The Scope rows pane dims while the Scope column holds focus, and the divider extends through the blank footer separator.
+- The dashboard daemon-version-mismatch alert now suggests **`plumb restart`** (was `plumb stop`).
 
 ## 0.8.45 (unreleased)
 

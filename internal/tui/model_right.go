@@ -219,7 +219,7 @@ func (m *Model) rightLinesTools(rw int) []string {
 			if ts.Errors > 0 {
 				c4 = render.PadLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), c4w)
 			}
-			lines = append(lines, "  ○ "+tn+s3+c2+s3+c3+s3+c4+s3)
+			lines = append(lines, "  ∙ "+tn+s3+c2+s3+c3+s3+c4+s3)
 		}
 	}
 	return lines

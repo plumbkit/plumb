@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -119,6 +120,8 @@ type settingItem struct {
 	help       string   // one-line description, shown on the status bar's second line
 	overridden bool     // workspace scope: the key is set in the project config (not inherited)
 	lspLang    string   // non-empty for per-language [lsp.<lang>] rows; identifies the language
+	lspMissing bool     // enabled LSP server whose command is not on PATH
+	list       []string // raw entries for settingList rows; rendered one per line
 }
 
 var (
@@ -245,7 +248,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			help: "Periodic full-resync fallback interval. Suppressed while watching; 0 disables.",
 		},
 		{
-			group: "Indexing", label: "Exclude patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns),
+			group: "Indexing", label: "Exclude patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns), list: cfg.Topology.ExcludePatterns,
 			help: "Path globs to skip during indexing. Enter to edit the list.",
 		},
 
@@ -266,7 +269,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			help: "Cap on findings appended per file to keep responses bounded.",
 		},
 		{
-			group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers),
+			group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers), list: cfg.Quality.Analysers,
 			help: "Which analysers to run (e.g. golangci-lint). Enter to edit the list.",
 		},
 
@@ -283,7 +286,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			help: "Gate push/fetch/pull (each call also needs confirm). Protected branches stay safe.",
 		},
 		{
-			group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches),
+			group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches), list: cfg.Git.ProtectedBranches,
 			help: "Branches that may never be force-pushed, even with allow_push. Enter to edit.",
 		},
 
@@ -309,11 +312,11 @@ func buildSettingItems(cfg config.Config) []settingItem {
 			help: "Let read/search tools reach the Go module cache + GOROOT read-only.",
 		},
 		{
-			group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots),
+			group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots), list: cfg.Workspace.ExtraRoots,
 			help: "Extra dirs read+write tools may reach beyond the workspace. Enter to edit.",
 		},
 		{
-			group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots),
+			group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots), list: cfg.Workspace.ReadRoots,
 			help: "Extra read-only dirs (compare another project). Enter to edit the list.",
 		},
 
@@ -344,26 +347,39 @@ func lspSettingItems(cfg config.Config) []settingItem {
 	out := make([]settingItem, 0, len(langs)*4)
 	for _, lang := range langs {
 		e := cfg.LSP[lang]
+		g := capFirst(lang)
+		missing := e.Enabled && e.Command != "" && !lspOnPath(e.Command)
+		enabledHelp := "Enable the " + lang + " language server (most non-Go/Python servers are opt-in)."
+		if missing {
+			enabledHelp = "(!) " + lang + " language server not found on PATH — install it or set the command."
+		}
 		out = append(out,
 			settingItem{
-				group: "LSP servers", label: lang + " enabled", kind: settingToggle, key: skLSPEnabled, lspLang: lang,
-				value: onOff(e.Enabled), help: "Enable the " + lang + " language server (most non-Go/Python servers are opt-in).",
+				group: g, label: "enabled", kind: settingToggle, key: skLSPEnabled, lspLang: lang, lspMissing: missing,
+				value: onOff(e.Enabled), help: enabledHelp,
 			},
 			settingItem{
-				group: "LSP servers", label: lang + " command", kind: settingText, key: skLSPCommand, lspLang: lang,
+				group: g, label: "command", kind: settingText, key: skLSPCommand, lspLang: lang, lspMissing: missing,
 				value: pathOrDefault(e.Command), help: "Executable for the " + lang + " language server. Enter to edit.",
 			},
 			settingItem{
-				group: "LSP servers", label: lang + " args", kind: settingList, key: skLSPArgs, lspLang: lang,
-				value: listSummary(e.Args), help: "Command-line args passed to the " + lang + " server. Enter to edit.",
+				group: g, label: "args", kind: settingList, key: skLSPArgs, lspLang: lang, lspMissing: missing,
+				value: listSummary(e.Args), list: e.Args, help: "Command-line args passed to the " + lang + " server. Enter to edit.",
 			},
 			settingItem{
-				group: "LSP servers", label: lang + " root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang,
-				value: listSummary(e.RootMarkers), help: "Files that mark a " + lang + " project root. Enter to edit.",
+				group: g, label: "root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang, lspMissing: missing,
+				value: listSummary(e.RootMarkers), list: e.RootMarkers, help: "Files that mark a " + lang + " project root. Enter to edit.",
 			},
 		)
 	}
 	return out
+}
+
+// lspOnPath reports whether cmd resolves to an executable on PATH (or via an
+// absolute/relative path). Used to flag enabled-but-missing LSP servers.
+func lspOnPath(cmd string) bool {
+	_, err := exec.LookPath(cmd)
+	return err == nil
 }
 
 // pathOrDefault renders a path field, showing "(default)" when empty.
@@ -391,6 +407,60 @@ func listSummary(items []string) string {
 	return fmt.Sprintf("(%d) %s", len(items), strings.Join(items, ", "))
 }
 
+// Settings rows-pane tabs. General holds every non-LSP setting; LSP holds the
+// per-language [lsp.<lang>] server rows. tab / shift+tab cycle through the Scope
+// column and these two tabs (Scope → General → LSP → Scope).
+const (
+	settingsTabGeneral = iota
+	settingsTabLSP
+)
+
+// settingsTabHeaderRows is the height reserved at the top of the rows pane for
+// the tab bar plus the blank line beneath it.
+const settingsTabHeaderRows = 2
+
+var settingsTabNames = []string{"General", "LSP"}
+
+// filterSettingsByTab keeps only the rows for the active tab. LSP rows are keyed
+// off a non-empty lspLang, so the split survives any change to the group label.
+func filterSettingsByTab(items []settingItem, tab int) []settingItem {
+	out := make([]settingItem, 0, len(items))
+	for _, it := range items {
+		if (it.lspLang != "") == (tab == settingsTabLSP) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// capFirst upper-cases the first rune of s, used for per-language LSP section
+// headers ("go" → "Go"). Language ids are ASCII, so byte slicing is safe.
+func capFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// settingsTabBar renders the rows-pane tab bar: [General] [LSP], the active tab
+// highlighted (brightest when the rows pane itself holds focus).
+func (m Model) settingsTabBar() string {
+	rowsFocused := !m.settingsScopeFocus
+	parts := make([]string, len(settingsTabNames))
+	for i, n := range settingsTabNames {
+		label := "[" + n + "]"
+		switch {
+		case i == m.settingsTab && rowsFocused:
+			parts[i] = SelectedStyle.Render(label)
+		case i == m.settingsTab:
+			parts[i] = PanelHeaderStyle.Render(label)
+		default:
+			parts[i] = FadedStyle.Render(label)
+		}
+	}
+	return " " + strings.Join(parts, "  ")
+}
+
 // settingsFooterRows is the number of body rows reserved at the bottom for the
 // pinned footer: a blank separator, the key-hint bar, and the status bar.
 const settingsFooterRows = 3
@@ -410,6 +480,7 @@ type settingsLine struct {
 	kind  settingsLineKind
 	group string // slHeader
 	item  int    // slRow: index into settingsItems
+	cont  int    // slRow: 0 = the row itself; >0 = the Nth list-entry continuation line
 }
 
 // settingsLogicalLines describes the scrollable list: each group as a header
@@ -426,19 +497,48 @@ func settingsLogicalLines(items []settingItem) []settingsLine {
 			last = it.group
 		}
 		out = append(out, settingsLine{kind: slRow, item: i})
+		// A multi-entry list row stacks its remaining entries on continuation lines.
+		if it.kind == settingList {
+			for j := 1; j < len(it.list); j++ {
+				out = append(out, settingsLine{kind: slRow, item: i, cont: j})
+			}
+		}
 	}
 	return out
+}
+
+// rowLabel is a row's display label: list rows get a trailing "(N)" count so the
+// value column can stack one entry per line instead of a long joined string.
+func rowLabel(it settingItem) string {
+	if it.kind == settingList && len(it.list) > 0 {
+		return fmt.Sprintf("%s (%d)", it.label, len(it.list))
+	}
+	return it.label
+}
+
+// rowValues is the value column as one or more lines: a list row yields one line
+// per entry ("(none)" when empty), everything else a single line.
+func rowValues(it settingItem) []string {
+	if it.kind == settingList {
+		if len(it.list) == 0 {
+			return []string{"(none)"}
+		}
+		return it.list
+	}
+	return []string{it.value}
 }
 
 // settingsColumnWidths returns the label and value column widths (including a
 // trailing gap) so every row aligns regardless of label/value lengths.
 func settingsColumnWidths(items []settingItem) (labelW, valueW int) {
 	for _, it := range items {
-		if w := lipgloss.Width(it.label); w > labelW {
+		if w := lipgloss.Width(rowLabel(it)); w > labelW {
 			labelW = w
 		}
-		if w := lipgloss.Width(it.value); w > valueW {
-			valueW = w
+		for _, v := range rowValues(it) {
+			if w := lipgloss.Width(v); w > valueW {
+				valueW = w
+			}
 		}
 	}
 	return labelW + 3, valueW + 4
@@ -463,7 +563,13 @@ func (m Model) renderSettingsSection() string {
 	for i := range 3 {
 		sb.WriteString(menu[i] + sepStyle.Render(logoLines[i]) + "\n")
 	}
-	sb.WriteString(sepStyle.Render(overlayLogoBottom("╭"+strings.Repeat("─", innerW)+"╮", m.width)) + "\n")
+	// Connect the scope/rows divider to the top border with a ┬ junction (top
+	// only — the footer status bars span the full width below the divider).
+	topFill := []rune(strings.Repeat("─", innerW))
+	if sw := m.settingsScopeWidth(); sw < len(topFill) {
+		topFill[sw] = '┬'
+	}
+	sb.WriteString(sepStyle.Render(overlayLogoBottom("╭"+string(topFill)+"╮", m.width)) + "\n")
 
 	sb.WriteString(m.renderSettingsBody(innerW, bodyHeight, isOverlay))
 
@@ -481,20 +587,20 @@ func (m Model) renderSettingsSection() string {
 }
 
 // settingsScopeWidth is the width of the left Scope column: the default (longest
-// scope label + 3) shifted by the user's [ / ] adjustment, clamped to bounds.
+// scope label + 4) shifted by the user's [ / ] adjustment, clamped to bounds.
 func (m Model) settingsScopeWidth() int {
 	base, lo, hi := m.settingsScopeBounds()
 	return clampWidth(base+m.settingsScopeWDelta, lo, hi)
 }
 
 // settingsScopeBounds returns the default scope-column width and the min/max it
-// can be resized to. The default is the widest scope label plus 3 columns of
+// can be resized to. The default is the widest scope label plus 4 columns of
 // breathing room, but capped at 30% of the screen so long workspace names do not
 // crowd out the settings pane; [ / ] can still widen it up to hi.
 func (m Model) settingsScopeBounds() (base, lo, hi int) {
 	lo = 10
 	hi = max(m.width-20, lo)
-	base = min(scopeLabelWidth(m.settingsScopes)+3, max(m.width*30/100, lo))
+	base = min(scopeLabelWidth(m.settingsScopes)+5, max(m.width*30/100, lo))
 	return base, lo, hi
 }
 
@@ -531,10 +637,17 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 	scopeW := m.settingsScopeWidth()
 	rowsW := max(innerW-1-scopeW, 10)
 
-	rowLines := m.settingsDisplayLines(rowsW)
-	rowOff := clampOffset(m.settingsScroll, len(rowLines), scrollH)
-	rowVis := rowLines[rowOff:]
-	rowBar := scrollbarCol(len(rowLines), scrollH, rowOff, isOverlay)
+	// Rows pane: a pinned 2-line header (tab bar + blank) above the scrollable
+	// settings rows, so the [General] [LSP] tabs stay visible while scrolling.
+	contentLines := m.settingsDisplayLines(rowsW)
+	contentVisH := max(scrollH-settingsTabHeaderRows, 1)
+	rowOff := clampOffset(m.settingsScroll, len(contentLines), contentVisH)
+	contentBar := scrollbarCol(len(contentLines), contentVisH, rowOff, isOverlay)
+	rowVis := append([]string{m.settingsTabBar(), ""}, contentLines[rowOff:]...)
+	var rowBar []string
+	if contentBar != nil {
+		rowBar = append([]string{SepStyle.Render("│"), SepStyle.Render("│")}, contentBar...)
+	}
 
 	scopeLines := m.settingsScopeLines(scopeW)
 	scopeOff := clampOffset(m.settingsScopeScroll, len(scopeLines), scrollH)
@@ -613,12 +726,9 @@ func (m Model) settingsScopeLines(w int) []string {
 	lines := []string{titleStyle.Render(" Scope"), ""}
 	for i, sc := range m.settingsScopes {
 		selected := i == m.settingsScopeCursor
-		// One first-column marker: the cursor (❯) when selected, otherwise the
-		// scope dot (● Global, · workspace).
-		marker := "·"
-		if sc.global {
-			marker = "●"
-		}
+		// One first-column marker: the cursor (❯) when selected, otherwise a
+		// muted bullet (∙).
+		marker := "∙"
 		if selected {
 			marker = "❯"
 		}
@@ -645,17 +755,34 @@ func (m Model) settingsScopeLines(w int) []string {
 // it is a workspace override or inherited; in Global scope it shows the reload
 // tier.
 func (m Model) settingsDisplayLines(rowsW int) []string {
+	if len(m.settingsItems) == 0 {
+		msg := "  (no settings in this tab)"
+		if m.settingsTab == settingsTabLSP {
+			msg = "  (no language servers configured — add [lsp.<lang>] to config)"
+		}
+		return []string{MutedStyle.Render(msg)}
+	}
 	labelW, valueW := settingsColumnWidths(m.settingsItems)
 	logical := settingsLogicalLines(m.settingsItems)
 	wsScope := !m.currentScope().global
+	missing := map[string]bool{} // language groups with an enabled-but-missing server
+	for _, it := range m.settingsItems {
+		if it.lspMissing {
+			missing[it.group] = true
+		}
+	}
 	out := make([]string, len(logical))
 	for i, ln := range logical {
 		switch ln.kind {
 		case slHeader:
-			out[i] = settingsHeaderDisplay(ln.group, rowsW)
+			out[i] = settingsHeaderDisplay(ln.group, rowsW, missing[ln.group])
 		case slRow:
 			it := m.settingsItems[ln.item]
-			out[i] = settingsRowDisplay(it, ln.item == m.settingsCursor, wsScope, labelW, valueW)
+			if ln.cont > 0 {
+				out[i] = settingsContLine(it, ln.cont, labelW, wsScope)
+			} else {
+				out[i] = settingsRowDisplay(it, ln.item == m.settingsCursor, wsScope, labelW, valueW)
+			}
 		default:
 			out[i] = ""
 		}
@@ -663,49 +790,74 @@ func (m Model) settingsDisplayLines(rowsW int) []string {
 	return out
 }
 
+// settingsContLine renders a list-entry continuation line, padded so the entry
+// aligns under the value column of the row above. Missing-LSP rows render red.
+func settingsContLine(it settingItem, idx, labelW int, wsScope bool) string {
+	style := DetailStyle
+	if wsScope && !it.overridden {
+		style = FadedStyle
+	}
+	if it.lspMissing {
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	}
+	entry := ""
+	if idx < len(it.list) {
+		entry = it.list[idx]
+	}
+	return strings.Repeat(" ", labelW+3) + style.Render(entry)
+}
+
 // settingsHeaderDisplay renders a group header as the name followed by a faded
 // dotted rule that fills to the right gap (1 space from each border).
-func settingsHeaderDisplay(group string, innerW int) string {
-	used := 1 + lipgloss.Width(group) + 1 // " " + name + " "
+func settingsHeaderDisplay(group string, innerW int, warn bool) string {
+	marker := ""
+	if warn { // an enabled LSP server in this group is not on PATH
+		marker = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("*")
+	}
+	used := 1 + lipgloss.Width(group) + lipgloss.Width(marker) + 1 // " " + name + marker + " "
 	dots := max(innerW-1-used, 0)
-	return " " + PanelHeaderFadedStyle.Render(group) + " " + SepStyle.Render(strings.Repeat("╌", dots))
+	return " " + PanelHeaderFadedStyle.Render(group) + marker + " " + SepStyle.Render(strings.Repeat("╌", dots))
 }
 
 // settingsRowDisplay renders one aligned settings row: 1-space gap, cursor,
 // fixed-width label and value columns, the control. In Global scope the
 // reload-tier numeral sits right after the setting name (¹ live / ² next session
 // / ³ restart — see settingsHintContent for the legend); in a workspace scope a
-// trailing mark shows override (● set) vs inherited.
+// superscript ⁴/⁵ after the numeral marks override vs inherited.
 func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW int) string {
-	value := fmt.Sprintf("%-*s", valueW, it.value)
+	label := rowLabel(it)
+	value := fmt.Sprintf("%-*s", valueW, rowValues(it)[0])
 	ctrl := settingControl(it)
 
-	numeral, numeralPlain := "", ""
-	if !wsScope {
-		numeral, numeralPlain = reloadNumeral(it.key)
+	numeral, numeralPlain := reloadNumeral(it.key)
+	// Workspace scope: a superscript marker after the tier numeral flags the row
+	// as an override (⁴) or inherited (⁵).
+	mark, markPlain := "", ""
+	if wsScope {
+		mark, markPlain = workspaceMark(it.overridden)
 	}
-	pad := strings.Repeat(" ", max(labelW-lipgloss.Width(it.label)-lipgloss.Width(numeralPlain), 0))
+	markers := numeralPlain + markPlain
+	pad := strings.Repeat(" ", max(labelW-lipgloss.Width(label)-lipgloss.Width(markers), 0))
 
-	// In a workspace scope, dim inherited rows so the workspace overrides (● set)
-	// stand out at a glance.
+	// Dim inherited rows so workspace overrides stand out; flag a missing LSP
+	// server's whole block in red.
 	labelStyle, valueStyle := ItemStyle, DetailStyle
 	if wsScope && !it.overridden {
 		labelStyle, valueStyle = FadedStyle, FadedStyle
 	}
+	if it.lspMissing {
+		red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+		labelStyle, valueStyle = red, red
+	}
 
 	var core string
 	if focused {
-		// The focused row renders in one SelectedStyle pass, so the numeral takes
-		// the selection colour (its tier colour is what matters on unfocused rows).
-		core = SelectedStyle.Render("❯ " + it.label + numeralPlain + pad + value + ctrl)
+		// One SelectedStyle pass, so the markers take the selection colour.
+		core = SelectedStyle.Render("❯ " + label + markers + pad + value + ctrl)
 	} else {
-		core = "  " + labelStyle.Render(it.label) + numeral + pad + valueStyle.Render(value) + MutedStyle.Render(ctrl)
+		core = "  " + labelStyle.Render(label) + numeral + mark + pad + valueStyle.Render(value) + MutedStyle.Render(ctrl)
 	}
-	out := " " + core
-	if wsScope {
-		out += " " + settingsRowMark(it)
-	}
-	return out
+	return " " + core
 }
 
 // reloadNumeral returns the coloured reload-tier numeral and its plain rune (the
@@ -721,13 +873,14 @@ func reloadNumeral(key settingKey) (coloured, plain string) {
 	}
 }
 
-// settingsRowMark renders the trailing workspace-scope marker: ● set (the key is
-// a workspace override) or inherited (falls through to global/default).
-func settingsRowMark(it settingItem) string {
-	if it.overridden {
-		return OkStyle.Render("● set")
+// workspaceMark returns the coloured + plain superscript that flags a workspace
+// row as an override (⁴, green) or inherited (⁵, muted), shown right after the
+// reload-tier numeral on the label.
+func workspaceMark(overridden bool) (coloured, plain string) {
+	if overridden {
+		return OkStyle.Render("⁴"), "⁴"
 	}
-	return MutedStyle.Render("inherited")
+	return MutedStyle.Render("⁵"), "⁵"
 }
 
 // settingsFooterRow renders one of the three pinned footer rows: a blank
@@ -775,9 +928,9 @@ func settingsHintContent(contentW int, wsScope bool) string {
 	legend := settingsLegend(wsScope)
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
-		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" scope  ·  ") +
+		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" panes  ·  ") +
 		SettingsBarKeyStyle.Render("[ ]") + SettingsBarStyle.Render(" width")
-	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  tab scope  ·  [ ] width")
+	shortcutW := lipgloss.Width("↑↓ move  ·  ←→ change  ·  tab panes  ·  [ ] width")
 	gap := max(contentW-lipgloss.Width(legend)-shortcutW, 1)
 	return legend + SettingsBarStyle.Render(strings.Repeat(" ", gap)) + shortcut
 }
@@ -787,15 +940,19 @@ func settingsHintContent(contentW int, wsScope bool) string {
 // ³ purple); a workspace scope explains the override/inherit marks. All segments
 // carry the bar background.
 func settingsLegend(wsScope bool) string {
-	if wsScope {
-		return SettingsBarStyle.Render("● set = workspace override  ·  inherited = from Global  ·  ⌫ reset to inherit")
-	}
 	ok := SettingsBarStyle.Foreground(ActiveTheme.Success)
 	warn := SettingsBarStyle.Foreground(ActiveTheme.Warning)
 	restart := SettingsBarStyle.Foreground(lipgloss.Color("#9D7CD8"))
-	return ok.Render("¹") + SettingsBarStyle.Render(" immediate  ·  ") +
+	muted := SettingsBarStyle.Foreground(ActiveTheme.TextMuted)
+	legend := ok.Render("¹") + SettingsBarStyle.Render(" immediate  ·  ") +
 		warn.Render("²") + SettingsBarStyle.Render(" new sessions  ·  ") +
 		restart.Render("³") + SettingsBarStyle.Render(" daemon restart")
+	if wsScope {
+		legend += SettingsBarStyle.Render("  ·  ") +
+			ok.Render("⁴") + SettingsBarStyle.Render(" override  ·  ") +
+			muted.Render("⁵") + SettingsBarStyle.Render(" inherited")
+	}
+	return legend
 }
 
 // settingsStatusContent left-aligns the status message on the bar, padded with

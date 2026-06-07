@@ -133,6 +133,7 @@ type Model struct {
 	settingsScopeScroll  int            // first visible row in the scope column
 	settingsScopeFocus   bool           // true = scope column focused, false = rows pane
 	settingsScopeWDelta  int            // user width adjustment ([ / ]) added to the default scope-column width
+	settingsTab          int            // active rows-pane tab: settingsTabGeneral or settingsTabLSP
 	pendingProjectReload string         // workspace folder whose project config changed (reload-project)
 	settingsListEditor   *listEditor    // non-nil while the list-value editor popup is open
 	settingsTextEditor   *textEditor    // non-nil while the single-line text editor popup is open

@@ -75,9 +75,9 @@ func (m Model) popupRightAll(rw int) []string {
 	if !c.Success {
 		st = WarnStyle.Render("✗ failed")
 	}
-	sl := MutedStyle.Render("○ historical")
+	sl := MutedStyle.Render("∙ historical")
 	if c.SessionID == currID {
-		sl = OkStyle.Render("● current")
+		sl = OkStyle.Render("∙ current")
 	}
 	sID := c.SessionID
 	if len(sID) > 12 {

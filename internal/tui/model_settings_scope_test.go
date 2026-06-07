@@ -142,9 +142,9 @@ func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
 	}
 }
 
-// TestListEditor_EscCancelsDiscards verifies esc closes the editor without
-// persisting (the conventional cancel) and without triggering a reload.
-func TestListEditor_EscCancelsDiscards(t *testing.T) {
+// TestListEditor_EscAutoSaves verifies esc closes the editor and auto-saves the
+// in-memory entries (the editor no longer has a separate cancel/discard).
+func TestListEditor_EscAutoSaves(t *testing.T) {
 	ws := t.TempDir()
 	m := Model{
 		settingsCfg:         config.Defaults(),
@@ -158,15 +158,37 @@ func TestListEditor_EscCancelsDiscards(t *testing.T) {
 	m.settingsListEditor.input = "/x"
 	m.settingsListEditor.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})) // add /x in-memory
 
-	m, _ = m.handleListEditorKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m, cmd := m.handleListEditorKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	if m.settingsListEditor != nil {
 		t.Error("esc should close the editor")
 	}
-	if m.pendingProjectReload != "" {
-		t.Error("esc cancel must not trigger a project reload")
+	if cmd == nil {
+		t.Error("esc should auto-save and push a project reload")
 	}
-	if present, _ := config.ProjectValuePresent(ws, []string{"workspace", "read_roots"}); present {
-		t.Error("esc cancel must not write read_roots")
+	merged, err := config.LoadProject(config.Defaults(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Workspace.ReadRoots) != 1 || merged.Workspace.ReadRoots[0] != "/x" {
+		t.Errorf("read_roots = %v, want [/x] (esc auto-saves)", merged.Workspace.ReadRoots)
+	}
+}
+
+// TestListEditor_EnterEditsInPlace verifies enter on a selected entry edits it
+// in place rather than closing the editor.
+func TestListEditor_EnterEditsInPlace(t *testing.T) {
+	e := newListEditor(skReadRoots, "read_roots", []string{"/a", "/b"})
+	e.cursor = 1
+	if done, _ := e.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); done {
+		t.Fatal("enter on an entry should edit in place, not close")
+	}
+	if !e.adding || !e.editing || e.input != "/b" {
+		t.Fatalf("enter should load the entry for editing: adding=%v editing=%v input=%q", e.adding, e.editing, e.input)
+	}
+	e.input = "/c"
+	e.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})) // commit the edit
+	if e.entries[1] != "/c" || len(e.entries) != 2 {
+		t.Errorf("entries = %v, want [/a /c]", e.entries)
 	}
 }
 

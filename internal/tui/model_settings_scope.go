@@ -143,7 +143,7 @@ func (m *Model) applyScopedAt(path []string, value any, apply func(*config.Confi
 			return false
 		}
 		apply(&m.settingsCfg)
-		m.settingsItems = m.buildScopeItems()
+		m.refreshSettingsItems()
 		return true
 	}
 	if len(path) == 0 {
@@ -154,7 +154,7 @@ func (m *Model) applyScopedAt(path []string, value any, apply func(*config.Confi
 		return false
 	}
 	m.pendingProjectReload = scope.folder
-	m.settingsItems = m.buildScopeItems() // re-reads the project file → the override shows
+	m.refreshSettingsItems() // re-reads the project file → the override shows
 	return true
 }
 
@@ -175,7 +175,7 @@ func (m Model) resetToInherit() Model {
 		return m
 	}
 	m.pendingProjectReload = scope.folder
-	m.settingsItems = m.buildScopeItems()
+	m.refreshSettingsItems()
 	m.settingsStatus = it.label + " → inherit"
 	return m
 }

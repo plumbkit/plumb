@@ -29,7 +29,7 @@ func (m Model) leftLines() []string {
 	}
 	for i, s := range m.sessions {
 		selected := i == m.cursor
-		indicator := "○"
+		indicator := "∙"
 		if selected {
 			indicator = "❯"
 		}

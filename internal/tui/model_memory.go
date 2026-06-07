@@ -97,7 +97,7 @@ func (m Model) memoryLeftLines() []string {
 
 	for i, mem := range m.memories {
 		selected := i == m.memoryCursor
-		indicator := "○"
+		indicator := "∙"
 		if selected {
 			indicator = "❯"
 		}
@@ -310,7 +310,7 @@ func (m Model) memoryWorkspaceLines(wsW int) []string {
 
 	for i, ws := range m.memoryWorkspaces {
 		selected := i == m.workspaceCursor
-		indicator := "○"
+		indicator := "∙"
 		if selected {
 			indicator = "❯"
 		}

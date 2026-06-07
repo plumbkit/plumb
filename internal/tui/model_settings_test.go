@@ -172,10 +172,11 @@ func TestSettingsLogicalLines_GroupsAndRows(t *testing.T) {
 	if len(lines) == 0 || lines[0].kind != slHeader {
 		t.Fatalf("first logical line should be a group header (no leading blank), got %+v", lines)
 	}
-	// Every settings item must appear exactly once as an slRow.
+	// Every settings item must appear exactly once as a primary slRow (cont==0);
+	// list-entry continuation lines (cont>0) legitimately repeat the item index.
 	seen := map[int]bool{}
 	for _, ln := range lines {
-		if ln.kind == slRow {
+		if ln.kind == slRow && ln.cont == 0 {
 			if seen[ln.item] {
 				t.Errorf("item %d appears more than once", ln.item)
 			}

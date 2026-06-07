@@ -68,7 +68,7 @@ func (m Model) dashboardDaemonVersionAlert() string {
 	}
 	for _, s := range m.sessions {
 		if s.DaemonVersion != "" && s.DaemonVersion != Version {
-			return fmt.Sprintf("Daemon version mismatch: running %s, TUI %s; run plumb stop", s.DaemonVersion, Version)
+			return fmt.Sprintf("Daemon version mismatch: running %s, TUI %s; run plumb restart", s.DaemonVersion, Version)
 		}
 	}
 	return ""

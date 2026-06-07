@@ -31,7 +31,8 @@ func (m *Model) enterSettings() {
 	if m.settingsScopeCursor >= len(m.settingsScopes) {
 		m.settingsScopeCursor = 0
 	}
-	m.settingsItems = m.buildScopeItems()
+	m.settingsTab = settingsTabGeneral
+	m.refreshSettingsItems()
 	m.settingsCursor = 0
 	m.settingsScroll = 0
 	m.settingsScopeFocus = false
@@ -48,7 +49,42 @@ func (m Model) settingsScrollHeight() int {
 }
 
 func (m Model) settingsPageSize() int {
-	return max(m.settingsScrollHeight()-1, 1)
+	return max(m.settingsContentHeight()-1, 1)
+}
+
+// settingsContentHeight is the visible height of the scrollable rows below the
+// pinned tab header (the scroll area minus the tab bar + blank line).
+func (m Model) settingsContentHeight() int {
+	return max(m.settingsScrollHeight()-settingsTabHeaderRows, 1)
+}
+
+// refreshSettingsItems rebuilds the rows for the current scope, keeping only the
+// active tab's settings.
+func (m *Model) refreshSettingsItems() {
+	m.settingsItems = filterSettingsByTab(m.buildScopeItems(), m.settingsTab)
+}
+
+// settingsCycleFocus moves focus forward (dir +1) or backward (dir -1) through
+// the three stops: the Scope column, the General tab, and the LSP tab. Switching
+// tab rebuilds the rows and resets the row cursor/scroll.
+func (m Model) settingsCycleFocus(dir int) Model {
+	pos := 0 // 0 = Scope, 1 = General, 2 = LSP
+	if !m.settingsScopeFocus {
+		pos = 1 + m.settingsTab
+	}
+	pos = (pos + dir + 3) % 3
+	if pos == 0 {
+		m.settingsScopeFocus = true
+		return m
+	}
+	m.settingsScopeFocus = false
+	if newTab := pos - 1; newTab != m.settingsTab {
+		m.settingsTab = newTab
+		m.settingsCursor = 0
+		m.settingsScroll = 0
+		m.refreshSettingsItems()
+	}
+	return m
 }
 
 // ensureSettingsCursorVisible scrolls so the focused row stays on screen.
@@ -64,7 +100,7 @@ func (m *Model) ensureSettingsCursorVisible() {
 	if lineIdx < 0 {
 		return
 	}
-	scrollH := m.settingsScrollHeight()
+	scrollH := m.settingsContentHeight()
 	if lineIdx < m.settingsScroll {
 		m.settingsScroll = lineIdx
 	} else if lineIdx >= m.settingsScroll+scrollH {
@@ -76,7 +112,7 @@ func (m *Model) ensureSettingsCursorVisible() {
 // clamped to the content bounds.
 func (m *Model) scrollSettings(delta int) {
 	m.settingsScroll += delta
-	maxOff := max(len(settingsLogicalLines(m.settingsItems))-m.settingsScrollHeight(), 0)
+	maxOff := max(len(settingsLogicalLines(m.settingsItems))-m.settingsContentHeight(), 0)
 	if m.settingsScroll > maxOff {
 		m.settingsScroll = maxOff
 	}
@@ -89,11 +125,11 @@ func (m *Model) scrollSettings(delta int) {
 // when it maps to a selectable settings row.
 func (m *Model) selectSettingAtBodyRow(y int) {
 	row := y - bodyStartRow
-	if row < 0 || row >= m.settingsScrollHeight() {
+	if row < settingsTabHeaderRows || row >= m.settingsScrollHeight() {
 		return
 	}
 	lines := settingsLogicalLines(m.settingsItems)
-	idx := m.settingsScroll + row
+	idx := m.settingsScroll + row - settingsTabHeaderRows
 	if idx < 0 || idx >= len(lines) {
 		return
 	}
@@ -144,8 +180,9 @@ func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "ctrl+h":
 		m.showHelp = true
 	case "esc":
-		m.sectionMenuOpen = true
-		m.sectionMenuCursor = m.currentSection
+		// Esc steps focus back to the Scope column; a no-op when already there.
+		// (The section menu opens with "/", not Esc.)
+		m.settingsScopeFocus = true
 	default:
 		return m.handleSettingsNavKey(msg.String())
 	}
@@ -156,19 +193,26 @@ func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 // separate from the section/global keys to keep each handler simple. When the
 // Scope column is focused it routes to handleScopeNavKey instead.
 func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
-	switch key { // scope-column resize works regardless of which pane is focused
+	switch key { // pane controls work regardless of which pane is focused
 	case "[":
 		return m.adjustScopeWidth(-1), nil
 	case "]":
 		return m.adjustScopeWidth(1), nil
+	case "tab":
+		return m.settingsCycleFocus(1), nil
+	case "shift+tab":
+		return m.settingsCycleFocus(-1), nil
 	}
 	if m.settingsScopeFocus {
 		return m.handleScopeNavKey(key)
 	}
+	return m.handleSettingsRowKey(key)
+}
+
+// handleSettingsRowKey handles cursor movement and value-editing keys within the
+// focused rows pane (the Scope column and pane controls are handled upstream).
+func (m Model) handleSettingsRowKey(key string) (Model, tea.Cmd) {
 	switch key {
-	case "tab", "shift+tab":
-		m.settingsScopeFocus = true
-		return m, nil
 	case "up", "k":
 		if m.settingsCursor > 0 {
 			m.settingsCursor--
@@ -203,7 +247,8 @@ func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
 }
 
 // handleScopeNavKey drives the Scope column: up/down pick a scope (reloading the
-// rows for it), tab/shift+tab/right/enter return focus to the rows pane.
+// rows for it), right/enter return focus to the rows pane. tab/shift+tab are
+// handled upstream in handleSettingsNavKey.
 func (m Model) handleScopeNavKey(key string) (Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
@@ -216,7 +261,7 @@ func (m Model) handleScopeNavKey(key string) (Model, tea.Cmd) {
 			m.settingsScopeCursor++
 			m.selectScope()
 		}
-	case "tab", "shift+tab", "right", "l", "enter", " ":
+	case "right", "l", "enter", " ":
 		m.settingsScopeFocus = false
 	}
 	return m, nil
@@ -229,7 +274,7 @@ func (m *Model) selectScope() {
 	m.settingsCursor = 0
 	m.settingsScroll = 0
 	m.settingsScopeScroll = clampOffset(m.settingsScopeScroll, len(m.settingsScopes)+2, m.settingsScrollHeight())
-	m.settingsItems = m.buildScopeItems()
+	m.refreshSettingsItems()
 }
 
 // activateSetting handles enter/space: opens the theme picker for the popup row
@@ -628,7 +673,7 @@ func (m Model) setLogLevel(lvl string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.settingsCfg.LogLevel = lvl
-	m.settingsItems = buildSettingItems(m.settingsCfg)
+	m.refreshSettingsItems()
 	m.settingsStatus = "log level → " + lvl
 	m.pendingReload = false // log level applies live via set-level, not reload-config
 	return m, m.applyLogLevelLive(lvl)
@@ -637,7 +682,7 @@ func (m Model) setLogLevel(lvl string) (Model, tea.Cmd) {
 func (m Model) setLogFormat(format string) Model {
 	if m.persist(func(c *config.Config) { c.LogFormat = format }) {
 		m.settingsCfg.LogFormat = format
-		m.settingsItems = buildSettingItems(m.settingsCfg)
+		m.refreshSettingsItems()
 		m.settingsStatus = settingStatus(skLogFormat, "log format → "+format)
 	}
 	return m
@@ -716,7 +761,7 @@ func (m Model) setDuration(key settingKey, dir int) Model {
 	}
 	if m.persist(func(c *config.Config) { p, _ := durField(c, key); p.Duration = d }) {
 		ptr.Duration = d
-		m.settingsItems = buildSettingItems(m.settingsCfg)
+		m.refreshSettingsItems()
 		m.settingsStatus = settingStatus(key, durLabel(key)+" → "+next)
 	}
 	return m
@@ -870,7 +915,7 @@ func (m *Model) applyTheme(name string) {
 	} else {
 		m.settingsStatus = "theme → " + name
 	}
-	m.settingsItems = buildSettingItems(m.settingsCfg)
+	m.refreshSettingsItems()
 }
 
 // cycleOption returns the option dir steps away from cur, wrapping around.
@@ -892,7 +937,7 @@ func cycleOption(opts []string, cur string, dir int) string {
 func (m Model) setPathStyle(style string) Model {
 	if m.persist(func(c *config.Config) { c.UI.PathStyle = style }) {
 		m.settingsCfg.UI.PathStyle = style
-		m.settingsItems = buildSettingItems(m.settingsCfg)
+		m.refreshSettingsItems()
 		m.settingsStatus = settingStatus(skPathStyle, "path style → "+style)
 	}
 	return m

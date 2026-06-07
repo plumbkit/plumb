@@ -517,8 +517,14 @@ func (m Model) handleMainKeySimple(key string) Model {
 		m.sectionMenuOpen = false
 		m.showHelp = true
 	case "esc":
-		m.sectionMenuOpen = false
-		m.showHelp = false
+		// Esc closes an open overlay; otherwise it steps focus back to the
+		// section's home panel (Sessions / Workspaces), a no-op when already there.
+		if m.sectionMenuOpen || m.showHelp {
+			m.sectionMenuOpen = false
+			m.showHelp = false
+		} else {
+			m.focusPanel = m.sectionHomeFocus()
+		}
 	case "1", "2", "3", "4", "5":
 		if m.sectionMenuOpen {
 			m.selectSection(int(key[0] - '1'))
@@ -533,6 +539,15 @@ func (m Model) handleMainKeySimple(key string) Model {
 		m.resizeFocusedColumn(2)
 	}
 	return m
+}
+
+// sectionHomeFocus is the home (left-most) panel Esc steps focus back to:
+// Workspaces in the Memory section, Sessions everywhere else.
+func (m Model) sectionHomeFocus() panelFocus {
+	if m.currentSection == 2 {
+		return focusWorkspaces
+	}
+	return focusSessions
 }
 
 // resizeFocusedColumn adjusts column width with [/]. Outside the Memory section
