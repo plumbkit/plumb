@@ -54,6 +54,12 @@ var defaults = Config{
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},
 	},
+	Semantics: SemanticsConfig{
+		Enabled:          false,
+		Provider:         "openai",
+		RerankCandidates: 50,
+		Timeout:          Duration{10 * time.Second},
+	},
 	LSP: map[string]LSPConfig{
 		"go": {
 			Command:     "gopls",

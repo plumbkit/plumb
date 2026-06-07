@@ -244,6 +244,39 @@ type SessionConfig struct {
 	EvictionTTLMinutes int `toml:"eviction_ttl_minutes"`
 }
 
+// SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by
+// default. The embedder is always a hosted or user-run HTTP endpoint — plumb
+// never bundles or supervises a model. Project-overridable. See the design in
+// docs/internal/semantic-search-design.md.
+//
+// Key resolution: APIKey (a literal key in config) wins; when empty, the key is
+// read from the environment variable named by APIKeyEnv (or the provider
+// preset's default env var). Resolve() applies presets + this rule.
+//
+// Concurrency: read-only after Load returns.
+type SemanticsConfig struct {
+	// Enabled turns semantic re-rank on. Default false.
+	Enabled bool `toml:"enabled"`
+	// Provider selects a preset: openai | voyage | jina | mistral | cohere | custom.
+	// Default "openai". "custom" requires BaseURL (a user-run OpenAI-compatible
+	// endpoint, e.g. Ollama / llama.cpp / LM Studio / TEI / vLLM).
+	Provider string `toml:"provider"`
+	// Model is the embedding model id. "" uses the provider preset's default.
+	Model string `toml:"model"`
+	// BaseURL overrides the provider's API base; required for "custom".
+	BaseURL string `toml:"base_url"`
+	// APIKey is a literal key. Highest precedence; prefer APIKeyEnv to keep secrets
+	// out of config files (a global config is safer than a committed project one).
+	APIKey string `toml:"api_key"`
+	// APIKeyEnv names the env var holding the key, used when APIKey is empty.
+	// "" uses the provider preset's default env var.
+	APIKeyEnv string `toml:"api_key_env"`
+	// RerankCandidates is how many FTS5 hits to re-rank. Default 50. 0 uses the default.
+	RerankCandidates int `toml:"rerank_candidates"`
+	// Timeout caps a single embedding HTTP call. Default 10s.
+	Timeout Duration `toml:"timeout"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
@@ -261,4 +294,5 @@ type Config struct {
 	Topology  TopologyConfig       `toml:"topology"`
 	LSP       map[string]LSPConfig `toml:"lsp"`
 	LSPQuery  LSPQueryConfig       `toml:"lsp_query"`
+	Semantics SemanticsConfig      `toml:"semantics"`
 }

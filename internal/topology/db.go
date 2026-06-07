@@ -68,6 +68,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS topology_fts USING fts5(
     kind,
     tokenize='unicode61 remove_diacritics 2'
 );
+
+-- Opt-in semantic-search cache: one row per (embedding model, content hash).
+-- Keyed by content hash (not node id) so it survives re-indexing and shares a
+-- vector across identical symbol text. Populated lazily when a symbol appears as
+-- a topology_search rerank candidate. vector is dim little-endian float32s.
+CREATE TABLE IF NOT EXISTS topology_embeddings (
+    model        TEXT    NOT NULL,
+    content_hash TEXT    NOT NULL,
+    dim          INTEGER NOT NULL,
+    vector       BLOB    NOT NULL,
+    PRIMARY KEY (model, content_hash)
+);
 `
 
 // DBPath returns the canonical path to the topology database for the given workspace.

@@ -34,6 +34,9 @@ func validate(cfg Config) error {
 	if err := validateTopology(cfg.Topology); err != nil {
 		return err
 	}
+	if err := validateSemantics(cfg.Semantics); err != nil {
+		return err
+	}
 	switch cfg.UI.PathStyle {
 	case "", "compact", "truncate-middle", "full":
 	default:
@@ -58,6 +61,24 @@ func validateQuality(q QualityConfig) error {
 	}
 	if q.MaxFindingsPerFile < 0 {
 		return fmt.Errorf("quality.max_findings_per_file must be non-negative")
+	}
+	return nil
+}
+
+func validateSemantics(s SemanticsConfig) error {
+	switch s.Provider {
+	case "", "openai", "voyage", "jina", "mistral", "cohere", "custom":
+	default:
+		return fmt.Errorf("semantics.provider must be one of openai, voyage, jina, mistral, cohere, custom; got %q", s.Provider)
+	}
+	if s.Enabled && s.Provider == "custom" && s.BaseURL == "" {
+		return fmt.Errorf("semantics.base_url is required when provider = custom and enabled = true")
+	}
+	if s.RerankCandidates < 0 {
+		return fmt.Errorf("semantics.rerank_candidates must be non-negative (0 uses the default)")
+	}
+	if s.Timeout.Duration < 0 {
+		return fmt.Errorf("semantics.timeout must be non-negative")
 	}
 	return nil
 }
