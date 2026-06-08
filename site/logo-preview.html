@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>plumb logotype — preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --cream:#f3efe6; --cream-2:#ece6d9; --ink:#1c1a16; --ink-soft:#4a463d;
+  --ink-faint:#8a8475; --rule:#d6cfbf; --green:#2f5141; --rust:#a4502b;
+  --serif:'Fraunces',Georgia,serif; --sans:'Inter',sans-serif; --mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--cream);color:var(--ink);font-family:var(--sans);padding:48px 40px 80px}
+h1{font-family:var(--mono);font-size:13px;letter-spacing:.22em;text-transform:uppercase;color:var(--rust);margin-bottom:6px}
+.sub{color:var(--ink-faint);font-size:14px;margin-bottom:40px;max-width:760px;line-height:1.6}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:28px;max-width:1100px}
+.tile{background:#fff;border:1px solid var(--rule);border-radius:16px;padding:44px 40px 30px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:240px}
+.tile.dark{background:var(--ink)}
+.tag{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-faint);margin-top:30px;text-transform:uppercase}
+.dark .tag{color:#8a8475}
+.stage{display:flex;align-items:center;justify-content:center;flex:1}
+
+/* ---- shared wordmark ---- */
+.mark{font-family:var(--serif);font-weight:500;color:var(--ink);line-height:1;display:inline-flex;align-items:flex-start;letter-spacing:.005em}
+.dark .mark{color:var(--cream)}
+.mark .pee{position:relative;display:inline-block}
+/* the plumb line drops from the P stem */
+.mark .plumb{position:absolute;left:var(--stem,.13em);top:var(--ptop,.62em);overflow:visible}
+
+/* sizes per variant */
+.v1 .mark{font-size:72px}
+.v2 .mark{font-size:72px}
+.v3 .mark{font-size:84px}
+.v4 .mark{font-size:64px}
+
+/* small lock-up (nav scale) */
+.v5 .mark{font-size:30px}
+.v6 .mark{font-size:30px}
+</style>
+</head>
+<body>
+<h1>plumb logotype — concept: the P becomes the plumb line</h1>
+<div class="sub">The P&rsquo;s stem continues past the baseline into a string + the green diamond bob. Four large explorations + two nav-scale lock-ups. Tell me which direction and I&rsquo;ll tune the alignment, drop length and bob size.</div>
+
+<div class="grid">
+
+  <!-- V1: balanced drop, bob aligned under stem -->
+  <div class="tile v1">
+    <div class="stage">
+      <span class="mark" style="--stem:.135em;--ptop:.60em">
+        <span class="pee">P<svg class="plumb" width="16" height="60" viewBox="0 0 16 60">
+          <line x1="8" y1="0" x2="8" y2="40" stroke="#1c1a16" stroke-width="2.4"/>
+          <path d="M8 40 L14 47 L8 58 L2 47 Z" fill="#2f5141"/>
+        </svg></span>lumb
+      </span>
+    </div>
+    <div class="tag">V1 · balanced drop</div>
+  </div>
+
+  <!-- V2: longer string, smaller bob, more "instrument" -->
+  <div class="tile v2">
+    <div class="stage">
+      <span class="mark" style="--stem:.135em;--ptop:.60em">
+        <span class="pee">P<svg class="plumb" width="14" height="78" viewBox="0 0 14 78">
+          <line x1="7" y1="0" x2="7" y2="60" stroke="#1c1a16" stroke-width="2.2"/>
+          <path d="M7 60 L11.5 65 L7 75 L2.5 65 Z" fill="#2f5141"/>
+        </svg></span>lumb
+      </span>
+    </div>
+    <div class="tag">V2 · long plumb line</div>
+  </div>
+
+  <!-- V3: hero, bigger bob, confident -->
+  <div class="tile v3">
+    <div class="stage">
+      <span class="mark" style="--stem:.14em;--ptop:.58em">
+        <span class="pee">P<svg class="plumb" width="20" height="66" viewBox="0 0 20 66">
+          <line x1="10" y1="0" x2="10" y2="42" stroke="#1c1a16" stroke-width="3"/>
+          <path d="M10 42 L17 51 L10 64 L3 51 Z" fill="#2f5141"/>
+        </svg></span>lumb
+      </span>
+    </div>
+    <div class="tag">V3 · hero, bold bob</div>
+  </div>
+
+  <!-- V4: bob outline + rust string accent -->
+  <div class="tile v4">
+    <div class="stage">
+      <span class="mark" style="--stem:.135em;--ptop:.60em">
+        <span class="pee">P<svg class="plumb" width="16" height="58" viewBox="0 0 16 58">
+          <line x1="8" y1="0" x2="8" y2="38" stroke="#1c1a16" stroke-width="2.2"/>
+          <path d="M8 38 L14 45 L8 56 L2 45 Z" fill="none" stroke="#2f5141" stroke-width="2.2" stroke-linejoin="round"/>
+        </svg></span>lumb
+      </span>
+    </div>
+    <div class="tag">V4 · open (outline) bob</div>
+  </div>
+
+  <!-- V5: nav-scale lock-up on cream -->
+  <div class="tile v5">
+    <div class="stage">
+      <span class="mark" style="--stem:.14em;--ptop:.60em">
+        <span class="pee">P<svg class="plumb" width="9" height="26" viewBox="0 0 9 26">
+          <line x1="4.5" y1="0" x2="4.5" y2="17" stroke="#1c1a16" stroke-width="1.3"/>
+          <path d="M4.5 17 L7 20 L4.5 25 L2 20 Z" fill="#2f5141"/>
+        </svg></span>lumb
+      </span>
+    </div>
+    <div class="tag">V5 · nav scale (light)</div>
+  </div>
+
+  <!-- V6: nav-scale lock-up on ink -->
+  <div class="tile dark v6">
+    <div class="stage">
+      <span class="mark" style="--stem:.14em;--ptop:.60em">
+        <span class="pee">P<svg class="plumb" width="9" height="26" viewBox="0 0 9 26">
+          <line x1="4.5" y1="0" x2="4.5" y2="17" stroke="#f3efe6" stroke-width="1.3"/>
+          <path d="M4.5 17 L7 20 L4.5 25 L2 20 Z" fill="#2f5141"/>
+        </svg></span>lumb
+      </span>
+    </div>
+    <div class="tag">V6 · nav scale (dark)</div>
+  </div>
+
+</div>
+</body>
+</html>
