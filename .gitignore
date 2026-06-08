@@ -60,19 +60,29 @@ coverage.html
 # Test binary cache (used to satisfy Airlock Digital whitelisting)
 .testcache/
 
-# Claude Code
+# ── AI coding agents: per-developer local state, caches, and secret-bearing config ──
+# Shared rules/context files live at the repo ROOT (AGENTS.md, CLAUDE.md, QWEN.md,
+# .goosehints, …) and are intentionally NOT ignored. These dirs are machine-local.
+# (gitignore has no inline comments — keep each note on its own line.)
 .claude/
-
+# Cursor editor + cursor-agent CLI; also holds rules — un-ignore to share them
+.cursor/
+.gemini/
+# Qwen Code (QWEN.md at root is shared, not ignored)
+.qwen/
+# Augment Code (auggie)
+.augment/
+.goose/
 # Crush local session state
 .crush/
-
-# Gemini CLI local config
-.gemini/
+# OpenCode local state (opencode.json is shareable and NOT ignored)
+.opencode/
+.serena/
+# Aider chat/input history + tags cache (.aider.chat.history.md, .aider.tags.cache.*, …)
+.aider*
 
 # Plumb workspace marker (commit if you want to share context with your team)
 .plumb/
-
-.serena/
 
 # macOS
 .DS_Store
