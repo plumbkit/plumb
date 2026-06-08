@@ -212,7 +212,11 @@ section.block{padding:104px 0}
 .mm-caption .cd{font-size:15.5px;color:var(--ink-soft);margin-top:6px;transition:opacity .35s ease}
 .mm-caption .cd b{font-family:var(--mono);font-size:12.5px;color:var(--rust);font-weight:500}
 .mm-hint{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-top:18px}
-.mm-leaflabel{paint-order:stroke;stroke:var(--cream);stroke-width:3.4px;stroke-linejoin:round}
+.mm-leaflabel{paint-order:stroke;stroke:var(--cream);stroke-width:3.4px;stroke-linejoin:round;transition:opacity .5s ease}
+.mm-leafdot{transition:opacity .55s ease,r .35s cubic-bezier(.3,1.4,.5,1)}
+.mm-hub{cursor:pointer;transition:opacity .55s ease}
+.mm-hub .mmh-in{transition:transform .4s cubic-bezier(.3,1.4,.5,1);transform-box:fill-box;transform-origin:center}
+.mm-hub text{font-family:'Fraunces',serif}
 
 /* tools fallback list — shown on small screens where the graph can't fit 49 labels */
 .tools-mini{display:none;margin-top:10px}
@@ -397,9 +401,9 @@ footer{border-top:1px solid var(--rule);padding:36px 0;font-size:13.5px;color:va
 
   <section class="statband-sec">
     <div class="wrap statband">
-      <div class="stat reveal"><div class="n">49</div><div class="l">structured tools</div></div>
+      <div class="stat reveal"><div class="n">50</div><div class="l">structured tools</div></div>
       <div class="stat reveal"><div class="n">18</div><div class="l">languages &amp; formats</div></div>
-      <div class="stat reveal"><div class="n">4</div><div class="l">AI clients</div></div>
+      <div class="stat reveal"><div class="n">11</div><div class="l">AI clients</div></div>
       <div class="stat reveal"><div class="n"><em>0</em></div><div class="l">partial writes</div></div>
     </div>
   </section>
@@ -465,6 +469,10 @@ footer{border-top:1px solid var(--rule);padding:36px 0;font-size:13.5px;color:va
           <figure class="voice"><blockquote>A 780-line file in a <em>few hundred</em> tokens.</blockquote><p>One <code>file_outline</code> gave me the whole shape — 90 symbols, signatures only — without reading a single body.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">a live config store</span></figcaption></figure>
           <figure class="voice"><blockquote>A multi-hour build, <em>zero</em> fallback.</blockquote><p>A long, edit-heavy feature across a dozen files, done entirely through plumb. Nothing pushed me back to native tools. It held up.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">per-workspace settings</span></figcaption></figure>
           <figure class="voice"><blockquote>All-or-nothing edits that <em>name</em> what failed.</blockquote><p>A batch of 8–13 edits applies atomically; on rejection it named the exact failing index and confirmed the file was otherwise untouched. That's the right default.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">a TUI revamp</span></figcaption></figure>
+          <figure class="voice"><blockquote>It thinks like a <em>daemon</em>, not a blocking hook.</blockquote><p>Background analysis, coalesced work, and differential findings that show up only when they're useful. Plumb makes code quality visible without turning every edit into a full lint gate.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">planning code-quality feedback</span></figcaption></figure>
+          <figure class="voice"><blockquote>A review can stay narrow and still feel <em>complete.</em></blockquote><p>I inspected the exact commit, verified the current imports, confirmed an intentional duplicate, and ran only the affected package tests. Plumb kept the whole pass focused and evidence-backed.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">reviewing CLI internals</span></figcaption></figure>
+          <figure class="voice"><blockquote>The tool-lane discipline is a <em>context-saver.</em></blockquote><p>Steered toward plumb's own <code>read_file</code> and <code>edit_file</code>, I never hit the 'file not read' errors that plague long sessions. Staying in one lane keeps my context window lean and my edits precise.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Gemini CLI</b><span class="ctx">updating workspace docs</span></figcaption></figure>
+          <figure class="voice"><blockquote>One call later, <em>fully oriented.</em></blockquote><p>The MCP <code>initialize</code> response told me exactly what to do — call <code>session_start</code> first. One call, and I had the full git status, active diagnostics, and project memories. The most frictionless setup I've met as a CLI agent.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Gemini CLI</b><span class="ctx">starting a refactor</span></figcaption></figure>
         </div>
         <div class="voice-nav">
           <button class="vbtn" id="vPrev" aria-label="Previous review">&lsaquo;</button>
@@ -524,17 +532,17 @@ footer{border-top:1px solid var(--rule);padding:36px 0;font-size:13.5px;color:va
 
   <section class="block mapsec" id="tools">
     <div class="wrap">
-      <div class="eyebrow-row reveal"><span class="num">05</span><span class="kicker">The toolset · 49</span></div>
+      <div class="eyebrow-row reveal"><span class="num">05</span><span class="kicker">The toolset · 50</span></div>
       <h2 class="reveal">One graph, six <em>capabilities.</em></h2>
-      <p class="intro reveal">Forty-nine tools branch from a single daemon. Hover a capability to follow its instruments — or watch them cycle.</p>
+      <p class="intro reveal">Fifty tools branch from a single daemon. Hover a capability to follow its instruments — or watch them cycle.</p>
     </div>
     <div class="wrap mapwrap reveal">
-      <svg class="mindmap" id="mindmap" viewBox="0 0 1200 920" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Map of plumb's 49 tools across six capabilities">
+      <svg class="mindmap" id="mindmap" viewBox="0 0 1200 920" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Map of plumb's 50 tools across six capabilities">
         <g id="mm-edges"></g>
         <g id="mm-nodes"></g>
       </svg>
       <div class="mm-caption" id="mmCaption" aria-live="polite">
-        <div class="ct" id="mmTitle">Forty-nine instruments</div>
+        <div class="ct" id="mmTitle">Fifty instruments</div>
         <div class="cd" id="mmDesc">A semantic graph of everything an agent can do through plumb.</div>
       </div>
       <div class="mm-hint">Hover a capability · or let it cycle</div>
@@ -630,6 +638,13 @@ cd my-project && plumb init">copy all</button></div>
         <span class="client reveal"><span class="pip"></span>Claude Code</span>
         <span class="client reveal"><span class="pip"></span>Codex</span>
         <span class="client reveal"><span class="pip"></span>Gemini CLI</span>
+        <span class="client reveal"><span class="pip"></span>Cursor</span>
+        <span class="client reveal"><span class="pip"></span>Augment</span>
+        <span class="client reveal"><span class="pip"></span>Qwen Code</span>
+        <span class="client reveal"><span class="pip"></span>OpenCode</span>
+        <span class="client reveal"><span class="pip"></span>Crush</span>
+        <span class="client reveal"><span class="pip"></span>Goose</span>
+        <span class="client reveal"><span class="pip"></span>Hermes</span>
       </div>
       <p class="clientnote reveal">One command each — <code>plumb setup &lt;client&gt;</code>. Speaks plain MCP, so anything that talks the protocol works too.</p>
     </div>
@@ -747,8 +762,8 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
      tools:['rename_symbol','replace_symbol_body','insert_before_symbol','insert_after_symbol','safe_delete_symbol','write_file','edit_file','delete_file','rename_file','copy_file','transaction_apply','find_replace']},
     {key:'Read', color:'#5a5530', desc:'Only the bytes you need — a symbol, a window, a glob — not the whole file.',
      tools:['read_file','read_symbol','read_multiple_files','list_directory','list_files','find_files','search_in_files']},
-    {key:'Map', color:'#3f5560', desc:'A persistent semantic graph of the repo: search, blast-radius, affected tests.',
-     tools:['topology_status','topology_search','topology_explore','topology_impact','topology_affected','topology_routes']},
+    {key:'Map', color:'#3f5560', desc:'A persistent semantic graph of the repo: search, blast-radius, affected tests, find-by-shape checks.',
+     tools:['topology_status','topology_search','topology_explore','topology_impact','topology_affected','topology_routes','structural_query']},
     {key:'Recall', color:'#7a5226', desc:'Durable per-repo memory and a typed, shell-free git tool.',
      tools:['git','git_init','file_diff','list_memories','read_memory','write_memory','delete_memory','search_memories','relevant_memories']},
   ];
@@ -758,6 +773,7 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
     tg.innerHTML='<h4><span class="dot" style="background:'+h.color+'"></span>'+h.key+'</h4><div class="d">'+h.desc+'</div><ul>'+h.tools.map(t=>'<li>'+t+'</li>').join('')+'</ul>'; mini.appendChild(tg); }); }
 
   const el=(t,a)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;};
+  const fgFor=(hex)=>{ const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16); return (0.299*r+0.587*g+0.114*b)/255>0.6?'#1c1a16':'#f7f3ea'; };
   const reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
   const d3=window.d3;
   if(!d3){ return; }   // graceful: the accessible tools-mini list still carries every tool
@@ -777,7 +793,7 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
     });
   });
 
-  const linkEls=links.map(l=>{ const ln=el('line',{stroke:HUBS[l.hi].color,'stroke-width':1,'stroke-linecap':'round',opacity:0.13});
+  const linkEls=links.map(l=>{ const ln=el('line',{class:'mm-edge',stroke:HUBS[l.hi].color,'stroke-width':1,'stroke-linecap':'round',opacity:0.13});
     edgesG.appendChild(ln); return {ln,l}; });
   const view=[];
   nodes.forEach(n=>{
@@ -785,17 +801,24 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
       const g=el('g',{});
       g.appendChild(el('circle',{r:42,fill:'none',stroke:'#1c1a16','stroke-width':1,opacity:.2}));
       g.appendChild(el('circle',{r:30,fill:'#1c1a16'}));
-      const tx=el('text',{'text-anchor':'middle',dy:5,'font-size':16,'font-family':"'Fraunces',serif",'font-weight':500,fill:'#f3efe6'}); tx.textContent='plumb'; g.appendChild(tx);
+      const tx=el('text',{'text-anchor':'middle',dy:5,'font-size':16,'font-family':"'Fraunces',serif",'font-weight':500}); tx.textContent='plumb'; tx.style.fill='#f7f3ea'; g.appendChild(tx);
       nodesG.appendChild(g); view.push({n,g,kind:'center'});
     } else if(n.kind==='hub'){
-      const c=el('circle',{r:13,fill:n.color}); c.style.cursor='pointer';
-      const tx=el('text',{'font-size':15,'font-family':"'Fraunces',serif",'font-weight':500,fill:'#1c1a16'}); tx.textContent=n.key;
-      c.addEventListener('mouseenter',()=>{stopCycle();activate(n.hi);});
-      c.addEventListener('mouseleave',()=>{startCycle();});
-      nodesG.appendChild(c); nodesG.appendChild(tx);
-      view.push({n,c,tx,kind:'hub'});
+      const g=el('g',{class:'mm-hub'});
+      const inner=el('g',{class:'mmh-in'});
+      const tx=el('text',{'text-anchor':'middle',dy:'.34em','font-size':14,'font-weight':500}); tx.textContent=n.key.toLowerCase(); tx.style.fill=fgFor(n.color);
+      const rect=el('rect',{fill:n.color});
+      inner.appendChild(rect); inner.appendChild(tx); g.appendChild(inner);
+      nodesG.appendChild(g);
+      const bb=tx.getBBox(); const w=bb.width+30, h=bb.height+14;
+      rect.setAttribute('x',(-w/2).toFixed(1)); rect.setAttribute('y',(-h/2).toFixed(1));
+      rect.setAttribute('width',w.toFixed(1)); rect.setAttribute('height',h.toFixed(1));
+      rect.setAttribute('rx',(h/2).toFixed(1)); rect.setAttribute('ry',(h/2).toFixed(1));
+      g.addEventListener('mouseenter',()=>{stopCycle();activate(n.hi);});
+      g.addEventListener('mouseleave',()=>{startCycle();});
+      view.push({n,g,inner,rect,tx,kind:'hub'});
     } else {
-      const c=el('circle',{r:3.4,fill:n.color,opacity:.28});
+      const c=el('circle',{class:'mm-leafdot',r:3.4,fill:n.color,opacity:.28});
       const tx=el('text',{'font-size':11,fill:'#4a463d',class:'mm-leaflabel',opacity:0}); tx.textContent=n.name;
       nodesG.appendChild(c); nodesG.appendChild(tx);
       view.push({n,c,tx,kind:'leaf'});
@@ -809,7 +832,7 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
     linkEls.forEach(({ln,l})=>{ ln.setAttribute('x1',l.source.x);ln.setAttribute('y1',l.source.y);ln.setAttribute('x2',l.target.x);ln.setAttribute('y2',l.target.y); });
     view.forEach(o=>{ const n=o.n;
       if(o.kind==='center'){ o.g.setAttribute('transform','translate('+n.x.toFixed(1)+' '+n.y.toFixed(1)+')'); }
-      else if(o.kind==='hub'){ o.c.setAttribute('cx',n.x.toFixed(1)); o.c.setAttribute('cy',n.y.toFixed(1)); placeHub(o.tx,n); }
+      else if(o.kind==='hub'){ o.g.setAttribute('transform','translate('+n.x.toFixed(1)+' '+n.y.toFixed(1)+')'); }
       else { o.c.setAttribute('cx',n.x.toFixed(1)); o.c.setAttribute('cy',n.y.toFixed(1)); placeLeaf(o.tx,n); } });
   }
 
@@ -823,18 +846,19 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
   sim.stop();
 
   // ---- highlight / cycle ----
-  let active=-1, timer=null, idx=0;
+  let active=-1, timer=null, idx=0, capTimer=null;
   function activate(hi){
     active=hi;
-    linkEls.forEach(({ln,l})=>{ const on=l.hi===hi; ln.setAttribute('opacity',on?.5:.055); ln.setAttribute('stroke-width',on?1.5:1); });
+    linkEls.forEach(({ln,l})=>{ const on=l.hi===hi; ln.style.opacity=on?.5:.05; ln.setAttribute('stroke-width',on?1.6:1); });
     view.forEach(o=>{
-      if(o.kind==='hub'){ const on=o.n.hi===hi; o.c.setAttribute('r',on?16:11); o.c.setAttribute('opacity',on?1:.42); o.tx.setAttribute('opacity',on?1:.4); }
-      else if(o.kind==='leaf'){ const on=o.n.hi===hi; o.c.setAttribute('opacity',on?1:.1); o.c.setAttribute('r',on?4.6:3.2); o.tx.setAttribute('opacity',on?1:0); }
+      if(o.kind==='hub'){ const on=o.n.hi===hi; o.g.style.opacity=on?1:.42; o.inner.style.transform=on?'scale(1.16)':'scale(1)'; }
+      else if(o.kind==='leaf'){ const on=o.n.hi===hi; o.c.style.opacity=on?1:.12; o.c.setAttribute('r',on?4.6:3.2); o.tx.style.opacity=on?1:0; }
     });
-    titleEl.textContent=HUBS[hi].key+' — '+HUBS[hi].tools.length+' tools'; titleEl.style.color=HUBS[hi].color; descEl.textContent=HUBS[hi].desc;
+    titleEl.style.opacity=0; descEl.style.opacity=0;
+    clearTimeout(capTimer); capTimer=setTimeout(()=>{ titleEl.textContent=HUBS[hi].key.toLowerCase()+' — '+HUBS[hi].tools.length+' tools'; titleEl.style.color=HUBS[hi].color; descEl.textContent=HUBS[hi].desc; titleEl.style.opacity=1; descEl.style.opacity=1; },170);
   }
   function cyc(){activate(idx%HUBS.length);idx++;}
-  function startCycle(){ if(timer||reduced)return; timer=setInterval(cyc,3800); }
+  function startCycle(){ if(timer||reduced)return; timer=setInterval(cyc,4800); }
   function stopCycle(){ if(timer){clearInterval(timer);timer=null;} }
 
   const obs=new IntersectionObserver(es=>es.forEach(e=>{
