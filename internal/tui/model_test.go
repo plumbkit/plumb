@@ -982,22 +982,21 @@ func TestDashDaemonWidgetUsesMemoryRows(t *testing.T) {
 			t.Fatalf("daemon memory widget should not render CPU data: %q", line)
 		}
 	}
-	wantPeak := "│   Peak RSS ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 33 MB   │"
-	if plain[2] != wantPeak {
-		t.Fatalf("daemon peak row = %q, want %q", plain[2], wantPeak)
+	assertRow := func(idx int, label, value string) {
+		t.Helper()
+		if !strings.Contains(plain[idx], label) || !strings.Contains(plain[idx], value) {
+			t.Fatalf("daemon row %d = %q, want label %q and value %q", idx, plain[idx], label, value)
+		}
 	}
-	wantHeapInUse := "│   Heap In Use ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 9 MB   │"
-	if plain[4] != wantHeapInUse {
-		t.Fatalf("daemon heap in use row = %q, want %q", plain[4], wantHeapInUse)
+	// RSS is the current sample, not a peak — the label must not claim otherwise.
+	assertRow(2, "RSS", "33 MB")
+	if strings.Contains(plain[2], "Peak") {
+		t.Fatalf("daemon RSS row = %q, should not be labelled Peak (it is the current sample)", plain[2])
 	}
-	wantHeapSys := "│   Heap Sys ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 15 MB   │"
-	if plain[5] != wantHeapSys {
-		t.Fatalf("daemon heap sys row = %q, want %q", plain[5], wantHeapSys)
-	}
-	wantGC := "│   GC ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ 20 cycles   │"
-	if plain[6] != wantGC {
-		t.Fatalf("daemon GC row = %q, want %q", plain[6], wantGC)
-	}
+	assertRow(4, "Heap In Use", "9 MB")
+	assertRow(5, "Heap Sys", "15 MB")
+	assertRow(6, "Heap Released", "0 B")
+	assertRow(7, "GC", "20 cycles")
 }
 
 func TestDashboardDaemonVersionAlert(t *testing.T) {

@@ -5,9 +5,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/monitor"
 )
 
 var logLevelCmd = &cobra.Command{
@@ -113,6 +121,16 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 		return
 	}
 
+	if line == "heap-profile" {
+		handleHeapProfile(conn)
+		return
+	}
+
+	if line == "mem-stats" {
+		handleMemStats(conn)
+		return
+	}
+
 	// reload-project <workspace>: re-apply the per-project config to the sessions
 	// pinned to that workspace (and only those), so a workspace settings change
 	// made in the TUI takes effect at once for that project.
@@ -144,6 +162,51 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 
 	slog.Info("daemon: log level changed via control socket", "level", level)
 	fmt.Fprintf(conn, "ok\n")
+}
+
+// handleHeapProfile writes a heap pprof snapshot to the cache dir and replies
+// with its absolute path, in response to the control-socket "heap-profile"
+// command (sent by `plumb debug heap`). A forced GC runs first so the profile
+// reflects live, post-collection memory rather than uncollected garbage. Open
+// the result with `go tool pprof <path>`.
+func handleHeapProfile(conn net.Conn) {
+	runtime.GC()
+	dir := config.CacheDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fmt.Fprintf(conn, "error: creating cache dir: %s\n", err.Error())
+		return
+	}
+	path := filepath.Join(dir, fmt.Sprintf("plumb.heap.%d.pprof", time.Now().UnixNano()))
+	f, err := os.Create(path) //nolint:gosec // G304: path is cache dir + a fixed-format name, no user input
+	if err != nil {
+		fmt.Fprintf(conn, "error: creating heap profile: %s\n", err.Error())
+		return
+	}
+	defer f.Close()
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		fmt.Fprintf(conn, "error: writing heap profile: %s\n", err.Error())
+		return
+	}
+	slog.Info("daemon: heap profile written via control socket", "path", path)
+	fmt.Fprintf(conn, "%s\n", path)
+}
+
+// handleMemStats replies with a formatted runtime memory snapshot, in response
+// to the control-socket "mem-stats" command (sent by `plumb debug mem`).
+func handleMemStats(conn net.Conn) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Fprintf(conn,
+		"HeapAlloc    %s\nHeapInuse    %s\nHeapSys      %s\nHeapIdle     %s\nHeapReleased %s\nNextGC       %s\nNumGC        %d\nGoroutines   %d\n",
+		monitor.FormatBytes(m.HeapAlloc),
+		monitor.FormatBytes(m.HeapInuse),
+		monitor.FormatBytes(m.HeapSys),
+		monitor.FormatBytes(m.HeapIdle),
+		monitor.FormatBytes(m.HeapReleased),
+		monitor.FormatBytes(m.NextGC),
+		m.NumGC,
+		runtime.NumGoroutine(),
+	)
 }
 
 // handleReloadConfig re-reads the global config in response to a control-socket

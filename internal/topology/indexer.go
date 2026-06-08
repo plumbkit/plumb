@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -483,7 +484,14 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("topology: resync walk: %w", err)
 	}
-	return idx.pruneDeleted(present)
+	if err := idx.pruneDeleted(present); err != nil {
+		return err
+	}
+	// A full resync builds a large transient working set (file reads, parse
+	// trees, node/edge slices). Hand the freed pages back to the OS so RSS and
+	// HeapSys settle to steady state instead of lingering at the walk's peak.
+	debug.FreeOSMemory()
+	return nil
 }
 
 // pace throttles the full resync walk: after every resyncBatch files it pauses

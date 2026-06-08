@@ -7,6 +7,11 @@ Proactive concurrent-edit detection — the last medium-priority item from the a
 ### Added
 
 - **`read_file` warns when a peer edited a file since plumb wrote it.** The per-session `WriteTracker` now records each file's mtime at write time; when a later `read_file` finds the on-disk mtime has advanced past that, it prepends `# plumb-warn: changed on disk since plumb last wrote it this session — a peer or external process may have edited it`. This surfaces a concurrent external edit *proactively* instead of leaving the agent to infer it from a later refused edit — the multi-agent coordination gap raised across several sessions (feedbacks 2026-06-04). Nil-safe and scoped per connection; the warning never fires for files plumb didn't write this session.
+- **Daemon memory introspection + soft ceiling.** The daemon now bounds and explains its own memory. A soft heap limit (`debug.SetMemoryLimit`) is applied at startup — `PLUMB_MEMORY_LIMIT` (e.g. `1500MiB`, or `0`/`off` to disable) with a generous 4 GiB anti-OOM backstop default — so a transient spike can't exhaust the machine. Two new control-socket commands, surfaced as `plumb debug mem` (live `HeapAlloc`/`HeapInuse`/`HeapSys`/`HeapReleased`/`NumGC`/`Goroutines`) and `plumb debug heap` (writes a `runtime/pprof` heap profile to the cache dir for `go tool pprof`), make a spike attributable instead of guessed. A full topology resync now calls `debug.FreeOSMemory()` on completion, handing the large transient working set back to the OS so RSS/`HeapSys` settle to steady state instead of lingering at the walk's peak.
+
+### Changed
+
+- **TUI daemon widget: "Peak RSS" relabelled "RSS" and a "Heap Released" row added.** The row showed the *current* RSS sample, not a peak (no peak was ever tracked), which made a lingering post-spike `HeapSys` read as alarming. It now reads "RSS", and a new "Heap Released" row shows how much of `HeapSys` the runtime has handed back to the OS, so freed-but-reserved memory is legible at a glance.
 
 ## 0.9.5 (unreleased)
 

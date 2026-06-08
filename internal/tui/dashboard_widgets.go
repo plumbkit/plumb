@@ -62,6 +62,7 @@ func (m Model) dashDaemonWidget(inner int) []string {
 	allocStr := na
 	inuseStr := na
 	sysStr := na
+	relStr := na
 	gcStr := na
 	gorStr := na
 
@@ -74,6 +75,7 @@ func (m Model) dashDaemonWidget(inner int) []string {
 		allocStr = monitor.FormatBytes(d.HeapAllocBytes)
 		inuseStr = monitor.FormatBytes(d.HeapInuseBytes)
 		sysStr = monitor.FormatBytes(d.HeapSysBytes)
+		relStr = monitor.FormatBytes(d.HeapReleasedBytes)
 		gcStr = fmt.Sprintf("%d cycles", d.NumGC)
 		gorStr = fmt.Sprintf("%d", d.Goroutines)
 	}
@@ -84,10 +86,11 @@ func (m Model) dashDaemonWidget(inner int) []string {
 	}
 
 	return dashBox(titleText, inner, []string{
-		dashMemoryRow("Peak RSS", memStr, inner),
+		dashMemoryRow("RSS", memStr, inner),
 		dashMemoryRow("Heap Alloc", allocStr, inner),
 		dashMemoryRow("Heap In Use", inuseStr, inner),
 		dashMemoryRow("Heap Sys", sysStr, inner),
+		dashMemoryRow("Heap Released", relStr, inner),
 		dashMemoryRow("GC", gcStr, inner),
 		dashMemoryRow("Goroutines", gorStr, inner),
 	})
