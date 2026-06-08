@@ -80,8 +80,9 @@ plumb daemon
 
 Run the shared background daemon. **Usually started automatically by
 `serve`** — you rarely run this by hand. The daemon owns the language-server
-subprocesses (one `gopls`/`pyright` per workspace root), the per-connection MCP
-sessions, the stats database, and the topology pool.
+subprocesses (one per `(root, language)` — a single workspace root may host
+several, e.g. `gopls` + an HTML server), the per-connection MCP sessions, the
+stats database, and the topology pool.
 
 It takes an exclusive `flock` on `plumb.daemon.lock` for its lifetime; a second
 `plumb daemon` invocation sees the lock held and exits immediately, enforcing

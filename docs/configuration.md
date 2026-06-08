@@ -179,6 +179,28 @@ Built-in defaults:
 | `python` | `pyright-langserver` | `--stdio` | `pyproject.toml`, `setup.py`, `pyrightconfig.json` | `false` |
 | `java` | `jdtls` | `[]` (plumb appends `-data <dir>`) | `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath` | `false` |
 
+(Rust, Swift, Zig, TypeScript/JavaScript, Kotlin, and HTML are also available,
+all `enabled = false` by default — see the *Adapter validation status* table in
+`AGENTS.md`.)
+
+### Multiple language servers in one project
+
+Enabling more than one language binds them all to the same workspace: a single
+root can run several servers at once (e.g. Go + HTML for a web app). Each file is
+routed to the server that owns its extension. The **primary** language is the one
+resolved from root markers — with both `go.mod` and `index.html` present, `go`
+wins — and is started on attach; **secondary** servers start lazily the first
+time a file of their language is opened, and the sessions view lists every active
+server. So to add HTML support to a Go project:
+
+```toml
+[lsp.html]
+enabled = true   # gopls stays primary; the HTML server handles .html files
+```
+
+`workspace_symbols` and the call/type hierarchies still consult the primary
+language only; `diagnostics` aggregates across every server bound to the root.
+
 ---
 
 ## Environment variables
