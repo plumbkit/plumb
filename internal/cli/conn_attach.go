@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 			} else {
 				s.sessionProxy.setPrimary(folder, language, e.proxy)
 				s.sessionInv.setPrimary(folder, language, e.inv)
+				s.sessionProxy.setActivateHook(s.appendActiveAdapter)
 				v.lsRefRoot = folder
 				v.lsRefLang = language
 				adapter = adapterForLanguage(language)
@@ -72,6 +74,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
 			info.Adapter = adapter
+			info.Adapters = adaptersFor(adapter)
 			if cn != "" {
 				info.ClientName = cn
 				info.ClientVersion = cv
@@ -203,6 +206,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			} else {
 				s.sessionProxy.resetPrimary(root, language, e.proxy)
 				s.sessionInv.resetPrimary(root, language, e.inv)
+				s.sessionProxy.setActivateHook(s.appendActiveAdapter)
 				v.lsRefRoot = root
 				v.lsRefLang = language
 				adapter = adapterForLanguage(language)
@@ -231,6 +235,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
 			info.Adapter = adapter
+			info.Adapters = adaptersFor(adapter)
 			info.Synthetic = false
 			info.Health = ""
 			info.HealthMessage = ""
@@ -309,6 +314,31 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	s.startConfigWatcher()
 }
 
+// appendActiveAdapter records a secondary language server as active for this
+// session, so the sessions view lists every LSP the session is driving (like
+// nvim's :LspInfo). Wired as routingProxy.onActivate; dedups and is a no-op for
+// a language with no adapter. The primary is already recorded at attach time.
+func (s *connSession) appendActiveAdapter(language string) {
+	adp := adapterForLanguage(language)
+	if adp == "" {
+		return
+	}
+	session.Patch(s.sessID, func(in *session.Info) {
+		if !slices.Contains(in.Adapters, adp) {
+			in.Adapters = append(in.Adapters, adp)
+		}
+	})
+}
+
+// adaptersFor seeds the active-adapter list with the primary adapter, or nil
+// when the session attached without LSP.
+func adaptersFor(adapter string) []string {
+	if adapter == "" {
+		return nil
+	}
+	return []string{adapter}
+}
+
 func adapterForLanguage(language string) string {
 	switch language {
 	case "go":
@@ -327,6 +357,8 @@ func adapterForLanguage(language string) string {
 		return "typescript-language-server"
 	case "kotlin":
 		return "kotlin-language-server"
+	case "html":
+		return "vscode-html-language-server"
 	default:
 		return ""
 	}

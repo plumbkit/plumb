@@ -225,7 +225,7 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 			if p.ClientName != "" {
 				client = fmt.Sprintf(" [%s]", p.ClientName)
 			}
-			fmt.Fprintf(&sb, "  %s%s%s%s\n", p.Name, selfMark, client, idle)
+			fmt.Fprintf(&sb, "  %s%s%s%s%s\n", p.Name, selfMark, client, sessionLSP(p), idle)
 		}
 	}
 
@@ -251,6 +251,22 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 	}
 
 	return sb.String()
+}
+
+// sessionLSP renders a session's active language servers as a compact " · LSP
+// gopls, vscode-html-language-server" suffix, so a peer entry shows every server
+// the session is driving (a multi-language root, e.g. Go + HTML, runs several).
+// Falls back to the single primary Adapter for older session records; empty when
+// the session has no LSP.
+func sessionLSP(p session.Info) string {
+	adapters := p.Adapters
+	if len(adapters) == 0 && p.Adapter != "" {
+		adapters = []string{p.Adapter}
+	}
+	if len(adapters) == 0 {
+		return ""
+	}
+	return " · LSP " + strings.Join(adapters, ", ")
 }
 
 // fileFromInputJSON extracts the first file path from a tool call's input JSON.

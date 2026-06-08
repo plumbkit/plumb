@@ -48,10 +48,16 @@ type Info struct {
 	// independent of whether an LSP adapter is attached. Language remains the
 	// attached LSP language and may be "none" when the adapter is disabled or
 	// unavailable.
-	DetectedLanguage string    `json:"detected_language,omitempty"`
-	Folder           string    `json:"folder"`
-	Adapter          string    `json:"adapter"`
-	StartedAt        time.Time `json:"started_at"`
+	DetectedLanguage string `json:"detected_language,omitempty"`
+	Folder           string `json:"folder"`
+	Adapter          string `json:"adapter"`
+	// Adapters lists every language server currently active for this session's
+	// root, primary first. One root may drive several (e.g. gopls +
+	// vscode-html-language-server for a Go web app); secondaries are appended as
+	// they start lazily on the first file of their language. Adapter remains the
+	// primary for backward compatibility.
+	Adapters  []string  `json:"adapters,omitempty"`
+	StartedAt time.Time `json:"started_at"`
 	// LastSeenAt is populated by List from the session file's mtime.
 	// It is not stored in the JSON; Touch updates the mtime instead.
 	LastSeenAt time.Time `json:"-"`

@@ -91,6 +91,34 @@ func TestFormatWorkspaceSessions_MultiplePeersAndWrites(t *testing.T) {
 	}
 }
 
+// TestFormatWorkspaceSessions_ListsActiveLSPs verifies that every language
+// server a session is driving is shown (a multi-language root runs several,
+// e.g. gopls + the HTML server), and that older records with only the single
+// Adapter field still render.
+func TestFormatWorkspaceSessions_ListsActiveLSPs(t *testing.T) {
+	now := time.Now()
+	peers := []session.Info{
+		{
+			ID: "self-1", Name: "me-fox", Folder: "/ws", ClientName: "claude-code",
+			LastSeenAt: now.Add(-5 * time.Second),
+			Adapters:   []string{"gopls", "vscode-html-language-server"},
+		},
+		{
+			ID: "peer-2", Name: "old-rec", Folder: "/ws", ClientName: "claude-code",
+			LastSeenAt: now.Add(-5 * time.Second),
+			Adapter:    "gopls", // legacy record: only the primary
+		},
+	}
+	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, now)
+
+	if !strings.Contains(out, "LSP gopls, vscode-html-language-server") {
+		t.Errorf("expected the full active-LSP set for the multi-language session:\n%s", out)
+	}
+	if !strings.Contains(out, "old-rec") || !strings.Contains(out, "LSP gopls") {
+		t.Errorf("a legacy record with only Adapter should still show its LSP:\n%s", out)
+	}
+}
+
 // TestWorkspaceSessions_ConcurrentNoDeadlock proves that concurrent Execute
 // calls do not deadlock. Each call takes the session-dir flock (LOCK_EX) for a
 // brief read then releases — concurrent callers queue behind it, which is

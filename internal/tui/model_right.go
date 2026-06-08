@@ -5,7 +5,27 @@ import (
 	"strings"
 
 	"github.com/golimpio/plumb/internal/render"
+	"github.com/golimpio/plumb/internal/session"
 )
+
+// sessionAdapterRow renders the active-LSP detail row: every language server
+// the session is driving, joined (a multi-language root runs several, e.g.
+// gopls + vscode-html-language-server), falling back to the legacy single
+// Adapter, and pluralised to "Adapters" when more than one is live.
+func sessionAdapterRow(s session.Info) (label, value string) {
+	value = strings.Join(s.Adapters, ", ")
+	if value == "" {
+		value = s.Adapter
+	}
+	if value == "" {
+		value = "—"
+	}
+	label = "Adapter"
+	if len(s.Adapters) > 1 {
+		label = "Adapters"
+	}
+	return label, value
+}
 
 func (m *Model) handleRightPanelClick(bodyRow int) {
 	switch m.rightTab {
@@ -93,10 +113,7 @@ func (m Model) rightLinesDetails(rw int) []string {
 	} else {
 		fld = contractPath(fld, mv, m.settingsCfg.UI.PathStyle)
 	}
-	adp := s.Adapter
-	if adp == "" {
-		adp = "—"
-	}
+	adapterLabel, adp := sessionAdapterRow(s)
 	nm := s.Name
 	if nm == "" {
 		nm = MutedStyle.Render("—")
@@ -110,7 +127,7 @@ func (m Model) rightLinesDetails(rw int) []string {
 		detailRow("ID", s.ID),
 		detailRow("Language", lang),
 		detailRow("Folder", fld),
-		detailRow("Adapter", adp),
+		detailRow(adapterLabel, adp),
 		detailRow("PID", fmt.Sprintf("%d", s.PID)),
 	}
 	if s.DaemonVersion != "" {
