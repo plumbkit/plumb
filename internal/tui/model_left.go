@@ -38,7 +38,7 @@ func (m Model) leftLines() []string {
 			name = s.ID
 		}
 		firstLine := " " + indicator + " " + name
-		if badge := sessionLangLabel(s); badge != "" {
+		if badge := sessionListLangLabel(s); badge != "" {
 			firstLine += " " + sessionLangBadge(badge, selected, lf)
 		}
 		if s.Health == "blocked" {
@@ -126,6 +126,39 @@ func sessionLangLabel(s session.Info) string {
 	default:
 		return language
 	}
+}
+
+// adapterLangShort maps an LSP adapter binary to a short language label for the
+// session-list badge, so a multi-language session shows which extra servers it
+// drives (e.g. "go +html").
+var adapterLangShort = map[string]string{
+	"gopls":                       "go",
+	"pyright":                     "python",
+	"jdtls":                       "java",
+	"rust-analyzer":               "rust",
+	"sourcekit-lsp":               "swift",
+	"zls":                         "zig",
+	"typescript-language-server":  "ts",
+	"kotlin-language-server":      "kotlin",
+	"vscode-html-language-server": "html",
+}
+
+// sessionListLangLabel is the session-list badge text: the primary language plus
+// a "+lang" hint for each secondary language server the session is driving. A
+// Go web app also serving HTML shows "go +html"; single-language sessions are
+// unchanged. The Details pane keeps the primary in Language and the full server
+// set in Adapters, so this list-only label stays compact.
+func sessionListLangLabel(s session.Info) string {
+	label := sessionLangLabel(s)
+	if len(s.Adapters) <= 1 {
+		return label
+	}
+	for _, a := range s.Adapters[1:] {
+		if l := adapterLangShort[a]; l != "" {
+			label += " +" + l
+		}
+	}
+	return label
 }
 
 func sessionLangBadge(language string, selected, focused bool) string {

@@ -158,20 +158,32 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 	return nil, fmt.Errorf("LSP server not yet ready for %s", root)
 }
 
-// noteActivated reports a secondary language server coming live under the
-// connection's primary root, so the session record can surface every active
-// LSP (not just the primary). A no-op for the primary language itself and when
-// no callback is wired. See routingProxy.onActivate.
+// noteActivated reports a secondary language server coming live for a file
+// inside the connection's pinned workspace, so the session record can surface
+// every active LSP (not just the primary). It fires for any language other than
+// the primary whose file resolves to the primary root OR a directory beneath it
+// — a secondary's own root marker (e.g. index.html for HTML) makes Detect carve
+// out a sub-root (site/), so a strict root== check would miss it. It does NOT
+// fire for a genuinely different project reached by cross-workspace routing.
+// A no-op for the primary language and when no callback is wired.
 func (r *routingProxy) noteActivated(root, language string) {
 	r.mu.RLock()
 	cb := r.onActivate
 	primaryRoot := r.primaryRoot
 	primaryLang := r.primaryLang
 	r.mu.RUnlock()
-	if cb == nil || root != primaryRoot || language == primaryLang {
+	if cb == nil || language == primaryLang || !withinRoot(root, primaryRoot) {
 		return
 	}
 	cb(language)
+}
+
+// withinRoot reports whether path is root itself or a descendant directory of it.
+func withinRoot(path, root string) bool {
+	if root == "" {
+		return false
+	}
+	return path == root || strings.HasPrefix(path, root+"/")
 }
 
 // ─── lsp.Client implementation ─────────────────────────────────────────

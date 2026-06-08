@@ -144,6 +144,37 @@ func TestRoutingProxy_ActivateHookFiresForSecondary(t *testing.T) {
 	}
 }
 
+// TestRoutingProxy_ActivateHookFiresForSubRootSecondary is the regression test
+// for the missed-adapter bug: a secondary language whose own root marker lives
+// in a subdirectory (e.g. site/index.html for HTML) makes Detect carve out a
+// sub-root, so the activated root differs from the session's primary root. The
+// hook must still fire because the file is inside the pinned workspace.
+func TestRoutingProxy_ActivateHookFiresForSubRootSecondary(t *testing.T) {
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	site := filepath.Join(root, "site")
+	mustMkdir(t, site)
+	mustWrite(t, filepath.Join(site, "index.html"), "<html></html>\n")
+
+	pool := newTestPoolMulti("go", "html")
+	goProxy := installEntryLang(pool, root, "go", &stubClient{id: "go"})
+	// HTML resolves to the sub-root (site/ has the index.html marker).
+	installEntryLang(pool, site, "html", &stubClient{id: "html"})
+
+	rp := newRoutingProxy(pool)
+	rp.setPrimary(root, "go", goProxy)
+	var activated []string
+	rp.setActivateHook(func(lang string) { activated = append(activated, lang) })
+
+	_, _ = rp.Definition(context.Background(), protocol.DefinitionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file://" + filepath.Join(site, "index.html")},
+	})
+
+	if len(activated) != 1 || activated[0] != "html" {
+		t.Fatalf("activate hook for a sub-root secondary: got %v, want [html]", activated)
+	}
+}
+
 // TestRoutingInvProxy_MergesAcrossLanguages verifies AllDiagnostics aggregates
 // every language server under the primary root (Go + HTML), not just the
 // primary, while still filtering out-of-root URIs.

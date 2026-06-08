@@ -24,6 +24,26 @@ func TestSessionLangLabelUnknownLanguage(t *testing.T) {
 	}
 }
 
+func TestSessionListLangLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		info session.Info
+		want string
+	}{
+		{"single language unchanged", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls"}}, "go"},
+		{"no adapters falls back to primary", session.Info{Language: "go", DetectedLanguage: "go"}, "go"},
+		{"go + html shows secondary", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "vscode-html-language-server"}}, "go +html"},
+		{"unknown secondary adapter is skipped", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "mystery-ls"}}, "go"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sessionListLangLabel(tc.info); got != tc.want {
+				t.Errorf("sessionListLangLabel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSessionIsIdle_ThresholdRespected asserts that sessionIsIdle uses the
 // supplied threshold, not the hard-coded const.
 func TestSessionIsIdle_ThresholdRespected(t *testing.T) {
