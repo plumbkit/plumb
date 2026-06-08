@@ -24,24 +24,41 @@ func TestSessionLangLabelUnknownLanguage(t *testing.T) {
 	}
 }
 
-func TestSessionListLangLabel(t *testing.T) {
+func TestSessionLanguagesAndBadges(t *testing.T) {
 	tests := []struct {
-		name string
-		info session.Info
-		want string
+		name      string
+		info      session.Info
+		wantLangs []string // lower-case names (Details row)
+		wantBadge []string // upper-case badge labels (list view)
 	}{
-		{"single language unchanged", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls"}}, "go"},
-		{"no adapters falls back to primary", session.Info{Language: "go", DetectedLanguage: "go"}, "go"},
-		{"go + html shows secondary", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "vscode-html-language-server"}}, "go +html"},
-		{"unknown secondary adapter is skipped", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "mystery-ls"}}, "go"},
+		{"single language", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls"}}, []string{"go"}, []string{"GO"}},
+		{"no adapters falls back to primary", session.Info{Language: "go", DetectedLanguage: "go"}, []string{"go"}, []string{"GO"}},
+		{"go + html", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "vscode-html-language-server"}}, []string{"go", "html"}, []string{"GO", "HTML"}},
+		{"unknown secondary adapter skipped", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "mystery-ls"}}, []string{"go"}, []string{"GO"}},
+		{"unknown project language", session.Info{Language: "", DetectedLanguage: ""}, nil, []string{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sessionListLangLabel(tc.info); got != tc.want {
-				t.Errorf("sessionListLangLabel = %q, want %q", got, tc.want)
+			if got := sessionLanguages(tc.info); !equalStrs(got, tc.wantLangs) {
+				t.Errorf("sessionLanguages = %v, want %v", got, tc.wantLangs)
+			}
+			if got := sessionLangs(tc.info); !equalStrs(got, tc.wantBadge) {
+				t.Errorf("sessionLangs = %v, want %v", got, tc.wantBadge)
 			}
 		})
 	}
+}
+
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestSessionIsIdle_ThresholdRespected asserts that sessionIsIdle uses the

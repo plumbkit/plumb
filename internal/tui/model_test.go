@@ -153,9 +153,9 @@ func TestLeftLines_RenderSessionsAsTwoLineRows(t *testing.T) {
 	}
 	joined := strings.Join(plain, "\n")
 	for _, want := range []string{
-		" ❯ CRAZY-PLUMB  go ",
+		" ❯ CRAZY-PLUMB  GO ",
 		"    ╰─ .",
-		" ∙ SUPER-FRIEND  go ",
+		" ∙ SUPER-FRIEND  GO ",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("leftLines missing %q in:\n%s", want, joined)

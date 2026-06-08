@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -38,8 +39,11 @@ func (m Model) leftLines() []string {
 			name = s.ID
 		}
 		firstLine := " " + indicator + " " + name
-		if badge := sessionListLangLabel(s); badge != "" {
-			firstLine += " " + sessionLangBadge(badge, selected, lf)
+		// One badge per active language server (a Go web app also serving HTML
+		// shows two chips: GO HTML), each with its own background, separated by a
+		// plain space.
+		for _, b := range sessionLangs(s) {
+			firstLine += " " + sessionLangBadge(b, selected, lf)
 		}
 		if s.Health == "blocked" {
 			firstLine += " !"
@@ -128,37 +132,76 @@ func sessionLangLabel(s session.Info) string {
 	}
 }
 
-// adapterLangShort maps an LSP adapter binary to a short language label for the
-// session-list badge, so a multi-language session shows which extra servers it
-// drives (e.g. "go +html").
-var adapterLangShort = map[string]string{
+// adapterToLang maps an LSP adapter binary to its language name, so a session's
+// recorded adapters can be turned back into per-language badges.
+var adapterToLang = map[string]string{
 	"gopls":                       "go",
 	"pyright":                     "python",
 	"jdtls":                       "java",
 	"rust-analyzer":               "rust",
 	"sourcekit-lsp":               "swift",
 	"zls":                         "zig",
-	"typescript-language-server":  "ts",
+	"typescript-language-server":  "typescript",
 	"kotlin-language-server":      "kotlin",
 	"vscode-html-language-server": "html",
 }
 
-// sessionListLangLabel is the session-list badge text: the primary language plus
-// a "+lang" hint for each secondary language server the session is driving. A
-// Go web app also serving HTML shows "go +html"; single-language sessions are
-// unchanged. The Details pane keeps the primary in Language and the full server
-// set in Adapters, so this list-only label stays compact.
-func sessionListLangLabel(s session.Info) string {
-	label := sessionLangLabel(s)
-	if len(s.Adapters) <= 1 {
-		return label
+// langBadgeText maps a language name to its short, upper-case badge label.
+// Unknown languages fall back to upper-casing the name.
+var langBadgeText = map[string]string{
+	"go":         "GO",
+	"python":     "PY",
+	"java":       "JAVA",
+	"rust":       "RUST",
+	"swift":      "SWIFT",
+	"zig":        "ZIG",
+	"typescript": "TS",
+	"javascript": "JS",
+	"kotlin":     "KT",
+	"html":       "HTML",
+}
+
+func badgeText(lang string) string {
+	if t, ok := langBadgeText[lang]; ok {
+		return t
 	}
-	for _, a := range s.Adapters[1:] {
-		if l := adapterLangShort[a]; l != "" {
-			label += " +" + l
+	return strings.ToUpper(lang)
+}
+
+// sessionLanguages returns the language names a session drives: the primary
+// first, then each secondary language server, lower-case (e.g. ["go", "html"]).
+// Empty when the project language is unknown. Shared by the list badges and the
+// Details pane so the two never disagree.
+func sessionLanguages(s session.Info) []string {
+	primary := sessionLangLabel(s)
+	if primary == "" {
+		return nil
+	}
+	out := []string{primary}
+	for _, a := range secondaryAdapters(s.Adapters) {
+		if lang := adapterToLang[a]; lang != "" {
+			out = append(out, lang)
 		}
 	}
-	return label
+	return out
+}
+
+// sessionLangs returns the upper-case badge labels for the list view (GO, HTML).
+func sessionLangs(s session.Info) []string {
+	langs := sessionLanguages(s)
+	out := make([]string, 0, len(langs))
+	for _, l := range langs {
+		out = append(out, badgeText(l))
+	}
+	return out
+}
+
+// secondaryAdapters returns the active adapters after the primary (index 0).
+func secondaryAdapters(adapters []string) []string {
+	if len(adapters) <= 1 {
+		return nil
+	}
+	return adapters[1:]
 }
 
 func sessionLangBadge(language string, selected, focused bool) string {

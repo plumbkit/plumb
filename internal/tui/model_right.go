@@ -118,14 +118,21 @@ func (m Model) rightLinesDetails(rw int) []string {
 	if nm == "" {
 		nm = MutedStyle.Render("—")
 	}
-	lang := sessionLangLabel(s)
+	// Show every language the session is driving (a Go web app also serving HTML
+	// lists both), not just the primary.
+	langs := sessionLanguages(s)
+	lang := strings.Join(langs, ", ")
 	if lang == "" {
 		lang = MutedStyle.Render("—")
+	}
+	langLabel := "Language"
+	if len(langs) > 1 {
+		langLabel = "Languages"
 	}
 	lines := []string{
 		detailRow("Name", nm),
 		detailRow("ID", s.ID),
-		detailRow("Language", lang),
+		detailRow(langLabel, lang),
 		detailRow("Folder", fld),
 		detailRow(adapterLabel, adp),
 		detailRow("PID", fmt.Sprintf("%d", s.PID)),
