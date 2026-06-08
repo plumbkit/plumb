@@ -3,6 +3,8 @@ package html_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	html "github.com/golimpio/plumb/internal/lsp/adapters/html"
@@ -32,6 +34,37 @@ func newAdapter(t *testing.T) (*html.Adapter, *jsonrpc.MockCaller) {
 	mock.Handle(protocol.MethodShutdown, func(_ json.RawMessage) (any, error) { return nil, nil })
 	mock.Handle(protocol.MethodExit, func(_ json.RawMessage) (any, error) { return nil, nil })
 	return html.New(mock), mock
+}
+
+// writeTempHTML writes content to a temp index.html and returns its file:// URI,
+// so ensureOpen can read the document from disk before a query.
+func writeTempHTML(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "index.html")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp html: %v", err)
+	}
+	return "file://" + path
+}
+
+// assertOpenedBefore checks the adapter sent a didOpen notification before its
+// first call to method — the HTML server answers document queries only for open
+// documents.
+func assertOpenedBefore(t *testing.T, mock *jsonrpc.MockCaller, method string) {
+	t.Helper()
+	opened := -1
+	for i, c := range mock.Calls() {
+		if c.Method == protocol.MethodDidOpen && opened == -1 {
+			opened = i
+		}
+		if c.Method == method {
+			if opened == -1 || opened > i {
+				t.Fatalf("expected didOpen before %s; calls=%v", method, mock.Calls())
+			}
+			return
+		}
+	}
+	t.Fatalf("%s was not called; calls=%v", method, mock.Calls())
 }
 
 func TestAdapter_Initialize(t *testing.T) {
@@ -147,6 +180,48 @@ func TestAdapter_DidOpenDidClose(t *testing.T) {
 	}
 }
 
+// TestAdapter_ReopensAfterWatchedChange verifies an external edit closes the
+// stale open copy so the next query reopens the document with fresh content.
+func TestAdapter_ReopensAfterWatchedChange(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodDocumentSymbols, []protocol.DocumentSymbol{})
+	mock.Handle(protocol.MethodDidOpen, func(_ json.RawMessage) (any, error) { return nil, nil })
+	mock.Handle(protocol.MethodDidClose, func(_ json.RawMessage) (any, error) { return nil, nil })
+	mock.Handle(protocol.MethodDidChangeWatchedFiles, func(_ json.RawMessage) (any, error) { return nil, nil })
+
+	if _, err := ad.Initialize(ctx, html.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempHTML(t, "<html></html>\n")
+	dsp := protocol.DocumentSymbolParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
+
+	if _, err := ad.DocumentSymbols(ctx, dsp); err != nil {
+		t.Fatalf("first DocumentSymbols: %v", err)
+	}
+	if err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{{URI: uri, Type: protocol.FileChanged}},
+	}); err != nil {
+		t.Fatalf("DidChangeWatchedFiles: %v", err)
+	}
+	if _, err := ad.DocumentSymbols(ctx, dsp); err != nil {
+		t.Fatalf("second DocumentSymbols: %v", err)
+	}
+
+	var opens, closes int
+	for _, c := range mock.Calls() {
+		switch c.Method {
+		case protocol.MethodDidOpen:
+			opens++
+		case protocol.MethodDidClose:
+			closes++
+		}
+	}
+	if opens != 2 || closes != 1 {
+		t.Fatalf("got %d didOpen / %d didClose, want 2 / 1", opens, closes)
+	}
+}
+
 func TestAdapter_DocumentSymbols(t *testing.T) {
 	ad, mock := newAdapter(t)
 	ctx := context.Background()
@@ -156,13 +231,15 @@ func TestAdapter_DocumentSymbols(t *testing.T) {
 		{Name: "body", Kind: protocol.SKField, Range: protocol.Range{}},
 	}
 	mock.HandleOK(protocol.MethodDocumentSymbols, expected)
+	mock.Handle(protocol.MethodDidOpen, func(_ json.RawMessage) (any, error) { return nil, nil })
 
 	if _, err := ad.Initialize(ctx, html.DefaultInitParams("file:///p")); err != nil {
 		t.Fatal(err)
 	}
 
+	uri := writeTempHTML(t, "<html><body></body></html>\n")
 	syms, err := ad.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/index.html"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
 		t.Fatalf("DocumentSymbols: %v", err)
@@ -173,6 +250,7 @@ func TestAdapter_DocumentSymbols(t *testing.T) {
 	if syms[0].Name != "html" {
 		t.Fatalf("first symbol: got %q, want %q", syms[0].Name, "html")
 	}
+	assertOpenedBefore(t, mock, protocol.MethodDocumentSymbols)
 }
 
 func TestAdapter_Hover(t *testing.T) {
@@ -183,14 +261,16 @@ func TestAdapter_Hover(t *testing.T) {
 		Contents: protocol.MarkupContent{Kind: "markdown", Value: "The `section` element..."},
 	}
 	mock.HandleOK(protocol.MethodHover, expected)
+	mock.Handle(protocol.MethodDidOpen, func(_ json.RawMessage) (any, error) { return nil, nil })
 
 	if _, err := ad.Initialize(ctx, html.DefaultInitParams("file:///p")); err != nil {
 		t.Fatal(err)
 	}
 
+	uri := writeTempHTML(t, "<html><body><section>hi</section></body></html>\n")
 	hover, err := ad.Hover(ctx, protocol.HoverParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/index.html"},
-		Position:     protocol.Position{Line: 3, Character: 4},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 0, Character: 14},
 	})
 	if err != nil {
 		t.Fatalf("Hover: %v", err)
@@ -201,6 +281,7 @@ func TestAdapter_Hover(t *testing.T) {
 	if hover.Contents.Kind != "markdown" {
 		t.Fatalf("got kind %q, want markdown", hover.Contents.Kind)
 	}
+	assertOpenedBefore(t, mock, protocol.MethodHover)
 }
 
 func TestAdapter_Subscribe(t *testing.T) {
