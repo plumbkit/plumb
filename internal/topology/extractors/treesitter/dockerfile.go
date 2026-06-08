@@ -19,12 +19,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type DockerfileExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewDockerfile returns a tree-sitter-backed Dockerfile extractor.
 func NewDockerfile() *DockerfileExtractor {
-	return &DockerfileExtractor{lang: grammars.DockerfileLanguage()}
+	return &DockerfileExtractor{lang: lazyGrammar{load: grammars.DockerfileLanguage}}
 }
 
 func (e *DockerfileExtractor) Language() string     { return "dockerfile" }
@@ -35,11 +35,11 @@ func (e *DockerfileExtractor) Extensions() []string { return []string{"dockerfil
 // follow it as variables contained in that stage (containment is lexical and
 // certain, 1.0). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *DockerfileExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &dockerWalk{lang: e.lang, src: src, path: relPath}
+	w := &dockerWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walk(tree.RootNode())
 	return w.nodes, w.edges, nil
 }

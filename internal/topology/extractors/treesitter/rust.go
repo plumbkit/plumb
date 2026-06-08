@@ -16,12 +16,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type RustExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewRust returns a tree-sitter-backed Rust extractor.
 func NewRust() *RustExtractor {
-	return &RustExtractor{lang: grammars.RustLanguage()}
+	return &RustExtractor{lang: lazyGrammar{load: grammars.RustLanguage}}
 }
 
 func (e *RustExtractor) Language() string     { return "rust" }
@@ -34,12 +34,12 @@ func (e *RustExtractor) Extensions() []string { return []string{".rs"} }
 // so are heuristic (0.8), as are intra-file call edges. Returns (nil, nil, nil)
 // when src cannot be parsed.
 func (e *RustExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
 	w := &rustWalk{
-		lang:    e.lang,
+		lang:    e.lang.get(),
 		src:     src,
 		path:    relPath,
 		funcIdx: map[string]int64{},

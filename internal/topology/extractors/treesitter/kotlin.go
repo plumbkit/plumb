@@ -16,12 +16,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type KotlinExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewKotlin returns a tree-sitter-backed Kotlin extractor.
 func NewKotlin() *KotlinExtractor {
-	return &KotlinExtractor{lang: grammars.KotlinLanguage()}
+	return &KotlinExtractor{lang: lazyGrammar{load: grammars.KotlinLanguage}}
 }
 
 func (e *KotlinExtractor) Language() string     { return "kotlin" }
@@ -38,11 +38,11 @@ func (e *KotlinExtractor) Extensions() []string { return []string{".kt", ".kts"}
 // concrete declarations are KindClass. Returns (nil, nil, nil) when src cannot
 // be parsed.
 func (e *KotlinExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &kotlinWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &kotlinWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil

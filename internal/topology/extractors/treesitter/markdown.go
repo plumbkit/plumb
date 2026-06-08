@@ -18,12 +18,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type MarkdownExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewMarkdown returns a tree-sitter-backed Markdown extractor.
 func NewMarkdown() *MarkdownExtractor {
-	return &MarkdownExtractor{lang: grammars.MarkdownLanguage()}
+	return &MarkdownExtractor{lang: lazyGrammar{load: grammars.MarkdownLanguage}}
 }
 
 func (e *MarkdownExtractor) Language() string     { return "markdown" }
@@ -34,11 +34,11 @@ func (e *MarkdownExtractor) Extensions() []string { return []string{".md", ".mar
 // (an `## H2` under an `# H1`). Returns (nil, nil, nil) when src cannot be
 // parsed.
 func (e *MarkdownExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &mdWalk{lang: e.lang, src: src, path: relPath}
+	w := &mdWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walk(tree.RootNode(), -1)
 	return w.nodes, w.edges, nil
 }

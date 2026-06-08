@@ -17,12 +17,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type YAMLExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewYAML returns a tree-sitter-backed YAML extractor.
 func NewYAML() *YAMLExtractor {
-	return &YAMLExtractor{lang: grammars.YamlLanguage()}
+	return &YAMLExtractor{lang: lazyGrammar{load: grammars.YamlLanguage}}
 }
 
 func (e *YAMLExtractor) Language() string     { return "yaml" }
@@ -36,11 +36,11 @@ func (e *YAMLExtractor) Extensions() []string { return []string{".yaml", ".yml"}
 // (lists of objects) are attached to the nearest enclosing key. Returns
 // (nil, nil, nil) when src cannot be parsed.
 func (e *YAMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &yamlWalk{lang: e.lang, src: src, path: relPath}
+	w := &yamlWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walkNode(tree.RootNode(), -1, "")
 	return w.nodes, w.edges, nil
 }

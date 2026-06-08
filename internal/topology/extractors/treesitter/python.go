@@ -22,12 +22,12 @@ import (
 // parser is created per Extract call because gotreesitter parsers are not safe
 // for concurrent reuse.
 type PythonExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewPython returns a tree-sitter-backed Python extractor.
 func NewPython() *PythonExtractor {
-	return &PythonExtractor{lang: grammars.PythonLanguage()}
+	return &PythonExtractor{lang: lazyGrammar{load: grammars.PythonLanguage}}
 }
 
 func (e *PythonExtractor) Language() string     { return "python" }
@@ -39,11 +39,11 @@ func (e *PythonExtractor) Extensions() []string { return []string{".py"} }
 // Function-local bindings are not surfaced. Returns (nil, nil, nil) when the
 // source cannot be parsed.
 func (e *PythonExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &pyWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &pyWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil

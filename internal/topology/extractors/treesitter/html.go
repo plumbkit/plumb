@@ -30,12 +30,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type HTMLExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewHTML returns a tree-sitter-backed HTML extractor.
 func NewHTML() *HTMLExtractor {
-	return &HTMLExtractor{lang: grammars.HtmlLanguage()}
+	return &HTMLExtractor{lang: lazyGrammar{load: grammars.HtmlLanguage}}
 }
 
 func (e *HTMLExtractor) Language() string     { return "html" }
@@ -45,11 +45,11 @@ func (e *HTMLExtractor) Extensions() []string { return []string{".html", ".htm"}
 // with DOM-nesting containment edges between them. Returns (nil, nil, nil) when
 // src cannot be parsed.
 func (e *HTMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &htmlWalk{lang: e.lang, src: src, path: relPath}
+	w := &htmlWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walk(tree.RootNode(), -1)
 	return w.nodes, w.edges, nil
 }

@@ -16,12 +16,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type ZigExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewZig returns a tree-sitter-backed Zig extractor.
 func NewZig() *ZigExtractor {
-	return &ZigExtractor{lang: grammars.ZigLanguage()}
+	return &ZigExtractor{lang: lazyGrammar{load: grammars.ZigLanguage}}
 }
 
 func (e *ZigExtractor) Language() string     { return "zig" }
@@ -34,11 +34,11 @@ func (e *ZigExtractor) Extensions() []string { return []string{".zig"} }
 // therefore certain (1.0); intra-file call edges are name-resolved heuristics
 // (0.8). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *ZigExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &zigWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &zigWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil

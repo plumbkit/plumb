@@ -19,12 +19,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type JavaScriptExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewJavaScript returns a tree-sitter-backed JavaScript extractor.
 func NewJavaScript() *JavaScriptExtractor {
-	return &JavaScriptExtractor{lang: grammars.JavascriptLanguage()}
+	return &JavaScriptExtractor{lang: lazyGrammar{load: grammars.JavascriptLanguage}}
 }
 
 func (e *JavaScriptExtractor) Language() string     { return "javascript" }
@@ -37,11 +37,11 @@ func (e *JavaScriptExtractor) Extensions() []string { return []string{".js", ".m
 // and therefore certain (1.0); intra-file call edges are name-resolved
 // heuristics (0.8). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *JavaScriptExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &jsWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &jsWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode())
 	w.scanTests(tree.RootNode())
 	w.callEdges(tree.RootNode())

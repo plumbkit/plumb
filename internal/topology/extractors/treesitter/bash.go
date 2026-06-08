@@ -16,12 +16,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type BashExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewBash returns a tree-sitter-backed shell (bash) extractor.
 func NewBash() *BashExtractor {
-	return &BashExtractor{lang: grammars.BashLanguage()}
+	return &BashExtractor{lang: lazyGrammar{load: grammars.BashLanguage}}
 }
 
 func (e *BashExtractor) Language() string     { return "bash" }
@@ -33,11 +33,11 @@ func (e *BashExtractor) Extensions() []string { return []string{".sh", ".bash"} 
 // callee is resolved by name within the file, so call edges are heuristic
 // (0.8). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *BashExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &bashWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &bashWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode())
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil

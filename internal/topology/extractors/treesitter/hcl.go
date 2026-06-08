@@ -17,12 +17,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type HCLExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewHCL returns a tree-sitter-backed HCL extractor.
 func NewHCL() *HCLExtractor {
-	return &HCLExtractor{lang: grammars.HclLanguage()}
+	return &HCLExtractor{lang: lazyGrammar{load: grammars.HclLanguage}}
 }
 
 func (e *HCLExtractor) Language() string     { return "hcl" }
@@ -34,11 +34,11 @@ func (e *HCLExtractor) Extensions() []string { return []string{".tf", ".tfvars",
 // HCL declarations are flat, so no containment edges are emitted. Returns
 // (nil, nil, nil) when src cannot be parsed.
 func (e *HCLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &hclWalk{lang: e.lang, src: src, path: relPath}
+	w := &hclWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walk(tree.RootNode())
 	return w.nodes, nil, nil
 }

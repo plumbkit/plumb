@@ -17,12 +17,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type TOMLExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewTOML returns a tree-sitter-backed TOML extractor.
 func NewTOML() *TOMLExtractor {
-	return &TOMLExtractor{lang: grammars.TomlLanguage()}
+	return &TOMLExtractor{lang: lazyGrammar{load: grammars.TomlLanguage}}
 }
 
 func (e *TOMLExtractor) Language() string     { return "toml" }
@@ -33,11 +33,11 @@ func (e *TOMLExtractor) Extensions() []string { return []string{".toml"} }
 // pair inside a table as a field, with table→field links as certain (1.0)
 // containment edges. Returns (nil, nil, nil) when src cannot be parsed.
 func (e *TOMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &tomlWalk{lang: e.lang, src: src, path: relPath}
+	w := &tomlWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walk(tree.RootNode())
 	return w.nodes, w.edges, nil
 }

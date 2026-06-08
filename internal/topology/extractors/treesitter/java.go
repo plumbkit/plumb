@@ -16,12 +16,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type JavaExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewJava returns a tree-sitter-backed Java extractor.
 func NewJava() *JavaExtractor {
-	return &JavaExtractor{lang: grammars.JavaLanguage()}
+	return &JavaExtractor{lang: lazyGrammar{load: grammars.JavaLanguage}}
 }
 
 func (e *JavaExtractor) Language() string     { return "java" }
@@ -37,11 +37,11 @@ func (e *JavaExtractor) Extensions() []string { return []string{".java"} }
 // semantic GPS is the jdtls LSP adapter. Returns (nil, nil, nil) when src cannot
 // be parsed.
 func (e *JavaExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &javaWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	w := &javaWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil

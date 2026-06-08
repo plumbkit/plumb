@@ -12,6 +12,7 @@ Proactive concurrent-edit detection — the last medium-priority item from the a
 ### Changed
 
 - **TUI daemon widget: "Peak RSS" relabelled "RSS" and a "Heap Released" row added.** The row showed the *current* RSS sample, not a peak (no peak was ever tracked), which made a lingering post-spike `HeapSys` read as alarming. It now reads "RSS", and a new "Heap Released" row shows how much of `HeapSys` the runtime has handed back to the OS, so freed-but-reserved memory is legible at a glance.
+- **Tree-sitter grammars now decode lazily — large baseline-memory cut.** A live heap profile (`plumb debug heap`) showed ~307 MB — ~89 % of the daemon's resident Go heap — was gotreesitter grammar transition tables, because `buildExtractors` constructs an extractor for *every* supported language on every workspace attach and each constructor eagerly decoded its grammar. A Go-only workspace was therefore carrying the Python/Rust/Swift/Kotlin/Java/Zig/… grammars it would never use. Each extractor now holds its grammar behind a `lazyGrammar` (decode on first `Extract`, memoised), so grammar memory scales with the languages a workspace actually contains rather than the full supported set. The underlying `grammars.*Language` remains process-cached, so this changes only *when* the one decode happens, never how many times. Regression-guarded by `TestExtractorConstructionDecodesNoGrammar`.
 
 ## 0.9.5 (unreleased)
 

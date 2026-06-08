@@ -16,12 +16,12 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type SwiftExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 }
 
 // NewSwift returns a tree-sitter-backed Swift extractor.
 func NewSwift() *SwiftExtractor {
-	return &SwiftExtractor{lang: grammars.SwiftLanguage()}
+	return &SwiftExtractor{lang: lazyGrammar{load: grammars.SwiftLanguage}}
 }
 
 func (e *SwiftExtractor) Language() string     { return "swift" }
@@ -39,11 +39,11 @@ func (e *SwiftExtractor) Extensions() []string { return []string{".swift"} }
 // conformance (e.g. ParsableCommand) on its methods. Returns (nil, nil, nil)
 // when src cannot be parsed.
 func (e *SwiftExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &swiftWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
+	w := &swiftWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
 	w.walk(tree.RootNode(), -1, false, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil
