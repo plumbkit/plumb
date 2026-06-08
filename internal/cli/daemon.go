@@ -116,7 +116,7 @@ func drainConnections(wg *sync.WaitGroup, d time.Duration) bool {
 // several servers (e.g. Go + HTML); each contributes the diagnostics for the
 // files it owns.
 func workspaceDiagnostics(pool *workspacePool, workspace string) string {
-	entries := pool.entriesForRoot(workspace)
+	entries := pool.entriesUnderRoot(workspace)
 	if len(entries) == 0 {
 		return ""
 	}

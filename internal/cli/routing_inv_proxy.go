@@ -182,7 +182,7 @@ func (r *routingInvProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
 	// multi-language workspace is driving. AllDiagnostics returns a fresh map,
 	// so mutating merged is safe.
 	merged := p.AllDiagnostics()
-	for _, e := range r.pool.entriesForRoot(root) {
+	for _, e := range r.pool.entriesUnderRoot(root) {
 		if e.inv == p {
 			continue
 		}
@@ -213,7 +213,7 @@ func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
 		return nil
 	}
 	merged := p.AllDiagnosticTimes()
-	for _, e := range r.pool.entriesForRoot(root) {
+	for _, e := range r.pool.entriesUnderRoot(root) {
 		if e.inv == p {
 			continue
 		}

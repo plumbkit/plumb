@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -373,16 +374,19 @@ func (p *workspacePool) lookup(root, language string) *poolEntry {
 	return p.entries[poolKey{root, language}]
 }
 
-// entriesForRoot returns every acquired entry whose workspace root is root,
-// across all languages bound to it (one root may host several language servers,
-// e.g. Go + HTML). Used to aggregate diagnostics across a root's servers. The
-// returned slice is a snapshot; never starts a new LS.
-func (p *workspacePool) entriesForRoot(root string) []*poolEntry {
+// entriesUnderRoot returns every acquired entry whose workspace root is root or
+// a directory beneath it, across all languages. One root may host several
+// language servers directly (Go + HTML co-located), and a secondary whose own
+// root marker sits in a subdirectory (e.g. index.html under site/) is carved
+// into a sub-root — so aggregating a workspace's diagnostics must reach into the
+// subtree, not just the exact root. The returned slice is a snapshot; never
+// starts a new LS.
+func (p *workspacePool) entriesUnderRoot(root string) []*poolEntry {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var out []*poolEntry
 	for k, e := range p.entries {
-		if k.root == root {
+		if k.root == root || strings.HasPrefix(k.root, root+"/") {
 			out = append(out, e)
 		}
 	}

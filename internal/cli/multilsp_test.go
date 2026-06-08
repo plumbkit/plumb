@@ -216,3 +216,44 @@ func TestRoutingInvProxy_MergesAcrossLanguages(t *testing.T) {
 		t.Errorf("AllDiagnostics returned %d URIs; want 2", len(all))
 	}
 }
+
+// TestRoutingInvProxy_MergesSubRootSecondary covers the workspace-wide
+// diagnostics aggregate reaching into a secondary's sub-root: an HTML server
+// rooted at site/ (its index.html marker) must still fold into the Go root's
+// AllDiagnostics, since site/ is inside the pinned workspace.
+func TestRoutingInvProxy_MergesSubRootSecondary(t *testing.T) {
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, "go.mod"), "module x\n")
+	site := filepath.Join(root, "site")
+	mustMkdir(t, site)
+
+	pool := newTestPoolMulti("go", "html")
+	goCache := cache.New(time.Hour)
+	defer goCache.Close()
+	goInv := cache.NewInvalidator(goCache)
+	htmlCache := cache.New(time.Hour)
+	defer htmlCache.Close()
+	htmlInv := cache.NewInvalidator(htmlCache)
+	pool.entries[poolKey{root, "go"}] = &poolEntry{root: root, language: "go", inv: goInv}
+	// HTML server carved out at the sub-root site/.
+	pool.entries[poolKey{site, "html"}] = &poolEntry{root: site, language: "html", inv: htmlInv}
+
+	goURI := "file://" + filepath.Join(root, "main.go")
+	htmlURI := "file://" + filepath.Join(site, "index.html")
+	pushDiag(t, goInv, goURI, []protocol.Diagnostic{{Severity: protocol.SevError, Message: "go err"}})
+	pushDiag(t, htmlInv, htmlURI, []protocol.Diagnostic{{Severity: protocol.SevError, Message: "html err"}})
+
+	ri := newRoutingInvProxy(pool)
+	ri.setPrimary(root, "go", goInv)
+
+	all := ri.AllDiagnostics()
+	if _, ok := all[goURI]; !ok {
+		t.Errorf("AllDiagnostics missing Go diagnostics")
+	}
+	if _, ok := all[htmlURI]; !ok {
+		t.Errorf("AllDiagnostics missing sub-root HTML diagnostics (site/)")
+	}
+	if len(all) != 2 {
+		t.Errorf("AllDiagnostics returned %d URIs; want 2", len(all))
+	}
+}
