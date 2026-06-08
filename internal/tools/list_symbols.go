@@ -111,6 +111,13 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 		}
 		return "", lspTimeoutErr("list_symbols", t.timeout, err)
 	}
+	if len(syms) == 0 {
+		// Server answered empty — fall back to the structural Map for file types
+		// the workspace LSP does not cover (e.g. .html in a Go repo).
+		if out, ok := t.topologyFallback(ctx, a.URI); ok {
+			return out, nil
+		}
+	}
 	if t.cache != nil {
 		t.cache.Set(key, syms, t.ttl)
 	}

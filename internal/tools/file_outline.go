@@ -157,6 +157,16 @@ func (t *FileOutline) entries(ctx context.Context, uri string) ([]outlineEntry, 
 	if lspErr == nil {
 		var out []outlineEntry
 		flattenLSPSymbols(syms, 0, &out)
+		if len(out) > 0 {
+			return out, "lsp", nil
+		}
+		// The server answered but found nothing — typically a file type the
+		// workspace LSP does not own (an .html in a Go workspace). Fall back to
+		// the structural Map, which indexes every language regardless of which
+		// LSP is attached.
+		if e, ok := t.topologyEntries(ctx, uri); ok {
+			return e, "topology", nil
+		}
 		return out, "lsp", nil
 	}
 	if IsWorkspaceBoundaryError(lspErr) {

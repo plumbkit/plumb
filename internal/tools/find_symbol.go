@@ -127,6 +127,13 @@ func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string,
 		}
 	}
 
+	if len(syms) == 0 {
+		// Server answered empty — fall back to the structural Map for file types
+		// the workspace LSP does not cover (e.g. .html in a Go repo).
+		if fb, ok := t.topologyFallback(ctx, uri, query); ok {
+			return fb, nil
+		}
+	}
 	matches := flatFilterSymbols(syms, query)
 	if len(matches) == 0 {
 		return fmt.Sprintf("No symbols matching %q in %s.", query, uri), nil
