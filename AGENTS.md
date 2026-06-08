@@ -71,8 +71,8 @@ Claude Desktop / Claude Code / Codex / Gemini CLI
   └── plumb serve  (per conversation — dials Unix socket, frame-aware proxy)
         └── ~/Library/Caches/plumb/plumb.sock  (macOS; os.UserCacheDir())
               └── plumb daemon  (one process, shared across all conversations)
-                    ├── workspacePool  (one gopls per workspace root; refcounted — torn down after idle grace once last session leaves)
-                    │     └── poolEntry{proxy, inv, cache, refs, graceTimer} per root
+                    ├── workspacePool  (one LS per (root, language) — a root may run several, e.g. Go + HTML; the primary is refcounted/torn down after idle grace, secondaries are lazy and live to daemon shutdown)
+                    │     └── poolEntry{proxy, inv, cache, refs, graceTimer} per (root, language)
                     └── handleConn()  (per-connection MCP session: readTracker,
                           writeLimiter, editsCfg/strictFn, gitCfg/gitPolicyFn,
                           sessionCache, lsRefRoot — all per-connection/per-project)
@@ -248,6 +248,8 @@ Cold-start resolution in `session_start`: the daemon's already-attached root →
 ## Adapter validation status
 
 Real-binary validation has been exercised on macOS only; Linux/Windows is pre-v1 hardening work. Each **Experimental** adapter has mock-transport unit tests passing and a real-binary integration test written but gated `//go:build integration` that skips until the binary is on PATH.
+
+**Multiple servers per root.** A workspace root may bind more than one language server at once (e.g. Go + HTML for a web app). The pool is keyed by `(root, language)`; each file routes to the server that owns its extension (`langsupport.ByPath`). The **primary** language (the one `Detect` resolves from root markers — `go.mod` beats `index.html`, see Workspace detection) is pinned on attach; **secondaries** start lazily on the first file of their language and live to daemon shutdown. `diagnostics` aggregates across a root's servers; `workspace_symbols` and the call/type hierarchies consult the primary only. The TUI sessions view and `workspace_sessions` list every active adapter.
 
 | Adapter | Status |
 |---|---|

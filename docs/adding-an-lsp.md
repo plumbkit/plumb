@@ -184,6 +184,16 @@ Add the adapter as a candidate in `internal/workspace/detect.go` (once that
 package is implemented).  Map the language ID (e.g. `"rust"`) to the adapter
 constructor and the config key.
 
+> **Primary vs secondary.** A workspace root may bind several language servers
+> at once (e.g. Go + HTML). Routing keys the pool by `(root, language)` and
+> sends each file to the server that owns its extension (`langsupport.ByPath`).
+> An adapter needs nothing extra to work as a *secondary* in a root whose
+> primary is another language: it simply starts lazily the first time a file of
+> its language is touched. Just make sure the language's extensions are listed
+> in `internal/langsupport` (and, if the name differs from the config key, that
+> `normaliseLangName` folds it — as the tsx/jsx/javascript dialects fold onto
+> the typescript adapter).
+
 ### 8. Update config defaults
 
 Add a default `LSPConfig` entry in `internal/config/config.go`:

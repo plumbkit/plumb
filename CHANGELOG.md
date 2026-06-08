@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 (unreleased)
+
+Multiple language servers per workspace root: one project can now drive several LSPs at once (e.g. Go + HTML for a web app), each file routed to the server that owns its extension.
+
+### Added
+
+- **Multi-LSP per workspace.** The language-server pool is now keyed by `(root, language)` rather than root alone, so a single workspace root can bind several servers. The URI-bearing tools (`get_definition`, `find_references`, `diagnostics`, `rename_symbol`, hierarchies, …) route each file to the language server that owns its extension (`langsupport.ByPath`, with the `tsx`/`jsx`/`javascript` dialects folded onto the typescript adapter); a file no enabled language owns falls back to the root's primary server. The **primary** language — the one `Detect` resolves from root markers, so `go.mod` wins over `index.html` when both are present — is pinned on attach; **secondary** servers start lazily on the first file of their language and live to daemon shutdown, mirroring nvim's per-buffer attach. `diagnostics` and the control-socket dump aggregate across every server bound to a root. Enable a secondary with `[lsp.<lang>] enabled = true` (e.g. `[lsp.html]`). Workspace-wide queries (`workspace_symbols`) and the call/type hierarchies still consult the primary only.
+- **Sessions list every active LSP.** A session record now carries the full set of active language servers (`Adapters`), not just the primary, so a Go + HTML workspace shows both `gopls` and `vscode-html-language-server`. The TUI sessions detail joins them (labelled "Adapters" when more than one) and `workspace_sessions` annotates each peer with its active LSPs — like nvim's `:LspInfo`, servers appear as files of their language are opened.
+
+### Internal
+
+- A behaviour-preserving refactor isolates the `(root, language)` pool re-key from the per-file routing feature. New `workspacePool` helpers: `entriesForRoot` (aggregate a root's servers) and `fileLanguage`/`normaliseLangName` (resolve the per-file config language). The routing proxies gain a `primaryLang` axis and an activation hook that feeds the session's active-adapter set.
+
 ## 0.8.49 (unreleased)
 
 Makes plumb's experimental HTML support actually return data: the HTML language server now receives the document it is queried about, and the symbol tools fall back to the topology Map when the language server answers empty.

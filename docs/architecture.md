@@ -135,9 +135,10 @@ flowchart TD
     CC["Claude Desktop / Claude Code"] --> SV["plumb serve (per conversation)"]
     SV -->|Unix socket| SOCK["plumb.sock"]
     SOCK --> D["plumb daemon (one shared process)"]
-    D --> WP["workspacePool — one language server per root"]
-    WP --> PE1["poolEntry · /projects/foo (gopls + cache + invalidator + refcount)"]
-    WP --> PE2["poolEntry · /projects/bar (pyright + cache + invalidator + refcount)"]
+    D --> WP["workspacePool — one language server per (root, language)"]
+    WP --> PE1["poolEntry · (/projects/web, go) — gopls + cache + invalidator + refcount"]
+    WP --> PE2["poolEntry · (/projects/web, html) — vscode-html-language-server (lazy secondary)"]
+    WP --> PE3["poolEntry · (/projects/bar, python) — pyright + cache + invalidator + refcount"]
     D --> HC["handleConn — per-connection MCP session"]
 ```
 
@@ -154,12 +155,18 @@ Key design properties:
   second would `os.Remove(socketPath); net.Listen(...)`, quietly stealing the
   path from the first. Lock release is automatic via fd close on process
   exit (clean or crash) — see `internal/cli/lock.go`.
-- **One gopls per workspace root** — multiple MCP connections to the same
-  project share gopls, its cache, and its diagnostic stream. Each connection
-  that attaches a workspace as its primary holds a reference; when the last
-  session on a root detaches, the language server is torn down after a 90 s
-  idle grace so it stays warm across a quick disconnect-reconnect but is
-  eventually reclaimed when the workspace is idle.
+- **One language server per (root, language)** — multiple MCP connections to
+  the same project share each server, its cache, and its diagnostic stream. A
+  root may bind several servers at once (e.g. Go + HTML for a web app): each
+  file is routed to the server that owns its extension. The **primary** language
+  (resolved from root markers — `go.mod` beats `index.html` when both are
+  present) is pinned, and each connection that attaches a workspace as its
+  primary holds a reference; when the last session on a root detaches, the
+  primary is torn down after a 90 s idle grace so it stays warm across a quick
+  disconnect-reconnect but is eventually reclaimed when the workspace is idle.
+  **Secondary** servers start lazily on the first file of their language and
+  live to daemon shutdown. Enable a secondary with `[lsp.<lang>] enabled =
+  true`.
 - **Per-connection sessions** — `handleConn` registers a `session.Info`
   immediately on connection (with `Folder=""` until workspace resolves). The
   session is then patched as workspace and client identity become known.
@@ -327,8 +334,9 @@ a `connSession` (`internal/cli/conn.go`) which:
 1. Registers a `session.Info` immediately (Folder empty until the workspace resolves).
 2. Resolves the workspace lazily — via `roots/list` on `initialize`, then by
    walking up from the first tool call's path argument.
-3. On attach: acquires the shared language server for the workspace from
-   `workspacePool` (one per root), opens the per-connection cache + invalidator,
+3. On attach: acquires the shared primary language server for the workspace from
+   `workspacePool` (one per (root, language); secondaries spin up lazily as
+   files of other enabled languages are touched), opens the per-connection cache + invalidator,
    loads project config, and — when enabled — acquires the topology store and
    the quality runner.
 4. Registers all MCP tools (`registerAllTools`) and lifecycle hooks
