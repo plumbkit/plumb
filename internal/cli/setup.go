@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -167,50 +166,10 @@ func runSetupCodex(_ *cobra.Command, _ []string) error {
 // plumb was already registered with the same binary (no write performed).
 // preserved lists the names of servers that were already present and kept.
 func setupClaudeDesktopInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
-	cfg, isNew, err := readOrInitClaudeConfig(cfgPath)
-	if err != nil {
-		return false, nil, fmt.Errorf("reading %s: %w", cfgPath, err)
-	}
-
-	if cfg["mcpServers"] == nil {
-		cfg["mcpServers"] = map[string]any{}
-	}
-	servers, ok := cfg["mcpServers"].(map[string]any)
-	if !ok {
-		return false, nil, fmt.Errorf("mcpServers in %s is not an object — cannot safely modify it", cfgPath)
-	}
-
-	// Collect preserved servers (existing, not plumb) for reporting.
-	for name := range servers {
-		if name != "plumb" {
-			preserved = append(preserved, name)
-		}
-	}
-	sort.Strings(preserved)
-
-	// Idempotency check: if plumb is already registered with the same binary, skip the write.
-	if existing, exists := servers["plumb"].(map[string]any); exists {
-		if existing["command"] == plumbBin {
-			return false, preserved, nil
-		}
-	}
-
-	// Back up the original file before modifying it.
-	if !isNew {
-		if err := backupFile(cfgPath); err != nil {
-			return false, nil, fmt.Errorf("backing up %s: %w", cfgPath, err)
-		}
-	}
-
-	servers["plumb"] = map[string]any{
-		"command": plumbBin,
-		"args":    []string{"serve"},
-	}
-
-	if err := writeJSON(cfgPath, cfg); err != nil {
-		return false, nil, fmt.Errorf("writing %s: %w", cfgPath, err)
-	}
-	return true, preserved, nil
+	return mergeServerEntry(cfgPath, "mcpServers", readOrInitClaudeConfig, writeJSON,
+		map[string]any{"command": plumbBin, "args": []string{"serve"}},
+		func(existing map[string]any) bool { return existing["command"] == plumbBin },
+	)
 }
 
 func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
@@ -287,91 +246,18 @@ func installAndPrintSkills() {
 // setupClaudeCodeInto merges the plumb entry into a Claude Code config file.
 // Claude Code requires a "type":"stdio" field that Claude Desktop does not.
 func setupClaudeCodeInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
-	cfg, isNew, err := readOrInitClaudeConfig(cfgPath)
-	if err != nil {
-		return false, nil, fmt.Errorf("reading %s: %w", cfgPath, err)
-	}
-
-	if cfg["mcpServers"] == nil {
-		cfg["mcpServers"] = map[string]any{}
-	}
-	servers, ok := cfg["mcpServers"].(map[string]any)
-	if !ok {
-		return false, nil, fmt.Errorf("mcpServers in %s is not an object — cannot safely modify it", cfgPath)
-	}
-
-	for name := range servers {
-		if name != "plumb" {
-			preserved = append(preserved, name)
-		}
-	}
-	sort.Strings(preserved)
-
-	if existing, exists := servers["plumb"].(map[string]any); exists {
-		if existing["command"] == plumbBin {
-			return false, preserved, nil
-		}
-	}
-
-	if !isNew {
-		if err := backupFile(cfgPath); err != nil {
-			return false, nil, fmt.Errorf("backing up %s: %w", cfgPath, err)
-		}
-	}
-
-	servers["plumb"] = map[string]any{
-		"type":    "stdio",
-		"command": plumbBin,
-		"args":    []string{"serve"},
-	}
-
-	if err := writeJSON(cfgPath, cfg); err != nil {
-		return false, nil, fmt.Errorf("writing %s: %w", cfgPath, err)
-	}
-	return true, preserved, nil
+	return mergeServerEntry(cfgPath, "mcpServers", readOrInitClaudeConfig, writeJSON,
+		map[string]any{"type": "stdio", "command": plumbBin, "args": []string{"serve"}},
+		func(existing map[string]any) bool { return existing["command"] == plumbBin },
+	)
 }
 
 // setupCodexInto merges the plumb entry into Codex's TOML config.
 func setupCodexInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
-	cfg, isNew, err := readOrInitCodexConfig(cfgPath)
-	if err != nil {
-		return false, nil, fmt.Errorf("reading %s: %w", cfgPath, err)
-	}
-
-	if cfg["mcp_servers"] == nil {
-		cfg["mcp_servers"] = map[string]any{}
-	}
-	servers, ok := cfg["mcp_servers"].(map[string]any)
-	if !ok {
-		return false, nil, fmt.Errorf("mcp_servers in %s is not an object — cannot safely modify it", cfgPath)
-	}
-
-	for name := range servers {
-		if name != "plumb" {
-			preserved = append(preserved, name)
-		}
-	}
-	sort.Strings(preserved)
-
-	if existing, exists := servers["plumb"].(map[string]any); exists {
-		if existing["command"] == plumbBin && stringSliceEqual(existing["args"], []string{"serve"}) {
-			return false, preserved, nil
-		}
-	}
-
-	if !isNew {
-		if err := backupFile(cfgPath); err != nil {
-			return false, nil, fmt.Errorf("backing up %s: %w", cfgPath, err)
-		}
-	}
-
-	servers["plumb"] = map[string]any{
-		"command": plumbBin,
-		"args":    []string{"serve"},
-	}
-
-	if err := writeTOML(cfgPath, cfg); err != nil {
-		return false, nil, fmt.Errorf("writing %s: %w", cfgPath, err)
-	}
-	return true, preserved, nil
+	return mergeServerEntry(cfgPath, "mcp_servers", readOrInitCodexConfig, writeTOML,
+		map[string]any{"command": plumbBin, "args": []string{"serve"}},
+		func(existing map[string]any) bool {
+			return existing["command"] == plumbBin && stringSliceEqual(existing["args"], []string{"serve"})
+		},
+	)
 }

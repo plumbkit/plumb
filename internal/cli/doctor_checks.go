@@ -63,19 +63,8 @@ func checkDaemon() []checkResult {
 
 // checkMCPClients checks whether plumb is registered with each known MCP client.
 func checkMCPClients() []checkResult {
-	type client struct {
-		name   string
-		pathFn func() (string, error)
-	}
-	clients := []client{
-		{"Claude Desktop", claudeDesktopConfigPath},
-		{"Claude Code", claudeCodeConfigPath},
-		{"Gemini CLI", GeminiConfigPath},
-		{"Codex", CodexConfigPath},
-	}
-
 	var results []checkResult
-	for _, c := range clients {
+	for _, c := range allSetupClients() {
 		path, err := c.pathFn()
 		if err != nil {
 			results = append(results, checkResult{
@@ -90,7 +79,7 @@ func checkMCPClients() []checkResult {
 				name:   c.name,
 				ok:     false,
 				detail: "not installed or config not found",
-				fix:    fmt.Sprintf("install %s, then run `plumb setup %s`", c.name, setupCmdName(c.name)),
+				fix:    fmt.Sprintf("install %s, then run `plumb setup %s`", c.name, c.use),
 			})
 			continue
 		}
@@ -114,25 +103,11 @@ func checkMCPClients() []checkResult {
 				name:   c.name,
 				ok:     false,
 				detail: "config exists but plumb is not registered",
-				fix:    fmt.Sprintf("run `plumb setup %s`", setupCmdName(c.name)),
+				fix:    fmt.Sprintf("run `plumb setup %s`", c.use),
 			})
 		}
 	}
 	return results
-}
-
-func setupCmdName(clientName string) string {
-	switch clientName {
-	case "Claude Desktop":
-		return "claude-desktop"
-	case "Claude Code":
-		return "claude-code"
-	case "Gemini CLI":
-		return "gemini"
-	case "Codex":
-		return "codex"
-	}
-	return strings.ToLower(strings.ReplaceAll(clientName, " ", "-"))
 }
 
 // checkConfigs verifies global and project config files are parseable.

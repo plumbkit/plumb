@@ -217,8 +217,15 @@ Project-overridable, hot-reloaded. When `enabled`, `topology_search` re-ranks it
 | Claude Code, project scope | `plumb setup claude-code --project` | `.mcp.json` in the current directory + `~/.claude/skills/` |
 | Codex | `plumb setup codex` | `$CODEX_HOME/config.toml`, or `~/.codex/config.toml` when unset |
 | Gemini CLI | `plumb setup gemini` | `~/.gemini/settings.json` |
+| Cursor | `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
+| Augment Code | `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
+| Qwen Code | `plumb setup qwen` | `~/.qwen/settings.json` |
+| OpenCode | `plumb setup opencode` | `~/.config/opencode/opencode.json` (`mcp` key; `type:"local"`, command array) |
+| Crush | `plumb setup crush` | `~/.config/crush/crush.json` (`mcp` key; `type:"stdio"`) |
+| Goose | `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |
+| Hermes | `plumb setup hermes` | `~/.hermes/config.yaml` (`mcp_servers` key; YAML) |
 
-Setup helpers preserve existing MCP servers, back up config first, and resolve locations via OS/user-home helpers — no hardcoded paths.
+Setup helpers preserve existing MCP servers, back up config first, and resolve locations via OS/user-home helpers — no hardcoded paths. All clients funnel through one format-agnostic merge (`mergeServerEntry`) backed by JSON, TOML, or YAML serialisers; the trio Cursor/Augment/Qwen reuse the plain `mcpServers` shape, the rest carry a client-specific key/entry. (Aider is intentionally absent — it has no native MCP **client**, only third-party servers that wrap it.)
 
 `plumb setup claude-code` also installs two idempotent user-scoped skills into `~/.claude/skills/`: `plumb-explore` (navigation) and `plumb-refactor` (semantic rename, atomic cross-file edits); `--no-skill` skips.
 

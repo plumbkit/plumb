@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
 // claudeCodeConfigPath returns the user-level Claude Code config path.
@@ -18,6 +20,55 @@ func claudeCodeConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".claude.json"), nil
+}
+
+// homeRelConfigPath joins parts under the user's home directory. It is the
+// common shape of the per-client config-path helpers below.
+func homeRelConfigPath(parts ...string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(append([]string{home}, parts...)...), nil
+}
+
+// CursorConfigPath returns the global Cursor MCP config (~/.cursor/mcp.json),
+// shared by the Cursor editor and the cursor-agent CLI.
+func CursorConfigPath() (string, error) {
+	return homeRelConfigPath(".cursor", "mcp.json")
+}
+
+// AugmentConfigPath returns the Augment Code (auggie CLI) settings path
+// (~/.augment/settings.json).
+func AugmentConfigPath() (string, error) {
+	return homeRelConfigPath(".augment", "settings.json")
+}
+
+// QwenConfigPath returns the Qwen Code settings path (~/.qwen/settings.json).
+// Qwen Code is a Gemini-CLI fork and shares its mcpServers JSON shape.
+func QwenConfigPath() (string, error) {
+	return homeRelConfigPath(".qwen", "settings.json")
+}
+
+// OpenCodeConfigPath returns the OpenCode global config
+// (~/.config/opencode/opencode.json).
+func OpenCodeConfigPath() (string, error) {
+	return homeRelConfigPath(".config", "opencode", "opencode.json")
+}
+
+// CrushConfigPath returns the Crush global config (~/.config/crush/crush.json).
+func CrushConfigPath() (string, error) {
+	return homeRelConfigPath(".config", "crush", "crush.json")
+}
+
+// GooseConfigPath returns the Goose config (~/.config/goose/config.yaml).
+func GooseConfigPath() (string, error) {
+	return homeRelConfigPath(".config", "goose", "config.yaml")
+}
+
+// HermesConfigPath returns the Hermes Agent config (~/.hermes/config.yaml).
+func HermesConfigPath() (string, error) {
+	return homeRelConfigPath(".hermes", "config.yaml")
 }
 
 // GeminiConfigPath returns the platform-specific path for Gemini CLI's
@@ -176,6 +227,111 @@ func writeTOML(path string, m map[string]any) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+// readOrInitYAMLConfig reads cfgPath as YAML into a generic map.
+// isNew is true when the file did not exist.
+func readOrInitYAMLConfig(path string) (m map[string]any, isNew bool, err error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, false, fmt.Errorf("creating directory: %w", err)
+		}
+		return map[string]any{}, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) == 0 {
+		return map[string]any{}, false, nil
+	}
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		return nil, false, fmt.Errorf("parsing %s as YAML: %w — will not overwrite", path, err)
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, false, nil
+}
+
+// writeYAML writes m to path as YAML, creating the file if needed.
+// It writes to a temp file in the same directory and renames atomically.
+func writeYAML(path string, m map[string]any) error {
+	data, err := yaml.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".plumb_setup_*.yaml")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// mergeServerEntry is the shared, format-agnostic merge used by every
+// `plumb setup <client>` command. It reads cfgPath via read, finds (or creates)
+// the server map under serversKey, and inserts entry under the "plumb" key —
+// preserving every other entry. read/write select the serialisation (JSON, TOML,
+// or YAML); same reports whether an existing plumb entry already points at this
+// binary, making the operation idempotent.
+//
+// Returns added=false (no write) when plumb is already registered identically.
+// preserved lists the names of the other servers that were kept.
+func mergeServerEntry(
+	cfgPath, serversKey string,
+	read func(string) (map[string]any, bool, error),
+	write func(string, map[string]any) error,
+	entry map[string]any,
+	same func(existing map[string]any) bool,
+) (added bool, preserved []string, err error) {
+	cfg, isNew, err := read(cfgPath)
+	if err != nil {
+		return false, nil, fmt.Errorf("reading %s: %w", cfgPath, err)
+	}
+
+	if cfg[serversKey] == nil {
+		cfg[serversKey] = map[string]any{}
+	}
+	servers, ok := cfg[serversKey].(map[string]any)
+	if !ok {
+		return false, nil, fmt.Errorf("%s in %s is not an object — cannot safely modify it", serversKey, cfgPath)
+	}
+
+	for name := range servers {
+		if name != "plumb" {
+			preserved = append(preserved, name)
+		}
+	}
+	sort.Strings(preserved)
+
+	if existing, exists := servers["plumb"].(map[string]any); exists && same(existing) {
+		return false, preserved, nil
+	}
+
+	if !isNew {
+		if err := backupFile(cfgPath); err != nil {
+			return false, nil, fmt.Errorf("backing up %s: %w", cfgPath, err)
+		}
+	}
+
+	servers["plumb"] = entry
+
+	if err := write(cfgPath, cfg); err != nil {
+		return false, nil, fmt.Errorf("writing %s: %w", cfgPath, err)
+	}
+	return true, preserved, nil
 }
 
 // claudeSkillsDir returns the user-level Claude Code skills directory
