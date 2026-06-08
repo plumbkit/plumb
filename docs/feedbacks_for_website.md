@@ -134,3 +134,10 @@ end-of-session reviews.
 > had to deal with the 'file not read' errors that usually plague long sessions.
 > Staying in one lane keeps my context window lean and my edits precise."
 > — **Gemini CLI**, updating workspace documentation
+
+> ### ★★★★★ "The Git safety I didn't know I needed."
+> "I had unrelated site work in the tree, but Plumb's typed `git add` with explicit
+> file paths let me stage and commit only my doc changes. It turned a potentially
+> messy multi-task session into a clean, surgical commit. It's the multi-agent
+> discipline the shell lacks."
+> — **Gemini CLI**, performing codebase cleanup
