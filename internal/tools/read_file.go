@@ -67,13 +67,33 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 //
 // Concurrency: Execute is safe for concurrent use.
 type ReadFile struct {
-	tracker      *ReadTracker // may be nil; strict-mode tracking disabled when nil
+	tracker      *ReadTracker  // may be nil; strict-mode tracking disabled when nil
+	writes       *WriteTracker // may be nil; powers the concurrent-edit-on-read warning
 	guard        BoundaryGuard
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
+
+// WithWrites wires the per-session WriteTracker so read_file can warn when a
+// file changed on disk since plumb last wrote it this session (a concurrent
+// peer/external edit). Nil-safe; without it no concurrent-edit warning is shown.
+func (t *ReadFile) WithWrites(w *WriteTracker) *ReadFile {
+	t.writes = w
+	return t
+}
+
+// concurrentEditNote returns a one-line warning when plumb wrote this file
+// earlier in the session and its on-disk mtime has since advanced — i.e. a peer
+// or external process edited it after plumb's write. Returns "" otherwise.
+func (t *ReadFile) concurrentEditNote(fpath string, mtime time.Time) string {
+	recorded, ok := t.writes.WroteMtime(fpath)
+	if !ok || recorded == 0 || mtime.UnixNano() <= recorded {
+		return ""
+	}
+	return "# plumb-warn: changed on disk since plumb last wrote it this session — a peer or external process may have edited it; this read reflects the new content\n"
+}
 
 func (t *ReadFile) WithBoundary(guard BoundaryGuard) *ReadFile {
 	t.guard = guard
@@ -150,6 +170,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	}
 	mtime := info.ModTime()
 	t.tracker.Record(fpath, mtime)
+	concurrentNote := t.concurrentEditNote(fpath, mtime)
 
 	f, err := os.Open(fpath)
 	if err != nil {
@@ -191,14 +212,14 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
 
-	return t.formatOutput(mtime, sha, content, truncated, t.outsideLabel(fpath)), nil
+	return t.formatOutput(mtime, sha, content, truncated, t.outsideLabel(fpath), concurrentNote), nil
 }
 
 // formatOutput assembles the read_file response: the plumb-read header line
 // (mtime + optional sha + indent), an optional edit-lane hint line for clients
 // whose native Edit tool conflicts with plumb's read-state, a blank separator,
 // then the (possibly truncated) content.
-func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool, outsideLabel string) string {
+func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool, outsideLabel, concurrentNote string) string {
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
 	// lines/chars describe the body actually returned (a ranged read reflects the
@@ -210,6 +231,9 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated 
 		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s lines=%d chars=%d\n", mtimeStr, sha, classifyIndent(content), lines, chars)
 	} else {
 		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s lines=%d chars=%d\n", mtimeStr, classifyIndent(content), lines, chars)
+	}
+	if concurrentNote != "" {
+		sb.WriteString(concurrentNote)
 	}
 	if outsideLabel != "" {
 		fmt.Fprintf(&sb, "# plumb-note: read-only — outside the workspace (%s); not editable\n", outsideLabel)

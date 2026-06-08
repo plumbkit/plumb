@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.6 (unreleased)
+
+Proactive concurrent-edit detection — the last medium-priority item from the agent-feedback sweep.
+
+### Added
+
+- **`read_file` warns when a peer edited a file since plumb wrote it.** The per-session `WriteTracker` now records each file's mtime at write time; when a later `read_file` finds the on-disk mtime has advanced past that, it prepends `# plumb-warn: changed on disk since plumb last wrote it this session — a peer or external process may have edited it`. This surfaces a concurrent external edit *proactively* instead of leaving the agent to infer it from a later refused edit — the multi-agent coordination gap raised across several sessions (feedbacks 2026-06-04). Nil-safe and scoped per connection; the warning never fires for files plumb didn't write this session.
+
 ## 0.9.5 (unreleased)
 
 Filesystem-tool polish and a documented detection limitation — the tail of the agent-feedback sweep.

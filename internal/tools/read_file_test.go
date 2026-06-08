@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTextFile(t *testing.T, content string) string {
@@ -48,6 +49,49 @@ func TestReadFile_HeaderLineAndCharCounts(t *testing.T) {
 	if !strings.Contains(head, "chars=14") {
 		t.Errorf("expected chars=14 (rune count, not bytes) in header, got: %q", head)
 	}
+}
+
+func TestReadFile_ConcurrentEditWarning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	if err := os.WriteFile(path, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writes := NewWriteTracker()
+	writes.Record(path) // plumb "wrote" it: captures the current mtime
+
+	tool := NewReadFile(nil).WithWrites(writes)
+
+	// A read with no external change carries no warning.
+	out, err := callReadFileWith(t, tool, path)
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if strings.Contains(out, "plumb-warn") {
+		t.Errorf("unchanged file should carry no concurrent-edit warning:\n%s", out)
+	}
+
+	// Simulate a peer editing the file after plumb's write (advance mtime).
+	future := time.Now().Add(2 * time.Second)
+	if err := os.WriteFile(path, []byte("v2 peer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	out, err = callReadFileWith(t, tool, path)
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "plumb-warn") || !strings.Contains(out, "changed on disk") {
+		t.Errorf("expected a concurrent-edit warning after an external write:\n%s", out)
+	}
+}
+
+// callReadFileWith executes a pre-built ReadFile tool against path.
+func callReadFileWith(t *testing.T, tool *ReadFile, path string) (string, error) {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"file_path": path})
+	return tool.Execute(context.Background(), raw)
 }
 
 func TestReadFile_Basic(t *testing.T) {
