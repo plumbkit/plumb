@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var readFileSchema = json.RawMessage(`{
@@ -200,10 +201,15 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool, outsideLabel string) string {
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
+	// lines/chars describe the body actually returned (a ranged read reflects the
+	// slice). chars is rune count, not bytes — context-window limits are
+	// character-denominated and bytes mislead for any non-ASCII text
+	// (internal/feedbacks.md 2026-06-08).
+	lines, chars := displayLineCount(content), utf8.RuneCountInString(content)
 	if sha != "" {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s\n", mtimeStr, sha, classifyIndent(content))
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s lines=%d chars=%d\n", mtimeStr, sha, classifyIndent(content), lines, chars)
 	} else {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s\n", mtimeStr, classifyIndent(content))
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s lines=%d chars=%d\n", mtimeStr, classifyIndent(content), lines, chars)
 	}
 	if outsideLabel != "" {
 		fmt.Fprintf(&sb, "# plumb-note: read-only — outside the workspace (%s); not editable\n", outsideLabel)

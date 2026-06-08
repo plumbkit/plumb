@@ -179,7 +179,7 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 		verb = "created"
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s %s (%d bytes)", verb, path, len(newContent))
+	fmt.Fprintf(&sb, "%s %s %s", verb, path, sizeSummary(newContent))
 	if t.deps.showWriteDiff() {
 		if isNew {
 			sb.WriteString("\nnew file")

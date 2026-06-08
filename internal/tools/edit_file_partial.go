@@ -107,6 +107,39 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, conte
 	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh))
 }
 
+// applyPartialEdit applies a single edit to content and returns the (possibly
+// unchanged) content plus the per-edit outcome. It never mutates shared state —
+// the caller advances content only when res.applied is true.
+func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path string, preReadMtime time.Time) (string, partialEditResult) {
+	if edit.StartLine != 0 {
+		newStr := matchLineEndings(edit.NewStr, content)
+		updated, rerr := applyRangeEdit(content, edit.StartLine, edit.EndLine, newStr)
+		if rerr != nil {
+			return content, partialEditResult{index: i, err: rerr}
+		}
+		return updated, partialEditResult{index: i, applied: true, lineRange: summariseLineChanges(content, updated)}
+	}
+	if edit.OldStr == "" {
+		return content, partialEditResult{index: i, err: fmt.Errorf("old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range")}
+	}
+	oldStr := matchLineEndings(edit.OldStr, content)
+	newStr := matchLineEndings(edit.NewStr, content)
+	count := strings.Count(content, oldStr)
+	if count == 0 {
+		return content, partialEditResult{index: i, err: t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime)}
+	}
+	if !edit.ReplaceAll && count > 1 {
+		return content, partialEditResult{index: i, err: ambiguousError(i, count, path, edit.OldStr, oldStr)}
+	}
+	before := content
+	if edit.ReplaceAll {
+		content = strings.ReplaceAll(content, oldStr, newStr)
+	} else {
+		content = strings.Replace(content, oldStr, newStr, 1)
+	}
+	return content, partialEditResult{index: i, applied: true, lineRange: summariseLineChanges(before, content)}
+}
+
 // tryEditPartial reads the file and applies each edit independently.
 // Returns per-edit results, writeResult, original content, final content, and any write error.
 // If no edits succeeded the file is not written and writeResult is zero.
@@ -133,50 +166,10 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 
 	results := make([]partialEditResult, len(edits))
 	for i, edit := range edits {
-		if edit.StartLine != 0 {
-			newStr := matchLineEndings(edit.NewStr, content)
-			updated, rerr := applyRangeEdit(content, edit.StartLine, edit.EndLine, newStr)
-			if rerr != nil {
-				results[i] = partialEditResult{index: i, err: rerr}
-				continue
-			}
-			results[i] = partialEditResult{
-				index:     i,
-				applied:   true,
-				lineRange: summariseLineChanges(content, updated),
-			}
+		updated, res := t.applyPartialEdit(content, edit, i, path, preReadMtime)
+		results[i] = res
+		if res.applied {
 			content = updated
-			continue
-		}
-		if edit.OldStr == "" {
-			results[i] = partialEditResult{
-				index: i,
-				err:   fmt.Errorf("old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range"),
-			}
-			continue
-		}
-		oldStr := matchLineEndings(edit.OldStr, content)
-		newStr := matchLineEndings(edit.NewStr, content)
-		count := strings.Count(content, oldStr)
-		switch count {
-		case 0:
-			results[i] = partialEditResult{
-				index: i,
-				err:   t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime),
-			}
-		case 1:
-			before := content
-			content = strings.Replace(content, oldStr, newStr, 1)
-			results[i] = partialEditResult{
-				index:     i,
-				applied:   true,
-				lineRange: summariseLineChanges(before, content),
-			}
-		default:
-			results[i] = partialEditResult{
-				index: i,
-				err:   ambiguousError(i, count, path, edit.OldStr, oldStr),
-			}
 		}
 	}
 

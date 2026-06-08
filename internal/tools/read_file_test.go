@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,28 @@ func callReadFile(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
 	raw, _ := json.Marshal(args)
 	return NewReadFile(nil).Execute(context.Background(), raw)
+}
+
+func TestReadFile_HeaderLineAndCharCounts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "multibyte.txt")
+	// 3 lines; contains multibyte glyphs so chars < bytes.
+	_ = os.WriteFile(path, []byte("a → b\nc — d\ne\n"), 0o644)
+
+	out, err := callReadFile(t, map[string]any{"file_path": path})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	head := out[:strings.IndexByte(out, '\n')]
+	if !strings.Contains(head, "lines=3") {
+		t.Errorf("expected lines=3 in header, got: %q", head)
+	}
+	if !strings.Contains(head, "chars=") {
+		t.Errorf("expected a chars= field in header, got: %q", head)
+	}
+	// The byte length (18) exceeds the rune count (14) for this multibyte body.
+	if !strings.Contains(head, "chars=14") {
+		t.Errorf("expected chars=14 (rune count, not bytes) in header, got: %q", head)
+	}
 }
 
 func TestReadFile_Basic(t *testing.T) {

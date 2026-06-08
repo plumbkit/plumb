@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.3 (unreleased)
+
+Edit / read / search ergonomics from the agent feedback log — the recurring paper-cuts that pushed agents toward native tools or extra round-trips.
+
+### Added
+
+- **`edit_file` `replace_all`.** Each edit item accepts `replace_all: true` to replace EVERY occurrence of `old_string` instead of requiring it to appear exactly once — the mechanical rename-this-token-everywhere case agents reached for ~6 sessions running (and previously had to switch to `find_replace` for). Ignored in range mode.
+- **Character and line counts in plumb output.** The `read_file` header now reports `lines=N chars=M` and `edit_file`/`write_file` responses report `(N bytes, L lines, C chars)`. `chars` is the rune count, not bytes — context-window limits are character-denominated, so byte-only counts mislead on any non-ASCII document (this forced a `wc -m` shell loop in the AGENTS.md-trim session).
+- **`edit_file` `reconcile`.** Opt-in flag to apply against the current on-disk content when `expected_mtime`/`expected_sha` mismatch, relying on the exact-once `old_string` match for safety. Removes the edit→`golangci-lint --fix`→edit mtime tax (a formatter bumps the mtime; your anchors still match). Default off — the guard stays strict.
+
+### Changed
+
+- **`search_in_files` scopes to a single file.** Passing a file path to `path` now searches ONLY that file (it previously broadened to the containing directory). A file path is more specific than its directory — scoping to it is what the caller meant.
+- **`search_in_files` nudges on literal regex syntax.** A zero-match literal search whose pattern contains `|` alternation or `.*`/`.+` now appends a one-line hint to pass `use_regex: true`, preventing a false "no matches" from reading as "these don't exist".
+- **`edit_file` tolerates a string-encoded `edits` array.** Some MCP clients intermittently double-encode the typed `edits` array as a JSON string; `edit_file` now recovers that shape instead of failing with an opaque "cannot unmarshal string into … edits".
+
+### Note
+
+- `file_outline` already gives a clean headings-only outline for Markdown via the topology Map (`source=topology`); use it instead of `read_file` for large Markdown docs. No change needed — recorded here because the feedback log asked for a "headings-only" mode that already exists.
+
 ## 0.9.2 (unreleased)
 
 Git-tool improvements for multi-agent / shared-worktree work — the recurring git asks in the agent feedback log.

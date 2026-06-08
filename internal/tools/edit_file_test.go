@@ -77,6 +77,90 @@ func callEditFile(t *testing.T, args map[string]any) (string, error) {
 	return NewEditFile(WriteDeps{Reads: NewReadTracker()}).Execute(context.Background(), raw)
 }
 
+func TestEditFile_ReplaceAll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("x := old\ny := old\nz := old\n"), 0o644)
+
+	// Without replace_all, three occurrences are ambiguous and rejected.
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"old_string": "old", "new_string": "new"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "appears") && !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected ambiguous-match error without replace_all, got: %v", err)
+	}
+
+	// With replace_all, all three are replaced in one edit.
+	out, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"old_string": "old", "new_string": "new", "replace_all": true}},
+	})
+	if err != nil {
+		t.Fatalf("replace_all edit failed: %v", err)
+	}
+	if !strings.Contains(out, "applied 1 edit") {
+		t.Errorf("unexpected output: %q", out)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "old") || strings.Count(string(data), "new") != 3 {
+		t.Errorf("replace_all should replace every occurrence, got: %q", data)
+	}
+}
+
+func TestEditFile_RecoverStringEncodedEdits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+
+	// Some clients double-encode the edits array as a JSON string; it must still
+	// apply rather than failing with an opaque unmarshal error.
+	out, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		"edits":     `[{"old_string":"hello","new_string":"world"}]`,
+	})
+	if err != nil {
+		t.Fatalf("string-encoded edits should be recovered, got: %v", err)
+	}
+	if !strings.Contains(out, "applied 1 edit") {
+		t.Errorf("unexpected output: %q", out)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "world") {
+		t.Errorf("edit not applied: %q", data)
+	}
+}
+
+func TestEditFile_ReconcileBypassesMtimeGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+	staleMtime := time.Now().Add(-time.Hour).Format(time.RFC3339Nano)
+
+	// A stale expected_mtime is normally rejected.
+	_, err := callEditFile(t, map[string]any{
+		"file_path":      path,
+		"expected_mtime": staleMtime,
+		"edits":          []map[string]any{{"old_string": "hello", "new_string": "world"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "modified since you read it") {
+		t.Fatalf("expected mtime-mismatch rejection, got: %v", err)
+	}
+
+	// With reconcile, the stale mtime is ignored and the unique anchor still applies.
+	out, err := callEditFile(t, map[string]any{
+		"file_path":      path,
+		"expected_mtime": staleMtime,
+		"reconcile":      true,
+		"edits":          []map[string]any{{"old_string": "hello", "new_string": "world"}},
+	})
+	if err != nil {
+		t.Fatalf("reconcile should bypass the stale mtime, got: %v", err)
+	}
+	if !strings.Contains(out, "applied 1 edit") {
+		t.Errorf("unexpected output: %q", out)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "world") {
+		t.Errorf("edit not applied: %q", data)
+	}
+}
+
 func TestEditFile_BasicReplace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f.go")
 	_ = os.WriteFile(path, []byte("package main\n\nfunc Hello() {}\n"), 0o644)

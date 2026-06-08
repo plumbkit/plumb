@@ -512,7 +512,31 @@ func TestSearchInFiles_BraceGlobReturnsError(t *testing.T) {
 	}
 }
 
-func TestSearchInFiles_FilePathSearchesDirectoryWithNote(t *testing.T) {
+func TestSearchInFiles_LiteralMetacharHint(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "a.go"), []byte("alpha\nbeta\n"), 0o644)
+	tool := NewSearchInFiles(nil, nil, nil, 0)
+
+	// Literal search for an alternation pattern that matches nothing literally
+	// must nudge toward use_regex.
+	args, _ := json.Marshal(map[string]any{"pattern": "alpha|beta", "path": dir})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "use_regex") {
+		t.Errorf("expected a use_regex hint for a literal alternation pattern, got:\n%s", out)
+	}
+
+	// A plain literal that genuinely has no match must NOT carry the hint.
+	args, _ = json.Marshal(map[string]any{"pattern": "gamma", "path": dir})
+	out, _ = tool.Execute(context.Background(), args)
+	if strings.Contains(out, "use_regex") {
+		t.Errorf("plain literal with no metachars should carry no hint, got:\n%s", out)
+	}
+}
+
+func TestSearchInFiles_FilePathScopesToThatFile(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "a.go"), []byte("needle\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "b.go"), []byte("needle\n"), 0o644)
@@ -526,12 +550,15 @@ func TestSearchInFiles_FilePathSearchesDirectoryWithNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Both files found because the whole directory was searched.
-	if !strings.Contains(out, "a.go") || !strings.Contains(out, "b.go") {
-		t.Errorf("expected both files when path is a file; got:\n%s", out)
+	// Only the named file is searched — b.go must NOT appear.
+	if !strings.Contains(out, "a.go") {
+		t.Errorf("expected a.go in results; got:\n%s", out)
 	}
-	// A redirect note must be present.
-	if !strings.Contains(out, "Note:") || !strings.Contains(out, "containing directory") {
-		t.Errorf("expected path-redirect note in output; got:\n%s", out)
+	if strings.Contains(out, "b.go") {
+		t.Errorf("path was a file — search must be scoped to a.go only, not b.go; got:\n%s", out)
+	}
+	// A note explaining the file-scoping must be present.
+	if !strings.Contains(out, "Note:") || !strings.Contains(out, "searching only a.go") {
+		t.Errorf("expected file-scoping note in output; got:\n%s", out)
 	}
 }

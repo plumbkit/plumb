@@ -43,6 +43,10 @@ var editFileSchema = json.RawMessage(`{
           "end_line": {
             "type": "integer",
             "description": "Last line to replace (1-based, inclusive). Defaults to start_line when absent (single-line operation). Use -1 for end of file. Only used when start_line is set."
+          },
+          "replace_all": {
+            "type": "boolean",
+            "description": "str_replace mode only: when true, replace EVERY occurrence of old_string instead of requiring it to appear exactly once. Use for mechanical rename-this-token-everywhere edits. Ignored in range mode (start_line set). Default false."
           }
         },
         "required": ["new_string"],
@@ -69,6 +73,10 @@ var editFileSchema = json.RawMessage(`{
     "await_diagnostics": {
       "type": "boolean",
       "description": "When true, block up to a few seconds for the language server to finish re-analysing this file and report an authoritative post-write result — a clean fresh pass is stated explicitly. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
+    },
+    "reconcile": {
+      "type": "boolean",
+      "description": "When true, do NOT reject the edit if the file changed since your read (expected_mtime / expected_sha mismatch); apply against the current on-disk content instead, relying on the exact-once old_string match for safety. Use it for the edit→format(gofumpt/golangci-lint --fix)→edit loop, where a formatter bumped the mtime but your anchors still match. Default false (the mtime guard stays strict)."
     }
   },
   "required": ["file_path", "edits"],
@@ -142,10 +150,11 @@ func (*EditFile) Description() string {
 }
 
 type strEdit struct {
-	OldStr    string `json:"old_string"`
-	NewStr    string `json:"new_string"`
-	StartLine int    `json:"start_line"`
-	EndLine   int    `json:"end_line"`
+	OldStr     string `json:"old_string"`
+	NewStr     string `json:"new_string"`
+	StartLine  int    `json:"start_line"`
+	EndLine    int    `json:"end_line"`
+	ReplaceAll bool   `json:"replace_all"`
 }
 
 type editFileArgs struct {
@@ -156,6 +165,7 @@ type editFileArgs struct {
 	DirtyOk          bool      `json:"dirty_ok"`
 	ApplyPartial     bool      `json:"apply_partial"`
 	AwaitDiagnostics bool      `json:"await_diagnostics"`
+	Reconcile        bool      `json:"reconcile"`
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -197,7 +207,15 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
 	var a editFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return a, fmt.Errorf("edit_file: invalid arguments: %w", err)
+		// Some MCP clients intermittently double-encode the typed `edits` array
+		// as a JSON string ("[{...}]") rather than a JSON array, which fails the
+		// normal decode with an opaque "cannot unmarshal string into ... edits".
+		// Recover that one shape instead of forcing the agent to retry blindly.
+		if recovered, ok := recoverStringEncodedEdits(raw); ok {
+			a = recovered
+		} else {
+			return a, fmt.Errorf("edit_file: invalid arguments: %w", err)
+		}
 	}
 	if a.Path == "" {
 		return a, fmt.Errorf("edit_file: file_path is required")
@@ -208,12 +226,50 @@ func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
 	return a, nil
 }
 
+// recoverStringEncodedEdits handles the client-side bug where `edits` arrives as
+// a JSON string holding the array, rather than the array itself. It re-decodes
+// the file_path/etc. fields normally and unwraps the stringified edits once.
+// Returns ok=false if the input is malformed for any other reason.
+func recoverStringEncodedEdits(raw json.RawMessage) (editFileArgs, bool) {
+	var shadow struct {
+		editFileArgs
+		Edits json.RawMessage `json:"edits"`
+	}
+	if err := json.Unmarshal(raw, &shadow); err != nil {
+		return editFileArgs{}, false
+	}
+	var encoded string
+	if err := json.Unmarshal(shadow.Edits, &encoded); err != nil {
+		return editFileArgs{}, false
+	}
+	var edits []strEdit
+	if err := json.Unmarshal([]byte(encoded), &edits); err != nil {
+		return editFileArgs{}, false
+	}
+	a := shadow.editFileArgs
+	a.Edits = edits
+	return a, true
+}
+
 // editFilePreconditions runs the dirty-check, optimistic-concurrency, and
 // strict-mode gates before any read or write.
 func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a editFileArgs) error {
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
 		return &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)}
+	}
+	if err := checkExpectedVersion(path, a); err != nil {
+		return err
+	}
+	return t.checkStrictRead(path)
+}
+
+// checkExpectedVersion enforces the optional optimistic-concurrency guards
+// (expected_mtime / expected_sha). Both are skipped when reconcile is set, so
+// the edit applies against current content relying on the exact-once match.
+func checkExpectedVersion(path string, a editFileArgs) error {
+	if a.Reconcile {
+		return nil
 	}
 	if a.ExpectedMtime != "" {
 		want, err := time.Parse(time.RFC3339Nano, a.ExpectedMtime)
@@ -249,6 +305,12 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 			)}
 		}
 	}
+	return nil
+}
+
+// checkStrictRead enforces strict mode: the file must have been read in this
+// session and not changed since. A no-op when strict mode is off.
+func (t *EditFile) checkStrictRead(path string) error {
 	if !t.isStrict() {
 		return nil
 	}

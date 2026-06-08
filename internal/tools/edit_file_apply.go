@@ -56,7 +56,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 	}
 	summary := summariseLineChanges(before, content)
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "applied %d %s to %s (%d bytes)", len(edits), noun, path, len(content))
+	fmt.Fprintf(&sb, "applied %d %s to %s %s", len(edits), noun, path, sizeSummary(content))
 	if attempt > 1 {
 		fmt.Fprintf(&sb, " (succeeded on attempt %d)", attempt)
 	}
@@ -130,18 +130,21 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 		newStr := matchLineEndings(edit.NewStr, content)
 
 		count := strings.Count(content, oldStr)
-		switch count {
-		case 0:
+		if count == 0 {
 			return writeResult{}, "", "", &editLogicErr{
 				t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime),
 			}
-		case 1:
-			content = strings.Replace(content, oldStr, newStr, 1)
-		default:
+		}
+		if edit.ReplaceAll {
+			content = strings.ReplaceAll(content, oldStr, newStr)
+			continue
+		}
+		if count > 1 {
 			return writeResult{}, "", "", &editLogicErr{
 				ambiguousError(i, count, path, edit.OldStr, oldStr),
 			}
 		}
+		content = strings.Replace(content, oldStr, newStr, 1)
 	}
 
 	// Pre-rename mtime check: did anything change between our read and now?

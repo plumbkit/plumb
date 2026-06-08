@@ -169,7 +169,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 	ctx, cancel := applySearchDeadline(ctx)
 	defer cancel()
 
-	root, pathNote, err := resolveSearchRoot(a, t.ws, t.guard)
+	root, onlyFile, pathNote, err := resolveSearchRoot(a, t.ws, t.guard)
 	if err != nil {
 		return "", err
 	}
@@ -178,7 +178,13 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		return "", err
 	}
 
-	paths, walkErr := t.collectSearchPaths(ctx, a, root)
+	var paths []searchPathPair
+	var walkErr error
+	if onlyFile != "" {
+		paths = []searchPathPair{{abs: onlyFile, rel: filepath.Base(onlyFile)}}
+	} else {
+		paths, walkErr = t.collectSearchPaths(ctx, a, root)
+	}
 	results, totalLines, totalSkipped, truncated := t.runParallelScan(ctx, paths, a, re)
 
 	sort.Slice(results, func(i, j int) bool { return results[i].relPath < results[j].relPath })
@@ -192,7 +198,7 @@ func (t *SearchInFiles) Execute(ctx context.Context, raw json.RawMessage) (strin
 		if cancelled {
 			return "", walkErr
 		}
-		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern), nil
+		return pathNote + fmt.Sprintf("No matches for %q.", a.Pattern) + literalMetacharHint(a), nil
 	}
 
 	ann := t.annotateWithSymbols(ctx, a, results)
@@ -236,24 +242,41 @@ func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFu
 	return ctx, func() {}
 }
 
-// resolveSearchRoot resolves the search root directory. When a is a path to a
-// file rather than a directory, it falls back to the file's parent directory
-// and returns a non-empty note explaining the redirect.
-func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, note string, err error) {
+// resolveSearchRoot resolves the search root directory. When a names a single
+// file rather than a directory, the search is scoped to THAT file (onlyFile is
+// the absolute path; root is its parent so relative paths still resolve) — a
+// file path is more specific than its directory, so scoping to it is what the
+// caller almost always meant (internal/feedbacks.md 2026-06-04 / HTML #6).
+func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, onlyFile, note string, err error) {
 	root = resolvePath(a.Path, ws)
 	if checkErr := guard.check(root); checkErr != nil {
-		return "", "", fmt.Errorf("search_in_files: %w", checkErr)
+		return "", "", "", fmt.Errorf("search_in_files: %w", checkErr)
 	}
 	info, statErr := os.Stat(root)
 	if statErr != nil {
-		return "", "", fmt.Errorf("search_in_files: path %q: %w", root, statErr)
+		return "", "", "", fmt.Errorf("search_in_files: path %q: %w", root, statErr)
 	}
 	if !info.IsDir() {
-		dir := filepath.Dir(root)
-		note = fmt.Sprintf("Note: path was a file — searching its containing directory (%s) instead.\n\n", dir)
-		root = dir
+		note = fmt.Sprintf("Note: path was a file — searching only %s.\n\n", filepath.Base(root))
+		return filepath.Dir(root), root, note, nil
 	}
-	return root, note, nil
+	return root, "", "", nil
+}
+
+// literalMetacharHint returns a one-line nudge when a literal-mode (use_regex
+// false) search used a pattern containing unambiguous regex syntax — `|`
+// alternation or `.*`/`.+` — which was therefore matched literally. It only
+// fires on a zero-match result, the false-negative the feedback log flagged
+// (e.g. searching "A|B|C" literally and reading the clean "No matches" as
+// "these don't exist"). Conservative on purpose: a bare `.` does not trigger it.
+func literalMetacharHint(a searchInFilesArgs) string {
+	if a.UseRegex {
+		return ""
+	}
+	if !strings.Contains(a.Pattern, "|") && !strings.Contains(a.Pattern, ".*") && !strings.Contains(a.Pattern, ".+") {
+		return ""
+	}
+	return "\nNote: the pattern contains regex syntax (| alternation or .*) but use_regex is false, so it was matched literally. Pass use_regex: true to treat it as a pattern."
 }
 
 func compileSearchRegex(a searchInFilesArgs) (*regexp.Regexp, error) {
