@@ -265,39 +265,39 @@ section.block{padding:104px 0}
 
 /* observability — TUI mock */
 .tuiwrap{margin-top:48px;max-width:920px;margin-left:auto;margin-right:auto}
-.tui{background:#14120e;border:1px solid #2c281f;border-radius:14px;overflow:hidden;font-family:var(--mono);box-shadow:0 30px 70px rgba(0,0,0,.28)}
-.tui .bar{display:flex;align-items:center;gap:8px;padding:11px 16px;background:#1b1813;border-bottom:1px solid #2c281f}
-.tui .bar .d{width:11px;height:11px;border-radius:50%}
-.tui .bar .d.r{background:#ff5f57}.tui .bar .d.y{background:#febc2e}.tui .bar .d.g{background:#28c840}
-.tui .bar .t{margin-left:8px;font-size:12px;color:#6f6857;letter-spacing:.06em}
-.tui .body{display:grid;grid-template-columns:1.15fr 1fr;gap:0;color:#cdbfa6;font-size:12.5px}
+/* wireframe terminal — outlined on the cream canvas, no fill */
+.tui{background:transparent;border:1px solid var(--rule);border-radius:14px;overflow:hidden;font-family:var(--mono)}
+.tui .bar{display:flex;align-items:center;gap:9px;padding:11px 16px;border-bottom:1px solid var(--rule)}
+.tui .bar .d{width:10px;height:10px;border-radius:50%;background:transparent;border:1.3px solid var(--ink-faint)}
+.tui .bar .t{margin-left:8px;font-size:12px;color:var(--ink-faint);letter-spacing:.06em}
+.tui .body{display:grid;grid-template-columns:1.15fr 1fr;gap:0;color:var(--ink-soft);font-size:12.5px}
 @media(max-width:680px){.tui .body{grid-template-columns:1fr}}
 .tui .pane{padding:18px 20px}
-.tui .pane.l{border-right:1px solid #2c281f}
-@media(max-width:680px){.tui .pane.l{border-right:none;border-bottom:1px solid #2c281f}}
-.tui .ph{font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:#6f6857;margin-bottom:14px}
+.tui .pane.l{border-right:1px solid var(--rule)}
+@media(max-width:680px){.tui .pane.l{border-right:none;border-bottom:1px solid var(--rule)}}
+.tui .ph{font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px}
 .tui .row{display:flex;align-items:center;gap:9px;padding:6px 0;line-height:1.5}
 .tui .row .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
-.tui .row .dot.on{background:#7ee787;box-shadow:0 0 8px #7ee78799}
-.tui .row .dot.idle{background:#6f6857}
-.tui .nm{color:#f0e9d8}
-.tui .meta{color:#6f6857;margin-left:auto;white-space:nowrap}
-.tui .ed .op{color:#8fcfa8}
-.tui .ed .pathx{color:#cdbfa6}
-.tui .ed .delta{color:#6f6857;margin-left:auto}
-.tui .ed .plus{color:#7ee787}.tui .ed .minus{color:#e0856b}
-.tui .foot{padding:11px 20px;border-top:1px solid #2c281f;background:#1b1813;color:#6f6857;font-size:11.5px;letter-spacing:.04em;display:flex;flex-wrap:wrap;gap:6px 18px}
+.tui .row .dot.on{background:var(--green)}
+.tui .row .dot.idle{background:transparent;border:1px solid var(--ink-faint)}
+.tui .nm{color:var(--ink)}
+.tui .meta{color:var(--ink-faint);margin-left:auto;white-space:nowrap}
+.tui .ed .op{color:var(--green)}
+.tui .ed .pathx{color:var(--ink-soft)}
+.tui .ed .delta{color:var(--ink-faint);margin-left:auto}
+.tui .ed .plus{color:var(--green)}.tui .ed .minus{color:var(--rust)}
+.tui .foot{padding:11px 20px;border-top:1px solid var(--rule);color:var(--ink-faint);font-size:11.5px;letter-spacing:.04em;display:flex;flex-wrap:wrap;gap:6px 18px}
 .tui{max-width:100%}
 .tui .pane,.tui .row{min-width:0}
 .tui .nm,.tui .op,.tui .pathx{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tui .meta,.tui .delta{flex:0 0 auto}
-.tui .foot b{color:#cdbfa6;font-weight:400}
-.tui .cursor{display:inline-block;width:.55ch;height:1.05em;background:#7ee787;vertical-align:-2px;margin-left:2px;animation:blink 1.1s steps(1) infinite}
+.tui .foot b{color:var(--ink);font-weight:500}
+.tui .cursor{display:inline-block;width:.55ch;height:1.05em;background:var(--rust);vertical-align:-2px;margin-left:2px;animation:blink 1.1s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
 
 /* clients band */
-.clientrow{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:30px}
-.client{font-family:var(--mono);font-size:13px;letter-spacing:.02em;color:var(--ink);border:1px solid var(--rule);background:var(--cream-2);border-radius:999px;padding:10px 20px;display:flex;align-items:center;gap:9px}
+.clientrow{display:flex;flex-wrap:wrap;justify-content:center;gap:14px 36px;margin-top:30px}
+.client{font-family:var(--mono);font-size:13px;letter-spacing:.02em;color:var(--ink);display:flex;align-items:center;gap:9px}
 .client .pip{width:7px;height:7px;border-radius:50%;background:var(--green)}
 .clientnote{text-align:center;font-family:var(--mono);font-size:12.5px;color:var(--ink-faint);margin-top:22px}
 .clientnote code{color:var(--rust)}
@@ -330,12 +330,16 @@ main,header .nav{overflow-x:clip}
 }
 
 /* quickstart */
-.qcard{max-width:720px;margin:0 auto;background:var(--ink);color:var(--cream);border-radius:14px;overflow:hidden}
-.qcard .top{padding:14px 22px;border-bottom:1px solid rgba(255,255,255,.12);font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:rgba(255,255,255,.5);display:flex;justify-content:space-between}
-.qcard .body{padding:28px 26px;font-family:var(--mono);font-size:14px;line-height:2.1}
-.qcard .cm{color:#9b948a}.qcard .pr{color:#8fcfa8}.qcard .ok{color:#d9c2a6}
-.copy-btn{background:transparent;border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.7);border-radius:6px;padding:3px 11px;font-family:var(--mono);font-size:11px;cursor:pointer}
-.copy-btn:hover{color:#fff;border-color:#fff}
+/* wireframe quick-start card — outlined on the cream canvas */
+.qcard{max-width:720px;margin:0 auto;background:transparent;color:var(--ink);border:1px solid var(--rule);border-radius:14px;overflow:hidden}
+.qcard .top{padding:14px 22px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:var(--ink-faint);display:flex;align-items:center;justify-content:space-between}
+.qcard .top .winl{display:inline-flex;align-items:center;gap:9px}
+.qcard .top .wd{width:10px;height:10px;border-radius:50%;border:1.3px solid var(--ink-faint)}
+.qcard .top .winl .lbl{margin-left:5px}
+.qcard .body{padding:28px 26px;font-family:var(--mono);font-size:14px;line-height:2.1;color:var(--ink)}
+.qcard .cm{color:var(--ink-faint)}.qcard .pr{color:var(--green)}.qcard .ok{color:var(--rust)}
+.copy-btn{background:transparent;border:1px solid var(--rule);color:var(--ink-faint);border-radius:6px;padding:3px 11px;font-family:var(--mono);font-size:11px;cursor:pointer}
+.copy-btn:hover{color:var(--ink);border-color:var(--ink)}
 
 /* closing */
 .closing{text-align:center;padding:120px 0}
@@ -607,7 +611,7 @@ footer{border-top:1px solid var(--rule);padding:36px 0;font-size:13.5px;color:va
       <h2 class="reveal" style="text-align:center;max-width:none;margin-bottom:48px">Three commands.</h2>
     </div>
     <div class="qcard reveal">
-      <div class="top"><span>bash · install</span><button class="copy-btn" data-copy="go install github.com/golimpio/plumb/cmd/plumb@latest
+      <div class="top"><span class="winl"><span class="wd"></span><span class="wd"></span><span class="wd"></span><span class="lbl">bash · install</span></span><button class="copy-btn" data-copy="go install github.com/golimpio/plumb/cmd/plumb@latest
 plumb setup claude-code
 cd my-project && plumb init">copy all</button></div>
       <div class="body">
@@ -615,8 +619,8 @@ cd my-project && plumb init">copy all</button></div>
         <div><span class="pr">$</span> go install github.com/golimpio/plumb/cmd/plumb@latest</div>
         <div class="cm"># 2 · connect your assistant</div>
         <div><span class="pr">$</span> plumb setup claude-code</div>
-        <div class="cm"># 3 · mark your project root</div>
-        <div><span class="pr">$</span> cd my-project &amp;&amp; plumb init</div>
+        <div class="cm"># 3 · optional — pin the root &amp; enable project config</div>
+        <div><span class="pr">$</span> cd my-project &amp;&amp; plumb init <span class="cm"># auto-detected otherwise</span></div>
         <div class="ok">✓ ready — your agent now has an IDE</div>
       </div>
     </div>
