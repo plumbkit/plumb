@@ -13,7 +13,7 @@ var gitSchema = json.RawMessage(`{
   "properties": {
     "subcommand": {
       "type": "string",
-      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
+      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, check-ignore, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
     },
     "args": {
       "type": "array",
@@ -23,11 +23,11 @@ var gitSchema = json.RawMessage(`{
     "files": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Paths to stage — only used for subcommand \"add\". Uses -A semantics: new, modified, and deleted entries are all staged for each path. No glob expansion. Not used by any other subcommand."
+      "description": "Paths to act on. For subcommand \"add\": paths to stage (-A semantics — new, modified, and deleted entries all staged). For subcommand \"commit\": optional path-limited commit — commits ONLY these tracked paths (git commit -m <message> -- <files>), ignoring any unrelated staged changes already in the index; omit to commit the whole index. No glob expansion. Ignored by other subcommands."
     },
     "message": {
       "type": "string",
-      "description": "Commit message — only used for subcommand \"commit\". Maps to -m; pre-commit hooks always run. Not used by any other subcommand."
+      "description": "Commit message — only used for subcommand \"commit\". Maps to -m; pre-commit hooks always run. Combine with files to commit only specific paths. Not used by any other subcommand."
     },
     "repo": {
       "type": "string",
@@ -67,7 +67,9 @@ func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
 	return "Run git through one tiered tool. Read subcommands (status, log, diff, show, blame, shortlog, branch/tag/stash listing) always run. " +
 		"diff --cached (equivalently diff --staged) shows staged changes ready to be committed — use args: [\"--cached\"] or args: [\"--staged\"] to verify staged content after a selective git add. " +
+		"check-ignore (paths in args) reports which of the listed paths are git-ignored. " +
 		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) run when [git] allow_writes is enabled (default on). " +
+		"commit accepts an optional files list for a path-limited commit (commits only those tracked paths, leaving unrelated staged changes in the index) — the safe way to commit just your change in a shared worktree. " +
 		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) require [git] allow_destructive AND confirm:true. " +
 		"Network subcommands (push, fetch, pull) require [git] allow_push AND confirm:true; force-pushing a protected branch is always refused, as is pushing to an ad-hoc URL. " +
 		"Typed-parameter contract: add uses files (staged with -A semantics — new, modified, and deleted entries all staged); commit uses message; all other subcommands use args. " +

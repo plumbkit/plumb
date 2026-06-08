@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,7 +22,15 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 		if strings.TrimSpace(a.Message) == "" {
 			return nil, fmt.Errorf("git commit: message is required")
 		}
-		return []string{"commit", "-m", a.Message}, nil
+		argv := []string{"commit", "-m", a.Message}
+		// Path-limited commit: `git commit -m <msg> -- <files>` commits ONLY the
+		// named paths, ignoring unrelated staged changes in the index — the
+		// multi-agent / shared-worktree workflow agents asked for repeatedly.
+		if len(a.Files) > 0 {
+			argv = append(argv, "--")
+			argv = append(argv, a.Files...)
+		}
+		return argv, nil
 	case "add":
 		if len(a.Files) == 0 {
 			return nil, fmt.Errorf("git add: at least one path is required (use the files parameter)")
@@ -43,6 +52,11 @@ func runGit(ctx context.Context, repo, sub string, argv []string) (string, error
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// git check-ignore exits 1 when NONE of the listed paths are ignored —
+		// a normal "no match" result, not a failure.
+		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
+			return postProcessGit(ctx, repoRoot, sub, stdout.String())
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
@@ -50,7 +64,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string) (string, error
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("git %s: %s", sub, msg)
+		return "", fmt.Errorf("git %s: %s", sub, enhanceGitError(repoRoot, msg))
 	}
 	out := stdout.String()
 	if strings.TrimSpace(out) == "" {
@@ -69,8 +83,41 @@ func postProcessGit(ctx context.Context, repoRoot, sub, out string) (string, err
 		if res, err := resolveCommitInfo(ctx, repoRoot); err == nil {
 			return formatGitCommitResult(res), nil
 		}
+	case "check-ignore":
+		if strings.TrimSpace(out) == "" {
+			return "none of the listed paths are git-ignored", nil
+		}
 	}
 	return formatGitOutput(sub, out), nil
+}
+
+// isExitCode reports whether err is an *exec.ExitError with the given exit code.
+func isExitCode(err error, code int) bool {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode() == code
+	}
+	return false
+}
+
+// enhanceGitError rewrites a few cryptic git failures into actionable guidance.
+// Currently: a stale `.git/index.lock` (left by a crashed git process) blocks
+// add/commit with "Unable to create '.../index.lock': File exists" and no
+// in-plumb remedy. We surface the exact remedy rather than auto-removing the
+// lock — in a shared worktree another live git/plumb process may legitimately
+// hold it, so silent removal is unsafe.
+func enhanceGitError(repoRoot, msg string) string {
+	if !strings.Contains(msg, "index.lock") || !strings.Contains(msg, "File exists") {
+		return msg
+	}
+	lock := filepath.Join(repoRoot, ".git", "index.lock")
+	hint := fmt.Sprintf(
+		"\n  This is a leftover lock from a git process that did not exit cleanly. "+
+			"First confirm no git is running (e.g. `pgrep -fl git`); if none is, remove the stale lock with `rm -f %s`, then retry. "+
+			"plumb does not remove it automatically because another session may hold it in a shared worktree.",
+		lock,
+	)
+	return msg + hint
 }
 
 func formatGitOutput(sub, result string) string {

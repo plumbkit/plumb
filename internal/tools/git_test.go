@@ -57,6 +57,7 @@ func TestClassifyGit(t *testing.T) {
 		{"log", []string{"--oneline"}, tierRead},
 		{"diff", []string{"HEAD"}, tierRead},
 		{"shortlog", nil, tierRead},
+		{"check-ignore", []string{"node_modules"}, tierRead},
 		{"add", []string{}, tierWrite},
 		{"commit", nil, tierWrite},
 		{"mv", []string{"a", "b"}, tierWrite},
@@ -295,6 +296,99 @@ func TestGit_AddAndCommit(t *testing.T) {
 	hash := strings.SplitN(out, " ", 2)[0]
 	if len(hash) != 7 {
 		t.Errorf("expected 7-char short hash, got %q in %q", hash, out)
+	}
+}
+
+// --- path-limited commit: commit only named paths, leaving unrelated staged work ---
+
+func TestGit_PathLimitedCommit(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	mine := filepath.Join(dir, "mine.txt")
+	peer := filepath.Join(dir, "peer.txt")
+	_ = os.WriteFile(mine, []byte("mine\n"), 0o644)
+	_ = os.WriteFile(peer, []byte("peer\n"), 0o644)
+
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+
+	// Stage BOTH files (as a broad `git add` or a peer's staging would).
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{mine, peer}, "repo": dir}); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+
+	// Commit ONLY mine.txt via the path-limited form.
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "commit", "message": "add only mine", "files": []string{mine}, "repo": dir}); err != nil {
+		t.Fatalf("path-limited commit: %v", err)
+	}
+
+	// The commit must contain mine.txt and NOT peer.txt.
+	show, err := callGit(t, tool, map[string]any{"subcommand": "show", "args": []string{"--stat", "--name-only", "HEAD"}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git show: %v", err)
+	}
+	if !strings.Contains(show, "mine.txt") {
+		t.Errorf("commit should contain mine.txt:\n%s", show)
+	}
+	if strings.Contains(show, "peer.txt") {
+		t.Errorf("path-limited commit must NOT contain peer.txt:\n%s", show)
+	}
+
+	// peer.txt must remain staged in the index, untouched.
+	staged, err := callGit(t, tool, map[string]any{"subcommand": "diff", "args": []string{"--cached", "--name-only"}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git diff --cached: %v", err)
+	}
+	if !strings.Contains(staged, "peer.txt") {
+		t.Errorf("peer.txt should still be staged after a path-limited commit:\n%s", staged)
+	}
+}
+
+// --- check-ignore: a read-tier query of gitignore status ---
+
+func TestGit_CheckIgnore(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	_ = os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.log\n"), 0o644)
+
+	tool := NewGit(WriteDeps{}, nil)
+
+	// An ignored path is echoed back.
+	out, err := callGit(t, tool, map[string]any{"subcommand": "check-ignore", "args": []string{"ignored.log"}, "repo": dir})
+	if err != nil {
+		t.Fatalf("check-ignore (ignored path): %v", err)
+	}
+	if !strings.Contains(out, "ignored.log") {
+		t.Errorf("expected ignored.log in output, got %q", out)
+	}
+
+	// A non-ignored path yields the friendly empty result (git exits 1 here).
+	out, err = callGit(t, tool, map[string]any{"subcommand": "check-ignore", "args": []string{"kept.txt"}, "repo": dir})
+	if err != nil {
+		t.Fatalf("check-ignore (non-ignored path) must not be an error: %v", err)
+	}
+	if !strings.Contains(out, "none of the listed paths") {
+		t.Errorf("expected friendly no-match result, got %q", out)
+	}
+}
+
+// --- gitWorkingTreeSummary: session_start diffstat of uncommitted tracked changes ---
+
+func TestGitWorkingTreeSummary(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+
+	// Clean tree → empty summary.
+	if s := gitWorkingTreeSummary(dir, 12); s != "" {
+		t.Errorf("clean tree should yield empty summary, got %q", s)
+	}
+
+	// Modify a tracked file → it appears in the diffstat.
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("init\nmore\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := gitWorkingTreeSummary(dir, 12)
+	if !strings.Contains(s, "init.txt") {
+		t.Errorf("expected init.txt in working-tree summary, got %q", s)
 	}
 }
 

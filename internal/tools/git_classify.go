@@ -54,7 +54,7 @@ func checkGitGlobalFlags(args []string) error {
 // classification is safe-biased — when in doubt it returns the higher tier.
 func classifyGit(sub string, args []string) gitTier {
 	switch sub {
-	case "diff", "log", "show", "blame", "status", "shortlog":
+	case "diff", "log", "show", "blame", "status", "shortlog", "check-ignore":
 		return tierRead
 	case "add", "commit", "mv":
 		return tierWrite

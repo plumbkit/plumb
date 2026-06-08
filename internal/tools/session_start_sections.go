@@ -118,6 +118,21 @@ func writeSessionCommits(sb *strings.Builder, ws string) {
 	sb.WriteString("\n")
 }
 
+// writeSessionWorkingTree shows a compact diffstat of uncommitted changes to
+// tracked files, so an agent sees what was already modified in the worktree
+// (often a peer agent's in-flight work) before it starts editing.
+func writeSessionWorkingTree(sb *strings.Builder, ws string) {
+	const maxStatLines = 12
+	stat := gitWorkingTreeSummary(ws, maxStatLines)
+	if stat == "" {
+		return
+	}
+	sb.WriteString("## Uncommitted changes (git diff --stat HEAD)\n\n")
+	sb.WriteString("```\n")
+	sb.WriteString(stat)
+	sb.WriteString("\n```\n\n")
+}
+
 // writeSessionGitPolicy reports the connection's live, resolved git tool policy
 // so an agent learns up front whether it can commit through the git tool —
 // rather than discovering it via a rejected call or, worse, trusting a stale

@@ -153,6 +153,31 @@ func gitRecentCommits(ws string, n int) []string {
 	return lines
 }
 
+// gitWorkingTreeSummary returns a compact `git diff --stat HEAD` of the
+// uncommitted changes to tracked files (staged + unstaged vs HEAD), capped to
+// maxLines lines. Empty when the tree is clean or not a git repo. Lets an agent
+// see *what* was already changed at orientation instead of guessing from a bare
+// file list (internal/feedbacks.md 2026-06-04).
+func gitWorkingTreeSummary(ws string, maxLines int) string {
+	cmd := exec.Command("git", "-C", ws, "diff", "--stat", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) > maxLines {
+		// Keep the last line (the "N files changed" summary) and the first
+		// maxLines-1 file rows.
+		summary := lines[len(lines)-1]
+		lines = append(lines[:maxLines-1], "… "+summary)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // recentlyModifiedFiles returns up to n workspace-relative file paths sorted
 // by mtime (newest first). Skips hidden directories, .git, node_modules,
 // vendor — the usual noise.

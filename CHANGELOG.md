@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.2 (unreleased)
+
+Git-tool improvements for multi-agent / shared-worktree work — the recurring git asks in the agent feedback log.
+
+### Added
+
+- **Path-limited commit.** `git` `commit` now accepts an optional `files` list, mapping to `git commit -m <message> -- <files>`: it commits ONLY those tracked paths and leaves any unrelated staged changes in the index untouched. This is the safe way to commit just your own change when peers (or earlier tasks) have already staged other work — previously the typed `commit` committed the whole index, forcing a shell fallback. (feedbacks: Codex 2026-06-08, AGENTS-trim wishlist)
+- **`git check-ignore`.** Added to the read tier, so agents can verify `.gitignore` patterns in-plumb (`subcommand:"check-ignore", args:[paths]`). git's exit-1 "no path ignored" result is reported as a friendly "none of the listed paths are git-ignored" rather than surfacing as an error. (0.8.48 wishlist #2)
+- **`session_start` shows uncommitted changes.** The orientation packet now includes a compact `git diff --stat HEAD` of uncommitted changes to tracked files (capped to 12 lines), so an agent sees *what* was already modified in the worktree — often a peer's in-flight work — instead of guessing from a bare file list. (feedbacks 2026-06-04)
+
+### Changed
+
+- **Stale `.git/index.lock` now has an actionable error.** When `add`/`commit` fail with "Unable to create '.git/index.lock': File exists", the `git` tool appends the exact remedy (confirm no git is running, then `rm -f <lock>`) instead of surfacing only git's cryptic message. plumb does not remove the lock automatically — in a shared worktree another session may legitimately hold it.
+
 ## 0.9.1 (unreleased)
 
 Makes plumb's post-write diagnostics trustworthy — the single most-reported friction in the agent feedback log. Stale, post-EOF diagnostics no longer masquerade as hard errors, and a write can now request an authoritative "did my change compile?" answer.
