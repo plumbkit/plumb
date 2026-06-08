@@ -54,7 +54,7 @@ func TestRoutingProxy_DidChangeWatchedFiles_SkipsLanguageNone(t *testing.T) {
 	installEntry(pool, rootA, clientA)
 
 	rp := newRoutingProxy(pool)
-	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	rp.setPrimary(rootA, "go", pool.entries[poolKey{rootA, "go"}].proxy)
 
 	err := rp.DidChangeWatchedFiles(context.Background(), protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{
@@ -92,7 +92,7 @@ func TestRoutingProxy_DidChangeWatchedFiles_GroupsByWorkspace(t *testing.T) {
 	installEntry(pool, rootB, clientB)
 
 	rp := newRoutingProxy(pool)
-	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	rp.setPrimary(rootA, "go", pool.entries[poolKey{rootA, "go"}].proxy)
 
 	err := rp.DidChangeWatchedFiles(context.Background(), protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{
@@ -122,7 +122,7 @@ func TestRoutingProxy_DidChangeWatchedFiles_EmptyBatchIsNoOp(t *testing.T) {
 	installEntry(pool, rootA, clientA)
 
 	rp := newRoutingProxy(pool)
-	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	rp.setPrimary(rootA, "go", pool.entries[poolKey{rootA, "go"}].proxy)
 
 	if err := rp.DidChangeWatchedFiles(context.Background(), protocol.DidChangeWatchedFilesParams{}); err != nil {
 		t.Fatalf("DidChangeWatchedFiles: %v", err)

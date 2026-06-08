@@ -61,7 +61,7 @@ func TestCloseEntry_BoundsHungShutdown(t *testing.T) {
 // the default plumb configuration. Used by all Detect tests below.
 func detectTestPool() *workspacePool {
 	return &workspacePool{
-		entries:  make(map[string]*poolEntry),
+		entries:  make(map[poolKey]*poolEntry),
 		baseCtx:  context.Background(),
 		cacheTTL: time.Minute, // mirror production: a zero TTL would panic cache.New's ticker
 		langs: []langConfig{
@@ -518,7 +518,7 @@ func sleepCommand(t *testing.T) (string, []string) {
 // warmingPool builds a pool whose "go" language server is the given command.
 func warmingPool(baseCtx context.Context, command string, args []string) *workspacePool {
 	return &workspacePool{
-		entries:  make(map[string]*poolEntry),
+		entries:  make(map[poolKey]*poolEntry),
 		baseCtx:  baseCtx,
 		cacheTTL: 5 * time.Minute,
 		langs: []langConfig{
@@ -592,7 +592,7 @@ func TestAcquireLang_FirstStartFailureRemovesEntry(t *testing.T) {
 	if elapsed := time.Since(start); elapsed >= firstStartGrace {
 		t.Fatalf("acquireLang blocked %s on a fast spawn failure; want well under the %s grace", elapsed, firstStartGrace)
 	}
-	if e := pool.lookup(root); e != nil {
+	if e := pool.lookup(root, "go"); e != nil {
 		t.Fatal("failed entry was not removed; a later acquire cannot retry")
 	}
 }
@@ -621,7 +621,7 @@ func TestAcquireLang_CancelledCtxKeepsWarming(t *testing.T) {
 	if elapsed := time.Since(start); elapsed >= firstStartGrace {
 		t.Fatalf("acquireLang waited %s despite a cancelled request ctx", elapsed)
 	}
-	if got := pool.lookup(root); got != e {
+	if got := pool.lookup(root, "go"); got != e {
 		t.Fatal("entry missing after cancelled-ctx acquire; supervisor lifetime leaked to the request ctx")
 	}
 	if e.sup == nil {
@@ -634,7 +634,7 @@ func TestAcquireLang_CancelledCtxKeepsWarming(t *testing.T) {
 func poolRefs(p *workspacePool, root string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if e, ok := p.entries[root]; ok {
+	if e, ok := p.entries[poolKey{root, "go"}]; ok {
 		return e.refs
 	}
 	return -1
@@ -647,7 +647,7 @@ func waitEntryGone(t *testing.T, p *workspacePool, root string, within time.Dura
 	t.Helper()
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
-		if p.lookup(root) == nil {
+		if p.lookup(root, "go") == nil {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -686,12 +686,12 @@ func TestPool_RefcountKeepsSharedEntryAlive(t *testing.T) {
 		t.Fatalf("refs = %d, want 2 after two pinned acquires", got)
 	}
 
-	pool.release(root) // one session leaves; the other still holds the entry
+	pool.release(root, "go") // one session leaves; the other still holds the entry
 	if got := poolRefs(pool, root); got != 1 {
 		t.Fatalf("refs = %d, want 1 after one release", got)
 	}
 	time.Sleep(3 * pool.idleGrace)
-	if pool.lookup(root) == nil {
+	if pool.lookup(root, "go") == nil {
 		t.Fatal("entry torn down while a session still holds it (refs > 0)")
 	}
 }
@@ -707,7 +707,7 @@ func TestPool_GraceTeardownAfterLastSession(t *testing.T) {
 	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
 		t.Fatalf("pinned acquire: %v", err)
 	}
-	pool.release(root) // last (only) session leaves -> schedule idle teardown
+	pool.release(root, "go") // last (only) session leaves -> schedule idle teardown
 	waitEntryGone(t, pool, root, 2*time.Second)
 }
 
@@ -722,13 +722,13 @@ func TestPool_PinDuringGraceCancelsTeardown(t *testing.T) {
 	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
 		t.Fatalf("pinned acquire: %v", err)
 	}
-	pool.release(root) // schedule teardown after the grace window
+	pool.release(root, "go") // schedule teardown after the grace window
 	time.Sleep(30 * time.Millisecond)
 	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil { // re-pin before grace fires
 		t.Fatalf("re-pin acquire: %v", err)
 	}
 	time.Sleep(3 * pool.idleGrace)
-	if pool.lookup(root) == nil {
+	if pool.lookup(root, "go") == nil {
 		t.Fatal("entry torn down despite a re-pin during the grace window")
 	}
 	if got := poolRefs(pool, root); got != 1 {
@@ -751,9 +751,9 @@ func TestPool_UnpinnedAcquireNeverScheduledForTeardown(t *testing.T) {
 	if got := poolRefs(pool, root); got != 0 {
 		t.Fatalf("refs = %d, want 0 for an unpinned acquire", got)
 	}
-	pool.release(root) // defensive no-op: refs already 0, must not schedule teardown
+	pool.release(root, "go") // defensive no-op: refs already 0, must not schedule teardown
 	time.Sleep(3 * pool.idleGrace)
-	if pool.lookup(root) == nil {
+	if pool.lookup(root, "go") == nil {
 		t.Fatal("unpinned entry was reclaimed; release must be a no-op when refs == 0")
 	}
 }

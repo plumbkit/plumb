@@ -33,6 +33,7 @@ type routingProxy struct {
 
 	mu          sync.RWMutex
 	primaryRoot string
+	primaryLang string
 	primary     *clientProxy
 	guard       func(string) error
 }
@@ -53,11 +54,12 @@ func (r *routingProxy) setBoundaryGuard(guard func(string) error) {
 // setPrimary records the connection's primary workspace. Idempotent — only
 // the first call wins so the fallback target stays stable across the
 // connection's lifetime.
-func (r *routingProxy) setPrimary(root string, p *clientProxy) {
+func (r *routingProxy) setPrimary(root, language string, p *clientProxy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.primaryRoot == "" {
 		r.primaryRoot = root
+		r.primaryLang = language
 		r.primary = p
 	}
 }
@@ -67,10 +69,11 @@ func (r *routingProxy) setPrimary(root string, p *clientProxy) {
 // used by a deliberate workspace re-pin — session_start called with an explicit
 // workspace that differs from the current one — to switch the connection's LSP
 // routing to a different project.
-func (r *routingProxy) resetPrimary(root string, p *clientProxy) {
+func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.primaryRoot = root
+	r.primaryLang = language
 	r.primary = p
 }
 
@@ -354,6 +357,7 @@ type routingInvProxy struct {
 
 	mu          sync.RWMutex
 	primaryRoot string
+	primaryLang string
 	primary     *cache.Invalidator
 	guard       func(string) error
 }
@@ -404,21 +408,23 @@ type timedDiagnosticsContract interface {
 
 var _ timedDiagnosticsContract = (*routingInvProxy)(nil)
 
-func (r *routingInvProxy) setPrimary(root string, inv *cache.Invalidator) {
+func (r *routingInvProxy) setPrimary(root, language string, inv *cache.Invalidator) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.primaryRoot == "" {
 		r.primaryRoot = root
+		r.primaryLang = language
 		r.primary = inv
 	}
 }
 
 // resetPrimary unconditionally repoints the primary diagnostic invalidator,
 // mirroring routingProxy.resetPrimary for a deliberate workspace re-pin.
-func (r *routingInvProxy) resetPrimary(root string, inv *cache.Invalidator) {
+func (r *routingInvProxy) resetPrimary(root, language string, inv *cache.Invalidator) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.primaryRoot = root
+	r.primaryLang = language
 	r.primary = inv
 }
 
@@ -441,11 +447,11 @@ func (r *routingInvProxy) Tracked(uri string) bool {
 		return false
 	}
 	path := strings.TrimPrefix(uri, "file://")
-	root, _, err := r.pool.Detect(filepath.Dir(path))
+	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil || root == primaryRoot {
 		return primary.Tracked(uri)
 	}
-	if e := r.pool.lookup(root); e != nil {
+	if e := r.pool.lookup(root, language); e != nil {
 		return e.inv.Tracked(uri)
 	}
 	return false
@@ -467,14 +473,14 @@ func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 		return primary.Diagnostics(uri)
 	}
 	path := strings.TrimPrefix(uri, "file://")
-	root, _, err := r.pool.Detect(filepath.Dir(path))
+	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil || root == primaryRoot {
 		if primary == nil {
 			return nil
 		}
 		return primary.Diagnostics(uri)
 	}
-	if e := r.pool.lookup(root); e != nil {
+	if e := r.pool.lookup(root, language); e != nil {
 		return e.inv.Diagnostics(uri)
 	}
 	return nil
@@ -537,11 +543,11 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 		return nil, nil
 	}
 	path := strings.TrimPrefix(uri, "file://")
-	root, _, err := r.pool.Detect(filepath.Dir(path))
+	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil || root == primaryRoot {
 		return primary.WaitDiagnostics(ctx, uri)
 	}
-	if e := r.pool.lookup(root); e != nil {
+	if e := r.pool.lookup(root, language); e != nil {
 		return e.inv.WaitDiagnostics(ctx, uri)
 	}
 	return nil, nil
@@ -560,11 +566,11 @@ func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) (
 		return nil, nil
 	}
 	path := strings.TrimPrefix(uri, "file://")
-	root, _, err := r.pool.Detect(filepath.Dir(path))
+	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil || root == primaryRoot {
 		return primary.WaitNextDiagnostics(ctx, uri)
 	}
-	if e := r.pool.lookup(root); e != nil {
+	if e := r.pool.lookup(root, language); e != nil {
 		return e.inv.WaitNextDiagnostics(ctx, uri)
 	}
 	return nil, nil

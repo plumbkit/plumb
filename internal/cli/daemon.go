@@ -233,11 +233,19 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			ctrlLn.Close()
 		}()
 		diagsFn := func(workspace string) string {
-			e := pool.lookup(workspace)
-			if e == nil {
+			// A root may host several language servers (e.g. Go + HTML); merge
+			// each one's diagnostics so the control-socket dump is complete.
+			entries := pool.entriesForRoot(workspace)
+			if len(entries) == 0 {
 				return ""
 			}
-			return tools.FormatDiagnostics(e.inv.AllDiagnostics())
+			merged := entries[0].inv.AllDiagnostics()
+			for _, e := range entries[1:] {
+				for uri, diags := range e.inv.AllDiagnostics() {
+					merged[uri] = diags
+				}
+			}
+			return tools.FormatDiagnostics(merged)
 		}
 		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn, store.Reload, registry.reloadProject)
 	}

@@ -126,7 +126,7 @@ func setupTwoProjects(t *testing.T) (string, string) {
 // locate go.mod-rooted projects in tests.
 func newTestPool() *workspacePool {
 	return &workspacePool{
-		entries: make(map[string]*poolEntry),
+		entries: make(map[poolKey]*poolEntry),
 		baseCtx: context.Background(),
 		langs: []langConfig{
 			{name: "go", cfg: config.LSPConfig{
@@ -142,7 +142,7 @@ func newTestPool() *workspacePool {
 func installEntry(pool *workspacePool, root string, client lsp.Client) {
 	cp := &clientProxy{}
 	cp.set(client)
-	pool.entries[root] = &poolEntry{root: root, language: "go", proxy: cp}
+	pool.entries[poolKey{root, "go"}] = &poolEntry{root: root, language: "go", proxy: cp}
 }
 
 func TestRoutingProxy_RoutesByURI(t *testing.T) {
@@ -155,7 +155,7 @@ func TestRoutingProxy_RoutesByURI(t *testing.T) {
 	installEntry(pool, rootB, clientB)
 
 	rp := newRoutingProxy(pool)
-	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	rp.setPrimary(rootA, "go", pool.entries[poolKey{rootA, "go"}].proxy)
 
 	// Call against a file in project A → should land on clientA.
 	_, _ = rp.Definition(context.Background(), protocol.DefinitionParams{
@@ -182,7 +182,7 @@ func TestRoutingProxy_WorkspaceSymbolsUsesPrimary(t *testing.T) {
 	installEntry(pool, rootA, clientA)
 
 	rp := newRoutingProxy(pool)
-	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	rp.setPrimary(rootA, "go", pool.entries[poolKey{rootA, "go"}].proxy)
 
 	_, err := rp.WorkspaceSymbols(context.Background(), protocol.WorkspaceSymbolParams{Query: "Foo"})
 	if err != nil {
@@ -214,14 +214,14 @@ func TestRoutingProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
 	installEntry(pool, rootB, clientB)
 
 	rp := newRoutingProxy(pool)
-	rp.setPrimary(rootA, pool.entries[rootA].proxy)
+	rp.setPrimary(rootA, "go", pool.entries[poolKey{rootA, "go"}].proxy)
 	// setPrimary is first-wins: a second setPrimary must not change the primary.
-	rp.setPrimary(rootB, pool.entries[rootB].proxy)
+	rp.setPrimary(rootB, "go", pool.entries[poolKey{rootB, "go"}].proxy)
 	if rp.primaryRoot != rootA {
 		t.Fatalf("setPrimary should be first-wins: got %s, want %s", rp.primaryRoot, rootA)
 	}
 	// resetPrimary IS allowed to switch (deliberate re-pin).
-	rp.resetPrimary(rootB, pool.entries[rootB].proxy)
+	rp.resetPrimary(rootB, "go", pool.entries[poolKey{rootB, "go"}].proxy)
 	if rp.primaryRoot != rootB {
 		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", rp.primaryRoot, rootB)
 	}
@@ -240,12 +240,12 @@ func TestRoutingInvProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
 	rootA, rootB := setupTwoProjects(t)
 	pool := newTestPool()
 	ri := newRoutingInvProxy(pool)
-	ri.setPrimary(rootA, nil)
-	ri.setPrimary(rootB, nil) // first-wins: ignored
+	ri.setPrimary(rootA, "go", nil)
+	ri.setPrimary(rootB, "go", nil) // first-wins: ignored
 	if ri.primaryRoot != rootA {
 		t.Fatalf("setPrimary should be first-wins: got %s, want %s", ri.primaryRoot, rootA)
 	}
-	ri.resetPrimary(rootB, nil)
+	ri.resetPrimary(rootB, "go", nil)
 	if ri.primaryRoot != rootB {
 		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", ri.primaryRoot, rootB)
 	}

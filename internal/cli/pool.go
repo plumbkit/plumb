@@ -20,19 +20,30 @@ import (
 // params in pool_adapters.go. This file holds the pool state and the
 // acquire/release/teardown lifecycle.
 
-// workspacePool keeps one language-server process alive per workspace root.
-// Multiple MCP sessions targeting the same root share a single LS process,
-// its cache, and its diagnostic stream.
+// poolKey identifies a language-server entry by its workspace root AND the
+// language it serves. Keying by (root, language) — rather than root alone — is
+// what lets a single workspace bind more than one language server (e.g. Go +
+// HTML in one web-app repo): each language gets its own supervisor, cache, and
+// diagnostic stream under the same root.
+type poolKey struct {
+	root     string
+	language string
+}
+
+// workspacePool keeps one language-server process alive per (root, language).
+// Multiple MCP sessions targeting the same root share a single LS process per
+// language, its cache, and its diagnostic stream.
 //
-// The pool supports multiple languages (Go via gopls, Python via pyright).
-// Detect() resolves a path → (root, language) tuple from configured root
-// markers; acquireLang() starts the right adapter for that language.
+// The pool supports multiple languages (Go via gopls, Python via pyright, …)
+// and multiple languages within one root. Detect() resolves a path → (root,
+// primary-language) tuple from configured root markers; acquireLang() starts
+// the named adapter for a (root, language) pair.
 //
 // Concurrency: all methods are safe for concurrent use.
 type workspacePool struct {
 	mu       sync.Mutex
-	entries  map[string]*poolEntry // key: root path; one LS per root
-	langs    []langConfig          // enabled languages, deterministic order
+	entries  map[poolKey]*poolEntry // key: (root, language); one LS per pair
+	langs    []langConfig           // enabled languages, deterministic order
 	cacheTTL time.Duration
 
 	// idleGrace is how long a pinned entry lingers after its last session
@@ -101,7 +112,7 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		return langs[i].name < langs[j].name
 	})
 	return &workspacePool{
-		entries:   make(map[string]*poolEntry),
+		entries:   make(map[poolKey]*poolEntry),
 		langs:     langs,
 		cacheTTL:  cfg.Cache.TTL.Duration,
 		idleGrace: poolIdleGrace,
@@ -150,7 +161,7 @@ func (p *workspacePool) acquireLang(ctx context.Context, root, language string, 
 	if readyCh == nil {
 		return e, nil // reused an existing entry — no warm-up to wait on
 	}
-	return p.awaitReady(ctx, root, e, readyCh)
+	return p.awaitReady(ctx, e, readyCh)
 }
 
 // startOrReuse returns the existing entry for root, or builds a new one and
@@ -164,7 +175,18 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if e, ok := p.entries[root]; ok {
+	// Resolve the language BEFORE building the reuse key: an acquire with an
+	// empty language (detect-from-markers) and one with the explicit primary
+	// language must collapse to the SAME (root, language) entry, never two
+	// servers for one logical workspace language.
+	if language == "" {
+		language = p.detectLanguageAt(root)
+		if language == "" {
+			return nil, nil, fmt.Errorf("no enabled language matches %s", root)
+		}
+	}
+
+	if e, ok := p.entries[poolKey{root, language}]; ok {
 		if pin {
 			p.pinLocked(e)
 		}
@@ -172,12 +194,6 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 		return e, nil, nil
 	}
 
-	if language == "" {
-		language = p.detectLanguageAt(root)
-		if language == "" {
-			return nil, nil, fmt.Errorf("no enabled language matches %s", root)
-		}
-	}
 	lspCfg, ok := p.cfgFor(language)
 	if !ok {
 		return nil, nil, fmt.Errorf("language %q not configured or not enabled", language)
@@ -208,7 +224,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	if pin {
 		p.pinLocked(e)
 	}
-	p.entries[root] = e
+	p.entries[poolKey{root, language}] = e
 	slog.Info("pool: new workspace (warming)", "root", root, "language", language, "refs", e.refs)
 	return e, readyCh, nil
 }
@@ -230,10 +246,10 @@ func (p *workspacePool) pinLocked(e *poolEntry) {
 // reconnect or quick re-attach reuses the warm server. A no-op when root has no
 // entry or no outstanding pins (defensive: a session that attached without LSP,
 // LanguageNone, holds no pin and must not decrement a sibling's count).
-func (p *workspacePool) release(root string) {
+func (p *workspacePool) release(root, language string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e, ok := p.entries[root]
+	e, ok := p.entries[poolKey{root, language}]
 	if !ok || e.refs <= 0 {
 		return
 	}
@@ -244,8 +260,8 @@ func (p *workspacePool) release(root string) {
 	if e.graceTimer != nil {
 		e.graceTimer.Stop()
 	}
-	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(root, e) })
-	slog.Info("pool: last session detached — scheduling idle teardown", "root", root, "grace", p.idleGrace)
+	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(e) })
+	slog.Info("pool: last session detached — scheduling idle teardown", "root", root, "language", language, "grace", p.idleGrace)
 }
 
 // reapEntry tears down an entry whose grace window elapsed, but only if it is
@@ -253,16 +269,17 @@ func (p *workspacePool) release(root string) {
 // window cancels the timer, but the callback may already be running). Teardown
 // happens outside p.mu — closeEntry performs a bounded LSP shutdown handshake we
 // must not hold the pool lock across.
-func (p *workspacePool) reapEntry(root string, e *poolEntry) {
+func (p *workspacePool) reapEntry(e *poolEntry) {
+	key := poolKey{e.root, e.language}
 	p.mu.Lock()
-	cur, ok := p.entries[root]
+	cur, ok := p.entries[key]
 	if !ok || cur != e || e.refs > 0 {
 		p.mu.Unlock()
 		return
 	}
-	delete(p.entries, root)
+	delete(p.entries, key)
 	p.mu.Unlock()
-	slog.Info("pool: tearing down idle LS", "root", root, "language", e.language)
+	slog.Info("pool: tearing down idle LS", "root", e.root, "language", e.language)
 	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
 	defer cancel()
 	e.closeOnce.Do(func() { closeEntry(ctx, e) })
@@ -273,12 +290,12 @@ func (p *workspacePool) reapEntry(root string, e *poolEntry) {
 // will not retry) removes the entry so a later call re-spawns, and surfaces the
 // error so attachWorkspace degrades to LanguageNone. On grace or request-context
 // expiry the not-yet-ready entry is returned and the supervisor keeps warming.
-func (p *workspacePool) awaitReady(ctx context.Context, root string, e *poolEntry, readyCh <-chan error) (*poolEntry, error) {
+func (p *workspacePool) awaitReady(ctx context.Context, e *poolEntry, readyCh <-chan error) (*poolEntry, error) {
 	select {
 	case startErr := <-readyCh:
 		if startErr != nil {
-			p.removeFailed(root, e)
-			return nil, fmt.Errorf("starting %s for %s: %w", e.language, root, startErr)
+			p.removeFailed(e)
+			return nil, fmt.Errorf("starting %s for %s: %w", e.language, e.root, startErr)
 		}
 		return e, nil
 	case <-time.After(firstStartGrace):
@@ -316,10 +333,11 @@ func poolOnStart(language, root, rootURI string, inv *cache.Invalidator, proxy *
 // tears down its supervisor and cache. The identity check guards against
 // deleting a different entry a concurrent caller may have inserted for the same
 // root.
-func (p *workspacePool) removeFailed(root string, e *poolEntry) {
+func (p *workspacePool) removeFailed(e *poolEntry) {
+	key := poolKey{e.root, e.language}
 	p.mu.Lock()
-	if cur, ok := p.entries[root]; ok && cur == e {
-		delete(p.entries, root)
+	if cur, ok := p.entries[key]; ok && cur == e {
+		delete(p.entries, key)
 	}
 	p.mu.Unlock()
 	// closeOnce guards against the rare race where a parallel reapEntry for the
@@ -346,12 +364,29 @@ func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
 	return config.LSPConfig{}, false
 }
 
-// lookup returns the entry for root if it has already been acquired, or nil
-// if no entry exists. Unlike acquire, lookup never starts a new LS.
-func (p *workspacePool) lookup(root string) *poolEntry {
+// lookup returns the entry for (root, language) if it has already been
+// acquired, or nil if no entry exists. Unlike acquire, lookup never starts a
+// new LS.
+func (p *workspacePool) lookup(root, language string) *poolEntry {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.entries[root]
+	return p.entries[poolKey{root, language}]
+}
+
+// entriesForRoot returns every acquired entry whose workspace root is root,
+// across all languages bound to it (one root may host several language servers,
+// e.g. Go + HTML). Used to aggregate diagnostics across a root's servers. The
+// returned slice is a snapshot; never starts a new LS.
+func (p *workspacePool) entriesForRoot(root string) []*poolEntry {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []*poolEntry
+	for k, e := range p.entries {
+		if k.root == root {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // close shuts down all LS processes. Safe to call from multiple goroutines

@@ -52,9 +52,10 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 				s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
 				language = LanguageNone
 			} else {
-				s.sessionProxy.setPrimary(folder, e.proxy)
-				s.sessionInv.setPrimary(folder, e.inv)
+				s.sessionProxy.setPrimary(folder, language, e.proxy)
+				s.sessionInv.setPrimary(folder, language, e.inv)
 				v.lsRefRoot = folder
+				v.lsRefLang = language
 				adapter = adapterForLanguage(language)
 			}
 		}
@@ -180,7 +181,9 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// released at the end once the new root is acquired, so the pool can reclaim
 		// the old server after its idle grace if no other session holds it.
 		prevRef := v.lsRefRoot
+		prevRefLang := v.lsRefLang
 		v.lsRefRoot = ""
+		v.lsRefLang = ""
 		if v.qualityRunner != nil {
 			v.qualityRunner.Stop()
 			v.qualityRunner = nil
@@ -198,16 +201,17 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 				s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
 				language = LanguageNone
 			} else {
-				s.sessionProxy.resetPrimary(root, e.proxy)
-				s.sessionInv.resetPrimary(root, e.inv)
+				s.sessionProxy.resetPrimary(root, language, e.proxy)
+				s.sessionInv.resetPrimary(root, language, e.inv)
 				v.lsRefRoot = root
+				v.lsRefLang = language
 				adapter = adapterForLanguage(language)
 			}
 		}
 		// Acquire-before-release: the new root is pinned above before we drop the
 		// old one, so even a re-pin back to a recently-left root never races teardown.
 		if prevRef != "" {
-			s.pool.release(prevRef)
+			s.pool.release(prevRef, prevRefLang)
 		}
 		detectedLanguage := language
 		if detectedLanguage == LanguageNone {

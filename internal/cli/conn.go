@@ -44,7 +44,12 @@ type sessionView struct {
 	// re-pin (old root) and on close so the pool can reclaim an idle server once
 	// its last session leaves. Distinct from acquiredRoot, which is also set for
 	// LanguageNone workspaces that hold no LS reference.
-	lsRefRoot     string
+	lsRefRoot string
+	// lsRefLang is the language of the pinned pool entry referenced by lsRefRoot.
+	// Paired with lsRefRoot so the release on close / re-pin targets the exact
+	// (root, language) entry this session pinned, now that one root may host
+	// several language servers.
+	lsRefLang     string
 	clientName    string
 	clientVersion string
 	sessName      string
@@ -207,19 +212,21 @@ func (s *connSession) close() {
 	// reference so the pool can reclaim the server once its last session leaves
 	// (after the idle grace), and drop its shared write-budget reference so that
 	// entry is reclaimed too — all under the one mutation lane.
-	var ref, budgetKey string
+	var ref, refLang, budgetKey string
 	s.mutate(func(v *sessionView) {
 		if v.qualityRunner != nil {
 			v.qualityRunner.Stop()
 			v.qualityRunner = nil
 		}
 		ref = v.lsRefRoot
+		refLang = v.lsRefLang
 		v.lsRefRoot = ""
+		v.lsRefLang = ""
 		budgetKey = v.boundBudgetKey
 		v.boundBudgetKey = ""
 	})
 	if ref != "" {
-		s.pool.release(ref)
+		s.pool.release(ref, refLang)
 	}
 	if budgetKey != "" {
 		s.budgets.release(budgetKey)

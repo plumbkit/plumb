@@ -66,7 +66,7 @@ func TestRoutingInvProxy_AllDiagnostics_FiltersOutOfRoot(t *testing.T) {
 	})
 
 	rp := newRoutingInvProxy(newTestPool())
-	rp.setPrimary(root, inv)
+	rp.setPrimary(root, "go", inv)
 
 	all := rp.AllDiagnostics()
 	if _, ok := all[inRoot]; !ok {
@@ -96,7 +96,7 @@ func TestRoutingInvProxy_AllDiagnosticTimes_FiltersOutOfRoot(t *testing.T) {
 	pushDiag(t, inv, outOfRoot, []protocol.Diagnostic{{Severity: protocol.SevError, Message: "y"}})
 
 	rp := newRoutingInvProxy(newTestPool())
-	rp.setPrimary(root, inv)
+	rp.setPrimary(root, "go", inv)
 
 	times := rp.AllDiagnosticTimes()
 	if _, ok := times[inRoot]; !ok {
