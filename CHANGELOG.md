@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.48 (unreleased)
+
+Broadens `plumb setup` to seven more command-line MCP-client agents and tidies AI-agent artefacts out of version control.
+
+### Added
+
+- **Seven more `plumb setup` clients.** Registers plumb as a stdio MCP server in the popular command-line agents: `cursor` (`~/.cursor/mcp.json`, shared with the `cursor-agent` CLI), `augment` (`~/.augment/settings.json`), `qwen` (`~/.qwen/settings.json`) — all the plain `mcpServers` JSON shape — plus `opencode` (`mcp` key, `type:"local"` command-array), `crush` (`mcp` key, `type:"stdio"`), `goose` (`extensions` YAML), and `hermes` (`mcp_servers` YAML). Each preserves existing servers, backs up the config first, and is idempotent. A single format-agnostic `mergeServerEntry` now backs every setup command across JSON / TOML / YAML (the three original clients were refactored onto it); YAML support is new (`readOrInitYAMLConfig` / `writeYAML`, `gopkg.in/yaml.v3`). `config show` and `plumb doctor` enumerate all clients from one shared `allSetupClients()` list. Aider is deliberately excluded — it is not a native MCP client (only third-party servers wrap it).
+
+### Internal
+
+- **`.gitignore`: AI-agent local state.** Consolidated the scattered per-agent ignores into one "AI coding agents" section and added `.cursor/`, `.qwen/`, `.augment/`, `.goose/`, `.opencode/`, and `.aider*`. Shared rules/context files (`AGENTS.md`, `CLAUDE.md`, `QWEN.md`, `opencode.json`) stay tracked by design.
+
 ## 0.8.47 (unreleased)
 
 Maintainability + tooling pass: every non-test Go file is now within the ~600-line rule (enforced), a new `structural_query` tool lands, and the semantic-search spike returns a verdict.
