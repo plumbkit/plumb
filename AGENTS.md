@@ -239,6 +239,8 @@ Setup helpers preserve existing MCP servers, back up config first, and resolve l
 
 Walks to the parent otherwise; errors only after passing the filesystem root.
 
+**Detection uses global config, not project config.** `Detect`/`detectLanguageAt` consult the daemon's resolved **global** language set, *before* any `<root>/.plumb/config.toml` loads. So a language enabled **only** in a subfolder's project config (e.g. `[lsp.html] enabled = true` in `site/.plumb/config.toml`) does **not** make that subfolder resolve as that language — enable it in **global** config. With multi-LSP-per-root (0.9.0) this rarely bites: enable the secondary globally and per-file routing sends each extension to the right server within one workspace, no subfolder pin needed.
+
 `LanguageNone` (`"none"`) keeps non-Go/non-Python projects fully attached minus LSP; the `.git/` fallback extends this to any git repo, so a repo without a language marker resolves on the first path-bearing tool call. **Auto-attach** (opt-in, `[workspace].auto_attach`) covers the residual case — a seed dir with *no* `.git/` above — via `SynthesiseRoot`; synthetic sessions are marked `(auto)`, and `auto_attach_persist` creates `<root>/.plumb/` on first attach.
 
 Cold-start resolution in `session_start`: the daemon's already-attached root → explicit `workspace` arg → `roots/list` query → otherwise an honest "pass `workspace`" error. There is **no `os.Getwd()` fallback** (the daemon is a singleton shared across connections). Clients that don't report a folder (Claude Desktop sends no `roots`) must pin the project with an absolute `workspace`. Run `plumb init` to create a `.plumb/` marker.

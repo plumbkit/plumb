@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.5 (unreleased)
+
+Filesystem-tool polish and a documented detection limitation — the tail of the agent-feedback sweep.
+
+### Added
+
+- **`list_directory` shows symlink targets.** Symbolic links now render with a `[LINK]` prefix and `name -> target` annotation (previously indistinguishable from regular files), so verifying a symlink no longer needs a shell `ls -la`. (feedbacks: AGENTS-trim wishlist #2)
+
+### Docs
+
+- **Workspace detection uses global config, documented.** `Detect`/`detectLanguageAt` consult the daemon's global language set before any subfolder `.plumb/config.toml` loads, so a language enabled only in a subfolder's project config does not make that subfolder resolve as that language — enable it globally. AGENTS.md § Workspace detection now states this. (Largely moot since 0.9.0 multi-LSP routing: enable the secondary globally and per-file routing handles a polyglot repo within one workspace.) Remaining feedbacks items — a proactive concurrent-write signal on read, live LSP enable+attach without restart, and the read_file moderate-file cap — are recorded with worked designs in `docs/internal/todo.md`.
+
 ## 0.9.4 (unreleased)
 
 Symbol resolution and HTML/markup outline fixes from the agent feedback log.

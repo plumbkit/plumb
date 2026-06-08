@@ -57,8 +57,9 @@ func (t *ListDirectory) WithBoundary(guard BoundaryGuard) *ListDirectory {
 func (*ListDirectory) Name() string                 { return "list_directory" }
 func (*ListDirectory) InputSchema() json.RawMessage { return listDirectorySchema }
 func (*ListDirectory) Description() string {
-	return "List the immediate contents of a directory with [FILE] and [DIR] type prefixes, " +
-		"file sizes, and last-modified times. Non-recursive — shows one level only. " +
+	return "List the immediate contents of a directory with [FILE], [DIR], and [LINK] type prefixes, " +
+		"file sizes, and last-modified times. Symbolic links are shown as `name -> target`. " +
+		"Non-recursive — shows one level only. " +
 		"Accepts an absolute path, file:// URI, or workspace-relative path. " +
 		"Use list_files or find_files for recursive traversal."
 }
@@ -74,7 +75,9 @@ type dirEntry struct {
 	name     string
 	isDir    bool
 	size     int64
-	modified int64 // UnixNano
+	modified int64  // UnixNano
+	symlink  bool   // entry is a symbolic link
+	target   string // symlink target (raw, as stored), empty for non-links
 }
 
 func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string, error) {
@@ -117,10 +120,10 @@ func collectDirEntries(dir string, a listDirectoryArgs) ([]dirEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list_directory: reading %q: %w", dir, err)
 	}
-	return filterDirEntries(rawEntries, a)
+	return filterDirEntries(dir, rawEntries, a)
 }
 
-func filterDirEntries(rawEntries []os.DirEntry, a listDirectoryArgs) ([]dirEntry, error) {
+func filterDirEntries(dir string, rawEntries []os.DirEntry, a listDirectoryArgs) ([]dirEntry, error) {
 	var entries []dirEntry
 	for _, e := range rawEntries {
 		if !a.IncludeHidden && strings.HasPrefix(e.Name(), ".") {
@@ -139,12 +142,19 @@ func filterDirEntries(rawEntries []os.DirEntry, a listDirectoryArgs) ([]dirEntry
 		if err != nil {
 			continue
 		}
-		entries = append(entries, dirEntry{
+		entry := dirEntry{
 			name:     e.Name(),
 			isDir:    e.IsDir(),
 			size:     fi.Size(),
 			modified: fi.ModTime().UnixNano(),
-		})
+		}
+		if e.Type()&os.ModeSymlink != 0 {
+			entry.symlink = true
+			if tgt, lerr := os.Readlink(filepath.Join(dir, e.Name())); lerr == nil {
+				entry.target = tgt
+			}
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
 }
@@ -178,12 +188,19 @@ func formatDirResult(dir string, entries []dirEntry) string {
 	dirs, files := 0, 0
 	for _, e := range entries {
 		mt := time.Unix(0, e.modified).Format("2006-01-02 15:04")
-		if e.isDir {
+		name := e.name
+		if e.symlink && e.target != "" {
+			name = e.name + " -> " + e.target
+		}
+		switch {
+		case e.symlink:
+			fmt.Fprintf(&sb, "[LINK] %-40s  %12s  %s\n", name, "", mt)
+		case e.isDir:
 			dirs++
-			fmt.Fprintf(&sb, "[DIR]  %-40s  %12s  %s\n", e.name, "", mt)
-		} else {
+			fmt.Fprintf(&sb, "[DIR]  %-40s  %12s  %s\n", name, "", mt)
+		default:
 			files++
-			fmt.Fprintf(&sb, "[FILE] %-40s  %12s  %s\n", e.name, formatSize(e.size), mt)
+			fmt.Fprintf(&sb, "[FILE] %-40s  %12s  %s\n", name, formatSize(e.size), mt)
 		}
 	}
 	if len(entries) == 0 {
