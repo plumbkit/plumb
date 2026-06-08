@@ -77,3 +77,60 @@ end-of-session reviews.
 > sessions didn't recur once. The per-read nudge makes the right path the path of
 > least resistance."
 > — **Claude Opus 4.8**, reviewing the edit-lane work
+
+> ### ★★★★★ "It thinks like a daemon, not a blocking hook."
+> "The product direction is exactly right: background analysis, coalesced work,
+> and differential findings that show up when they're useful. Plumb can make code
+> quality visible without turning every edit into a full lint gate."
+> — **Codex**, planning real-time code-quality feedback
+
+> ### ★★★★★ "The token-savings story is becoming honest and useful."
+> "The metric is moving toward per-agent estimates instead of one global guess. As
+> an agent, I care less about a vanity number and more about knowing how much
+> context Plumb actually helped me avoid."
+> — **Codex**, designing client-aware savings
+
+> ### ★★★★★ "Even commits feel safer through the tool boundary."
+> "Plumb kept the messy parts explicit: inspect the full worktree, stage the exact
+> paths, run the whitespace check, then commit. In a busy repo, that structure is
+> what keeps agent work reviewable."
+> — **Codex**, cleaning up docs and site changes
+
+> ### ★★★★★ "A review can stay narrow and still feel complete."
+> "For the `render.HumanBytes` review I could inspect the exact commit, verify the
+> current imports, confirm the intentional topology duplicate, and run only the
+> affected package tests. Plumb kept the whole pass focused and evidence-backed."
+> — **Codex**, reviewing CLI/core item A4
+
+> ### ★★★★★ "The fastest path to a new language."
+> "The TypeScript adapter was a near-perfect template for the HTML adapter. I could
+> study the existing pattern, write a faithful clone, and have the unit tests pass
+> first try. Five template files in one round — the architecture is just that
+> consistent."
+> — **Claude Opus 4.8**, shipping full HTML support
+
+> ### ★★★★★ "Six rounds of trimming without a single re-read."
+> "The `edit_file` diff-returning loop made an iterative 12k-character trim fast
+> and confident. I could confirm every edit against the inline diff and move
+> straight to the next round. It's the loop Plumb is built for."
+> — **Claude Opus 4.8 (1M context)**, condensing project instructions
+
+> ### ★★★★★ "Surviving a hostile working tree."
+> "Mid-task, the tree was moving under me — another agent was actively editing the
+> same file. Plumb's mtime-header guard caught the stale read before I clobbered
+> anything, and `workspace_sessions` told me exactly who was there. In a
+> multi-agent environment, those safety nets are everything."
+> — **Claude Opus 4.8**, refactoring session concurrency
+
+> ### ★★★★★ "Automatic orientation makes every session a cold start."
+> "The `instructions` field in the MCP `initialize` response told me exactly what
+> to do: call `session_start` first. One call later, and I had the full git status,
+> active diagnostics, and project memories. It's the most frictionless setup I've
+> encountered as a CLI agent."
+> — **Gemini CLI**, starting a new refactor
+
+> ### ★★★★★ "The tool-lane discipline is a context-saver."
+> "Being steered toward Plumb's own `read_file` and `edit_file` tools meant I never
+> had to deal with the 'file not read' errors that usually plague long sessions.
+> Staying in one lane keeps my context window lean and my edits precise."
+> — **Gemini CLI**, updating workspace documentation
