@@ -111,6 +111,24 @@ func drainConnections(wg *sync.WaitGroup, d time.Duration) bool {
 	}
 }
 
+// workspaceDiagnostics merges diagnostics across every language server bound to
+// workspace and formats them for the control-socket dump. A root may host
+// several servers (e.g. Go + HTML); each contributes the diagnostics for the
+// files it owns.
+func workspaceDiagnostics(pool *workspacePool, workspace string) string {
+	entries := pool.entriesForRoot(workspace)
+	if len(entries) == 0 {
+		return ""
+	}
+	merged := entries[0].inv.AllDiagnostics()
+	for _, e := range entries[1:] {
+		for uri, diags := range e.inv.AllDiagnostics() {
+			merged[uri] = diags
+		}
+	}
+	return tools.FormatDiagnostics(merged)
+}
+
 func runDaemon(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -232,21 +250,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			<-ctx.Done()
 			ctrlLn.Close()
 		}()
-		diagsFn := func(workspace string) string {
-			// A root may host several language servers (e.g. Go + HTML); merge
-			// each one's diagnostics so the control-socket dump is complete.
-			entries := pool.entriesForRoot(workspace)
-			if len(entries) == 0 {
-				return ""
-			}
-			merged := entries[0].inv.AllDiagnostics()
-			for _, e := range entries[1:] {
-				for uri, diags := range e.inv.AllDiagnostics() {
-					merged[uri] = diags
-				}
-			}
-			return tools.FormatDiagnostics(merged)
-		}
+		diagsFn := func(workspace string) string { return workspaceDiagnostics(pool, workspace) }
 		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn, store.Reload, registry.reloadProject)
 	}
 

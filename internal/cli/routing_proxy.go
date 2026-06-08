@@ -36,6 +36,10 @@ type routingProxy struct {
 	primaryLang string
 	primary     *clientProxy
 	guard       func(string) error
+	// onActivate, when set, is invoked the first time a secondary language
+	// server under the primary root serves a request, so the session can list
+	// every active LSP. Guarded by mu; nil-safe.
+	onActivate func(language string)
 }
 
 func newRoutingProxy(pool *workspacePool) *routingProxy {
@@ -49,6 +53,15 @@ func (r *routingProxy) setBoundaryGuard(guard func(string) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guard = guard
+}
+
+// setActivateHook wires the callback fired when a secondary language server
+// first serves a request under the primary root. Pass nil to clear it (done on
+// a workspace re-pin so a switched connection starts with a clean adapter set).
+func (r *routingProxy) setActivateHook(fn func(language string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onActivate = fn
 }
 
 // setPrimary records the connection's primary workspace. Idempotent — only
@@ -108,27 +121,59 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 		return r.primaryClient()
 	}
 
+	// Pick the language by file extension first (so a .html file in a Go root
+	// reaches the HTML server), falling back to the root's primary language for
+	// files no enabled language owns (e.g. a .md next to .go still goes to gopls,
+	// which simply ignores it). When neither yields a real language, there is no
+	// server for this file — defer to the primary.
+	targetLang := language
+	if fileLang := r.pool.fileLanguage(path); fileLang != "" {
+		targetLang = fileLang
+	}
+	if targetLang == "" || targetLang == LanguageNone {
+		return r.primaryClient()
+	}
+
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
+	primaryLang := r.primaryLang
 	primary := r.primary
 	r.mu.RUnlock()
 
-	if root == primaryRoot {
+	if root == primaryRoot && targetLang == primaryLang {
 		if c := primary.get(); c != nil {
 			return c, nil
 		}
 	}
-	// On-demand routing acquire: not a pinned primary workspace, so pass
-	// pin=false. The entry is never torn down by the refcount path for a
-	// never-pinned root; it lives until daemon shutdown (pre-refcount behaviour).
-	e, err := r.pool.acquireLang(ctx, root, language, false)
+	// On-demand routing acquire: not a pinned primary workspace/language, so
+	// pass pin=false. The entry is never torn down by the refcount path for a
+	// never-pinned (root, language); it lives until daemon shutdown (pre-refcount
+	// behaviour) — the same lifecycle as a cross-workspace on-demand entry.
+	e, err := r.pool.acquireLang(ctx, root, targetLang, false)
 	if err != nil {
-		return nil, fmt.Errorf("acquiring %s for %s: %w", language, root, err)
+		return nil, fmt.Errorf("acquiring %s for %s: %w", targetLang, root, err)
 	}
 	if c := e.proxy.get(); c != nil {
+		r.noteActivated(root, targetLang)
 		return c, nil
 	}
 	return nil, fmt.Errorf("LSP server not yet ready for %s", root)
+}
+
+// noteActivated reports a secondary language server coming live under the
+// connection's primary root, so the session record can surface every active
+// LSP (not just the primary). A no-op for the primary language itself and when
+// no callback is wired. See routingProxy.onActivate.
+func (r *routingProxy) noteActivated(root, language string) {
+	r.mu.RLock()
+	cb := r.onActivate
+	primaryRoot := r.primaryRoot
+	primaryLang := r.primaryLang
+	r.mu.RUnlock()
+	if cb == nil || root != primaryRoot || language == primaryLang {
+		return
+	}
+	cb(language)
 }
 
 // ─── lsp.Client implementation ─────────────────────────────────────────
@@ -434,12 +479,24 @@ func uriUnderRoot(uri, root string) bool {
 	return path == root || strings.HasPrefix(path, root+"/")
 }
 
+// routeLang resolves the language whose invalidator owns path: the file's own
+// language by extension, falling back to the root's primary (detectLang) for
+// files no enabled language owns. Mirrors routingProxy.route's resolution so
+// diagnostics land on the same server that produced them.
+func (r *routingInvProxy) routeLang(path, detectLang string) string {
+	if fl := r.pool.fileLanguage(path); fl != "" {
+		return fl
+	}
+	return detectLang
+}
+
 func (r *routingInvProxy) Tracked(uri string) bool {
 	if err := r.checkURI(uri); err != nil {
 		return false
 	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
+	primaryLang := r.primaryLang
 	primary := r.primary
 	r.mu.RUnlock()
 
@@ -448,10 +505,11 @@ func (r *routingInvProxy) Tracked(uri string) bool {
 	}
 	path := strings.TrimPrefix(uri, "file://")
 	root, language, err := r.pool.Detect(filepath.Dir(path))
-	if err != nil || root == primaryRoot {
+	targetLang := r.routeLang(path, language)
+	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
 		return primary.Tracked(uri)
 	}
-	if e := r.pool.lookup(root, language); e != nil {
+	if e := r.pool.lookup(root, targetLang); e != nil {
 		return e.inv.Tracked(uri)
 	}
 	return false
@@ -463,6 +521,7 @@ func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
+	primaryLang := r.primaryLang
 	primary := r.primary
 	r.mu.RUnlock()
 
@@ -474,13 +533,14 @@ func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 	}
 	path := strings.TrimPrefix(uri, "file://")
 	root, language, err := r.pool.Detect(filepath.Dir(path))
-	if err != nil || root == primaryRoot {
+	targetLang := r.routeLang(path, language)
+	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
 		if primary == nil {
 			return nil
 		}
 		return primary.Diagnostics(uri)
 	}
-	if e := r.pool.lookup(root, language); e != nil {
+	if e := r.pool.lookup(root, targetLang); e != nil {
 		return e.inv.Diagnostics(uri)
 	}
 	return nil
@@ -494,12 +554,24 @@ func (r *routingInvProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
 	if p == nil {
 		return nil
 	}
-	all := p.AllDiagnostics()
-	if root == "" {
-		return all
+	// Fold the primary first, then any other language servers under the same
+	// root (e.g. HTML alongside Go), so the aggregate covers every server a
+	// multi-language workspace is driving. AllDiagnostics returns a fresh map,
+	// so mutating merged is safe.
+	merged := p.AllDiagnostics()
+	for _, e := range r.pool.entriesForRoot(root) {
+		if e.inv == p {
+			continue
+		}
+		for uri, diags := range e.inv.AllDiagnostics() {
+			merged[uri] = diags
+		}
 	}
-	out := make(map[string][]protocol.Diagnostic, len(all))
-	for uri, diags := range all {
+	if root == "" {
+		return merged
+	}
+	out := make(map[string][]protocol.Diagnostic, len(merged))
+	for uri, diags := range merged {
 		if uriUnderRoot(uri, root) {
 			out[uri] = diags
 		}
@@ -517,12 +589,20 @@ func (r *routingInvProxy) AllDiagnosticTimes() map[string]time.Time {
 	if p == nil {
 		return nil
 	}
-	all := p.AllDiagnosticTimes()
-	if root == "" {
-		return all
+	merged := p.AllDiagnosticTimes()
+	for _, e := range r.pool.entriesForRoot(root) {
+		if e.inv == p {
+			continue
+		}
+		for uri, t := range e.inv.AllDiagnosticTimes() {
+			merged[uri] = t
+		}
 	}
-	out := make(map[string]time.Time, len(all))
-	for uri, t := range all {
+	if root == "" {
+		return merged
+	}
+	out := make(map[string]time.Time, len(merged))
+	for uri, t := range merged {
 		if uriUnderRoot(uri, root) {
 			out[uri] = t
 		}
@@ -536,6 +616,7 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
+	primaryLang := r.primaryLang
 	primary := r.primary
 	r.mu.RUnlock()
 
@@ -544,10 +625,11 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 	}
 	path := strings.TrimPrefix(uri, "file://")
 	root, language, err := r.pool.Detect(filepath.Dir(path))
-	if err != nil || root == primaryRoot {
+	targetLang := r.routeLang(path, language)
+	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
 		return primary.WaitDiagnostics(ctx, uri)
 	}
-	if e := r.pool.lookup(root, language); e != nil {
+	if e := r.pool.lookup(root, targetLang); e != nil {
 		return e.inv.WaitDiagnostics(ctx, uri)
 	}
 	return nil, nil
@@ -559,6 +641,7 @@ func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) (
 	}
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
+	primaryLang := r.primaryLang
 	primary := r.primary
 	r.mu.RUnlock()
 
@@ -567,10 +650,11 @@ func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) (
 	}
 	path := strings.TrimPrefix(uri, "file://")
 	root, language, err := r.pool.Detect(filepath.Dir(path))
-	if err != nil || root == primaryRoot {
+	targetLang := r.routeLang(path, language)
+	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
 		return primary.WaitNextDiagnostics(ctx, uri)
 	}
-	if e := r.pool.lookup(root, language); e != nil {
+	if e := r.pool.lookup(root, targetLang); e != nil {
 		return e.inv.WaitNextDiagnostics(ctx, uri)
 	}
 	return nil, nil

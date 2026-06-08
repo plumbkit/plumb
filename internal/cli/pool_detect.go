@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/golimpio/plumb/internal/config"
+	"github.com/golimpio/plumb/internal/langsupport"
 )
 
 // LanguageNone is the sentinel language returned by Detect for workspaces
@@ -140,6 +141,38 @@ func (p *workspacePool) detectLanguageAt(dir string) string {
 			return ""
 		}
 		d = parent
+	}
+}
+
+// fileLanguage maps a file path to the ENABLED config language key whose LSP
+// should handle it, or "" when no enabled language owns the file. It is the
+// per-file routing primitive that lets a single root drive several language
+// servers (e.g. a .html file routed to the HTML server while .go files go to
+// gopls). langsupport.ByPath resolves the owning language by extension;
+// normaliseLangName folds tree-sitter dialect names to the config LSP key
+// (tsx/jsx/javascript share the typescript-language-server); cfgFor gates on
+// the language actually being enabled.
+func (p *workspacePool) fileLanguage(path string) string {
+	l, ok := langsupport.ByPath(path)
+	if !ok {
+		return ""
+	}
+	key := normaliseLangName(l.Name)
+	if _, ok := p.cfgFor(key); !ok {
+		return ""
+	}
+	return key
+}
+
+// normaliseLangName folds a langsupport.Language.Name to the config LSP map key.
+// The tsx/jsx/javascript dialects are all served by the typescript adapter, so
+// they collapse to "typescript"; every other name already equals its config key.
+func normaliseLangName(name string) string {
+	switch name {
+	case "tsx", "jsx", "javascript":
+		return "typescript"
+	default:
+		return name
 	}
 }
 
