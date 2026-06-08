@@ -27,6 +27,7 @@ func (t *EditFile) executePartial(
 	path string,
 	edits []strEdit,
 	uri string,
+	awaitFresh bool,
 ) string {
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
@@ -35,7 +36,7 @@ func (t *EditFile) executePartial(
 	sb.WriteString(formatPartialEditsResults(results))
 	if writeErr == nil && applied > 0 {
 		_ = res
-		t.executePartialPostWrite(ctx, path, uri, &sb)
+		t.executePartialPostWrite(ctx, path, uri, content, awaitFresh, &sb)
 	}
 	return sb.String()
 }
@@ -92,7 +93,7 @@ func formatPartialEditsResults(results []partialEditResult) string {
 	return sb.String()
 }
 
-func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string, sb *strings.Builder) {
+func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, content string, awaitFresh bool, sb *strings.Builder) {
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 		slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 	}
@@ -103,10 +104,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri string
 	}
 	invalidateCache(t.deps.Cache, uri)
 	t.deps.Writes.Record(path)
-	if t.deps.Diag != nil {
-		diags, fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
-		sb.WriteString(formatPostWriteDiagnostics(diags, fresh))
-	}
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh))
 }
 
 // tryEditPartial reads the file and applies each edit independently.

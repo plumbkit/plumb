@@ -181,15 +181,50 @@ func TestAwaitDiagnosticsRefresh_FreshFlag(t *testing.T) {
 
 func TestFormatPostWriteDiagnostics_StaleNote(t *testing.T) {
 	diags := errDiag("undefined: Foo")
-	stale := formatPostWriteDiagnostics(diags, false)
+	stale := formatPostWriteDiagnostics(diags, false, 0)
 	if !strings.Contains(stale, "undefined: Foo") {
 		t.Fatalf("missing diagnostic:\n%s", stale)
 	}
 	if !strings.Contains(stale, "re-analys") {
 		t.Fatalf("expected a staleness note when not fresh:\n%s", stale)
 	}
-	if strings.Contains(formatPostWriteDiagnostics(diags, true), "re-analys") {
+	if strings.Contains(formatPostWriteDiagnostics(diags, true, 0), "re-analys") {
 		t.Fatalf("fresh diagnostics should carry no staleness note")
+	}
+}
+
+// diagAtLine builds one error diagnostic at the given 0-based line.
+func diagAtLine(msg string, line uint32) []protocol.Diagnostic {
+	d := []protocol.Diagnostic{{Severity: protocol.SevError, Message: msg}}
+	d[0].Range.Start.Line = line
+	return d
+}
+
+func TestFormatPostWriteDiagnostics_OutOfRangeDowngraded(t *testing.T) {
+	// File now has 10 lines; a diagnostic at line 41 (0-based) points well past
+	// EOF — the classic stale-after-shrink case. It must be down-ranked to
+	// "stale?", never rendered as a hard "error".
+	out := formatPostWriteDiagnostics(diagAtLine("undefined: Gone", 41), true, 10)
+	if !strings.Contains(out, "stale?") {
+		t.Fatalf("expected an out-of-range diagnostic to be grouped as stale?:\n%s", out)
+	}
+	if strings.Contains(out, "error L42") {
+		t.Fatalf("out-of-range diagnostic must not be rendered as a hard error:\n%s", out)
+	}
+	if !strings.Contains(out, "current end") {
+		t.Fatalf("expected the stale? explanation note:\n%s", out)
+	}
+}
+
+func TestFormatPostWriteDiagnostics_InRangeStaysError(t *testing.T) {
+	// A diagnostic at line 3 (0-based) in a 10-line file is in range — it must
+	// still be a hard error, not downgraded.
+	out := formatPostWriteDiagnostics(diagAtLine("real error", 3), true, 10)
+	if !strings.Contains(out, "error L4: real error") {
+		t.Fatalf("in-range diagnostic must stay a hard error:\n%s", out)
+	}
+	if strings.Contains(out, "stale?") {
+		t.Fatalf("in-range diagnostic must not be marked stale:\n%s", out)
 	}
 }
 

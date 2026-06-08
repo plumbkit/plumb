@@ -65,6 +65,10 @@ var editFileSchema = json.RawMessage(`{
     "apply_partial": {
       "type": "boolean",
       "description": "When true, apply each edit independently and continue on failure instead of rolling back the entire batch. Returns a per-edit result list showing which edits succeeded and which failed. Incompatible with strict mode — not safe when concurrent agents share the file."
+    },
+    "await_diagnostics": {
+      "type": "boolean",
+      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file and report an authoritative post-write result — a clean fresh pass is stated explicitly. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
     }
   },
   "required": ["file_path", "edits"],
@@ -145,12 +149,13 @@ type strEdit struct {
 }
 
 type editFileArgs struct {
-	Path          string    `json:"file_path"`
-	Edits         []strEdit `json:"edits"`
-	ExpectedMtime string    `json:"expected_mtime"`
-	ExpectedSha   string    `json:"expected_sha"`
-	DirtyOk       bool      `json:"dirty_ok"`
-	ApplyPartial  bool      `json:"apply_partial"`
+	Path             string    `json:"file_path"`
+	Edits            []strEdit `json:"edits"`
+	ExpectedMtime    string    `json:"expected_mtime"`
+	ExpectedSha      string    `json:"expected_sha"`
+	DirtyOk          bool      `json:"dirty_ok"`
+	ApplyPartial     bool      `json:"apply_partial"`
+	AwaitDiagnostics bool      `json:"await_diagnostics"`
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -179,7 +184,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 
 	if a.ApplyPartial {
 		t.deps.notifyTopology(path)
-		return t.executePartial(ctx, path, a.Edits, uri) + t.deps.reportQuality(ctx, path), nil
+		return t.executePartial(ctx, path, a.Edits, uri, a.AwaitDiagnostics) + t.deps.reportQuality(ctx, path), nil
 	}
 	result, err := t.editFileApply(ctx, path, a, uri)
 	if err != nil {

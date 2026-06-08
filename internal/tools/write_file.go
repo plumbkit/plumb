@@ -30,6 +30,10 @@ var writeFileSchema = json.RawMessage(`{
     "dirty_ok": {
       "type": "boolean",
       "description": "Allow writing a file that has uncommitted changes in its git repository. Default false — the write is refused if the target file is dirty. Pass true to overwrite anyway."
+    },
+    "await_diagnostics": {
+      "type": "boolean",
+      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file and report an authoritative post-write result — a clean fresh pass is stated explicitly. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
     }
   },
   "required": ["file_path", "content"],
@@ -66,10 +70,11 @@ func (*WriteFile) Description() string {
 }
 
 type writeFileArgs struct {
-	Path       string `json:"file_path"`
-	Content    string `json:"content"`
-	CreateDirs *bool  `json:"create_dirs"`
-	DirtyOk    bool   `json:"dirty_ok"`
+	Path             string `json:"file_path"`
+	Content          string `json:"content"`
+	CreateDirs       *bool  `json:"create_dirs"`
+	DirtyOk          bool   `json:"dirty_ok"`
+	AwaitDiagnostics bool   `json:"await_diagnostics"`
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -104,7 +109,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 
 	t.writeFilePostWrite(ctx, path, uri, isNew)
-	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri)
+	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, a.AwaitDiagnostics)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
 }
@@ -168,7 +173,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 	t.deps.Writes.Record(path)
 }
 
-func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string) string {
+func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, awaitFresh bool) string {
 	verb := "updated"
 	if isNew {
 		verb = "created"
@@ -183,9 +188,6 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 			sb.WriteString(d)
 		}
 	}
-	if t.deps.Diag != nil {
-		diags, fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
-		sb.WriteString(formatPostWriteDiagnostics(diags, fresh))
-	}
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, newContent, awaitFresh))
 	return sb.String()
 }

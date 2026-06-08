@@ -44,12 +44,12 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 		}
 		invalidateCache(t.deps.Cache, uri)
 		t.deps.Writes.Record(path)
-		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri), nil
+		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, a.AwaitDiagnostics), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
 }
 
-func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string) string {
+func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string, awaitFresh bool) string {
 	noun := "edit"
 	if len(edits) > 1 {
 		noun = "edits"
@@ -73,10 +73,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 			sb.WriteString(d)
 		}
 	}
-	if t.deps.Diag != nil {
-		diags, fresh := awaitDiagnosticsRefresh(t.deps.Diag, uri, t.deps.postWriteDiagWindow(), t.deps.DiagWait)
-		sb.WriteString(formatPostWriteDiagnostics(diags, fresh))
-	}
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh))
 	return sb.String()
 }
 

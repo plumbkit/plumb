@@ -119,6 +119,39 @@ func (d WriteDeps) postWriteDiagWindow() time.Duration {
 	return d.PostWriteDiagWindow
 }
 
+// longPostWriteDiagWindow is the wait used when a write tool requests an
+// authoritative post-write diagnostics pass (await_diagnostics:true). It is far
+// longer than the default adaptive window so the language server almost always
+// re-publishes within it — giving the agent a trustworthy "did my change
+// compile?" answer without shelling out to a build.
+const longPostWriteDiagWindow = 5 * time.Second
+
+// postWriteDiagnostics waits for the language server to re-publish diagnostics
+// for the just-written uri, then renders them as a compact suffix ("" when the
+// source is unset or there is nothing to report). content is the new file
+// content; its line count down-ranks provably-stale, past-EOF diagnostics.
+//
+// When awaitFresh is set the wait is extended to longPostWriteDiagWindow so the
+// result is trustworthy, and a clean fresh pass is stated explicitly rather than
+// implied by silence — closing the "I had to shell out to go build to be sure"
+// gap in internal/feedbacks.md. A globally-disabled post-write window
+// (negative) is still honoured (await is a no-op).
+func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool) string {
+	if d.Diag == nil {
+		return ""
+	}
+	ceiling := d.postWriteDiagWindow()
+	if awaitFresh && ceiling >= 0 && ceiling < longPostWriteDiagWindow {
+		ceiling = longPostWriteDiagWindow
+	}
+	diags, fresh := awaitDiagnosticsRefresh(d.Diag, uri, ceiling, d.DiagWait)
+	out := formatPostWriteDiagnostics(diags, fresh, lineCount(content))
+	if awaitFresh && fresh && out == "" {
+		return "\n✓ fresh diagnostics pass — no errors or warnings"
+	}
+	return out
+}
+
 func (d WriteDeps) concurrentWriteSkew() time.Duration {
 	if d.ConcurrentWriteSkewFn != nil {
 		return d.ConcurrentWriteSkewFn()

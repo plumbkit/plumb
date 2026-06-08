@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 (unreleased)
+
+Makes plumb's post-write diagnostics trustworthy — the single most-reported friction in the agent feedback log. Stale, post-EOF diagnostics no longer masquerade as hard errors, and a write can now request an authoritative "did my change compile?" answer.
+
+### Changed
+
+- **Post-write diagnostics down-rank provably-stale entries.** After a structural edit that shrinks a file, the language server often keeps reporting `undefined: X` / `Y redeclared` against *old line numbers* until it re-indexes — phantom breakage an agent would chase. `edit_file` / `write_file` now compare each post-write diagnostic's line against the just-written file's current length: any error/warning past the file's end is split into a `stale?` group (with an explanatory note) instead of being rendered as a hard `error`. In-range diagnostics are unaffected. Combined with the existing "may predate this write" hedge (shown when the server had not re-published within the wait window), an agent can tell genuine breakage from re-index lag without shelling out to a build.
+
+### Added
+
+- **`await_diagnostics` on `edit_file` / `write_file`.** Pass `await_diagnostics: true` to block up to ~5s for the language server to finish re-analysing the written file and return an authoritative result — a clean fresh pass is now stated explicitly (`✓ fresh diagnostics pass — no errors or warnings`) rather than implied by silence. Default stays the fast adaptive window. Closes the recurring "I had to run `go build` to be sure" gap. The three post-write wait/format call sites are consolidated onto one `WriteDeps.postWriteDiagnostics` helper.
+
 ## 0.9.0 (unreleased)
 
 Multiple language servers per workspace root: one project can now drive several LSPs at once (e.g. Go + HTML for a web app), each file routed to the server that owns its extension.

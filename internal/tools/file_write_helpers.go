@@ -132,42 +132,73 @@ type postWriteDiagSource interface {
 	WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error)
 }
 
+// lineCount reports the number of source lines in s, generously (a trailing
+// newline counts as an extra empty line). Used to decide whether a post-write
+// diagnostic points beyond the file's current end. Being generous biases the
+// out-of-range check toward NOT down-ranking a borderline last-line diagnostic.
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+// renderDiagGroup appends up to maxPerCategory diagnostics under label, then a
+// "…(+N more)" overflow line.
+func renderDiagGroup(sb *strings.Builder, label string, diags []protocol.Diagnostic) {
+	const maxPerCategory = 3
+	for i, x := range diags {
+		if i >= maxPerCategory {
+			fmt.Fprintf(sb, "\n  %s: …(+%d more)", label, len(diags)-maxPerCategory)
+			return
+		}
+		fmt.Fprintf(sb, "\n  %s L%d: %s", label, x.Range.Start.Line+1, x.Message)
+	}
+}
+
 // formatPostWriteDiagnostics renders up to N error/warning diagnostics as a
-// compact suffix appended to write/edit_file output. Returns "" if none. When
-// fresh is false, a note warns the diagnostics may predate this write (the
-// language server had not re-analysed within the wait window) — these inline
-// diagnostics fire milliseconds after the write and are the most likely to be
-// stale.
-func formatPostWriteDiagnostics(d []protocol.Diagnostic, fresh bool) string {
+// compact suffix appended to write/edit_file output. Returns "" if none.
+//
+// Two staleness guards reduce phantom breakage after a write — the single
+// most-reported friction in internal/feedbacks.md:
+//
+//   - fresh=false: the language server had not re-published within the wait
+//     window, so the snapshot may predate this write; a hedge note is appended.
+//   - newLineCount>0: any error/warning whose line lies beyond the just-written
+//     file's current end is provably stale (it points past EOF — the classic
+//     case after a structural edit that shrank the file, where gopls still
+//     reports old line numbers). These are split into a "stale?" group and never
+//     rendered as a hard "error", so an agent does not chase phantom breakage.
+func formatPostWriteDiagnostics(d []protocol.Diagnostic, fresh bool, newLineCount int) string {
 	if len(d) == 0 {
 		return ""
 	}
-	var errs, warns []protocol.Diagnostic
+	var errs, warns, stale []protocol.Diagnostic
 	for _, x := range d {
-		switch x.Severity {
-		case protocol.SevError:
+		if x.Severity != protocol.SevError && x.Severity != protocol.SevWarning {
+			continue
+		}
+		if newLineCount > 0 && int(x.Range.Start.Line) >= newLineCount {
+			stale = append(stale, x)
+			continue
+		}
+		if x.Severity == protocol.SevError {
 			errs = append(errs, x)
-		case protocol.SevWarning:
+		} else {
 			warns = append(warns, x)
 		}
 	}
-	if len(errs) == 0 && len(warns) == 0 {
+	if len(errs) == 0 && len(warns) == 0 && len(stale) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("\ndiagnostics after write:")
-	render := func(label string, diags []protocol.Diagnostic) {
-		const maxPerCategory = 3
-		for i, x := range diags {
-			if i >= maxPerCategory {
-				fmt.Fprintf(&sb, "\n  %s: …(+%d more)", label, len(diags)-maxPerCategory)
-				return
-			}
-			fmt.Fprintf(&sb, "\n  %s L%d: %s", label, x.Range.Start.Line+1, x.Message)
-		}
+	renderDiagGroup(&sb, "error", errs)
+	renderDiagGroup(&sb, "warn", warns)
+	renderDiagGroup(&sb, "stale?", stale)
+	if len(stale) > 0 {
+		sb.WriteString("\n  (stale? = past the file's current end — almost certainly a pre-edit diagnostic the language server has not yet cleared; rebuild to confirm)")
 	}
-	render("error", errs)
-	render("warn", warns)
 	if !fresh {
 		sb.WriteString("\n  (may predate this write — the language server had not re-analysed within the wait window; re-check with diagnostics)")
 	}
