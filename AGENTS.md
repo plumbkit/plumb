@@ -281,78 +281,17 @@ Pyright is the worked example; full guide in `docs/adding-an-lsp.md`.
 
 ## Available tools (50)
 
-Concise index — full behaviour/inputs/steering live in each tool's MCP description (`tools/list`); sources are `internal/tools/<name>.go`.
+Concise index only. Full behaviour, schemas, and per-tool steering live in each tool's MCP description (`tools/list`); sources are `internal/tools/<name>.go`.
 
-**Bootstrap**
-
-- `session_start` — **Call FIRST.** Orientation packet (workspace, language, branch, recent commits + files, memories, top-5 tool stats, the live git tool policy, active diagnostics) plus a client-specific tool-guidance section.
-
-**LSP queries**
-
-| Tool | LSP method | Notes |
-|---|---|---|
-| `find_symbol` | `documentSymbol` | Single-file; `uri` required. |
-| `workspace_symbols` | `workspace/symbol` | Workspace-wide name search; stdlib/deps filtered. |
-| `get_definition` | `definition` | Definition location by name or position. |
-| `explain_symbol` | `hover` | Docs + type info. |
-| `list_symbols` | `documentSymbol` | Full hierarchy with line ranges. |
-| `file_outline` | `documentSymbol` | Token-cheap skeleton; tree-sitter topology fallback when the server is cold/absent. |
-| `find_references` | `references` | All call sites + source line. |
-| `call_hierarchy` | `prepareCallHierarchy` | Incoming + outgoing. |
-| `type_hierarchy` | `prepareTypeHierarchy` | Supertypes + subtypes. |
-| `diagnostics` | notification subscriber | Errors, warnings, hints. |
-
-**LSP edits** — `rename_symbol` (workspace-wide semantic rename; distinct from `rename_file`), `replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol`, `safe_delete_symbol` (refuses if external refs exist). The symbol-edit tools take an optional `include_doc_comment`.
-
-**Filesystem reads**
-
-| Tool | Notes |
-|---|---|
-| `read_file` | Path or `file://`; 200 KiB cap; binary detection. Emits a `# plumb-read mtime=… sha256=…` header — pass it to `edit_file.expected_mtime`/`expected_sha`. |
-| `read_symbol` | Source body of a named symbol in one call (plain name or `ReceiverType.Method`). Same mtime header. |
-| `read_multiple_files` | Up to 20 paths, parallel; per-file errors inline. |
-| `list_directory` | Immediate children with `[FILE]`/`[DIR]`, sizes, mtimes; glob + sort. |
-| `list_files` | Recursive; glob filter; depth control; respects `.gitignore`. |
-| `find_files` | Glob/regex finder; honours `.gitignore`. |
-| `search_in_files` | Exact content scan; **literal by default** (`use_regex:false`); smart-case; `.gitignore`-aware; `exclude` globs; `include_enclosing_symbol` annotates each match. |
-
-**Filesystem writes** — all take `WriteDeps`, hold per-path locks, check git dirty state (`dirty_ok` to override), notify the LSP, invalidate the symbol cache, and consume a rate-limit slot.
-
-| Tool | Notes |
-|---|---|
-| `write_file` | Atomic create/overwrite (tmpdir + rename, EXDEV fallback); symlink-aware; permissions preserved. |
-| `edit_file` | Per edit: str_replace (`old_string` must appear exactly once) or range (`start_line`/`end_line`; `-1` appends at EOF / extends to last line). CRLF-tolerant; all-or-nothing; optional `expected_mtime`; `apply_partial` for independent edits. |
-| `delete_file` | Refuses directories by default; `allow_dir: true` deletes an empty directory. |
-| `rename_file` | **Primary move tool.** Atomic; refuses overwrite without `overwrite=true`. Distinct from `rename_symbol`. |
-| `copy_file` | Duplicate preserving permissions; cross-device safe; refuses overwrite without `overwrite=true`. |
-| `transaction_apply` | Multi-file atomic edits (≤50 ops): validate in memory → write under locks → roll back on partial failure. |
-
-**Other**
-
-| Tool | Notes |
-|---|---|
-| `find_replace` | Text/regex find-and-replace across files; dry-run by default; `format_after` runs the workspace formatter. Prefer `rename_symbol` for identifiers. |
-| `git` | Tiered git tool — read (always) / write (`allow_writes`) / destructive (`allow_destructive` + `confirm`) / network (`allow_push` + `confirm`). Subcommand leads argv; unknown subcommands rejected. |
-| `git_init` | Initialise a repo; `init_plumb: true` also creates `.plumb/context.md`. |
-| `file_diff` | Unified diff between two arbitrary files (`diff -U`). |
-| `version` | Server version, Go runtime, OS/arch. |
-| `daemon_info` | Session name + ID, daemon version, uptime; live config state; this session's tool-call count and slowest calls. |
-| `rename_session` | Rename the current MCP session (letters/digits/`-`, ≤25 chars). |
-| `workspace_sessions` | Same-workspace peer awareness: other active sessions + recent writes here. `recent_limit` caps the feed (default 10, max 50). Read-only. |
-
-**Topology** — SQLite/FTS5 index at `<workspace>/.plumb/topology.db`; on by default.
-
-| Tool | Notes |
-|---|---|
-| `topology_status` | Index health: file/entity counts, DB size, languages, last sync/error. |
-| `topology_search` | FTS5 ranked symbol/file search; `kinds`/`language` filters. |
-| `topology_explore` | BFS neighbourhood around a named symbol; `depth`/`max_nodes`/`include_source`/`edge_kinds`. |
-| `topology_impact` | Bidirectional blast radius (depends-on + depended-by) around a symbol. |
-| `topology_affected` | Likely affected files + tests for changed files/symbols; run after writing. |
-| `topology_routes` | Framework-aware entry-point scanner; heuristic, confidence-annotated. |
-| `structural_query` | Curated find-by-shape checks (`undocumented-exports`, `long-functions`, `unused-context`); a small named set, not raw S-expr queries. |
-
-**Memory** — per-workspace markdown at `<workspace>/.plumb/memories/`, also exposed as MCP resources: `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories`, `relevant_memories`.
+- **Bootstrap:** `session_start` is the first call; it returns workspace, language, branch, recent context, tool stats, diagnostics, git policy, memories, and client-specific guidance.
+- **LSP queries:** `find_symbol`, `workspace_symbols`, `get_definition`, `explain_symbol`, `list_symbols`, `file_outline`, `find_references`, `call_hierarchy`, `type_hierarchy`, `diagnostics`.
+- **LSP edits:** `rename_symbol`, `replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol`, `safe_delete_symbol`; these are semantic operations, distinct from file moves/copies, and support `include_doc_comment` where relevant.
+- **Filesystem reads:** `read_file`, `read_symbol`, `read_multiple_files`, `list_directory`, `list_files`, `find_files`, `search_in_files`. Reads are bounded, binary-safe, `.gitignore`-aware where applicable, and return mtime/sha headers for optimistic edits.
+- **Filesystem writes:** `write_file`, `edit_file`, `delete_file`, `rename_file`, `copy_file`, `transaction_apply`. Writes take `WriteDeps`, hold per-path locks, respect dirty-file checks, notify LSP, invalidate caches, and consume the write-rate budget.
+- **Search/replace and git:** `find_replace` is dry-run by default; prefer `rename_symbol` for identifiers. `git` is tiered by policy (read/write/destructive/network), with typed `add`/`commit` and confirmation for dangerous tiers.
+- **Other utilities:** `git_init`, `file_diff`, `version`, `daemon_info`, `rename_session`, `workspace_sessions`.
+- **Topology:** `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`, `structural_query` use the SQLite/FTS5 index at `<workspace>/.plumb/topology.db`.
+- **Memory:** `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories`, `relevant_memories` operate on per-workspace markdown memories under `<workspace>/.plumb/memories/`.
 
 ## TUI conventions (Bubble Tea v2)
 
@@ -436,18 +375,9 @@ Outstanding items, footguns, and "subtle things to be aware of" live in [`docs/i
 
 ## Quick reference for agents
 
-You are likely an AI agent reading this through plumb. Most common patterns:
-
-> **Parameter names follow Claude Code's native tools** — `file_path`, `old_string`, `new_string` on file-content tools; `path`/`pattern` on search/dir tools. Common aliases (`old_str`, `new_str`, `filename`, `dir`, `symbol`→`name`, …) are accepted with a nudge to the canonical name; unknown params are rejected with a "did you mean". LSP tools take `uri`, which accepts a plain absolute path as readily as `file://`. `read_file` also accepts Claude Code's `offset`/`limit` window.
-
-- **First call:** `session_start({})`. Returns the orientation packet.
-- **Read before edit:** call `read_file`, copy its `mtime` header value, pass it as `expected_mtime` to `edit_file`. Mandatory under strict mode; recommended always.
-- **Common mistake — mixing plumb reads with the native Edit tool:** after a plumb `read_file`, edit with plumb `edit_file` — **not** Claude Code's native `Edit`/`Write`. The two track read-state *separately*, so a native `Edit` after a plumb `read_file` fails with "File has not been read yet". Stay in one lane.
-- **Common file ops:** `write_file({file_path, content})` create/overwrite; `edit_file({file_path, edits: [{old_string, new_string}], expected_mtime})` (`old_string` must appear exactly once); `transaction_apply({operations: [...]})` cross-file, all-or-nothing; `delete_file` (`allow_dir: true` for an empty dir); `rename_file`/`copy_file` ({from, to}) — `rename_file` is the move tool, distinct from `rename_symbol`.
-- **Discover what changed:** `git({subcommand: "status"})` or `git({subcommand: "log", args: ["-10", "--oneline"]})`.
-- **Throttled?** You hit the rate limit (default 120/min). Wait or set `PLUMB_WRITE_RATE_LIMIT=0`.
-- **Rejected for "has not been read"?** plumb's *strict mode* (`[edits].strict = true`) needs a prior plumb `read_file`. Claude Code's "File has not been read yet" instead means you used the *native* `Edit` after a plumb `read_file` — switch to plumb `edit_file`.
-- **Rejected for "uncommitted changes"?** The target was dirty in git *before* plumb touched it this session (re-editing a file plumb already wrote this session is never blocked). Commit the pre-existing changes, or pass `dirty_ok: true`.
-- **Too much log noise?** `plumb log-level warn` raises the floor instantly; `plumb log-level reset` restores the config-file default.
-
-When in doubt about the resolved config, `plumb config show --workspace .` from the project directory.
+- **First call:** `session_start({})` for orientation, live git policy, diagnostics, memories, and client-specific guidance.
+- **Stay in the plumb lane:** after a plumb read, edit with plumb `edit_file`/`write_file`, not a native client edit tool; read-state is tracked separately.
+- **Read before edit:** use `read_file`, then pass its `mtime` or `sha256` header to `edit_file.expected_mtime`/`expected_sha`. Required in strict mode, recommended always.
+- **Common file ops:** `write_file({file_path, content})`, `edit_file({file_path, edits: [{old_string, new_string}], expected_mtime})`, `transaction_apply({operations: [...]})`, `rename_file`/`copy_file` (`{from, to}`), `delete_file` (`allow_dir: true` only for empty directories).
+- **Common rejections:** "has not been read" means strict mode or native/plumb lane mixing; "uncommitted changes" means the file was dirty before this session, so commit it or pass `dirty_ok: true`; throttling means wait or adjust `PLUMB_WRITE_RATE_LIMIT`.
+- **Useful checks:** `git({subcommand: "status"})`, `git({subcommand: "log", args: ["-10", "--oneline"]})`, `plumb log-level warn/reset`, and `plumb config show --workspace .`.
