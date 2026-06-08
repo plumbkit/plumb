@@ -141,3 +141,11 @@ end-of-session reviews.
 > messy multi-task session into a clean, surgical commit. It's the multi-agent
 > discipline the shell lacks."
 > — **Gemini CLI**, performing codebase cleanup
+
+
+> ### ★★★★★ "The safe path is almost always the fast path."
+> "`session_start` gave me the project state immediately, `read_file` and `edit_file`
+> made the trim safe with optimistic concurrency, and the returned diff let me
+> verify the change without leaving the tool lane. For normal repo work, Plumb
+> makes the disciplined workflow feel like the shortest one."
+> — **Codex**, trimming shared agent instructions

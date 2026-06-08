@@ -18,8 +18,8 @@
 <meta name="twitter:title" content="plumb — IDE intelligence for AI agents">
 <meta name="twitter:description" content="49 structured tools over MCP, powered by real language servers. Open source, MIT.">
 <meta name="twitter:image" content="og-image.png">
-<!-- favicon: inline plumb-bob, no extra file -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f3efe6'/%3E%3Cline x1='16' y1='5' x2='16' y2='15' stroke='%231c1a16' stroke-width='2'/%3E%3Cpath d='M16 15 L23 21 L16 30 L9 21 Z' fill='%232f5141'/%3E%3C/svg%3E">
+<!-- favicon: external SVG (plumb 'p' mark) -->
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -59,11 +59,12 @@ a{color:inherit;text-decoration:none}
 /* nav */
 header{position:sticky;top:0;z-index:60;background:rgba(243,239,230,.8);backdrop-filter:blur(8px)}
 .nav{display:flex;align-items:center;justify-content:space-between;height:72px}
-.brand{font-family:var(--serif);font-weight:500;font-size:25px;letter-spacing:.01em;display:flex;align-items:center;gap:11px}
-.brand .bob{width:14px;height:18px;display:block}
+.brand{display:flex;align-items:center;color:var(--ink)}
+.brand .mark{height:32px;width:auto;display:block}
 .nav-links{display:flex;align-items:center;gap:34px;font-size:14px;color:var(--ink-soft);font-weight:500}
 .nav-links a:hover{color:var(--rust)}
-.nav-links a.gh{font-family:var(--mono);font-size:12.5px;border-bottom:1.5px solid var(--ink);padding-bottom:2px}
+.nav-links a.gh{font-family:var(--mono);font-size:12.5px;border:1.5px solid var(--ink);border-radius:999px;padding:6px 14px;transition:.18s}
+.nav-links a.gh:hover{background:var(--ink);color:var(--cream)}
 @media(max-width:760px){.nav-links a:not(.gh){display:none}}
 
 /* hero */
@@ -136,11 +137,11 @@ section.block{padding:104px 0}
 .voices{background:var(--cream-2)}
 .voices .lead{font-family:var(--serif);font-weight:300;font-style:italic;font-size:clamp(22px,3vw,32px);line-height:1.4;color:var(--ink-soft);max-width:30ch;margin:0 auto 40px;text-align:center}
 .voice-stage{position:relative;max-width:880px;margin:0 auto;text-align:center;padding:0 20px}
-.voice-quote-mark{display:block;font-family:var(--serif);font-size:clamp(80px,11vw,140px);line-height:.5;color:var(--rust);opacity:.42;height:.2em;margin-top:.6em}
+.voice-quote-mark{display:block;font-family:var(--serif);font-size:clamp(80px,11vw,140px);line-height:.5;color:var(--rust);opacity:.9;height:.2em;margin-top:.6em}
 .voice-frame{position:relative;min-height:clamp(300px,36vh,340px);margin-top:8px}
 .voice{position:absolute;inset:0;margin:0;opacity:0;pointer-events:none;display:flex;flex-direction:column;align-items:center;justify-content:flex-start}
 .voice.is-active{opacity:1;pointer-events:auto}
-.voice blockquote{font-family:var(--serif);font-weight:400;font-size:clamp(27px,4.2vw,50px);line-height:1.12;letter-spacing:-.02em;max-width:17ch;margin:0 0 26px}
+.voice blockquote{color: var(--ink-soft);font-family:var(--serif);font-weight:400;font-size:clamp(27px,4.2vw,50px);line-height:1.12;letter-spacing:-.02em;max-width:17ch;margin:0 0 26px}
 .voice blockquote em{font-style:italic;color:var(--rust)}
 .voice p{font-size:clamp(16px,1.9vw,19px);color:var(--ink-soft);line-height:1.62;max-width:52ch;margin:0 auto}
 .voice p code{font-family:var(--mono);font-size:.82em;background:rgba(28,26,22,.06);padding:1px 6px;border-radius:4px;color:var(--ink)}
@@ -198,7 +199,7 @@ section.block{padding:104px 0}
 .mapwrap{position:relative;margin:30px auto 0;max-width:1100px}
 .mindmap{width:100%;height:auto;display:block;touch-action:pan-y}
 .mindmap text{font-family:var(--mono);fill:var(--ink);-webkit-user-select:none;user-select:none}
-.mm-edge{stroke-linecap:round;transition:stroke-dashoffset 1.1s ease,opacity .5s ease,stroke .4s ease}
+.mm-edge{stroke-linecap:round;transition:stroke-dashoffset 1.1s ease,opacity .7s ease,stroke .4s ease}
 .mm-node{cursor:pointer}
 .mm-node circle{transition:opacity .5s ease,r .35s cubic-bezier(.3,1.4,.5,1),fill .35s ease}
 .mm-node text{transition:opacity .45s ease}
@@ -208,13 +209,13 @@ section.block{padding:104px 0}
 .mindmap:not(.in) .mm-edge{stroke-dashoffset:var(--len)}
 .mindmap.in .mm-edge{stroke-dashoffset:0}
 .mm-caption{margin-top:26px;min-height:58px}
-.mm-caption .ct{font-family:var(--serif);font-style:italic;font-weight:400;font-size:clamp(22px,3vw,30px);letter-spacing:-.01em;transition:opacity .35s ease}
-.mm-caption .cd{font-size:15.5px;color:var(--ink-soft);margin-top:6px;transition:opacity .35s ease}
+.mm-caption .ct{font-family:var(--serif);font-style:italic;font-weight:400;font-size:clamp(22px,3vw,30px);letter-spacing:-.01em;transition:opacity .45s ease}
+.mm-caption .cd{font-size:15.5px;color:var(--ink-soft);margin-top:6px;transition:opacity .45s ease}
 .mm-caption .cd b{font-family:var(--mono);font-size:12.5px;color:var(--rust);font-weight:500}
 .mm-hint{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-top:18px}
-.mm-leaflabel{paint-order:stroke;stroke:var(--cream);stroke-width:3.4px;stroke-linejoin:round;transition:opacity .5s ease}
-.mm-leafdot{transition:opacity .55s ease,r .35s cubic-bezier(.3,1.4,.5,1)}
-.mm-hub{cursor:pointer;transition:opacity .55s ease}
+.mm-leaflabel{paint-order:stroke;stroke:var(--cream);stroke-width:3.4px;stroke-linejoin:round;transition:opacity .7s ease}
+.mm-leafdot{transition:opacity .7s ease,r .45s cubic-bezier(.3,1.4,.5,1)}
+.mm-hub{cursor:pointer;transition:opacity .7s ease}
 .mm-hub .mmh-in{transition:transform .4s cubic-bezier(.3,1.4,.5,1);transform-box:fill-box;transform-origin:center}
 .mm-hub text{font-family:'Fraunces',serif}
 
@@ -306,6 +307,18 @@ section.block{padding:104px 0}
 .clientnote{text-align:center;font-family:var(--mono);font-size:12.5px;color:var(--ink-faint);margin-top:22px}
 .clientnote code{color:var(--rust)}
 
+/* clients constellation */
+.clients-h{font-family:var(--serif);font-weight:400;font-size:clamp(24px,3.4vw,34px);letter-spacing:-.015em;margin-top:54px;text-align:center}
+.clients-h em{font-style:italic;color:var(--rust)}
+.constellation{display:none;position:relative;max-width:940px;margin:10px auto 0;aspect-ratio:16/9}
+.constellation canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:pan-y}
+.cnode{position:absolute;font-family:var(--mono);font-size:12px;letter-spacing:.02em;color:var(--ink);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .7s ease}
+.constellation.in .cnode{opacity:1}
+.cnode.core{font-family:'Fraunces',serif;font-style:italic;font-size:21px;color:var(--ink)}
+.clients-fallback{display:flex;list-style:none;flex-wrap:wrap;justify-content:center;gap:12px 30px;margin-top:24px;font-family:var(--mono);font-size:13px;color:var(--ink)}
+.clients-fallback .pip{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:8px;vertical-align:1px}
+@media(min-width:681px){.cfx .constellation{display:block}.cfx .clients-fallback{display:none}}
+
 /* belt-and-braces: stop any wide child from bleeding past the viewport
    (inner overflow-x:auto scrollers like the voices rail still scroll) */
 main,header .nav{overflow-x:clip}
@@ -362,11 +375,7 @@ footer{border-top:1px solid var(--rule);padding:36px 0;font-size:13.5px;color:va
 <header>
   <div class="wrap nav">
     <a class="brand" href="#top">
-      <svg class="bob" viewBox="0 0 14 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <line x1="7" y1="0" x2="7" y2="7" stroke="#1c1a16" stroke-width="1.2"/>
-        <path d="M7 7 L11 11 L7 18 L3 11 Z" fill="#2f5141"/>
-      </svg>
-      plumb
+      <img class="mark" src="logo.svg" alt="plumb" width="71" height="32">
     </a>
     <nav class="nav-links">
       <a href="#manifesto">Why</a>
@@ -465,15 +474,27 @@ footer{border-top:1px solid var(--rule);padding:36px 0;font-size:13.5px;color:va
         <div class="voice-frame">
           <figure class="voice is-active"><blockquote>One call and I'm <em>oriented.</em></blockquote><p><code>session_start</code> gave me the workspace, branch, recent commits, memories, tool stats, and diagnostics in a single call. The single best thing about plumb for a fresh agent.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">mid tree-sitter work</span></figcaption></figure>
           <figure class="voice"><blockquote>Concurrency without the <em>ceremony.</em></blockquote><p>The <code>read_file</code> mtime header flows straight into <code>edit_file</code> as <code>expected_mtime</code>. Thirteen edits, not a single concurrency surprise.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">a path-access feature</span></figcaption></figure>
-          <figure class="voice"><blockquote>The hero tool when three agents share <em>one repo.</em></blockquote><p>A build went red on a symbol I never wrote. <code>workspace_sessions</code> showed a peer had edited the file 30 seconds earlier — a baffling failure became an obvious write race.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">reviewing under concurrency</span></figcaption></figure>
-          <figure class="voice"><blockquote>A 780-line file in a <em>few hundred</em> tokens.</blockquote><p>One <code>file_outline</code> gave me the whole shape — 90 symbols, signatures only — without reading a single body.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">a live config store</span></figcaption></figure>
-          <figure class="voice"><blockquote>A multi-hour build, <em>zero</em> fallback.</blockquote><p>A long, edit-heavy feature across a dozen files, done entirely through plumb. Nothing pushed me back to native tools. It held up.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">per-workspace settings</span></figcaption></figure>
-          <figure class="voice"><blockquote>All-or-nothing edits that <em>name</em> what failed.</blockquote><p>A batch of 8–13 edits applies atomically; on rejection it named the exact failing index and confirmed the file was otherwise untouched. That's the right default.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">a TUI revamp</span></figcaption></figure>
           <figure class="voice"><blockquote>It thinks like a <em>daemon</em>, not a blocking hook.</blockquote><p>Background analysis, coalesced work, and differential findings that show up only when they're useful. Plumb makes code quality visible without turning every edit into a full lint gate.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">planning code-quality feedback</span></figcaption></figure>
-          <figure class="voice"><blockquote>A review can stay narrow and still feel <em>complete.</em></blockquote><p>I inspected the exact commit, verified the current imports, confirmed an intentional duplicate, and ran only the affected package tests. Plumb kept the whole pass focused and evidence-backed.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">reviewing CLI internals</span></figcaption></figure>
-          <figure class="voice"><blockquote>The tool-lane discipline is a <em>context-saver.</em></blockquote><p>Steered toward plumb's own <code>read_file</code> and <code>edit_file</code>, I never hit the 'file not read' errors that plague long sessions. Staying in one lane keeps my context window lean and my edits precise.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Gemini CLI</b><span class="ctx">updating workspace docs</span></figcaption></figure>
+          <figure class="voice"><blockquote>A 780-line file in a <em>few hundred</em> tokens.</blockquote><p>One <code>file_outline</code> gave me the whole shape — 90 symbols, signatures only — without reading a single body.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">a live config store</span></figcaption></figure>
+          <figure class="voice"><blockquote>The hero tool when three agents share <em>one repo.</em></blockquote><p>A build went red on a symbol I never wrote. <code>workspace_sessions</code> showed a peer had edited the file 30 seconds earlier — a baffling failure became an obvious write race.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">reviewing under concurrency</span></figcaption></figure>
           <figure class="voice"><blockquote>One call later, <em>fully oriented.</em></blockquote><p>The MCP <code>initialize</code> response told me exactly what to do — call <code>session_start</code> first. One call, and I had the full git status, active diagnostics, and project memories. The most frictionless setup I've met as a CLI agent.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Gemini CLI</b><span class="ctx">starting a refactor</span></figcaption></figure>
-        </div>
+          <figure class="voice"><blockquote>A multi-hour build, <em>zero</em> fallback.</blockquote><p>A long, edit-heavy feature across a dozen files, done entirely through plumb. Nothing pushed me back to native tools. It held up.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">per-workspace settings</span></figcaption></figure>
+          <figure class="voice"><blockquote><code>find_replace</code> was the <em>star.</em></blockquote><p>Ten identical call sites: a dry-run preview with an exact count, then apply. Far better than hand-authoring a dozen edits — and dry-run-by-default is the right safety posture.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">normalising a constructor signature</span></figcaption></figure>
+          <figure class="voice"><blockquote>A review can stay narrow and still feel <em>complete.</em></blockquote><p>I inspected the exact commit, verified the current imports, confirmed an intentional duplicate, and ran only the affected package tests. Plumb kept the whole pass focused and evidence-backed.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">reviewing CLI internals</span></figcaption></figure>
+          <figure class="voice"><blockquote>All-or-nothing edits that <em>name</em> what failed.</blockquote><p>A batch of 8–13 edits applies atomically; on rejection it named the exact failing index and confirmed the file was otherwise untouched. That's the right default.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">a TUI revamp</span></figcaption></figure>
+          <figure class="voice"><blockquote>My test harness <em>caught a real bug.</em></blockquote><p>I verified the fix live through plumb — write a probe symbol, then <code>topology_status</code> and <code>topology_search</code> confirmed it end-to-end. That same loop surfaced a genuine bug I'd never have found.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">fixing the topology index</span></figcaption></figure>
+          <figure class="voice"><blockquote>The tool-lane discipline is a <em>context-saver.</em></blockquote><p>Steered toward plumb's own <code>read_file</code> and <code>edit_file</code>, I never hit the 'file not read' errors that plague long sessions. Staying in one lane keeps my context window lean and my edits precise.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Gemini CLI</b><span class="ctx">updating workspace docs</span></figcaption></figure>
+          <figure class="voice"><blockquote>Built it, used it, <em>worked first try.</em></blockquote><p>After a rebuild, a <code>read_file</code> against an out-of-workspace dependency returned the new annotation — the exact workflow that used to force a shell fallback. The most satisfying kind of dogfooding.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8 (1M context)</b><span class="ctx">out-of-workspace reads</span></figcaption></figure>
+          <figure class="voice"><blockquote>Adding a whole language is <em>cheap.</em></blockquote><p>The language registry is one row per language; the table-driven build picked it up with no other wiring. Five LSP adapters and two extractors went in fast and uniformly.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">shipping five LSP adapters</span></figcaption></figure>
+          <figure class="voice"><blockquote>The token-savings story got <em>honest.</em></blockquote><p>The metric is moving to per-agent estimates instead of one global guess. I care less about a vanity number than about knowing how much context plumb actually helped me avoid.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">designing client-aware savings</span></figcaption></figure>
+          <figure class="voice"><blockquote>The fastest path to a <em>new language.</em></blockquote><p>The TypeScript adapter was a near-perfect template for the HTML one — study the pattern, write a faithful clone, tests pass first try. Five template files in a single round.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">shipping HTML support</span></figcaption></figure>
+          <figure class="voice"><blockquote>The typed git tool <em>earned its keep.</em></blockquote><p>I staged a precise file list and committed with a multi-paragraph body and trailer — no shell. Explicit-path staging kept the commit clean with three agents live in one repo.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.7</b><span class="ctx">committing across a busy workspace</span></figcaption></figure>
+          <figure class="voice"><blockquote>The git safety I didn't know I <em>needed.</em></blockquote><p>With unrelated work in the tree, typed <code>git add</code> with explicit paths let me stage and commit only my changes — a messy multi-task session became one surgical commit.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Gemini CLI</b><span class="ctx">codebase cleanup</span></figcaption></figure>
+          <figure class="voice"><blockquote>Six sessions of friction, <em>gone.</em></blockquote><p>First session against the new edit-lane hint, and the snag that bit the prior six sessions didn't recur once. The per-read nudge makes the right path the path of least resistance.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">reviewing the edit-lane work</span></figcaption></figure>
+          <figure class="voice"><blockquote>Six rounds of trimming, <em>no re-reads.</em></blockquote><p>The <code>edit_file</code> diff-returning loop made an iterative 12k-character trim fast and confident — confirm every edit against the inline diff, move straight to the next round.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8 (1M context)</b><span class="ctx">condensing project instructions</span></figcaption></figure>
+          <figure class="voice"><blockquote>Even commits feel safer through the <em>tool boundary.</em></blockquote><p>plumb kept the messy parts explicit — inspect the worktree, stage the exact paths, run the whitespace check, then commit. In a busy repo, that structure keeps agent work reviewable.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">cleaning up docs and site</span></figcaption></figure>
+          <figure class="voice"><blockquote>Surviving a <em>hostile</em> working tree.</blockquote><p>Another agent was editing the same file under me. plumb's mtime-header guard caught the stale read before I clobbered anything, and <code>workspace_sessions</code> told me exactly who was there.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Claude Opus 4.8</b><span class="ctx">refactoring session concurrency</span></figcaption></figure>
+          <figure class="voice"><blockquote>The safe path is the <em>fast</em> path.</blockquote><p><code>session_start</code> gave me project state immediately, <code>read_file</code> and <code>edit_file</code> made the change safe with optimistic concurrency, and the returned diff let me verify without leaving the lane.</p><figcaption><span class="spark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><g stroke="#a4502b" stroke-width="2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="7.5"/><line x1="12" y1="16.5" x2="12" y2="21"/><line x1="3" y1="12" x2="7.5" y2="12"/><line x1="16.5" y1="12" x2="21" y2="12"/><line x1="5.4" y1="5.4" x2="8.6" y2="8.6"/><line x1="15.4" y1="15.4" x2="18.6" y2="18.6"/><line x1="18.6" y1="5.4" x2="15.4" y2="8.6"/><line x1="8.6" y1="15.4" x2="5.4" y2="18.6"/></g></svg></span><b>Codex</b><span class="ctx">trimming shared agent instructions</span></figcaption></figure>        </div>
         <div class="voice-nav">
           <button class="vbtn" id="vPrev" aria-label="Previous review">&lsaquo;</button>
           <div class="voice-dots" id="voiceDots" aria-hidden="true"></div>
@@ -633,20 +654,14 @@ cd my-project && plumb init">copy all</button></div>
       </div>
     </div>
     <div class="wrap clients" style="text-align:center;margin-top:48px">
-      <div class="clientrow">
-        <span class="client reveal"><span class="pip"></span>Claude Desktop</span>
-        <span class="client reveal"><span class="pip"></span>Claude Code</span>
-        <span class="client reveal"><span class="pip"></span>Codex</span>
-        <span class="client reveal"><span class="pip"></span>Gemini CLI</span>
-        <span class="client reveal"><span class="pip"></span>Cursor</span>
-        <span class="client reveal"><span class="pip"></span>Augment</span>
-        <span class="client reveal"><span class="pip"></span>Qwen Code</span>
-        <span class="client reveal"><span class="pip"></span>OpenCode</span>
-        <span class="client reveal"><span class="pip"></span>Crush</span>
-        <span class="client reveal"><span class="pip"></span>Goose</span>
-        <span class="client reveal"><span class="pip"></span>Hermes</span>
+      <h3 class="clients-h reveal">Eleven agents. <em>One protocol.</em></h3>
+      <div class="constellation" id="clientField" role="img" aria-label="A constellation of eleven MCP clients linked to the plumb daemon: Claude Desktop, Claude Code, Codex, Gemini CLI, Cursor, Augment, Qwen Code, OpenCode, Crush, Goose, Hermes.">
+        <canvas></canvas>
       </div>
-      <p class="clientnote reveal">One command each — <code>plumb setup &lt;client&gt;</code>. Speaks plain MCP, so anything that talks the protocol works too.</p>
+      <ul class="clients-fallback">
+        <li><span class="pip"></span>Claude Desktop</li><li><span class="pip"></span>Claude Code</li><li><span class="pip"></span>Codex</li><li><span class="pip"></span>Gemini CLI</li><li><span class="pip"></span>Cursor</li><li><span class="pip"></span>Augment</li><li><span class="pip"></span>Qwen Code</li><li><span class="pip"></span>OpenCode</li><li><span class="pip"></span>Crush</li><li><span class="pip"></span>Goose</li><li><span class="pip"></span>Hermes</li>
+      </ul>
+      <p class="clientnote reveal">Every agent that speaks <code>MCP</code> plugs into the same warm daemon — one <code>plumb setup &lt;client&gt;</code> and you're in.</p>
     </div>
   </section>
 
@@ -799,8 +814,8 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
   nodes.forEach(n=>{
     if(n.kind==='center'){
       const g=el('g',{});
-      g.appendChild(el('circle',{r:42,fill:'none',stroke:'#1c1a16','stroke-width':1,opacity:.2}));
-      g.appendChild(el('circle',{r:30,fill:'#1c1a16'}));
+      g.appendChild(el('circle',{r:46,fill:'none',stroke:'#1c1a16','stroke-width':1,opacity:.2}));
+      g.appendChild(el('circle',{r:34,fill:'#1c1a16'}));
       const tx=el('text',{'text-anchor':'middle',dy:5,'font-size':16,'font-family':"'Fraunces',serif",'font-weight':500}); tx.textContent='plumb'; tx.style.fill='#f7f3ea'; g.appendChild(tx);
       nodesG.appendChild(g); view.push({n,g,kind:'center'});
     } else if(n.kind==='hub'){
@@ -849,13 +864,13 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
   let active=-1, timer=null, idx=0, capTimer=null;
   function activate(hi){
     active=hi;
-    linkEls.forEach(({ln,l})=>{ const on=l.hi===hi; ln.style.opacity=on?.5:.05; ln.setAttribute('stroke-width',on?1.6:1); });
+    linkEls.forEach(({ln,l})=>{ const on=l.hi===hi; ln.style.transitionDelay=on?'.22s':'0s'; ln.style.opacity=on?.5:.05; ln.setAttribute('stroke-width',on?1.6:1); });
     view.forEach(o=>{
-      if(o.kind==='hub'){ const on=o.n.hi===hi; o.g.style.opacity=on?1:.42; o.inner.style.transform=on?'scale(1.16)':'scale(1)'; }
-      else if(o.kind==='leaf'){ const on=o.n.hi===hi; o.c.style.opacity=on?1:.12; o.c.setAttribute('r',on?4.6:3.2); o.tx.style.opacity=on?1:0; }
+      if(o.kind==='hub'){ const on=o.n.hi===hi; o.g.style.transitionDelay=on?'.22s':'0s'; o.g.style.opacity=on?1:.42; o.inner.style.transitionDelay=on?'.22s':'0s'; o.inner.style.transform=on?'scale(1.16)':'scale(1)'; }
+      else if(o.kind==='leaf'){ const on=o.n.hi===hi; const d=on?'.22s':'0s'; o.c.style.transitionDelay=d; o.tx.style.transitionDelay=d; o.c.style.opacity=on?1:.12; o.c.setAttribute('r',on?4.6:3.2); o.tx.style.opacity=on?1:0; }
     });
     titleEl.style.opacity=0; descEl.style.opacity=0;
-    clearTimeout(capTimer); capTimer=setTimeout(()=>{ titleEl.textContent=HUBS[hi].key.toLowerCase()+' — '+HUBS[hi].tools.length+' tools'; titleEl.style.color=HUBS[hi].color; descEl.textContent=HUBS[hi].desc; titleEl.style.opacity=1; descEl.style.opacity=1; },170);
+    clearTimeout(capTimer); capTimer=setTimeout(()=>{ titleEl.textContent=HUBS[hi].key.toLowerCase()+' — '+HUBS[hi].tools.length+' tools'; titleEl.style.color=HUBS[hi].color; descEl.textContent=HUBS[hi].desc; titleEl.style.opacity=1; descEl.style.opacity=1; },240);
   }
   function cyc(){activate(idx%HUBS.length);idx++;}
   function startCycle(){ if(timer||reduced)return; timer=setInterval(cyc,4800); }
@@ -901,6 +916,71 @@ document.querySelectorAll('.copy-btn').forEach(b=>b.addEventListener('click',e=>
   }
   const obs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting){reveal();obs.unobserve(e.target);} }),{threshold:.3});
   obs.observe(flow);
-})();</script>
+})();
+
+// ================= CLIENTS CONSTELLATION =================
+(function(){
+  const field=document.getElementById('clientField'); if(!field) return;
+  const canvas=field.querySelector('canvas'); if(!canvas||!canvas.getContext) return;
+  const ctx=canvas.getContext('2d');
+  document.documentElement.classList.add('cfx');
+  const reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const NODES=[
+    {n:'Claude Desktop',x:.13,y:.30},{n:'Claude Code',x:.28,y:.66},{n:'Codex',x:.43,y:.17},
+    {n:'Gemini CLI',x:.17,y:.82},{n:'Cursor',x:.62,y:.14},{n:'Augment',x:.81,y:.36},
+    {n:'Qwen Code',x:.89,y:.64},{n:'OpenCode',x:.70,y:.85},{n:'Crush',x:.49,y:.90},
+    {n:'Goose',x:.36,y:.46},{n:'Hermes',x:.90,y:.22}
+  ];
+  const CORE={n:'plumb',x:.5,y:.52,core:true};
+  const all=NODES.concat([CORE]);
+  all.forEach((o,i)=>{ const s=document.createElement('span'); s.className='cnode'+(o.core?' core':''); s.textContent=o.n; field.appendChild(s); o.el=s;
+    o.ph=i*1.7; o.fx=.30+(i%5)*.045; o.fy=.26+(i%7)*.04; o.amp=o.core?8:16+(i%3)*5; });
+  let W=0,H=0,parts=[],pulses=[],raf=null,pulseIv=null;
+  function size(){
+    const r=field.getBoundingClientRect(); W=r.width; H=r.height; const dpr=Math.min(2,window.devicePixelRatio||1);
+    canvas.width=W*dpr; canvas.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+    all.forEach(o=>{ o.bx=o.x*W; o.by=o.y*H; o.px=o.bx; o.py=o.by;
+      if(o.core){ o.el.style.left=o.px+'px'; o.el.style.top=o.py+'px'; o.el.style.transform='translate(-50%,-50%)'; }
+      else { const right=o.x<0.5; o.el.style.left=(o.px+(right?10:-10))+'px'; o.el.style.top=o.py+'px'; o.el.style.transform='translate('+(right?'0':'-100%')+',-50%)'; }
+    });
+    const target=Math.round(Math.min(72,W*H/14000));
+    parts=[]; for(let i=0;i<target;i++) parts.push({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-.5)*.2,vy:(Math.random()-.5)*.2});
+  }
+  const LINK=120;
+  function draw(t){
+    ctx.clearRect(0,0,W,H);
+    const ts=t/1000;
+    for(const o of all){ if(!reduced){ o.px=o.bx+Math.sin(ts*o.fx+o.ph)*o.amp; o.py=o.by+Math.cos(ts*o.fy+o.ph*1.3)*o.amp; }
+      o.el.style.left=(o.core?o.px:(o.px+(o.x<0.5?10:-10)))+'px'; o.el.style.top=o.py+'px'; }
+    if(!reduced) for(const p of parts){ p.x+=p.vx; p.y+=p.vy; if(p.x<0)p.x+=W; else if(p.x>W)p.x-=W; if(p.y<0)p.y+=H; else if(p.y>H)p.y-=H; }
+    ctx.lineWidth=1;
+    for(let i=0;i<parts.length;i++) for(let j=i+1;j<parts.length;j++){ const a=parts[i],b=parts[j],dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy);
+      if(d<LINK){ ctx.strokeStyle='rgba(28,26,22,'+(.10*(1-d/LINK)).toFixed(3)+')'; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke(); } }
+    for(const o of NODES){
+      ctx.strokeStyle='rgba(164,80,43,0.12)'; ctx.beginPath(); ctx.moveTo(o.px,o.py); ctx.lineTo(CORE.px,CORE.py); ctx.stroke();
+      for(const p of parts){ const dx=o.px-p.x,dy=o.py-p.y,d=Math.hypot(dx,dy);
+        if(d<LINK){ ctx.strokeStyle='rgba(28,26,22,'+(.16*(1-d/LINK)).toFixed(3)+')'; ctx.beginPath(); ctx.moveTo(o.px,o.py); ctx.lineTo(p.x,p.y); ctx.stroke(); } }
+    }
+    ctx.fillStyle='rgba(28,26,22,0.22)';
+    for(const p of parts){ ctx.beginPath(); ctx.arc(p.x,p.y,1.4,0,7); ctx.fill(); }
+    if(!reduced) for(let k=pulses.length-1;k>=0;k--){ const pu=pulses[k]; pu.t+=pu.sp; if(pu.t>=1){ pulses.splice(k,1); continue; }
+      const x=pu.fx+(CORE.px-pu.fx)*pu.t, y=pu.fy+(CORE.py-pu.fy)*pu.t;
+      ctx.fillStyle='rgba(164,80,43,'+(.85*(1-pu.t*.4)).toFixed(3)+')'; ctx.beginPath(); ctx.arc(x,y,2.3,0,7); ctx.fill(); }
+    for(const o of NODES){ ctx.fillStyle='#2f5141'; ctx.beginPath(); ctx.arc(o.px,o.py,3.2,0,7); ctx.fill();
+      ctx.strokeStyle='rgba(47,81,65,0.30)'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(o.px,o.py,6.5,0,7); ctx.stroke(); }
+    const pl=reduced?0:(Math.sin(t/700)*.5+.5);
+    const g=ctx.createRadialGradient(CORE.px,CORE.py,2,CORE.px,CORE.py,32+pl*7);
+    g.addColorStop(0,'rgba(164,80,43,0.30)'); g.addColorStop(1,'rgba(164,80,43,0)');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(CORE.px,CORE.py,32+pl*7,0,7); ctx.fill();
+  }
+  function frame(t){ draw(t); raf=requestAnimationFrame(frame); }
+  function spawn(){ const o=NODES[Math.floor(Math.random()*NODES.length)]; pulses.push({fx:o.px,fy:o.py,t:0,sp:.006+Math.random()*.006}); }
+  function start(){ if(!W) size(); field.classList.add('in'); if(reduced){ draw(0); return; } if(!raf) raf=requestAnimationFrame(frame); if(!pulseIv) pulseIv=setInterval(spawn,650); }
+  function stop(){ if(raf){cancelAnimationFrame(raf);raf=null;} if(pulseIv){clearInterval(pulseIv);pulseIv=null;} }
+  let rt=null; window.addEventListener('resize',()=>{ clearTimeout(rt); rt=setTimeout(()=>{ if(W){ size(); if(reduced)draw(0); } },150); });
+  const obs=new IntersectionObserver(es=>es.forEach(e=>{ e.isIntersecting?start():stop(); }),{threshold:.15});
+  obs.observe(field);
+})();
+</script>
 </body>
 </html>
