@@ -53,6 +53,55 @@ func TestReadSymbol_TopologyFallback(t *testing.T) {
 	}
 }
 
+// TestReadSymbol_ColdLSPBareMethodName proves S1: when the LSP answers but does
+// NOT resolve a bare method name (a cold server), read_symbol falls back to the
+// structural Map — the Go extractor names methods by their bare name — instead
+// of returning "No symbol named".
+func TestReadSymbol_ColdLSPBareMethodName(t *testing.T) {
+	ws := t.TempDir()
+	src := "package demo\n\ntype Server struct{}\n\nfunc (s *Server) handleConn() int { return 7 }\n"
+	fpath := filepath.Join(ws, "srv.go")
+	if err := os.WriteFile(fpath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Empty LSP: answers with no symbols and no error (the cold-server case).
+	tool := tools.NewReadSymbol(&mockLSP{}, nil, 0, 0, tools.NewReadTracker()).
+		WithTopologyFallback(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"path": "file://" + fpath, "name": "handleConn"})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected the cold-LSP topology fallback to resolve, got: %v", err)
+	}
+	if !strings.Contains(out, "handleConn") || !strings.Contains(out, "return 7") {
+		t.Errorf("cold-LSP bare method name should resolve via the Map:\n%s", out)
+	}
+}
+
+// TestReadSymbol_URIAlias proves S2: read_symbol accepts `uri` as an alias for
+// `path`.
+func TestReadSymbol_URIAlias(t *testing.T) {
+	store, _, uri := fallbackFixture(t)
+	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+		WithTopologyFallback(func() *topology.Store { return store })
+	args, _ := json.Marshal(map[string]any{"uri": uri, "name": "Alpha"})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("uri alias should work like path, got: %v", err)
+	}
+	if !strings.Contains(out, "func Alpha() int {") {
+		t.Errorf("expected Alpha via uri alias:\n%s", out)
+	}
+}
+
 // TestReadSymbol_TopologyFallback_ReceiverSegmentNotSubstring guards that a
 // dotted ReceiverType.Method name resolves on a whole-segment match, not a
 // substring: "User.Save" must resolve (User).Save and never (SuperUser).Save.

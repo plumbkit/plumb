@@ -21,12 +21,16 @@ var readSymbolSchema = json.RawMessage(`{
       "type": "string",
       "description": "Absolute path or file:// URI of the file containing the symbol"
     },
+    "uri": {
+      "type": "string",
+      "description": "Alias for path (file:// URI or absolute path). Used only when path is omitted."
+    },
     "name": {
       "type": "string",
       "description": "Exact symbol name. Accepts plain name (e.g. \"handleConn\") or dotted ReceiverType.MethodName form (e.g. \"Model.renderDashboard\")."
     }
   },
-  "required": ["path", "name"],
+  "required": ["name"],
   "additionalProperties": false
 }`)
 
@@ -103,6 +107,7 @@ func (t *ReadSymbol) Description() string {
 
 type readSymbolArgs struct {
 	Path string `json:"path"`
+	URI  string `json:"uri"`
 	Name string `json:"name"`
 }
 
@@ -126,7 +131,14 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	matches := resolveSymbolsByName(syms, a.Name)
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbol named %q in %s.", a.Name, fpath), nil
+		// The LSP answered but did not resolve the name (commonly a cold server,
+		// or a bare method name it indexes only as a qualified symbol). Try the
+		// structural Map before giving up — the Go extractor names methods by their
+		// bare name, so it resolves what the LSP missed.
+		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
+			return fb, nil
+		}
+		return t.noSymbolMessage(a.Name, fpath), nil
 	}
 	return t.formatReadSymbolResult(fpath, a.Name, matches)
 }
@@ -162,12 +174,26 @@ func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {
 		return a, fmt.Errorf("read_symbol: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("read_symbol: path is required")
+		a.Path = a.URI // uri is an alias for path
+	}
+	if a.Path == "" {
+		return a, fmt.Errorf("read_symbol: path (or uri) is required")
 	}
 	if a.Name == "" {
 		return a, fmt.Errorf("read_symbol: name is required")
 	}
 	return a, nil
+}
+
+// noSymbolMessage renders the not-found message, adding a hint when the file is
+// outside the workspace — neither the LSP nor the topology index covers those,
+// so read_file is the right tool.
+func (t *ReadSymbol) noSymbolMessage(name, fpath string) string {
+	msg := fmt.Sprintf("No symbol named %q in %s.", name, fpath)
+	if t.outsideFn != nil && t.outsideFn(fpath) != "" {
+		msg += " (This file is outside the workspace; neither the language server nor the topology index covers it — use read_file with a line range instead.)"
+	}
+	return msg
 }
 
 func resolveReadSymbolPaths(path string) (fpath, uri string) {

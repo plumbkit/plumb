@@ -47,6 +47,13 @@ type Language struct {
 	// LSPAdapter is the language-server key in [lsp.<adapter>], or "" when no
 	// language server is wired (the structural engine is then the only source).
 	LSPAdapter string
+	// PreferStructuralOutline makes outline-style tools (file_outline,
+	// list_symbols, find_symbol) consult the topology Map BEFORE the language
+	// server. Set for markup languages whose LSP documentSymbol is unusable as an
+	// outline (vscode-html emits a node per tag AND attribute — ~1220 for one
+	// page vs the Map's ~54 clean landmarks). The LSP stays the source for
+	// hover/diagnostics; only the outline prefers the Map.
+	PreferStructuralOutline bool
 }
 
 // registry is the immutable capability table — the single place that encodes
@@ -68,8 +75,8 @@ var registry = []Language{
 	{Name: "dockerfile", Extensions: []string{"dockerfile", "containerfile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "toml", Extensions: []string{".toml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "yaml", Extensions: []string{".yaml", ".yml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
-	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: ""},
-	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server"},
+	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: "", PreferStructuralOutline: true},
+	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server", PreferStructuralOutline: true},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.

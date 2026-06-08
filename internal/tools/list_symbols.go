@@ -90,6 +90,14 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 	}
 	a.URI = toFileURI(a.URI)
 
+	// Markup languages (HTML/Markdown) have unusably noisy LSP outlines; consult
+	// the structural Map first and only fall through to the LSP if it has nothing.
+	if preferStructuralOutline(a.URI) {
+		if out, ok := t.topologyFallback(ctx, a.URI); ok {
+			return out, nil
+		}
+	}
+
 	key := a.URI + ":docSymbols"
 	if t.cache != nil {
 		if v, ok := t.cache.Get(key); ok {

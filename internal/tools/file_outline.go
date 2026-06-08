@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/golimpio/plumb/internal/cache"
+	"github.com/golimpio/plumb/internal/langsupport"
 	"github.com/golimpio/plumb/internal/lsp"
 	"github.com/golimpio/plumb/internal/lsp/protocol"
 	"github.com/golimpio/plumb/internal/topology"
@@ -150,9 +151,27 @@ func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResul
 	return &outlineResult{uri: a.URI, source: source, lines: lines, entries: entries, includeDocs: includeDocs}, nil
 }
 
+// preferStructuralOutline reports whether the file's language prefers the
+// topology Map over the LSP for outline-style views (markup like HTML/Markdown,
+// whose documentSymbol is too noisy — a node per tag and attribute — to serve
+// as an outline). The LSP remains the source for hover/diagnostics.
+func preferStructuralOutline(uri string) bool {
+	lang, ok := langsupport.ByPath(strings.TrimPrefix(uri, "file://"))
+	return ok && lang.PreferStructuralOutline
+}
+
 // entries resolves the file's symbols, preferring the language server and
-// falling back to the topology index when it errors or times out.
+// falling back to the topology index when it errors or times out. For markup
+// languages flagged PreferStructuralOutline, the Map is consulted FIRST (the
+// LSP outline is unusably noisy), falling through to the LSP only when the Map
+// has nothing.
 func (t *FileOutline) entries(ctx context.Context, uri string) ([]outlineEntry, string, error) {
+	if preferStructuralOutline(uri) {
+		if e, ok := t.topologyEntries(ctx, uri); ok {
+			return e, "topology", nil
+		}
+		// Map empty/unavailable — fall through to the LSP path below.
+	}
 	syms, lspErr := t.lspSymbols(ctx, uri)
 	if lspErr == nil {
 		var out []outlineEntry

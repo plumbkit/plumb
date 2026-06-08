@@ -253,6 +253,42 @@ func TestAdapter_DocumentSymbols(t *testing.T) {
 	assertOpenedBefore(t, mock, protocol.MethodDocumentSymbols)
 }
 
+// TestAdapter_DocumentSymbols_FlatShapeRangeMapping proves the union decode:
+// when the server returns the legacy flat SymbolInformation[] (range under
+// location.range), the adapter maps it onto DocumentSymbol.Range instead of
+// leaving every symbol at L1 (the pre-fix bug).
+func TestAdapter_DocumentSymbols_FlatShapeRangeMapping(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+
+	flat := []protocol.SymbolInformation{
+		{Name: "html", Kind: protocol.SKField, Location: protocol.Location{
+			URI:   "file:///p/index.html",
+			Range: protocol.Range{Start: protocol.Position{Line: 5}, End: protocol.Position{Line: 9}},
+		}},
+	}
+	mock.HandleOK(protocol.MethodDocumentSymbols, flat)
+	mock.Handle(protocol.MethodDidOpen, func(_ json.RawMessage) (any, error) { return nil, nil })
+
+	if _, err := ad.Initialize(ctx, html.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+
+	uri := writeTempHTML(t, "<html><body></body></html>\n")
+	syms, err := ad.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	})
+	if err != nil {
+		t.Fatalf("DocumentSymbols: %v", err)
+	}
+	if len(syms) != 1 {
+		t.Fatalf("got %d symbols, want 1", len(syms))
+	}
+	if syms[0].Range.Start.Line != 5 || syms[0].Range.End.Line != 9 {
+		t.Fatalf("flat location.range must map to .Range; got %+v", syms[0].Range)
+	}
+}
+
 func TestAdapter_Hover(t *testing.T) {
 	ad, mock := newAdapter(t)
 	ctx := context.Background()

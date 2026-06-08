@@ -207,15 +207,70 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 // DocumentSymbols returns all symbols in the document.
+//
+// vscode-html-language-server returns the legacy flat SymbolInformation[] shape
+// (range under location.range) rather than the hierarchical DocumentSymbol[]
+// (range under .range). Decoding straight into []DocumentSymbol silently drops
+// every range to the zero value (all symbols at L1). We decode the
+// DocumentSymbol | SymbolInformation union and map location.range → Range so
+// outlines carry real line numbers regardless of which shape the server sends.
 func (a *Adapter) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
 	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
 		return nil, err
 	}
-	var result []protocol.DocumentSymbol
-	if err := a.conn.Call(ctx, protocol.MethodDocumentSymbols, params, &result); err != nil {
+	var raw json.RawMessage
+	if err := a.conn.Call(ctx, protocol.MethodDocumentSymbols, params, &raw); err != nil {
 		return nil, fmt.Errorf("vscode-html-language-server documentSymbol: %w", err)
 	}
-	return result, nil
+	return decodeDocumentSymbolUnion(raw)
+}
+
+// htmlSymbolNode is a hybrid of DocumentSymbol and SymbolInformation: it carries
+// both the hierarchical `range`/`children` and the flat `location`, so one
+// decode handles whichever shape the server sends.
+type htmlSymbolNode struct {
+	Name     string              `json:"name"`
+	Kind     protocol.SymbolKind `json:"kind"`
+	Detail   string              `json:"detail"`
+	Range    protocol.Range      `json:"range"`
+	Location protocol.Location   `json:"location"`
+	Children []htmlSymbolNode    `json:"children"`
+}
+
+// decodeDocumentSymbolUnion parses either shape into []protocol.DocumentSymbol,
+// preferring the hierarchical range and falling back to the flat
+// location.range when the former is absent (zero).
+func decodeDocumentSymbolUnion(raw json.RawMessage) ([]protocol.DocumentSymbol, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var nodes []htmlSymbolNode
+	if err := json.Unmarshal(raw, &nodes); err != nil {
+		return nil, fmt.Errorf("vscode-html-language-server documentSymbol: decoding symbols: %w", err)
+	}
+	return htmlNodesToSymbols(nodes), nil
+}
+
+func htmlNodesToSymbols(nodes []htmlSymbolNode) []protocol.DocumentSymbol {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]protocol.DocumentSymbol, 0, len(nodes))
+	for _, n := range nodes {
+		rng := n.Range
+		if rng == (protocol.Range{}) {
+			rng = n.Location.Range // flat SymbolInformation shape
+		}
+		out = append(out, protocol.DocumentSymbol{
+			Name:           n.Name,
+			Detail:         n.Detail,
+			Kind:           n.Kind,
+			Range:          rng,
+			SelectionRange: rng,
+			Children:       htmlNodesToSymbols(n.Children),
+		})
+	}
+	return out
 }
 
 // WorkspaceSymbols searches for symbols matching the query. The HTML server does

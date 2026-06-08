@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.4 (unreleased)
+
+Symbol resolution and HTML/markup outline fixes from the agent feedback log.
+
+### Fixed
+
+- **HTML symbol ranges no longer collapse to line 1.** `vscode-html-language-server` returns the legacy flat `SymbolInformation[]` shape (range under `location.range`); the adapter decoded it into `DocumentSymbol` (range under `.range`), zeroing every range. It now decodes the `DocumentSymbol | SymbolInformation` union and maps `location.range → Range`, so HTML outlines carry real line numbers.
+- **`read_symbol` resolves a bare method name when the LSP is cold.** Previously, if the language server answered but did not resolve the name, `read_symbol` returned "No symbol named" without trying the structural Map. It now falls back to topology on a no-match (not just on an LSP error) — and the Go extractor names methods by their bare name, so a cold-server bare-method lookup resolves.
+
+### Changed
+
+- **Outline tools prefer the Map for HTML/Markdown.** `file_outline` and `list_symbols` now consult the topology Map *before* the language server for markup languages (new `PreferStructuralOutline` flag in `internal/langsupport`). vscode-html's `documentSymbol` emits a node per tag AND attribute (~1220 for one page vs the Map's ~54 clean landmarks), so the LSP outline was unusable; the LSP still serves hover/diagnostics.
+- **`read_symbol` accepts `uri` as an alias for `path`** and, on a not-found for an out-of-workspace file, hints that neither the LSP nor the topology index covers it (use `read_file`).
+
 ## 0.9.3 (unreleased)
 
 Edit / read / search ergonomics from the agent feedback log — the recurring paper-cuts that pushed agents toward native tools or extra round-trips.
