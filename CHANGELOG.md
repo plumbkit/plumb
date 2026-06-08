@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.49 (unreleased)
+
+Makes plumb's experimental HTML support actually return data: the HTML language server now receives the document it is queried about, and the symbol tools fall back to the topology Map when the language server answers empty.
+
+### Fixed
+
+- **HTML language server now answers document queries.** `vscode-html-language-server` has no filesystem access — it serves `documentSymbol`, `hover`, and embedded CSS/JS **diagnostics** only for documents opened via `textDocument/didOpen`, which plumb (driving external files through `didChangeWatchedFiles`, the right primitive for gopls/pyright) never sent. The adapter now opens a file from disk on first query (`ensureOpen`) and keeps it open; an external change closes the stale copy (`refreshOpen`) so the next query reopens fresh content. Previously every HTML query came back empty. See `docs/internal/todo-to-review.md` for the known follow-ups (the server's `documentSymbol` is noisy and its legacy `SymbolInformation` ranges land at line 1, so the topology Map remains the better HTML *outline*).
+
+### Added
+
+- **Symbol tools fall back to the topology Map on an *empty* LSP result.** `file_outline`, `list_symbols`, and `find_symbol` already fell back to the topology index when the language server **errored or timed out**; they now also fall back when it answers **empty** — the case for a file type the workspace LSP does not own (e.g. an `.html` file in a Go workspace). The full structural outline of such files is now reachable without any language server (annotated `source=topology`).
+
 ## 0.8.48 (unreleased)
 
 Broadens `plumb setup` to seven more command-line MCP-client agents and tidies AI-agent artefacts out of version control.
