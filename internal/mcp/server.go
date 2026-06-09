@@ -21,6 +21,16 @@ const protocolVersion = "2024-11-05"
 
 const maxMessageBytes = 4 << 20 // 4 MiB per newline-delimited JSON-RPC message
 
+// DefaultWriteTimeout bounds a single response write to the transport. On a
+// net.Conn (the daemon's Unix socket) a blocked write would otherwise hold the
+// per-connection write mutex forever and wedge every later reply on that
+// connection. 30s is far longer than any healthy local write yet decisively
+// shorter than a client's request timeout, so a genuinely stuck write fails
+// fast and tears the connection down (the resilient proxy then reconnects)
+// instead of hanging to the client timeout. Transports that do not support
+// SetWriteDeadline (e.g. test pipes) are unaffected. 0 disables the deadline.
+const DefaultWriteTimeout = 30 * time.Second
+
 // JSON-RPC 2.0 standard error codes.
 const (
 	codeParseError     = -32700
@@ -115,6 +125,12 @@ type Server struct {
 	// Leaving it nil disables the resources capability entirely.
 	Resources ResourceProvider
 
+	// WriteTimeout bounds a single response write when the transport supports
+	// SetWriteDeadline. Defaults to DefaultWriteTimeout (set by New); the daemon
+	// overrides it from PLUMB_WRITE_TIMEOUT. 0 disables the deadline. Must be set
+	// before Serve.
+	WriteTimeout time.Duration // see DefaultWriteTimeout
+
 	// pending tracks in-flight server-initiated requests by string ID.
 	pendingMu  sync.Mutex
 	pending    map[string]chan json.RawMessage
@@ -129,11 +145,12 @@ type Server struct {
 // New creates a Server with the given identity.
 func New(info ServerInfo) *Server {
 	return &Server{
-		info:      info,
-		tools:     make(map[string]Tool),
-		argShapes: make(map[string]*shape),
-		pending:   make(map[string]chan json.RawMessage),
-		prompts:   make(map[string]Prompt),
+		info:         info,
+		tools:        make(map[string]Tool),
+		argShapes:    make(map[string]*shape),
+		pending:      make(map[string]chan json.RawMessage),
+		prompts:      make(map[string]Prompt),
+		WriteTimeout: DefaultWriteTimeout,
 	}
 }
 
@@ -168,26 +185,70 @@ func (s *Server) resolveToolArgs(name string, args json.RawMessage) (json.RawMes
 
 // ─── serveState ──────────────────────────────────────────────────────────────
 
+// deadlineWriter is the optional capability a transport exposes to bound a
+// blocking write. net.Conn satisfies it; pipes used in tests do not.
+type deadlineWriter interface {
+	SetWriteDeadline(time.Time) error
+}
+
 // serveState holds the mutable per-Serve-call state shared across the scan
 // goroutine, request dispatcher, and response writer.
+//
+// Concurrency: enc/wd are written through wrMu; broken is read and written only
+// under wrMu. cancel is set once before any goroutine starts and only read
+// afterwards.
 type serveState struct {
-	s    *Server
-	enc  *json.Encoder
-	wrMu sync.Mutex
-	wg   sync.WaitGroup
+	s            *Server
+	enc          *json.Encoder
+	wd           deadlineWriter // nil when the transport has no SetWriteDeadline
+	writeTimeout time.Duration
+	cancel       context.CancelFunc // tears the connection down on a fatal write error
+	wrMu         sync.Mutex
+	broken       bool // a write failed; further writes are no-ops (guarded by wrMu)
+	wg           sync.WaitGroup
 }
 
 func newServeState(s *Server, w io.Writer) *serveState {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	return &serveState{s: s, enc: enc}
+	ss := &serveState{s: s, enc: enc, writeTimeout: s.WriteTimeout}
+	if dw, ok := w.(deadlineWriter); ok {
+		ss.wd = dw
+	}
+	return ss
+}
+
+// encode writes one message, bounding the write with a deadline when the
+// transport supports it. Caller must hold wrMu. The deadline is cleared after
+// the write so an idle connection between replies carries none.
+func (ss *serveState) encode(v any) error {
+	if ss.wd != nil && ss.writeTimeout > 0 {
+		_ = ss.wd.SetWriteDeadline(time.Now().Add(ss.writeTimeout))
+		defer func() { _ = ss.wd.SetWriteDeadline(time.Time{}) }()
+	}
+	return ss.enc.Encode(v)
+}
+
+// fail marks the connection broken and cancels Serve. A write error on the
+// socket (including a write-deadline timeout) is not recoverable for this
+// connection: tearing it down lets the resilient proxy reconnect, where leaving
+// it up would wedge wrMu and hang every later reply. Caller must hold wrMu.
+func (ss *serveState) fail(err error) {
+	slog.Error("mcp: write error — closing connection", "err", err)
+	ss.broken = true
+	if ss.cancel != nil {
+		ss.cancel()
+	}
 }
 
 func (ss *serveState) write(resp mcpResponse) {
 	ss.wrMu.Lock()
 	defer ss.wrMu.Unlock()
-	if err := ss.enc.Encode(resp); err != nil {
-		slog.Error("mcp: write error", "err", err)
+	if ss.broken {
+		return
+	}
+	if err := ss.encode(resp); err != nil {
+		ss.fail(err)
 	}
 }
 
@@ -206,7 +267,12 @@ func (ss *serveState) makeRequest(ctx context.Context, method string, params any
 		msg["params"] = params
 	}
 	ss.wrMu.Lock()
-	encErr := ss.enc.Encode(msg)
+	var encErr error
+	if ss.broken {
+		encErr = errors.New("connection closed")
+	} else if encErr = ss.encode(msg); encErr != nil {
+		ss.fail(encErr)
+	}
 	ss.wrMu.Unlock()
 	if encErr != nil {
 		ss.s.pendingMu.Lock()
@@ -311,7 +377,12 @@ func startScanGoroutine(ctx context.Context, reader *bufio.Reader) <-chan scanLi
 // responses to w until r is exhausted or ctx is cancelled. Each request is
 // handled concurrently; Serve waits for all in-flight handlers before returning.
 func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
+	// A fatal write error cancels this derived context so the loop below returns
+	// and the connection is torn down, rather than wedging on a held wrMu.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	ss := newServeState(s, w)
+	ss.cancel = cancel
 	scanCh := startScanGoroutine(ctx, bufio.NewReader(r))
 	var initOnce sync.Once
 

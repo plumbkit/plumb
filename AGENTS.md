@@ -99,6 +99,8 @@ Stats live in one global DB at `config.DataDir()/stats.db`; every row carries `w
 
 **Resilient proxy** (`internal/cli/serve_proxy*.go`): `plumb serve` is a frame-aware reconnecting proxy that survives a daemon crash or hang without the client noticing. On a daemon failure it keeps the client's stdio open, dial-or-spawns a fresh daemon, and **replays the captured MCP handshake** (the client only sends `initialize` once). In-flight requests get a synthesised retryable error (`code -32000`) instead of hanging; non-idempotent writes are never auto-replayed. A *hung* daemon is caught by an idle `ping` heartbeat, then `SIGTERM`→`SIGKILL`'d and respawned. Reconnects are bounded. Knobs: `PLUMB_PROXY_RECONNECT` (default on; off ⇒ legacy `io.Copy` proxy), `PLUMB_PROXY_HEARTBEAT` (`0` disables hang detection), `plumb serve --no-reconnect`.
 
+**Per-connection write deadline** (`internal/mcp/server.go`): each MCP response write to the socket is bounded by a `SetWriteDeadline` (default 30 s, `PLUMB_WRITE_TIMEOUT`; `0`/`off` disables). Without it a blocked `conn.Write` would hold the connection's write mutex forever and wedge every later reply on that connection (`daemon_info` included) to the client timeout. A lapsed deadline fails the write, marks the connection broken, and cancels its `Serve` loop so the connection is torn down with a clear error — the resilient proxy then reconnects — rather than hanging. Transports without `SetWriteDeadline` (test pipes) are unaffected.
+
 ## Configuration layers
 
 Built in four layers, each overriding the prior; `plumb config show` prints the resolved config with provenance.

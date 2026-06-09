@@ -5,8 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 )
@@ -387,4 +391,119 @@ func paddedPingRequest(id, targetBytes int) string {
 	suffix := `"}}`
 	padLen := max(targetBytes-len(prefix)-len(suffix), 0)
 	return prefix + strings.Repeat("x", padLen) + suffix
+}
+
+// fakeDeadlineWriter is a writer that, like net.Conn, supports SetWriteDeadline.
+// When block is set it emulates a stuck socket: each Write sleeps until the most
+// recently-set deadline and then reports os.ErrDeadlineExceeded, the error a
+// real net.Conn returns once a write deadline lapses. Otherwise it buffers
+// normally and records every deadline set, so a test can prove the deadline is
+// applied before a write and cleared after.
+type fakeDeadlineWriter struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	deadlines []time.Time
+	block     bool
+}
+
+func (f *fakeDeadlineWriter) SetWriteDeadline(t time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deadlines = append(f.deadlines, t)
+	return nil
+}
+
+func (f *fakeDeadlineWriter) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	block := f.block
+	var d time.Time
+	if n := len(f.deadlines); n > 0 {
+		d = f.deadlines[n-1]
+	}
+	f.mu.Unlock()
+	if block {
+		if !d.IsZero() {
+			time.Sleep(time.Until(d))
+		}
+		return 0, os.ErrDeadlineExceeded
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.buf.Write(p)
+}
+
+func (f *fakeDeadlineWriter) recordedDeadlines() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Time(nil), f.deadlines...)
+}
+
+// On a deadline-capable transport, a happy-path write sets a deadline before
+// the write and clears it afterwards, leaving the connection deadline-free
+// between replies.
+func TestServer_WriteDeadline_SetThenClearedOnSuccess(t *testing.T) {
+	s := newServer()
+	s.WriteTimeout = 30 * time.Second
+	w := &fakeDeadlineWriter{}
+	if err := s.Serve(context.Background(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`+"\n"), w); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if w.buf.Len() == 0 {
+		t.Fatal("expected a response to be written")
+	}
+	ds := w.recordedDeadlines()
+	if len(ds) < 2 {
+		t.Fatalf("want at least a set+clear deadline pair, got %d: %v", len(ds), ds)
+	}
+	if ds[0].IsZero() {
+		t.Errorf("first deadline should be a future time, got zero")
+	}
+	if !ds[len(ds)-1].IsZero() {
+		t.Errorf("last deadline should be cleared (zero), got %v", ds[len(ds)-1])
+	}
+}
+
+// A write that stalls past the deadline must fail fast and tear the connection
+// down (cancel Serve) instead of wedging on the held write mutex forever. The
+// reader never reaches EOF, so the only way Serve can return is the
+// write-failure cancel path.
+func TestServer_WriteDeadline_TearsDownOnStuckWrite(t *testing.T) {
+	s := newServer()
+	s.WriteTimeout = 30 * time.Millisecond
+	w := &fakeDeadlineWriter{block: true}
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	go func() { _, _ = io.WriteString(pw, `{"jsonrpc":"2.0","id":1,"method":"ping"}`+"\n") }()
+
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(context.Background(), pr, w) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want a non-nil error from the torn-down connection")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return — the stuck write wedged the connection")
+	}
+	if len(w.recordedDeadlines()) == 0 {
+		t.Error("expected a write deadline to have been set")
+	}
+}
+
+// A transport without SetWriteDeadline (a plain pipe/buffer, as in tests) is
+// unaffected by WriteTimeout — the deadline branch is simply skipped.
+func TestServer_WriteDeadline_NoDeadlineWriterUnaffected(t *testing.T) {
+	s := newServer()
+	s.WriteTimeout = time.Nanosecond // would fail instantly if applied to this writer
+	var out bytes.Buffer
+	if err := s.Serve(context.Background(),
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`+"\n"), &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if out.Len() == 0 {
+		t.Fatal("expected a response on a non-deadline writer regardless of WriteTimeout")
+	}
 }

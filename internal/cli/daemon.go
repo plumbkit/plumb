@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -330,6 +331,27 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 	}
 }
 
+// serverWriteTimeout is the per-connection response-write deadline. A blocked
+// socket write would otherwise hold the connection's write mutex forever and
+// wedge every later reply (see docs/internal/todo.md). PLUMB_WRITE_TIMEOUT
+// accepts a Go duration; "0"/"off"/"disable" disables the deadline. An unset or
+// unparseable value uses mcp's built-in default.
+func serverWriteTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv("PLUMB_WRITE_TIMEOUT"))
+	if v == "" {
+		return mcp.DefaultWriteTimeout
+	}
+	switch strings.ToLower(v) {
+	case "0", "off", "disable", "disabled", "none":
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return mcp.DefaultWriteTimeout
+	}
+	return d
+}
+
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
 func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
@@ -343,6 +365,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	defer registry.remove(s.sessID)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
+	srv.WriteTimeout = serverWriteTimeout()
 	s.registerAllTools(srv, daemonStartedAt)
 	s.registerHooks(srv)
 	// Serve on the session context (a child of the daemon ctx) — NOT the bare
