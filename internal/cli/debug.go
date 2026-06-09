@@ -17,7 +17,7 @@ func init() {
 
 var debugCmd = &cobra.Command{
 	Use:   "debug",
-	Short: "Inspect the running daemon's internals (memory, heap profiles)",
+	Short: "Inspect the running daemon's internals (memory, heap profiles, goroutine stacks)",
 	Long: `Low-level daemon introspection for diagnosing resource use.
 
   plumb debug mem    — print a live runtime memory snapshot

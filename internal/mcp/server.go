@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -233,8 +234,17 @@ func (ss *serveState) encode(v any) error {
 // socket (including a write-deadline timeout) is not recoverable for this
 // connection: tearing it down lets the resilient proxy reconnect, where leaving
 // it up would wedge wrMu and hang every later reply. Caller must hold wrMu.
+//
+// A lapsed write deadline is the wedge this guards against, so it logs at WARN.
+// Any other write error means the client/proxy disconnected mid-write (broken
+// pipe, reset, EOF) — expected churn, logged at Debug so it does not drown the
+// log on every routine disconnect.
 func (ss *serveState) fail(err error) {
-	slog.Error("mcp: write error — closing connection", "err", err)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		slog.Warn("mcp: response write timed out — closing connection", "err", err, "timeout", ss.writeTimeout)
+	} else {
+		slog.Debug("mcp: write failed — closing connection", "err", err)
+	}
 	ss.broken = true
 	if ss.cancel != nil {
 		ss.cancel()
