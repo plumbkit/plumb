@@ -125,7 +125,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn))
 	srv.Register(tools.NewSafeDeleteSymbol(s.sessionProxy, lspTimeout))
 	srv.Register(tools.NewListMemories(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewReadMemory(s.workspace).WithBoundary(boundary))
+	srv.Register(tools.NewReadMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
 	srv.Register(tools.NewWriteMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
 	srv.Register(tools.NewDeleteMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
 	srv.Register(tools.NewSearchMemories(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary))
