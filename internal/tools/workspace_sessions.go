@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // writeToolNames is the set of mutating MCP tool names used by the
@@ -177,9 +177,8 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 
 	// ── 2. Recent writes from the stats DB (read-only connection) ──────────
 	var writes []stats.RecentCall
-	if db, dbErr := stats.OpenReadOnly(); dbErr == nil {
+	if db, dbErr := stats.SharedReadOnly(); dbErr == nil && db != nil {
 		writes, _ = db.RecentWritesByWorkspace(workspace, writeToolNames, recentLimit)
-		db.Close()
 	}
 
 	return formatWorkspaceSessions(workspace, t.selfSessID, peers, writes, now)

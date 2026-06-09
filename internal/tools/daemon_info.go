@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // ConfigStatus is a snapshot of the live config store, surfaced by daemon_info.
@@ -144,11 +144,10 @@ func formatSessionLatencySync(sessID string) string {
 	if sessID == "" {
 		return ""
 	}
-	db, err := stats.OpenReadOnly()
+	db, err := stats.SharedReadOnly()
 	if err != nil || db == nil {
 		return ""
 	}
-	defer db.Close()
 	filter := stats.Filter{SessionID: sessID}
 	summary, err := db.Summary(filter)
 	if err != nil || len(summary) == 0 {

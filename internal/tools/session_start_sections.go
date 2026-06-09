@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/fsguard"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/memory"
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/fsguard"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string) {
@@ -216,11 +216,10 @@ func writeSessionMemories(sb *strings.Builder, ws string) {
 }
 
 func writeSessionStats(sb *strings.Builder, ws, clientName string) {
-	db, err := stats.OpenReadOnly()
+	db, err := stats.SharedReadOnly()
 	if err != nil || db == nil {
 		return
 	}
-	defer db.Close()
 	toolStats, err := db.Summary(stats.Filter{Workspace: ws})
 	if err != nil || len(toolStats) == 0 {
 		return

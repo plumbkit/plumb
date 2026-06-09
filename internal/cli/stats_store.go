@@ -4,63 +4,57 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
-// statsStore owns the global stats database, opened lazily on first write.
+// statsStore owns the global stats writer, opened lazily on first write. The
+// writer batches inserts through a single goroutine (see stats.Writer), so
+// concurrent sessions never contend for the SQLite write lock.
 //
 // Concurrency: safe for concurrent Record / RenameSession / Close.
 type statsStore struct {
-	mu      sync.Mutex
-	dbs     map[string]*stats.DB
-	closing bool
-	wg      sync.WaitGroup
+	mu     sync.Mutex
+	writer *stats.Writer
+	closed bool
+	failed bool // NewWriter failed once; don't retry-spam the log
 }
 
 func newStatsStore() *statsStore {
-	return &statsStore{dbs: make(map[string]*stats.DB)}
+	return &statsStore{}
 }
 
-// Record writes one call to the global stats DB, opening it on first use.
+// writer returns the lazily-opened stats writer, or nil when the store is
+// closed or the database could not be opened.
+func (s *statsStore) ensureWriter() *stats.Writer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.failed {
+		return nil
+	}
+	if s.writer == nil {
+		w, err := stats.NewWriter()
+		if err != nil {
+			s.failed = true
+			slog.Warn("stats: cannot open global DB", "err", err)
+			return nil
+		}
+		s.writer = w
+	}
+	return s.writer
+}
+
+// Record enqueues one call to the global stats writer, opening it on first use.
+// Non-blocking — the MCP response path must never wait on stats SQLite.
 func (s *statsStore) Record(workspace string, call stats.Call) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	if s.closing {
-		s.mu.Unlock()
+	w := s.ensureWriter()
+	if w == nil {
 		return
 	}
-	s.wg.Add(1)
-	s.mu.Unlock()
-	go func() {
-		defer s.wg.Done()
-		s.recordSync(workspace, call)
-	}()
-}
-
-func (s *statsStore) recordSync(workspace string, call stats.Call) {
-	s.mu.Lock()
-	db, ok := s.dbs["global"]
-	if !ok {
-		var err error
-		db, err = stats.Open()
-		if err != nil {
-			s.mu.Unlock()
-			slog.Warn("stats: cannot open global DB", "err", err)
-			return
-		}
-		s.dbs["global"] = db
-	}
-	s.mu.Unlock()
 	call.Workspace = workspace
-	if err := db.Record(call); err != nil {
-		slog.Warn("stats: cannot record tool call",
-			"workspace", workspace,
-			"session", call.SessionID,
-			"tool", call.Tool,
-			"err", err)
-	}
+	w.Record(call)
 }
 
 // RenameSession backfills the display name for the global stats DB.
@@ -68,38 +62,29 @@ func (s *statsStore) RenameSession(sessionID, name string) {
 	if s == nil || sessionID == "" {
 		return
 	}
-	s.mu.Lock()
-	db, ok := s.dbs["global"]
-	if !ok {
-		var err error
-		db, err = stats.Open()
-		if err != nil {
-			s.mu.Unlock()
-			slog.Warn("stats: cannot open global DB for rename", "err", err)
-			return
-		}
-		s.dbs["global"] = db
+	w := s.ensureWriter()
+	if w == nil {
+		return
 	}
-	s.mu.Unlock()
-	if err := db.RenameSession(sessionID, name); err != nil {
-		slog.Warn("stats: cannot rename session",
-			"session", sessionID,
-			"err", err)
-	}
+	w.RenameSession(sessionID, name)
 }
 
-// Close shuts the global DB. Intended to be called once at daemon shutdown.
+// Close drains and flushes in-flight writes, then shuts the writer. Intended to
+// be called once at daemon shutdown.
 func (s *statsStore) Close() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	s.closing = true
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	w := s.writer
+	s.writer = nil
 	s.mu.Unlock()
-	s.wg.Wait()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, db := range s.dbs {
-		db.Close()
+	if w != nil {
+		w.Close()
 	}
 }

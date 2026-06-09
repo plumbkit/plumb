@@ -18,7 +18,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // schema is the current fresh database shape. The global stats database uses
@@ -162,11 +162,22 @@ func Open() (*DB, error) {
 		return nil, fmt.Errorf("stats: open %s: %w", path, err)
 	}
 	db.SetMaxOpenConns(1)
+	// synchronous=NORMAL is corruption-safe under WAL and avoids an fsync per
+	// commit; the only exposure is losing the last batch of stats on a hard
+	// power cut, which is acceptable for metrics. WAL + busy_timeout come from
+	// the DSN; assert NORMAL here since it is per-connection.
+	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("stats: synchronous: %w", err)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("stats: schema: %w", err)
 	}
-	// Read the current schema version and apply any pending migrations.
+	// Read the current schema version and apply any pending migrations. The
+	// user_version stamp is a write, so only issue it when the version actually
+	// moved — stamping on every Open turns a read-only open into a writer that
+	// contends for the write lock.
 	var currentVersion int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
 		db.Close()
@@ -177,11 +188,10 @@ func Open() (*DB, error) {
 			db.Close()
 			return nil, err
 		}
-	}
-	// Stamp the (possibly updated) schema version.
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("stats: stamping user_version: %w", err)
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("stats: stamping user_version: %w", err)
+		}
 	}
 	return &DB{db: db}, nil
 }
@@ -252,41 +262,91 @@ func capString(s string) string {
 	return s
 }
 
-// Record inserts a call. Stats are best-effort, but the caller gets the
-// insert error so the daemon can log storage failures.
-func (d *DB) Record(c Call) error {
-	if d == nil {
-		return nil
-	}
-	if c.Workspace == "" {
+// insertCallSQL inserts one tool_calls row. Shared by Record and RecordBatch.
+const insertCallSQL = `INSERT INTO tool_calls
+	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// validateCall reports the required-field error for c, or nil when storable.
+func validateCall(c Call) error {
+	switch {
+	case c.Workspace == "":
 		return fmt.Errorf("stats: workspace is required")
-	}
-	if c.SessionID == "" {
+	case c.SessionID == "":
 		return fmt.Errorf("stats: session_id is required")
-	}
-	if c.Tool == "" {
+	case c.Tool == "":
 		return fmt.Errorf("stats: tool is required")
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	return nil
+}
+
+// callArgs returns the positional bind arguments for insertCallSQL.
+func callArgs(c Call) []any {
 	success := 1
 	if !c.Success {
 		success = 0
 	}
-	if _, err := d.db.Exec(
-		`INSERT INTO tool_calls
-		 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return []any{
 		c.SessionID, c.SessionName, c.Workspace, c.Tool,
 		c.CalledAt.UnixMilli(), c.DurationMs,
 		c.InputBytes, c.OutputBytes,
 		success, c.ErrorMsg,
 		capString(c.InputJSON), capString(c.OutputText),
 		c.ClientName, c.ClientVersion,
-	); err != nil {
+	}
+}
+
+// Record inserts a call. Stats are best-effort, but the caller gets the
+// insert error so the daemon can log storage failures.
+func (d *DB) Record(c Call) error {
+	if d == nil {
+		return nil
+	}
+	if err := validateCall(c); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, err := d.db.Exec(insertCallSQL, callArgs(c)...); err != nil {
 		return fmt.Errorf("stats: insert call: %w", err)
 	}
 	return nil
+}
+
+// RecordBatch inserts many calls in one transaction — a single fsync and one
+// write-lock acquisition for the whole batch instead of per row, which is what
+// keeps the writer off SQLITE_BUSY under load. Rows that fail validation are
+// skipped and counted; a SQLite error rolls the whole transaction back.
+func (d *DB) RecordBatch(calls []Call) (skipped int, err error) {
+	if d == nil || len(calls) == 0 {
+		return 0, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("stats: begin batch: %w", err)
+	}
+	stmt, err := tx.Prepare(insertCallSQL)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, fmt.Errorf("stats: prepare batch: %w", err)
+	}
+	defer stmt.Close()
+	for _, c := range calls {
+		if validateCall(c) != nil {
+			skipped++
+			continue
+		}
+		if _, err := stmt.Exec(callArgs(c)...); err != nil {
+			_ = tx.Rollback()
+			return skipped, fmt.Errorf("stats: insert batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return skipped, fmt.Errorf("stats: commit batch: %w", err)
+	}
+	return skipped, nil
 }
 
 // RenameSession updates the stored human-readable name for all calls in a
@@ -301,4 +361,16 @@ func (d *DB) RenameSession(sessionID, name string) error {
 		return fmt.Errorf("stats: rename session: %w", err)
 	}
 	return nil
+}
+
+// checkpoint truncates the WAL back into the main database file, bounding WAL
+// growth between the autocheckpoint thresholds. Best-effort: a checkpoint
+// blocked by a live reader is left for the next attempt.
+func (d *DB) checkpoint() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, _ = d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 }
