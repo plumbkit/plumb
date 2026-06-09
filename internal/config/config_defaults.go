@@ -51,6 +51,15 @@ var defaults = Config{
 		IdleThresholdMinutes: 30,
 		EvictionTTLMinutes:   60,
 	},
+	Memory: MemoryConfig{
+		Enabled:             true,
+		GeneratedSummaries:  true,
+		InjectHints:         true,
+		HintBudgetBytes:     512,
+		EpisodicBudgetBytes: 1024,
+		MaxHints:            3,
+		IdleSummaryMinutes:  0,
+	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},
 	},

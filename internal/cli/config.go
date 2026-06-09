@@ -211,6 +211,17 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"timeout", sem.Timeout.String(), sourceFor("timeout", dsem.Timeout, gsem.Timeout, sem.Timeout)},
 	})
 
+	mem, gmem, dmem := projectCfg.Memory, globalCfg.Memory, defaultsCfg.Memory
+	addConfigSection(cfgTable, "memory", [][]string{
+		{"enabled", fmt.Sprintf("%v", mem.Enabled), sourceFor("enabled", dmem.Enabled, gmem.Enabled, mem.Enabled)},
+		{"generated_summaries", fmt.Sprintf("%v", mem.GeneratedSummaries), sourceFor("generated_summaries", dmem.GeneratedSummaries, gmem.GeneratedSummaries, mem.GeneratedSummaries)},
+		{"inject_hints", fmt.Sprintf("%v", mem.InjectHints), sourceFor("inject_hints", dmem.InjectHints, gmem.InjectHints, mem.InjectHints)},
+		{"hint_budget_bytes", fmt.Sprintf("%d", mem.HintBudgetBytes), sourceFor("hint_budget_bytes", dmem.HintBudgetBytes, gmem.HintBudgetBytes, mem.HintBudgetBytes)},
+		{"episodic_budget_bytes", fmt.Sprintf("%d", mem.EpisodicBudgetBytes), sourceFor("episodic_budget_bytes", dmem.EpisodicBudgetBytes, gmem.EpisodicBudgetBytes, mem.EpisodicBudgetBytes)},
+		{"max_hints", fmt.Sprintf("%d", mem.MaxHints), sourceFor("max_hints", dmem.MaxHints, gmem.MaxHints, mem.MaxHints)},
+		{"idle_summary_minutes", fmt.Sprintf("%d", mem.IdleSummaryMinutes), sourceFor("idle_summary_minutes", dmem.IdleSummaryMinutes, gmem.IdleSummaryMinutes, mem.IdleSummaryMinutes)},
+	})
+
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]

@@ -345,6 +345,20 @@ func TestDefaults_TopologyEnabledAndMaxFileSize(t *testing.T) {
 	}
 }
 
+func TestDefaults_Memory(t *testing.T) {
+	cfg := Defaults()
+	m := cfg.Memory
+	if !m.Enabled || !m.GeneratedSummaries || !m.InjectHints {
+		t.Errorf("memory feature toggles must default on: %+v", m)
+	}
+	if m.HintBudgetBytes != 512 || m.EpisodicBudgetBytes != 1024 || m.MaxHints != 3 {
+		t.Errorf("unexpected memory budget defaults: %+v", m)
+	}
+	if m.IdleSummaryMinutes != 0 {
+		t.Errorf("IdleSummaryMinutes default = %d, want 0 (falls back to session idle threshold)", m.IdleSummaryMinutes)
+	}
+}
+
 func TestDefaults_TopologyResyncPacingAndInterval(t *testing.T) {
 	cfg := Defaults()
 	if cfg.Topology.ResyncBatch != 100 {

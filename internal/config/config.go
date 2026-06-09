@@ -244,6 +244,32 @@ type SessionConfig struct {
 	EvictionTTLMinutes int `toml:"eviction_ttl_minutes"`
 }
 
+// MemoryConfig controls the Advanced Memory Engine: the FTS5 index over the
+// markdown memory store, rule-based episodic summaries, and proactive
+// memory-hint injection into tool responses. Project-overridable.
+//
+// Concurrency: read-only after Load returns.
+type MemoryConfig struct {
+	// Enabled turns on the memory.db FTS5 index. When false, memory tools fall
+	// back to the deterministic grep path. Default true.
+	Enabled bool `toml:"enabled"`
+	// GeneratedSummaries turns on rule-based episodic summaries written when a
+	// session goes idle (always redacted; no LLM). Default true.
+	GeneratedSummaries bool `toml:"generated_summaries"`
+	// InjectHints appends a compact "[Hint: relevant memory …]" block to tool
+	// responses when the touched path matches a memory's paths glob. Default true.
+	InjectHints bool `toml:"inject_hints"`
+	// HintBudgetBytes caps the injected hint block per response. Default 512.
+	HintBudgetBytes int `toml:"hint_budget_bytes"`
+	// EpisodicBudgetBytes caps the "last session" summary in session_start. Default 1024.
+	EpisodicBudgetBytes int `toml:"episodic_budget_bytes"`
+	// MaxHints caps how many memories are hinted in one response. Default 3.
+	MaxHints int `toml:"max_hints"`
+	// IdleSummaryMinutes is the idle threshold before an episodic summary is
+	// generated. 0 falls back to Session.IdleThresholdMinutes. Default 0.
+	IdleSummaryMinutes int `toml:"idle_summary_minutes"`
+}
+
 // SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by
 // default. The embedder is always a hosted or user-run HTTP endpoint — plumb
 // never bundles or supervises a model. Project-overridable. See the design in
@@ -295,4 +321,5 @@ type Config struct {
 	LSP       map[string]LSPConfig `toml:"lsp"`
 	LSPQuery  LSPQueryConfig       `toml:"lsp_query"`
 	Semantics SemanticsConfig      `toml:"semantics"`
+	Memory    MemoryConfig         `toml:"memory"`
 }
