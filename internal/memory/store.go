@@ -70,7 +70,7 @@ func List(workspace string) ([]Memory, error) {
 		}
 		m := Memory{Name: name, Path: path, SizeBytes: info.Size()}
 		if data, err := os.ReadFile(path); err == nil {
-			_, m.Description, m.Paths = parseFrontmatterFull(data)
+			m.Description, m.Paths = parseFrontmatterFull(data)
 		}
 		out = append(out, m)
 	}
@@ -223,18 +223,16 @@ func Delete(workspace, name string) error {
 //
 //	paths: internal/auth/**, cmd/server/*.go
 //	paths: [internal/auth/**, cmd/server/*.go]
-func parseFrontmatterFull(data []byte) (name, description string, paths []string) {
+func parseFrontmatterFull(data []byte) (description string, paths []string) {
 	fm, _ := splitFrontmatter(data)
 	if len(fm) == 0 {
-		return "", "", nil
+		return "", nil
 	}
 	for line := range strings.SplitSeq(string(fm), "\n") {
 		line = strings.TrimSpace(line)
 		if k, v, ok := strings.Cut(line, ":"); ok {
 			v = strings.TrimSpace(v)
 			switch strings.TrimSpace(k) {
-			case "name":
-				name = v
 			case "description":
 				description = v
 			case "paths":
@@ -242,7 +240,7 @@ func parseFrontmatterFull(data []byte) (name, description string, paths []string
 			}
 		}
 	}
-	return name, description, paths
+	return description, paths
 }
 
 func parseList(v string) []string {
