@@ -5,8 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -394,16 +393,13 @@ func paddedPingRequest(id, targetBytes int) string {
 }
 
 // fakeDeadlineWriter is a writer that, like net.Conn, supports SetWriteDeadline.
-// When block is set it emulates a stuck socket: each Write sleeps until the most
-// recently-set deadline and then reports os.ErrDeadlineExceeded, the error a
-// real net.Conn returns once a write deadline lapses. Otherwise it buffers
-// normally and records every deadline set, so a test can prove the deadline is
-// applied before a write and cleared after.
+// It buffers writes normally and records every deadline set, so a test can
+// prove the deadline is applied before a write and cleared after. (The stuck-
+// write teardown is covered separately against a real net.Conn via net.Pipe.)
 type fakeDeadlineWriter struct {
 	mu        sync.Mutex
 	buf       bytes.Buffer
 	deadlines []time.Time
-	block     bool
 }
 
 func (f *fakeDeadlineWriter) SetWriteDeadline(t time.Time) error {
@@ -414,19 +410,6 @@ func (f *fakeDeadlineWriter) SetWriteDeadline(t time.Time) error {
 }
 
 func (f *fakeDeadlineWriter) Write(p []byte) (int, error) {
-	f.mu.Lock()
-	block := f.block
-	var d time.Time
-	if n := len(f.deadlines); n > 0 {
-		d = f.deadlines[n-1]
-	}
-	f.mu.Unlock()
-	if block {
-		if !d.IsZero() {
-			time.Sleep(time.Until(d))
-		}
-		return 0, os.ErrDeadlineExceeded
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.buf.Write(p)
@@ -464,21 +447,27 @@ func TestServer_WriteDeadline_SetThenClearedOnSuccess(t *testing.T) {
 	}
 }
 
-// A write that stalls past the deadline must fail fast and tear the connection
-// down (cancel Serve) instead of wedging on the held write mutex forever. The
-// reader never reaches EOF, so the only way Serve can return is the
-// write-failure cancel path.
-func TestServer_WriteDeadline_TearsDownOnStuckWrite(t *testing.T) {
+// On a real net.Conn, a write that stalls past the deadline must fail fast and
+// tear the connection down (cancel Serve) instead of wedging on the held write
+// mutex forever. net.Pipe is a genuine net.Conn whose Write blocks
+// synchronously until the peer reads and which honours SetWriteDeadline, so a
+// peer that sends a request but never reads the reply reproduces the wedge
+// exactly — and the only way Serve can return is the write-failure cancel path
+// (the peer never closes, so there is no EOF).
+func TestServer_WriteDeadline_TearsDownOnStuckSocket(t *testing.T) {
 	s := newServer()
-	s.WriteTimeout = 30 * time.Millisecond
-	w := &fakeDeadlineWriter{block: true}
-
-	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
-	go func() { _, _ = io.WriteString(pw, `{"jsonrpc":"2.0","id":1,"method":"ping"}`+"\n") }()
+	s.WriteTimeout = 50 * time.Millisecond
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close(); _ = serverConn.Close() })
 
 	done := make(chan error, 1)
-	go func() { done <- s.Serve(context.Background(), pr, w) }()
+	go func() { done <- s.Serve(context.Background(), serverConn, serverConn) }()
+
+	// The server reads this (net.Pipe Write unblocks once it does), dispatches
+	// the ping, then blocks writing the reply because we never read clientConn.
+	if _, err := clientConn.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n")); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
 
 	select {
 	case err := <-done:
@@ -486,10 +475,7 @@ func TestServer_WriteDeadline_TearsDownOnStuckWrite(t *testing.T) {
 			t.Fatal("want a non-nil error from the torn-down connection")
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return — the stuck write wedged the connection")
-	}
-	if len(w.recordedDeadlines()) == 0 {
-		t.Error("expected a write deadline to have been set")
+		t.Fatal("Serve did not return — the stuck socket write wedged the connection")
 	}
 }
 
