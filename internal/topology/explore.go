@@ -18,12 +18,19 @@ const (
 
 // Explore performs a bounded BFS from the named symbol and returns its neighbourhood.
 func Explore(ctx context.Context, db *sql.DB, name string, opts ExploreOpts) (*Neighbourhood, error) {
-	opts = clampOpts(opts)
 	centre, err := resolveNode(db, name)
 	if err != nil {
 		return nil, err
 	}
-	return bfs(ctx, db, centre, opts)
+	return ExploreFrom(ctx, db, centre, opts)
+}
+
+// ExploreFrom performs the bounded BFS from an already-resolved centre node.
+// Callers that disambiguate an ambiguous symbol name themselves (via
+// ResolveNodes) use this so the traversal is guaranteed to start from the
+// intended node rather than an arbitrary first match.
+func ExploreFrom(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
+	return bfs(ctx, db, centre, clampOpts(opts))
 }
 
 func clampOpts(opts ExploreOpts) ExploreOpts {
@@ -46,6 +53,71 @@ func clampOpts(opts ExploreOpts) ExploreOpts {
 		opts.MaxBytes = hardCapBytes
 	}
 	return opts
+}
+
+// NodeHint narrows an ambiguous symbol-name resolution to a specific node.
+// Both fields are optional; an empty hint matches every candidate.
+type NodeHint struct {
+	PathSubstr string // case-insensitive substring of the node's file path
+	Kind       string // exact NodeKind match (e.g. "function", "method")
+}
+
+func (h NodeHint) empty() bool { return h.PathSubstr == "" && h.Kind == "" }
+
+func (h NodeHint) matches(n Node) bool {
+	if h.Kind != "" && string(n.Kind) != h.Kind {
+		return false
+	}
+	if h.PathSubstr != "" && !strings.Contains(strings.ToLower(n.Path), strings.ToLower(h.PathSubstr)) {
+		return false
+	}
+	return true
+}
+
+// ResolveNodes returns every indexed node whose name or qualified name equals
+// name, ordered deterministically by path then start line. When hint is
+// non-empty and matches at least one candidate the result is restricted to the
+// matching nodes; a hint that matches nothing is ignored, so a stale hint never
+// turns a real symbol into a miss. The first element is the best pick for a
+// traversal start; any remaining elements are genuine same-name alternatives a
+// caller can surface for disambiguation.
+func ResolveNodes(ctx context.Context, db *sql.DB, name string, hint NodeHint) ([]Node, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT n.id, n.file_id, n.kind, n.name, n.qualified, n.signature,
+                n.start_line, n.end_line, n.docstring, n.language, f.path
+         FROM topology_nodes n
+         JOIN topology_files f ON f.id = n.file_id
+         WHERE n.name = ? OR n.qualified = ?
+         ORDER BY f.path, n.start_line`, name, name)
+	if err != nil {
+		return nil, fmt.Errorf("topology: resolve nodes: %w", err)
+	}
+	defer rows.Close()
+	var all []Node
+	for rows.Next() {
+		var n Node
+		if scanErr := rows.Scan(&n.ID, &n.FileID, &n.Kind, &n.Name, &n.Qualified, &n.Signature,
+			&n.StartLine, &n.EndLine, &n.Docstring, &n.Language, &n.Path); scanErr != nil {
+			continue
+		}
+		all = append(all, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("topology: resolve nodes: %w", err)
+	}
+	if hint.empty() {
+		return all, nil
+	}
+	matched := make([]Node, 0, len(all))
+	for _, n := range all {
+		if hint.matches(n) {
+			matched = append(matched, n)
+		}
+	}
+	if len(matched) > 0 {
+		return matched, nil
+	}
+	return all, nil
 }
 
 func resolveNode(db *sql.DB, name string) (Node, error) {

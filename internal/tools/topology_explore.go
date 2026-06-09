@@ -40,6 +40,14 @@ var topologyExploreSchema = json.RawMessage(`{
       "type": "array",
       "items": {"type": "string"},
       "description": "Optional filter on edge kinds: calls, imports, contains, defines, inherits, implements."
+    },
+    "path": {
+      "type": "string",
+      "description": "Optional file-path substring to disambiguate when several indexed symbols share this name (case-insensitive)."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Optional node kind to disambiguate a shared name: function, method, type, class, constant, variable, field, …"
     }
   },
   "required": ["name"],
@@ -76,6 +84,8 @@ type topologyExploreArgs struct {
 	MaxBytes      int      `json:"max_bytes"`
 	IncludeSource string   `json:"include_source"`
 	EdgeKinds     []string `json:"edge_kinds"`
+	Path          string   `json:"path"`
+	Kind          string   `json:"kind"`
 }
 
 func (t *TopologyExplore) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -90,11 +100,11 @@ func (t *TopologyExplore) Execute(ctx context.Context, raw json.RawMessage) (str
 	if store == nil {
 		return topologyDisabledMessage(), nil
 	}
-	nb, runErr := t.run(ctx, store, a)
+	nb, alts, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatTopologyNeighbourhood(nb, a), nil
+	return formatTopologyNeighbourhood(nb, a, alts), nil
 }
 
 func parseTopologyExploreArgs(raw json.RawMessage) (topologyExploreArgs, error) {
@@ -115,9 +125,16 @@ func (a *topologyExploreArgs) validate() error {
 	return nil
 }
 
-func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topologyExploreArgs) (*topology.Neighbourhood, error) {
+func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topologyExploreArgs) (*topology.Neighbourhood, []topology.Node, error) {
 	if store == nil {
-		return nil, nil // defensive; Execute pre-checks a nil store
+		return nil, nil, nil // defensive; Execute pre-checks a nil store
+	}
+	cands, err := store.ResolveNodes(ctx, a.Name, topology.NodeHint{PathSubstr: a.Path, Kind: a.Kind})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cands) == 0 {
+		return nil, nil, fmt.Errorf("topology: symbol %q not found in index", a.Name)
 	}
 	opts := topology.ExploreOpts{
 		Depth:         a.Depth,
@@ -126,10 +143,14 @@ func (t *TopologyExplore) run(ctx context.Context, store *topology.Store, a topo
 		IncludeSource: a.IncludeSource,
 		EdgeKinds:     a.EdgeKinds,
 	}
-	return store.Explore(ctx, a.Name, opts)
+	nb, err := store.ExploreFrom(ctx, cands[0], opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nb, cands[1:], nil
 }
 
-func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreArgs) string {
+func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreArgs, alts []topology.Node) string {
 	if nb == nil {
 		return fmt.Sprintf("topology_explore: symbol %q not found in the index", a.Name)
 	}
@@ -167,7 +188,27 @@ func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreAr
 	if nb.Truncated {
 		sb.WriteString("\n[truncated: max_nodes or max_bytes reached — reduce depth or increase limits]\n")
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	return strings.TrimRight(sb.String(), "\n") + topologyAmbiguityNote(a.Name, alts)
+}
+
+// topologyAmbiguityNote returns a trailing note when a symbol name resolved to
+// more than one indexed node, listing the alternatives so the agent can re-query
+// with a path/kind hint. Returns "" when the name was unambiguous.
+func topologyAmbiguityNote(name string, alternatives []topology.Node) string {
+	if len(alternatives) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\n\n[note: %q matched %d symbols; showing the first. Pass path/kind to disambiguate. Other matches:",
+		name, len(alternatives)+1)
+	for _, n := range alternatives {
+		fmt.Fprintf(&sb, "\n  %s %s — %s", string(n.Kind), n.Name, n.Path)
+		if n.StartLine > 0 {
+			fmt.Fprintf(&sb, " L%d", n.StartLine)
+		}
+	}
+	sb.WriteString("]")
+	return sb.String()
 }
 
 func writeNeighbourLine(sb *strings.Builder, n topology.Node, includeSource string) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.9 (unreleased)
+
+Closes out the low-priority *Architecture* residuals from `docs/internal/todo.md`: the name-keyed topology traversal imprecision, and the tree-sitter Phase 7 (offline semantic search) decision.
+
+### Changed
+
+- **`topology_explore`/`topology_impact` no longer follow the wrong same-named symbol — disambiguated traversal start.** Both tools resolved their start node by name with a bare `LIMIT 1` (`resolveNode`, `internal/topology/explore.go`), so when two symbols across different files shared a name the BFS could anchor on an arbitrary one and report *its* neighbours — a silent mis-attribution (edge traversal itself was already ID-correct; only the start was ambiguous). Resolution now goes through `ResolveNodes`, which returns every same-name node ordered deterministically (path, then start line) and accepts an optional `NodeHint{PathSubstr, Kind}`; the tools expose two new optional args, **`path`** (case-insensitive file-path substring) and **`kind`** (node kind), to pin the intended symbol. A hint that matches nothing is ignored, so a stale hint never turns a real symbol into a miss. When a name still resolves to several nodes the output appends a one-line `[note: "X" matched N symbols …]` listing the alternatives so the agent can re-query precisely. New package seams `ExploreFrom`/`ImpactFrom` (and the `Store` wrappers) start a traversal from an already-resolved node. Guarded by `TestResolveNodes_*`, `TestExploreFrom_StartsAtChosenNode`, `TestImpactFrom_StartsAtChosenNode`, and `TestTopologyAmbiguityNote`.
+
 ## 0.9.8 (unreleased)
 
 Completes the 0.9.7 daemon-memory work: bound the *transient* parse peak that the lazy-grammar + arena-recycling changes left untouched — the actual cause of the daemon's resident footprint.

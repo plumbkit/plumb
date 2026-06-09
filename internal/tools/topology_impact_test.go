@@ -44,9 +44,25 @@ func TestTopologyImpact_Defaults(t *testing.T) {
 	}
 }
 
+func TestTopologyAmbiguityNote(t *testing.T) {
+	if note := topologyAmbiguityNote("foo", nil); note != "" {
+		t.Errorf("unambiguous name should produce no note, got: %q", note)
+	}
+	alts := []topology.Node{
+		{Kind: topology.KindFunction, Name: "foo", Path: "b/bar.go", StartLine: 12},
+	}
+	note := topologyAmbiguityNote("foo", alts)
+	if !strings.Contains(note, "matched 2 symbols") {
+		t.Errorf("note should report the total match count, got: %q", note)
+	}
+	if !strings.Contains(note, "b/bar.go") || !strings.Contains(note, "L12") {
+		t.Errorf("note should list the alternative's path and line, got: %q", note)
+	}
+}
+
 func TestTopologyImpact_FormatNilResult(t *testing.T) {
 	a := topologyImpactArgs{Name: "foo", Depth: 3, EdgeKinds: []string{"calls"}}
-	out := formatImpactResult(nil, a)
+	out := formatImpactResult(nil, a, nil)
 	if strings.Contains(out, "disabled") {
 		t.Errorf("nil result is a not-found case, not 'disabled'; got: %s", out)
 	}

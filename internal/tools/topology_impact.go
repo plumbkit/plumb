@@ -36,6 +36,14 @@ var topologyImpactSchema = json.RawMessage(`{
       "items": {"type": "string"},
       "description": "Optional filter on edge kinds: calls, imports, contains, defines, inherits, implements. Defaults to imports, calls.",
       "default": ["imports","calls"]
+    },
+    "path": {
+      "type": "string",
+      "description": "Optional file-path substring to disambiguate when several indexed symbols share this name (case-insensitive)."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Optional node kind to disambiguate a shared name: function, method, type, class, constant, variable, field, …"
     }
   },
   "required": ["name"],
@@ -70,6 +78,8 @@ type topologyImpactArgs struct {
 	MaxNodes  int      `json:"max_nodes"`
 	MaxBytes  int      `json:"max_bytes"`
 	EdgeKinds []string `json:"edge_kinds"`
+	Path      string   `json:"path"`
+	Kind      string   `json:"kind"`
 }
 
 func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -84,11 +94,11 @@ func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if store == nil {
 		return topologyDisabledMessage(), nil
 	}
-	result, runErr := t.run(ctx, store, a)
+	result, alts, runErr := t.run(ctx, store, a)
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatImpactResult(result, a), nil
+	return formatImpactResult(result, a, alts), nil
 }
 
 func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
@@ -118,9 +128,16 @@ func (a *topologyImpactArgs) validate() error {
 	return nil
 }
 
-func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topologyImpactArgs) (*topology.ImpactResult, error) {
+func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topologyImpactArgs) (*topology.ImpactResult, []topology.Node, error) {
 	if store == nil {
-		return nil, nil
+		return nil, nil, nil
+	}
+	cands, err := store.ResolveNodes(ctx, a.Name, topology.NodeHint{PathSubstr: a.Path, Kind: a.Kind})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cands) == 0 {
+		return nil, nil, fmt.Errorf("topology: symbol %q not found in index", a.Name)
 	}
 	opts := topology.ImpactOpts{
 		Depth:     a.Depth,
@@ -128,10 +145,14 @@ func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topol
 		MaxBytes:  a.MaxBytes,
 		EdgeKinds: a.EdgeKinds,
 	}
-	return store.Impact(ctx, a.Name, opts)
+	result, err := store.ImpactFrom(ctx, cands[0], opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return result, cands[1:], nil
 }
 
-func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs) string {
+func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs, alts []topology.Node) string {
 	if result == nil {
 		return fmt.Sprintf("topology_impact: symbol %q not found in the index", a.Name)
 	}
@@ -148,7 +169,7 @@ func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs) str
 	sb.WriteString("\n")
 	writeImpactSection(&sb, "depended on by (inward)", result.DependedOnBy)
 
-	return strings.TrimRight(sb.String(), "\n")
+	return strings.TrimRight(sb.String(), "\n") + topologyAmbiguityNote(a.Name, alts)
 }
 
 func writeImpactSection(sb *strings.Builder, label string, nb *topology.Neighbourhood) {

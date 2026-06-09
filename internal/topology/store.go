@@ -231,6 +231,23 @@ func (s *Store) Impact(ctx context.Context, name string, opts ImpactOpts) (*Impa
 	return Impact(ctx, s.db, name, opts)
 }
 
+// ResolveNodes returns the indexed nodes matching name (optionally narrowed by
+// hint), ordered deterministically. The tools use it to disambiguate a symbol
+// name to a specific node before starting an ID-correct traversal.
+func (s *Store) ResolveNodes(ctx context.Context, name string, hint NodeHint) ([]Node, error) {
+	return ResolveNodes(ctx, s.db, name, hint)
+}
+
+// ExploreFrom performs a bounded BFS from an already-resolved centre node.
+func (s *Store) ExploreFrom(ctx context.Context, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
+	return ExploreFrom(ctx, s.db, centre, opts)
+}
+
+// ImpactFrom performs a bidirectional BFS from an already-resolved centre node.
+func (s *Store) ImpactFrom(ctx context.Context, centre Node, opts ImpactOpts) (*ImpactResult, error) {
+	return ImpactFrom(ctx, s.db, centre, opts)
+}
+
 // Status returns a snapshot of the index health.
 func (s *Store) Status() Status {
 	return Report(s.db, s.workspace, s.idx)
