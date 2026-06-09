@@ -1,0 +1,79 @@
+name: Bug report
+description: Something in Plumb is not behaving as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The fields below are what we need to
+        reproduce and fix it quickly. Please do **not** report security vulnerabilities
+        here — see SECURITY.md for private reporting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: When I run ..., Plumb does ..., but I expected ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps. A small repo or file that triggers it helps enormously.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Plumb version
+      description: Output of `plumb version`.
+      placeholder: e.g. v0.9.0
+    validations:
+      required: true
+  - type: textarea
+    id: daemon-info
+    attributes:
+      label: daemon_info / session_start output
+      description: Paste relevant output from the `daemon_info` tool or `session_start`. Redact anything private.
+    validations:
+      required: false
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows (unsupported — tracked)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: Which client is connected?
+      placeholder: e.g. Claude Desktop, Claude Code, Codex, Gemini CLI
+    validations:
+      required: true
+  - type: input
+    id: language
+    attributes:
+      label: Language & language server
+      description: The language and LSP server (with version) involved, if relevant.
+      placeholder: e.g. Go / gopls v0.16.2, Python / pyright 1.1.x
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: From `~/Library/Caches/plumb/daemon.log` (macOS) or `~/.cache/plumb/daemon.log` (Linux). Redact secrets.
+      render: shell
+    validations:
+      required: false
