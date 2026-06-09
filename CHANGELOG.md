@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.8 (unreleased)
+
+Completes the 0.9.7 daemon-memory work: bound the *transient* parse peak that the lazy-grammar + arena-recycling changes left untouched — the actual cause of the daemon's resident footprint.
+
+### Changed
+
+- **Per-parse memory budget bounds the transient peak — daemon RSS 1.9 GB → ~460 MB.** 0.9.7's lazy-grammar + arena-recycling work cut the steady-state *baseline* but left the cold-start/resync *transient* unbounded — and that transient was the real symptom: a live daemon sat at **1.9 GB RSS** (`HeapSys` high-water 1.9 GB) while its live heap was only ~46 MB. An allocation profile traced 83 % of all bytes to gotreesitter parse arenas under `extractPath`. Root cause: indexing is strictly serial, so a 1.9 GB *live* high-water can only come from a **single pathological parse** — the GLR-heavy Markdown grammar (~200 nodes/byte) blows one parse of a few-hundred-KB file to hundreds of MB to >1 GB (measured: a 300 KB Markdown document → ~1.4 GB of live arena for one parse; the repo's own 353 KB `CHANGELOG.md` → ~715 MB). gotreesitter has a per-parse memory budget (applied to the node arena *and* the GLR scratch independently, doubled again by the recovery parser) but plumb left it at its 512 MB default — too high given the ~4× application. The daemon now sets `GOT_PARSE_MEMORY_BUDGET_MB=128` at startup (before the first parse; honours an operator-set value) and tightens the soft-heap default from 4 GiB to 1 GiB so the GC reclaims each parse's transient before the next, instead of letting consecutive transients stack into the high-water. `debug.FreeOSMemory` (already present) hands the freed pages back. Measured end-to-end after a real restart + full resync of this repo: RSS **1905 MB → 465 MB**, `HeapSys` **1.9 GB → 459 MB** (4.1×). Regression-guarded by `TestParseMemoryBudgetBoundsLargeMarkdown` (a large-Markdown parse must stay materially below its unbudgeted footprint) and `TestApplyParseMemoryBudget`. Note: on macOS the prior 1.9 GB was `MADV_FREE` memory (reclaimed under pressure, not a leak), but the *peak* was real indexing pressure and is what this bounds.
+
+### Docs
+
+- **`git` `repo` schema corrected.** The `repo` argument description still claimed an omitted repo uses the current working directory; since the 0.9.7 fail-closed fix that is false — an omitted repo uses the connection's pinned workspace, or the call is refused. Description updated to match.
+
 ## 0.9.7 (unreleased)
 
 Daemon memory: bound it, explain it, and cut the steady-state baseline. A live heap profile attributed ~307 MB of resident heap to eagerly-decoded tree-sitter grammars (now decoded lazily — gone for languages a workspace doesn't use) and most cold-start allocation churn to never-released parse arenas (now recycled — which *reduces*, but does not eliminate, the transient, since per-parse node allocation is inherent to indexing every file). The daemon can now also profile itself, and a soft ceiling bounds any spike.
