@@ -174,7 +174,7 @@ All `[topology]` fields (see the
 | `enabled` | `true` | Turn the index on or off (on by default). |
 | `resync_on_attach` | `false` | Full resync each time the workspace attaches. |
 | `exclude_patterns` | `[]` | Path globs to skip during indexing. |
-| `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). |
+| `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). GLR-heavy markup grammars (Markdown, HTML, YAML) carry a tighter built-in 256 KiB inner cap — a file above it is indexed with zero symbols rather than parsed, since a full parse of a large markup file is expensive and low-value. |
 | `resync_batch` | `100` | Files extracted before the full resync pauses (CPU throttle). `0` disables pacing. |
 | `resync_pause_ms` | `25` | Pause after each `resync_batch` files, in milliseconds. `0` disables pacing. |
 | `resync_interval_minutes` | `60` | Periodic full-resync **fallback** (used only when `watch = false` or the watcher can't start); suppressed while the watcher is live; `0` disables. |

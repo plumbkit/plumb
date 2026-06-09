@@ -12,6 +12,10 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+
+	tsg "github.com/odvcencio/gotreesitter"
+
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 // Indexer manages background extraction and persistence for one workspace.
@@ -176,6 +180,24 @@ func (idx *Indexer) runQueueCycle(initial indexOp) {
 	} else {
 		idx.setState("idle", "")
 	}
+	if shouldReclaimAfterBurst(len(ops)) {
+		// A coalesced burst (git checkout, a formatter) left a large transient
+		// parse working set. A single small edit must NOT pay a stop-the-world GC,
+		// so this is gated on the burst size.
+		tsg.DrainArenaPools()
+		debug.FreeOSMemory()
+	}
+}
+
+// reclaimAfterOps is the burst size at which runQueueCycle reclaims transient
+// parse memory. Below it the cost of a forced GC + FreeOSMemory outweighs the
+// at-most-one pooled arena a small edit leaves behind.
+const reclaimAfterOps = 64
+
+// shouldReclaimAfterBurst reports whether a queue cycle processed enough files to
+// warrant draining the parse-arena pool and returning pages to the OS.
+func shouldReclaimAfterBurst(n int) bool {
+	return n >= reclaimAfterOps
 }
 
 // takeResyncPending atomically reads and clears the pending-resync flag.
@@ -273,8 +295,27 @@ func (idx *Indexer) extractPath(ctx context.Context, absPath, relPath string) (n
 	}
 	h := sha256.Sum256(src)
 	hash = fmt.Sprintf("%x", h)
+	if skipOversizedGrammar(relPath, ex.Language(), len(src)) {
+		// Recorded with this hash and zero symbols, so isStale won't re-attempt it.
+		return nil, nil, hash, nil
+	}
 	nodes, edges, err = safeExtract(ctx, ex, relPath, src)
 	return nodes, edges, hash, err
+}
+
+// skipOversizedGrammar reports whether a file should be recorded without parsing
+// because its grammar carries a per-grammar source-size cap (langsupport
+// MaxParseBytes) that this file exceeds. GLR-heavy markup grammars (Markdown,
+// HTML, YAML) can drive a pathological parse on a few-hundred-KB file for little
+// outline value; the global max_file_size_bytes stays the outer bound.
+func skipOversizedGrammar(relPath, lang string, srcLen int) bool {
+	l, ok := langsupport.ByName(lang)
+	if !ok || l.MaxParseBytes <= 0 || int64(srcLen) <= l.MaxParseBytes {
+		return false
+	}
+	slog.Debug("topology: skipping oversized GLR grammar parse",
+		"path", relPath, "lang", lang, "bytes", srcLen, "cap", l.MaxParseBytes)
+	return true
 }
 
 // safeExtract wraps Extract in a recover so malformed files cannot panic the daemon.
@@ -488,8 +529,10 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 		return err
 	}
 	// A full resync builds a large transient working set (file reads, parse
-	// trees, node/edge slices). Hand the freed pages back to the OS so RSS and
-	// HeapSys settle to steady state instead of lingering at the walk's peak.
+	// trees, node/edge slices). Release the pooled parse arena to the GC, then
+	// hand the freed pages back to the OS so RSS and HeapSys settle to steady
+	// state instead of lingering at the walk's peak.
+	tsg.DrainArenaPools()
 	debug.FreeOSMemory()
 	return nil
 }

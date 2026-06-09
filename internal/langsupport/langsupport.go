@@ -54,6 +54,15 @@ type Language struct {
 	// page vs the Map's ~54 clean landmarks). The LSP stays the source for
 	// hover/diagnostics; only the outline prefers the Map.
 	PreferStructuralOutline bool
+	// MaxParseBytes is a per-grammar source-size ceiling for structural
+	// extraction, tighter than the global [topology].max_file_size_bytes. Set
+	// only for GLR-heavy markup grammars (Markdown ~200 nodes/byte, HTML per
+	// tag/attribute, YAML) where one few-hundred-KB file drives a pathological
+	// parse for little outline value; a file above the cap is indexed with zero
+	// symbols rather than parsed. 0 means no per-grammar cap (the global limit is
+	// the only bound). This is a grammar property, not a user preference, so it is
+	// not config-exposed.
+	MaxParseBytes int64
 }
 
 // registry is the immutable capability table — the single place that encodes
@@ -74,9 +83,9 @@ var registry = []Language{
 	{Name: "sql", Extensions: []string{".sql"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "dockerfile", Extensions: []string{"dockerfile", "containerfile"}, Structural: EngineTreeSitter, LSPAdapter: ""},
 	{Name: "toml", Extensions: []string{".toml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
-	{Name: "yaml", Extensions: []string{".yaml", ".yml"}, Structural: EngineTreeSitter, LSPAdapter: ""},
-	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: "", PreferStructuralOutline: true},
-	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server", PreferStructuralOutline: true},
+	{Name: "yaml", Extensions: []string{".yaml", ".yml"}, Structural: EngineTreeSitter, LSPAdapter: "", MaxParseBytes: 256 << 10},
+	{Name: "markdown", Extensions: []string{".md", ".markdown"}, Structural: EngineTreeSitter, LSPAdapter: "", PreferStructuralOutline: true, MaxParseBytes: 256 << 10},
+	{Name: "html", Extensions: []string{".html", ".htm"}, Structural: EngineTreeSitter, LSPAdapter: "vscode-html-language-server", PreferStructuralOutline: true, MaxParseBytes: 256 << 10},
 }
 
 // All returns the registry entries. The returned slice must not be mutated.
