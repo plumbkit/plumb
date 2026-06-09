@@ -5,8 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"syscall"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // daemonSocketPath returns the Unix socket path for the plumb daemon.
@@ -90,27 +91,11 @@ func reapAfterExit(cmd *exec.Cmd, logFile *os.File) {
 	_ = cmd.Wait()
 }
 
-// daemonLogPath returns the OS-appropriate path for daemon log output.
-//   - macOS : ~/Library/Logs/plumb/daemon.log
-//   - Linux : $XDG_STATE_HOME/plumb/daemon.log  (fallback: ~/.local/state/plumb/daemon.log)
-//   - other : $TMPDIR/plumb/daemon.log
+// daemonLogPath returns the path for daemon log output, under the OS state
+// directory resolved by internal/paths (which delegates to adrg/xdg):
+//   - macOS  : ~/Library/Application Support/plumb/daemon.log
+//   - Linux  : $XDG_STATE_HOME/plumb/daemon.log  (fallback: ~/.local/state/plumb/daemon.log)
+//   - Windows: %LocalAppData%\plumb\daemon.log
 func daemonLogPath() string {
-	switch runtime.GOOS {
-	case "darwin":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			break
-		}
-		return filepath.Join(home, "Library", "Logs", "plumb", "daemon.log")
-	case "linux":
-		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-			return filepath.Join(xdg, "plumb", "daemon.log")
-		}
-		home, err := os.UserHomeDir()
-		if err != nil {
-			break
-		}
-		return filepath.Join(home, ".local", "state", "plumb", "daemon.log")
-	}
-	return filepath.Join(os.TempDir(), "plumb", "daemon.log")
+	return filepath.Join(paths.StateDir(), "daemon.log")
 }

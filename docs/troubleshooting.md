@@ -117,6 +117,7 @@ To make it permanent, set `log_level` in `~/.config/plumb/config.toml`.
 ## Still stuck?
 
 - `plumb doctor --json` for machine-readable check output.
-- Tail the daemon log (path shown by `plumb doctor`; under the system cache dir,
-  e.g. `~/Library/Caches/plumb/daemon.log` on macOS).
+- Tail the daemon log (path shown by `plumb doctor`; under the OS state dir,
+  e.g. `~/Library/Application Support/plumb/daemon.log` on macOS,
+  `~/.local/state/plumb/daemon.log` on Linux).
 - `plumb config show --workspace .` to confirm the resolved configuration.

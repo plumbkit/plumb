@@ -61,6 +61,10 @@ func TestRunStats_ShowsRows(t *testing.T) {
 }
 
 func TestRunStats_NoStatsPrintsLogo(t *testing.T) {
+	// PrintLogo is guarded by a process-global once flag; reset it so this test
+	// deterministically observes the banner regardless of earlier tests in the
+	// package having already printed it.
+	logoPrinted = false
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	// Use os.TempDir() so the workspace is outside the plumb workspace tree.
 	ws, err := os.MkdirTemp(os.TempDir(), "plumb-test-ws-*")

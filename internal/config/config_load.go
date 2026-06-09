@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // GlobalConfigPath returns the path where the global config file lives.
@@ -30,7 +31,24 @@ func DataDir() string {
 	return dataPath()
 }
 
+// configPath resolves the global config file via internal/paths (adrg/xdg), with
+// a read fallback to the pre-0.9.8 location so existing installs are not reset.
 func configPath() string {
+	newPath := filepath.Join(paths.ConfigDir(), "config.toml")
+	// Back-compat: plumb < 0.9.8 used the Linux XDG layout on every OS
+	// (~/.config/plumb) for config. On macOS the lib-resolved location is now
+	// ~/Library/Application Support/plumb; if it has no config yet but a legacy
+	// file exists, keep reading the legacy one rather than silently resetting to
+	// defaults. On Linux the two paths coincide, so this is a no-op there.
+	if legacy := legacyConfigPath(); legacy != "" && legacy != newPath && !fileExists(newPath) && fileExists(legacy) {
+		return legacy
+	}
+	return newPath
+}
+
+// legacyConfigPath is the pre-0.9.8 config location (XDG_CONFIG_HOME or
+// ~/.config), retained only as a read fallback for existing installs.
+func legacyConfigPath() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -42,34 +60,17 @@ func configPath() string {
 	return filepath.Join(base, "plumb", "config.toml")
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func cachePath() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "plumb")
+	return paths.CacheDir()
 }
 
 func dataPath() string {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return cachePath() // fallback to cache if home unknown
-		}
-		switch runtime.GOOS {
-		case "darwin":
-			base = filepath.Join(home, "Library", "Application Support")
-		case "windows":
-			base = os.Getenv("APPDATA")
-			if base == "" {
-				base = filepath.Join(home, "AppData", "Roaming")
-			}
-		default:
-			base = filepath.Join(home, ".local", "share")
-		}
-	}
-	return filepath.Join(base, "plumb")
+	return paths.DataDir()
 }
 
 // Load reads the config file, applies env overrides, and validates the result.

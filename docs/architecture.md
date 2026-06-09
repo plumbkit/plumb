@@ -187,7 +187,7 @@ Key design properties:
 | `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
 | `~/Library/Caches/plumb/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
 | `~/Library/Caches/plumb/plumb.daemon.lock` | daemon | Advisory `flock` held for the daemon's lifetime; rejects duplicate daemons |
-| `~/Library/Caches/plumb/daemon.log` | daemon | slog text output |
+| `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS state dir) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
 | `<workspace>/.plumb/topology.db` | daemon (when `[topology] enabled`) | Per-workspace SQLite/FTS5 semantic index |
@@ -196,10 +196,12 @@ XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
 respected when set. Cache paths use `os.UserCacheDir()` directly because they
 are runtime, not data — see Daemon architecture above for why.
 
-The table above shows the Linux data layout. On macOS the data dir defaults to
-`~/Library/Application Support/plumb/` (so stats live at
-`~/Library/Application Support/plumb/stats.db`); cache files live under
-`~/Library/Caches/plumb/`.
+plumb resolves these locations through `internal/paths`, which delegates to
+`github.com/adrg/xdg` (no hand-rolled per-OS paths). The table above shows the
+Linux layout. On macOS config, data (sessions, `stats.db`) and state
+(`daemon.log`) all live under `~/Library/Application Support/plumb/`, and cache
+files (socket, pid, locks) under `~/Library/Caches/plumb/`. A pre-0.9.8 config at
+`~/.config/plumb/config.toml` is still read as a fallback.
 
 ### Statistics database (`stats.db`)
 

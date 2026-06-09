@@ -88,7 +88,8 @@ On daemon start the binary writes these under `os.UserCacheDir()/plumb` (`~/Libr
 | `plumb.spawn.lock` | `flock`'d briefly by `plumb serve` to serialise daemon spawn decisions |
 | `plumb.daemon.lock` | `flock`'d by `plumb daemon` for its lifetime; a second daemon sees `EWOULDBLOCK` and exits |
 | `plumb.ctrl.sock` | Admin socket; line-based `set-level <level>` commands from `plumb log-level` |
-| `daemon.log` | All daemon logs |
+
+plumb resolves all of its own base directories through `internal/paths`, which delegates to the de-facto cross-platform library `github.com/adrg/xdg` — no hand-rolled per-OS path logic. The runtime files above (socket/pid/locks/version) stay in the cache dir; **config**, **data** (sessions, `stats.db`) and **state** live under `~/Library/Application Support/plumb` on macOS and the XDG base dirs on Linux (`~/.config`, `~/.local/share`, `~/.local/state`). The daemon **log** is `daemon.log` under the **state** dir. A pre-0.9.8 config at `~/.config/plumb/config.toml` is still honoured as a read fallback.
 
 Stats live in one global DB at `config.DataDir()/stats.db`; every row carries `workspace` and `session_id`, and project/session views filter on those.
 
