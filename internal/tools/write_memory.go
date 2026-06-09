@@ -9,14 +9,21 @@ import (
 )
 
 type writeMemoryTool struct {
-	ws    WorkspaceFn
-	guard BoundaryGuard
+	ws      WorkspaceFn
+	guard   BoundaryGuard
+	indexFn func() *memory.Index
 }
 
 func NewWriteMemory(ws WorkspaceFn) *writeMemoryTool { return &writeMemoryTool{ws: ws} }
 
 func (t *writeMemoryTool) WithBoundary(guard BoundaryGuard) *writeMemoryTool {
 	t.guard = guard
+	return t
+}
+
+// WithIndex wires the per-connection memory FTS index so writes keep it current.
+func (t *writeMemoryTool) WithIndex(fn func() *memory.Index) *writeMemoryTool {
+	t.indexFn = fn
 	return t
 }
 
@@ -67,7 +74,7 @@ func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (stri
 	if err := t.guard.check(ws); err != nil {
 		return "", fmt.Errorf("write_memory: %w", err)
 	}
-	if err := memory.Write(ws, a.Name, a.Content, a.Description); err != nil {
+	if err := memory.WriteIndexed(resolveMemoryIndex(t.indexFn, ws), ws, a.Name, a.Content, a.Description); err != nil {
 		return "", err
 	}
 	path, _ := memory.Path(ws, a.Name)

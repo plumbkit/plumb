@@ -9,14 +9,21 @@ import (
 )
 
 type deleteMemoryTool struct {
-	ws    WorkspaceFn
-	guard BoundaryGuard
+	ws      WorkspaceFn
+	guard   BoundaryGuard
+	indexFn func() *memory.Index
 }
 
 func NewDeleteMemory(ws WorkspaceFn) *deleteMemoryTool { return &deleteMemoryTool{ws: ws} }
 
 func (t *deleteMemoryTool) WithBoundary(guard BoundaryGuard) *deleteMemoryTool {
 	t.guard = guard
+	return t
+}
+
+// WithIndex wires the per-connection memory FTS index so deletes drop it too.
+func (t *deleteMemoryTool) WithIndex(fn func() *memory.Index) *deleteMemoryTool {
+	t.indexFn = fn
 	return t
 }
 
@@ -58,7 +65,7 @@ func (t *deleteMemoryTool) Execute(_ context.Context, args json.RawMessage) (str
 	if err := t.guard.check(ws); err != nil {
 		return "", fmt.Errorf("delete_memory: %w", err)
 	}
-	if err := memory.Delete(ws, a.Name); err != nil {
+	if err := memory.DeleteIndexed(resolveMemoryIndex(t.indexFn, ws), ws, a.Name); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Memory %q deleted from %s/.plumb/memories/", a.Name, ws), nil

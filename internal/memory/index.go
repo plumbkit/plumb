@@ -156,6 +156,14 @@ func initMemoryDB(db *sql.DB) error {
 	return nil
 }
 
+// Workspace returns the workspace this index belongs to.
+func (ix *Index) Workspace() string {
+	if ix == nil {
+		return ""
+	}
+	return ix.workspace
+}
+
 // Close releases the index database.
 func (ix *Index) Close() error {
 	if ix == nil || ix.db == nil {

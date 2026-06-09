@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -122,6 +123,43 @@ func Write(workspace, name, content, description string) error {
 		return fmt.Errorf("writing memory: %w", err)
 	}
 	return os.Rename(tmp, path)
+}
+
+// WriteIndexed writes a memory and updates the FTS index. The file write is the
+// source of truth: an index error is logged and swallowed (the next Reindex or
+// Fresh check repairs it) and never fails the write. A nil index degrades to a
+// plain Write.
+func WriteIndexed(ix *Index, workspace, name, content, description string) error {
+	if err := Write(workspace, name, content, description); err != nil {
+		return err
+	}
+	if ix == nil {
+		return nil
+	}
+	rec, err := recordFromFile(workspace, name)
+	if err != nil {
+		slog.Warn("memory: index record build failed", "name", name, "err", err)
+		return nil
+	}
+	if err := ix.Upsert(rec); err != nil {
+		slog.Warn("memory: index upsert failed", "name", name, "err", err)
+	}
+	return nil
+}
+
+// DeleteIndexed deletes a memory and removes it from the FTS index. A nil index
+// degrades to a plain Delete; an index error is logged, not fatal.
+func DeleteIndexed(ix *Index, workspace, name string) error {
+	if err := Delete(workspace, name); err != nil {
+		return err
+	}
+	if ix == nil {
+		return nil
+	}
+	if err := ix.Remove(name); err != nil {
+		slog.Warn("memory: index remove failed", "name", name, "err", err)
+	}
+	return nil
 }
 
 // Relevant returns memories whose `paths:` frontmatter contains a glob

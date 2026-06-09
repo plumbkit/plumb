@@ -12,6 +12,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/quality"
 	"github.com/plumbkit/plumb/internal/quality/golangcilint"
 	"github.com/plumbkit/plumb/internal/session"
@@ -88,6 +89,31 @@ func (s *connSession) reconcileTopologyStore(workspace string) {
 		}
 		v.topologyStore = s.topologyPool.Acquire(workspace, cfg)
 	})
+}
+
+// memoryConfigFor returns the merged per-project [memory] config for workspace,
+// so a per-project enable/disable wins over the global default.
+func (s *connSession) memoryConfigFor(workspace string) config.MemoryConfig {
+	base := s.store.Current()
+	cfg, err := config.LoadProject(base, workspace)
+	if err != nil {
+		return base.Memory
+	}
+	return cfg.Memory
+}
+
+// memoryIndexLive returns the FTS index for the connection's current workspace,
+// or nil when memory indexing is disabled, no workspace is attached, or the
+// index cannot be opened. The pool opens the index lazily on first call.
+func (s *connSession) memoryIndexLive() *memory.Index {
+	if s.memoryPool == nil {
+		return nil
+	}
+	ws := s.view().acquiredRoot
+	if ws == "" || !s.memoryConfigFor(ws).Enabled {
+		return nil
+	}
+	return s.memoryPool.Acquire(ws)
 }
 
 // startQualityRunner creates and starts the quality runner when the [quality]

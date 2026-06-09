@@ -109,6 +109,7 @@ type connSession struct {
 	ttl          time.Duration
 
 	topologyPool *topologyPool
+	memoryPool   *memoryIndexPool
 	writeLimiter *tools.RateLimiter
 
 	watcherOnce sync.Once

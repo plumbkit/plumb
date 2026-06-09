@@ -231,6 +231,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	topoPool := newTopologyPool(cfg.Topology)
 	defer topoPool.StopAll()
 
+	memPool := newMemoryIndexPool()
+	defer memPool.CloseAll()
+
 	// Daemon-level reconciliation: on every global config change, reconfigure the
 	// shared pools that can reload live (topology), and log when a change needs a
 	// restart to take effect (LSP servers, cache, log format). Per-connection
@@ -284,11 +287,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, store, statsStore, daemonStartedAt, budgets, registry)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, store, statsStore, daemonStartedAt, budgets, registry)
 	return nil
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	var wg sync.WaitGroup
 
 	// Idle-session reaper: cancel connections that have not called any tool
@@ -326,7 +329,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, store, statsStore, daemonStartedAt, budgets, registry)
+			handleConn(ctx, conn, pool, topoPool, memPool, store, statsStore, daemonStartedAt, budgets, registry)
 		})
 	}
 }
@@ -354,9 +357,10 @@ func serverWriteTimeout() time.Duration {
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	defer conn.Close()
 	s := newConnSession(ctx, pool, topoPool, store, statsStore, budgets)
+	s.memoryPool = memPool
 	registry.add(s.sessID, connHandle{
 		cancel:        s.cancel,
 		workspace:     s.workspace,
