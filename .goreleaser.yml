@@ -1,0 +1,95 @@
+# GoReleaser configuration — https://goreleaser.com
+# Builds macOS + Linux binaries (amd64 + arm64), publishes a GitHub release,
+# and pushes a Homebrew formula to the plumbkit/homebrew-plumb tap.
+#
+# Plumb is pure-Go (no CGo), so cross-compilation is clean: CGO_ENABLED=0.
+# Run locally with `goreleaser release --snapshot --clean` to test without publishing.
+version: 2
+
+project_name: plumb
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: plumb
+    main: ./cmd/plumb
+    binary: plumb
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      # Mirrors the Makefile's version injection; GoReleaser supplies the tag.
+      - -s -w -X github.com/plumbkit/plumb/internal/cli.Version={{ .Version }}
+
+archives:
+  - id: plumb
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+
+checksums:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "merge conflict"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Others
+      order: 999
+
+brews:
+  - name: plumb
+    repository:
+      owner: plumbkit
+      name: homebrew-plumb
+      # PAT with `repo` scope on the tap repo, provided by the release workflow.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/plumbkit/plumb"
+    description: "LSP-backed MCP server with crash-safe, concurrent writes for coding agents."
+    license: "MIT"
+    # Where the formula installs from within the tap repo.
+    directory: Formula
+    commit_author:
+      name: goreleaser-bot
+      email: hello@getplumb.sh
+    install: |
+      bin.install "plumb"
+    test: |
+      system "#{bin}/plumb", "version"
+
+release:
+  github:
+    owner: plumbkit
+    name: plumb
+  draft: false
+  prerelease: auto # tags like v0.9.0-rc1 are marked pre-release automatically
