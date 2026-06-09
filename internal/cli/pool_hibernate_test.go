@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -121,6 +123,46 @@ func TestPool_OverBudgetVictim(t *testing.T) {
 	v := p.overBudgetVictimLocked("java", 2)
 	if v == nil || v.root != "/a" {
 		t.Fatalf("victim = %v, want the LRU entry /a", v)
+	}
+}
+
+// TestPool_PruneJdtlsCache verifies cache maintenance: an unused jdtls-data dir
+// older than the age threshold is removed, a recent one is kept, and a dir
+// backing a pooled Java workspace is kept even when it is old.
+func TestPool_PruneJdtlsCache(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	base := filepath.Join(config.CacheDir(), "jdtls-data")
+	mustMkdir(t, base)
+	old := time.Now().Add(-40 * 24 * time.Hour)
+
+	stale := filepath.Join(base, "stalehash")
+	mustMkdir(t, stale)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	recent := filepath.Join(base, "recenthash")
+	mustMkdir(t, recent)
+
+	p := hibernatePool("java", time.Hour, 0)
+	const root = "/some/java/project"
+	installEntryLang(p, root, "java", &stubClient{})
+	inUse := jdtlsDataDir(root)
+	mustMkdir(t, inUse)
+	if err := os.Chtimes(inUse, old, old); err != nil { // old, but live ⇒ must be kept
+		t.Fatal(err)
+	}
+
+	p.pruneJdtlsCache()
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("stale unused jdtls-data dir was not pruned")
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Error("recent jdtls-data dir was wrongly pruned")
+	}
+	if _, err := os.Stat(inUse); err != nil {
+		t.Error("in-use jdtls-data dir was wrongly pruned")
 	}
 }
 
