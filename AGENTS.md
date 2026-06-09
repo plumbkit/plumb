@@ -54,7 +54,7 @@ Key packages:
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, P95, client-aware) |
+| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, P95, client-aware). Writes funnel through one batched-transaction `Writer` (single-writer goroutine; non-blocking enqueue, never on the response path); reads use a process-cached `SharedReadOnly` handle |
 | `internal/memory/` | Per-workspace markdown memory store; exposed as MCP resources |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/render/` | Shared, pure CLI/TUI presentation helpers (stdlib + rendering libs only) |
