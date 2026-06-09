@@ -51,7 +51,7 @@ a reconnect. `[ui]`, `[lsp_query]`, and the `[lsp.*]` servers are **global-only*
 |---|---|---|---|---|
 | `log_level` | string | `"info"` | `PLUMB_LOG_LEVEL` | One of `debug`, `info`, `warn`, `error`. Change a running daemon at runtime with [`plumb log-level`](cli-reference.md#plumb-log-level). |
 | `log_format` | string | `"text"` | `PLUMB_LOG_FORMAT` | `text` or `json`. |
-| `log_file` | string | `""` | `PLUMB_LOG_FILE` | Empty writes to the daemon log under the cache dir. |
+| `log_file` | string | `""` | `PLUMB_LOG_FILE` | Empty writes to the daemon log under the OS log dir (`~/Library/Logs/plumb/` on macOS). |
 
 ## `[ui]` — TUI presentation (global only)
 
@@ -251,7 +251,7 @@ change.
 ```toml
 log_level  = "info"      # debug | info | warn | error
 log_format = "text"      # text | json
-log_file   = ""          # empty = daemon log under the cache dir
+log_file   = ""          # empty = daemon log under the OS log dir (~/Library/Logs/plumb on macOS)
 
 [ui]
 theme = "nordico"        # global only; set via the TUI Settings picker

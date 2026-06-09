@@ -144,9 +144,11 @@ flowchart TD
 
 Key design properties:
 
-- **Single source of truth for runtime files** — socket, PID file, and log
-  file all live under `os.UserCacheDir()/plumb/` so paths stay stable across
-  GUI-app and terminal launches (macOS `$TMPDIR` is unreliable across these).
+- **Single source of truth for runtime files** — socket and PID file live under
+  `os.UserCacheDir()/plumb/` so paths stay stable across GUI-app and terminal
+  launches (macOS `$TMPDIR` is unreliable across these). The daemon log is the
+  one exception: it lives in the OS log dir (`~/Library/Logs/plumb/` on macOS),
+  not the cache dir.
 - **Singleton enforced by `flock(2)`** — two advisory locks (`plumb.spawn.lock`
   held briefly by `plumb serve` around its dial-or-spawn block, and
   `plumb.daemon.lock` held by `plumb daemon` for its lifetime) guarantee at
@@ -187,7 +189,7 @@ Key design properties:
 | `~/Library/Caches/plumb/plumb.pid` | daemon | PID for `plumb stop` lookup |
 | `~/Library/Caches/plumb/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
 | `~/Library/Caches/plumb/plumb.daemon.lock` | daemon | Advisory `flock` held for the daemon's lifetime; rejects duplicate daemons |
-| `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS state dir) |
+| `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS log dir; `~/Library/Logs/plumb/` on macOS) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
 | `<workspace>/.plumb/topology.db` | daemon (when `[topology] enabled`) | Per-workspace SQLite/FTS5 semantic index |
@@ -197,10 +199,12 @@ respected when set. Cache paths use `os.UserCacheDir()` directly because they
 are runtime, not data — see Daemon architecture above for why.
 
 plumb resolves these locations through `internal/paths`, which delegates to
-`github.com/adrg/xdg` (no hand-rolled per-OS paths). The table above shows the
-Linux layout. On macOS config, data (sessions, `stats.db`) and state
-(`daemon.log`) all live under `~/Library/Application Support/plumb/`, and cache
-files (socket, pid, locks) under `~/Library/Caches/plumb/`. A pre-0.9.8 config at
+`github.com/adrg/xdg` for config/data/state/cache. The daemon log is the sole
+hand-rolled per-OS path: macOS keeps user logs in `~/Library/Logs/` (which no
+XDG base maps to), so `paths.LogDir` special-cases it. The table above shows the
+Linux layout. On macOS config and data (sessions, `stats.db`) live under
+`~/Library/Application Support/plumb/`, the daemon log under `~/Library/Logs/plumb/`,
+and cache files (socket, pid, locks) under `~/Library/Caches/plumb/`. A pre-0.9.8 config at
 `~/.config/plumb/config.toml` is still read as a fallback.
 
 ### Statistics database (`stats.db`)

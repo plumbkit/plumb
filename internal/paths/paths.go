@@ -11,6 +11,10 @@
 //     fallbacks)
 //   - Windows: %AppData% / %LocalAppData% per xdg
 //
+// Logs are the single exception: macOS keeps user logs in ~/Library/Logs (the
+// directory Console.app reads), which no XDG base maps to, so LogDir special-
+// cases macOS while Linux/Windows follow the state dir. See LogDir.
+//
 // Concurrency: safe for concurrent use. xdg resolves its base directories once
 // at import from the environment; plumb and its tests may change XDG_*/HOME at
 // runtime, so each accessor refreshes via xdg.Reload under a mutex (these are
@@ -18,7 +22,9 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/adrg/xdg"
@@ -46,8 +52,28 @@ func ConfigDir() string { return filepath.Join(base(func() string { return xdg.C
 // DataDir returns plumb's persistent-data directory (sessions, stats).
 func DataDir() string { return filepath.Join(base(func() string { return xdg.DataHome }), appDir) }
 
-// StateDir returns plumb's state directory (logs and other regenerable state).
+// StateDir returns plumb's state directory (regenerable state). For logs use
+// LogDir, which diverges from this on macOS.
 func StateDir() string { return filepath.Join(base(func() string { return xdg.StateHome }), appDir) }
+
+// LogDir returns plumb's log directory. Logs are the single role where the macOS
+// convention diverges from XDG: macOS keeps user logs in ~/Library/Logs (the
+// directory Console.app reads), which no xdg base resolves to — so this
+// deliberately special-cases macOS. Linux ($XDG_STATE_HOME) and Windows
+// (%LocalAppData%) follow the state dir, the correct place for logs there.
+//
+//   - macOS  : ~/Library/Logs/plumb
+//   - Linux  : $XDG_STATE_HOME/plumb  (fallback ~/.local/state/plumb)
+//   - Windows: %LocalAppData%\plumb
+func LogDir() string {
+	if runtime.GOOS == "darwin" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, "Library", "Logs", appDir)
+		}
+		// Degenerate (no HOME): fall back to the state dir.
+	}
+	return StateDir()
+}
 
 // CacheDir returns plumb's cache directory (socket, pid, locks, heap profiles).
 func CacheDir() string { return filepath.Join(base(func() string { return xdg.CacheHome }), appDir) }

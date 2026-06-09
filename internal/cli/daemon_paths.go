@@ -91,11 +91,11 @@ func reapAfterExit(cmd *exec.Cmd, logFile *os.File) {
 	_ = cmd.Wait()
 }
 
-// daemonLogPath returns the path for daemon log output, under the OS state
-// directory resolved by internal/paths (which delegates to adrg/xdg):
-//   - macOS  : ~/Library/Application Support/plumb/daemon.log
+// daemonLogPath returns the path for daemon log output, under the OS log
+// directory resolved by internal/paths:
+//   - macOS  : ~/Library/Logs/plumb/daemon.log
 //   - Linux  : $XDG_STATE_HOME/plumb/daemon.log  (fallback: ~/.local/state/plumb/daemon.log)
 //   - Windows: %LocalAppData%\plumb\daemon.log
 func daemonLogPath() string {
-	return filepath.Join(paths.StateDir(), "daemon.log")
+	return filepath.Join(paths.LogDir(), "daemon.log")
 }
