@@ -191,17 +191,16 @@ func truncateLines(s string, maxLines int, suffix string) string {
 	return strings.Join(lines[:maxLines], "\n") + "\n" + suffix
 }
 
-// findGitRoot returns the root of the git repository that contains path.
-// If path is empty, the current working directory is used.
+// findGitRoot returns the root of the git repository that contains path. An
+// empty path is an error, never the daemon's cwd: the daemon is a singleton
+// shared across connections, so falling back to its working directory would run
+// git against an unrelated repository (a cross-session isolation leak). Callers
+// must resolve and boundary-check the repo before reaching here.
 func findGitRoot(path string) (string, error) {
-	start := path
-	if start == "" {
-		var err error
-		start, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("getting working directory: %w", err)
-		}
+	if path == "" {
+		return "", fmt.Errorf("no repository path")
 	}
+	start := path
 
 	info, err := os.Stat(start)
 	if err != nil {

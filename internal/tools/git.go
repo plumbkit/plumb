@@ -135,8 +135,11 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 }
 
 // defaultRepo returns repo, or the session workspace when repo is empty.
-// Keeps the git command targeted at the pinned project rather than the
-// daemon's cwd (shared across connections, may belong to another repository).
+// Keeps the git command targeted at the pinned project rather than the daemon's
+// cwd (shared across connections, may belong to another repository). When the
+// connection has no pinned workspace (WorkspaceFn nil or returning ""), the repo
+// stays empty and checkBoundary refuses — fail closed, never fall through to the
+// daemon cwd, which would run git against an unrelated repository.
 func (t *Git) defaultRepo(repo string) string {
 	if repo != "" || t.deps.WorkspaceFn == nil {
 		return repo
@@ -145,10 +148,15 @@ func (t *Git) defaultRepo(repo string) string {
 }
 
 func (t *Git) checkBoundary(a gitToolArgs) error {
-	if a.Repo != "" {
-		if err := t.deps.checkBoundary(a.Repo); err != nil {
-			return fmt.Errorf("git: %w", err)
-		}
+	// A resolved repo is mandatory. An empty repo here means neither an explicit
+	// "repo" arg nor a pinned workspace was available; running git anyway would
+	// fall through to the daemon's cwd (a different connection's project — a
+	// cross-session isolation leak), so refuse instead.
+	if a.Repo == "" {
+		return fmt.Errorf("git: no repository resolved — pass an explicit \"repo\" or attach a workspace with session_start")
+	}
+	if err := t.deps.checkBoundary(a.Repo); err != nil {
+		return fmt.Errorf("git: %w", err)
 	}
 	for _, f := range a.Files {
 		path := f

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -221,7 +222,9 @@ func TestGit_RejectsUnknownSubcommand(t *testing.T) {
 
 func TestGit_AddRequiresFiles(t *testing.T) {
 	tool := NewGit(WriteDeps{}, nil) // nil policy → writes allowed
-	_, err := callGit(t, tool, map[string]any{"subcommand": "add"})
+	// repo supplied so the call clears the fail-closed boundary check and reaches
+	// argv-shape validation (nil Boundary admits any non-empty path).
+	_, err := callGit(t, tool, map[string]any{"subcommand": "add", "repo": t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "at least one path is required") {
 		t.Fatalf("expected files-required error, got %v", err)
 	}
@@ -229,9 +232,53 @@ func TestGit_AddRequiresFiles(t *testing.T) {
 
 func TestGit_CommitRequiresMessage(t *testing.T) {
 	tool := NewGit(WriteDeps{}, nil)
-	_, err := callGit(t, tool, map[string]any{"subcommand": "commit", "message": "   "})
+	_, err := callGit(t, tool, map[string]any{"subcommand": "commit", "message": "   ", "repo": t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "message is required") {
 		t.Fatalf("expected message-required error, got %v", err)
+	}
+}
+
+// --- fail-closed repo resolution: the cross-session leak regression ---
+
+// TestGit_RefusesWhenNoRepoResolved is the core security regression: a git call
+// with no "repo" arg on a connection whose workspace is unresolved (WorkspaceFn
+// returns "") must REFUSE rather than fall through to the daemon's cwd — which
+// is shared across connections and may be another project's repository.
+func TestGit_RefusesWhenNoRepoResolved(t *testing.T) {
+	calls := 0
+	deps := WriteDeps{WorkspaceFn: func() string { calls++; return "" }}
+	tool := NewGit(deps, nil)
+	out, err := callGit(t, tool, map[string]any{"subcommand": "status"})
+	if err == nil || !strings.Contains(err.Error(), "no repository resolved") {
+		t.Fatalf("expected fail-closed 'no repository resolved' error, got out=%q err=%v", out, err)
+	}
+}
+
+// TestGit_DefaultRepoFollowsWorkspace asserts an omitted repo resolves to the
+// connection's pinned workspace (not the cwd, not another connection's root).
+func TestGit_DefaultRepoFollowsWorkspace(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	deps := WriteDeps{WorkspaceFn: func() string { return dir }}
+	tool := NewGit(deps, nil)
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "status"}); err != nil {
+		t.Fatalf("status against pinned workspace should succeed, got %v", err)
+	}
+}
+
+// TestGit_DefaultRepoBoundaryEnforced asserts the resolved default repo is
+// boundary-checked: a WorkspaceFn pointing outside this connection's PathPolicy
+// is rejected (the check now always runs, never skipped for an empty arg).
+func TestGit_DefaultRepoBoundaryEnforced(t *testing.T) {
+	outside := t.TempDir()
+	deps := WriteDeps{
+		WorkspaceFn: func() string { return outside },
+		Boundary:    func(string) error { return fmt.Errorf("workspace boundary violation") },
+	}
+	tool := NewGit(deps, nil)
+	_, err := callGit(t, tool, map[string]any{"subcommand": "status"})
+	if err == nil || !strings.Contains(err.Error(), "boundary") {
+		t.Fatalf("expected boundary rejection for out-of-policy default repo, got %v", err)
 	}
 }
 
