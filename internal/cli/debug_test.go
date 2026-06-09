@@ -78,6 +78,44 @@ func TestHandleCtrlConn_HeapProfile(t *testing.T) {
 	}
 }
 
+func TestHandleCtrlConn_GoroutineStacks(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	ln := testCtrlListener(t)
+	go serveControlSocket(ln, "info", "text", nil, nil, nil)
+
+	// goroutine-stacks replies with a single path line.
+	conn, err := net.Dial(ln.Addr().Network(), ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("goroutine-stacks\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	path := strings.TrimSpace(line)
+	if strings.HasPrefix(path, "error:") {
+		t.Fatalf("goroutine-stacks returned error: %s", path)
+	}
+	if !strings.HasSuffix(path, ".txt") {
+		t.Fatalf("goroutine-stacks path = %q, want a .txt file", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stacks dump %q: %v", path, err)
+	}
+	// debug=2 output starts with "goroutine profile: total N" and contains
+	// per-goroutine "goroutine <id> [<state>]" headers.
+	if !strings.Contains(string(data), "goroutine") {
+		t.Fatalf("stacks dump %q missing goroutine stacks:\n%s", path, data)
+	}
+}
+
 func TestParseByteSize(t *testing.T) {
 	tests := []struct {
 		in      string

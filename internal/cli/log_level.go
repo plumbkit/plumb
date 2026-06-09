@@ -131,6 +131,11 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 		return
 	}
 
+	if line == "goroutine-stacks" {
+		handleStacksProfile(conn)
+		return
+	}
+
 	// reload-project <workspace>: re-apply the per-project config to the sessions
 	// pinned to that workspace (and only those), so a workspace settings change
 	// made in the TUI takes effect at once for that project.
@@ -188,6 +193,33 @@ func handleHeapProfile(conn net.Conn) {
 		return
 	}
 	slog.Info("daemon: heap profile written via control socket", "path", path)
+	fmt.Fprintf(conn, "%s\n", path)
+}
+
+// handleStacksProfile writes a full goroutine stack dump (the pprof "goroutine"
+// profile at debug=2 — human-readable stacks for every goroutine, the
+// non-destructive equivalent of SIGQUIT) to the cache dir and replies with its
+// path, in response to the control-socket "goroutine-stacks" command (sent by
+// `plumb debug stacks`). Capturing it *during* a hang shows what each goroutine
+// is blocked on — a held mutex, a stalled socket write, a lock wait.
+func handleStacksProfile(conn net.Conn) {
+	dir := config.CacheDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fmt.Fprintf(conn, "error: creating cache dir: %s\n", err.Error())
+		return
+	}
+	path := filepath.Join(dir, fmt.Sprintf("plumb.stacks.%d.txt", time.Now().UnixNano()))
+	f, err := os.Create(path) //nolint:gosec // G304: path is cache dir + a fixed-format name, no user input
+	if err != nil {
+		fmt.Fprintf(conn, "error: creating stacks dump: %s\n", err.Error())
+		return
+	}
+	defer f.Close()
+	if err := pprof.Lookup("goroutine").WriteTo(f, 2); err != nil {
+		fmt.Fprintf(conn, "error: writing stacks dump: %s\n", err.Error())
+		return
+	}
+	slog.Info("daemon: goroutine stacks written via control socket", "path", path, "goroutines", runtime.NumGoroutine())
 	fmt.Fprintf(conn, "%s\n", path)
 }
 

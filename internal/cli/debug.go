@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	debugCmd.AddCommand(debugMemCmd, debugHeapCmd)
+	debugCmd.AddCommand(debugMemCmd, debugHeapCmd, debugStacksCmd)
 }
 
 var debugCmd = &cobra.Command{
@@ -22,8 +22,9 @@ var debugCmd = &cobra.Command{
 
   plumb debug mem    — print a live runtime memory snapshot
   plumb debug heap   — write a heap pprof profile and print its path
+  plumb debug stacks — dump every goroutine's stack and print the file path
 
-Both talk to the running daemon over its control socket; start it with
+These talk to the running daemon over its control socket; start it with
 "plumb serve" if it is not already up.`,
 }
 
@@ -75,6 +76,26 @@ Inspect it with:  go tool pprof <printed-path>`,
 	Args: cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		resp, err := dialDaemonCtrlFull("heap-profile")
+		if err != nil {
+			return err
+		}
+		fmt.Print(resp)
+		return nil
+	},
+}
+
+var debugStacksCmd = &cobra.Command{
+	Use:   "stacks",
+	Short: "Dump every goroutine's stack from the running daemon and print the file path",
+	Long: `Write a full goroutine stack dump from the daemon to the cache directory.
+
+This is the non-destructive equivalent of SIGQUIT: every goroutine's stack,
+showing what each is blocked on. Capture it *during* a hang to see the wedge —
+then grep the file (e.g. for "sync.Mutex", "conn.Write", or a lock name) to find
+the blocked goroutines.`,
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		resp, err := dialDaemonCtrlFull("goroutine-stacks")
 		if err != nil {
 			return err
 		}
