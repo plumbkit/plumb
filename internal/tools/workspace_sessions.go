@@ -37,8 +37,8 @@ var writeToolNames = []string{
 
 // WorkspaceSessions returns peer-session awareness for the caller's workspace.
 // Concurrency: Execute is pure-read and takes no in-process mutexes of its own;
-// it calls session.List (filesystem flock) and stats.OpenReadOnly (new SQLite
-// read-only connection). Both are bounded by the wsSessionsTimeout so a stuck
+// it calls session.List (filesystem flock) and stats.SharedReadOnly (a process-
+// cached read-only connection). Both are bounded by the wsSessionsTimeout so a stuck
 // NFS mount or an unusually large session directory never blocks the MCP
 // response. No deadlock is possible because the tool never holds more than one
 // resource at a time, and the resource it does hold (an OS flock) is not
