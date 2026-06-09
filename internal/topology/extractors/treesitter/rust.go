@@ -38,6 +38,7 @@ func (e *RustExtractor) Extract(_ context.Context, relPath string, src []byte) (
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
+	defer tree.Release()
 	w := &rustWalk{
 		lang:    e.lang.get(),
 		src:     src,

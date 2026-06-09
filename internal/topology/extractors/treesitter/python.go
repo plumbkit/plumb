@@ -43,6 +43,7 @@ func (e *PythonExtractor) Extract(_ context.Context, relPath string, src []byte)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
+	defer tree.Release()
 	w := &pyWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode(), -1, false)
 	w.callEdges(tree.RootNode())

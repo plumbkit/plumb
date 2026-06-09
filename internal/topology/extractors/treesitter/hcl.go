@@ -38,6 +38,7 @@ func (e *HCLExtractor) Extract(_ context.Context, relPath string, src []byte) ([
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
+	defer tree.Release()
 	w := &hclWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walk(tree.RootNode())
 	return w.nodes, nil, nil

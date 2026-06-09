@@ -41,6 +41,7 @@ func (e *JavaScriptExtractor) Extract(_ context.Context, relPath string, src []b
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
+	defer tree.Release()
 	w := &jsWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
 	w.walk(tree.RootNode())
 	w.scanTests(tree.RootNode())

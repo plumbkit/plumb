@@ -43,6 +43,7 @@ func (e *SwiftExtractor) Extract(_ context.Context, relPath string, src []byte) 
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
+	defer tree.Release()
 	w := &swiftWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
 	w.walk(tree.RootNode(), -1, false, false)
 	w.callEdges(tree.RootNode())

@@ -40,6 +40,7 @@ func (e *YAMLExtractor) Extract(_ context.Context, relPath string, src []byte) (
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
+	defer tree.Release()
 	w := &yamlWalk{lang: e.lang.get(), src: src, path: relPath}
 	w.walkNode(tree.RootNode(), -1, "")
 	return w.nodes, w.edges, nil
