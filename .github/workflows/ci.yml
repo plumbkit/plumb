@@ -6,53 +6,83 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOLANGCI_LINT_VERSION: v2.12.2
+
 jobs:
-  ci:
-    runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # ── The gate: build + test + lint on both supported OSes. ──
+  verify:
+    name: verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history so `git describe --tags` resolves the version
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.2"
+          go-version-file: go.mod
           cache: true
 
-      - name: Build
-        run: go build ./...
+      - name: Install golangci-lint ${{ env.GOLANGCI_LINT_VERSION }}
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" "${GOLANGCI_LINT_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Vet
-        run: go vet ./...
+      - name: make verify
+        run: make verify
 
-      - name: File size
-        run: ./scripts/check-file-size.sh
-
-      - name: Test
-        run: go test -race ./...
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@v8
+  # ── Race detector — ubuntu only (slow; one OS is enough to catch data races). ──
+  race:
+    name: test-race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          version: v2.12.2
+          go-version-file: go.mod
+          cache: true
+      - name: make test-race
+        run: make test-race
 
+  # ── The credibility job: real-binary LSP integration on both OSes. ──
+  # This is what turns "Validated (macOS only)" into "Validated (macOS + Linux)".
   integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    name: integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.2"
+          go-version-file: go.mod
           cache: true
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-node@v4
         with:
-          distribution: temurin
-          java-version: "21"
+          node-version: "20"
+
+      - name: Put GOPATH/bin on PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Install gopls
         run: go install golang.org/x/tools/gopls@latest
@@ -60,39 +90,10 @@ jobs:
       - name: Install pyright
         run: npm install -g pyright
 
-      - name: Install jdtls
+      - name: Verify language servers are on PATH
         run: |
-          # jdtls is published to download.eclipse.org, not GitHub Releases
-          # (the repo's only "release" is an unrelated pre-release VSIX, so the
-          # GitHub releases/latest API 404s). Resolve the newest stable
-          # milestone and its timestamped tarball, falling back to the rolling
-          # snapshot if the milestone listing cannot be parsed.
-          BASE="https://download.eclipse.org/jdtls/milestones"
-          VERSION=$(curl -fsSL "$BASE/" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tail -1)
-          if [ -n "$VERSION" ]; then
-            FILE=$(curl -fsSL "$BASE/$VERSION/" | grep -oE "jdt-language-server-$VERSION-[0-9]+\.tar\.gz" | sort -u | tail -1)
-          fi
-          if [ -n "$VERSION" ] && [ -n "$FILE" ]; then
-            ASSET_URL="$BASE/$VERSION/$FILE"
-          else
-            ASSET_URL="https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"
-          fi
-          echo "Downloading jdtls from $ASSET_URL"
-          curl -fsSL "$ASSET_URL" -o jdtls.tar.gz
-          mkdir -p "$HOME/.local/jdtls" "$HOME/.local/bin"
-          tar -xzf jdtls.tar.gz -C "$HOME/.local/jdtls"
-          cat > "$HOME/.local/bin/jdtls" <<'SCRIPT'
-          #!/usr/bin/env bash
-          JDTLS_HOME="$HOME/.local/jdtls"
-          exec java \
-            -jar "$JDTLS_HOME/plugins"/org.eclipse.equinox.launcher_*.jar \
-            -configuration "$JDTLS_HOME/config_linux" \
-            "$@"
-          SCRIPT
-          chmod +x "$HOME/.local/bin/jdtls"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          gopls version
+          pyright --version
 
-      - name: Integration tests
-        env:
-          JDTLS_FRESH_DATA: "1"
-        run: go test -tags=integration -timeout=10m ./...
+      - name: make integration-test
+        run: make integration-test
