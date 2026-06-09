@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.10 (unreleased)
+
+Advanced Memory Engine, Phase 1 — turn the per-workspace memory store from grep-over-markdown into an FTS5-indexed, provenance-aware, self-summarising knowledge layer. Markdown files stay the source of truth; a separate, rebuildable `memory.db` is the derived index (distinct from `topology.db`). Shipped wave by wave.
+
+### Added
+
+- **`internal/redact` — secret scrubber for generated memories.** A dependency-free leaf package (`Redact`/`ContainsSecret`) that strips API keys, tokens (GitHub/Slack/JWT/AWS), PEM private keys, URL-embedded credentials, and `key = value` secret assignments before any generated or episodic memory is persisted, replacing each with a labelled `[REDACTED:<kind>]` placeholder. Conservative-biased to catch secrets while leaving benign prose intact — a summary that merely mentions “token” or a file path like `internal/auth/login.go` is untouched. Table-tested with false-positive guards (`internal/redact/redact_test.go`).
+
 ## 0.9.9 (unreleased)
 
 Closes out the low-priority *Architecture* residuals from `docs/internal/todo.md`: the name-keyed topology traversal imprecision, and the tree-sitter Phase 7 (offline semantic search) decision.
