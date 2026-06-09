@@ -29,9 +29,43 @@ func sendCtrlFull(t *testing.T, ln net.Listener, cmd string) string {
 	return string(out)
 }
 
+func TestRenderLSPStatus(t *testing.T) {
+	if got := renderLSPStatus(""); got != "no active language servers\n" {
+		t.Fatalf("empty reply: got %q", got)
+	}
+	// go: active with pid+rss (566231040 B ≈ 540 MB, idle 12s);
+	// java: hibernated with empty pid/rss (idle 1500s = 25m0s).
+	resp := "go\t/x\tactive\t1234\t566231040\t12\njava\t/y\thibernated\t\t\t1500\n"
+	out := renderLSPStatus(resp)
+	for _, want := range []string{"LANGUAGE", "go", "/x", "active", "1234", "540 MB", "12s", "java", "hibernated", "25m0s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandleCtrlConn_LSPStatus(t *testing.T) {
+	ln := testCtrlListener(t)
+	go serveControlSocket(ln, "info", "text", ctrlHandlers{lspStatus: func() string {
+		return "go\t/x\tactive\t1\t100\t5\n"
+	}})
+	resp := sendCtrlFull(t, ln, "lsp-status")
+	if !strings.Contains(resp, "go\t/x\tactive") {
+		t.Fatalf("lsp-status reply: got %q", resp)
+	}
+}
+
+func TestHandleCtrlConn_LSPStatusNilFn(t *testing.T) {
+	ln := testCtrlListener(t)
+	go serveControlSocket(ln, "info", "text", ctrlHandlers{})
+	if resp := sendCtrlFull(t, ln, "lsp-status"); resp != "" {
+		t.Fatalf("nil lspStatus should yield empty reply, got %q", resp)
+	}
+}
+
 func TestHandleCtrlConn_MemStats(t *testing.T) {
 	ln := testCtrlListener(t)
-	go serveControlSocket(ln, "info", "text", nil, nil, nil)
+	go serveControlSocket(ln, "info", "text", ctrlHandlers{})
 
 	resp := sendCtrlFull(t, ln, "mem-stats")
 	for _, want := range []string{"HeapAlloc", "HeapInuse", "HeapSys", "HeapReleased", "NumGC", "Goroutines"} {
@@ -47,7 +81,7 @@ func TestHandleCtrlConn_HeapProfile(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	ln := testCtrlListener(t)
-	go serveControlSocket(ln, "info", "text", nil, nil, nil)
+	go serveControlSocket(ln, "info", "text", ctrlHandlers{})
 
 	// Read only the first line: heap-profile replies with a single path line.
 	conn, err := net.Dial(ln.Addr().Network(), ln.Addr().String())
@@ -83,7 +117,7 @@ func TestHandleCtrlConn_GoroutineStacks(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	ln := testCtrlListener(t)
-	go serveControlSocket(ln, "info", "text", nil, nil, nil)
+	go serveControlSocket(ln, "info", "text", ctrlHandlers{})
 
 	// goroutine-stacks replies with a single path line.
 	conn, err := net.Dial(ln.Addr().Network(), ln.Addr().String())

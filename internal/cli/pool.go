@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/monitor"
 )
 
 // The pool is split across files by concern: workspace detection + the CLI
@@ -77,6 +79,19 @@ const (
 	poolHibernating                      // teardown in progress
 	poolHibernated                       // process stopped; next acquire restarts it
 )
+
+func (s poolLifecycle) String() string {
+	switch s {
+	case poolActive:
+		return "active"
+	case poolHibernating:
+		return "hibernating"
+	case poolHibernated:
+		return "hibernated"
+	default:
+		return "unknown"
+	}
+}
 
 type poolEntry struct {
 	root     string
@@ -348,6 +363,49 @@ func (p *workspacePool) touch(root, language string) {
 	if e := p.lookup(root, language); e != nil {
 		e.lastUsed.Store(time.Now().UnixNano())
 	}
+}
+
+// lspStatusReport renders one tab-separated line per pooled language server —
+// language, root, lifecycle state, PID, RSS bytes, idle seconds — for the
+// `plumb debug lsp` admin command. Empty PID/RSS fields mean the process is not
+// running (hibernated or warming). The map is snapshotted under p.mu; RSS
+// sampling (which may shell out on macOS) runs after the lock is released.
+func (p *workspacePool) lspStatusReport() string {
+	type row struct {
+		lang, root, state string
+		pid               int
+		lastUsed          int64
+	}
+	p.mu.Lock()
+	rows := make([]row, 0, len(p.entries))
+	for k, e := range p.entries {
+		pid := 0
+		if e.sup != nil {
+			pid = e.sup.PID()
+		}
+		rows = append(rows, row{k.language, k.root, e.state.String(), pid, e.lastUsed.Load()})
+	}
+	p.mu.Unlock()
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].lang != rows[j].lang {
+			return rows[i].lang < rows[j].lang
+		}
+		return rows[i].root < rows[j].root
+	})
+	now := time.Now().UnixNano()
+	var b strings.Builder
+	for _, r := range rows {
+		pidStr, rssStr := "", ""
+		if r.pid > 0 {
+			pidStr = strconv.Itoa(r.pid)
+			if rss, ok := monitor.ProcessRSS(r.pid); ok {
+				rssStr = strconv.FormatUint(rss, 10)
+			}
+		}
+		idle := (now - r.lastUsed) / int64(time.Second)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\n", r.lang, r.root, r.state, pidStr, rssStr, idle)
+	}
+	return b.String()
 }
 
 // startJanitor launches the hibernation janitor on ctx (the daemon-lifetime

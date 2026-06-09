@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/monitor"
 )
 
 // checkLSPs reports install and runtime status for all configured language servers.
@@ -53,7 +54,52 @@ func checkLSPs(ws string) []checkResult {
 			results = append(results, checkSwiftToolchain())
 		}
 	}
+	results = append(results, checkActiveLSPProcesses()...)
 	return results
+}
+
+// checkActiveLSPProcesses queries the running daemon for its live language
+// servers and reports each one's process state, PID, and resident memory — so
+// `plumb doctor` shows the resource footprint of heavyweight servers (jdtls) and
+// confirms idle ones have hibernated. Returns nil when the daemon is down (the
+// Daemon section already reports that) or when no servers are pooled.
+func checkActiveLSPProcesses() []checkResult {
+	resp, err := dialDaemonCtrlFull("lsp-status")
+	if err != nil {
+		return nil
+	}
+	resp = strings.TrimRight(resp, "\n")
+	if resp == "" {
+		return nil
+	}
+	var results []checkResult
+	for _, line := range strings.Split(resp, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 6 {
+			continue
+		}
+		results = append(results, checkResult{
+			name:   f[0] + " (live)",
+			ok:     true,
+			detail: formatActiveLSPDetail(f[1], f[2], f[3], f[4]),
+		})
+	}
+	return results
+}
+
+// formatActiveLSPDetail renders the detail line for one live server from its
+// raw lsp-status fields (root, state, pid, rss_bytes).
+func formatActiveLSPDetail(root, state, pid, rss string) string {
+	detail := root + "  " + state
+	if pid != "" {
+		detail += "  pid " + pid
+	}
+	if rss != "" {
+		if n, err := strconv.ParseUint(rss, 10, 64); err == nil {
+			detail += "  " + monitor.FormatBytes(n)
+		}
+	}
+	return detail
 }
 
 func checkLSPBinary(lang string, lspCfg config.LSPConfig) checkResult {

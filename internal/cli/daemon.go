@@ -266,7 +266,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			ctrlLn.Close()
 		}()
 		diagsFn := func(workspace string) string { return workspaceDiagnostics(pool, workspace) }
-		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, diagsFn, store.Reload, registry.reloadProject)
+		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, ctrlHandlers{
+			diags:         diagsFn,
+			reload:        store.Reload,
+			reloadProject: registry.reloadProject,
+			lspStatus:     pool.lspStatusReport,
+		})
 	}
 
 	daemonStartedAt := time.Now()

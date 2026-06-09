@@ -86,21 +86,32 @@ func validLogLevelCommand(level string) bool {
 	}
 }
 
+// ctrlHandlers bundles the optional daemon-side callbacks the control socket
+// dispatches to. Any field may be nil — tests pass a zero value and the handler
+// treats a nil callback as "feature unavailable". Collapsing these into a struct
+// (rather than positional params) keeps adding a new admin command cheap.
+type ctrlHandlers struct {
+	diags         func(string) string // diagnostics <workspace>
+	reload        func() error        // reload-config
+	reloadProject func(string)        // reload-project <workspace>
+	lspStatus     func() string       // lsp-status
+}
+
 // serveControlSocket accepts admin connections on ln and handles each in its
-// own goroutine. It returns when ln is closed (daemon shutdown).
-// diagsFn returns live formatted diagnostics for the given workspace path;
-// pass nil if the daemon has no workspace pool (e.g. in tests that don't need it).
-func serveControlSocket(ln net.Listener, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error, reloadProjectFn func(string)) {
+// own goroutine. It returns when ln is closed (daemon shutdown). All callbacks
+// in h are optional; pass a zero ctrlHandlers when the daemon has no workspace
+// pool (e.g. in tests that don't need it).
+func serveControlSocket(ln net.Listener, configLevel, logFormat string, h ctrlHandlers) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go handleCtrlConn(conn, configLevel, logFormat, diagsFn, reloadFn, reloadProjectFn)
+		go handleCtrlConn(conn, configLevel, logFormat, h)
 	}
 }
 
-func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(string) string, reloadFn func() error, reloadProjectFn func(string)) {
+func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -110,14 +121,14 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 	line := strings.TrimSpace(scanner.Text())
 
 	if workspace, ok := strings.CutPrefix(line, "diagnostics "); ok {
-		if diagsFn != nil {
-			fmt.Fprint(conn, diagsFn(workspace))
+		if h.diags != nil {
+			fmt.Fprint(conn, h.diags(workspace))
 		}
 		return
 	}
 
 	if line == "reload-config" {
-		handleReloadConfig(conn, reloadFn)
+		handleReloadConfig(conn, h.reload)
 		return
 	}
 
@@ -131,6 +142,13 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 		return
 	}
 
+	if line == "lsp-status" {
+		if h.lspStatus != nil {
+			fmt.Fprint(conn, h.lspStatus())
+		}
+		return
+	}
+
 	if line == "goroutine-stacks" {
 		handleStacksProfile(conn)
 		return
@@ -141,8 +159,8 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, diagsFn func(s
 	// made in the TUI takes effect at once for that project.
 	if ws, ok := strings.CutPrefix(line, "reload-project "); ok {
 		ws = strings.TrimSpace(ws)
-		if reloadProjectFn != nil {
-			reloadProjectFn(ws)
+		if h.reloadProject != nil {
+			h.reloadProject(ws)
 		}
 		slog.Info("daemon: project config reloaded via control socket", "workspace", ws)
 		fmt.Fprint(conn, "ok\n")

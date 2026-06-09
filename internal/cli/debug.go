@@ -4,15 +4,19 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/render"
 )
 
 func init() {
-	debugCmd.AddCommand(debugMemCmd, debugHeapCmd, debugStacksCmd)
+	debugCmd.AddCommand(debugMemCmd, debugHeapCmd, debugStacksCmd, debugLSPCmd)
 }
 
 var debugCmd = &cobra.Command{
@@ -23,6 +27,7 @@ var debugCmd = &cobra.Command{
   plumb debug mem    — print a live runtime memory snapshot
   plumb debug heap   — write a heap pprof profile and print its path
   plumb debug stacks — dump every goroutine's stack and print the file path
+  plumb debug lsp    — list active language servers with PID, RSS, and idle time
 
 These talk to the running daemon over its control socket; start it with
 "plumb serve" if it is not already up.`,
@@ -102,6 +107,76 @@ the blocked goroutines.`,
 		fmt.Print(resp)
 		return nil
 	},
+}
+
+var debugLSPCmd = &cobra.Command{
+	Use:   "lsp",
+	Short: "List the running daemon's language servers with PID, RSS, and idle time",
+	Long: `List every language server the daemon currently pools, with its lifecycle
+state (active / hibernating / hibernated), child-process PID, resident memory,
+and time since its last tool call.
+
+Hibernated servers show no PID or RSS — their process was stopped to reclaim
+memory after going idle past the language's idle_timeout, and the next tool call
+restarts them transparently.`,
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		resp, err := dialDaemonCtrlFull("lsp-status")
+		if err != nil {
+			return err
+		}
+		fmt.Print(renderLSPStatus(resp))
+		return nil
+	},
+}
+
+// renderLSPStatus turns the daemon's tab-separated lsp-status reply
+// (language, root, state, pid, rss_bytes, idle_seconds per line) into an aligned
+// table. Presentation lives here, not in the daemon, so the wire format stays
+// raw values.
+func renderLSPStatus(resp string) string {
+	resp = strings.TrimRight(resp, "\n")
+	if resp == "" {
+		return "no active language servers\n"
+	}
+	var b strings.Builder
+	w := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE")
+	for _, line := range strings.Split(resp, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 6 {
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]))
+	}
+	_ = w.Flush()
+	return b.String()
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func formatRSSField(s string) string {
+	if s == "" {
+		return "-"
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return "-"
+	}
+	return monitor.FormatBytes(n)
+}
+
+func formatIdleField(s string) string {
+	secs, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || secs < 0 {
+		return "-"
+	}
+	return (time.Duration(secs) * time.Second).String()
 }
 
 // dialDaemonCtrlFull dials the daemon control socket, sends a single-line
