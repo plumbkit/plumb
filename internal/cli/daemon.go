@@ -365,6 +365,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 		cancel:        s.cancel,
 		workspace:     s.workspace,
 		reloadProject: func() { s.applyProjectConfig(s.workspace()) },
+		summarise:     s.generateEpisodicSummary,
 	})
 	defer registry.remove(s.sessID)
 	defer s.close()

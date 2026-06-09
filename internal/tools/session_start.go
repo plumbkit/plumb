@@ -73,6 +73,14 @@ type SessionStart struct {
 	externalIDFn func(id string) string                                      // may be nil; links session to external ID, returns inherited name
 	pinConflict  func(requested string)                                      // may be nil; records a same-connection workspace switch attempt
 	repin        func(ctx context.Context, workspace string) (string, error) // may be nil; re-pins the connection to an explicit workspace
+	episodicFn   func(ws string) (string, bool)                              // may be nil; returns the last episodic summary for the workspace
+}
+
+// WithEpisodic wires an accessor for the most recent episodic summary, surfaced
+// as a "Last session" block. Nil-safe: unset or returning ok=false omits it.
+func (t *SessionStart) WithEpisodic(fn func(ws string) (string, bool)) *SessionStart {
+	t.episodicFn = fn
+	return t
 }
 
 // WithTopology wires the topology store accessor so session_start can lead its
@@ -87,6 +95,21 @@ func (t *SessionStart) WithTopology(fn topologyStoreFn) *SessionStart {
 // topologyActive reports whether a topology store is wired and live.
 func (t *SessionStart) topologyActive() bool {
 	return t.topo != nil && t.topo() != nil
+}
+
+// writeSessionEpisodic appends a compact "Last session" block summarising the
+// previous idle session's activity, when one is available.
+func (t *SessionStart) writeSessionEpisodic(sb *strings.Builder, ws string) {
+	if t.episodicFn == nil {
+		return
+	}
+	text, ok := t.episodicFn(ws)
+	if !ok || text == "" {
+		return
+	}
+	sb.WriteString("\n## Last session\n\n")
+	sb.WriteString(text)
+	sb.WriteString("\n")
 }
 
 // WithLSPLanguage wires an accessor for the LSP language actually attached to
@@ -184,6 +207,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	t.writeSessionGitPolicy(&sb, ws)
 	t.writeSessionRecentFiles(&sb, ws)
 	writeSessionMemories(&sb, ws)
+	t.writeSessionEpisodic(&sb, ws)
 	clientName := ""
 	if t.clientNameFn != nil {
 		clientName = t.clientNameFn()

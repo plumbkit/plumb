@@ -47,6 +47,19 @@ CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
 CREATE INDEX IF NOT EXISTS idx_tc_session   ON tool_calls(session_id);
 CREATE INDEX IF NOT EXISTS idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX IF NOT EXISTS idx_tc_ws_session ON tool_calls(workspace, session_id);
+
+CREATE TABLE IF NOT EXISTS episodic_memories (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace     TEXT    NOT NULL DEFAULT '',
+    session_id    TEXT    NOT NULL DEFAULT '',
+    session_name  TEXT    NOT NULL DEFAULT '',
+    generated_at  INTEGER NOT NULL,
+    summary       TEXT    NOT NULL DEFAULT '',
+    touched_files TEXT    NOT NULL DEFAULT '',
+    read_count    INTEGER NOT NULL DEFAULT 0,
+    write_count   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_em_ws ON episodic_memories(workspace, generated_at);
 `
 
 // migration describes a single forward schema step. For ADD COLUMN migrations,
@@ -68,6 +81,20 @@ var migrations = []migration{
 	{from: 4, to: 5, addColumn: "workspace", sql: `ALTER TABLE tool_calls ADD COLUMN workspace    TEXT NOT NULL DEFAULT ''`},
 	{from: 5, to: 6, addColumn: "client_name", sql: `ALTER TABLE tool_calls ADD COLUMN client_name    TEXT NOT NULL DEFAULT ''`},
 	{from: 6, to: 7, addColumn: "client_version", sql: `ALTER TABLE tool_calls ADD COLUMN client_version TEXT NOT NULL DEFAULT ''`},
+	// v8 adds a new table, not a column — addColumn stays empty so the step always
+	// runs; CREATE TABLE IF NOT EXISTS makes it idempotent and overlap-safe with
+	// the baseline schema.
+	{from: 7, to: 8, sql: `CREATE TABLE IF NOT EXISTS episodic_memories (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace     TEXT    NOT NULL DEFAULT '',
+    session_id    TEXT    NOT NULL DEFAULT '',
+    session_name  TEXT    NOT NULL DEFAULT '',
+    generated_at  INTEGER NOT NULL,
+    summary       TEXT    NOT NULL DEFAULT '',
+    touched_files TEXT    NOT NULL DEFAULT '',
+    read_count    INTEGER NOT NULL DEFAULT 0,
+    write_count   INTEGER NOT NULL DEFAULT 0
+)`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -149,7 +176,8 @@ func DBPathFor() string {
 //	5 — added workspace column (0.5.31+)
 //	6 — added client_name column (0.7.6+)
 //	7 — added client_version column (0.7.6+)
-const SchemaVersion = 7
+//	8 — added episodic_memories table (0.9.10+)
+const SchemaVersion = 8
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {

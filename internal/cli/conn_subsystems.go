@@ -116,6 +116,24 @@ func (s *connSession) memoryIndexLive() *memory.Index {
 	return s.memoryPool.Acquire(ws)
 }
 
+// latestEpisodic returns the most recent episodic summary for the workspace,
+// for the session_start "Last session" block. ok=false when summaries are
+// disabled or none exists.
+func (s *connSession) latestEpisodic(ws string) (string, bool) {
+	if !s.memoryConfigFor(ws).GeneratedSummaries {
+		return "", false
+	}
+	ro, err := stats.SharedReadOnly()
+	if err != nil || ro == nil {
+		return "", false
+	}
+	e, ok, err := ro.LatestEpisodic(ws)
+	if err != nil || !ok {
+		return "", false
+	}
+	return e.Summary, e.Summary != ""
+}
+
 // startQualityRunner creates and starts the quality runner when the [quality]
 // block is enabled, writing it into the snapshot being built. Call only from
 // within a mutate fn (it reads and writes v). No-op if already started.

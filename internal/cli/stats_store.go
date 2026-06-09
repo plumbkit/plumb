@@ -69,6 +69,16 @@ func (s *statsStore) RenameSession(sessionID, name string) {
 	w.RenameSession(sessionID, name)
 }
 
+// RecordEpisodic enqueues a generated episodic summary to the global stats DB.
+func (s *statsStore) RecordEpisodic(e stats.Episodic) {
+	if s == nil || e.Workspace == "" {
+		return
+	}
+	if w := s.ensureWriter(); w != nil {
+		w.RecordEpisodic(e)
+	}
+}
+
 // Close drains and flushes in-flight writes, then shuts the writer. Intended to
 // be called once at daemon shutdown.
 func (s *statsStore) Close() {

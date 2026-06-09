@@ -23,8 +23,9 @@ const (
 // writerCommand is one unit of work for the writer goroutine: either an insert
 // or a session rename. Exactly one field is non-nil.
 type writerCommand struct {
-	call   *Call
-	rename *renameCommand
+	call     *Call
+	rename   *renameCommand
+	episodic *Episodic
 }
 
 type renameCommand struct {
@@ -104,6 +105,19 @@ func (w *Writer) RenameSession(sessionID, name string) {
 	}
 }
 
+// RecordEpisodic enqueues an episodic summary insert, ordered behind any pending
+// tool-call inserts. Non-blocking: a full buffer drops it (counted).
+func (w *Writer) RecordEpisodic(e Episodic) {
+	if w == nil || w.closed.Load() || e.Workspace == "" {
+		return
+	}
+	select {
+	case w.ch <- writerCommand{episodic: &e}:
+	default:
+		w.dropped.Add(1)
+	}
+}
+
 // Dropped reports the cumulative number of commands dropped because the buffer
 // was full. Exposed for tests and diagnostics.
 func (w *Writer) Dropped() int64 {
@@ -154,6 +168,11 @@ func (w *Writer) run() {
 			flush() // name rows that are already inserted
 			if err := w.db.RenameSession(cmd.rename.sessionID, cmd.rename.name); err != nil {
 				slog.Warn("stats: rename session failed", "session", cmd.rename.sessionID, "err", err)
+			}
+		case cmd.episodic != nil:
+			flush()
+			if err := w.db.recordEpisodic(*cmd.episodic); err != nil {
+				slog.Warn("stats: record episodic failed", "workspace", cmd.episodic.Workspace, "err", err)
 			}
 		}
 	}

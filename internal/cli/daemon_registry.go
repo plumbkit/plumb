@@ -18,6 +18,9 @@ type connHandle struct {
 	cancel        context.CancelFunc
 	workspace     func() string
 	reloadProject func()
+	// summarise generates this session's episodic summary; invoked by the idle
+	// reaper once per idle spell. nil when episodic summaries are unavailable.
+	summarise func()
 }
 
 // connRegistry tracks live MCP connections so the idle reaper can cancel them
@@ -26,10 +29,16 @@ type connHandle struct {
 type connRegistry struct {
 	mu    sync.Mutex
 	conns map[string]connHandle // sessID → handle
+	// summarisedAt records the last-seen time a session was summarised at, so the
+	// reaper summarises at most once per idle spell (re-arming after new activity).
+	summarisedAt map[string]time.Time
 }
 
 func newConnRegistry() *connRegistry {
-	return &connRegistry{conns: make(map[string]connHandle)}
+	return &connRegistry{
+		conns:        make(map[string]connHandle),
+		summarisedAt: make(map[string]time.Time),
+	}
 }
 
 func (r *connRegistry) add(sessID string, h connHandle) {
@@ -64,7 +73,43 @@ func (r *connRegistry) reloadProject(ws string) {
 func (r *connRegistry) remove(sessID string) {
 	r.mu.Lock()
 	delete(r.conns, sessID)
+	delete(r.summarisedAt, sessID)
 	r.mu.Unlock()
+}
+
+// summariseIdle generates an episodic summary for each session idle longer than
+// threshold, at most once per idle spell (re-arming when the session is active
+// again). Summaries run in their own goroutines so a slow one never stalls the
+// reaper. A zero/negative threshold is a no-op.
+func (r *connRegistry) summariseIdle(threshold time.Duration) {
+	if threshold <= 0 {
+		return
+	}
+	infos, err := session.List()
+	if err != nil || len(infos) == 0 {
+		return
+	}
+	r.mu.Lock()
+	var run []func()
+	for _, info := range infos {
+		lastSeen := info.LastSeenAt
+		if lastSeen.IsZero() {
+			lastSeen = info.StartedAt
+		}
+		if time.Since(lastSeen) < threshold {
+			continue
+		}
+		h, ok := r.conns[info.ID]
+		if !ok || h.summarise == nil || !lastSeen.After(r.summarisedAt[info.ID]) {
+			continue
+		}
+		r.summarisedAt[info.ID] = lastSeen
+		run = append(run, h.summarise)
+	}
+	r.mu.Unlock()
+	for _, fn := range run {
+		go fn()
+	}
 }
 
 // evictIdle cancels connections whose sessions have been idle longer than ttl.
@@ -106,8 +151,15 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 			if !ok {
 				return
 			}
-			ttlMin := store.Current().Session.EvictionTTLMinutes
-			registry.evictIdle(time.Duration(ttlMin) * time.Minute)
+			cur := store.Current()
+			if cur.Memory.GeneratedSummaries {
+				thr := cur.Memory.IdleSummaryMinutes
+				if thr == 0 {
+					thr = cur.Session.IdleThresholdMinutes
+				}
+				registry.summariseIdle(time.Duration(thr) * time.Minute)
+			}
+			registry.evictIdle(time.Duration(cur.Session.EvictionTTLMinutes) * time.Minute)
 		}
 	}
 }

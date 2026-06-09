@@ -104,6 +104,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
+		WithEpisodic(s.latestEpisodic).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithRepin(s.repinWorkspace).
 		WithPinConflict(func(requested string) {
