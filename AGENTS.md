@@ -54,8 +54,9 @@ Key packages:
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, P95, client-aware). Writes funnel through one batched-transaction `Writer` (single-writer goroutine; non-blocking enqueue, never on the response path); reads use a process-cached `SharedReadOnly` handle |
-| `internal/memory/` | Per-workspace markdown memory store; exposed as MCP resources |
+| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, P95, client-aware). Writes funnel through one batched-transaction `Writer` (single-writer goroutine; non-blocking enqueue, never on the response path); reads use a process-cached `SharedReadOnly` handle. Also holds the `episodic_memories` table (schema v8) for idle-session summaries |
+| `internal/memory/` | Per-workspace markdown memory store (source of truth), exposed as MCP resources. Plus a rebuildable per-workspace FTS5 index (`memory.db`, separate from `topology.db`) backing ranked `search_memories`; generated-memory provenance + redaction (`internal/redact`); and `paths:`-glob hint matching for response injection |
+| `internal/redact/` | Secret scrubber (API keys, tokens, PEM keys, URL credentials, secret assignments) applied before any generated/episodic memory is persisted |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/render/` | Shared, pure CLI/TUI presentation helpers (stdlib + rendering libs only) |
 | `internal/fsguard/` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs |
@@ -195,6 +196,21 @@ eviction_ttl_minutes   = 60   # daemon force-closes a connection idle this long;
 
 Global or per-project; no env override. `idle_threshold_minutes` is cosmetic (a `~` marker in the TUI). `eviction_ttl_minutes` has teeth: a daemon-side reaper (5-min tick) cancels a connection whose last tool call was longer ago than the TTL, reclaiming a `plumb serve` whose agent silently disconnected. Read live; `0` disables. The activity signal is a tool call (`LastSeenAt` = session file mtime).
 
+### `[memory]` — Advanced Memory Engine
+
+```toml
+[memory]
+enabled               = true   # the memory.db FTS5 index; off ⇒ search_memories uses grep only
+generated_summaries   = true   # rule-based episodic summaries (no LLM) written when a session goes idle
+inject_hints          = true   # append a "[Hint: relevant memory …]" block to path-bearing tool responses
+hint_budget_bytes     = 512    # cap on an injected hint block
+episodic_budget_bytes = 1024   # cap on the session_start "Last session" summary
+max_hints             = 3      # max memories hinted per response
+idle_summary_minutes  = 0      # idle threshold for episodic generation; 0 ⇒ falls back to [session] idle_threshold_minutes
+```
+
+Project-overridable; no env override; surfaced with provenance in `plumb config show`. The markdown files under `.plumb/memories/` stay the source of truth; `memory.db` is a rebuildable index (mtime+size freshness anchor, grep fallback when stale/absent). Generated and episodic memories are always redaction-scrubbed and clearly lower-confidence than user-authored ones. Hint injection reads only frontmatter (never bodies) on the hot path via a per-connection cache.
+
 ### `[semantics]` — opt-in semantic re-rank for `topology_search`
 
 ```toml
@@ -300,7 +316,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - **Search/replace and git:** `find_replace` is dry-run by default; prefer `rename_symbol` for identifiers. `git` is tiered by policy (read/write/destructive/network), with typed `add`/`commit` and confirmation for dangerous tiers.
 - **Other utilities:** `git_init`, `file_diff`, `version`, `daemon_info`, `rename_session`, `workspace_sessions`.
 - **Topology:** `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`, `structural_query` use the SQLite/FTS5 index at `<workspace>/.plumb/topology.db`.
-- **Memory:** `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories`, `relevant_memories` operate on per-workspace markdown memories under `<workspace>/.plumb/memories/`.
+- **Memory:** `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories`, `relevant_memories` operate on per-workspace markdown memories under `<workspace>/.plumb/memories/`. `search_memories` is FTS5-ranked when the index is fresh (grep fallback otherwise; `mode` = auto/fts/grep); `read_memory` shows a provenance footer for generated memories; writes/deletes keep the index current. See `[memory]` config.
 
 ## TUI conventions (Bubble Tea v2)
 
