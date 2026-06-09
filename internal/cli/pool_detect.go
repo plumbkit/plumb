@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 // LanguageNone is the sentinel language returned by Detect for workspaces

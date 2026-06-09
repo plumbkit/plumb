@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/render"
 )
 
 func TestContractPath(t *testing.T) {

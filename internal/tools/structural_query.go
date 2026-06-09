@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // structuralQueries is the curated, named query set. The tool deliberately does

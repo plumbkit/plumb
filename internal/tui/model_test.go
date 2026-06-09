@@ -11,9 +11,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/golimpio/plumb/internal/monitor"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // mkCall builds a RecentCall with the given session id and a CalledAt

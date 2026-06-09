@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // applyProjectConfig loads <workspace>/.plumb/config.toml and applies it to

@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // NotificationHandler is invoked for each server-initiated notification.

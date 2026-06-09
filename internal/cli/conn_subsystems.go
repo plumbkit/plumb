@@ -10,13 +10,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/quality"
-	"github.com/golimpio/plumb/internal/quality/golangcilint"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/stats"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/quality"
+	"github.com/plumbkit/plumb/internal/quality/golangcilint"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // startTopologyIndexer acquires the topology store for the workspace when

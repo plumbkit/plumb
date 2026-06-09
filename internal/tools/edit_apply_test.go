@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 func TestOffsetForPosition(t *testing.T) {

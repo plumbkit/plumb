@@ -3,7 +3,7 @@ package tui
 import (
 	"time"
 
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 const (

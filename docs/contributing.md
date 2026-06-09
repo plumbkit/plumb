@@ -7,7 +7,7 @@ root — read it before making non-trivial changes.
 ## Set up
 
 ```sh
-git clone https://github.com/golimpio/plumb
+git clone https://github.com/plumbkit/plumb
 cd plumb
 make install-hooks    # REQUIRED after every fresh clone
 make build

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // TestTopologyEnabledFor_ProjectOptOutWins is the F3 regression: with topology

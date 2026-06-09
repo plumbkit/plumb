@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 func TestURIUnderRoot(t *testing.T) {

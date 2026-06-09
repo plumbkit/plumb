@@ -22,13 +22,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/mcp"
-	"github.com/golimpio/plumb/internal/quality"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/tools"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/quality"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // sessionView is an immutable snapshot of a connSession's mutable state.

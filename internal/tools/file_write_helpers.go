@@ -43,9 +43,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // fileSHA256 computes the hex-encoded SHA-256 of the named file's full

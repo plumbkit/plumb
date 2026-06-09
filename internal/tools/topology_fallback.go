@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // topologyStoreFn returns the active topology store, or nil when topology is

@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 func cursorFor(items []settingItem, key settingKey) int {

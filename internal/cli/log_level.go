@@ -14,8 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/monitor"
 )
 
 var logLevelCmd = &cobra.Command{

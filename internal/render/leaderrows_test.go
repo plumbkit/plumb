@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/golimpio/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/render"
 )
 
 func TestLeaderRows(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 func TestEncodeDecodeVec(t *testing.T) {

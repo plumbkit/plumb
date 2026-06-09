@@ -11,7 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // persist writes a change to the global config, recording a failure in the

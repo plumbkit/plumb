@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/golimpio/plumb/internal/semantics"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/semantics"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // SemanticRerankConfig is the per-call semantic re-rank setting, resolved by the

@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/golimpio/plumb/internal/mcp"
-	"github.com/golimpio/plumb/internal/memory"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // buildWriteDeps assembles the WriteDeps struct used by all write tools.

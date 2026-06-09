@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // colocatedConfidence labels tests found only by sitting in the same directory

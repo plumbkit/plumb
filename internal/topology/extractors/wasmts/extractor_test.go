@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 func names(nodes []topology.Node, kind topology.NodeKind) []string {

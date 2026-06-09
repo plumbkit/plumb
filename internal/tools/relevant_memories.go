@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/memory"
 )
 
 type relevantMemoriesTool struct {

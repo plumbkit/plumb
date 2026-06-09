@@ -8,7 +8,7 @@ import (
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // fidelityCase is one extractor's idiomatic sample plus the symbol that sits

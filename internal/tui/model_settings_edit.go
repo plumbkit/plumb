@@ -9,7 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // activateSetting handles enter/space: opens the theme picker for the popup row

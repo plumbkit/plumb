@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // settingScope identifies which configuration the Settings screen is editing:

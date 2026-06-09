@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/fsguard"
+	"github.com/plumbkit/plumb/internal/fsguard"
 )
 
 // Discovery scans a project directory and reports what plumb can infer about

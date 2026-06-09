@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/render"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // sessionAdapterRow renders the active-LSP detail row: every language server

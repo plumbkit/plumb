@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 func TestTopologyImpact_NilStore(t *testing.T) {

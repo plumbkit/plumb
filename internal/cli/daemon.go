@@ -16,10 +16,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/mcp"
-	"github.com/golimpio/plumb/internal/monitor"
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // The daemon is split across files by concern: the connection registry + idle

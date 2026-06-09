@@ -9,7 +9,7 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // settingsStatusMsg carries the result of an asynchronous settings action

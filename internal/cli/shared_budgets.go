@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // sharedBudgets is the registry of write-rate budgets shared across connections

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // writeProjectTopologyConfig drops a minimal project config that toggles the

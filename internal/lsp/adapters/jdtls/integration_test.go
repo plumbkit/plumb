@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/adapters/jdtls"
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/adapters/jdtls"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // requireJDTLS skips if jdtls is not on PATH and returns its path.

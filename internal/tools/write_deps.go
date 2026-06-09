@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/lsp"
 )
 
 // QualityReportFn is a function that runs post-write quality analysis on path

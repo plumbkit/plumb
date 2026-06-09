@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/golimpio/plumb/internal/quality"
+	"github.com/plumbkit/plumb/internal/quality"
 )
 
 // Analyser runs golangci-lint on Go source files.

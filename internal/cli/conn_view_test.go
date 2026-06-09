@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // TestSessionView_ConcurrentReadsDuringMutation is the snapshot-model race

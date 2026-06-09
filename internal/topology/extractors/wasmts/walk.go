@@ -3,7 +3,7 @@ package wasmts
 import (
 	"strings"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // jsFuncValues are initialiser node types whose binding is treated as a function.

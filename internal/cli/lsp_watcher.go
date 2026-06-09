@@ -11,7 +11,7 @@ import (
 
 	"github.com/sgtdi/fswatcher"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 const (

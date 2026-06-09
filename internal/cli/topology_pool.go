@@ -5,12 +5,12 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/langsupport"
-	"github.com/golimpio/plumb/internal/topology"
-	"github.com/golimpio/plumb/internal/topology/extractors/golang"
-	"github.com/golimpio/plumb/internal/topology/extractors/treesitter"
-	"github.com/golimpio/plumb/internal/topology/extractors/wasmts"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
+	"github.com/plumbkit/plumb/internal/topology/extractors/wasmts"
 )
 
 // topologyPool manages one topology.Store per workspace root.

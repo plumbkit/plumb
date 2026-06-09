@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // applyWorkspaceEdit applies a LSP WorkspaceEdit to disk. Handles both the

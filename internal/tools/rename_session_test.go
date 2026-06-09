@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 func TestRenameSession_PreservesCase(t *testing.T) {

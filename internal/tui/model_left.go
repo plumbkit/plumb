@@ -7,7 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 func (m Model) leftLines() []string {

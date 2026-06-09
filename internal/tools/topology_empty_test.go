@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // emptyTopologyStore opens a throwaway topology store with nothing indexed, so

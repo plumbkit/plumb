@@ -13,7 +13,7 @@ import (
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // PythonExtractor extracts Python symbols using the gotreesitter Python grammar.

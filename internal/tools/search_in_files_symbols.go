@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 func (t *SearchInFiles) annotateWithSymbols(ctx context.Context, a searchInFilesArgs, results []*searchFileMatch) map[string]map[int]string {

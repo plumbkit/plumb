@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // blockingShutdownClient embeds stubClient (routing_proxy_test.go) and makes

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // symbol_topology_fallback.go provides the tree-sitter (topology) fallback for

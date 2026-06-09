@@ -7,7 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/golimpio/plumb/internal/tui"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 const logoText = `╭─╮ ╷        ╷
@@ -22,9 +22,11 @@ const annoSkipLogo = "skipLogo"
 
 var logoPrinted bool
 
-// PrintLogo renders the industrial "piping" logo.
+// PrintLogo renders the industrial "piping" logo once per process; repeat
+// calls are no-ops so the PersistentPreRun banner and a command's own call
+// never double-print.
 func PrintLogo() {
-	printLogo(os.Stdout)
+	printLogoIfNeeded(os.Stdout)
 }
 
 func printLogo(w io.Writer) {

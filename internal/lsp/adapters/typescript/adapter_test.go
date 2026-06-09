@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	ts "github.com/golimpio/plumb/internal/lsp/adapters/typescript"
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	ts "github.com/plumbkit/plumb/internal/lsp/adapters/typescript"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // initResult is a canned Initialize response.

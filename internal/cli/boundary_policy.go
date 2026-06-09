@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // readBoundaryGuard and writeBoundaryGuard are the per-connection BoundaryGuard

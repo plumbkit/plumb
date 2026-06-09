@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // mustGitDir makes dir a git-rooted project so workspacePool.Detect resolves it

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // TestWriteSessionFileAtomic_NoTornReads guards that session-file writes are

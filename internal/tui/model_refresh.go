@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/monitor"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/stats"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 func (m *Model) refresh() {

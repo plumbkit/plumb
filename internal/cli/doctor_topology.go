@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/render"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // checkTopology reports the health of the per-workspace topology index. It is a

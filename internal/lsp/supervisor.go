@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 )
 
 // State is the lifecycle state of a supervised process.

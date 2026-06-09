@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
-	"github.com/golimpio/plumb/internal/langsupport"
-	"github.com/golimpio/plumb/internal/lsp"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 var fileOutlineSchema = json.RawMessage(`{

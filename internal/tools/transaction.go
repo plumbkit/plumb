@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/tools/txlog"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
 var transactionApplySchema = json.RawMessage(`{

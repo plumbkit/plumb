@@ -11,7 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // detectWorkspaceFolder walks up from the current working directory looking

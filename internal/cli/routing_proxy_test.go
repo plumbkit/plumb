@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/lsp"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // stubClient is a minimal lsp.Client that records which URIs it was called

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/tools"
-	"github.com/golimpio/plumb/internal/topology"
-	goext "github.com/golimpio/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/topology"
+	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
 )
 
 // fallbackFixture writes a small Go file and opens a topology store over it.

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/tools/txlog"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
 // attachWorkspace resolves rootURI to a project root, acquires the shared

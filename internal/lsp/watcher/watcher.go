@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // Filter is a thread-safe store of file-watcher glob patterns registered by

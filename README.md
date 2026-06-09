@@ -1,150 +1,174 @@
 # plumb
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/golimpio/plumb.svg)](https://pkg.go.dev/github.com/golimpio/plumb)
-[![Go Report Card](https://goreportcard.com/badge/github.com/golimpio/plumb)](https://goreportcard.com/report/github.com/golimpio/plumb)
+[![CI](https://github.com/plumbkit/plumb/actions/workflows/ci.yml/badge.svg)](https://github.com/plumbkit/plumb/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/plumbkit/plumb.svg)](https://pkg.go.dev/github.com/plumbkit/plumb)
+[![Go Report Card](https://goreportcard.com/badge/github.com/plumbkit/plumb)](https://goreportcard.com/report/github.com/plumbkit/plumb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Real IDE intelligence for AI assistants** — go-to-definition, find-references, rename, diagnostics, atomic file editing, and semantic refactors, powered by the same language servers your editor uses.
+**Give your coding agent real IDE intelligence — and let it run unattended without corrupting your code.**
 
-Plumb is an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that bridges AI assistants to [LSP](https://microsoft.github.io/language-server-protocol/) (Language Server Protocol) language servers. Instead of dumping raw source files into the assistant's context window, plumb exposes 47 structured tools so the assistant can query and edit a codebase the way an IDE would.
+Plumb is an [MCP](https://modelcontextprotocol.io) server that bridges AI coding agents to [LSP](https://microsoft.github.io/language-server-protocol/) language servers — the same ones your editor uses. Other tools make an agent *semantic*. Plumb makes it semantic **and safe**: concurrency-correct atomic writes, multi-file transactions with rollback, a crash-resilient daemon, and scoped filesystem + git access you control. It's a single pure-Go binary — no Python or Node toolchain to install.
+
+<!-- TODO(launch): record a 20–30s asciinema/vhs demo (agent editing a multi-file Go
+     project + recovering from a forced daemon crash) and embed it here as
+     docs/assets/demo.gif. This single asset converts better than any paragraph. -->
 
 ---
 
 ## Why Plumb
 
-LLM coding assistants typically work by reading files into the context window. This approach is token-heavy, lossy at scale, and blind to symbol semantics. Plumb provides a superior architecture built on three pillars:
+LLM agents usually work by reading whole files into the context window — token-heavy, lossy at scale, blind to symbol semantics, and unsafe to let loose on a real repo. Plumb is built on three pillars, in priority order.
 
-### 1. Semantic Intelligence
-Plumb gives the assistant the same primitives your editor already has:
-- **LSP-backed refactors** — `rename_symbol`, `replace_symbol_body`, and `safe_delete_symbol` understand scope, types, and references.
-- **Real diagnostics inline** — Actual compiler output from `gopls` or `pyright` is appended to every write response, so the assistant learns it broke the build instantly.
-- **Symbol search** — Scoped search across the workspace, filtered to your code (no stdlib or dependency noise).
+### 1. Reliability & write-safety (the part nobody else gets right)
+Leaving an agent to edit a codebase for an hour is only viable if writes can't corrupt files and a crash can't wedge your session.
 
-### 2. Concurrency & Safety
-Building with agents requires industrial-grade file safety:
-- **Atomic I/O** — Writes are staged in temporary files and renamed into place. No partial writes, ever.
-- **Per-path locking** — The daemon serialises concurrent writes to the same file from any session, preventing race conditions.
-- **Multi-file transactions** — Apply edits across 50+ files with guaranteed atomic rollback if any part fails.
+- **Atomic I/O** — every write is staged in a temp file and renamed into place. No partial writes, ever. Symlink-aware, CRLF-tolerant.
+- **Per-path locking** — the daemon serialises concurrent writes to the same file across every session and chat window. No races.
+- **Multi-file transactions** — apply edits across dozens of files with guaranteed atomic rollback if any step fails.
+- **Crash-resilient daemon** — `plumb serve` is a reconnecting proxy. If the daemon crashes or hangs, it respawns one and replays the handshake; the agent never notices. In-flight writes are never silently re-run.
+- **Optimistic concurrency** — mtime/sha guards catch stale edits before they clobber newer changes.
 
-### 3. Visibility & Context Efficiency
-- **Token Savings** — Only read the symbols or line ranges you need. No more loading 2000-line files to find one function.
-- **Session Bootstrap** — `session_start` orients the assistant in one round-trip: workspace, git branch, recent commits, and active diagnostics.
-- **Durable Memory** — Project-specific markdown notes travel with the repo and are exposed as MCP resources.
+### 2. Semantic intelligence
+The same primitives your editor has, exposed as structured tools:
 
----
+- **LSP-backed refactors** — `rename_symbol`, `replace_symbol_body`, `safe_delete_symbol` understand scope, types, and references.
+- **Real diagnostics inline** — actual `gopls`/`pyright` output is appended to every write, so the agent learns it broke the build immediately.
+- **Symbol search** — scoped to your code, no stdlib or dependency noise.
 
-## Monitoring (TUI)
-
-Engineers love visibility. Plumb includes a live Bubble Tea TUI to monitor what your agents are doing in real-time.
-
-- **Live Dashboard:** Monitor daemon health, activity history, and tokens saved.
-- **Session Inspector:** Drill down into every tool call, see request/response payloads, and debug failures.
-- **Live Logs:** Stream daemon logs with filtering and follow support.
-
-*Run `plumb` from your terminal to launch the dashboard.*
+### 3. Context efficiency & safety controls
+- **Read only what you need** — symbols or line ranges, not 2,000-line files.
+- **Scoped access you control** — a per-connection path allowlist (read-only vs read-write roots) plus tiered git gating (destructive and network operations are off by default and need explicit confirmation). See [SECURITY.md](SECURITY.md).
+- **One-round-trip bootstrap** — `session_start` returns workspace, branch, recent commits, diagnostics, and project memory.
 
 ---
 
-## Quick Start
+## Install
 
-### 1. Prerequisites
-Ensure the language servers you need are on your `$PATH`:
+Plumb is a single binary. Pick whichever you like:
 
 ```sh
+# Homebrew (macOS + Linux) — recommended
+brew install plumbkit/plumb/plumb
+
 # Go
-go install golang.org/x/tools/gopls@latest
+go install github.com/plumbkit/plumb/cmd/plumb@latest
 
-# Python (optional)
-npm install -g pyright
+# Or download a prebuilt binary from the Releases page:
+# https://github.com/plumbkit/plumb/releases
 ```
 
-### 2. Install & Setup
+> **macOS note:** prebuilt binaries are not yet notarised — on first run you may need
+> `xattr -d com.apple.quarantine ./plumb`, or right-click → Open. Homebrew installs
+> avoid this.
+
+### Connect your agent and go
+
 ```sh
-# Install plumb
-go install github.com/golimpio/plumb/cmd/plumb@latest
-
-# Connect your assistant
-plumb setup claude-desktop  # For Claude Desktop
-plumb setup claude-code     # For Claude Code (user-level)
-plumb setup codex           # For Codex
+plumb setup claude-desktop   # also: claude-code, codex, gemini, cursor, …
+cd your/project && plumb init
 ```
 
-### 3. Initialise a Project
-Go to your project root and run:
+`plumb setup` writes the MCP config for you — no hand-editing JSON. Then make sure the language servers you need are on your `$PATH`:
+
 ```sh
-plumb init
+go install golang.org/x/tools/gopls@latest   # Go
+npm install -g pyright                        # Python
 ```
 
-> Full walkthrough — prerequisites, per-client setup, and enabling Python/Java — in [**docs/getting-started.md**](docs/getting-started.md).
+Full walkthrough: [**docs/getting-started.md**](docs/getting-started.md).
 
 ---
 
-## Core Capabilities
+## Language support (honest version)
 
-Plumb exposes 47 tools across several categories. For a full API reference, see [**docs/tools.md**](docs/tools.md).
+Plumb negotiates LSP capabilities per language and also ships a pure-Go tree-sitter index for language-server-free search and navigation. Support comes in tiers — we'd rather be precise than claim a big number.
 
-- **Session:** One-shot bootstrap, identity tracking, and daemon info.
-- **LSP Queries:** Definitions, references, symbols, call/type hierarchies, and diagnostics.
-- **LSP Edits:** Scope-aware renames and targeted symbol insertions/deletions.
-- **Filesystem:** Atomic writes, unique-string replacement, recursive search, and parallel reads.
-- **VCS & Memory:** Git inspection, multi-file transactions, and durable project notes.
-- **Topology (optional):** A persistent SQLite/FTS5 semantic index — ranked symbol search, BFS neighbourhood exploration, and blast-radius/route analysis that works instantly, without waiting for a language server. Enable with `[topology] enabled = true`.
+| Tier | Languages | What you get |
+|---|---|---|
+| **First-class** (CI-tested, real-binary integration) | **Go** (gopls), **Python** (pyright) | Full LSP: definitions, references, rename, diagnostics, hierarchies + all write tools |
+| **Validated, opt-in** | **Java** (jdtls), **Rust** (rust-analyzer), **Swift** (sourcekit-lsp) | Full LSP; enable per-language and put the server on `$PATH` |
+| **Experimental, opt-in** | **TypeScript/JS**, **Kotlin**, **Zig**, **HTML** | Works; less battle-tested. Enable with `[lsp.<lang>] enabled = true` |
+| **Search & navigation** (tree-sitter, no LSP needed) | 15+ incl. JS/TS/TSX, Bash, SQL, HCL, Dockerfile, TOML, YAML, Markdown | Ranked symbol search, outlines, graph exploration via the Topology index |
+
+Real-binary validation has been exercised on **macOS and Linux** (see CI). Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues) — the daemon's Unix-socket architecture needs a port.
 
 ---
 
 ## How it works
 
-`plumb serve` is a thin stdio proxy. When an assistant opens a project, it calls `plumb serve`, which connects to a shared background daemon.
+`plumb serve` is a thin, reconnecting stdio proxy. The real work happens in one shared background daemon, so language servers stay warm across chats.
 
 ```
-Assistant (Claude, Gemini, etc.)
-  └── plumb serve  (thin proxy, one per conversation)
-        └── ~/Library/Caches/plumb/plumb.sock
-              └── plumb daemon  (one shared process)
+Agent (Claude, Codex, Gemini, …)
+  └── plumb serve   (reconnecting proxy, one per conversation)
+        └── ~/Library/Caches/plumb/plumb.sock   (~/.cache/plumb on Linux)
+              └── plumb daemon   (one shared process)
                     ├── gopls for /projects/foo
                     └── pyright for /projects/bar
 ```
 
-**Benefits:**
-- **Warm Servers:** LSPs stay warm between sessions — no re-indexing when you start a new chat.
-- **Shared State:** One daemon manages all connections, ensuring per-path locks work across different chat windows.
-- **LSP Native:** Full support for `workspace/didChangeWatchedFiles`, keeping symbol indexes live after every write.
+Warm servers (no re-indexing each chat), shared per-path locks across all connections, and full `workspace/didChangeWatchedFiles` support so symbol indexes stay live after every write.
+
+---
+
+## Monitoring (TUI)
+
+Run `plumb` with no arguments to launch a live [Bubble Tea](https://github.com/charmbracelet/bubbletea) dashboard: daemon health and tokens saved, a session inspector for every tool call, and streaming logs with follow + filtering.
+
+---
+
+## Core capabilities
+
+Plumb exposes **50 tools**. The ones you'll use constantly:
+
+`session_start` · `find_symbol` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
+
+The rest cover filesystem reads/writes, LSP hierarchies, tiered git, an optional SQLite/FTS5 **Topology** index (ranked search + blast-radius/route analysis with no language server), and durable per-project memory. Full API reference: [**docs/tools.md**](docs/tools.md).
 
 ---
 
 ## Configuration
 
-Plumb is highly configurable via `config.toml` files (global or per-project) or environment variables.
+Global or per-project `config.toml`, or environment variables. Run `plumb config show` to see the resolved config with provenance.
 
 ```toml
 [edits]
 strict = true                  # require read_file before edit_file
-rate_limit_per_minute = 30     # prevent runaway agent loops
+rate_limit_per_minute = 30     # bound runaway agent loops
+
+[git]
+allow_destructive = false      # reset/checkout/rebase off by default
+allow_push = false             # push/fetch/pull off by default
 ```
 
-Run `plumb config show` to see your resolved configuration. Full settings reference: [**docs/configuration.md**](docs/configuration.md).
+Full settings reference: [**docs/configuration.md**](docs/configuration.md).
 
-## Documentation
+---
 
-Full documentation lives in [**docs/**](docs/index.md):
+## How Plumb compares
 
-- [Getting Started](docs/getting-started.md) · [CLI Reference](docs/cli-reference.md) · [Configuration](docs/configuration.md)
-- [Tools (MCP API)](docs/tools.md) · [Architecture](docs/architecture.md) · [Topology](docs/topology.md)
-- [Troubleshooting](docs/troubleshooting.md) · [Contributing](docs/contributing.md)
+| | **Plumb** | **Serena** | Thin `lsp-mcp` bridges | Agent's built-in file tools |
+|---|---|---|---|---|
+| LSP-backed semantics | ✅ | ✅ | ✅ (often 1 language) | ❌ |
+| Concurrency-safe atomic writes | ✅ | ⚠️ | ❌ | ❌ |
+| Multi-file transactions w/ rollback | ✅ | ❌ | ❌ | ❌ |
+| Crash-resilient daemon / auto-recovery | ✅ | ⚠️ (crashes reported) | ❌ | n/a |
+| Scoped path + tiered git safety | ✅ | ⚠️ | ❌ | ❌ |
+| Single binary, no runtime deps | ✅ (pure Go) | ❌ (Python) | varies | n/a |
+| Language breadth (full LSP) | Focused, validated tiers | 40+ (mostly install-it-yourself) | 1–few | n/a |
 
-## Similar tools
+Plumb's bet: most agents can already *read* code well enough. What's missing is the ability to *write* — concurrently, transactionally, and recoverably — without supervision. If you need maximum language breadth today, [Serena](https://github.com/oraios/serena) is excellent; if you need an agent you can trust to edit a real codebase unattended, that's Plumb.
 
-If Plumb isn't quite what you're looking for, check out these excellent alternatives:
+---
 
-- **[CodeGraph](https://github.com/colbymchenry/codegraph)**: Instead of using live LSPs, CodeGraph uses `tree-sitter` to build a pre-indexed SQLite graph of your codebase. It excels at rapid exploration, impact analysis, and minimizing agent tool calls by returning bundled semantic chunks.
-- **[Serena](https://github.com/oraios/serena)**: An MCP toolkit backed by either standard LSPs or a JetBrains IDE plugin. It offers similar symbol-level editing to Plumb, but when paired with JetBrains, it adds deep IDE features like interactive debugging and execution control.
+## Roadmap
 
-*(By comparison, **Plumb** combines live LSP integration — real-time diagnostics, concurrency-safe file writes, and atomic cross-file transactions — with an optional SQLite/FTS5 **Topology** index for fast, language-server-free symbol search and graph exploration.)*
+Near-term, roughly in order: green Linux CI + Homebrew distribution, more validated LSP adapters promoted out of experimental, opt-in semantic re-rank for Topology search (GA), and Windows support. Issues and ideas welcome.
 
 ## Contributing
 
-See [`AGENTS.md`](AGENTS.md) for architecture details and code style. We follow Australian English conventions for all prose.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) for architecture and code style. We follow Australian English in all prose. By contributing you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).

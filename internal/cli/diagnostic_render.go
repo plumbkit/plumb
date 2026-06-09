@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/reflow/wordwrap"
 
-	"github.com/golimpio/plumb/internal/tui"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 type cliDiagnostic struct {

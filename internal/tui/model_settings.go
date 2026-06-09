@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // settingKind classifies how a settings row is edited.

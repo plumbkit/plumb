@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/golimpio/plumb/internal/cli"
+	"github.com/plumbkit/plumb/internal/cli"
 )
 
 func main() {

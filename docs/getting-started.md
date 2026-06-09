@@ -32,13 +32,13 @@ from source.
 ## 2. Install plumb
 
 ```sh
-go install github.com/golimpio/plumb/cmd/plumb@latest
+go install github.com/plumbkit/plumb/cmd/plumb@latest
 ```
 
 Or build from source:
 
 ```sh
-git clone https://github.com/golimpio/plumb
+git clone https://github.com/plumbkit/plumb
 cd plumb
 make build        # produces ./plumb, version stamped from git/VERSION
 ```

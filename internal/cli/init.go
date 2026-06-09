@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/render"
-	"github.com/golimpio/plumb/internal/tui"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 var initFlagDiscover bool

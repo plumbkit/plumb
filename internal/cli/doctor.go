@@ -10,7 +10,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"github.com/spf13/cobra"
 
-	"github.com/golimpio/plumb/internal/tui"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 // The doctor checks are split across files by concern: daemon / MCP-client /

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // Extractor extracts TSX/JSX symbols using line-by-line heuristic scanning.

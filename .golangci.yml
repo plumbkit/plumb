@@ -36,7 +36,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/golimpio/plumb
+        - github.com/plumbkit/plumb
   exclusions:
     generated: lax
     paths:

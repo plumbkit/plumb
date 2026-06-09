@@ -4,8 +4,8 @@ package cli
 // per-call SemanticRerankConfig that topology_search consumes.
 
 import (
-	"github.com/golimpio/plumb/internal/semantics"
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/semantics"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // semanticRerank builds the live semantic re-rank config for topology_search.

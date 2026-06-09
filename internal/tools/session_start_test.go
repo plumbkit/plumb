@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // stubDiagnostics implements diagnosticsSource for tests.

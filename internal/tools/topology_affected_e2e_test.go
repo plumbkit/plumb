@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/tools"
-	"github.com/golimpio/plumb/internal/topology"
-	goext "github.com/golimpio/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/topology"
+	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
 )
 
 // TestTopologyAffected_ColocatedTests proves the recall booster: a sibling test

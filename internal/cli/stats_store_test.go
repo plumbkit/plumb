@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 // TestStatsStore_RecordReturnsFast verifies Record dispatches the write

@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 func enabledTopologyConfig() config.TopologyConfig {

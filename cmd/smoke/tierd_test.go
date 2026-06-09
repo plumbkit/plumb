@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 const tierDTimeout = 60 * time.Second

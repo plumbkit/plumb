@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 // echoTool echoes its "text" argument — minimal Tool for server tests.

@@ -9,8 +9,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/golimpio/plumb/internal/monitor"
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func (m Model) dashStatsRow(width int) []string {

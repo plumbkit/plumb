@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 )
 
 // longLivedCommand returns a command + args for a process that stays alive

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/golimpio/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/memory"
 )
 
 type deleteMemoryTool struct {

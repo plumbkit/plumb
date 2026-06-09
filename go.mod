@@ -1,4 +1,4 @@
-module github.com/golimpio/plumb
+module github.com/plumbkit/plumb
 
 go 1.26
 

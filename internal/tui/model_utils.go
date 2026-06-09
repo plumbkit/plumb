@@ -13,8 +13,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/golimpio/plumb/internal/render"
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func scrollbarCol(total, visible, offset int, dimmed bool) []string {

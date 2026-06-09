@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // sessionNamePattern is the JSON Schema regex advertised for the name argument.

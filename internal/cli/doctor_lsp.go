@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // checkLSPs reports install and runtime status for all configured language servers.

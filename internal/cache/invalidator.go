@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // Invalidator subscribes to LSP server notifications, evicts cache entries

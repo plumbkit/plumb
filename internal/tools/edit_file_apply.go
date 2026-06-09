@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // editFileApply runs the retry loop, notifies the LSP on success, and

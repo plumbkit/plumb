@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 func TestDetectAnyLanguageAtUsesDisabledAdapterMarkers(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/memory"
 )
 
 type searchMemoriesTool struct {

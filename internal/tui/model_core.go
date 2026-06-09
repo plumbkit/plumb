@@ -5,12 +5,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/memory"
-	"github.com/golimpio/plumb/internal/monitor"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/stats"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // Version is set by the cli package before calling Run so it appears in the header.

@@ -8,7 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/golimpio/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/memory"
 )
 
 // memWorkspace is one row in the Memory section's Workspaces pane. Memory is

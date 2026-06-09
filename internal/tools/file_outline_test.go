@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/tools"
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // outlineSource is a Go file whose symbols and line numbers the LSP-path test

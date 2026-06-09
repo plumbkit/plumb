@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 func makeTestTree(t *testing.T) string {

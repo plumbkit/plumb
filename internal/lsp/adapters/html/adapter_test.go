@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	html "github.com/golimpio/plumb/internal/lsp/adapters/html"
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	html "github.com/plumbkit/plumb/internal/lsp/adapters/html"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // initResult is a canned Initialize response.

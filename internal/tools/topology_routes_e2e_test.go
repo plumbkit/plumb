@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/tools"
-	"github.com/golimpio/plumb/internal/topology"
-	"github.com/golimpio/plumb/internal/topology/extractors/treesitter"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // TestTopologyRoutes_ArgumentParserEndToEnd indexes a real Swift ArgumentParser

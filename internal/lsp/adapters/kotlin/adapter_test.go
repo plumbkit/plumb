@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/lsp/adapters/kotlin"
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/adapters/kotlin"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // initResult is a canned Initialize response.

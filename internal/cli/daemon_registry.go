@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // connHandle is the per-connection state the registry tracks: the cancel func

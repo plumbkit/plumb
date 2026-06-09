@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // TestConnRegistry_ReloadProject_OnlyMatchingWorkspace verifies the per-workspace

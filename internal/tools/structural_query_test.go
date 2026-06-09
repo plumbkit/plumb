@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/topology"
-	goext "github.com/golimpio/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/topology"
+	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
 )
 
 const structuralFixture = `package demo

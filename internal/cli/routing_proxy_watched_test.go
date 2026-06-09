@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // watchedFilesRecordingClient embeds stubClient (routing_proxy_test.go) and

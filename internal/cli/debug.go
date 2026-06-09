@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/golimpio/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/render"
 )
 
 func init() {

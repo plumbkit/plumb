@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/golimpio/plumb/internal/lsp"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // clientProxy delegates lsp.Client calls to the currently live adapter.

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/adapters/rust"
-	"github.com/golimpio/plumb/internal/lsp/jsonrpc"
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/adapters/rust"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // requireRustAnalyzer skips if rust-analyzer is not on PATH and returns its path.

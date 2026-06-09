@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 func TestGetDefinition_SingleLocation(t *testing.T) {

@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"github.com/golimpio/plumb/internal/memory"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // mkSessions builds n placeholder sessions with empty Folder so refreshStats

@@ -16,9 +16,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/golimpio/plumb/internal/render"
-	"github.com/golimpio/plumb/internal/session"
-	"github.com/golimpio/plumb/internal/tui"
+	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tui"
 )
 
 var diagnosticsCmd = &cobra.Command{

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 var deleteFileSchema = json.RawMessage(`{

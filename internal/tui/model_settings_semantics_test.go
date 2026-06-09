@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 func TestSemanticsRows_MaskedKeyAndTab(t *testing.T) {

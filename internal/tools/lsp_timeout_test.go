@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // TestWorkspaceSymbols_Timeout verifies that a language server that never

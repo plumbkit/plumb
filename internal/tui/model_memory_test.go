@@ -6,8 +6,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/golimpio/plumb/internal/memory"
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 func TestCollectMemoryWorkspaces(t *testing.T) {

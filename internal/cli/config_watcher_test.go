@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 func TestCheckAndReloadConfig_DeduplicatesOnMtime(t *testing.T) {

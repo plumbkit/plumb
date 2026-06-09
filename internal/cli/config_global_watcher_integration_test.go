@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // TestGlobalConfigWatcher_ReloadsOnFileChange exercises the real fsnotify path:

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
-	"github.com/golimpio/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // writeFixture creates path under t.TempDir(), writes content, returns the

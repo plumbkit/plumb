@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 var markdownSrc = []byte("# Title\n\n" +

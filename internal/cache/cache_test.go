@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/cache"
 )
 
 func newCache(t *testing.T) *cache.Cache {

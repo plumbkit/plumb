@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // stubDiag is a thread-safe postWriteDiagSource for testing awaitDiagnosticsRefresh.

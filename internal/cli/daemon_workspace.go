@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 // rootFromRoots calls roots/list on the MCP client and returns the first root

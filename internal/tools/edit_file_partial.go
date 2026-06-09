@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // partialEditResult records the outcome of one edit in an apply_partial call.

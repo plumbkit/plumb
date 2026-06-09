@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 var topologyExploreSchema = json.RawMessage(`{

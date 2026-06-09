@@ -4,7 +4,7 @@ TESTCACHE := .testcache
 # Try an exact git tag first (release builds), then fall back to VERSION file,
 # then fall back to the short commit hash.
 VERSION   := $(shell git describe --tags --exact-match 2>/dev/null || cat VERSION 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)
-LDFLAGS   := -X github.com/golimpio/plumb/internal/cli.Version=$(VERSION)
+LDFLAGS   := -X github.com/plumbkit/plumb/internal/cli.Version=$(VERSION)
 
 # macOS-only codesign settings. CODESIGN_IDENTITY can be:
 #   - unset/empty: ad-hoc sign (`-s -`). Gives the binary a stable identifier
@@ -20,7 +20,7 @@ LDFLAGS   := -X github.com/golimpio/plumb/internal/cli.Version=$(VERSION)
 #   - a real Apple Developer ID identity (for distribution).
 UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
-CODESIGN_BUNDLE  := com.golimpio.plumb
+CODESIGN_BUNDLE  := com.plumbkit.plumb
 
 .PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm
 

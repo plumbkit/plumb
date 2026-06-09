@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // Store is the public API for topology. It owns a database connection and

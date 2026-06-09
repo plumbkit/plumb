@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/golimpio/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/render"
 )
 
 // filteredLogEntries returns log entries that match the current filter string

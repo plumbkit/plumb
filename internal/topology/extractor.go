@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/golimpio/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/langsupport"
 )
 
 // Extractor parses source files and returns nodes and edges.

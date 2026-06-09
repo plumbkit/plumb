@@ -3,7 +3,7 @@ package golangcilint
 import (
 	"testing"
 
-	"github.com/golimpio/plumb/internal/quality"
+	"github.com/plumbkit/plumb/internal/quality"
 )
 
 func TestSupports(t *testing.T) {

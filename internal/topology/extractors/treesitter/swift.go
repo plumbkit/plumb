@@ -7,7 +7,7 @@ import (
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 
-	"github.com/golimpio/plumb/internal/topology"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // SwiftExtractor extracts Swift symbols using the gotreesitter Swift grammar.

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/memory"
 )
 
 // WorkspaceFn returns the daemon's currently-resolved workspace, or "" if

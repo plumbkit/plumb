@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 func TestSessionLangLabelPrefersDetectedLanguage(t *testing.T) {

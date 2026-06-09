@@ -6,8 +6,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/golimpio/plumb/internal/topology"
-	tsregex "github.com/golimpio/plumb/internal/topology/extractors/typescript"
+	"github.com/plumbkit/plumb/internal/topology"
+	tsregex "github.com/plumbkit/plumb/internal/topology/extractors/typescript"
 )
 
 // grammar selects which embedded tree-sitter grammar an extractor drives.

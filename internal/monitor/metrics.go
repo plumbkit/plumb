@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/golimpio/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 const SnapshotFileName = "daemon.metrics.json"

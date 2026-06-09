@@ -8,7 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/golimpio/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/monitor"
 )
 
 func (m Model) View() tea.View {

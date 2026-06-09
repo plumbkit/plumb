@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/golimpio/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 // ResourceProvider exposes a workspace's memories as MCP resources so they

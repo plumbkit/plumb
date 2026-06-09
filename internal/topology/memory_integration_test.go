@@ -10,10 +10,10 @@ import (
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 
-	"github.com/golimpio/plumb/internal/config"
-	"github.com/golimpio/plumb/internal/topology"
-	goext "github.com/golimpio/plumb/internal/topology/extractors/golang"
-	ts "github.com/golimpio/plumb/internal/topology/extractors/treesitter"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/topology"
+	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	ts "github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // allExtractors mirrors cli.buildExtractors: every supported structural

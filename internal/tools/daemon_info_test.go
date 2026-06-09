@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golimpio/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/stats"
 )
 
 func TestDaemonInfo_OmitsConfigStatusWhenUnset(t *testing.T) {
