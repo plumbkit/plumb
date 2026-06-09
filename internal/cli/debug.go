@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/golimpio/plumb/internal/render"
 )
 
 func init() {
@@ -33,9 +36,34 @@ var debugMemCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Print(resp)
+		pairs := parseMemPairs(resp)
+		if len(pairs) == 0 {
+			fmt.Print(resp) // error reply or unexpected shape — show it raw
+			return nil
+		}
+		for _, row := range render.LeaderRows(pairs) {
+			fmt.Println(row)
+		}
 		return nil
 	},
+}
+
+// parseMemPairs turns the daemon's tab-separated mem-stats reply into ordered
+// label/value pairs. Returns nil if any line is not a label\tvalue pair (e.g.
+// an "error: …" reply), so the caller can fall back to printing it raw.
+func parseMemPairs(resp string) [][2]string {
+	var pairs [][2]string
+	for _, line := range strings.Split(strings.TrimRight(resp, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		label, value, ok := strings.Cut(line, "\t")
+		if !ok {
+			return nil
+		}
+		pairs = append(pairs, [2]string{label, value})
+	}
+	return pairs
 }
 
 var debugHeapCmd = &cobra.Command{

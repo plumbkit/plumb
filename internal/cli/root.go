@@ -34,6 +34,19 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	// Print the logo banner before every command (logo, one blank line, then the
+	// command's own output). Commands tagged annoSkipLogo opt out: the bare TUI
+	// launch and the stdio-protocol commands (serve, daemon), where a banner on
+	// stdout would corrupt the alt-screen or the MCP wire. printLogoIfNeeded is
+	// idempotent, so the help/error paths never double-print.
+	rootCmd.Annotations = map[string]string{annoSkipLogo: "true"}
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		if cmd.Annotations[annoSkipLogo] == "true" {
+			return
+		}
+		printLogoIfNeeded(os.Stdout)
+	}
+
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		PrintLogo()
 		tui.RebuildStyles()
@@ -168,8 +181,6 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	RunE: func(_ *cobra.Command, _ []string) error {
-		PrintLogo()
-
 		goVersion := "unknown"
 		if info, ok := debug.ReadBuildInfo(); ok {
 			goVersion = info.GoVersion

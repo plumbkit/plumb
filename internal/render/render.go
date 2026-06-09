@@ -13,6 +13,40 @@ import (
 	"charm.land/lipgloss/v2/table"
 )
 
+// leaderDot is the dotted-leader glyph shared by the TUI memory rows and the
+// `plumb debug mem` CLI rows.
+const leaderDot = "⣀"
+
+// minLeaderDots is the smallest leader run rendered, so even the widest
+// label/value pair keeps a visible gap.
+const minLeaderDots = 2
+
+// LeaderRows aligns label/value pairs into dotted-leader rows — labels
+// left-aligned, values right-aligned at a common right edge, dotted leaders
+// filling the gap (e.g. "HeapAlloc ⣀⣀⣀⣀⣀⣀ 12 MB"). Pure text, no colour, so it
+// is safe to pipe. Used by `plumb debug mem`.
+func LeaderRows(pairs [][2]string) []string {
+	maxLabel, maxValue := 0, 0
+	for _, p := range pairs {
+		if w := lipgloss.Width(p[0]); w > maxLabel {
+			maxLabel = w
+		}
+		if w := lipgloss.Width(p[1]); w > maxValue {
+			maxValue = w
+		}
+	}
+	total := maxLabel + maxValue + minLeaderDots + 2 // +2 for the spaces around the leader
+	rows := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		dots := total - lipgloss.Width(p[0]) - lipgloss.Width(p[1]) - 2
+		if dots < minLeaderDots {
+			dots = minLeaderDots
+		}
+		rows = append(rows, p[0]+" "+strings.Repeat(leaderDot, dots)+" "+p[1])
+	}
+	return rows
+}
+
 // contextBorder is a left-only border used for workspace context blocks.
 var contextBorder = lipgloss.Border{Left: "┊"}
 

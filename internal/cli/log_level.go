@@ -196,8 +196,10 @@ func handleHeapProfile(conn net.Conn) {
 func handleMemStats(conn net.Conn) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+	// Tab-separated label/value pairs; the CLI (`plumb debug mem`) renders the
+	// aligned dotted-leader rows so presentation stays out of the daemon.
 	fmt.Fprintf(conn,
-		"HeapAlloc    %s\nHeapInuse    %s\nHeapSys      %s\nHeapIdle     %s\nHeapReleased %s\nNextGC       %s\nNumGC        %d\nGoroutines   %d\n",
+		"HeapAlloc\t%s\nHeapInuse\t%s\nHeapSys\t%s\nHeapIdle\t%s\nHeapReleased\t%s\nNextGC\t%s\nNumGC\t%d\nGoroutines\t%d\n",
 		monitor.FormatBytes(m.HeapAlloc),
 		monitor.FormatBytes(m.HeapInuse),
 		monitor.FormatBytes(m.HeapSys),

@@ -19,9 +19,10 @@ import (
 var serveFlagNoReconnect bool
 
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the MCP server over stdio",
-	RunE:  runServe,
+	Use:         "serve",
+	Short:       "Start the MCP server over stdio",
+	RunE:        runServe,
+	Annotations: map[string]string{annoSkipLogo: "true"}, // stdio MCP wire — no banner
 }
 
 func init() {

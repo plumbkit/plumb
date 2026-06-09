@@ -15,6 +15,11 @@ const logoText = `╭─╮ ╷        ╷
 ╵   ╵ ┃┃ ╵╵╵ ╰─╯
 ────╮ ╰╯ ╭──────`
 
+// annoSkipLogo marks a command that must NOT print the logo banner before it
+// runs — the stdio-protocol commands (serve, daemon) and the bare TUI launch,
+// where a banner on stdout would corrupt the MCP wire or the alt-screen.
+const annoSkipLogo = "skipLogo"
+
 var logoPrinted bool
 
 // PrintLogo renders the industrial "piping" logo.

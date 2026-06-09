@@ -50,10 +50,11 @@ func concurrentWriteSkew(edits config.EditsConfig) time.Duration {
 }
 
 var daemonCmd = &cobra.Command{
-	Use:    "daemon",
-	Short:  "Run the background daemon (usually started automatically by serve)",
-	Hidden: true,
-	RunE:   runDaemon,
+	Use:         "daemon",
+	Short:       "Run the background daemon (usually started automatically by serve)",
+	Hidden:      true,
+	RunE:        runDaemon,
+	Annotations: map[string]string{annoSkipLogo: "true"}, // background process — no banner
 }
 
 // acceptDrainGrace bounds how long the accept loop waits for in-flight
