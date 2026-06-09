@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.plumbkit/plumb",
+  "title": "Plumb",
+  "description": "LSP-backed IDE intelligence plus concurrency-safe, transactional edits for AI coding agents.",
+  "websiteUrl": "https://getplumb.sh",
+  "repository": {
+    "url": "https://github.com/plumbkit/plumb",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://getplumb.sh/favicon.png",
+      "mimeType": "image/png"
+    }
+  ],
+  "version": "0.9.7"
+}
