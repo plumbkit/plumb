@@ -170,6 +170,18 @@ func (s *Supervisor) State() State {
 	return s.state
 }
 
+// PID returns the OS process ID of the supervised language server, or 0 when no
+// process is currently running (stopped, starting, or between restarts). Used
+// to sample a child server's resource usage (see internal/monitor.ProcessRSS).
+func (s *Supervisor) PID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.proc == nil || s.proc.Process == nil {
+		return 0
+	}
+	return s.proc.Process.Pid
+}
+
 // loop is the supervision goroutine.  It spawns the process, calls OnStart,
 // waits for the process to exit, then retries with exponential backoff.
 func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {

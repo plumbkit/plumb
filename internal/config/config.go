@@ -46,6 +46,19 @@ type LSPConfig struct {
 	RootMarkers []string          `toml:"root_markers"`
 	Env         map[string]string `toml:"env"`
 	Enabled     bool              `toml:"enabled"`
+	// IdleTimeout hibernates a language server that has gone this long without a
+	// tool call, reclaiming its process memory even while a session stays
+	// attached. The poolEntry and its warm cache are kept; the next tool call
+	// transparently restarts the process. Aimed at heavyweight servers (jdtls
+	// reaches ~1.5 GB RSS). 0 disables hibernation (the default for every
+	// language except java). Read at pool construction — restart-needed.
+	IdleTimeout Duration `toml:"idle_timeout"`
+	// MaxWorkspaces caps the number of simultaneously-running servers of this
+	// language across all workspaces. Before starting one beyond the cap, the
+	// pool hibernates the least-recently-used running entry of the same language
+	// (LRU eviction). 0 means unlimited (the default for every language except
+	// java). Read at pool construction — restart-needed.
+	MaxWorkspaces int `toml:"max_workspaces"`
 }
 
 // LSPQueryConfig bounds LSP tool operations so a slow, indexing, or wedged

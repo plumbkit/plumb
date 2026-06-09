@@ -182,6 +182,20 @@ func StartSnapshotWriter(ctx context.Context, path string, interval time.Duratio
 	}()
 }
 
+// ProcessRSS returns the resident set size in bytes for an arbitrary process —
+// typically a child language-server, not the daemon. The bool is false when the
+// value cannot be sampled (unsupported platform, process gone, or sampling
+// error). Unlike Sampler.Sample, which is deliberately daemon-process-only,
+// this works for any PID.
+//
+// Concurrency: safe for concurrent use; performs no shared mutation.
+func ProcessRSS(pid int) (uint64, bool) {
+	if pid <= 0 {
+		return 0, false
+	}
+	return processChildRSS(pid)
+}
+
 func FormatBytes(n uint64) string {
 	const unit = 1024
 	switch {

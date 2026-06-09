@@ -23,6 +23,16 @@ func readProcessMetrics(pid int) (processMetrics, error) {
 	return out, nil
 }
 
+// processChildRSS samples an arbitrary process's RSS from /proc/<pid>/statm,
+// which is readable for any process the daemon can see (no self-only limit).
+func processChildRSS(pid int) (uint64, bool) {
+	var pm processMetrics
+	if err := readLinuxStatm(pid, &pm); err != nil || !pm.RSSAvailable {
+		return 0, false
+	}
+	return pm.RSSBytes, true
+}
+
 func readLinuxStatm(pid int, out *processMetrics) error {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid))
 	if err != nil {

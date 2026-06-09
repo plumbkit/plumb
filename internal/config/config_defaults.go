@@ -83,10 +83,14 @@ var defaults = Config{
 			Enabled:     false,
 		},
 		"java": {
-			Command:     "jdtls",
-			Args:        []string{},
-			RootMarkers: []string{"pom.xml", "build.gradle", "build.gradle.kts", ".classpath"},
-			Enabled:     false,
+			Command:       "jdtls",
+			Args:          []string{},
+			RootMarkers:   []string{"pom.xml", "build.gradle", "build.gradle.kts", ".classpath"},
+			Enabled:       false,
+			// jdtls is heavyweight (15–40 s cold start, ~0.8–1.5 GB RSS): hibernate
+			// an idle JVM after 20 m and cap concurrent JVMs at 2.
+			IdleTimeout:   Duration{20 * time.Minute},
+			MaxWorkspaces: 2,
 		},
 		"rust": {
 			Command:     "rust-analyzer",
