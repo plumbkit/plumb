@@ -183,6 +183,18 @@ func Relevant(workspace, relPath string) ([]Memory, error) {
 	return out, nil
 }
 
+// MatchesPath reports whether relPath (relative to the workspace) matches any
+// of this memory's `paths:` globs.
+func (m Memory) MatchesPath(relPath string) bool {
+	relPath = filepath.ToSlash(relPath)
+	for _, g := range m.Paths {
+		if matchGlob(g, relPath) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchGlob handles a glob with optional ** segments against a slash path.
 func matchGlob(glob, path string) bool {
 	// First try exact filepath.Match for simple patterns.

@@ -210,6 +210,25 @@ func TestServer_ToolsCall(t *testing.T) {
 	}
 }
 
+func TestServer_EnrichToolOutput(t *testing.T) {
+	s := newServer()
+	s.EnrichToolOutput = func(_ context.Context, name string, _ json.RawMessage, text string) string {
+		if name == "echo" {
+			return text + "\n[Hint: relevant memory 'auth-gotchas' — call read_memory to view.]"
+		}
+		return text
+	}
+	resps := serveOn(t, s, `{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`)
+	result, _ := resps[0]["result"].(map[string]any)
+	if result["isError"].(bool) {
+		t.Fatalf("unexpected isError")
+	}
+	out := toolText(result)
+	if !strings.Contains(out, "hello") || !strings.Contains(out, "[Hint: relevant memory 'auth-gotchas'") {
+		t.Fatalf("enrichment not applied to successful output: %q", out)
+	}
+}
+
 func TestServer_ToolsCall_UnknownTool(t *testing.T) {
 	resps := serve(t, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nope","arguments":{}}}`)
 	if len(resps) != 1 {

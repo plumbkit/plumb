@@ -118,6 +118,12 @@ type Server struct {
 	// stores output in output_text.
 	OnAfterTool func(ctx context.Context, name string, args json.RawMessage, output, errMsg string, duration time.Duration, isError bool)
 
+	// EnrichToolOutput, if set, may append advisory text to a SUCCESSFUL tool
+	// result before it is returned to the client (OnAfterTool cannot — it is
+	// fire-and-forget). Called synchronously on the response path, so it must be
+	// cheap and must never block. Returning text unchanged is a no-op.
+	EnrichToolOutput func(ctx context.Context, name string, args json.RawMessage, text string) string
+
 	// OnClientInfo is called once during the initialize exchange with the
 	// client's self-reported name and version.
 	OnClientInfo func(ctx context.Context, name, version string)

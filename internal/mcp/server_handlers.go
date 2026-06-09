@@ -140,6 +140,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	if len(warnings) > 0 {
 		text = aliasNotice(warnings) + text
 	}
+	if s.EnrichToolOutput != nil {
+		text = s.EnrichToolOutput(ctx, params.Name, params.Arguments, text)
+	}
 	return okResp(req.ID, callResult{
 		Content: []content{{Type: "text", Text: text}},
 		IsError: false,

@@ -110,6 +110,7 @@ type connSession struct {
 
 	topologyPool *topologyPool
 	memoryPool   *memoryIndexPool
+	hintCache    *memoryHintCache
 	writeLimiter *tools.RateLimiter
 
 	watcherOnce sync.Once
@@ -168,6 +169,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		cancel:       cancel,
 		pool:         pool,
 		topologyPool: topoPool,
+		hintCache:    &memoryHintCache{},
 		store:        store,
 		statsStore:   statsStore,
 		budgets:      budgets,

@@ -168,4 +168,5 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage) {
 		s.onBeforeTool(toolCtx, name, args)
 	}
+	srv.EnrichToolOutput = s.enrichToolOutput
 }
