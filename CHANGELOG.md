@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.11 (unreleased)
+
+Java (jdtls) production hardening — transition the daemon from a "static supervisor" to a "dynamic resource manager" for heavyweight language servers, plus multi-OS polish. jdtls reaches ~0.8–1.5 GB RSS with 15–40 s cold starts; the pool previously only reclaimed a server when its last session detached, so an idle-but-connected session kept its JVM resident forever. Closes both jdtls items in `docs/internal/todo.md`.
+
+### Added
+
+- **Idle hibernation of heavyweight language servers.** A pool janitor goroutine stops a server's process after `[lsp.<lang>] idle_timeout` without a tool call (default `20m` for java, off for everything else), keeping the `poolEntry` and its warm cache mapped; the next tool call restarts it transparently (`wakeLocked` reuses the `Supervisor` and rebuilds the file watcher). Activity is tracked by a per-entry `lastUsed` touched at the routing read sites (`routingProxy.route`/`primaryClient`), not in `clientProxy.get()` which also fires for teardown/probes. The proxy is cleared under `p.mu` before the out-of-lock teardown so a concurrent call sees the server as not-ready and restarts it rather than dialing a dying connection. Guarded by `TestPool_TouchUpdatesLastUsed`, `TestPool_HibernateIdle_*`, and `TestPool_HibernateAndWakeRestartsServer`.
+- **LRU workspace eviction.** `[lsp.<lang>] max_workspaces` (default `2` for java, unlimited otherwise) caps concurrently-running servers of a language; starting one beyond the cap hibernates the least-recently-used running entry first (`overBudgetVictimLocked`). Guarded by `TestPool_OverBudgetVictim`.
+- **`plumb debug lsp` + doctor live-server view.** A new `lsp-status` control-socket command lists every pooled server with its lifecycle state, child PID, resident memory, and idle time; `plumb debug lsp` renders it as a table and `plumb doctor` appends a `(live)` row per server. `monitor.ProcessRSS(pid)` samples an arbitrary child process's RSS (macOS via `ps -o rss=`, Linux via `/proc/<pid>/statm`), distinct from the daemon-only `Sampler`; `Supervisor.PID()` exposes the child PID. The four optional control-socket callbacks are collapsed into a `ctrlHandlers` struct. Guarded by `TestRenderLSPStatus`, `TestHandleCtrlConn_LSPStatus*`.
+- **`jdtls-data` cache pruning.** The janitor removes Eclipse-workspace storage (~50 MB/project) for projects untouched for 30+ days and not backing a pooled workspace — once at startup and daily thereafter; a live entry's dir is always kept, including while hibernated. Guarded by `TestPool_PruneJdtlsCache`.
+- **`[lsp.<language>] idle_timeout` and `max_workspaces` config fields.** Per-language, project-overridable, read at pool construction (restart-needed); surfaced in `plumb config show` and the configuration docs. Guarded by the config defaults tests.
+
+### Docs
+
+- **jdtls binary-naming + resource-budget guidance.** `docs/adding-an-lsp.md` and `docs/configuration.md` document the `command` override for non-Homebrew launchers (`jdtls.sh`/`jdtls.bat`/absolute path) and the hibernation / `max_workspaces` / cache-pruning behaviour.
+- **doctor JDK-distro version coverage + CI-tunable cold-start budgets.** `parseJavaMajorVersion` tests now assert the line-1 `java --version` strings of Eclipse Temurin, Amazon Corretto, and Microsoft Build of OpenJDK. The jdtls integration test's ServiceReady/diagnostics deadlines are overridable via `PLUMB_TEST_JDTLS_READY_TIMEOUT` / `PLUMB_TEST_JDTLS_DIAG_TIMEOUT` for slow/cold CI runners, with the warm-cache vs `JDTLS_FRESH_DATA` trade-off documented.
+
 ## 0.9.10 (unreleased)
 
 Advanced Memory Engine, Phase 1 — turn the per-workspace memory store from grep-over-markdown into an FTS5-indexed, provenance-aware, self-summarising knowledge layer. Markdown files stay the source of truth; a separate, rebuildable `memory.db` is the derived index (distinct from `topology.db`). Shipped wave by wave.

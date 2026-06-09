@@ -50,6 +50,11 @@ func TestParseJavaMajorVersion(t *testing.T) {
 		// Version string with surrounding quotes (some JVM output styles)
 		{`openjdk version "21.0.3" 2024-04-16`, 21},
 		{`openjdk version "17.0.9" 2023-10-17`, 17},
+		// Distro line-1 strings (vendor appears on line 2+, major must read from line 1):
+		// Eclipse Temurin, Amazon Corretto, Microsoft Build of OpenJDK.
+		{`openjdk 21.0.3 2024-04-16 LTS`, 21},
+		{`openjdk 17.0.11 2024-04-16 LTS`, 17},
+		{`openjdk 11.0.23 2024-04-16 LTS`, 11},
 		// Unrecognised / empty
 		{``, 0},
 		{`some random text`, 0},

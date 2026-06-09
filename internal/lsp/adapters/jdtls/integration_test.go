@@ -99,6 +99,24 @@ func startJDTLS(t *testing.T) *jdtls.Adapter {
 	return jdtls.New(conn)
 }
 
+// jdtlsTestDuration returns def, or the duration parsed from the named env var
+// when it is set and valid. It lets a slow/cold CI runner widen the cold-start
+// budgets without editing the test; an unparseable value is logged and the
+// default used.
+func jdtlsTestDuration(t *testing.T, env string, def time.Duration) time.Duration {
+	t.Helper()
+	v := os.Getenv(env)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		t.Logf("%s=%q is not a valid duration (%v); using default %s", env, v, err, def)
+		return def
+	}
+	return d
+}
+
 // TestIntegration_DidOpen verifies that jdtls publishes error diagnostics for
 // a syntactically broken Java file opened via DidOpen. The flow:
 //
@@ -121,9 +139,16 @@ func startJDTLS(t *testing.T) *jdtls.Adapter {
 // jdtls proceeds to publish diagnostics.
 //
 // jdtls starts a JVM and loads Eclipse plugins on each cold run; the 5-minute
-// budget covers cold-cache JVM startup on typical developer hardware. Subsequent
-// runs reuse the data dir under .testcache and are much faster (set
-// JDTLS_FRESH_DATA=1 to force a hermetic per-test data dir).
+// ServiceReady budget (and 2-minute diagnostics budget) covers cold-cache JVM
+// startup on typical developer hardware. Subsequent runs reuse the data dir
+// under .testcache and are much faster (set JDTLS_FRESH_DATA=1 to force a
+// hermetic per-test data dir — fully isolated but pays the cold start every
+// time, so prefer the warm cache locally and reserve fresh data for CI runs
+// that must not leak state between jobs).
+//
+// On a slow/cold CI runner these budgets can be tight. Raise them without a code
+// change via PLUMB_TEST_JDTLS_READY_TIMEOUT / PLUMB_TEST_JDTLS_DIAG_TIMEOUT
+// (Go duration strings, e.g. "8m"); see jdtlsTestDuration.
 func TestIntegration_DidOpen(t *testing.T) {
 	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "java-fixture")
 
@@ -147,7 +172,7 @@ func TestIntegration_DidOpen(t *testing.T) {
 
 	ad := startJDTLS(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), jdtlsTestDuration(t, "PLUMB_TEST_JDTLS_READY_TIMEOUT", 5*time.Minute))
 	defer cancel()
 
 	// readyCh is closed once jdtls sends ServiceReady. sync.Once guards against
@@ -250,7 +275,7 @@ func TestIntegration_DidOpen(t *testing.T) {
 	}()
 
 	// Wait for jdtls to publish diagnostics for Broken.java.
-	deadline := time.After(2 * time.Minute)
+	deadline := time.After(jdtlsTestDuration(t, "PLUMB_TEST_JDTLS_DIAG_TIMEOUT", 2*time.Minute))
 	for {
 		select {
 		case errs := <-diagCh:

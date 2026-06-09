@@ -170,6 +170,8 @@ disabled by default**.
 | `root_markers` | []string | Files whose presence identifies a workspace of this language. |
 | `env` | map | Extra environment variables for the server process. |
 | `enabled` | bool | Whether plumb starts this server and detects this language. |
+| `idle_timeout` | duration | Hibernate the server (stop its process, keep the warm cache) after this long without a tool call; the next call restarts it. `0` disables. Default `0`, except `java` = `20m`. Restart-needed. |
+| `max_workspaces` | int | Cap on concurrently-running servers of this language; the least-recently-used is hibernated before starting another. `0` = unlimited. Default `0`, except `java` = `2`. Restart-needed. |
 
 Built-in defaults:
 
@@ -178,6 +180,12 @@ Built-in defaults:
 | `go` | `gopls` | `[]` | `go.mod` | **`true`** |
 | `python` | `pyright-langserver` | `--stdio` | `pyproject.toml`, `setup.py`, `pyrightconfig.json` | `false` |
 | `java` | `jdtls` | `[]` (plumb appends `-data <dir>`) | `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath` | `false` |
+
+jdtls is heavyweight (~0.8–1.5 GB RSS); it defaults to `idle_timeout = "20m"` and
+`max_workspaces = 2` so idle JVMs are hibernated and concurrent JVMs are capped.
+If your `jdtls` launcher is not named `jdtls` on `PATH` (e.g. `jdtls.sh`,
+`jdtls.bat`, or an absolute path), set `command` accordingly. Use
+`plumb debug lsp` to see each server's state, PID, RSS, and idle time.
 
 (Rust, Swift, Zig, TypeScript/JavaScript, Kotlin, and HTML are also available,
 all `enabled = false` by default — see the *Adapter validation status* table in

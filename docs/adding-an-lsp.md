@@ -246,6 +246,16 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   Other platforms: download from https://download.eclipse.org/jdtls/ (`milestones/`
   for stable builds, `snapshots/jdt-language-server-latest.tar.gz` for the rolling
   latest). The GitHub repo does not publish language-server tarballs as releases.
+- **Binary name on non-Homebrew installs**: the compiled default is
+  `command = "jdtls"`. A manual install may ship the launcher under a different
+  name or only as a script — `jdtls.sh` (Linux), `jdtls.bat`/`jdtls.exe`
+  (Windows), or an absolute path inside the extracted tarball. Point plumb at it
+  with a `command` override:
+  ```toml
+  [lsp.java]
+  enabled = true
+  command = "/opt/jdtls/bin/jdtls"   # or "jdtls.bat" on Windows
+  ```
 - **Status**: validated — unit-tested with mocked transport and integration-tested
   against a real jdtls binary in `internal/lsp/adapters/jdtls/` (gated with
   `//go:build integration`).
@@ -275,6 +285,14 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 - **Cold-start warning**: jdtls starts a JVM and loads Eclipse plugins on first
   run. Initial startup can take 30–60 seconds. Subsequent runs within the same
   daemon lifetime are fast because the JVM stays alive.
+- **Resource budget**: jdtls is heavyweight (~0.8–1.5 GB RSS per project), so the
+  pool reclaims idle JVMs. After `[lsp.java] idle_timeout` (default 20 m) without
+  a tool call, the server is *hibernated* — its process is stopped while the warm
+  cache is kept, and the next tool call restarts it transparently. `max_workspaces`
+  (default 2) caps concurrent Java JVMs, hibernating the least-recently-used one
+  before starting another. Inspect live servers with `plumb debug lsp` (state,
+  PID, RSS, idle time); stale `jdtls-data` dirs are pruned after 30 days unused.
+  Both knobs are read at pool construction — change them and restart the daemon.
 
 ### rust-analyzer (Rust)
 
