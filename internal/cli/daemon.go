@@ -167,6 +167,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// and surface the active limit in daemon.log.
 	applyMemoryLimit(os.Getenv("PLUMB_MEMORY_LIMIT"))
 
+	// Bound a single tree-sitter parse so a GLR-heavy structural file (large
+	// Markdown above all) cannot balloon the heap high-water. Must precede the
+	// first parse — gotreesitter memoises the env value once.
+	applyParseMemoryBudget()
+
 	hasEnabled := false
 	for _, lspCfg := range cfg.LSP {
 		if lspCfg.Enabled {

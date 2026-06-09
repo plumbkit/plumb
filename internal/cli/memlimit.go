@@ -4,17 +4,45 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
 )
 
 // defaultDaemonMemLimit is the soft heap ceiling applied when PLUMB_MEMORY_LIMIT
-// is unset: a generous anti-OOM backstop, not a tight cap. Go's GC works harder
-// as the heap approaches it and never hard-fails — a genuine spike is bounded
-// rather than allowed to exhaust the machine. Override with PLUMB_MEMORY_LIMIT
-// (e.g. "1500MiB"), or disable with "0"/"off".
-const defaultDaemonMemLimit int64 = 4 << 30 // 4 GiB
+// is unset. Go's GC works harder as the heap approaches it and never hard-fails —
+// a genuine spike is bounded rather than allowed to exhaust the machine. The
+// daemon idles at tens of MB, so a tight-but-comfortable 1 GiB keeps the GC
+// reclaiming transient parse arenas promptly (so consecutive large parses don't
+// stack into the heap high-water and pin RSS) while leaving ample headroom.
+// Override with PLUMB_MEMORY_LIMIT (e.g. "2GiB"), or disable with "0"/"off".
+const defaultDaemonMemLimit int64 = 1 << 30 // 1 GiB
+
+// defaultParseMemoryBudgetMB bounds a SINGLE tree-sitter parse's backing-storage
+// growth (applied by gotreesitter to the node arena and the GLR scratch
+// independently). GLR-heavy structural grammars (Markdown most of all, at ~200
+// nodes/byte) can otherwise balloon one parse of a few-hundred-KB file to
+// hundreds of MB — back-to-back during a resync that becomes the multi-GB heap
+// high-water. 128 MB completes ordinary code parses with headroom while capping
+// the pathological case. Honoured only if the operator has not already set
+// GOT_PARSE_MEMORY_BUDGET_MB. Disable plumb's default by exporting that env to
+// "0" (gotreesitter treats 0 as "no budget").
+const defaultParseMemoryBudgetMB = "128"
+
+// applyParseMemoryBudget sets a default per-parse memory budget for the bundled
+// tree-sitter engine unless the operator already configured one. It must run
+// before the first parse: gotreesitter memoises the env value with a sync.Once,
+// so a later change would not take effect.
+func applyParseMemoryBudget() {
+	const envKey = "GOT_PARSE_MEMORY_BUDGET_MB"
+	if _, ok := os.LookupEnv(envKey); ok {
+		slog.Info("daemon: per-parse memory budget (operator-configured)", "budget_mb", os.Getenv(envKey))
+		return
+	}
+	_ = os.Setenv(envKey, defaultParseMemoryBudgetMB)
+	slog.Info("daemon: per-parse memory budget applied (default)", "budget_mb", defaultParseMemoryBudgetMB)
+}
 
 // applyMemoryLimit sets the Go runtime soft memory limit from PLUMB_MEMORY_LIMIT,
 // falling back to defaultDaemonMemLimit when unset and to no limit when the value

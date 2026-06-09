@@ -115,6 +115,29 @@ func TestParseByteSize(t *testing.T) {
 	}
 }
 
+func TestApplyParseMemoryBudget(t *testing.T) {
+	const envKey = "GOT_PARSE_MEMORY_BUDGET_MB"
+
+	t.Run("default applied when unset", func(t *testing.T) {
+		t.Setenv(envKey, "") // ensure a known starting point for LookupEnv via Unsetenv below
+		if err := os.Unsetenv(envKey); err != nil {
+			t.Fatalf("unsetenv: %v", err)
+		}
+		applyParseMemoryBudget()
+		if got := os.Getenv(envKey); got != defaultParseMemoryBudgetMB {
+			t.Errorf("budget = %q, want default %q", got, defaultParseMemoryBudgetMB)
+		}
+	})
+
+	t.Run("operator value respected", func(t *testing.T) {
+		t.Setenv(envKey, "256")
+		applyParseMemoryBudget()
+		if got := os.Getenv(envKey); got != "256" {
+			t.Errorf("budget = %q, want operator value 256 (must not be overwritten)", got)
+		}
+	})
+}
+
 func TestApplyMemoryLimit(t *testing.T) {
 	// Snapshot the current limit (SetMemoryLimit(-1) reports without changing) and
 	// restore it so this test does not leak a global mutation into others.
