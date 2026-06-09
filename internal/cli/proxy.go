@@ -32,6 +32,15 @@ func (p *clientProxy) get() lsp.Client {
 	return p.cur
 }
 
+// clear drops the live adapter so get() returns nil until the next set(). Used
+// when an entry is hibernated: a concurrent route() then sees the server as
+// not-ready and triggers a restart instead of calling into a dying connection.
+func (p *clientProxy) clear() {
+	p.mu.Lock()
+	p.cur = nil
+	p.mu.Unlock()
+}
+
 func (p *clientProxy) getOrErr() (lsp.Client, error) {
 	c := p.get()
 	if c == nil {

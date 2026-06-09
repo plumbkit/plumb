@@ -227,6 +227,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()
+	pool.startJanitor(ctx)
 
 	topoPool := newTopologyPool(cfg.Topology)
 	defer topoPool.StopAll()

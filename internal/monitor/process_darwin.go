@@ -39,6 +39,7 @@ func readProcessMetrics(pid int) (processMetrics, error) {
 func processChildRSS(pid int) (uint64, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	//nolint:gosec // G204: pid is an OS process ID (int formatted via strconv), not user-controlled input
 	out, err := exec.CommandContext(ctx, "ps", "-o", "rss=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, false

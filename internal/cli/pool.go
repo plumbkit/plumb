@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -66,6 +67,17 @@ type langConfig struct {
 	cfg  config.LSPConfig
 }
 
+// poolLifecycle tracks whether a poolEntry's language-server process is running
+// or has been hibernated — stopped to reclaim memory while the entry, its warm
+// cache, and its map slot survive. See workspacePool.hibernateEntry / wakeLocked.
+type poolLifecycle int
+
+const (
+	poolActive      poolLifecycle = iota // process running (or warming)
+	poolHibernating                      // teardown in progress
+	poolHibernated                       // process stopped; next acquire restarts it
+)
+
 type poolEntry struct {
 	root     string
 	language string
@@ -74,6 +86,15 @@ type poolEntry struct {
 	cache    *cache.Cache
 	sup      *lsp.Supervisor
 	watcher  *lspFSWatcher
+
+	// lastUsed is the unix-nanosecond timestamp of the most recent tool call
+	// routed to this entry (see workspacePool.touch). It drives idle hibernation
+	// and LRU eviction. Atomic so the janitor reads it without taking p.mu.
+	lastUsed atomic.Int64
+
+	// state is the hibernation lifecycle (poolActive / poolHibernating /
+	// poolHibernated). Guarded by workspacePool.mu.
+	state poolLifecycle
 
 	// refs counts the sessions that hold this root as their PINNED primary
 	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
@@ -140,6 +161,10 @@ const firstStartGrace = 2 * time.Second
 // (shutdownHardDeadline) is the outer backstop.
 const poolCloseGrace = 2 * time.Second
 
+// janitorInterval is how often the hibernation janitor scans for idle servers.
+// Coarse relative to idle_timeout (minutes), so it adds negligible overhead.
+const janitorInterval = 60 * time.Second
+
 // acquireLang returns (or starts) the shared workspace state for root, never
 // blocking on a slow cold-start. Pass "" for language to detect from root
 // markers; otherwise the named adapter is used directly.
@@ -191,8 +216,24 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 		if pin {
 			p.pinLocked(e)
 		}
-		slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
-		return e, nil, nil
+		switch e.state {
+		case poolHibernated:
+			readyCh, err := p.wakeLocked(e)
+			if err != nil {
+				return nil, nil, err
+			}
+			slog.Info("pool: waking hibernated LS", "root", root, "language", e.language, "refs", e.refs)
+			return e, readyCh, nil
+		case poolHibernating:
+			// Teardown in flight; the server is not restartable until it settles.
+			// Return the not-yet-ready entry so the caller retries (route surfaces
+			// "LSP server not yet ready"); the next acquire finds it hibernated and
+			// wakes it.
+			return e, nil, nil
+		default:
+			slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
+			return e, nil, nil
+		}
 	}
 
 	lspCfg, ok := p.cfgFor(language)
@@ -200,11 +241,22 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 		return nil, nil, fmt.Errorf("language %q not configured or not enabled", language)
 	}
 
+	// LRU eviction: before starting a new server, if this language is at its
+	// max_workspaces budget, hibernate its least-recently-used running entry.
+	// hibernateEntry re-takes p.mu and does blocking teardown, so it runs in a
+	// goroutine that parks until startOrReuse releases the lock; the new server
+	// starts immediately and the victim's JVM is reclaimed concurrently.
+	if victim := p.overBudgetVictimLocked(language, lspCfg.MaxWorkspaces); victim != nil {
+		slog.Info("pool: max_workspaces reached — evicting LRU", "language", language, "victim_root", victim.root, "max", lspCfg.MaxWorkspaces)
+		go p.hibernateEntry(victim)
+	}
+
 	rootURI := protocol.FileURI(root)
 	c := cache.New(p.cacheTTL)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
-	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c}
+	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c, state: poolActive}
+	e.lastUsed.Store(time.Now().UnixNano())
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
 		OnStart: poolOnStart(language, root, rootURI, inv, proxy),
@@ -284,6 +336,154 @@ func (p *workspacePool) reapEntry(e *poolEntry) {
 	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
 	defer cancel()
 	e.closeOnce.Do(func() { closeEntry(ctx, e) })
+}
+
+// touch records that a tool call was routed to (root, language) just now, so the
+// hibernation janitor and LRU eviction see the entry as recently active. Called
+// from the routing proxy at the point a live client is handed to a tool — not
+// from clientProxy.get(), which also fires for teardown and capability probes
+// that must not reset the idle clock. A no-op for an unknown or hibernated
+// entry. Concurrency-safe (atomic store; brief map lookup under p.mu).
+func (p *workspacePool) touch(root, language string) {
+	if e := p.lookup(root, language); e != nil {
+		e.lastUsed.Store(time.Now().UnixNano())
+	}
+}
+
+// startJanitor launches the hibernation janitor on ctx (the daemon-lifetime
+// context). It exits when ctx is cancelled. Call once, from the daemon — not
+// from one-shot CLI pools, which would leak the goroutine on a Background ctx.
+func (p *workspacePool) startJanitor(ctx context.Context) {
+	go p.janitor(ctx)
+}
+
+func (p *workspacePool) janitor(ctx context.Context) {
+	ticker := time.NewTicker(janitorInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.hibernateIdle()
+		}
+	}
+}
+
+// hibernateIdle hibernates every running entry whose language sets a positive
+// idle_timeout and whose last tool call is older than it. Candidates are
+// selected under p.mu; the blocking teardown runs outside the lock.
+func (p *workspacePool) hibernateIdle() {
+	now := time.Now().UnixNano()
+	var victims []*poolEntry
+	p.mu.Lock()
+	for _, e := range p.entries {
+		if e.state != poolActive {
+			continue
+		}
+		cfg, ok := p.cfgFor(e.language)
+		if !ok || cfg.IdleTimeout.Duration <= 0 {
+			continue
+		}
+		if now-e.lastUsed.Load() > int64(cfg.IdleTimeout.Duration) {
+			victims = append(victims, e)
+		}
+	}
+	p.mu.Unlock()
+	for _, e := range victims {
+		p.hibernateEntry(e)
+	}
+}
+
+// overBudgetVictimLocked returns the least-recently-used running entry of
+// language when starting one more would exceed max running servers, or nil when
+// max is unlimited (<=0) or the budget is not yet reached. Caller holds p.mu.
+func (p *workspacePool) overBudgetVictimLocked(language string, max int) *poolEntry {
+	if max <= 0 {
+		return nil
+	}
+	var running []*poolEntry
+	for k, e := range p.entries {
+		if k.language == language && e.state == poolActive {
+			running = append(running, e)
+		}
+	}
+	if len(running) < max {
+		return nil
+	}
+	victim := running[0]
+	for _, e := range running[1:] {
+		if e.lastUsed.Load() < victim.lastUsed.Load() {
+			victim = e
+		}
+	}
+	return victim
+}
+
+// hibernateEntry stops an active entry's language-server process to reclaim its
+// memory, keeping the poolEntry, its warm cache, and its map slot so the next
+// acquire restarts it (wakeLocked). Distinct from reapEntry, which deletes the
+// entry entirely. The proxy is cleared and state set under p.mu BEFORE the
+// out-of-lock teardown, so a concurrent route() sees the server as not-ready and
+// triggers a restart rather than calling into a dying connection. sup.Stop()
+// blocks on its goroutine, so it must never run under p.mu (mirrors reapEntry).
+// closeOnce is deliberately NOT consumed — a later reapEntry must still be able
+// to fully tear the entry down.
+func (p *workspacePool) hibernateEntry(e *poolEntry) {
+	p.mu.Lock()
+	if e.state != poolActive {
+		p.mu.Unlock()
+		return
+	}
+	e.state = poolHibernating
+	client := e.proxy.get()
+	e.proxy.clear()
+	sup := e.sup
+	watcher := e.watcher
+	e.watcher = nil
+	root, language := e.root, e.language
+	p.mu.Unlock()
+
+	slog.Info("pool: hibernating idle LS", "root", root, "language", language)
+	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
+	if client != nil {
+		_ = client.Shutdown(ctx)
+		_ = client.Exit(ctx)
+	}
+	cancel()
+	if sup != nil {
+		sup.Stop()
+	}
+	if watcher != nil {
+		watcher.Stop()
+	}
+
+	p.mu.Lock()
+	if e.state == poolHibernating {
+		e.state = poolHibernated
+	}
+	p.mu.Unlock()
+}
+
+// wakeLocked restarts a hibernated entry's language server, reusing the same
+// Supervisor (StartAsync re-runs the captured OnStart, re-publishing the adapter
+// into the entry's proxy) and the same warm cache. The file watcher is not
+// restartable, so it is rebuilt. Returns the first-start channel for awaitReady.
+// Caller holds p.mu and must have verified e.state == poolHibernated.
+func (p *workspacePool) wakeLocked(e *poolEntry) (<-chan error, error) {
+	readyCh, err := e.sup.StartAsync(p.baseCtx)
+	if err != nil {
+		return nil, fmt.Errorf("waking %s for %s: %w", e.language, e.root, err)
+	}
+	if watcher, err := newLSPFSWatcher(e.root, e.proxy); err != nil {
+		slog.Warn("lsp: file watcher unavailable on wake", "root", e.root, "language", e.language, "err", err)
+	} else {
+		e.watcher = watcher
+		watcher.Start()
+	}
+	e.state = poolActive
+	e.lastUsed.Store(time.Now().UnixNano())
+	return readyCh, nil
 }
 
 // awaitReady waits up to firstStartGrace for a freshly started entry to become

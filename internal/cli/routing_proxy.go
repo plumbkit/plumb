@@ -92,8 +92,10 @@ func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
 func (r *routingProxy) primaryClient() (lsp.Client, error) {
 	r.mu.RLock()
 	p := r.primary
+	root, language := r.primaryRoot, r.primaryLang
 	r.mu.RUnlock()
 	if c := p.get(); c != nil {
+		r.pool.touch(root, language)
 		return c, nil
 	}
 	return nil, fmt.Errorf("LSP server not yet ready")
@@ -140,6 +142,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 
 	if root == primaryRoot && targetLang == primaryLang {
 		if c := primary.get(); c != nil {
+			r.pool.touch(root, targetLang)
 			return c, nil
 		}
 	}
@@ -152,6 +155,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 		return nil, fmt.Errorf("acquiring %s for %s: %w", targetLang, root, err)
 	}
 	if c := e.proxy.get(); c != nil {
+		r.pool.touch(root, targetLang)
 		r.noteActivated(root, targetLang)
 		return c, nil
 	}
