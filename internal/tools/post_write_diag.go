@@ -126,7 +126,10 @@ func renderDiagGroup(sb *strings.Builder, label string, diags []protocol.Diagnos
 // most-reported friction in internal/feedbacks.md:
 //
 //   - fresh=false: the language server had not re-published within the wait
-//     window, so the snapshot may predate this write; a hedge note is appended.
+//     window, so the whole snapshot predates this write. Rendering its
+//     (pre-edit) error/warn groups reads as fresh breakage for one beat
+//     (e.g. a stale "imported and not used" after the import was already
+//     fixed), so we short-circuit to a single "pending" line instead.
 //   - newLineCount>0: any error/warning whose line lies beyond the just-written
 //     file's current end is provably stale (it points past EOF — the classic
 //     case after a structural edit that shrank the file, where gopls still
@@ -135,6 +138,12 @@ func renderDiagGroup(sb *strings.Builder, label string, diags []protocol.Diagnos
 func formatPostWriteDiagnostics(d []protocol.Diagnostic, fresh bool, newLineCount int) string {
 	if len(d) == 0 {
 		return ""
+	}
+	if !fresh {
+		// The snapshot predates this write — every finding in it is pre-edit.
+		// Surface a single pending line rather than stale groups that read as
+		// fresh breakage (internal/feedbacks.md 2026-06-09).
+		return "\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
 	}
 	var errs, warns, stale []protocol.Diagnostic
 	for _, x := range d {
@@ -162,8 +171,8 @@ func formatPostWriteDiagnostics(d []protocol.Diagnostic, fresh bool, newLineCoun
 	if len(stale) > 0 {
 		sb.WriteString("\n  (stale? = past the file's current end — almost certainly a pre-edit diagnostic the language server has not yet cleared; rebuild to confirm)")
 	}
-	if !fresh {
-		sb.WriteString("\n  (may predate this write — the language server had not re-analysed within the wait window; re-check with diagnostics)")
-	}
+	// No !fresh branch here: a not-fresh snapshot is short-circuited to the
+	// "pending" line at the top of this function, so by this point fresh is always
+	// true.
 	return sb.String()
 }

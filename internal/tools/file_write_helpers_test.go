@@ -179,17 +179,24 @@ func TestAwaitDiagnosticsRefresh_FreshFlag(t *testing.T) {
 	}
 }
 
-func TestFormatPostWriteDiagnostics_StaleNote(t *testing.T) {
+func TestFormatPostWriteDiagnostics_StaleSnapshotIsPending(t *testing.T) {
+	// A not-fresh snapshot predates the write: its findings must NOT be rendered
+	// (they read as fresh breakage). Surface a single pending line instead.
 	diags := errDiag("undefined: Foo")
-	stale := formatPostWriteDiagnostics(diags, false, 0)
-	if !strings.Contains(stale, "undefined: Foo") {
-		t.Fatalf("missing diagnostic:\n%s", stale)
+	pending := formatPostWriteDiagnostics(diags, false, 0)
+	if strings.Contains(pending, "undefined: Foo") {
+		t.Fatalf("a stale snapshot must not render its (pre-edit) findings:\n%s", pending)
 	}
-	if !strings.Contains(stale, "re-analys") {
-		t.Fatalf("expected a staleness note when not fresh:\n%s", stale)
+	if !strings.Contains(pending, "pending") {
+		t.Fatalf("expected a pending line when not fresh:\n%s", pending)
 	}
-	if strings.Contains(formatPostWriteDiagnostics(diags, true, 0), "re-analys") {
-		t.Fatalf("fresh diagnostics should carry no staleness note")
+	// An empty not-fresh snapshot is silent — no phantom pending line.
+	if got := formatPostWriteDiagnostics(nil, false, 0); got != "" {
+		t.Fatalf("empty not-fresh snapshot should be silent, got:\n%s", got)
+	}
+	// The fresh path is unchanged: real findings still render.
+	if !strings.Contains(formatPostWriteDiagnostics(diags, true, 0), "undefined: Foo") {
+		t.Fatalf("fresh diagnostics should still render their findings")
 	}
 }
 

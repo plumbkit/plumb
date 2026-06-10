@@ -102,6 +102,8 @@ func (t *ReadSymbol) Description() string {
 		"Accepts plain name or dotted ReceiverType.MethodName form. " +
 		"Returns all matches when the name is ambiguous. " +
 		"Prefer this over a list_symbols + read_file pair for targeted symbol reads. " +
+		"Each body line carries a display-only 1-based file line-number gutter ('<n>\\t', cat -n style) " +
+		"— strip it before reusing a line as an edit_file old_string. " +
 		"Falls back to a tree-sitter parse when the language server is cold or absent."
 }
 
@@ -265,11 +267,16 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 			fmt.Fprintf(&sb, "(error reading lines: %v)\n", ferr)
 			continue
 		}
-		src, rerr := readContentMaybeRanged(f, &start, &end)
+		src, hasLines, rerr := readContentMaybeRanged(f, &start, &end)
 		f.Close()
 		if rerr != nil {
 			fmt.Fprintf(&sb, "(error reading lines: %v)\n", rerr)
 			continue
+		}
+		if hasLines {
+			// Display-only 1-based file line-number gutter (see withLineGutter);
+			// strip the "<n>\t" prefix before reusing a line as an edit old_string.
+			src = withLineGutter(src, start)
 		}
 		sb.WriteString(src)
 		if i < len(matches)-1 {

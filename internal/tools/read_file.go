@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -58,7 +59,10 @@ const maxReadFileBytes = 200 * 1024 // 200 KiB
 //
 // Subsequent edit_file calls may pass either value as expected_mtime or
 // expected_sha to guard against concurrent modifications. The header is
-// followed by a blank line, then the content (or selected line range).
+// followed by a blank line, then the content (or selected line range). Each
+// content line is prefixed with a display-only 1-based file line-number gutter
+// ("<n>\t…", the cat -n convention); the gutter is not part of the file and
+// must be stripped before a line is used as an edit_file old_string.
 // sha256 is computed over the full file, not the sliced excerpt.
 //
 // If a non-nil ReadTracker is supplied, every successful read records the
@@ -131,6 +135,9 @@ func (t *ReadFile) Description() string {
 	return "Read the text contents of a file. Accepts an absolute path or a file:// URI. " +
 		"Use start_line and end_line to read a slice of a large file without loading it entirely " +
 		"(only the requested lines are streamed into memory). " +
+		"Each content line is prefixed with a 1-based file line number and a tab (cat -n style) so range " +
+		"math is exact; this gutter is display-only — strip the leading '<n>\\t' before using a line as an " +
+		"edit_file or find_replace old_string. " +
 		"Binary files are detected and rejected. Output is capped at 200 KiB — use line ranges on large files. " +
 		"The output begins with a header carrying the file's mtime (RFC3339Nano) and SHA-256 hash. " +
 		"Pass mtime back as expected_mtime to edit_file for fast optimistic-concurrency checks; " +
@@ -193,7 +200,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("read_file: %w", err)
 	}
-	content, err := readContentMaybeRanged(src, start, end)
+	content, hasLines, err := readContentMaybeRanged(src, start, end)
 	if err != nil {
 		return "", fmt.Errorf("read_file: %w", err)
 	}
@@ -212,14 +219,18 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
 
-	return t.formatOutput(mtime, sha, content, truncated, t.outsideLabel(fpath), concurrentNote), nil
+	firstLine := 1
+	if start != nil && *start > 1 {
+		firstLine = *start
+	}
+	return t.formatOutput(mtime, sha, content, firstLine, hasLines, truncated, t.outsideLabel(fpath), concurrentNote), nil
 }
 
 // formatOutput assembles the read_file response: the plumb-read header line
 // (mtime + optional sha + indent), an optional edit-lane hint line for clients
 // whose native Edit tool conflicts with plumb's read-state, a blank separator,
 // then the (possibly truncated) content.
-func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated bool, outsideLabel, concurrentNote string) string {
+func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, firstLine int, number, truncated bool, outsideLabel, concurrentNote string) string {
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
 	// lines/chars describe the body actually returned (a ranged read reflects the
@@ -247,6 +258,9 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, truncated 
 		sb.WriteString(nativeEditReadHint(mtimeStr))
 	}
 	sb.WriteByte('\n')
+	if number {
+		content = withLineGutter(content, firstLine)
+	}
 	sb.WriteString(content)
 	if truncated {
 		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")
@@ -317,19 +331,53 @@ func classifyIndent(content string) string {
 // 1-based [startLine, endLine] range. When a range is given we use a bufio
 // Scanner that stops at endLine — so a 50MB file with a 100-line range only
 // reads ~100 lines, not the whole file.
-func readContentMaybeRanged(src io.Reader, startLine, endLine *int) (string, error) {
+// The bool return reports whether the string is real file content (true) versus
+// an "(no lines in range …)" placeholder (false); only real content gets the
+// display line-number gutter.
+func readContentMaybeRanged(src io.Reader, startLine, endLine *int) (string, bool, error) {
 	if startLine == nil && endLine == nil {
 		data, err := io.ReadAll(src)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
-		return string(data), nil
+		return string(data), true, nil
 	}
 	start, end := resolveReadRange(startLine, endLine)
 	if end >= 0 && start > end {
-		return fmt.Sprintf("(no lines in range %d–%d)", start, end), nil
+		return fmt.Sprintf("(no lines in range %d–%d)", start, end), false, nil
 	}
 	return readLineRange(src, start, end)
+}
+
+// withLineGutter prefixes each line of content with its 1-based file line
+// number, right-aligned and tab-separated — the cat -n convention Claude Code's
+// native Read uses, so agents already strip it for str_replace. firstLine is
+// the file line number of content's first line (1 for a whole-file read; the
+// range start for a sliced read). The gutter is display-only: callers strip the
+// leading "<n>\t" before using a line as an edit_file/find_replace old_string.
+func withLineGutter(content string, firstLine int) string {
+	if content == "" {
+		return content
+	}
+	trailingNL := strings.HasSuffix(content, "\n")
+	body := content
+	if trailingNL {
+		body = body[:len(body)-1]
+	}
+	lines := strings.Split(body, "\n")
+	width := len(strconv.Itoa(firstLine + len(lines) - 1))
+	var sb strings.Builder
+	sb.Grow(len(content) + len(lines)*(width+1))
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		fmt.Fprintf(&sb, "%*d\t%s", width, firstLine+i, line)
+	}
+	if trailingNL {
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }
 
 func resolveReadRange(startLine, endLine *int) (start, end int) {
@@ -344,7 +392,7 @@ func resolveReadRange(startLine, endLine *int) (start, end int) {
 	return start, end
 }
 
-func readLineRange(src io.Reader, start, end int) (string, error) {
+func readLineRange(src io.Reader, start, end int) (string, bool, error) {
 	scanner := bufio.NewScanner(src)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024) // up to 4 MiB per line
 	var sb strings.Builder
@@ -363,14 +411,14 @@ func readLineRange(src io.Reader, start, end int) (string, error) {
 		sb.WriteString(scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if lineNo < start {
 		endLabel := fmt.Sprintf("%d", end)
 		if end < 0 {
 			endLabel = "EOF"
 		}
-		return fmt.Sprintf("(no lines in range %d–%s; file has %d lines)", start, endLabel, lineNo), nil
+		return fmt.Sprintf("(no lines in range %d–%s; file has %d lines)", start, endLabel, lineNo), false, nil
 	}
-	return sb.String(), nil
+	return sb.String(), true, nil
 }

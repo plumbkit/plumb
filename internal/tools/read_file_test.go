@@ -105,6 +105,55 @@ func TestReadFile_Basic(t *testing.T) {
 	}
 }
 
+func TestReadFile_LineNumberGutter(t *testing.T) {
+	// Whole-file read: gutter starts at 1 and the body content is preserved
+	// verbatim after the "<n>\t" prefix.
+	path := writeTextFile(t, "alpha\nbeta\ngamma\n")
+	out, err := callReadFile(t, map[string]any{"file_path": path})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	_, body, _ := strings.Cut(out, "\n\n") // header block, blank line, then content
+	want := "1\talpha\n2\tbeta\n3\tgamma\n"
+	if body != want {
+		t.Fatalf("gutter mismatch:\n got %q\nwant %q", body, want)
+	}
+}
+
+func TestReadFile_GutterRangeStartsAtFileLine(t *testing.T) {
+	// A sliced read numbers lines by their real file position, not 1.
+	path := writeTextFile(t, "l1\nl2\nl3\nl4\nl5\n")
+	start, end := 3, 4
+	out, err := callReadFile(t, map[string]any{"file_path": path, "start_line": start, "end_line": end})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "3\tl3") || !strings.Contains(out, "4\tl4") {
+		t.Fatalf("expected gutters 3/4 keyed to file lines, got:\n%s", out)
+	}
+}
+
+func TestWithLineGutter(t *testing.T) {
+	cases := []struct {
+		name      string
+		content   string
+		firstLine int
+		want      string
+	}{
+		{"empty stays empty", "", 1, ""},
+		{"trailing newline kept, no phantom line", "a\nb\n", 1, "1\ta\n2\tb\n"},
+		{"no trailing newline", "a\nb", 1, "1\ta\n2\tb"},
+		{"width grows with line number", "x\ny", 9, " 9\tx\n10\ty"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := withLineGutter(c.content, c.firstLine); got != c.want {
+				t.Fatalf("withLineGutter(%q, %d) = %q, want %q", c.content, c.firstLine, got, c.want)
+			}
+		})
+	}
+}
+
 func TestReadFile_FileURI(t *testing.T) {
 	path := writeTextFile(t, "content via URI\n")
 	out, err := callReadFile(t, map[string]any{"file_path": "file://" + path})

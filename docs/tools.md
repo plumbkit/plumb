@@ -42,6 +42,10 @@ These apply across many tools:
   header line — `# plumb-read mtime=<RFC3339Nano> sha256=<hash> indent=<…>` —
   whose `mtime`/`sha256` you can pass back to `edit_file` for optimistic
   concurrency checks.
+- **Line-number gutter.** `read_file` and `read_symbol` prefix every content
+  line with its 1-based file line number and a tab (`cat -n` style), so range
+  math is exact. The gutter is **display-only** — strip the leading `<n>\t`
+  before using a line as an `edit_file` or `find_replace` `old_string`.
 
 ---
 
@@ -195,11 +199,14 @@ window — either plumb's `start_line` + `end_line` (1-based, inclusive) or Clau
 Code's native `offset` (first line) + `limit` (line count). `start_line` and
 `offset` are synonyms; `limit` and `end_line` are mutually exclusive. Binary
 files rejected; output capped at 200 KiB. Emits the `# plumb-read …` header.
+Each content line carries a display-only 1-based line-number gutter (`<n>\t`,
+`cat -n` style) — strip it before reusing a line as an edit `old_string`.
 
 ### `read_symbol`
 Read the source body of a named symbol in one call (LSP `documentSymbol` +
 file read). **Inputs:** `path` (required), `name` (required — plain or dotted
-`ReceiverType.MethodName`). Returns all matches when ambiguous.
+`ReceiverType.MethodName`). Returns all matches when ambiguous. Body lines
+carry the same display-only line-number gutter as `read_file`.
 
 ### `read_multiple_files`
 Read up to 20 files in parallel; per-file errors reported inline. **Inputs:**
