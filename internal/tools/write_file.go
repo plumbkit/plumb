@@ -200,7 +200,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.Writes.Record(path)
+	t.deps.recordWritten(path)
 }
 
 func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, awaitFresh bool) string {

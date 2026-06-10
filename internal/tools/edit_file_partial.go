@@ -16,6 +16,7 @@ type partialEditResult struct {
 	index     int
 	applied   bool
 	lineRange string
+	note      string // advisory shown on success (e.g. gutter forgiveness fired)
 	err       error
 }
 
@@ -86,6 +87,9 @@ func formatPartialEditsResults(results []partialEditResult) string {
 			} else {
 				fmt.Fprintf(&sb, "  [%d] applied (no line change)\n", r.index)
 			}
+			if r.note != "" {
+				fmt.Fprintf(&sb, "      note: %s\n", r.note)
+			}
 		} else {
 			fmt.Fprintf(&sb, "  [%d] FAILED: %v\n", r.index, r.err)
 		}
@@ -103,7 +107,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, conte
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.Writes.Record(path)
+	t.deps.recordWritten(path)
 	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh))
 }
 
@@ -122,14 +126,16 @@ func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path st
 	if edit.OldStr == "" {
 		return content, partialEditResult{index: i, err: fmt.Errorf("old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range")}
 	}
-	oldStr := matchLineEndings(edit.OldStr, content)
-	newStr := matchLineEndings(edit.NewStr, content)
-	count := strings.Count(content, oldStr)
+	oldStr, newStr, count, stripped := resolveStrMatch(content, edit)
 	if count == 0 {
 		return content, partialEditResult{index: i, err: t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime)}
 	}
 	if !edit.ReplaceAll && count > 1 {
 		return content, partialEditResult{index: i, err: ambiguousError(i, count, path, edit.OldStr, oldStr)}
+	}
+	var note string
+	if stripped {
+		note = gutterStrippedNote
 	}
 	before := content
 	if edit.ReplaceAll {
@@ -137,7 +143,7 @@ func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path st
 	} else {
 		content = strings.Replace(content, oldStr, newStr, 1)
 	}
-	return content, partialEditResult{index: i, applied: true, lineRange: summariseLineChanges(before, content)}
+	return content, partialEditResult{index: i, applied: true, lineRange: summariseLineChanges(before, content), note: note}
 }
 
 // tryEditPartial reads the file and applies each edit independently.

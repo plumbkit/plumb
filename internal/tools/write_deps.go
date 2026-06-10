@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -183,4 +184,28 @@ func (d WriteDeps) notifyTopology(path string) {
 
 func (d WriteDeps) checkBoundary(path string) error {
 	return d.Boundary.check(path)
+}
+
+// recordWritten marks path as written by plumb this session in BOTH per-session
+// trackers. It is the single "this session now knows path's current state" seam,
+// called on every successful content write (edit_file, write_file, find_replace,
+// rename/copy destination, transaction).
+//
+//   - WriteTracker: powers the dirty-guard (re-editing a file plumb wrote is not
+//     blocked) and the read-time concurrent-edit warning.
+//   - ReadTracker: a write is as authoritative as a read for the file's current
+//     content, so recording the post-write mtime means (a) strict mode does not
+//     demand a re-read after the session's own edit, and (b) the
+//     changedSinceSessionRead staleness guard does not false-positive on the
+//     session's own consecutive writes (read → edit → edit no longer warns).
+//
+// Both calls stat under the caller's held per-path lock, so they observe the
+// same post-write mtime. nil-safe on both trackers.
+func (d WriteDeps) recordWritten(path string) {
+	d.Writes.Record(path)
+	if d.Reads != nil {
+		if info, err := os.Stat(path); err == nil {
+			d.Reads.Record(path, info.ModTime())
+		}
+	}
 }

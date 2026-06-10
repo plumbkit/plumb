@@ -156,5 +156,5 @@ func (t *CopyFile) copyFilePostWrite(ctx context.Context, to string) {
 	}
 	invalidateCache(t.deps.Cache, "file://"+to)
 	t.deps.notifyTopology(to)
-	t.deps.Writes.Record(to)
+	t.deps.recordWritten(to)
 }

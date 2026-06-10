@@ -278,7 +278,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+path)
-	t.deps.Writes.Record(path)
+	t.deps.recordWritten(path)
 	return nil
 }
 

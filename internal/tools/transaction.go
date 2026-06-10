@@ -393,7 +393,7 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-		t.deps.Writes.Record(p.path)
+		t.deps.recordWritten(p.path)
 	}
 }
 

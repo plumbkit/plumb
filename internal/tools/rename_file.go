@@ -155,5 +155,5 @@ func (t *RenameFile) renameFilePostRename(ctx context.Context, from, to string) 
 	// processDelete. Then enqueue to so the new path is indexed immediately.
 	t.deps.notifyTopology(from)
 	t.deps.notifyTopology(to)
-	t.deps.Writes.Record(to)
+	t.deps.recordWritten(to)
 }
