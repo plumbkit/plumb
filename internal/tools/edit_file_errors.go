@@ -50,6 +50,12 @@ func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtim
 		b.WriteString("\n  The file may have been modified since you last read it, or the string is incorrect.")
 		b.WriteString("\n  Use read_file to check the current content.")
 	}
+	// Multi-line unambiguous gutters are stripped automatically before this
+	// error can fire (resolveStrMatch); this hint covers the residue — a
+	// single guttered line, or a stripped form that still didn't match.
+	if looksGuttered(searched) {
+		b.WriteString("\n  Hint: old_string appears to include the display-only line-number gutter from read_file/read_symbol (\"<n>\\t\" at line start) — strip the gutter and retry.")
+	}
 	return errors.New(b.String())
 }
 
