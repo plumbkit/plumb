@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.17 (unreleased)
+
+The memory roadmap wave: `workspace_search` ranked discovery across code, docs, and memories, plus the topology ↔ memory join (CodeRef resolver, staleness surfacing, related-memory sections on the topology tools, once-per-session hint suppression).
+
 ## 0.9.16 (unreleased)
 
 Independent dual review of the Advanced Memory Engine (0.9.10) — a §1–7 checklist agent plus a 3-finder `/code-review` pass — surfaced one hot-path perf bug, two real correctness bugs, and a tail of minors a single-author self-review missed. This release fixes **every** finding (see `docs/internal/todo-to-review.md`): the memory hint path no longer re-reads project config on every `read_file`; `search_memories` no longer silently regresses substring search; the index no longer races its own shutdown; episodic summaries are accurate and always fire before eviction; and a round of redaction-coverage and dedup cleanups.
