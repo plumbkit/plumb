@@ -16,8 +16,9 @@ import (
 // message. A mismatch is a hard refusal — the file changed since the caller read
 // it, so the intended write would clobber an unseen change.
 //
-// This is the same check edit_file applies; write_file uses it so a full-content
-// overwrite gets the same guarantee a targeted edit already had.
+// Both write tools funnel through this one helper: write_file calls it directly,
+// and edit_file's checkExpectedVersion delegates here (wrapping a failure as an
+// edit-logic error), so the two enforce identical semantics and wording.
 func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error {
 	if expectedMtime != "" {
 		want, err := time.Parse(time.RFC3339Nano, expectedMtime)

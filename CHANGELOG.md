@@ -6,6 +6,8 @@ Independent dual review of the Advanced Memory Engine (0.9.10) — a §1–7 che
 
 ### Changed
 
+- **The optimistic-concurrency guards of `edit_file` and `write_file` now share one implementation.** `edit_file`'s `checkExpectedVersion` delegates to the shared `verifyExpectedVersion` (`write_guards.go`), keeping only its `reconcile` skip and `editLogicErr` wrapping. The ~25-line duplication was deliberate when shipped (0.9.15 kept churn off the then-concurrently-edited `edit_file` files); the 0.9.15 review accepted the guards and folded the siblings now the tree has settled. Behaviour-preserving — wording and semantics were already identical, and the existing guard tests for both tools pin them.
+
 - **Memory hint injection no longer re-reads `.plumb/config.toml` on the `read_file` hot path.** `enrichToolOutput` (run on every `read_file`/`edit_file`/`write_file`/`read_symbol`/`file_outline` success — thousands of `read_file` calls/session) called `memoryConfigFor(ws)` → `config.LoadProject`, doing an `os.ReadFile` + TOML parse + clone + validate of the project config **per call**, in violation of the `EnrichToolOutput` "must be cheap" contract. The resolved `[memory]` config is now snapshotted into the lock-free `sessionView` (seeded from global config at construction, swapped per project on every attach / re-pin / reload, exactly like `[edits]`/`[git]`/`[semantics]`), read via `s.memoryConfig()`. The same per-call load is removed from `memoryIndexLive`, `latestEpisodic`, and `generateEpisodicSummary`; `memoryConfigFor` is deleted. Guarded by `TestApplyProjectConfig_SnapshotsMemory`.
 
 ### Fixed

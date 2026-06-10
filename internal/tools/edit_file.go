@@ -287,45 +287,16 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 }
 
 // checkExpectedVersion enforces the optional optimistic-concurrency guards
-// (expected_mtime / expected_sha). Both are skipped when reconcile is set, so
-// the edit applies against current content relying on the exact-once match.
+// (expected_mtime / expected_sha) via the shared verifyExpectedVersion, wrapping
+// a failure as an edit-logic error so the retry loop never re-attempts it. Both
+// guards are skipped when reconcile is set, so the edit applies against current
+// content relying on the exact-once match.
 func checkExpectedVersion(path string, a editFileArgs) error {
 	if a.Reconcile {
 		return nil
 	}
-	if a.ExpectedMtime != "" {
-		want, err := time.Parse(time.RFC3339Nano, a.ExpectedMtime)
-		if err != nil {
-			return &editLogicErr{fmt.Errorf("edit_file: expected_mtime is not RFC3339Nano: %w", err)}
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
-		}
-		if !info.ModTime().Equal(want) {
-			return &editLogicErr{fmt.Errorf(
-				"edit_file: file %q was modified since you read it\n"+
-					"  expected_mtime: %s\n"+
-					"  current mtime:  %s\n"+
-					"  Re-read the file and try again",
-				path, want.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-			)}
-		}
-	}
-	if a.ExpectedSha != "" {
-		current, err := fileSHA256(path)
-		if err != nil {
-			return &editLogicErr{fmt.Errorf("edit_file: computing sha256 of %q: %w", path, err)}
-		}
-		if current != a.ExpectedSha {
-			return &editLogicErr{fmt.Errorf(
-				"edit_file: file %q content has changed since you read it\n"+
-					"  expected sha256: %s\n"+
-					"  current  sha256: %s\n"+
-					"  Re-read the file and try again",
-				path, a.ExpectedSha, current,
-			)}
-		}
+	if err := verifyExpectedVersion("edit_file", path, a.ExpectedMtime, a.ExpectedSha); err != nil {
+		return &editLogicErr{err}
 	}
 	return nil
 }
