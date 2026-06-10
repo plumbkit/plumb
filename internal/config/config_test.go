@@ -357,6 +357,9 @@ func TestDefaults_Memory(t *testing.T) {
 	if m.IdleSummaryMinutes != 0 {
 		t.Errorf("IdleSummaryMinutes default = %d, want 0 (falls back to session idle threshold)", m.IdleSummaryMinutes)
 	}
+	if m.GeneratedMemoryKeep != 50 {
+		t.Errorf("GeneratedMemoryKeep default = %d, want 50", m.GeneratedMemoryKeep)
+	}
 }
 
 func TestDefaults_TopologyResyncPacingAndInterval(t *testing.T) {

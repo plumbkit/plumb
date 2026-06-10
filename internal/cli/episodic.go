@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/redact"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -54,11 +55,11 @@ func (s *connSession) generateEpisodicSummary() {
 	if err != nil || len(calls) == 0 {
 		return
 	}
-	summary, touched, readN, writeN := buildEpisodic(calls)
-	if summary == "" {
+	detail := buildEpisodicDetail(calls, ws)
+	if detail.Summary == "" {
 		return
 	}
-	summary, _ = redact.Redact(summary)
+	summary, _ := redact.Redact(detail.Summary)
 	summary = clampBytes(summary, episodicBudget(mcfg))
 	s.statsStore.RecordEpisodic(stats.Episodic{
 		Workspace:    ws,
@@ -66,10 +67,31 @@ func (s *connSession) generateEpisodicSummary() {
 		SessionName:  s.view().sessName,
 		GeneratedAt:  time.Now(),
 		Summary:      summary,
-		TouchedFiles: touched,
-		ReadCount:    readN,
-		WriteCount:   writeN,
+		TouchedFiles: detail.Touched,
+		ReadCount:    detail.ReadN,
+		WriteCount:   detail.WriteN,
 	})
+	s.writeGeneratedEpisodicMemory(ws, mcfg, summary, detail)
+}
+
+func (s *connSession) writeGeneratedEpisodicMemory(ws string, mcfg config.MemoryConfig, summary string, detail episodicDetail) {
+	if len(detail.SourcePaths) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	name := fmt.Sprintf("episodic-%s-%s", now.Format("20060102-150405"), shortSessionID(s.sessID))
+	description := "Generated session summary"
+	body := summary + "\n"
+	ix := s.memoryIndexLive()
+	_ = memory.WriteGenerated(ix, ws, name, description, body, memory.Provenance{
+		Confidence:    memory.ConfidenceGenerated,
+		SourceSession: s.sessID,
+		SourcePaths:   detail.SourcePaths,
+		SourceSymbols: detail.SourceSymbols,
+		SourceCalls:   detail.SourceCalls,
+		CreatedAt:     now,
+	})
+	_, _ = memory.PruneGeneratedEpisodic(ix, ws, mcfg.GeneratedMemoryKeep)
 }
 
 func episodicBudget(m config.MemoryConfig) int {
@@ -79,53 +101,113 @@ func episodicBudget(m config.MemoryConfig) int {
 	return 1024
 }
 
+type episodicDetail struct {
+	Summary       string
+	Touched       []string
+	SourcePaths   []string
+	SourceSymbols []string
+	SourceCalls   []string
+	ReadN         int
+	WriteN        int
+}
+
 // buildEpisodic derives a one-or-two sentence summary plus the touched-file list
 // and read/write counts from a session's calls. Pure and deterministic — no LLM.
 // Single pass: each call's InputJSON is unmarshalled exactly once.
 func buildEpisodic(calls []stats.Call) (summary string, touched []string, readN, writeN int) {
-	touched, symbols, readN, writeN := tallyEpisodic(calls)
-	if readN == 0 && writeN == 0 && len(touched) == 0 {
-		return "", nil, 0, 0
+	d := buildEpisodicDetail(calls, "")
+	return d.Summary, d.Touched, d.ReadN, d.WriteN
+}
+
+func buildEpisodicDetail(calls []stats.Call, workspace string) episodicDetail {
+	d := tallyEpisodic(calls, workspace)
+	if d.ReadN == 0 && d.WriteN == 0 && len(d.Touched) == 0 {
+		return episodicDetail{}
 	}
-	sort.Strings(touched)
-	sort.Strings(symbols)
-	return renderEpisodic(touched, symbols, readN, writeN), touched, readN, writeN
+	sort.Strings(d.Touched)
+	sort.Strings(d.SourcePaths)
+	sort.Strings(d.SourceSymbols)
+	sort.Strings(d.SourceCalls)
+	d.Summary = renderEpisodic(d.Touched, d.SourceSymbols, d.ReadN, d.WriteN)
+	return d
 }
 
 // tallyEpisodic does the single unmarshal pass: each call's InputJSON is decoded
-// exactly once, classified read-vs-write, and mined for touched paths (basenames,
-// deduped) and symbol names.
-func tallyEpisodic(calls []stats.Call) (touched, symbols []string, readN, writeN int) {
+// exactly once, classified read-vs-write, and mined for touched paths, source
+// paths, called tools, and symbol names.
+func tallyEpisodic(calls []stats.Call, workspace string) episodicDetail {
+	d := episodicDetail{}
 	seenFile := map[string]bool{}
+	seenSourcePath := map[string]bool{}
 	seenSym := map[string]bool{}
+	seenCall := map[string]bool{}
 	for _, c := range calls {
 		var args map[string]any
 		_ = json.Unmarshal([]byte(c.InputJSON), &args) // nil map on error; reads below are nil-safe
+		if c.Tool != "" && !seenCall[c.Tool] {
+			seenCall[c.Tool] = true
+			d.SourceCalls = append(d.SourceCalls, c.Tool)
+		}
 		if isEpisodicWrite(c.Tool, args) {
-			writeN++
-			touched = appendTouched(touched, seenFile, args)
+			d.WriteN++
+			d.Touched = appendTouched(d.Touched, seenFile, args)
+			d.SourcePaths = appendSourcePaths(d.SourcePaths, seenSourcePath, args, workspace)
 		} else {
-			readN++
+			d.ReadN++
 		}
 		if episodicSymbolTools[c.Tool] {
 			if name, _ := args["name"].(string); name != "" && !seenSym[name] {
 				seenSym[name] = true
-				symbols = append(symbols, name)
+				d.SourceSymbols = append(d.SourceSymbols, name)
 			}
 		}
 	}
-	return touched, symbols, readN, writeN
+	return d
 }
 
 // appendTouched adds the deduped basenames of a write call's paths to touched.
 func appendTouched(touched []string, seen map[string]bool, args map[string]any) []string {
 	for _, p := range touchedPaths(args) {
-		if rel := filepath.Base(p); rel != "." && rel != "/" && rel != "" && !seen[rel] {
+		if rel := filepath.Base(strings.TrimPrefix(p, "file://")); rel != "." && rel != "/" && rel != "" && !seen[rel] {
 			seen[rel] = true
 			touched = append(touched, rel)
 		}
 	}
 	return touched
+}
+
+func appendSourcePaths(out []string, seen map[string]bool, args map[string]any, workspace string) []string {
+	for _, p := range touchedPaths(args) {
+		rel := episodicRelPath(workspace, p)
+		if rel == "" || seen[rel] {
+			continue
+		}
+		seen[rel] = true
+		out = append(out, rel)
+	}
+	return out
+}
+
+func episodicRelPath(workspace, raw string) string {
+	raw = strings.TrimPrefix(raw, "file://")
+	if raw == "" {
+		return ""
+	}
+	if filepath.IsAbs(raw) {
+		if workspace == "" {
+			return filepath.ToSlash(filepath.Clean(raw))
+		}
+		rel, err := filepath.Rel(workspace, raw)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return ""
+		}
+		return filepath.ToSlash(rel)
+	}
+	rel := filepath.Clean(raw)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 // renderEpisodic formats the human-readable summary sentence from the tallies.
@@ -172,10 +254,10 @@ func touchedPaths(args map[string]any) []string {
 	return out
 }
 
-// stringPaths pulls the file_path/path/from/to string values from one arg map.
+// stringPaths pulls the file_path/path/from/to/uri string values from one arg map.
 func stringPaths(m map[string]any) []string {
 	var out []string
-	for _, key := range []string{"file_path", "path", "from", "to"} {
+	for _, key := range []string{"file_path", "path", "from", "to", "uri"} {
 		if v, ok := m[key].(string); ok && v != "" {
 			out = append(out, v)
 		}

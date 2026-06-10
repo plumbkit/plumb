@@ -58,3 +58,27 @@ func TestReadMemory_UserMemoryHasNoFooter(t *testing.T) {
 		t.Errorf("user memory must not show a provenance footer:\n%s", out)
 	}
 }
+
+func TestWriteMemory_PathsFrontmatterFeedsRelevantMemories(t *testing.T) {
+	ws := t.TempDir()
+	tool := NewWriteMemory(func() string { return ws })
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{
+		"name":"auth-notes",
+		"content":"Auth flow notes.",
+		"description":"Auth notes",
+		"paths":["internal/auth/**", "cmd/server/*.go"]
+	}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	mems, err := memory.Relevant(ws, "internal/auth/login.go")
+	if err != nil {
+		t.Fatalf("Relevant: %v", err)
+	}
+	if len(mems) != 1 || mems[0].Name != "auth-notes" {
+		t.Fatalf("expected auth-notes relevant to internal/auth/login.go, got %+v", mems)
+	}
+	if !mems[0].MatchesPath("cmd/server/main.go") {
+		t.Fatalf("expected second path glob to be stored, got %+v", mems[0].Paths)
+	}
+}

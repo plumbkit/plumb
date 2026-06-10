@@ -100,9 +100,21 @@ func Read(workspace, name string) (string, error) {
 	return string(data), nil
 }
 
+// WriteOptions controls optional frontmatter emitted by WriteWithOptions.
+type WriteOptions struct {
+	Description string
+	Paths       []string
+}
+
 // Write atomically writes a memory. If description is non-empty, frontmatter
 // is prepended (replacing any existing frontmatter in content).
 func Write(workspace, name, content, description string) error {
+	return WriteWithOptions(workspace, name, content, WriteOptions{Description: description})
+}
+
+// WriteWithOptions atomically writes a memory. If Description or Paths is set,
+// frontmatter is prepended (replacing any existing frontmatter in content).
+func WriteWithOptions(workspace, name, content string, opts WriteOptions) error {
 	path, err := Path(workspace, name)
 	if err != nil {
 		return err
@@ -110,16 +122,21 @@ func Write(workspace, name, content, description string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating memories dir: %w", err)
 	}
-	if description != "" {
+	paths := dedupeStrings(opts.Paths)
+	if opts.Description != "" || len(paths) > 0 {
 		_, body := splitFrontmatter([]byte(content))
 		var sb strings.Builder
 		sb.WriteString("---\n")
 		sb.WriteString("name: ")
 		sb.WriteString(name)
 		sb.WriteString("\n")
-		sb.WriteString("description: ")
-		sb.WriteString(strings.ReplaceAll(description, "\n", " "))
-		sb.WriteString("\n---\n\n")
+		if opts.Description != "" {
+			sb.WriteString("description: ")
+			sb.WriteString(frontmatterScalar(opts.Description))
+			sb.WriteString("\n")
+		}
+		writeListLine(&sb, "paths", paths)
+		sb.WriteString("---\n\n")
 		sb.Write(body)
 		content = sb.String()
 	}
@@ -130,12 +147,22 @@ func Write(workspace, name, content, description string) error {
 	return os.Rename(tmp, path)
 }
 
+func frontmatterScalar(s string) string {
+	return strings.ReplaceAll(s, "\n", " ")
+}
+
 // WriteIndexed writes a memory and updates the FTS index. The file write is the
 // source of truth: an index error is logged and swallowed (the next Reindex or
 // Fresh check repairs it) and never fails the write. A nil index degrades to a
 // plain Write.
 func WriteIndexed(ix *Index, workspace, name, content, description string) error {
-	if err := Write(workspace, name, content, description); err != nil {
+	return WriteIndexedWithOptions(ix, workspace, name, content, WriteOptions{Description: description})
+}
+
+// WriteIndexedWithOptions writes a memory with optional frontmatter and updates
+// the FTS index. A nil index degrades to a plain WriteWithOptions.
+func WriteIndexedWithOptions(ix *Index, workspace, name, content string, opts WriteOptions) error {
+	if err := WriteWithOptions(workspace, name, content, opts); err != nil {
 		return err
 	}
 	if ix == nil {
@@ -165,6 +192,53 @@ func DeleteIndexed(ix *Index, workspace, name string) error {
 		slog.Warn("memory: index remove failed", "name", name, "err", err)
 	}
 	return nil
+}
+
+// PruneGeneratedEpisodic keeps the newest keep generated episodic memories and
+// deletes older ones. Only plumb-created memories whose name starts with
+// "episodic-" and whose provenance says confidence=generated are eligible.
+// keep <= 0 disables pruning.
+func PruneGeneratedEpisodic(ix *Index, workspace string, keep int) (int, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	mems, err := List(workspace)
+	if err != nil {
+		return 0, err
+	}
+	type candidate struct {
+		name string
+		at   int64
+	}
+	var cs []candidate
+	for _, m := range mems {
+		if !strings.HasPrefix(m.Name, "episodic-") {
+			continue
+		}
+		rec, err := ReadMeta(workspace, m.Name)
+		if err != nil || rec.Confidence != ConfidenceGenerated {
+			continue
+		}
+		at := rec.CreatedAt.UnixNano()
+		if at == 0 {
+			if st, statErr := os.Stat(m.Path); statErr == nil {
+				at = st.ModTime().UnixNano()
+			}
+		}
+		cs = append(cs, candidate{name: m.Name, at: at})
+	}
+	if len(cs) <= keep {
+		return 0, nil
+	}
+	sort.Slice(cs, func(i, j int) bool { return cs[i].at > cs[j].at })
+	deleted := 0
+	for _, c := range cs[keep:] {
+		if err := DeleteIndexed(ix, workspace, c.name); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // Relevant returns memories whose `paths:` frontmatter contains a glob

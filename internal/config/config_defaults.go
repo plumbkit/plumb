@@ -59,6 +59,7 @@ var defaults = Config{
 		EpisodicBudgetBytes: 1024,
 		MaxHints:            3,
 		IdleSummaryMinutes:  0,
+		GeneratedMemoryKeep: 50,
 	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // TestWriteGenerated_EmitsPathsGlob proves a generated memory carries a `paths:`
@@ -106,5 +107,41 @@ func TestWriteGenerated_IndexedSourcePathsSearchable(t *testing.T) {
 	}
 	if hits[0].Field != "source_paths" && hits[0].Field != "path" {
 		t.Errorf("expected source_paths/path field label, got %q", hits[0].Field)
+	}
+}
+
+func TestPruneGeneratedEpisodic_OnlyDeletesOldGeneratedEpisodic(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := OpenIndex(ws)
+	if err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	defer ix.Close()
+	for i, name := range []string{"episodic-old", "episodic-new"} {
+		created := time.Date(2026, 6, 9, 12, i, 0, 0, time.UTC)
+		if err := WriteGenerated(ix, ws, name, "session", "body", Provenance{CreatedAt: created}); err != nil {
+			t.Fatalf("WriteGenerated(%s): %v", name, err)
+		}
+	}
+	if err := Write(ws, "episodic-user", "user body", "user desc"); err != nil {
+		t.Fatalf("Write user memory: %v", err)
+	}
+	if err := WriteGenerated(ix, ws, "general-generated", "general", "body", Provenance{}); err != nil {
+		t.Fatalf("WriteGenerated general: %v", err)
+	}
+	deleted, err := PruneGeneratedEpisodic(ix, ws, 1)
+	if err != nil {
+		t.Fatalf("PruneGeneratedEpisodic: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+	if _, err := Read(ws, "episodic-old"); err == nil {
+		t.Fatal("episodic-old should have been pruned")
+	}
+	for _, name := range []string{"episodic-new", "episodic-user", "general-generated"} {
+		if _, err := Read(ws, name); err != nil {
+			t.Fatalf("%s should remain: %v", name, err)
+		}
 	}
 }

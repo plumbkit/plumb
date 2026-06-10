@@ -37,6 +37,9 @@ func validate(cfg Config) error {
 	if err := validateSemantics(cfg.Semantics); err != nil {
 		return err
 	}
+	if err := validateMemory(cfg.Memory); err != nil {
+		return err
+	}
 	switch cfg.UI.PathStyle {
 	case "", "compact", "truncate-middle", "full":
 	default:
@@ -79,6 +82,25 @@ func validateSemantics(s SemanticsConfig) error {
 	}
 	if s.Timeout.Duration < 0 {
 		return fmt.Errorf("semantics.timeout must be non-negative")
+	}
+	return nil
+}
+
+func validateMemory(m MemoryConfig) error {
+	if m.HintBudgetBytes < 0 {
+		return fmt.Errorf("memory.hint_budget_bytes must be non-negative")
+	}
+	if m.EpisodicBudgetBytes < 0 {
+		return fmt.Errorf("memory.episodic_budget_bytes must be non-negative")
+	}
+	if m.MaxHints < 0 {
+		return fmt.Errorf("memory.max_hints must be non-negative")
+	}
+	if m.IdleSummaryMinutes < 0 {
+		return fmt.Errorf("memory.idle_summary_minutes must be non-negative")
+	}
+	if m.GeneratedMemoryKeep < 0 {
+		return fmt.Errorf("memory.generated_memory_keep must be non-negative (0 disables pruning)")
 	}
 	return nil
 }

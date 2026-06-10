@@ -297,16 +297,28 @@ memory, then writes under locks, rolling back on partial failure. **Inputs:**
 ## Memory
 
 Per-workspace markdown notes at `<workspace>/.plumb/memories/`, also exposed as
-MCP resources. Names are constrained to `[A-Za-z0-9_-]+`.
+MCP resources. Names are constrained to `[A-Za-z0-9_-]+`. Markdown files are the
+source of truth; `<workspace>/.plumb/memory.db` is only a rebuildable search index.
+
+Agents should call `write_memory` for durable project knowledge: conventions,
+architecture decisions, gotchas, validation commands, or resolved bugs. Pass
+workspace-relative `paths` globs when the note applies to specific files; those
+frontmatter globs drive `relevant_memories` and automatic path hints.
 
 | Tool | Purpose | Inputs |
 |---|---|---|
 | `list_memories` | List all memory names + descriptions. | optional workspace |
 | `read_memory` | Read one memory. | memory name |
-| `write_memory` | Create or overwrite a memory. | name, content, optional description |
+| `write_memory` | Create or overwrite a memory. | name, content, optional description, optional paths globs |
 | `delete_memory` | Remove a memory. | memory name |
-| `search_memories` | Pattern search across memory bodies. | search pattern |
-| `relevant_memories` | Memories relevant to a given file path. | file path |
+| `search_memories` | Ranked FTS search with grep fallback across memory bodies. | search pattern |
+| `relevant_memories` | Memories whose `paths:` frontmatter matches a file path. | file path |
+
+When `[memory] generated_summaries = true`, plumb also writes conservative,
+redacted generated memories for idle sessions that touched workspace files. These
+are named `episodic-*`, carry generated provenance, and are pruned by
+`[memory] generated_memory_keep` (default 50; 0 disables pruning). They summarise
+activity only; they do not infer architectural lessons.
 
 ---
 

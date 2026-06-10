@@ -281,6 +281,9 @@ type MemoryConfig struct {
 	// IdleSummaryMinutes is the idle threshold before an episodic summary is
 	// generated. 0 falls back to Session.IdleThresholdMinutes. Default 0.
 	IdleSummaryMinutes int `toml:"idle_summary_minutes"`
+	// GeneratedMemoryKeep caps how many generated episodic markdown memories are
+	// retained per workspace. 0 disables pruning. Default 50.
+	GeneratedMemoryKeep int `toml:"generated_memory_keep"`
 }
 
 // SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by

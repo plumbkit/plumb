@@ -220,6 +220,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"episodic_budget_bytes", fmt.Sprintf("%d", mem.EpisodicBudgetBytes), sourceFor("episodic_budget_bytes", dmem.EpisodicBudgetBytes, gmem.EpisodicBudgetBytes, mem.EpisodicBudgetBytes)},
 		{"max_hints", fmt.Sprintf("%d", mem.MaxHints), sourceFor("max_hints", dmem.MaxHints, gmem.MaxHints, mem.MaxHints)},
 		{"idle_summary_minutes", fmt.Sprintf("%d", mem.IdleSummaryMinutes), sourceFor("idle_summary_minutes", dmem.IdleSummaryMinutes, gmem.IdleSummaryMinutes, mem.IdleSummaryMinutes)},
+		{"generated_memory_keep", fmt.Sprintf("%d", mem.GeneratedMemoryKeep), sourceFor("generated_memory_keep", dmem.GeneratedMemoryKeep, gmem.GeneratedMemoryKeep, mem.GeneratedMemoryKeep)},
 	})
 
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {

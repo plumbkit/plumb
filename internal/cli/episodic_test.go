@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/redact"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -213,7 +215,6 @@ func TestClampBytes(t *testing.T) {
 // seed a session's tool_calls → generateEpisodicSummary reads them, builds a
 // summary, redacts it, and writes it via the stats Writer → read it back through
 // the same LatestEpisodic accessor session_start uses. This is the
-// idle→episodic→surface loop minus the reaper trigger (covered separately below).
 func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	ws := t.TempDir()
@@ -234,7 +235,7 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	}
 	now := time.Now()
 	for _, c := range []stats.Call{
-		{Workspace: ws, SessionID: s.sessID, Tool: "edit_file", CalledAt: now, InputJSON: `{"file_path":"/p/auth.go"}`, Success: true},
+		{Workspace: ws, SessionID: s.sessID, Tool: "edit_file", CalledAt: now, InputJSON: fmt.Sprintf(`{"file_path":%q}`, filepath.Join(ws, "auth.go")), Success: true},
 		{Workspace: ws, SessionID: s.sessID, Tool: "find_references", CalledAt: now, InputJSON: `{"name":"UserSession"}`, Success: true},
 		{Workspace: ws, SessionID: s.sessID, Tool: "read_file", CalledAt: now, InputJSON: `{}`, Success: true},
 	} {
@@ -270,6 +271,16 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	}
 	if got.WriteCount != 1 || got.ReadCount != 2 {
 		t.Errorf("counts: write=%d read=%d (want 1/2)", got.WriteCount, got.ReadCount)
+	}
+	mems, err := memory.List(ws)
+	if err != nil {
+		t.Fatalf("memory.List: %v", err)
+	}
+	if len(mems) != 1 || !strings.HasPrefix(mems[0].Name, "episodic-") {
+		t.Fatalf("expected one generated episodic memory, got %+v", mems)
+	}
+	if !mems[0].MatchesPath("auth.go") {
+		t.Fatalf("generated memory should attach to auth.go, paths=%v", mems[0].Paths)
 	}
 }
 
