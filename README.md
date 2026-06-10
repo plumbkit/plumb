@@ -28,6 +28,8 @@ Leaving an agent to edit a codebase for an hour is only viable if writes can't c
 - **Crash-resilient daemon** — `plumb serve` is a reconnecting proxy. If the daemon crashes or hangs, it respawns one and replays the handshake; the agent never notices. In-flight writes are never silently re-run.
 - **Optimistic concurrency** — mtime/sha guards catch stale edits before they clobber newer changes.
 
+See it run: [`docs/demos/`](docs/demos/) has a self-contained two-agents-one-file demo where a stale write is refused with a clear message and nothing is lost.
+
 ### 2. Semantic intelligence
 The same primitives your editor has, exposed as structured tools:
 

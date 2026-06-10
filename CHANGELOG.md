@@ -24,6 +24,8 @@ The memory roadmap wave: `workspace_search` ranked discovery across code, docs, 
 
 ### Documentation
 
+- **Runnable "two agents, one file" demo (review-plan Positioning W2).** `docs/demos/two-agents-one-file.sh` is a self-contained, reproducible demo: it builds or finds a plumb binary, spins up an isolated HOME with its own daemon, drives two real `plumb serve` sessions over stdio, and shows the guardrail live: Agent B's edit lands, Agent A's stale guarded edit is refused with the "was modified since you read it" message, the final file keeps B's change, and `workspace_sessions` shows both agents. The demo mirrors the B4 test scenarios by design, so the pitch and the test suite prove the same thing; linked from the README's write-safety pillar.
+
 - **Platform and adapter claims now match the retested reality (review-plan B2 W1).** `README.md` no longer claims Linux real-binary validation: macOS only, with Linux integration running in CI and being hardened pre-v1; the experimental tier row now says navigation works against the real servers while diagnostics validation is still in progress. `AGENTS.md`'s adapter-validation intro and the zls / typescript-language-server / kotlin-language-server rows replace the stale "skips until the binary is on PATH" story with the 2026-06-10 retest result: `TestIntegration_DocumentSymbols` passes but `TestIntegration_DidChangeWatchedFiles` fails (zls and typescript-language-server appear to use pull diagnostics; kotlin-language-server needs a real Gradle/Maven project), so the three stay experimental until pull-diagnostics support lands.
 
 ## 0.9.16 (unreleased)
