@@ -76,6 +76,7 @@ type ReadFile struct {
 	guard        BoundaryGuard
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
+	outlineFn    func(string) bool   // may be nil; reports whether the path has a structural engine (file_outline is worthwhile)
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
@@ -129,6 +130,20 @@ func (t *ReadFile) outsideLabel(path string) string {
 	return t.outsideFn(path)
 }
 
+// WithOutlineHint wires an accessor reporting whether path has a structural
+// engine (Go AST, tree-sitter, including Markdown/config) so a one-call
+// file_outline would return a useful map. read_file uses it to gate the
+// large-read nudge — a suggestion to call file_outline on a big structured file
+// is only helpful when there is structure to outline. Nil-safe (no nudge).
+func (t *ReadFile) WithOutlineHint(fn func(string) bool) *ReadFile {
+	t.outlineFn = fn
+	return t
+}
+
+func (t *ReadFile) outlineSupported(path string) bool {
+	return t.outlineFn != nil && t.outlineFn(path)
+}
+
 func (t *ReadFile) Name() string                 { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
 func (t *ReadFile) Description() string {
@@ -179,9 +194,40 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	t.tracker.Record(fpath, mtime)
 	concurrentNote := t.concurrentEditNote(fpath, mtime)
 
+	body, err := readFileBody(fpath, a)
+	if err != nil {
+		return "", err
+	}
+
+	sha, err := fileSHA256(fpath)
+	if err != nil {
+		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
+	}
+
+	firstLine := 1
+	if body.start != nil && *body.start > 1 {
+		firstLine = *body.start
+	}
+	largeNote := t.largeReadNote(fpath, len(body.content), body.truncated, body.ranged)
+	return t.formatOutput(mtime, sha, body.content, firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
+}
+
+// readBody is the decoded result of reading (a slice of) a file.
+type readBody struct {
+	content   string
+	hasLines  bool // real content vs an "(no lines in range …)" placeholder
+	truncated bool // hit the 200 KiB hard cap
+	ranged    bool // a start_line/end_line/offset/limit window was requested
+	start     *int // resolved first line (nil ⇒ from line 1)
+}
+
+// readFileBody opens fpath, rejects binaries, applies the optional line window,
+// and caps the result at maxReadFileBytes. Extracted from Execute so the
+// orchestrator stays under the complexity bound.
+func readFileBody(fpath string, a readFileArgs) (readBody, error) {
 	f, err := os.Open(fpath)
 	if err != nil {
-		return "", fmt.Errorf("read_file: %w", err)
+		return readBody{}, fmt.Errorf("read_file: %w", err)
 	}
 	defer f.Close()
 
@@ -192,17 +238,17 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	n, _ := io.ReadFull(f, sniff)
 	sniff = sniff[:n]
 	if bytes.IndexByte(sniff, 0) >= 0 {
-		return "", fmt.Errorf("read_file: %q appears to be a binary file", fpath)
+		return readBody{}, fmt.Errorf("read_file: %q appears to be a binary file", fpath)
 	}
 	src := io.MultiReader(bytes.NewReader(sniff), f)
 
 	start, end, err := resolveLineWindow(a)
 	if err != nil {
-		return "", fmt.Errorf("read_file: %w", err)
+		return readBody{}, fmt.Errorf("read_file: %w", err)
 	}
 	content, hasLines, err := readContentMaybeRanged(src, start, end)
 	if err != nil {
-		return "", fmt.Errorf("read_file: %w", err)
+		return readBody{}, fmt.Errorf("read_file: %w", err)
 	}
 
 	truncated := false
@@ -213,24 +259,34 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		}
 		truncated = true
 	}
+	return readBody{content: content, hasLines: hasLines, truncated: truncated, ranged: start != nil || end != nil, start: start}, nil
+}
 
-	sha, err := fileSHA256(fpath)
-	if err != nil {
-		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
-	}
+// largeReadFileThreshold is the whole-file body size above which read_file
+// nudges toward file_outline. Well below the 200 KiB hard cap but above a
+// typical client's comfortable token budget for a single file, so the agent is
+// pointed at the structural map before its own context cap (which plumb cannot
+// see) forces a spill. 32 KiB ≈ 8k–10k tokens.
+const largeReadFileThreshold = 32 * 1024
 
-	firstLine := 1
-	if start != nil && *start > 1 {
-		firstLine = *start
+// largeReadNote returns a one-line nudge toward file_outline when an unranged,
+// non-truncated read returns a large body for a structurally-known file. It is
+// suppressed for ranged reads (the agent is already slicing), truncated reads
+// (the truncation note already names file_outline), and paths with no
+// structural engine (nothing useful to outline). Returns "" otherwise.
+func (t *ReadFile) largeReadNote(path string, size int, truncated, ranged bool) string {
+	if truncated || ranged || size <= largeReadFileThreshold || !t.outlineSupported(path) {
+		return ""
 	}
-	return t.formatOutput(mtime, sha, content, firstLine, hasLines, truncated, t.outsideLabel(fpath), concurrentNote), nil
+	return fmt.Sprintf("# plumb-note: large file (%d KiB) — file_outline returns its structure "+
+		"in ~200 tokens (symbols/sections, no bodies); read_file with start_line/end_line reads a slice\n", size/1024)
 }
 
 // formatOutput assembles the read_file response: the plumb-read header line
 // (mtime + optional sha + indent), an optional edit-lane hint line for clients
 // whose native Edit tool conflicts with plumb's read-state, a blank separator,
 // then the (possibly truncated) content.
-func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, firstLine int, number, truncated bool, outsideLabel, concurrentNote string) string {
+func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, firstLine int, number, truncated bool, outsideLabel, concurrentNote, largeNote string) string {
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
 	// lines/chars describe the body actually returned (a ranged read reflects the
@@ -245,6 +301,9 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, firstLine 
 	}
 	if concurrentNote != "" {
 		sb.WriteString(concurrentNote)
+	}
+	if largeNote != "" {
+		sb.WriteString(largeNote)
 	}
 	if outsideLabel != "" {
 		fmt.Fprintf(&sb, "# plumb-note: read-only — outside the workspace (%s); not editable\n", outsideLabel)

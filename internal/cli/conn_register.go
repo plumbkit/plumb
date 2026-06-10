@@ -9,11 +9,22 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/tools"
 )
+
+// hasStructuralEngine reports whether path is owned by a language with a
+// structural extractor (Go AST or tree-sitter, including Markdown/config), so a
+// file_outline call would return a useful map. Wired into read_file to gate its
+// large-read nudge. Stateless and connection-independent — a package function,
+// not a method.
+func hasStructuralEngine(path string) bool {
+	l, ok := langsupport.ByPath(path)
+	return ok && l.Structural != langsupport.EngineNone
+}
 
 // buildWriteDeps assembles the WriteDeps struct used by all write tools.
 func (s *connSession) buildWriteDeps() tools.WriteDeps {
@@ -75,7 +86,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary))
 	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewListDirectory(s.workspace).WithBoundary(boundary))
-	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker))
+	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithOutlineHint(hasStructuralEngine))
 	srv.Register(tools.NewReadSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.readTracker).WithTopologyFallback(topoFn).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel))
 	srv.Register(tools.NewReadMultipleFiles().WithBoundary(boundary))
 	wd := s.buildWriteDeps()

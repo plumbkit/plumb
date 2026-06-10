@@ -29,6 +29,56 @@ func callReadFile(t *testing.T, args map[string]any) (string, error) {
 	return NewReadFile(nil).Execute(context.Background(), raw)
 }
 
+// largeBody builds content over the large-read nudge threshold.
+func largeBody() []byte {
+	return []byte(strings.Repeat("# section\nsome content line here\n", 2000)) // ~58 KiB
+}
+
+func TestReadFile_LargeReadNudge(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.md")
+	_ = os.WriteFile(path, largeBody(), 0o644)
+	tool := NewReadFile(nil).WithOutlineHint(func(string) bool { return true })
+
+	raw, _ := json.Marshal(map[string]any{"file_path": path})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "file_outline") || !strings.Contains(out, "large file") {
+		t.Fatalf("expected a large-read file_outline nudge:\n%s", out[:200])
+	}
+}
+
+func TestReadFile_LargeReadNudge_Suppressed(t *testing.T) {
+	large := largeBody()
+	cases := []struct {
+		name string
+		tool *ReadFile
+		args map[string]any
+		body []byte
+	}{
+		{"no structural engine", NewReadFile(nil).WithOutlineHint(func(string) bool { return false }), map[string]any{}, large},
+		{"ranged read", NewReadFile(nil).WithOutlineHint(func(string) bool { return true }), map[string]any{"start_line": 1, "end_line": 50}, large},
+		{"small file", NewReadFile(nil).WithOutlineHint(func(string) bool { return true }), map[string]any{}, []byte("tiny\n")},
+		{"no hint wired", NewReadFile(nil), map[string]any{}, large},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "f.md")
+			_ = os.WriteFile(path, c.body, 0o644)
+			c.args["file_path"] = path
+			raw, _ := json.Marshal(c.args)
+			out, err := c.tool.Execute(context.Background(), raw)
+			if err != nil {
+				t.Fatalf("read_file: %v", err)
+			}
+			if strings.Contains(out, "large file") {
+				t.Fatalf("nudge must be suppressed for %s:\n%s", c.name, out[:200])
+			}
+		})
+	}
+}
+
 func TestReadFile_HeaderLineAndCharCounts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "multibyte.txt")
 	// 3 lines; contains multibyte glyphs so chars < bytes.
