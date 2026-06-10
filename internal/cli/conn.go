@@ -65,6 +65,7 @@ type sessionView struct {
 	git       config.GitConfig
 	ws        config.WorkspaceConfig
 	semantics config.SemanticsConfig
+	memory    config.MemoryConfig
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.
@@ -190,6 +191,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		git:       cfg.Git,
 		ws:        cfg.Workspace,
 		semantics: cfg.Semantics,
+		memory:    cfg.Memory,
 	})
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
@@ -308,6 +310,14 @@ func (s *connSession) isStrict() bool {
 // editsConfig returns the current resolved edits config.
 func (s *connSession) editsConfig() config.EditsConfig {
 	return s.view().edits
+}
+
+// memoryConfig returns the current resolved [memory] config off the lock-free
+// snapshot (seeded at construction from global config, swapped per project on
+// every attach / re-pin / reload). Lets the hot read_file hint path read the
+// config without re-reading and re-parsing .plumb/config.toml per call.
+func (s *connSession) memoryConfig() config.MemoryConfig {
+	return s.view().memory
 }
 
 // gitConfig returns the current resolved git tool config.

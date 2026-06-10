@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.16 (unreleased)
+
+Independent dual review of the Advanced Memory Engine (0.9.10) — a §1–7 checklist agent plus a 3-finder `/code-review` pass — surfaced one hot-path perf bug, two real correctness bugs, and a tail of minors a single-author self-review missed. This release fixes **every** finding (see `docs/internal/todo-to-review.md`): the memory hint path no longer re-reads project config on every `read_file`; `search_memories` no longer silently regresses substring search; the index no longer races its own shutdown; episodic summaries are accurate and always fire before eviction; and a round of redaction-coverage and dedup cleanups.
+
+### Changed
+
+- **Memory hint injection no longer re-reads `.plumb/config.toml` on the `read_file` hot path.** `enrichToolOutput` (run on every `read_file`/`edit_file`/`write_file`/`read_symbol`/`file_outline` success — thousands of `read_file` calls/session) called `memoryConfigFor(ws)` → `config.LoadProject`, doing an `os.ReadFile` + TOML parse + clone + validate of the project config **per call**, in violation of the `EnrichToolOutput` "must be cheap" contract. The resolved `[memory]` config is now snapshotted into the lock-free `sessionView` (seeded from global config at construction, swapped per project on every attach / re-pin / reload, exactly like `[edits]`/`[git]`/`[semantics]`), read via `s.memoryConfig()`. The same per-call load is removed from `memoryIndexLive`, `latestEpisodic`, and `generateEpisodicSummary`; `memoryConfigFor` is deleted. Guarded by `TestApplyProjectConfig_SnapshotsMemory`.
+
 ## 0.9.15 (unreleased)
 
 The **multi-agent coexistence wave** — a concurrency-safety and reconnect-robustness pass distilled from the 0.9.10–0.9.12 review sessions (see `internal/feedbacks.md` and the *Multi-agent coexistence wave* plan in `docs/internal/todo-to-review.md`). The single-agent loop was already solid; every fresh friction was about agents and humans coexisting in one repo. This release closes the write-path gaps that let a concurrent peer's or a human's edit be clobbered without warning (optimistic + automatic session-aware guards on both write tools, with a ReadTracker-refresh fix so a session's own edits aren't mis-flagged), points agents at `file_outline` both when a read is truncated *and* proactively when a large under-cap read would trip the client's token budget, makes a daemon restart both self-explaining (errors) and *proactively announced* (a one-shot reconnect note on the next tool result), and closes the 0.9.14 line-number-gutter decision with measured overhead and a cross-client round-trip test.

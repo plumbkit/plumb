@@ -39,7 +39,7 @@ func (s *connSession) generateEpisodicSummary() {
 	if ws == "" {
 		return
 	}
-	mcfg := s.memoryConfigFor(ws)
+	mcfg := s.memoryConfig()
 	if !mcfg.GeneratedSummaries {
 		return
 	}

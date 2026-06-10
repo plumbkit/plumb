@@ -205,6 +205,37 @@ func TestGlobalConfigChange_ReappliesSession(t *testing.T) {
 	}
 }
 
+// TestApplyProjectConfig_SnapshotsMemory asserts the [memory] block is captured
+// into the session view by applyProjectConfig, so memoryConfig() (read on the
+// hot read_file hint path) returns the project-resolved value without a per-call
+// disk read of .plumb/config.toml.
+func TestApplyProjectConfig_SnapshotsMemory(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Project overrides two toggles; leaves generated_summaries to inherit global.
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[memory]\ninject_hints = false\nenabled = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := config.NewStore(config.Defaults()) // global: all memory toggles on
+	s := &connSession{store: store}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
+
+	s.applyProjectConfig(ws)
+
+	mc := s.memoryConfig()
+	if mc.InjectHints || mc.Enabled {
+		t.Errorf("project [memory] overrides not snapshotted into the view: %+v", mc)
+	}
+	if !mc.GeneratedSummaries {
+		t.Error("un-overridden generated_summaries should inherit the global default (true)")
+	}
+}
+
 // writeGlobalConfig writes body to the global config path resolved from the
 // test's XDG_CONFIG_HOME, creating the parent directory.
 func writeGlobalConfig(t *testing.T, body string) {

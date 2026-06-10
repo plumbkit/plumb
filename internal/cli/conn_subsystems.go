@@ -91,17 +91,6 @@ func (s *connSession) reconcileTopologyStore(workspace string) {
 	})
 }
 
-// memoryConfigFor returns the merged per-project [memory] config for workspace,
-// so a per-project enable/disable wins over the global default.
-func (s *connSession) memoryConfigFor(workspace string) config.MemoryConfig {
-	base := s.store.Current()
-	cfg, err := config.LoadProject(base, workspace)
-	if err != nil {
-		return base.Memory
-	}
-	return cfg.Memory
-}
-
 // memoryIndexLive returns the FTS index for the connection's current workspace,
 // or nil when memory indexing is disabled, no workspace is attached, or the
 // index cannot be opened. The pool opens the index lazily on first call.
@@ -110,7 +99,7 @@ func (s *connSession) memoryIndexLive() *memory.Index {
 		return nil
 	}
 	ws := s.view().acquiredRoot
-	if ws == "" || !s.memoryConfigFor(ws).Enabled {
+	if ws == "" || !s.memoryConfig().Enabled {
 		return nil
 	}
 	return s.memoryPool.Acquire(ws)
@@ -120,7 +109,7 @@ func (s *connSession) memoryIndexLive() *memory.Index {
 // for the session_start "Last session" block. ok=false when summaries are
 // disabled or none exists.
 func (s *connSession) latestEpisodic(ws string) (string, bool) {
-	if !s.memoryConfigFor(ws).GeneratedSummaries {
+	if !s.memoryConfig().GeneratedSummaries {
 		return "", false
 	}
 	ro, err := stats.SharedReadOnly()

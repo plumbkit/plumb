@@ -68,7 +68,7 @@ func (s *connSession) enrichToolOutput(_ context.Context, name string, args json
 	if ws == "" {
 		return text
 	}
-	mcfg := s.memoryConfigFor(ws)
+	mcfg := s.memoryConfig()
 	if !mcfg.InjectHints {
 		return text
 	}
