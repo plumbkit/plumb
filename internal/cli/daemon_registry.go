@@ -113,7 +113,11 @@ func (r *connRegistry) summariseIdle(threshold time.Duration) {
 }
 
 // evictIdle cancels connections whose sessions have been idle longer than ttl.
-// A zero or negative ttl is a no-op (eviction disabled).
+// A zero or negative ttl is a no-op (eviction disabled). It also summarises an
+// idle session that has not yet been summarised this spell BEFORE cancelling it,
+// so a session whose eviction TTL is shorter than the episodic-summary threshold
+// still gets a "Last session" summary (the summary goroutine reads only the
+// atomic view + the daemon-global stats writer, so it completes after teardown).
 func (r *connRegistry) evictIdle(ttl time.Duration) {
 	if ttl <= 0 {
 		return
@@ -123,7 +127,7 @@ func (r *connRegistry) evictIdle(ttl time.Duration) {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	var summaries, cancels []func()
 	for _, info := range infos {
 		lastSeen := info.LastSeenAt
 		if lastSeen.IsZero() {
@@ -132,10 +136,25 @@ func (r *connRegistry) evictIdle(ttl time.Duration) {
 		if time.Since(lastSeen) < ttl {
 			continue
 		}
-		if h, ok := r.conns[info.ID]; ok && h.cancel != nil {
-			slog.Info("daemon: evicting idle session", "session", info.Name, "last_seen", lastSeen)
-			h.cancel()
+		h, ok := r.conns[info.ID]
+		if !ok {
+			continue
 		}
+		if h.summarise != nil && lastSeen.After(r.summarisedAt[info.ID]) {
+			r.summarisedAt[info.ID] = lastSeen
+			summaries = append(summaries, h.summarise)
+		}
+		if h.cancel != nil {
+			slog.Info("daemon: evicting idle session", "session", info.Name, "last_seen", lastSeen)
+			cancels = append(cancels, h.cancel)
+		}
+	}
+	r.mu.Unlock()
+	for _, fn := range summaries {
+		go fn()
+	}
+	for _, fn := range cancels {
+		fn()
 	}
 }
 
@@ -152,13 +171,16 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 				return
 			}
 			cur := store.Current()
-			if cur.Memory.GeneratedSummaries {
-				thr := cur.Memory.IdleSummaryMinutes
-				if thr == 0 {
-					thr = cur.Session.IdleThresholdMinutes
-				}
-				registry.summariseIdle(time.Duration(thr) * time.Minute)
+			// Always run summariseIdle (no global gate): the per-session closure
+			// re-checks the project [memory] config, so a per-project episodic
+			// opt-in is honoured even when the global default is off. The threshold
+			// is global-resolved (Memory.IdleSummaryMinutes, falling back to
+			// Session.IdleThresholdMinutes).
+			thr := cur.Memory.IdleSummaryMinutes
+			if thr == 0 {
+				thr = cur.Session.IdleThresholdMinutes
 			}
+			registry.summariseIdle(time.Duration(thr) * time.Minute)
 			registry.evictIdle(time.Duration(cur.Session.EvictionTTLMinutes) * time.Minute)
 		}
 	}

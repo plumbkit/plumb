@@ -14,14 +14,16 @@ import (
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
-// episodicWriteTools are the tools that mutate files; a call to one counts as a
-// write and contributes its target path to the "touched files" list.
+// episodicWriteTools are the tools that unconditionally mutate files; a call to
+// one counts as a write and contributes its target path(s) to the "touched
+// files" list. find_replace is NOT here — it is a write only when it actually
+// applies (apply==true); its default dry-run is a read (see isEpisodicWrite).
 var episodicWriteTools = map[string]bool{
 	"write_file": true, "edit_file": true, "delete_file": true,
 	"rename_file": true, "copy_file": true, "transaction_apply": true,
 	"rename_symbol": true, "replace_symbol_body": true,
 	"insert_before_symbol": true, "insert_after_symbol": true,
-	"safe_delete_symbol": true, "find_replace": true,
+	"safe_delete_symbol": true,
 }
 
 // episodicSymbolTools are LSP/navigation tools whose `name` argument is a symbol
@@ -79,14 +81,55 @@ func episodicBudget(m config.MemoryConfig) int {
 
 // buildEpisodic derives a one-or-two sentence summary plus the touched-file list
 // and read/write counts from a session's calls. Pure and deterministic — no LLM.
+// Single pass: each call's InputJSON is unmarshalled exactly once.
 func buildEpisodic(calls []stats.Call) (summary string, touched []string, readN, writeN int) {
-	touched = episodicTouchedFiles(calls)
-	symbols := episodicSymbols(calls)
-	readN, writeN = episodicCounts(calls)
+	touched, symbols, readN, writeN := tallyEpisodic(calls)
 	if readN == 0 && writeN == 0 && len(touched) == 0 {
 		return "", nil, 0, 0
 	}
+	sort.Strings(touched)
+	sort.Strings(symbols)
+	return renderEpisodic(touched, symbols, readN, writeN), touched, readN, writeN
+}
 
+// tallyEpisodic does the single unmarshal pass: each call's InputJSON is decoded
+// exactly once, classified read-vs-write, and mined for touched paths (basenames,
+// deduped) and symbol names.
+func tallyEpisodic(calls []stats.Call) (touched, symbols []string, readN, writeN int) {
+	seenFile := map[string]bool{}
+	seenSym := map[string]bool{}
+	for _, c := range calls {
+		var args map[string]any
+		_ = json.Unmarshal([]byte(c.InputJSON), &args) // nil map on error; reads below are nil-safe
+		if isEpisodicWrite(c.Tool, args) {
+			writeN++
+			touched = appendTouched(touched, seenFile, args)
+		} else {
+			readN++
+		}
+		if episodicSymbolTools[c.Tool] {
+			if name, _ := args["name"].(string); name != "" && !seenSym[name] {
+				seenSym[name] = true
+				symbols = append(symbols, name)
+			}
+		}
+	}
+	return touched, symbols, readN, writeN
+}
+
+// appendTouched adds the deduped basenames of a write call's paths to touched.
+func appendTouched(touched []string, seen map[string]bool, args map[string]any) []string {
+	for _, p := range touchedPaths(args) {
+		if rel := filepath.Base(p); rel != "." && rel != "/" && rel != "" && !seen[rel] {
+			seen[rel] = true
+			touched = append(touched, rel)
+		}
+	}
+	return touched
+}
+
+// renderEpisodic formats the human-readable summary sentence from the tallies.
+func renderEpisodic(touched, symbols []string, readN, writeN int) string {
 	var sb strings.Builder
 	sb.WriteString("In your last session you ")
 	if len(touched) > 0 {
@@ -101,63 +144,36 @@ func buildEpisodic(calls []stats.Call) (summary string, touched []string, readN,
 		fmt.Fprintf(&sb, " and looked at %s", joinBackticked(symbols, 3))
 	}
 	sb.WriteString(".")
-	return sb.String(), touched, readN, writeN
+	return sb.String()
 }
 
-func episodicCounts(calls []stats.Call) (readN, writeN int) {
-	for _, c := range calls {
-		if episodicWriteTools[c.Tool] {
-			writeN++
-		} else {
-			readN++
-		}
+// isEpisodicWrite reports whether a call mutated files. find_replace is a write
+// only when it actually applied (apply==true); its default dry-run is a read.
+func isEpisodicWrite(tool string, args map[string]any) bool {
+	if tool == "find_replace" {
+		apply, _ := args["apply"].(bool)
+		return apply
 	}
-	return readN, writeN
+	return episodicWriteTools[tool]
 }
 
-func episodicTouchedFiles(calls []stats.Call) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, c := range calls {
-		if !episodicWriteTools[c.Tool] {
-			continue
-		}
-		for _, p := range pathsFromArgs(c.InputJSON) {
-			rel := filepath.Base(p)
-			if rel == "" || seen[rel] {
-				continue
+// touchedPaths extracts file paths from a write tool's args: the top-level
+// file_path/path/from/to, plus each entry of a transaction_apply's operations[]
+// array (whose paths are nested, not top-level).
+func touchedPaths(args map[string]any) []string {
+	out := stringPaths(args)
+	if ops, ok := args["operations"].([]any); ok {
+		for _, op := range ops {
+			if m, ok := op.(map[string]any); ok {
+				out = append(out, stringPaths(m)...)
 			}
-			seen[rel] = true
-			out = append(out, rel)
 		}
 	}
-	sort.Strings(out)
 	return out
 }
 
-func episodicSymbols(calls []stats.Call) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, c := range calls {
-		if !episodicSymbolTools[c.Tool] {
-			continue
-		}
-		if name := stringField(c.InputJSON, "name"); name != "" && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// pathsFromArgs extracts file path arguments (file_path, path, from, to) from a
-// tool's JSON input. Best-effort: malformed JSON yields nothing.
-func pathsFromArgs(inputJSON string) []string {
-	var m map[string]any
-	if json.Unmarshal([]byte(inputJSON), &m) != nil {
-		return nil
-	}
+// stringPaths pulls the file_path/path/from/to string values from one arg map.
+func stringPaths(m map[string]any) []string {
 	var out []string
 	for _, key := range []string{"file_path", "path", "from", "to"} {
 		if v, ok := m[key].(string); ok && v != "" {
@@ -165,17 +181,6 @@ func pathsFromArgs(inputJSON string) []string {
 		}
 	}
 	return out
-}
-
-func stringField(inputJSON, key string) string {
-	var m map[string]any
-	if json.Unmarshal([]byte(inputJSON), &m) != nil {
-		return ""
-	}
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
 }
 
 func joinBackticked(items []string, max int) string {

@@ -61,6 +61,121 @@ func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 	}
 }
 
+// TestBuildEpisodic_TransactionAndFindReplace: transaction_apply paths are
+// nested under operations[], and find_replace is a write only when it applied.
+func TestBuildEpisodic_TransactionAndFindReplace(t *testing.T) {
+	calls := []stats.Call{
+		{Tool: "transaction_apply", InputJSON: `{"operations":[{"path":"/ws/a.go"},{"from":"/ws/b.go","to":"/ws/c.go"}]}`},
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/dry.go","apply":false}`},    // dry-run → read
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/applied.go","apply":true}`}, // applied → write
+	}
+	summary, touched, readN, writeN := buildEpisodic(calls)
+	if writeN != 2 {
+		t.Errorf("writeN = %d, want 2 (transaction_apply + applied find_replace)", writeN)
+	}
+	if readN != 1 {
+		t.Errorf("readN = %d, want 1 (the dry-run find_replace)", readN)
+	}
+	want := map[string]bool{"a.go": true, "b.go": true, "c.go": true, "applied.go": true}
+	for _, f := range touched {
+		if !want[f] {
+			t.Errorf("unexpected touched file %q", f)
+		}
+		delete(want, f)
+	}
+	if len(want) > 0 {
+		t.Errorf("missing touched files: %v (got %v)", want, touched)
+	}
+	if strings.Contains(summary, "dry.go") {
+		t.Errorf("a dry-run find_replace must not contribute a touched file: %s", summary)
+	}
+}
+
+// TestEvictIdle_SummarisesBeforeCancel: an idle session past the eviction TTL is
+// summarised (once) before its connection is cancelled — so a short eviction TTL
+// never robs a session of its episodic summary.
+func TestEvictIdle_SummarisesBeforeCancel(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	sessID, err := session.Register(session.Info{Name: "evict-test", DaemonVersion: "test"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("session.Dir: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, sessID+".json"), old, old); err != nil {
+		t.Fatalf("age session: %v", err)
+	}
+
+	var summarised, cancelled int32
+	reg := newConnRegistry()
+	reg.add(sessID, connHandle{
+		summarise: func() { atomic.AddInt32(&summarised, 1) },
+		cancel:    func() { atomic.AddInt32(&cancelled, 1) },
+	})
+
+	reg.evictIdle(1 * time.Minute) // idle 2min > 1min ttl
+	deadline := time.After(time.Second)
+	for atomic.LoadInt32(&summarised) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("evictIdle did not summarise the session before eviction")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if atomic.LoadInt32(&cancelled) != 1 {
+		t.Errorf("expected the session to be cancelled once, got %d", cancelled)
+	}
+	// A second eviction pass must not re-summarise (dedup).
+	reg.evictIdle(1 * time.Minute)
+	time.Sleep(50 * time.Millisecond)
+	if n := atomic.LoadInt32(&summarised); n != 1 {
+		t.Errorf("expected exactly one summarise, got %d", n)
+	}
+}
+
+// TestRunIdleReaper_SummarisesWhenGlobalSummariesOff: the reaper fires the
+// per-session summarise closure even when the GLOBAL generated_summaries is off,
+// so a per-project episodic opt-in (re-checked inside the closure) is reachable.
+func TestRunIdleReaper_SummarisesWhenGlobalSummariesOff(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	sessID, err := session.Register(session.Info{Name: "reaper-test", DaemonVersion: "test"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	dir, _ := session.Dir()
+	old := time.Now().Add(-40 * time.Minute) // past the default 30min idle threshold
+	if err := os.Chtimes(filepath.Join(dir, sessID+".json"), old, old); err != nil {
+		t.Fatalf("age session: %v", err)
+	}
+
+	cfg := config.Defaults()
+	cfg.Memory.GeneratedSummaries = false // GLOBAL off
+	cfg.Session.EvictionTTLMinutes = 0    // disable eviction to isolate the summarise path
+	store := config.NewStore(cfg)
+
+	var summarised int32
+	reg := newConnRegistry()
+	reg.add(sessID, connHandle{summarise: func() { atomic.AddInt32(&summarised, 1) }})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := make(chan time.Time)
+	go runIdleReaper(ctx, store, reg, ticks)
+	ticks <- time.Now()
+
+	deadline := time.After(time.Second)
+	for atomic.LoadInt32(&summarised) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("reaper did not summarise an idle session with global summaries off (per-project opt-in unreachable)")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestClampBytes(t *testing.T) {
 	if got := clampBytes("short", 0); got != "short" {
 		t.Errorf("zero budget should be a no-op, got %q", got)
