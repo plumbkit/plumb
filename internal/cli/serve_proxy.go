@@ -83,9 +83,15 @@ type reconnectingProxy struct {
 	initializeID       string
 	initializedFrame   []byte
 	initializeAnswered bool
+	// daemonVersion is the serverInfo.version the connected daemon reported in
+	// its initialize response — the authoritative version for the reconnect
+	// note. A long-lived proxy predates an upgraded daemon, so its own compiled
+	// Version must never stand in for the daemon's; "" until a handshake
+	// response has been seen.
+	daemonVersion string
 
 	reqMu       sync.Mutex
-	outstanding map[string]json.RawMessage
+	outstanding map[string]outstandingReq
 
 	// reconnected is set when the proxy transparently re-establishes the daemon
 	// connection (only ever inside reconnect(), which fires solely on an
@@ -125,7 +131,7 @@ func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
 		conn:         deps.initial,
 		fr:           newFrameReader(deps.initial),
 		gen:          1,
-		outstanding:  make(map[string]json.RawMessage),
+		outstanding:  make(map[string]outstandingReq),
 		pongCh:       make(map[string]chan struct{}),
 	}
 	p.daemonPID.Store(int64(readDaemonPID()))
@@ -203,7 +209,7 @@ func (p *reconnectingProxy) pumpClientToDaemon(ctx context.Context) error {
 		for {
 			gen, werr := p.writeDaemon(frame)
 			if werr == nil {
-				p.trackOutstanding(frame) // only once the frame has actually reached the daemon
+				p.trackOutstanding(frame, gen) // only once the frame has actually reached the daemon
 				break
 			}
 			if ctx.Err() != nil {
@@ -285,16 +291,35 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) {
 	}
 }
 
+// outstandingReq is one confirmed-sent, unanswered request: its wire id plus
+// the connection generation it was written under. The generation is what lets
+// a reconnect sweep distinguish requests sent to a dead daemon (gen < current)
+// from requests already re-issued on the fresh connection.
+type outstandingReq struct {
+	id  json.RawMessage
+	gen uint64
+}
+
 // trackOutstanding records a request id as in-flight — but only AFTER the frame
 // was successfully written to the daemon. Tracking before the write would let a
-// reconnect's failOutstanding synthesise a -32000 for a request the pump then
-// re-sends to the fresh daemon: a double response, and an auto-replay of a write
-// the "never auto-replay" contract forbids. By tracking only confirmed-sent
-// requests, a request whose write failed is simply re-sent once (it never
-// reached a daemon), while a confirmed-sent request that the daemon dies before
-// answering gets exactly one synthesised retryable error. The initialize request
-// is excluded — it is resolved by replayHandshake, not failOutstanding.
-func (p *reconnectingProxy) trackOutstanding(frame []byte) {
+// reconnect's sweep synthesise a -32000 for a request the pump then re-sends to
+// the fresh daemon: a double response, and an auto-replay of a write the "never
+// auto-replay" contract forbids. By tracking only confirmed-sent requests, a
+// request whose write failed is simply re-sent once (it never reached a
+// daemon), while a confirmed-sent request that the daemon dies before answering
+// gets exactly one synthesised retryable error. The initialize request is
+// excluded — it is resolved by replayHandshake, not the sweep.
+//
+// Track-after-write leaves one race: the daemon can die — and the reconnect
+// sweep run — in the gap between the successful write and the store below,
+// which would orphan the request forever (the client hangs until its own
+// timeout; reproduced as the proxy-test family's long-standing load flake).
+// The post-store generation check closes it: if the connection generation
+// advanced past writeGen while we were storing, the entry was written to a
+// dead daemon and a sweep may already have missed it — sweep again now.
+// Whichever of the two sweeps deletes the entry synthesises the error, so the
+// client gets exactly one response either way.
+func (p *reconnectingProxy) trackOutstanding(frame []byte, writeGen uint64) {
 	e := parseEnvelope(frame)
 	if !e.isRequest() {
 		return
@@ -307,8 +332,11 @@ func (p *reconnectingProxy) trackOutstanding(frame []byte) {
 		return
 	}
 	p.reqMu.Lock()
-	p.outstanding[key] = cloneBytes(e.ID)
+	p.outstanding[key] = outstandingReq{id: cloneBytes(e.ID), gen: writeGen}
 	p.reqMu.Unlock()
+	if gen := p.generation(); gen != writeGen {
+		p.failOutstandingBelow(gen)
+	}
 }
 
 func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {
@@ -319,7 +347,7 @@ func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {
 		if p.deliverPong(key) {
 			return // heartbeat pong — never forwarded to the client
 		}
-		p.resolveResponse(key)
+		p.resolveResponse(key, frame)
 		frame = p.annotateReconnect(frame)
 	}
 	p.writeClient(frame)
@@ -342,7 +370,10 @@ func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
 	if !p.reconnected.Load() {
 		return frame
 	}
-	annotated, ok := injectReconnectNote(frame, Version)
+	p.hsMu.Lock()
+	daemonV := p.daemonVersion
+	p.hsMu.Unlock()
+	annotated, ok := injectReconnectNote(frame, daemonV, Version)
 	if !ok {
 		return frame // not a tool result — keep the note armed for the next response
 	}
@@ -351,12 +382,18 @@ func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
 }
 
 // resolveResponse marks the initialize handshake answered or de-tracks a
-// completed request so it is not error-synthesised on a later reconnect.
-func (p *reconnectingProxy) resolveResponse(key string) {
+// completed request so it is not error-synthesised on a later reconnect. The
+// initialize response also carries the daemon's serverInfo.version, captured
+// here so the reconnect note can report the daemon's version rather than this
+// proxy's own.
+func (p *reconnectingProxy) resolveResponse(key string, frame []byte) {
 	p.hsMu.Lock()
 	isInit := key == p.initializeID
 	if isInit {
 		p.initializeAnswered = true
+		if v := serverInfoVersion(frame); v != "" {
+			p.daemonVersion = v
+		}
 	}
 	p.hsMu.Unlock()
 	if !isInit {
@@ -402,13 +439,17 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 		if err == nil {
 			fr, herr := p.replayHandshake(conn)
 			if herr == nil {
-				p.failOutstanding()
 				// Arm the one-shot reconnect note BEFORE publishing: publish makes
 				// the new connection live to the pumps, so a tool call can be
 				// written and its result processed the instant publish returns. Set
 				// the flag first so that first post-reconnect result always sees it.
 				p.reconnected.Store(true)
 				gen := p.publish(conn, fr)
+				// Sweep AFTER the generation bump so a request tracked late (the
+				// track-after-write gap) is detectable as stale by gen comparison;
+				// entries written on the fresh connection carry the new gen and are
+				// never swept.
+				p.failOutstandingBelow(gen)
 				p.daemonPID.Store(int64(readDaemonPID())) // track the PID we are now connected to
 				slog.Warn("serve: reconnected to daemon after failure", "attempt", attempt, "generation", gen)
 				return nil
@@ -479,6 +520,11 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 			p.hsMu.Lock()
 			answered := p.initializeAnswered
 			p.initializeAnswered = true
+			// The replayed response comes from the freshly started daemon — the
+			// version the upcoming reconnect note must report.
+			if v := serverInfoVersion(frame); v != "" {
+				p.daemonVersion = v
+			}
 			p.hsMu.Unlock()
 			if !answered {
 				p.writeClient(frame)
@@ -489,15 +535,20 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 	}
 }
 
-// failOutstanding synthesises a retryable JSON-RPC error for every in-flight
-// request so the client is never left waiting for a response the dead daemon
-// will never send. The initialize request is excluded — it is resolved by
+// failOutstandingBelow synthesises a retryable JSON-RPC error for every
+// in-flight request written under a connection generation older than gen, so
+// the client is never left waiting for a response a dead daemon will never
+// send. Requests written on the current connection (gen == current) are left
+// alone. The initialize request is excluded — it is resolved by
 // replayHandshake.
-func (p *reconnectingProxy) failOutstanding() {
+func (p *reconnectingProxy) failOutstandingBelow(gen uint64) {
 	p.reqMu.Lock()
 	ids := make([]json.RawMessage, 0, len(p.outstanding))
-	for k, raw := range p.outstanding {
-		ids = append(ids, raw)
+	for k, req := range p.outstanding {
+		if req.gen >= gen {
+			continue
+		}
+		ids = append(ids, req.id)
 		delete(p.outstanding, k)
 	}
 	p.reqMu.Unlock()

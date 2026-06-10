@@ -100,17 +100,54 @@ func cloneBytes(b []byte) []byte {
 	return c
 }
 
+// serverInfoVersion extracts result.serverInfo.version from an initialize
+// response frame. Fail-safe like the injector below: any shape mismatch —
+// an error response, missing serverInfo, malformed JSON — returns "".
+func serverInfoVersion(frame []byte) string {
+	var resp struct {
+		Result struct {
+			ServerInfo struct {
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frame, &resp); err != nil {
+		return ""
+	}
+	return resp.Result.ServerInfo.Version
+}
+
+// reconnectNoteText builds the reconnect note. The daemon's own reported
+// version leads; when it differs from this proxy's compiled version the note
+// also says so — a long-lived `plumb serve` keeps running the old binary
+// after a daemon upgrade, and the agent/user otherwise has no in-band signal
+// of that lag. An unknown daemon version falls back to the proxy's.
+func reconnectNoteText(daemonVersion, proxyVersion string) string {
+	const tail = " — your session state (read-tracking, caches) was rebuilt " +
+		"and tool-output behaviour may have changed since your previous call."
+	if daemonVersion == "" || daemonVersion == proxyVersion {
+		v := daemonVersion
+		if v == "" {
+			v = proxyVersion
+		}
+		return fmt.Sprintf("# plumb-note: plumb daemon reconnected (now %s)%s", v, tail)
+	}
+	return fmt.Sprintf("# plumb-note: plumb daemon reconnected (daemon now %s; this serve proxy is still %s — start a new client session to refresh it)%s",
+		daemonVersion, proxyVersion, tail)
+}
+
 // injectReconnectNote appends a one-shot informational note as an extra text
 // content item to a tools/call result frame, so the agent learns its plumb
 // daemon was transparently reconnected (and may have changed behaviour) on the
-// first response after a reconnect.
+// first response after a reconnect. The note reports the daemon's own version
+// (see reconnectNoteText).
 //
 // It is deliberately additive — it only *appends* a content item, never edits
 // existing text — and fully fail-safe: any frame that is not a well-formed MCP
 // tools/call result (an error response, a result with no content array,
 // anything that does not round-trip) is returned unchanged with ok=false, so a
 // malformed injection can never corrupt a real tool result.
-func injectReconnectNote(frame []byte, version string) (out []byte, ok bool) {
+func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string) (out []byte, ok bool) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(frame, &full); err != nil {
 		return frame, false
@@ -134,8 +171,7 @@ func injectReconnectNote(frame []byte, version string) (out []byte, ok bool) {
 	}
 	note, err := json.Marshal(map[string]string{
 		"type": "text",
-		"text": fmt.Sprintf("# plumb-note: plumb daemon reconnected (now %s) — your session state "+
-			"(read-tracking, caches) was rebuilt and tool-output behaviour may have changed since your previous call.", version),
+		"text": reconnectNoteText(daemonVersion, proxyVersion),
 	})
 	if err != nil {
 		return frame, false
