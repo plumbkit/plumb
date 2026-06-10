@@ -92,6 +92,41 @@ func TestList_EmptyDirectory(t *testing.T) {
 	}
 }
 
+// TestRelevant_DelegatesToMatchesPath proves Relevant returns exactly the
+// memories whose paths globs match, agreeing with MatchesPath (which it now
+// delegates to). Covers a basename glob, a path-anchored glob, and a non-match.
+func TestRelevant_DelegatesToMatchesPath(t *testing.T) {
+	ws := t.TempDir()
+	write := func(name, paths string) {
+		content := "---\nname: " + name + "\ndescription: d\npaths: " + paths + "\n---\n\nbody"
+		if err := Write(ws, name, content, ""); err != nil {
+			t.Fatalf("Write %q: %v", name, err)
+		}
+	}
+	write("auth", "internal/auth/**")
+	write("anygo", "*.go")
+	write("nopaths-here", "cmd/specific.go")
+
+	got, err := Relevant(ws, "internal/auth/login.go")
+	if err != nil {
+		t.Fatalf("Relevant: %v", err)
+	}
+	names := map[string]bool{}
+	for _, m := range got {
+		names[m.Name] = true
+		// Relevant must agree with MatchesPath for the same path.
+		if !m.MatchesPath("internal/auth/login.go") {
+			t.Errorf("Relevant returned %q but MatchesPath disagrees", m.Name)
+		}
+	}
+	if !names["auth"] || !names["anygo"] {
+		t.Errorf("expected auth + anygo to match internal/auth/login.go, got %v", names)
+	}
+	if names["nopaths-here"] {
+		t.Errorf("cmd/specific.go glob must not match internal/auth/login.go")
+	}
+}
+
 func TestWrite_OverwriteReplacesFrontmatter(t *testing.T) {
 	ws := t.TempDir()
 	if err := Write(ws, "x", "first content\n", "first description"); err != nil {

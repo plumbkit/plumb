@@ -3,6 +3,7 @@ package stats
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -459,5 +460,71 @@ func TestOpenReadOnlyOldSchemaTellsUserToDeleteDB(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "delete") || !strings.Contains(err.Error(), "fresh global stats database") {
 		t.Fatalf("OpenReadOnly error = %q, want delete instruction", err)
+	}
+}
+
+// episodicColumns returns the column shape of episodic_memories as
+// "name type notnull dflt pk" rows, for byte-comparing two database states.
+func episodicColumns(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query("PRAGMA table_info(episodic_memories)")
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		cols = append(cols, fmt.Sprintf("%s %s notnull=%d dflt=%q pk=%d", name, ctype, notnull, dflt.String, pk))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(cols) == 0 {
+		t.Fatal("episodic_memories has no columns (table missing?)")
+	}
+	return cols
+}
+
+// TestEpisodicSchemaParity proves a fresh database (baseline schema) and a
+// migrated database (v7→v8 step) produce a byte-identical episodic_memories
+// table — the single episodicMemoriesDDL const guarantees it, this guards it.
+func TestEpisodicSchemaParity(t *testing.T) {
+	// Fresh: full baseline schema.
+	fresh, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "fresh.db"))
+	if err != nil {
+		t.Fatalf("open fresh: %v", err)
+	}
+	defer fresh.Close()
+	if _, err := fresh.Exec(schema); err != nil {
+		t.Fatalf("apply baseline schema: %v", err)
+	}
+
+	// Migrated: a v7 database (tool_calls only) brought to v8 via migrate.
+	migrated, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrated.db"))
+	if err != nil {
+		t.Fatalf("open migrated: %v", err)
+	}
+	defer migrated.Close()
+	if _, err := migrated.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+		t.Fatalf("seed v7 schema: %v", err)
+	}
+	if err := migrate(migrated, 7, SchemaVersion); err != nil {
+		t.Fatalf("migrate 7→%d: %v", SchemaVersion, err)
+	}
+
+	fc, mc := episodicColumns(t, fresh), episodicColumns(t, migrated)
+	if len(fc) != len(mc) {
+		t.Fatalf("column count differs: fresh=%v migrated=%v", fc, mc)
+	}
+	for i := range fc {
+		if fc[i] != mc[i] {
+			t.Errorf("column %d differs:\n fresh:    %s\n migrated: %s", i, fc[i], mc[i])
+		}
 	}
 }

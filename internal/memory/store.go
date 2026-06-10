@@ -170,14 +170,10 @@ func Relevant(workspace, relPath string) ([]Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	relPath = filepath.ToSlash(relPath)
 	var out []Memory
 	for _, m := range mems {
-		for _, glob := range m.Paths {
-			if matchGlob(glob, relPath) {
-				out = append(out, m)
-				break
-			}
+		if m.MatchesPath(relPath) {
+			out = append(out, m)
 		}
 	}
 	return out, nil
@@ -196,6 +192,13 @@ func (m Memory) MatchesPath(relPath string) bool {
 }
 
 // matchGlob handles a glob with optional ** segments against a slash path.
+//
+// A slashless glob is matched against the path's BASENAME first, anywhere in the
+// tree — this is intentional: a memory tagged `paths: config.go` or `paths: *.go`
+// is meant to attach to that file (or any Go file) wherever it lives, not only at
+// the workspace root. A glob containing a slash (or `**`) is matched against the
+// full relative path, so authors who want a location-anchored match write one
+// (`internal/auth/*.go`, `cmd/**`).
 func matchGlob(glob, path string) bool {
 	// First try exact filepath.Match for simple patterns.
 	if ok, _ := filepath.Match(glob, filepath.Base(path)); ok {

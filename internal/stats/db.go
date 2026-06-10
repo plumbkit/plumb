@@ -21,6 +21,23 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 )
 
+// episodicMemoriesDDL is the single source of truth for the episodic_memories
+// table shape. It is embedded in both the baseline schema (fresh database) and
+// the v7→v8 migration (existing database), so the two can never drift — a fresh
+// DB and a migrated DB are byte-identical by construction. `CREATE TABLE IF NOT
+// EXISTS` keeps both paths idempotent and overlap-safe.
+const episodicMemoriesDDL = `CREATE TABLE IF NOT EXISTS episodic_memories (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace     TEXT    NOT NULL DEFAULT '',
+    session_id    TEXT    NOT NULL DEFAULT '',
+    session_name  TEXT    NOT NULL DEFAULT '',
+    generated_at  INTEGER NOT NULL,
+    summary       TEXT    NOT NULL DEFAULT '',
+    touched_files TEXT    NOT NULL DEFAULT '',
+    read_count    INTEGER NOT NULL DEFAULT 0,
+    write_count   INTEGER NOT NULL DEFAULT 0
+)`
+
 // schema is the current fresh database shape. The global stats database uses
 // row-level workspace and session fields to separate project history inside the
 // single daemon-owned store.
@@ -48,17 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_tc_session   ON tool_calls(session_id);
 CREATE INDEX IF NOT EXISTS idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX IF NOT EXISTS idx_tc_ws_session ON tool_calls(workspace, session_id);
 
-CREATE TABLE IF NOT EXISTS episodic_memories (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    workspace     TEXT    NOT NULL DEFAULT '',
-    session_id    TEXT    NOT NULL DEFAULT '',
-    session_name  TEXT    NOT NULL DEFAULT '',
-    generated_at  INTEGER NOT NULL,
-    summary       TEXT    NOT NULL DEFAULT '',
-    touched_files TEXT    NOT NULL DEFAULT '',
-    read_count    INTEGER NOT NULL DEFAULT 0,
-    write_count   INTEGER NOT NULL DEFAULT 0
-);
+` + episodicMemoriesDDL + `;
 CREATE INDEX IF NOT EXISTS idx_em_ws ON episodic_memories(workspace, generated_at);
 `
 
@@ -83,18 +90,9 @@ var migrations = []migration{
 	{from: 6, to: 7, addColumn: "client_version", sql: `ALTER TABLE tool_calls ADD COLUMN client_version TEXT NOT NULL DEFAULT ''`},
 	// v8 adds a new table, not a column — addColumn stays empty so the step always
 	// runs; CREATE TABLE IF NOT EXISTS makes it idempotent and overlap-safe with
-	// the baseline schema.
-	{from: 7, to: 8, sql: `CREATE TABLE IF NOT EXISTS episodic_memories (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    workspace     TEXT    NOT NULL DEFAULT '',
-    session_id    TEXT    NOT NULL DEFAULT '',
-    session_name  TEXT    NOT NULL DEFAULT '',
-    generated_at  INTEGER NOT NULL,
-    summary       TEXT    NOT NULL DEFAULT '',
-    touched_files TEXT    NOT NULL DEFAULT '',
-    read_count    INTEGER NOT NULL DEFAULT 0,
-    write_count   INTEGER NOT NULL DEFAULT 0
-)`},
+	// the baseline schema. Shares episodicMemoriesDDL with the baseline so the two
+	// can never drift.
+	{from: 7, to: 8, sql: episodicMemoriesDDL},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for

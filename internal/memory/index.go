@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
 
 	_ "modernc.org/sqlite" // register the SQLite driver
 )
@@ -344,34 +343,6 @@ func recordFromFile(workspace, name string) (Record, error) {
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// splitIdentifier splits CamelCase / snake_case / kebab-case / dotted / slashed
-// identifiers into space-separated lowercase tokens for FTS indexing, so a query
-// for "user session" matches a memory named "UserSession".
-//
-// NOTE: copied from internal/topology to avoid a memory→topology import (they are
-// sibling packages). TestSplitIdentifier_ParityWithTopology guards the copy.
-// Phase 2 may extract a shared internal/tokenise leaf.
-func splitIdentifier(s string) string {
-	if s == "" {
-		return ""
-	}
-	s = strings.NewReplacer("_", " ", "-", " ", ".", " ", "/", " ").Replace(s)
-	var buf strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		if i > 0 && runes[i-1] != ' ' {
-			lowerToUpper := unicode.IsUpper(r) && !unicode.IsUpper(runes[i-1])
-			upperSeqToLower := unicode.IsUpper(r) && unicode.IsUpper(runes[i-1]) &&
-				i+1 < len(runes) && unicode.IsLower(runes[i+1])
-			if lowerToUpper || upperSeqToLower {
-				buf.WriteRune(' ')
-			}
-		}
-		buf.WriteRune(unicode.ToLower(r))
-	}
-	return strings.Join(strings.Fields(buf.String()), " ")
 }
 
 // ensureMemoryGitignore makes sure dir/.gitignore excludes memory.db and its

@@ -79,24 +79,9 @@ func TestIndex_CloseRaceWithReindex(t *testing.T) {
 	}
 }
 
-// TestSplitIdentifier locks the code-aware tokenisation. The expected outputs
-// mirror internal/topology's splitIdentifier (the copy's reference behaviour).
-func TestSplitIdentifier(t *testing.T) {
-	cases := map[string]string{
-		"UserSession":   "user session",
-		"workspacePool": "workspace pool",
-		"HTTPServer":    "http server",
-		"user_session":  "user session",
-		"auth-gotchas":  "auth gotchas",
-		"internal/auth": "internal auth",
-		"":              "",
-	}
-	for in, want := range cases {
-		if got := splitIdentifier(in); got != want {
-			t.Errorf("splitIdentifier(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
+// The code-aware tokenisation that backs memory FTS now lives in
+// internal/tokenise (shared with topology); its canonical table test moved
+// there. TestIndex_UpsertAndSearch below proves the integration end-to-end.
 
 func openTestIndex(t *testing.T) (*Index, string) {
 	t.Helper()

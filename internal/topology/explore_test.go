@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/tokenise"
 )
 
 func insertTestNode(t *testing.T, db *sql.DB, fileID int64, relPath string, n Node) int64 {
@@ -19,7 +21,7 @@ func insertTestNode(t *testing.T, db *sql.DB, fileID int64, relPath string, n No
 	}
 	id, _ := res.LastInsertId()
 	// Also insert into FTS so searches work.
-	tokens := splitIdentifier(n.Name)
+	tokens := tokenise.SplitIdentifier(n.Name)
 	if _, err := db.Exec(
 		`INSERT INTO topology_fts(rowid, name, name_tokens, qualified, signature, docstring, path, kind)
          VALUES (?,?,?,?,?,?,?,?)`,

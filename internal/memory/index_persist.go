@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/tokenise"
 )
 
 // Upsert indexes one memory, replacing any existing row for the same name. The
@@ -126,7 +128,7 @@ func insertFTS(tx *sql.Tx, id int64, rec Record) error {
 		INSERT INTO memory_fts(rowid, name, name_tokens, description, body,
 			path_globs, source_paths, source_symbols, provenance)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
-		id, rec.Name, splitIdentifier(rec.Name), rec.Description, rec.Body,
+		id, rec.Name, tokenise.SplitIdentifier(rec.Name), rec.Description, rec.Body,
 		strings.Join(rec.Paths, " "), strings.Join(rec.SourcePaths, " "),
 		strings.Join(rec.SourceSymbols, " "), provenance); err != nil {
 		return fmt.Errorf("memory: insert fts %q: %w", rec.Name, err)

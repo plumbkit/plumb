@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/tokenise"
 )
 
 // insertNodeWithFTS inserts a node and its FTS entry, returning the node ID.
@@ -18,7 +20,7 @@ func insertNodeWithFTS(t *testing.T, db *sql.DB, fileID int64, relPath string, n
 		t.Fatalf("insert node %q: %v", n.Name, err)
 	}
 	id, _ := res.LastInsertId()
-	tokens := splitIdentifier(n.Name)
+	tokens := tokenise.SplitIdentifier(n.Name)
 	if _, err := db.Exec(
 		`INSERT INTO topology_fts(rowid, name, name_tokens, qualified, signature, docstring, path, kind)
          VALUES (?,?,?,?,?,?,?,?)`,
@@ -69,9 +71,9 @@ func TestSearch_ByToken(t *testing.T) {
 	n := Node{Kind: KindType, Name: "workspacePool", Language: "go", StartLine: 5, EndLine: 10}
 	insertNodeWithFTS(t, db, fileID, "pkg/ws/pool.go", n)
 
-	tokens := splitIdentifier("workspacePool")
+	tokens := tokenise.SplitIdentifier("workspacePool")
 	if tokens == "" {
-		t.Error("splitIdentifier(workspacePool) returned empty string")
+		t.Error("tokenise.SplitIdentifier(workspacePool) returned empty string")
 	}
 
 	// Search by the split token "workspace" — should find workspacePool via name_tokens.

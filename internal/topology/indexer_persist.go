@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/tokenise"
 )
 
 // This file holds the indexer's SQLite persistence layer: writing a file's
@@ -105,7 +107,7 @@ func insertNodes(tx *sql.Tx, fileID int64, relPath string, nodes []Node) ([]int6
 		id, _ := res.LastInsertId()
 		n.ID = id
 		ids = append(ids, id)
-		tokens := splitIdentifier(n.Name)
+		tokens := tokenise.SplitIdentifier(n.Name)
 		if _, err := tx.Exec(
 			`INSERT INTO topology_fts(rowid, name, name_tokens, qualified, signature, docstring, path, kind)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
