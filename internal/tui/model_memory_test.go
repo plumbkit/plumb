@@ -257,3 +257,99 @@ func assertMemoryRowWidths(t *testing.T, m Model, rs, ls int) {
 		}
 	}
 }
+
+func TestMemoryFilterNarrowsList(t *testing.T) {
+	m := Model{currentSection: 2}
+	m.memories = []memory.Memory{
+		{Name: "alpha", Description: "first note"},
+		{Name: "beta", Description: "second note"},
+		{Name: "gamma", Description: "ALSO second"},
+	}
+	if got := len(m.filteredMemories()); got != 3 {
+		t.Fatalf("empty filter should return all memories, got %d", got)
+	}
+	m.memoryFilter = "second"
+	got := m.filteredMemories()
+	if len(got) != 2 || got[0].Name != "beta" || got[1].Name != "gamma" {
+		t.Fatalf("filter %q = %+v, want [beta gamma]", m.memoryFilter, got)
+	}
+	m.memoryFilter = "ALPHA"
+	got = m.filteredMemories()
+	if len(got) != 1 || got[0].Name != "alpha" {
+		t.Fatalf("name match must be case-insensitive, got %+v", got)
+	}
+	m.memoryFilter = "no-such-memory"
+	if got := m.filteredMemories(); len(got) != 0 {
+		t.Fatalf("want no matches, got %+v", got)
+	}
+}
+
+func TestMemoryFilterKeyLifecycle(t *testing.T) {
+	m := Model{currentSection: 2, focusPanel: focusSessions}
+	m.memories = []memory.Memory{{Name: "alpha"}, {Name: "beta"}}
+
+	m = m.handleMainKeySimple("f")
+	if !m.memoryFilterActive {
+		t.Fatal("'f' should activate the filter")
+	}
+
+	m.memoryCursor = 1
+	m, handled := m.handleMemoryFilterKey("b")
+	if !handled || m.memoryFilter != "b" || m.memoryCursor != 0 {
+		t.Fatalf("typing: handled=%v filter=%q cursor=%d, want handled \"b\" 0", handled, m.memoryFilter, m.memoryCursor)
+	}
+
+	if del, _ := m.handleMemoryFilterKey("backspace"); del.memoryFilter != "" {
+		t.Fatalf("backspace should delete the last rune, got %q", del.memoryFilter)
+	}
+
+	if _, handled := m.handleMemoryFilterKey("down"); handled {
+		t.Fatal("navigation keys must fall through to the main handler")
+	}
+
+	m, _ = m.handleMemoryFilterKey("enter")
+	if m.memoryFilterActive || m.memoryFilter != "b" {
+		t.Fatalf("enter: active=%v filter=%q, want closed with the query kept", m.memoryFilterActive, m.memoryFilter)
+	}
+
+	m = m.handleMainKeySimple("esc")
+	if m.memoryFilter != "" {
+		t.Fatalf("esc should clear the applied filter, got %q", m.memoryFilter)
+	}
+}
+
+func TestMemoryEnterTogglesListAndDetail(t *testing.T) {
+	m := Model{currentSection: 2, focusPanel: focusSessions}
+	m = m.mainKeyEnter()
+	if m.focusPanel != focusDetails {
+		t.Fatalf("enter from the list should focus the detail pane, got %v", m.focusPanel)
+	}
+	m = m.mainKeyEnter()
+	if m.focusPanel != focusSessions {
+		t.Fatalf("enter from the detail pane should focus the list, got %v", m.focusPanel)
+	}
+}
+
+func TestMemoryDetailShowsDatesAndStrippedBody(t *testing.T) {
+	RebuildStyles()
+	ws := t.TempDir()
+	if err := memory.Write(ws, "alpha", "alpha body line\n", "alpha desc"); err != nil {
+		t.Fatal(err)
+	}
+	m := &Model{currentSection: 2, sessions: []session.Info{{ID: "1", Folder: ws}}}
+	m.refreshMemories()
+
+	plain := ansiStripForTest(strings.Join(m.memoryRightLines(60), "\n"))
+	if !strings.Contains(plain, "Updated") {
+		t.Errorf("detail should show the Updated date:\n%s", plain)
+	}
+	if strings.Contains(plain, "Created") {
+		t.Errorf("a user memory without created_at should not show Created:\n%s", plain)
+	}
+	if strings.Contains(plain, "---") || strings.Contains(plain, "description:") {
+		t.Errorf("body should not repeat the frontmatter block:\n%s", plain)
+	}
+	if !strings.Contains(plain, "alpha body line") {
+		t.Errorf("body missing:\n%s", plain)
+	}
+}

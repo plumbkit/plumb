@@ -409,6 +409,13 @@ func (m Model) renderHelp(bg string) string {
 			},
 		},
 		{
+			title: "Memory",
+			items: []helpItem{
+				{key: "f", desc: "Filter the memories list (esc clears)"},
+				{key: "enter", desc: "Toggle between list and detail"},
+			},
+		},
+		{
 			title: "Settings",
 			items: []helpItem{
 				{key: "↑/↓  ←/→", desc: "Move between / change settings"},

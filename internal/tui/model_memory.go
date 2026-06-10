@@ -59,11 +59,39 @@ func (m *Model) collectMemoryWorkspaces() []memWorkspace {
 }
 
 // memDetailRow renders a key/value pair with a 2-space gap. Keys are padded to
-// 4 chars so Name/Desc/Size align; longer keys (Paths) get 1 space gap.
+// 7 chars so Name/Desc/Size/Created/Updated/Paths all align.
 func memDetailRow(k, v string) string {
-	const kw = 4
+	const kw = 7
 	pad := max(kw-len(k), 0)
 	return "  " + KeyStyle.Width(0).Render(k) + strings.Repeat(" ", pad+2) + ValStyle.Render(v)
+}
+
+// filteredMemories returns the memories visible under the active filter — a
+// case-insensitive substring match on name and description. An empty filter
+// returns the full list.
+func (m Model) filteredMemories() []memory.Memory {
+	if m.memoryFilter == "" {
+		return m.memories
+	}
+	q := strings.ToLower(m.memoryFilter)
+	var out []memory.Memory
+	for _, mem := range m.memories {
+		if strings.Contains(strings.ToLower(mem.Name), q) ||
+			strings.Contains(strings.ToLower(mem.Description), q) {
+			out = append(out, mem)
+		}
+	}
+	return out
+}
+
+// resetMemoryFilterView re-homes cursor, scroll, and body cache after the
+// filter (and so the visible list) changed.
+func (m *Model) resetMemoryFilterView() {
+	m.memoryCursor = 0
+	m.leftScroll = 0
+	m.rightScroll = 0
+	m.memoryBodyCache = ""
+	m.memoryBodyCacheName = ""
 }
 
 func (m Model) memoryLeftLines() []string {
@@ -75,11 +103,27 @@ func (m Model) memoryLeftLines() []string {
 	} else {
 		titleStyle = PanelHeaderFadedStyle
 	}
+	mems := m.filteredMemories()
 	titleText := fmt.Sprintf(" Memories (%d)", len(m.memories))
+	if m.memoryFilter != "" {
+		titleText = fmt.Sprintf(" Memories (%d/%d)", len(mems), len(m.memories))
+	}
 
-	lines := []string{titleStyle.Render(titleText), ""}
-	if len(m.memories) == 0 {
+	// The filter status line replaces the header's blank spacer, so the
+	// 2-header-line scroll math in scrollToCursor is unaffected.
+	filterLine := ""
+	if m.memoryFilterActive {
+		filterLine = MutedStyle.Render(" ⌕ "+m.memoryFilter) + SelectedStyle.Render("▎")
+	} else if m.memoryFilter != "" {
+		filterLine = MutedStyle.Render(" ⌕ " + m.memoryFilter)
+	}
+
+	lines := []string{titleStyle.Render(titleText), filterLine}
+	if len(mems) == 0 {
 		msg := " No memories in this workspace."
+		if m.memoryFilter != "" {
+			msg = " No memories match the filter."
+		}
 		if lf {
 			lines = append(lines, MutedStyle.Render(msg))
 		} else {
@@ -95,7 +139,7 @@ func (m Model) memoryLeftLines() []string {
 	// never fires on these lines.
 	availW := max(m.leftWidth-prefixW-1, 4)
 
-	for i, mem := range m.memories {
+	for i, mem := range mems {
 		selected := i == m.memoryCursor
 		indicator := "∙"
 		if selected {
@@ -163,18 +207,30 @@ func (m *Model) memoryRightLines(rw int) []string {
 
 	lines := []string{headerStyle.Render(" Memory Detail"), ""}
 
-	if len(m.memories) == 0 {
-		lines = append(lines, "  "+MutedStyle.Render("No memories in this workspace."))
+	mems := m.filteredMemories()
+	if len(mems) == 0 {
+		msg := "No memories in this workspace."
+		if m.memoryFilter != "" {
+			msg = "No memories match the filter."
+		}
+		lines = append(lines, "  "+MutedStyle.Render(msg))
 		return lines
 	}
 
-	mem := m.memories[m.memoryCursor]
+	mem := mems[min(m.memoryCursor, len(mems)-1)]
 
+	const dateFormat = "2006-01-02 15:04"
 	lines = append(lines, memDetailRow("Name", mem.Name))
 	if mem.Description != "" {
 		lines = append(lines, memDetailRow("Desc", mem.Description))
 	}
 	lines = append(lines, memDetailRow("Size", fmt.Sprintf("%d bytes", mem.SizeBytes)))
+	if !mem.CreatedAt.IsZero() {
+		lines = append(lines, memDetailRow("Created", mem.CreatedAt.Local().Format(dateFormat)))
+	}
+	if !mem.ModTime.IsZero() {
+		lines = append(lines, memDetailRow("Updated", mem.ModTime.Local().Format(dateFormat)))
+	}
 	if len(mem.Paths) > 0 {
 		lines = append(lines, memDetailRow("Paths", strings.Join(mem.Paths, ", ")))
 	}
@@ -205,10 +261,11 @@ func (m *Model) memoryRightLines(rw int) []string {
 }
 
 func (m *Model) currentMemoryBody() string {
-	if len(m.memories) == 0 {
+	mems := m.filteredMemories()
+	if len(mems) == 0 {
 		return ""
 	}
-	name := m.memories[m.memoryCursor].Name
+	name := mems[min(m.memoryCursor, len(mems)-1)].Name
 	if m.memoryBodyCacheName == name && m.memoryBodyCache != "" {
 		return m.memoryBodyCache
 	}
@@ -216,7 +273,8 @@ func (m *Model) currentMemoryBody() string {
 	if ws == "" {
 		return ""
 	}
-	body, err := memory.Read(ws, name)
+	// Body only — the frontmatter metadata is already shown structured above.
+	body, err := memory.ReadBody(ws, name)
 	if err != nil {
 		body = "(error loading memory: " + err.Error() + ")"
 	}
@@ -237,10 +295,9 @@ func (m *Model) refreshMemories() {
 	}
 	if ws != m.memoryFolder {
 		m.memoryFolder = ws
-		m.memoryCursor = 0
-		m.leftScroll = 0
-		m.memoryBodyCache = ""
-		m.memoryBodyCacheName = ""
+		m.memoryFilter = ""
+		m.memoryFilterActive = false
+		m.resetMemoryFilterView()
 	}
 	if ws == "" {
 		m.memories = nil
@@ -252,8 +309,8 @@ func (m *Model) refreshMemories() {
 		return
 	}
 	m.memories = mems
-	if m.memoryCursor >= len(m.memories) && m.memoryCursor > 0 {
-		m.memoryCursor = len(m.memories) - 1
+	if visible := len(m.filteredMemories()); m.memoryCursor >= visible {
+		m.memoryCursor = max(visible-1, 0)
 	}
 	// Invalidate body cache if the selected memory disappeared.
 	if m.memoryBodyCacheName != "" {
@@ -272,12 +329,13 @@ func (m *Model) refreshMemories() {
 }
 
 func (m *Model) selectMemoryAtBodyRow(row int) {
-	if row < 1 || len(m.memories) == 0 {
+	visible := len(m.filteredMemories())
+	if row < 1 || visible == 0 {
 		return
 	}
 	// Each memory occupies 4 rows: name, desc-line1, desc-line2, blank.
 	idx := (row - 1) / 4
-	if idx < 0 || idx >= len(m.memories) {
+	if idx < 0 || idx >= visible {
 		return
 	}
 	m.memoryCursor = idx

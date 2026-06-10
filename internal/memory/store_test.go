@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPath_RejectsTraversal(t *testing.T) {
@@ -194,5 +195,65 @@ func TestWrite_OverwriteReplacesFrontmatter(t *testing.T) {
 	}
 	if !strings.Contains(got, "second content") {
 		t.Errorf("body not overwritten: %s", got)
+	}
+}
+
+// TestReadBody_StripsFrontmatter: display surfaces show metadata structured
+// from List, so the body view must not repeat the raw frontmatter block.
+func TestReadBody_StripsFrontmatter(t *testing.T) {
+	ws := t.TempDir()
+	if err := Write(ws, "conventions", "Some text\n", "Project conventions"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := ReadBody(ws, "conventions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "---") || strings.Contains(body, "description:") {
+		t.Errorf("frontmatter not stripped: %q", body)
+	}
+	if !strings.HasPrefix(body, "Some text") {
+		t.Errorf("body should start at the content, got %q", body)
+	}
+
+	if err := Write(ws, "plain", "Just text.\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	body, err = ReadBody(ws, "plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "Just text.\n" {
+		t.Errorf("frontmatter-less body should be returned unchanged, got %q", body)
+	}
+}
+
+// TestList_PopulatesDates: ModTime always comes from the file; CreatedAt only
+// from a `created_at:` frontmatter line (generated memories carry one).
+func TestList_PopulatesDates(t *testing.T) {
+	ws := t.TempDir()
+	if err := Write(ws, "user-note", "body", "desc"); err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	if err := WriteGenerated(nil, ws, "machine-made", "desc", "body", Provenance{CreatedAt: created}); err != nil {
+		t.Fatal(err)
+	}
+	mems, err := List(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Memory{}
+	for _, m := range mems {
+		byName[m.Name] = m
+	}
+	if byName["user-note"].ModTime.IsZero() {
+		t.Error("ModTime should be populated from the file")
+	}
+	if !byName["user-note"].CreatedAt.IsZero() {
+		t.Errorf("memory without created_at should have zero CreatedAt, got %v", byName["user-note"].CreatedAt)
+	}
+	if !byName["machine-made"].CreatedAt.Equal(created) {
+		t.Errorf("CreatedAt = %v, want %v", byName["machine-made"].CreatedAt, created)
 	}
 }

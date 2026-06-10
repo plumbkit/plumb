@@ -118,6 +118,8 @@ type Model struct {
 	memoryFolder        string         // folder the current m.memories/body cache was loaded from
 	memoryWsWidth       int            // Workspaces pane width override; 0 = percentage default
 	memoryMemWidth      int            // Memories pane width override; 0 = percentage default
+	memoryFilter        string         // Memories-list filter (case-insensitive substring on name/description)
+	memoryFilterActive  bool           // true while the filter is being edited ("f" opens, enter/esc closes)
 
 	// Settings section (section 4) — grouped settings screen + theme popup.
 	settingsCfg          config.Config  // global config snapshot, loaded on entering the section

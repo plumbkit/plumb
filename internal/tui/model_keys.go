@@ -113,119 +113,12 @@ func (m Model) popupKeyPageUp() Model {
 	return m
 }
 
-func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	if m.logDetailOpen {
-		return m.handleLogDetailKey(msg)
-	}
-	switch msg.String() {
-	case "ctrl+q":
-		return m, tea.Quit
-	case "ctrl+c":
-		return m.mainKeyQuit()
-	case "esc":
-		m = m.handleLogSectionEscKey()
-	case "/":
-		if m.sectionMenuOpen {
-			m.sectionMenuOpen = false
-		} else {
-			m.sectionMenuOpen = true
-			m.sectionMenuCursor = m.currentSection
-		}
-	case "ctrl+1", "ctrl+2", "ctrl+3", "ctrl+4", "ctrl+5", "alt+1", "alt+2", "alt+3", "alt+4", "alt+5":
-		m.selectSectionShortcut(msg.String())
-	case "ctrl+h":
-		m.showHelp = true
-	case "up", "k":
-		m.moveLogSelection(-1)
-	case "down", "j":
-		m.moveLogSelection(1)
-	case "pgup":
-		m.moveLogSelection(-m.logBodyHeight())
-	case "pgdown":
-		m.moveLogSelection(m.logBodyHeight())
-	case "G":
-		m.logFollow = true
-	case "enter":
-		m = m.handleLogEnterKey()
-	default:
-		m = m.handleLogFilterInput(msg.String())
-	}
-	return m, nil
-}
-
-func (m Model) handleLogDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+q":
-		return m, tea.Quit
-	case "ctrl+c":
-		return m.mainKeyQuit()
-	case "esc":
-		m.logDetailOpen = false
-		m.logDetailScroll = 0
-	case "c":
-		if text := m.currentLogDetailText(); text != "" {
-			m.logDetailCopied = true
-			return m, tea.Batch(
-				copyTextToClipboard(text),
-				tea.Tick(3*time.Second, func(time.Time) tea.Msg { return logDetailCopyResetMsg{} }),
-			)
-		}
-	case "up", "k":
-		if m.logDetailScroll > 0 {
-			m.logDetailScroll--
-		}
-	case "down", "j":
-		m.logDetailScroll++
-	case "pgup":
-		pageSize := max(m.height-10, 1)
-		m.logDetailScroll -= pageSize
-		if m.logDetailScroll < 0 {
-			m.logDetailScroll = 0
-		}
-	case "pgdown":
-		pageSize := max(m.height-10, 1)
-		m.logDetailScroll += pageSize
-	}
-	return m, nil
-}
-
-func (m Model) handleLogSectionEscKey() Model {
-	if m.logFilter != "" {
-		m.logFilter = ""
-		m.logScroll = 0
-	} else {
-		m.sectionMenuOpen = true
-		m.sectionMenuCursor = m.currentSection
-	}
-	return m
-}
-
-func (m Model) handleLogEnterKey() Model {
-	if len(m.filteredLogEntries()) > 0 {
-		m.logDetailOpen = true
-		m.logDetailScroll = 0
-	}
-	return m
-}
-
-func (m Model) handleLogFilterInput(s string) Model {
-	if s == "backspace" {
-		if r := []rune(m.logFilter); len(r) > 0 {
-			m.logFilter = string(r[:len(r)-1])
-			m.logScroll = 0
-			m.logCursor = 0
-		}
-		return m
-	}
-	if len(s) == 1 && s[0] >= 32 && s[0] < 127 {
-		m.logFilter += s
-		m.logScroll = 0
-		m.logCursor = 0
-	}
-	return m
-}
-
 func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.currentSection == 2 && m.memoryFilterActive {
+		if next, handled := m.handleMemoryFilterKey(msg.String()); handled {
+			return next, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+q":
 		return m, tea.Quit
@@ -261,9 +154,49 @@ func (m Model) mainKeyQuit() (Model, tea.Cmd) {
 	return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return clearQuitMessageMsg{id: id} })
 }
 
+// handleMemoryFilterKey consumes input while the memory filter is being
+// edited: printable characters and backspace edit the query, esc clears and
+// closes, enter keeps the query applied and closes. Navigation keys (arrows,
+// tab, paging) are not handled here, so they fall through to the main handler
+// and still move through the filtered list mid-edit.
+func (m Model) handleMemoryFilterKey(s string) (Model, bool) {
+	switch {
+	case s == "esc":
+		m.memoryFilter = ""
+		m.memoryFilterActive = false
+		m.resetMemoryFilterView()
+		return m, true
+	case s == "enter":
+		m.memoryFilterActive = false
+		return m, true
+	case s == "backspace":
+		if r := []rune(m.memoryFilter); len(r) > 0 {
+			m.memoryFilter = string(r[:len(r)-1])
+			m.resetMemoryFilterView()
+		}
+		return m, true
+	case len(s) == 1 && s[0] >= 32 && s[0] < 127:
+		m.memoryFilter += s
+		m.resetMemoryFilterView()
+		return m, true
+	}
+	return m, false
+}
+
 func (m Model) mainKeyEnter() Model {
 	if m.sectionMenuOpen {
 		m.selectSection(m.sectionMenuCursor)
+		return m
+	}
+	if m.currentSection == 2 {
+		// Toggle between the Memories list and the Detail pane.
+		switch m.focusPanel {
+		case focusDetails:
+			m.focusPanel = focusSessions
+		default:
+			m.focusPanel = focusDetails
+			m.rightScroll = 0
+		}
 		return m
 	}
 	switch m.focusPanel {
@@ -401,7 +334,7 @@ func (m Model) mainKeyDown() Model {
 		m.rightScroll++
 	default:
 		if m.currentSection == 2 {
-			if m.memoryCursor < len(m.memories)-1 {
+			if m.memoryCursor < len(m.filteredMemories())-1 {
 				m.memoryCursor++
 				m.rightScroll = 0
 				m.memoryBodyCache = ""
@@ -439,8 +372,8 @@ func (m Model) mainKeyPageDown() Model {
 	default:
 		if m.currentSection == 2 {
 			m.memoryCursor += pageSize
-			if m.memoryCursor >= len(m.memories) {
-				m.memoryCursor = max(len(m.memories)-1, 0)
+			if visible := len(m.filteredMemories()); m.memoryCursor >= visible {
+				m.memoryCursor = max(visible-1, 0)
 			}
 			m.rightScroll = 0
 			m.memoryBodyCache = ""
@@ -517,14 +450,7 @@ func (m Model) handleMainKeySimple(key string) Model {
 		m.sectionMenuOpen = false
 		m.showHelp = true
 	case "esc":
-		// Esc closes an open overlay; otherwise it steps focus back to the
-		// section's home panel (Sessions / Workspaces), a no-op when already there.
-		if m.sectionMenuOpen || m.showHelp {
-			m.sectionMenuOpen = false
-			m.showHelp = false
-		} else {
-			m.focusPanel = m.sectionHomeFocus()
-		}
+		m = m.mainKeyEsc()
 	case "1", "2", "3", "4", "5":
 		if m.sectionMenuOpen {
 			m.selectSection(int(key[0] - '1'))
@@ -533,10 +459,38 @@ func (m Model) handleMainKeySimple(key string) Model {
 		m = m.handleRenameSessionKey()
 	case "a":
 		m.refresh()
+	case "f":
+		m = m.mainKeyOpenMemoryFilter()
 	case "[":
 		m.resizeFocusedColumn(-2)
 	case "]":
 		m.resizeFocusedColumn(2)
+	}
+	return m
+}
+
+// mainKeyEsc closes an open overlay, then clears an applied memory filter;
+// otherwise it steps focus back to the section's home panel
+// (Sessions / Workspaces), a no-op when already there.
+func (m Model) mainKeyEsc() Model {
+	switch {
+	case m.sectionMenuOpen || m.showHelp:
+		m.sectionMenuOpen = false
+		m.showHelp = false
+	case m.currentSection == 2 && m.memoryFilter != "":
+		m.memoryFilter = ""
+		m.resetMemoryFilterView()
+	default:
+		m.focusPanel = m.sectionHomeFocus()
+	}
+	return m
+}
+
+// mainKeyOpenMemoryFilter opens the memory filter when the Memories list has
+// focus; a no-op elsewhere.
+func (m Model) mainKeyOpenMemoryFilter() Model {
+	if m.currentSection == 2 && m.focusPanel == focusSessions {
+		m.memoryFilterActive = true
 	}
 	return m
 }

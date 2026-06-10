@@ -382,11 +382,10 @@ func (m *Model) selectSection(idx int) {
 	m.sectionMenuCursor = idx
 	m.sectionMenuOpen = false
 	if m.currentSection == 2 && prev != 2 {
-		m.memoryCursor = 0
-		m.memoryBodyCache = ""
-		m.memoryBodyCacheName = ""
+		m.memoryFilter = ""
+		m.memoryFilterActive = false
+		m.resetMemoryFilterView()
 		m.focusPanel = focusSessions
-		m.rightScroll = 0
 	}
 	if m.currentSection == 3 && !m.logInitd {
 		m.logEntries, m.logOffset = initLogTail(m.logPath)

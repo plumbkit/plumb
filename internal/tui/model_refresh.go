@@ -240,7 +240,7 @@ func (m *Model) ensurePopupCursorVisible() {
 func (m *Model) ensureLeftCursorVisible() {
 	cursor, count, perItem := m.cursor, len(m.sessions), 3
 	if m.currentSection == 2 {
-		cursor, count, perItem = m.memoryCursor, len(m.memories), 4
+		cursor, count, perItem = m.memoryCursor, len(m.filteredMemories()), 4
 	}
 	m.leftScroll = scrollToCursor(cursor, count, perItem, max(m.height-6, 1), m.leftScroll)
 }

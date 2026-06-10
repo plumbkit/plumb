@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var nameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -29,7 +30,9 @@ type Memory struct {
 	Confidence  Confidence // provenance confidence from frontmatter; "" for user-authored
 	Path        string
 	SizeBytes   int64
-	ContentSHA  string // sha256 of the full file; "" if the body was not read
+	ContentSHA  string    // sha256 of the full file; "" if the body was not read
+	CreatedAt   time.Time // frontmatter `created_at:` (generated memories); zero when absent
+	ModTime     time.Time // file modification time — when the memory last changed
 }
 
 // UserAuthored reports whether this memory was written by a person rather than
@@ -79,9 +82,10 @@ func List(workspace string) ([]Memory, error) {
 		if err != nil {
 			continue
 		}
-		m := Memory{Name: name, Path: path, SizeBytes: info.Size()}
+		m := Memory{Name: name, Path: path, SizeBytes: info.Size(), ModTime: info.ModTime()}
 		if data, err := os.ReadFile(path); err == nil {
-			m.Description, m.Paths, m.Confidence = parseFrontmatterFull(data)
+			fm := parseFrontmatterFull(data)
+			m.Description, m.Paths, m.Confidence, m.CreatedAt = fm.description, fm.paths, fm.confidence, fm.createdAt
 			// The bytes are already in hand for the frontmatter parse, so hashing
 			// here is near-free and lets Fresh do exact content comparison (catching
 			// a same-size, same-mtime edit) without a second read.
@@ -107,6 +111,19 @@ func Read(workspace, name string) (string, error) {
 		return "", fmt.Errorf("reading memory: %w", err)
 	}
 	return string(data), nil
+}
+
+// ReadBody returns a memory's content with any frontmatter block removed —
+// the metadata is available structured via List, so display surfaces need not
+// repeat the raw `---` block. Leading blank lines after the frontmatter are
+// trimmed.
+func ReadBody(workspace, name string) (string, error) {
+	content, err := Read(workspace, name)
+	if err != nil {
+		return "", err
+	}
+	_, body := splitFrontmatter([]byte(content))
+	return strings.TrimLeft(string(body), "\n"), nil
 }
 
 // WriteOptions controls optional frontmatter emitted by WriteWithOptions.
@@ -368,10 +385,11 @@ func Delete(workspace, name string) error {
 //
 //	paths: internal/auth/**, cmd/server/*.go
 //	paths: [internal/auth/**, cmd/server/*.go]
-func parseFrontmatterFull(data []byte) (description string, paths []string, confidence Confidence) {
+func parseFrontmatterFull(data []byte) frontmatter {
+	var out frontmatter
 	fm, _ := splitFrontmatter(data)
 	if len(fm) == 0 {
-		return "", nil, ""
+		return out
 	}
 	for line := range strings.SplitSeq(string(fm), "\n") {
 		line = strings.TrimSpace(line)
@@ -379,15 +397,27 @@ func parseFrontmatterFull(data []byte) (description string, paths []string, conf
 			v = strings.TrimSpace(v)
 			switch strings.TrimSpace(k) {
 			case "description":
-				description = v
+				out.description = v
 			case "paths":
-				paths = parseList(v)
+				out.paths = parseList(v)
 			case "confidence":
-				confidence = Confidence(v)
+				out.confidence = Confidence(v)
+			case "created_at":
+				if ts, err := time.Parse(time.RFC3339, v); err == nil {
+					out.createdAt = ts
+				}
 			}
 		}
 	}
-	return description, paths, confidence
+	return out
+}
+
+// frontmatter is the parsed view of a memory file's YAML-style header.
+type frontmatter struct {
+	description string
+	paths       []string
+	confidence  Confidence
+	createdAt   time.Time
 }
 
 func parseList(v string) []string {

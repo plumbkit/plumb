@@ -326,12 +326,12 @@ func recordFromFile(workspace, name string) (Record, error) {
 		return Record{}, err
 	}
 	fm, body := splitFrontmatter(data)
-	desc, paths, _ := parseFrontmatterFull(data)
+	parsed := parseFrontmatterFull(data)
 	rec := Record{
 		Name:        name,
-		Description: desc,
+		Description: parsed.description,
 		Body:        string(body),
-		Paths:       paths,
+		Paths:       parsed.paths,
 		Confidence:  ConfidenceUser,
 		ContentSHA:  sha256Hex(data),
 		MTimeNS:     st.ModTime().UnixNano(),
