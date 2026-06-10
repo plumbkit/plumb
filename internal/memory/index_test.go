@@ -94,6 +94,99 @@ func openTestIndex(t *testing.T) (*Index, string) {
 	return ix, ws
 }
 
+// recordTimes reads the stored created_at / last_used_at for a memory directly,
+// for asserting timestamp preservation across a re-upsert.
+func recordTimes(t *testing.T, ix *Index, name string) (createdNS, lastUsedNS int64) {
+	t.Helper()
+	err := ix.db.QueryRow(`SELECT created_at, last_used_at FROM memory_records WHERE name = ?`, name).
+		Scan(&createdNS, &lastUsedNS)
+	if err != nil {
+		t.Fatalf("recordTimes %q: %v", name, err)
+	}
+	return createdNS, lastUsedNS
+}
+
+// TestIndex_PriorTimesPreservedOnReupsert: re-indexing a memory (no explicit
+// CreatedAt) must keep its original created_at and last_used_at — a re-upsert is
+// not a "new" memory, so recency/age ranking signals survive a content edit.
+func TestIndex_PriorTimesPreservedOnReupsert(t *testing.T) {
+	ix, _ := openTestIndex(t)
+	if err := ix.Upsert(Record{Name: "note", Description: "v1", Body: "first body"}); err != nil {
+		t.Fatalf("Upsert v1: %v", err)
+	}
+	created1, _ := recordTimes(t, ix, "note")
+	// Bump last_used_at so we can prove it is preserved (not reset) by re-upsert.
+	if err := ix.TouchUsed("note"); err != nil {
+		t.Fatalf("TouchUsed: %v", err)
+	}
+	_, touched := recordTimes(t, ix, "note")
+	if touched == 0 {
+		t.Fatal("TouchUsed did not set last_used_at")
+	}
+
+	if err := ix.Upsert(Record{Name: "note", Description: "v2", Body: "second body"}); err != nil {
+		t.Fatalf("Upsert v2: %v", err)
+	}
+	created2, lastUsed2 := recordTimes(t, ix, "note")
+	if created2 != created1 {
+		t.Errorf("created_at not preserved across re-upsert: %d -> %d", created1, created2)
+	}
+	if lastUsed2 != touched {
+		t.Errorf("last_used_at not preserved across re-upsert: %d -> %d", touched, lastUsed2)
+	}
+}
+
+// TestIndex_TouchUsedBumpsLastUsed: TouchUsed strictly advances last_used_at.
+func TestIndex_TouchUsedBumpsLastUsed(t *testing.T) {
+	ix, _ := openTestIndex(t)
+	if err := ix.Upsert(Record{Name: "note", Body: "body"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	_, before := recordTimes(t, ix, "note")
+	time.Sleep(2 * time.Millisecond) // ensure a distinct nanosecond clock reading
+	if err := ix.TouchUsed("note"); err != nil {
+		t.Fatalf("TouchUsed: %v", err)
+	}
+	_, after := recordTimes(t, ix, "note")
+	if after <= before {
+		t.Errorf("TouchUsed did not advance last_used_at: %d -> %d", before, after)
+	}
+	// A missing memory is a no-op, not an error.
+	if err := ix.TouchUsed("does-not-exist"); err != nil {
+		t.Errorf("TouchUsed on missing memory should be a no-op, got %v", err)
+	}
+}
+
+// TestIndex_RecencyTiebreak: two memories of equal rank and confidence are
+// ordered by last_used_at DESC — touching the lower one floats it to the top.
+func TestIndex_RecencyTiebreak(t *testing.T) {
+	ix, _ := openTestIndex(t)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Identical body/description so FTS rank ties; same (default) confidence.
+	must(ix.Upsert(Record{Name: "alpha", Description: "auth notes", Body: "auth auth auth"}))
+	must(ix.Upsert(Record{Name: "bravo", Description: "auth notes", Body: "auth auth auth"}))
+
+	time.Sleep(2 * time.Millisecond)
+	must(ix.TouchUsed("bravo")) // make bravo strictly more recently used
+
+	hits, err := ix.Search(context.Background(), "auth", SearchOpts{Limit: 10})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("expected 2 hits, got %d", len(hits))
+	}
+	if hits[0].Name != "bravo" {
+		t.Errorf("recency tiebreak: more-recently-used 'bravo' should sort first, got %q then %q",
+			hits[0].Name, hits[1].Name)
+	}
+}
+
 func TestIndex_UpsertAndSearch(t *testing.T) {
 	ix, _ := openTestIndex(t)
 	if err := ix.Upsert(Record{

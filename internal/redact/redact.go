@@ -28,8 +28,18 @@ var rules = []rule{
 	{regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), "[REDACTED:aws-key]"},
 	// GitHub tokens (ghp_/gho_/ghs_/ghr_/ghu_).
 	{regexp.MustCompile(`\bgh[posru]_[0-9A-Za-z]{36,}\b`), "[REDACTED:github-token]"},
-	// Slack tokens.
+	// Slack tokens (bot/user/app-level/refresh/legacy).
 	{regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z-]{10,}\b`), "[REDACTED:slack-token]"},
+	// Slack app-level tokens (xapp-<ver>-<id>-<secret>).
+	{regexp.MustCompile(`\bxapp-[0-9]-[A-Za-z0-9-]{10,}\b`), "[REDACTED:slack-token]"},
+	// Stripe secret/restricted keys (sk_live_… / rk_test_…).
+	{regexp.MustCompile(`\b[sr]k_(live|test)_[0-9a-zA-Z]{10,}\b`), "[REDACTED:stripe-key]"},
+	// Google API keys (AIza + 35 chars).
+	{regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`), "[REDACTED:google-key]"},
+	// OpenAI-style keys (sk-… / sk-proj-…). The 20-char lower bound keeps short
+	// hyphenated tokens like "sk-learn" out; Stripe's underscore form is caught
+	// above and does not match this hyphenated shape.
+	{regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b`), "[REDACTED:api-key]"},
 	// Credentials embedded in a URL (scheme://user:pass@host) — keep the scheme.
 	{regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s:@]+@`), "${1}[REDACTED:url-credentials]@"},
 	// Authorization / bearer headers.
