@@ -49,7 +49,14 @@ import (
 // once in TestMain so the client configs we write point at a real executable.
 var plumbBin string
 
+// realHome is the developer's real HOME, captured before any per-test override.
+// Clients whose code is installed HOME-relative (hermes via pip --user) resolve
+// their modules against HOME, so a probe under the isolated HOME needs to point
+// back at the real install (see the hermes probeEnv / PYTHONUSERBASE).
+var realHome string
+
 func TestMain(m *testing.M) {
+	realHome = os.Getenv("HOME")
 	root, err := findRepoRoot()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clientsmoke: locate repo root:", err)
@@ -104,11 +111,12 @@ type clientSpec struct {
 	setupArgs []string // args to the plumb binary, e.g. {"setup", "gemini"}
 
 	// Connection tier (-tags=clients).
-	connect     bool                                        // has an auth-free connecting probe
-	connectArgs []string                                    // probe argv, e.g. {"mcp", "list"}
-	connectSkip string                                      // reason logged when connect == false
-	prep        func(t *testing.T, tmpHome, fixture string) // optional pre-probe setup (e.g. folder trust)
-	wantOut     []string                                    // advisory substrings expected in probe output
+	connect     bool                                                      // has an auth-free connecting probe
+	connectArgs []string                                                  // probe argv, e.g. {"mcp", "list"}
+	connectSkip string                                                    // reason logged when connect == false
+	prep        func(t *testing.T, tmpHome, fixture string, env []string) // optional pre-probe setup (folder trust, MCP approval)
+	probeEnv    func(realHome string) []string                            // extra env layered onto the probe/prompt, both tiers (e.g. PYTHONUSERBASE)
+	wantOut     []string                                                  // advisory substrings expected in probe output
 
 	// Auth tier (-tags=clients_e2e).
 	authKeys   []string                     // acceptable API-key env vars; first set wins. empty ⇒ unsupported
@@ -143,14 +151,21 @@ func clientSpecs() []clientSpec {
 			promptArgs: func(p string) []string { return []string{"run", p} },
 		},
 		{
+			// cursor-agent caches MCP tool lists (account/cloud-backed): its headless
+			// `mcp list-tools` returns plumb's tools WITHOUT spawning `plumb serve`, so
+			// no probe provably reaches a fresh plumb, and `mcp list` is separately
+			// buggy (reports "needs approval" even when approved). No auth-free
+			// connection signal — still drivable in the auth tier (enable prep kept).
 			name: "cursor-agent", binary: "cursor-agent", setupArgs: []string{"setup", "cursor"},
-			connect: true, connectArgs: []string{"mcp", "list"}, wantOut: []string{"plumb"},
+			connect: false, connectSkip: "cursor-agent caches MCP tool lists and does not reconnect in headless mode, so no probe provably reaches a fresh plumb (plus documented `mcp list` approval bugs)",
+			prep:       enableCursorMCP,
 			authKeys:   []string{"CURSOR_API_KEY"},
 			promptArgs: func(p string) []string { return []string{"-p", p, "--force"} },
 		},
 		{
 			name: "hermes", binary: "hermes", setupArgs: []string{"setup", "hermes"},
 			connect: true, connectArgs: []string{"mcp", "test", "plumb"}, wantOut: []string{"plumb"},
+			probeEnv:   func(home string) []string { return []string{"PYTHONUSERBASE=" + filepath.Join(home, ".local")} },
 			authKeys:   []string{"OPENAI_API_KEY"},
 			authEnv:    func(k string) []string { return []string{"OPENAI_API_KEY=" + k} },
 			promptArgs: func(p string) []string { return []string{"-z", p} },
@@ -337,8 +352,8 @@ func stopDaemon(env []string) {
 // servers in an untrusted folder. It both disables the folder-trust feature in
 // settings.json (preserving the mcpServers plumb setup wrote) and writes an
 // explicit trustedFolders.json entry, covering schema variants across versions.
-func seedFolderTrust(homeSub string) func(t *testing.T, tmpHome, fixture string) {
-	return func(t *testing.T, tmpHome, fixture string) {
+func seedFolderTrust(homeSub string) func(t *testing.T, tmpHome, fixture string, env []string) {
+	return func(t *testing.T, tmpHome, fixture string, _ []string) {
 		t.Helper()
 		dir := filepath.Join(tmpHome, homeSub)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -357,6 +372,20 @@ func seedFolderTrust(homeSub string) func(t *testing.T, tmpHome, fixture string)
 		m["security"] = sec
 		writeJSONFile(t, settings, m)
 		writeJSONFile(t, filepath.Join(dir, "trustedFolders.json"), map[string]string{fixture: "TRUST_FOLDER"})
+	}
+}
+
+// enableCursorMCP adds plumb to cursor-agent's local approved-list so the probe
+// actually loads it — cursor-agent refuses to load an unapproved MCP server
+// (the analogue of gemini's folder trust). Best-effort: a failure is logged, not
+// fatal, so the probe still runs and the session assertion reports the truth.
+func enableCursorMCP(t *testing.T, _, fixture string, env []string) {
+	t.Helper()
+	cmd := exec.Command("cursor-agent", "mcp", "enable", "plumb")
+	cmd.Env = env
+	cmd.Dir = fixture
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("cursor-agent mcp enable plumb (non-fatal): %v\n%s", err, out)
 	}
 }
 

@@ -37,13 +37,16 @@ func TestClientsConnect(t *testing.T) {
 
 			runPlumbSetup(t, env, spec.setupArgs...)
 			if spec.prep != nil {
-				spec.prep(t, tmpHome, fixture)
+				spec.prep(t, tmpHome, fixture, env)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, spec.binary, spec.connectArgs...)
 			cmd.Env = env
+			if spec.probeEnv != nil {
+				cmd.Env = append(cmd.Env, spec.probeEnv(realHome)...)
+			}
 			cmd.Dir = fixture
 			out, runErr := cmd.CombinedOutput()
 			t.Logf("$ %s %s  (exit=%v)\n%s", spec.binary, strings.Join(spec.connectArgs, " "), runErr, truncate(out, 2000))

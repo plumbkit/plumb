@@ -52,8 +52,9 @@ install auggie  npm "@augmentcode/auggie"
 install crush   npm "@charmland/crush"
 install claude  npm "@anthropic-ai/claude-code"
 
-# pip-distributed
-install hermes  pip "hermes-agent"
+# pip-distributed. The [mcp] extra pulls the Python MCP SDK hermes needs to
+# actually speak to a stdio MCP server (without it, `hermes mcp test` fails).
+install hermes  pip "hermes-agent[mcp]"
 
 # script-distributed
 install opencode     sh "curl -fsSL https://opencode.ai/install | bash"

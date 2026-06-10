@@ -48,11 +48,14 @@ func TestClientsAuth(t *testing.T) {
 			if spec.authEnv != nil {
 				env = append(env, spec.authEnv(keyVal)...)
 			}
+			if spec.probeEnv != nil {
+				env = append(env, spec.probeEnv(realHome)...)
+			}
 			t.Cleanup(func() { stopDaemon(env) })
 
 			runPlumbSetup(t, env, spec.setupArgs...)
 			if spec.prep != nil {
-				spec.prep(t, tmpHome, fixture)
+				spec.prep(t, tmpHome, fixture, env)
 			}
 
 			args := spec.promptArgs(toolPrompt)
