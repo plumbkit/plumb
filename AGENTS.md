@@ -16,7 +16,7 @@ Current version: see the `VERSION` file and `CHANGELOG.md` (not pinned in this b
 
 ## Project purpose
 
-Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language Server Protocol) capabilities to LLMs, plus a complete filesystem toolkit (read, write, edit, delete, rename, transaction). It lets an LLM — especially Claude Desktop, Claude Code, Codex, or Gemini CLI, which may have limited filesystem access — navigate, understand, and modify a codebase entirely through structured semantic tools, no raw-file dumping or shell.
+Plumb gives coding agents the intelligence layer of an IDE. It is an MCP (Model Context Protocol) server exposing LSP (Language Server Protocol) capabilities, a tree-sitter topology index, and per-project memory, plus a complete filesystem toolkit (read, write, edit, delete, rename, transaction). It lets an LLM — especially Claude Desktop, Claude Code, Codex, or Gemini CLI, which may have limited filesystem access — navigate, understand, and modify a codebase entirely through structured semantic tools, no raw-file dumping or shell.
 
 The architectural commitments are:
 
