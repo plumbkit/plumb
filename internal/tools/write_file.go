@@ -31,6 +31,10 @@ var writeFileSchema = json.RawMessage(`{
       "type": "boolean",
       "description": "Allow writing a file that has uncommitted changes in its git repository. Default false — the write is refused if the target file is dirty. Pass true to overwrite anyway."
     },
+    "overwrite_changed": {
+      "type": "boolean",
+      "description": "Allow overwriting a file that changed on disk since this session read it (a peer agent or human edited it after your read). Default false — the write is refused so a stale full-content overwrite cannot silently discard that change. Re-read to merge, or pass true to overwrite anyway. Only consulted when neither expected_mtime nor expected_sha is given (those guards take precedence)."
+    },
     "expected_mtime": {
       "type": "string",
       "description": "Optional. RFC3339Nano mtime previously returned by read_file. If provided, the write is rejected if the file's current mtime differs — fast optimistic-concurrency check, so a full-content overwrite never silently clobbers a change made since you read it."
@@ -88,6 +92,7 @@ type writeFileArgs struct {
 	AwaitDiagnostics bool   `json:"await_diagnostics"`
 	ExpectedMtime    string `json:"expected_mtime"`
 	ExpectedSha      string `json:"expected_sha"`
+	OverwriteChanged bool   `json:"overwrite_changed"`
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -150,6 +155,15 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	}
 	if err := verifyExpectedVersion("write_file", path, a.ExpectedMtime, a.ExpectedSha); err != nil {
 		return err
+	}
+	// Automatic session-aware guard: if the caller gave no explicit version guard
+	// but this session read the file and it has since changed on disk, a full
+	// overwrite would silently discard that change. Refuse unless overridden.
+	if a.ExpectedMtime == "" && a.ExpectedSha == "" && !a.OverwriteChanged &&
+		changedSinceSessionRead(t.deps.Reads, path) {
+		return fmt.Errorf("write_file: %q changed on disk since you read it this session — "+
+			"a peer agent or process edited it after your read, and a full overwrite would discard that change. "+
+			"Re-read to merge, or pass overwrite_changed: true to overwrite anyway", path)
 	}
 	createDirs := a.CreateDirs == nil || *a.CreateDirs
 	if !createDirs {

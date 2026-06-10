@@ -644,3 +644,54 @@ func TestEditFile_RangeEdit_OutOfRange(t *testing.T) {
 		t.Fatalf("expected out-of-range error, got: %v", err)
 	}
 }
+
+func TestEditFile_StaleReadWarning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reads := NewReadTracker()
+	info, _ := os.Stat(path)
+	reads.Record(path, info.ModTime()) // this session read the original
+	tool := NewEditFile(WriteDeps{Reads: reads})
+
+	// A peer appends to the file after our read; the edited region ("beta") stays.
+	future := time.Now().Add(2 * time.Second)
+	_ = os.WriteFile(path, []byte("alpha\nbeta\ngamma\nDELTA\n"), 0o644)
+	_ = os.Chtimes(path, future, future)
+
+	raw, _ := json.Marshal(map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"old_string": "beta", "new_string": "BETA"}},
+	})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("edit should apply (anchor still matches): %v", err)
+	}
+	if !strings.Contains(out, "plumb-warn") || !strings.Contains(out, "changed on disk since your session last read it") {
+		t.Errorf("expected a stale-read warning, got: %q", out)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "BETA") {
+		t.Errorf("edit should have applied, got: %q", data)
+	}
+}
+
+func TestEditFile_NoStaleWarningWhenUnchanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	_ = os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644)
+	reads := NewReadTracker()
+	info, _ := os.Stat(path)
+	reads.Record(path, info.ModTime())
+	tool := NewEditFile(WriteDeps{Reads: reads})
+	raw, _ := json.Marshal(map[string]any{
+		"file_path": path,
+		"edits":     []map[string]any{{"old_string": "beta", "new_string": "BETA"}},
+	})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if strings.Contains(out, "plumb-warn") {
+		t.Errorf("an unchanged file should carry no stale-read warning, got: %q", out)
+	}
+}

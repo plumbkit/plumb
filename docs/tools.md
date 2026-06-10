@@ -247,12 +247,19 @@ Create or overwrite a file atomically; post-write diagnostics appended.
 `expected_mtime` / `expected_sha` (from a prior `read_file` header) reject the
 write if the file changed since you read it — the same optimistic-concurrency
 guard `edit_file` has, so a whole-file overwrite never silently clobbers a
-concurrent change.
+concurrent change. Even without those, a write is **refused** when this session
+read the file and it then changed on disk (a peer or human edited under you);
+pass `overwrite_changed: true` to override. A never-read / new file is never
+flagged.
 **Inputs:** `file_path`, `content` (required), `expected_mtime` / `expected_sha`
-(optional concurrency check), `dirty_ok`.
+(optional concurrency check), `overwrite_changed`, `dirty_ok`.
 
 ### `edit_file`
-Targeted `str_replace` with a uniqueness lock and CRLF tolerance. **Inputs:**
+Targeted `str_replace` with a uniqueness lock and CRLF tolerance. When this
+session read the file and it then changed on disk (with no `expected_mtime`
+passed), the response carries a `# plumb-warn` note — the edit still applies
+(the `old_string` anchor protects the edited region) but surrounding context may
+have moved, so re-read before further edits. **Inputs:**
 `file_path` (required), `edits` (array of `{old_string, new_string}` — each `old_string` must
 appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
 check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.

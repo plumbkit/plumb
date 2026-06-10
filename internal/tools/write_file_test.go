@@ -276,3 +276,48 @@ func TestWriteFile_ExpectedShaGuard(t *testing.T) {
 		t.Fatalf("stale expected_sha should be refused, got: %v", err)
 	}
 }
+
+func TestWriteFile_RefusesStaleOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reads := NewReadTracker()
+	info, _ := os.Stat(path)
+	reads.Record(path, info.ModTime()) // this session read v1
+	tool := NewWriteFile(WriteDeps{Reads: reads})
+
+	// A peer edits the file after our read (advance the mtime past the read).
+	future := time.Now().Add(2 * time.Second)
+	_ = os.WriteFile(path, []byte("peer change"), 0o644)
+	_ = os.Chtimes(path, future, future)
+
+	raw, _ := json.Marshal(map[string]any{"file_path": path, "content": "my overwrite"})
+	_, err := tool.Execute(context.Background(), raw)
+	if err == nil || !strings.Contains(err.Error(), "changed on disk since you read it") {
+		t.Fatalf("a stale overwrite should be refused, got: %v", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "peer change" {
+		t.Errorf("refused write must not clobber the peer change, got: %q", data)
+	}
+
+	// overwrite_changed:true proceeds.
+	raw2, _ := json.Marshal(map[string]any{"file_path": path, "content": "my overwrite", "overwrite_changed": true})
+	if _, err := tool.Execute(context.Background(), raw2); err != nil {
+		t.Fatalf("overwrite_changed:true should write: %v", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "my overwrite" {
+		t.Errorf("override write should apply, got: %q", data)
+	}
+}
+
+func TestWriteFile_NewFileNeverFlagged(t *testing.T) {
+	// A brand-new file the session never read must not trip the session-aware
+	// guard, even with a ReadTracker wired.
+	path := filepath.Join(t.TempDir(), "brand-new.txt")
+	tool := NewWriteFile(WriteDeps{Reads: NewReadTracker()})
+	raw, _ := json.Marshal(map[string]any{"file_path": path, "content": "hello"})
+	if _, err := tool.Execute(context.Background(), raw); err != nil {
+		t.Fatalf("creating an unread new file should never be flagged: %v", err)
+	}
+}

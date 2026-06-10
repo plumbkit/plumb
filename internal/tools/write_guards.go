@@ -53,3 +53,25 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 	}
 	return nil
 }
+
+// changedSinceSessionRead reports whether this session read path earlier (via
+// the per-connection ReadTracker) and its on-disk mtime has advanced since — i.e.
+// a peer agent or a human edited it after this session's last read, with no
+// explicit expected_mtime/expected_sha guard to catch it.
+//
+// It returns false when the file was never read this session (so creating or
+// blind-writing a brand-new file is never flagged), when reads is nil, or on a
+// stat error. write_file uses it to refuse-with-override; edit_file uses it to
+// warn (its str_replace anchor already protects the edited region, but the
+// surrounding file may have moved under the caller).
+func changedSinceSessionRead(reads *ReadTracker, path string) bool {
+	readAt := reads.Mtime(path)
+	if readAt.IsZero() {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.ModTime().After(readAt)
+}

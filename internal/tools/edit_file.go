@@ -191,17 +191,39 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	uri := "file://" + path
+	// Captured before the write (which bumps the mtime): warn if the file moved
+	// on disk since this session read it and no explicit version guard governs it.
+	staleNote := t.staleReadNote(path, a)
 
 	if a.ApplyPartial {
 		t.deps.notifyTopology(path)
-		return t.executePartial(ctx, path, a.Edits, uri, a.AwaitDiagnostics) + t.deps.reportQuality(ctx, path), nil
+		return t.executePartial(ctx, path, a.Edits, uri, a.AwaitDiagnostics) + staleNote + t.deps.reportQuality(ctx, path), nil
 	}
 	result, err := t.editFileApply(ctx, path, a, uri)
 	if err != nil {
 		return "", err
 	}
 	t.deps.notifyTopology(path)
-	return result + t.deps.reportQuality(ctx, path), nil
+	return result + staleNote + t.deps.reportQuality(ctx, path), nil
+}
+
+// staleReadNote returns a one-line warning when this session read the file and it
+// has since changed on disk, but the caller passed no explicit expected_mtime/
+// expected_sha (and is not reconciling). The str_replace anchor already protects
+// the edited region from corruption, so this is informational, not a refusal:
+// the surrounding file may have moved under the caller (e.g. an entry landing in
+// a section a peer just re-versioned). Returns "" when nothing changed, the file
+// was never read this session, or an explicit guard already governs staleness.
+func (t *EditFile) staleReadNote(path string, a editFileArgs) string {
+	if a.ExpectedMtime != "" || a.ExpectedSha != "" || a.Reconcile {
+		return ""
+	}
+	if !changedSinceSessionRead(t.deps.Reads, path) {
+		return ""
+	}
+	return "\n# plumb-warn: this file changed on disk since your session last read it — " +
+		"your edit applied against the newer content (the old_string match protected the edited " +
+		"region, but surrounding context may have moved); re-read before further edits"
 }
 
 func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
