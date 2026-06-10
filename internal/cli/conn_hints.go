@@ -83,15 +83,25 @@ func (s *connSession) enrichToolOutput(_ context.Context, name string, args json
 	return text + hintBlock(names, mcfg.HintBudgetBytes)
 }
 
+// matchingMemoryNames returns up to max memory names whose paths globs match
+// rel. User-authored memories always claim slots before generated ones — every
+// idle session can mint an episodic-* memory attached to the same hot files, and
+// those must never crowd a hand-written note out of the capped hint block.
 func matchingMemoryNames(mems []memory.Memory, rel string, max int) []string {
-	var names []string
+	var user, generated []string
 	for _, m := range mems {
-		if m.MatchesPath(rel) {
-			names = append(names, m.Name)
-			if len(names) >= max {
-				break
-			}
+		if !m.MatchesPath(rel) {
+			continue
 		}
+		if m.UserAuthored() {
+			user = append(user, m.Name)
+		} else {
+			generated = append(generated, m.Name)
+		}
+	}
+	names := append(user, generated...)
+	if len(names) > max {
+		names = names[:max]
 	}
 	return names
 }

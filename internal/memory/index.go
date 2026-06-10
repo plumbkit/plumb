@@ -326,7 +326,7 @@ func recordFromFile(workspace, name string) (Record, error) {
 		return Record{}, err
 	}
 	fm, body := splitFrontmatter(data)
-	desc, paths := parseFrontmatterFull(data)
+	desc, paths, _ := parseFrontmatterFull(data)
 	rec := Record{
 		Name:        name,
 		Description: desc,

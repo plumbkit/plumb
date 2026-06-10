@@ -66,6 +66,24 @@ func TestMatchingMemoryNames_RespectsMax(t *testing.T) {
 	}
 }
 
+// TestMatchingMemoryNames_UserAuthoredClaimSlotsFirst: generated episodic-*
+// memories attach to the same hot files as hand-written notes, and List returns
+// them in name order ("episodic-…" sorts early) — so without an explicit
+// preference they would fill every capped hint slot. A user memory sorting LAST
+// by name must still claim a slot ahead of every generated one.
+func TestMatchingMemoryNames_UserAuthoredClaimSlotsFirst(t *testing.T) {
+	mems := []memory.Memory{
+		{Name: "episodic-20260610-aaaa", Paths: []string{"**"}, Confidence: memory.ConfidenceGenerated},
+		{Name: "episodic-20260610-bbbb", Paths: []string{"**"}, Confidence: memory.ConfidenceGenerated},
+		{Name: "episodic-20260610-cccc", Paths: []string{"**"}, Confidence: memory.ConfidenceGenerated},
+		{Name: "zz-user-notes", Paths: []string{"**"}},
+	}
+	got := matchingMemoryNames(mems, "x.go", 3)
+	if len(got) != 3 || got[0] != "zz-user-notes" {
+		t.Errorf("user-authored memory must claim the first hint slot, got %v", got)
+	}
+}
+
 func TestHintBlock(t *testing.T) {
 	block := hintBlock([]string{"auth-gotchas"}, 512)
 	if !strings.Contains(block, "[Hint:") || !strings.Contains(block, "'auth-gotchas'") {

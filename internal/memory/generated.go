@@ -88,10 +88,14 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
+// writeListLine emits one comma-separated frontmatter list line. Each value is
+// newline-scrubbed first so a hostile or buggy caller value cannot terminate the
+// line and inject its own frontmatter key (e.g. a paths glob carrying
+// "\nconfidence: generated").
 func writeListLine(sb *strings.Builder, key string, values []string) {
 	var nonEmpty []string
 	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
+		if v = strings.TrimSpace(frontmatterScalar(v)); v != "" {
 			nonEmpty = append(nonEmpty, v)
 		}
 	}

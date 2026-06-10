@@ -25,20 +25,18 @@ func validate(cfg Config) error {
 	if cfg.Edits.ConcurrentWriteSkewMs < 0 {
 		return fmt.Errorf("edits.concurrent_write_skew_ms must be non-negative")
 	}
-	if err := validateQuality(cfg.Quality); err != nil {
-		return err
-	}
 	if cfg.LSPQuery.Timeout.Duration < 0 {
 		return fmt.Errorf("lsp_query.timeout must be non-negative (0 disables)")
 	}
-	if err := validateTopology(cfg.Topology); err != nil {
-		return err
-	}
-	if err := validateSemantics(cfg.Semantics); err != nil {
-		return err
-	}
-	if err := validateMemory(cfg.Memory); err != nil {
-		return err
+	for _, check := range []func() error{
+		func() error { return validateQuality(cfg.Quality) },
+		func() error { return validateTopology(cfg.Topology) },
+		func() error { return validateSemantics(cfg.Semantics) },
+		func() error { return validateMemory(cfg.Memory) },
+	} {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	switch cfg.UI.PathStyle {
 	case "", "compact", "truncate-middle", "full":

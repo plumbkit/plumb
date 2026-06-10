@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -83,7 +84,7 @@ func (s *connSession) writeGeneratedEpisodicMemory(ws string, mcfg config.Memory
 	description := "Generated session summary"
 	body := summary + "\n"
 	ix := s.memoryIndexLive()
-	_ = memory.WriteGenerated(ix, ws, name, description, body, memory.Provenance{
+	err := memory.WriteGenerated(ix, ws, name, description, body, memory.Provenance{
 		Confidence:    memory.ConfidenceGenerated,
 		SourceSession: s.sessID,
 		SourcePaths:   detail.SourcePaths,
@@ -91,7 +92,13 @@ func (s *connSession) writeGeneratedEpisodicMemory(ws string, mcfg config.Memory
 		SourceCalls:   detail.SourceCalls,
 		CreatedAt:     now,
 	})
-	_, _ = memory.PruneGeneratedEpisodic(ix, ws, mcfg.GeneratedMemoryKeep)
+	if err != nil {
+		slog.Warn("memory: generated episodic write failed", "name", name, "err", err)
+		return
+	}
+	if _, err := memory.PruneGeneratedEpisodic(ix, ws, mcfg.GeneratedMemoryKeep); err != nil {
+		slog.Warn("memory: generated episodic prune failed", "err", err)
+	}
 }
 
 func episodicBudget(m config.MemoryConfig) int {
@@ -111,14 +118,10 @@ type episodicDetail struct {
 	WriteN        int
 }
 
-// buildEpisodic derives a one-or-two sentence summary plus the touched-file list
-// and read/write counts from a session's calls. Pure and deterministic — no LLM.
-// Single pass: each call's InputJSON is unmarshalled exactly once.
-func buildEpisodic(calls []stats.Call) (summary string, touched []string, readN, writeN int) {
-	d := buildEpisodicDetail(calls, "")
-	return d.Summary, d.Touched, d.ReadN, d.WriteN
-}
-
+// buildEpisodicDetail derives a one-or-two sentence summary plus the touched-file
+// list, read/write counts, and provenance trails from a session's calls. Pure and
+// deterministic — no LLM. Single pass: each call's InputJSON is unmarshalled
+// exactly once.
 func buildEpisodicDetail(calls []stats.Call, workspace string) episodicDetail {
 	d := tallyEpisodic(calls, workspace)
 	if d.ReadN == 0 && d.WriteN == 0 && len(d.Touched) == 0 {

@@ -26,26 +26,31 @@ func TestBuildEpisodic(t *testing.T) {
 		{Tool: "read_file", InputJSON: `{"file_path":"/ws/c.go"}`},
 		{Tool: "read_file", InputJSON: `{}`},
 	}
-	summary, touched, readN, writeN := buildEpisodic(calls)
-	if writeN != 2 {
-		t.Errorf("writeN = %d, want 2", writeN)
+	d := buildEpisodicDetail(calls, "/ws")
+	if d.WriteN != 2 {
+		t.Errorf("WriteN = %d, want 2", d.WriteN)
 	}
-	if readN != 3 {
-		t.Errorf("readN = %d, want 3", readN)
+	if d.ReadN != 3 {
+		t.Errorf("ReadN = %d, want 3", d.ReadN)
 	}
-	if len(touched) != 2 {
-		t.Errorf("touched = %v, want [a.go b.go]", touched)
+	if len(d.Touched) != 2 {
+		t.Errorf("Touched = %v, want [a.go b.go]", d.Touched)
 	}
 	for _, want := range []string{"modified", "a.go", "b.go", "UserSession"} {
-		if !strings.Contains(summary, want) {
-			t.Errorf("summary missing %q: %s", want, summary)
+		if !strings.Contains(d.Summary, want) {
+			t.Errorf("summary missing %q: %s", want, d.Summary)
 		}
+	}
+	// Source paths are workspace-relative; the in-workspace writes contribute, the
+	// read does not.
+	if len(d.SourcePaths) != 2 || d.SourcePaths[0] != "internal/a.go" || d.SourcePaths[1] != "internal/b.go" {
+		t.Errorf("SourcePaths = %v, want [internal/a.go internal/b.go]", d.SourcePaths)
 	}
 }
 
 func TestBuildEpisodic_EmptyWhenNoActivity(t *testing.T) {
-	if s, _, _, _ := buildEpisodic(nil); s != "" {
-		t.Errorf("empty calls should yield empty summary, got %q", s)
+	if d := buildEpisodicDetail(nil, ""); d.Summary != "" {
+		t.Errorf("empty calls should yield empty summary, got %q", d.Summary)
 	}
 }
 
@@ -56,7 +61,7 @@ func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 		{Tool: "find_symbol", InputJSON: `{"name":"ghp_0123456789abcdefghijklmnopqrstuvwxyz1"}`},
 		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/a.go"}`},
 	}
-	summary, _, _, _ := buildEpisodic(calls)
+	summary := buildEpisodicDetail(calls, "").Summary
 	cleaned, n := redact.Redact(summary)
 	if n == 0 || strings.Contains(cleaned, "ghp_0123456789abcdefghijklmnopqrstuvwxyz1") {
 		t.Errorf("secret survived redaction: %s", cleaned)
@@ -72,12 +77,13 @@ func TestBuildEpisodic_TransactionAndFindReplace(t *testing.T) {
 		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/dry.go","dry_run":true}`},      // explicit dry-run → read
 		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/applied.go","dry_run":false}`}, // applied → write
 	}
-	summary, touched, readN, writeN := buildEpisodic(calls)
-	if writeN != 2 {
-		t.Errorf("writeN = %d, want 2 (transaction_apply + applied find_replace)", writeN)
+	d := buildEpisodicDetail(calls, "")
+	summary, touched := d.Summary, d.Touched
+	if d.WriteN != 2 {
+		t.Errorf("WriteN = %d, want 2 (transaction_apply + applied find_replace)", d.WriteN)
 	}
-	if readN != 2 {
-		t.Errorf("readN = %d, want 2 (default + explicit dry-run find_replace)", readN)
+	if d.ReadN != 2 {
+		t.Errorf("ReadN = %d, want 2 (default + explicit dry-run find_replace)", d.ReadN)
 	}
 	want := map[string]bool{"a.go": true, "b.go": true, "c.go": true, "applied.go": true}
 	for _, f := range touched {
@@ -214,7 +220,8 @@ func TestClampBytes(t *testing.T) {
 // TestGenerateEpisodicSummary_Integration exercises the full connSession path:
 // seed a session's tool_calls → generateEpisodicSummary reads them, builds a
 // summary, redacts it, and writes it via the stats Writer → read it back through
-// the same LatestEpisodic accessor session_start uses. This is the
+// the same LatestEpisodic accessor session_start uses — and also writes the
+// durable episodic-* markdown memory with generated provenance.
 func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	ws := t.TempDir()
@@ -272,6 +279,14 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	if got.WriteCount != 1 || got.ReadCount != 2 {
 		t.Errorf("counts: write=%d read=%d (want 1/2)", got.WriteCount, got.ReadCount)
 	}
+	assertGeneratedEpisodicMemory(t, ws, s.sessID)
+}
+
+// assertGeneratedEpisodicMemory checks the durable episodic-* markdown memory
+// written alongside the stats row: attached to the touched file, marked
+// generated, and provenance-stamped.
+func assertGeneratedEpisodicMemory(t *testing.T, ws, sessID string) {
+	t.Helper()
 	mems, err := memory.List(ws)
 	if err != nil {
 		t.Fatalf("memory.List: %v", err)
@@ -281,6 +296,42 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	}
 	if !mems[0].MatchesPath("auth.go") {
 		t.Fatalf("generated memory should attach to auth.go, paths=%v", mems[0].Paths)
+	}
+	if mems[0].UserAuthored() {
+		t.Errorf("generated episodic memory must not read as user-authored, confidence=%q", mems[0].Confidence)
+	}
+	rec, err := memory.ReadMeta(ws, mems[0].Name)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+	if rec.Confidence != memory.ConfidenceGenerated {
+		t.Errorf("confidence = %q, want generated", rec.Confidence)
+	}
+	if rec.SourceSession != sessID {
+		t.Errorf("source_session = %q, want %q", rec.SourceSession, sessID)
+	}
+	if rec.CreatedAt.IsZero() {
+		t.Error("created_at must be set so retention pruning orders correctly")
+	}
+}
+
+// TestEpisodicRelPath pins the source-path derivation: workspace-relative slash
+// paths in, anything outside the workspace (or escaping it) dropped.
+func TestEpisodicRelPath(t *testing.T) {
+	ws := "/ws"
+	cases := map[string]string{
+		"/ws/internal/a.go":        "internal/a.go",
+		"file:///ws/internal/a.go": "internal/a.go", // rename_symbol reports file:// URIs
+		"internal/a.go":            "internal/a.go", // already relative
+		"/other/x.go":              "",              // outside the workspace
+		"../escape.go":             "",              // relative escape
+		"/ws":                      "",              // the root itself is not a file
+		"":                         "",
+	}
+	for in, want := range cases {
+		if got := episodicRelPath(ws, in); got != want {
+			t.Errorf("episodicRelPath(%q, %q) = %q, want %q", ws, in, got, want)
+		}
 	}
 }
 

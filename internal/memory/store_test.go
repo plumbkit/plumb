@@ -21,6 +21,53 @@ func TestPath_RejectsTraversal(t *testing.T) {
 	}
 }
 
+// TestWriteWithOptions_PathsNewlineCannotInjectFrontmatter: write_memory paths
+// are agent-supplied, so a glob carrying a newline must not break out of its
+// frontmatter line and forge provenance (e.g. mark a user memory as generated).
+func TestWriteWithOptions_PathsNewlineCannotInjectFrontmatter(t *testing.T) {
+	ws := t.TempDir()
+	opts := WriteOptions{Paths: []string{"a.go\nconfidence: generated"}}
+	if err := WriteWithOptions(ws, "notes", "body", opts); err != nil {
+		t.Fatalf("WriteWithOptions: %v", err)
+	}
+	mems, err := List(ws)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(mems) != 1 {
+		t.Fatalf("want 1 memory, got %d", len(mems))
+	}
+	if !mems[0].UserAuthored() {
+		t.Errorf("newline in a paths glob forged generated confidence: %q", mems[0].Confidence)
+	}
+}
+
+// TestList_PopulatesConfidence: List surfaces the provenance confidence so
+// capped consumers (hint slots) can prefer user-authored memories.
+func TestList_PopulatesConfidence(t *testing.T) {
+	ws := t.TempDir()
+	if err := Write(ws, "hand-written", "body", "desc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteGenerated(nil, ws, "machine-made", "desc", "body", Provenance{}); err != nil {
+		t.Fatal(err)
+	}
+	mems, err := List(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Memory{}
+	for _, m := range mems {
+		byName[m.Name] = m
+	}
+	if !byName["hand-written"].UserAuthored() {
+		t.Errorf("hand-written should be user-authored, confidence=%q", byName["hand-written"].Confidence)
+	}
+	if byName["machine-made"].UserAuthored() {
+		t.Errorf("generated memory should not be user-authored, confidence=%q", byName["machine-made"].Confidence)
+	}
+}
+
 func TestWriteReadList(t *testing.T) {
 	ws := t.TempDir()
 

@@ -110,6 +110,24 @@ func TestWriteGenerated_IndexedSourcePathsSearchable(t *testing.T) {
 	}
 }
 
+// TestWriteGenerated_PathsNewlineCannotInjectFrontmatter: a provenance value
+// carrying a newline must not terminate its frontmatter line and smuggle in a
+// key of its own — the list writer scrubs newlines to spaces.
+func TestWriteGenerated_PathsNewlineCannotInjectFrontmatter(t *testing.T) {
+	ws := t.TempDir()
+	prov := Provenance{SourcePaths: []string{"a.go\nstale_after: 2020-01-01T00:00:00Z"}}
+	if err := WriteGenerated(nil, ws, "inject", "d", "body", prov); err != nil {
+		t.Fatalf("WriteGenerated: %v", err)
+	}
+	rec, err := ReadMeta(ws, "inject")
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+	if !rec.StaleAfter.IsZero() {
+		t.Errorf("newline in a list value injected stale_after = %v", rec.StaleAfter)
+	}
+}
+
 func TestPruneGeneratedEpisodic_OnlyDeletesOldGeneratedEpisodic(t *testing.T) {
 	ws := t.TempDir()
 	ix, err := OpenIndex(ws)
@@ -143,5 +161,55 @@ func TestPruneGeneratedEpisodic_OnlyDeletesOldGeneratedEpisodic(t *testing.T) {
 		if _, err := Read(ws, name); err != nil {
 			t.Fatalf("%s should remain: %v", name, err)
 		}
+	}
+}
+
+// TestPruneGeneratedEpisodic_ZeroKeepDisables: keep <= 0 must delete nothing.
+func TestPruneGeneratedEpisodic_ZeroKeepDisables(t *testing.T) {
+	ws := t.TempDir()
+	for _, name := range []string{"episodic-a", "episodic-b"} {
+		if err := WriteGenerated(nil, ws, name, "d", "body", Provenance{}); err != nil {
+			t.Fatalf("WriteGenerated(%s): %v", name, err)
+		}
+	}
+	deleted, err := PruneGeneratedEpisodic(nil, ws, 0)
+	if err != nil {
+		t.Fatalf("PruneGeneratedEpisodic: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("keep=0 must disable pruning, deleted %d", deleted)
+	}
+	if mems, _ := List(ws); len(mems) != 2 {
+		t.Errorf("expected both memories to remain, got %d", len(mems))
+	}
+}
+
+// TestPruneGeneratedEpisodic_MissingCreatedAtFallsBackToMtime: a generated
+// episodic memory whose frontmatter lacks created_at must be aged by file mtime,
+// not treated as infinitely old (the zero time's UnixNano is hugely negative).
+func TestPruneGeneratedEpisodic_MissingCreatedAtFallsBackToMtime(t *testing.T) {
+	ws := t.TempDir()
+	// A legacy generated memory with no created_at line; its file mtime is "now".
+	legacy := "---\nname: episodic-legacy\nconfidence: generated\n---\n\nbody"
+	if err := Write(ws, "episodic-legacy", legacy, ""); err != nil {
+		t.Fatalf("Write legacy: %v", err)
+	}
+	// A properly-stamped memory created yesterday — genuinely older than legacy.
+	prov := Provenance{CreatedAt: time.Now().Add(-24 * time.Hour)}
+	if err := WriteGenerated(nil, ws, "episodic-dated", "d", "body", prov); err != nil {
+		t.Fatalf("WriteGenerated: %v", err)
+	}
+	deleted, err := PruneGeneratedEpisodic(nil, ws, 1)
+	if err != nil {
+		t.Fatalf("PruneGeneratedEpisodic: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+	if _, err := Read(ws, "episodic-legacy"); err != nil {
+		t.Errorf("legacy (newest by mtime) should remain: %v", err)
+	}
+	if _, err := Read(ws, "episodic-dated"); err == nil {
+		t.Error("episodic-dated (older by created_at) should have been pruned")
 	}
 }
