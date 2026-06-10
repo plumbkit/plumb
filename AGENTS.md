@@ -390,7 +390,12 @@ make verify      # build + test + lint — definition of "ready to commit"
 make tidy        # go mod tidy
 make clean       # remove ./plumb
 make install-hooks  # install pre-commit hook (required after every fresh clone)
+make install-clients     # install the MCP client CLIs (gemini, codex, qwen, …) the clientsmoke harness drives
+make clients-test        # on-demand: each installed client CLI completes an MCP handshake with plumb (no API keys)
+make clients-test-auth   # on-demand: drive each client headless to force a real plumb tool call (needs API keys)
 ```
+
+The two `clients-test*` targets are on-demand (own build tags, never in `make verify` beyond a compile check) and drive real client CLIs non-interactively — see [`docs/internal/client-testing.md`](docs/internal/client-testing.md).
 
 **`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`. **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
 

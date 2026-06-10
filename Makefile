@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm
+.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm install-clients clients-test clients-test-auth build-clients
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -64,6 +64,31 @@ integration-test: $(TESTCACHE)
 build-integration: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=integration ./...
 
+# install-clients installs the MCP client CLIs the clientsmoke harness drives
+# (idempotent; never configures API keys). See scripts/install-clients.sh.
+install-clients:
+	./scripts/install-clients.sh
+
+# clients-test is the on-demand CONNECTION tier: it confirms each installed
+# client CLI completes the MCP handshake with plumb, non-interactively and
+# without API keys. Uninstalled clients (and those lacking an auth-free probe)
+# are skipped. See cmd/clientsmoke.
+clients-test: $(TESTCACHE)
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=clients -timeout=15m -v ./cmd/clientsmoke/...
+
+# clients-test-auth is the LLM AUTH tier: it drives each client headless to force
+# a real plumb tool call. Runs only the clients whose API key is exported (e.g.
+# OPENAI_API_KEY for most; ANTHROPIC_API_KEY/GEMINI_API_KEY/CURSOR_API_KEY for
+# claude/gemini/cursor); the rest skip. Costs money.
+clients-test-auth: $(TESTCACHE)
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=clients_e2e -timeout=20m -v ./cmd/clientsmoke/...
+
+# build-clients compiles and vets both clientsmoke build tags, which test/lint
+# skip — keeping the on-demand harness from bitrotting (mirrors build-integration).
+build-clients: $(TESTCACHE)
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients ./cmd/clientsmoke/...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients_e2e ./cmd/clientsmoke/...
+
 lint:
 	golangci-lint run
 
@@ -90,7 +115,7 @@ ts-wasm:
 
 # verify is the definition of "ready to commit": build + test + lint + an
 # integration-tag compile pass (build-integration) + the file-size guard.
-verify: build test lint build-integration check-size
+verify: build test lint build-integration build-clients check-size
 
 install-hooks:
 	cp scripts/pre-commit .git/hooks/pre-commit
