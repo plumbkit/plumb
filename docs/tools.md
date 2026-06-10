@@ -244,7 +244,12 @@ invalidate the symbol cache, consume one rate-limit slot, and accept
 
 ### `write_file`
 Create or overwrite a file atomically; post-write diagnostics appended.
-**Inputs:** `file_path`, `content` (required), `dirty_ok`.
+`expected_mtime` / `expected_sha` (from a prior `read_file` header) reject the
+write if the file changed since you read it — the same optimistic-concurrency
+guard `edit_file` has, so a whole-file overwrite never silently clobbers a
+concurrent change.
+**Inputs:** `file_path`, `content` (required), `expected_mtime` / `expected_sha`
+(optional concurrency check), `dirty_ok`.
 
 ### `edit_file`
 Targeted `str_replace` with a uniqueness lock and CRLF tolerance. **Inputs:**

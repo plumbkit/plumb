@@ -31,6 +31,14 @@ var writeFileSchema = json.RawMessage(`{
       "type": "boolean",
       "description": "Allow writing a file that has uncommitted changes in its git repository. Default false — the write is refused if the target file is dirty. Pass true to overwrite anyway."
     },
+    "expected_mtime": {
+      "type": "string",
+      "description": "Optional. RFC3339Nano mtime previously returned by read_file. If provided, the write is rejected if the file's current mtime differs — fast optimistic-concurrency check, so a full-content overwrite never silently clobbers a change made since you read it."
+    },
+    "expected_sha": {
+      "type": "string",
+      "description": "Optional. Hex-encoded SHA-256 previously returned by read_file. If provided, the write is rejected if the file's current content hash differs — stronger than expected_mtime, survives mtime aliasing."
+    },
     "await_diagnostics": {
       "type": "boolean",
       "description": "When true, block up to a few seconds for the language server to finish re-analysing this file and report an authoritative post-write result — a clean fresh pass is stated explicitly. Use it for a trustworthy \"did my change compile?\" answer instead of shelling out to a build. Default false (fast adaptive window; the result may predate the write)."
@@ -66,6 +74,9 @@ func (*WriteFile) Description() string {
 		"target is never partially written. Parent directories are created automatically. " +
 		"After writing, the LSP server is notified (didOpen/didChange/didClose) so " +
 		"diagnostics and symbol lookups reflect the new content immediately. " +
+		"Optionally pass expected_mtime or expected_sha (from a prior read_file header) to " +
+		"reject the write if the file changed since you read it — the same optimistic-concurrency " +
+		"guard edit_file has, so a full-content overwrite never silently clobbers a concurrent change. " +
 		"Use edit_file for targeted str_replace edits to an existing file."
 }
 
@@ -75,6 +86,8 @@ type writeFileArgs struct {
 	CreateDirs       *bool  `json:"create_dirs"`
 	DirtyOk          bool   `json:"dirty_ok"`
 	AwaitDiagnostics bool   `json:"await_diagnostics"`
+	ExpectedMtime    string `json:"expected_mtime"`
+	ExpectedSha      string `json:"expected_sha"`
 }
 
 func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -134,6 +147,9 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
 		return fmt.Errorf("write_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to overwrite", path)
+	}
+	if err := verifyExpectedVersion("write_file", path, a.ExpectedMtime, a.ExpectedSha); err != nil {
+		return err
 	}
 	createDirs := a.CreateDirs == nil || *a.CreateDirs
 	if !createDirs {

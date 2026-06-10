@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func callWriteFile(t *testing.T, args map[string]any) (string, error) {
@@ -224,5 +225,54 @@ func TestWriteFile_AtomicTmpCleanedOnSuccess(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "data" {
 		t.Errorf("unexpected content: %q", data)
+	}
+}
+
+func TestWriteFile_ExpectedMtimeGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	good := info.ModTime().Format(time.RFC3339Nano)
+
+	// Matching expected_mtime → the write proceeds and bumps the mtime.
+	if _, err := callWriteFile(t, map[string]any{
+		"file_path": path, "content": "v2", "expected_mtime": good,
+	}); err != nil {
+		t.Fatalf("matching expected_mtime should write: %v", err)
+	}
+
+	// The original mtime is now stale (the write above superseded it) → refused.
+	_, err := callWriteFile(t, map[string]any{
+		"file_path": path, "content": "v3", "expected_mtime": good,
+	})
+	if err == nil || !strings.Contains(err.Error(), "modified since you read it") {
+		t.Fatalf("stale expected_mtime should be refused, got: %v", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "v2" {
+		t.Errorf("a refused write must not change the file, got: %q", data)
+	}
+}
+
+func TestWriteFile_ExpectedShaGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, _ := fileSHA256(path)
+
+	// Matching expected_sha → the write proceeds.
+	if _, err := callWriteFile(t, map[string]any{
+		"file_path": path, "content": "v2", "expected_sha": sha,
+	}); err != nil {
+		t.Fatalf("matching expected_sha should write: %v", err)
+	}
+	// The old sha no longer matches the new content → refused.
+	_, err := callWriteFile(t, map[string]any{
+		"file_path": path, "content": "v3", "expected_sha": sha,
+	})
+	if err == nil || !strings.Contains(err.Error(), "content has changed since you read it") {
+		t.Fatalf("stale expected_sha should be refused, got: %v", err)
 	}
 }

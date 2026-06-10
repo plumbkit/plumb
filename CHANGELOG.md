@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.15 (unreleased)
+
+Concurrency-safety and reconnect-robustness pass from the 0.9.10–0.9.12 review session (see `internal/feedbacks.md`): close the write-path gaps that let a concurrent peer's or a human's edit be clobbered without warning, make a daemon-restart-induced state loss self-explaining instead of silent, and point agents at `file_outline` when a read is truncated.
+
+### Added
+
+- **`write_file` now accepts `expected_mtime` / `expected_sha`** (from a prior `read_file` header), the same optimistic-concurrency guard `edit_file` already had. When provided, the write is refused if the file changed since you read it — so a full-content overwrite can no longer silently clobber a concurrent change. Previously `write_file` had **no** way to guard a whole-file replacement, the most destructive write, against an under-the-feet change. Guarded by `TestWriteFile_ExpectedMtimeGuard` and `TestWriteFile_ExpectedShaGuard`.
+
 ## 0.9.14 (unreleased)
 
 Resolution of the line-number-gutter efficiency concern (raised against 0.9.12): keep the gutter universal, and close its one real failure mode — a client pasting the rendered `<n>\t` prefix into `old_string` — with server-side forgiveness in `edit_file`, mirroring the existing CRLF tolerance. A mis-pasted gutter now costs zero extra round-trips instead of a failed-edit retry.
