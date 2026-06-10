@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
 )
 
@@ -33,6 +34,39 @@ func TestConnRegistry_ReloadProject_OnlyMatchingWorkspace(t *testing.T) {
 	}
 	if bCount != 0 {
 		t.Errorf("repoB must not reload on a repoA change; got %d", bCount)
+	}
+}
+
+func TestServerWriteTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{name: "unset uses default", want: mcp.DefaultWriteTimeout},
+		{name: "duration override", env: "2s", want: 2 * time.Second},
+		{name: "trimmed duration override", env: " 1500ms ", want: 1500 * time.Millisecond},
+		{name: "zero disables", env: "0", want: 0},
+		{name: "off disables", env: "off", want: 0},
+		{name: "disable disables", env: "disable", want: 0},
+		{name: "disabled disables", env: "disabled", want: 0},
+		{name: "none disables", env: "none", want: 0},
+		{name: "bad value uses default", env: "not-a-duration", want: mcp.DefaultWriteTimeout},
+		{name: "negative value uses default", env: "-1s", want: mcp.DefaultWriteTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env == "" {
+				t.Setenv("PLUMB_WRITE_TIMEOUT", "")
+				_ = os.Unsetenv("PLUMB_WRITE_TIMEOUT")
+			} else {
+				t.Setenv("PLUMB_WRITE_TIMEOUT", tt.env)
+			}
+			if got := serverWriteTimeout(); got != tt.want {
+				t.Errorf("serverWriteTimeout() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

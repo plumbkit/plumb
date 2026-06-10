@@ -376,7 +376,9 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	defer registry.remove(s.sessID)
 	defer s.close()
 	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: Version})
-	srv.WriteTimeout = serverWriteTimeout()
+	writeTimeout := serverWriteTimeout()
+	srv.WriteTimeout = writeTimeout
+	slog.Debug("daemon: MCP response write timeout configured", "timeout", writeTimeout)
 	s.registerAllTools(srv, daemonStartedAt)
 	s.registerHooks(srv)
 	// Serve on the session context (a child of the daemon ctx) — NOT the bare

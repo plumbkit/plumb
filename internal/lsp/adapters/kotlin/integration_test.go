@@ -84,8 +84,32 @@ func startKotlinLS(t *testing.T, ws string) *kotlin.Adapter {
 	return ad
 }
 
+func copyKotlinFixture(t *testing.T) string {
+	t.Helper()
+	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "kotlin-fixture")
+	ws := t.TempDir()
+	srcDir := filepath.Join(ws, "src", "main", "kotlin")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copies := map[string]string{
+		"build.gradle.kts": filepath.Join(ws, "build.gradle.kts"),
+		filepath.Join("src", "main", "kotlin", "Greeter.kt"): filepath.Join(srcDir, "Greeter.kt"),
+	}
+	for rel, dst := range copies {
+		src, err := os.ReadFile(filepath.Join(fixtureSrc, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ws
+}
+
 func TestIntegration_DocumentSymbols(t *testing.T) {
-	fixture := filepath.Join(repoRoot(t), "testdata", "kotlin-fixture")
+	fixture := copyKotlinFixture(t)
 	ad := startKotlinLS(t, fixture)
 	srcPath := filepath.Join(fixture, "src", "main", "kotlin", "Greeter.kt")
 
@@ -149,27 +173,8 @@ func symbolNames(syms []protocol.DocumentSymbol) []string {
 // kotlin-language-server, and that the external-write → notify → open →
 // diagnostics pipeline works end to end.
 func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
-	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "kotlin-fixture")
-
-	ws := t.TempDir()
+	ws := copyKotlinFixture(t)
 	srcDir := filepath.Join(ws, "src", "main", "kotlin")
-	if err := os.MkdirAll(srcDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	copies := map[string]string{
-		"build.gradle.kts": filepath.Join(ws, "build.gradle.kts"),
-		filepath.Join("src", "main", "kotlin", "Greeter.kt"): filepath.Join(srcDir, "Greeter.kt"),
-	}
-	for rel, dst := range copies {
-		src, err := os.ReadFile(filepath.Join(fixtureSrc, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, src, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	ad := startKotlinLS(t, ws)
 	brokenPath := filepath.Join(srcDir, "Broken.kt")
 	brokenURI := protocol.FileURI(brokenPath)
