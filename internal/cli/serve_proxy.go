@@ -351,7 +351,6 @@ func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
 }
 
 // resolveResponse marks the initialize handshake answered or de-tracks a
-// completed request so it is not error-synthesised on a later reconnect. It
 // completed request so it is not error-synthesised on a later reconnect.
 func (p *reconnectingProxy) resolveResponse(key string) {
 	p.hsMu.Lock()
