@@ -175,27 +175,33 @@ func gitGateLabel(enabled bool) string {
 	return "off"
 }
 
-// writeSessionRecentFiles lists the 5 most recently modified files.
+// writeSessionRecentFiles lists the 5 most recently modified files and
+// returns them so the memories section can rank recently-relevant memories
+// first without a second tree walk.
 // Skips the walk if fsguard identifies ws as a protected macOS root (e.g.
 // $HOME) — touching those would surface a TCC prompt attributed to plumb.
-func (t *SessionStart) writeSessionRecentFiles(sb *strings.Builder, ws string) {
+func (t *SessionStart) writeSessionRecentFiles(sb *strings.Builder, ws string) []string {
 	refuse := t.refuseFn != nil && t.refuseFn()
 	if skip, reason := fsguard.RefuseWalk(ws, refuse); skip {
 		slog.Info("session_start: skipping recent-files walk", "workspace", ws, "reason", reason)
-		return
+		return nil
 	}
 	files := recentlyModifiedFiles(ws, 5)
 	if len(files) == 0 {
-		return
+		return nil
 	}
 	sb.WriteString("## Recently modified files\n\n")
 	for _, f := range files {
 		fmt.Fprintf(sb, "- %s\n", f)
 	}
 	sb.WriteString("\n")
+	return files
 }
 
-func writeSessionMemories(sb *strings.Builder, ws string) {
+// writeSessionMemories lists every memory, ordering those attached to a
+// recently modified file (paths glob or provenance) first — the memories most
+// likely to matter for the work in flight lead the list.
+func writeSessionMemories(sb *strings.Builder, ws string, recent []string) {
 	mems, err := memory.List(ws)
 	if err != nil {
 		return
@@ -204,6 +210,7 @@ func writeSessionMemories(sb *strings.Builder, ws string) {
 		sb.WriteString("## Memories\n\nNone yet. Use write_memory to save project notes.\n\n")
 		return
 	}
+	mems = recentFirstMemories(mems, recent)
 	fmt.Fprintf(sb, "## Memories (%d)\n\n", len(mems))
 	for _, m := range mems {
 		fmt.Fprintf(sb, "- **%s**", m.Name)
@@ -213,6 +220,27 @@ func writeSessionMemories(sb *strings.Builder, ws string) {
 		fmt.Fprintf(sb, " (%d bytes)\n", m.SizeBytes)
 	}
 	sb.WriteString("\nUse read_memory to load any of these.\n\n")
+}
+
+// recentFirstMemories stably partitions mems: memories related to a recently
+// modified file first, the rest in their original (name) order after.
+func recentFirstMemories(mems []memory.Memory, recent []string) []memory.Memory {
+	if len(recent) == 0 {
+		return mems
+	}
+	refs := make([]memory.CodeRef, 0, len(recent))
+	for _, f := range recent {
+		refs = append(refs, memory.CodeRef{File: f})
+	}
+	var hot, rest []memory.Memory
+	for _, m := range mems {
+		if len(memory.MemoriesForRefs([]memory.Memory{m}, refs, 1)) > 0 {
+			hot = append(hot, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	return append(hot, rest...)
 }
 
 func writeSessionStats(sb *strings.Builder, ws, clientName string) {

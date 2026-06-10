@@ -58,9 +58,13 @@ func memoriesDirSig(ws string) int64 {
 }
 
 // enrichToolOutput appends a "[Hint: relevant memory …]" block when the tool's
-// target path matches a memory's paths glob. Names only — never memory bodies.
-// Cheap and non-blocking, as required of an EnrichToolOutput hook.
-func (s *connSession) enrichToolOutput(_ context.Context, name string, args json.RawMessage, text string) string {
+// target path matches a memory's paths glob — and, for mutation tools, when a
+// memory's provenance references a symbol the topology index records in the
+// edited file. Names only — never memory bodies. Each memory is hinted at most
+// once per session (cleared on re-pin): after the first pointer, repeats on
+// every read of the same path are noise. Cheap and non-blocking, as required
+// of an EnrichToolOutput hook.
+func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) string {
 	if !hintAllowedTools[name] {
 		return text
 	}
@@ -76,21 +80,74 @@ func (s *connSession) enrichToolOutput(_ context.Context, name string, args json
 	if rel == "" {
 		return text
 	}
-	names := matchingMemoryNames(s.hintCache.memories(ws), rel, hintMaxHints(mcfg))
+	var syms map[string]bool
+	if name == "edit_file" || name == "write_file" {
+		syms = s.editedFileSymbols(ctx, ws, rel)
+	}
+	names := s.unseenHints(matchingMemoryNames(s.hintCache.memories(ws), rel, syms, hintMaxHints(mcfg)))
 	if len(names) == 0 {
 		return text
 	}
 	return text + hintBlock(names, mcfg.HintBudgetBytes)
 }
 
+// unseenHints filters names down to those not yet hinted this session and
+// records the survivors. Clearing happens on re-pin (clearHintSeen), so a new
+// project starts fresh.
+func (s *connSession) unseenHints(names []string) []string {
+	s.hintSeenMu.Lock()
+	defer s.hintSeenMu.Unlock()
+	if s.hintSeen == nil {
+		s.hintSeen = make(map[string]bool)
+	}
+	var out []string
+	for _, n := range names {
+		if s.hintSeen[n] {
+			continue
+		}
+		s.hintSeen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// clearHintSeen resets the once-per-session hint suppression; called on
+// re-pin so memories of the new project hint normally.
+func (s *connSession) clearHintSeen() {
+	s.hintSeenMu.Lock()
+	s.hintSeen = nil
+	s.hintSeenMu.Unlock()
+}
+
+// editedFileSymbols returns the symbol names the topology index records in
+// the edited file. Only consulted for mutation tools — read_file dominates
+// call volume and stays path-glob-only; one indexed query per edit is cheap.
+func (s *connSession) editedFileSymbols(ctx context.Context, ws, rel string) map[string]bool {
+	store := s.topologyStoreLive()
+	if store == nil {
+		return nil
+	}
+	nodes, err := store.SymbolsInFile(ctx, filepath.Join(ws, rel))
+	if err != nil || len(nodes) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		set[n.Name] = true
+	}
+	return set
+}
+
 // matchingMemoryNames returns up to max memory names whose paths globs match
-// rel. User-authored memories always claim slots before generated ones — every
-// idle session can mint an episodic-* memory attached to the same hot files, and
-// those must never crowd a hand-written note out of the capped hint block.
-func matchingMemoryNames(mems []memory.Memory, rel string, max int) []string {
+// rel, or whose provenance source_symbols intersect syms (nil syms skips the
+// symbol pass). User-authored memories always claim slots before generated
+// ones — every idle session can mint an episodic-* memory attached to the same
+// hot files, and those must never crowd a hand-written note out of the capped
+// hint block.
+func matchingMemoryNames(mems []memory.Memory, rel string, syms map[string]bool, max int) []string {
 	var user, generated []string
 	for _, m := range mems {
-		if !m.MatchesPath(rel) {
+		if !m.MatchesPath(rel) && !referencesAnySymbol(m, syms) {
 			continue
 		}
 		if m.UserAuthored() {
@@ -104,6 +161,15 @@ func matchingMemoryNames(mems []memory.Memory, rel string, max int) []string {
 		names = names[:max]
 	}
 	return names
+}
+
+func referencesAnySymbol(m memory.Memory, syms map[string]bool) bool {
+	for _, sym := range m.SourceSymbols {
+		if syms[sym] {
+			return true
+		}
+	}
+	return false
 }
 
 // hintRelPath extracts the tool's target file path (file_path / path / uri) and

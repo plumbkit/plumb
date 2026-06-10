@@ -24,15 +24,17 @@ var nameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // Memory describes one memory's metadata.
 type Memory struct {
-	Name        string
-	Description string
-	Paths       []string   // glob patterns from frontmatter `paths:` for auto-attach
-	Confidence  Confidence // provenance confidence from frontmatter; "" for user-authored
-	Path        string
-	SizeBytes   int64
-	ContentSHA  string    // sha256 of the full file; "" if the body was not read
-	CreatedAt   time.Time // frontmatter `created_at:` (generated memories); zero when absent
-	ModTime     time.Time // file modification time — when the memory last changed
+	Name          string
+	Description   string
+	Paths         []string   // glob patterns from frontmatter `paths:` for auto-attach
+	Confidence    Confidence // provenance confidence from frontmatter; "" for user-authored
+	Path          string
+	SizeBytes     int64
+	ContentSHA    string    // sha256 of the full file; "" if the body was not read
+	CreatedAt     time.Time // frontmatter `created_at:` (generated memories); zero when absent
+	ModTime       time.Time // file modification time — when the memory last changed
+	SourcePaths   []string  // provenance `source_paths:` — files the source session touched
+	SourceSymbols []string  // provenance `source_symbols:` — symbols the source session touched
 }
 
 // UserAuthored reports whether this memory was written by a person rather than
@@ -86,6 +88,7 @@ func List(workspace string) ([]Memory, error) {
 		if data, err := os.ReadFile(path); err == nil {
 			fm := parseFrontmatterFull(data)
 			m.Description, m.Paths, m.Confidence, m.CreatedAt = fm.description, fm.paths, fm.confidence, fm.createdAt
+			m.SourcePaths, m.SourceSymbols = fm.sourcePaths, fm.sourceSymbols
 			// The bytes are already in hand for the frontmatter parse, so hashing
 			// here is near-free and lets Fresh do exact content comparison (catching
 			// a same-size, same-mtime edit) without a second read.
@@ -402,6 +405,10 @@ func parseFrontmatterFull(data []byte) frontmatter {
 				out.paths = parseList(v)
 			case "confidence":
 				out.confidence = Confidence(v)
+			case "source_paths":
+				out.sourcePaths = parseList(v)
+			case "source_symbols":
+				out.sourceSymbols = parseList(v)
 			case "created_at":
 				if ts, err := time.Parse(time.RFC3339, v); err == nil {
 					out.createdAt = ts
@@ -414,10 +421,12 @@ func parseFrontmatterFull(data []byte) frontmatter {
 
 // frontmatter is the parsed view of a memory file's YAML-style header.
 type frontmatter struct {
-	description string
-	paths       []string
-	confidence  Confidence
-	createdAt   time.Time
+	description   string
+	paths         []string
+	confidence    Confidence
+	createdAt     time.Time
+	sourcePaths   []string
+	sourceSymbols []string
 }
 
 func parseList(v string) []string {

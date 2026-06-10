@@ -59,12 +59,20 @@ var topologyExploreSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type TopologyExplore struct {
 	storeFn func() *topology.Store
+	ws      WorkspaceFn // optional; enables the related-memories join
 }
 
 // NewTopologyExplore returns a new TopologyExplore tool.
 // storeFn returns the current topology.Store for the session, or nil if disabled.
 func NewTopologyExplore(storeFn func() *topology.Store) *TopologyExplore {
 	return &TopologyExplore{storeFn: storeFn}
+}
+
+// WithMemories wires the workspace accessor so the response can append
+// memories related to the explored neighbourhood (CodeRef join).
+func (t *TopologyExplore) WithMemories(ws WorkspaceFn) *TopologyExplore {
+	t.ws = ws
+	return t
 }
 
 func (*TopologyExplore) Name() string                 { return "topology_explore" }
@@ -104,7 +112,12 @@ func (t *TopologyExplore) Execute(ctx context.Context, raw json.RawMessage) (str
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatTopologyNeighbourhood(nb, a, alts), nil
+	out := formatTopologyNeighbourhood(nb, a, alts)
+	if t.ws != nil {
+		nodes := append([]topology.Node{nb.Centre}, nb.Nodes...)
+		out += relatedMemoriesSection(t.ws(), nodesToRefs(nodes))
+	}
+	return out, nil
 }
 
 func parseTopologyExploreArgs(raw json.RawMessage) (topologyExploreArgs, error) {

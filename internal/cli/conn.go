@@ -114,6 +114,12 @@ type connSession struct {
 	hintCache    *memoryHintCache
 	writeLimiter *tools.RateLimiter
 
+	// hintSeen tracks the memory names already hinted on this connection, so a
+	// memory is pointed out once per session, not on every read of a hot path.
+	// Lazily created; cleared on re-pin.
+	hintSeen   map[string]bool
+	hintSeenMu sync.Mutex
+
 	watcherOnce sync.Once
 	unsubscribe func() // removes the store-change listener on close
 

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -48,11 +49,20 @@ var topologyAffectedSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type TopologyAffected struct {
 	storeFn func() *topology.Store
+	ws      WorkspaceFn // optional; enables the known-context memories join
 }
 
 // NewTopologyAffected returns a new TopologyAffected tool.
 func NewTopologyAffected(storeFn func() *topology.Store) *TopologyAffected {
 	return &TopologyAffected{storeFn: storeFn}
+}
+
+// WithMemories wires the workspace accessor so the response can append
+// memories attached to the changed or affected files (test strategy, known
+// risky areas).
+func (t *TopologyAffected) WithMemories(ws WorkspaceFn) *TopologyAffected {
+	t.ws = ws
+	return t
 }
 
 func (*TopologyAffected) Name() string                 { return "topology_affected" }
@@ -105,7 +115,35 @@ func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (st
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatAffectedResult(result, a), nil
+	out := formatAffectedResult(result, a)
+	if t.ws != nil {
+		out += relatedMemoriesSection(t.ws(), affectedRefs(a, result))
+	}
+	return out, nil
+}
+
+// affectedRefs builds the CodeRef set for the memories join: the changed
+// files and symbols the caller named, plus the affected nodes the traversal
+// found.
+func affectedRefs(a topologyAffectedArgs, result *affectedResult) []memory.CodeRef {
+	refs := make([]memory.CodeRef, 0, len(a.Files)+len(a.Symbols)+len(result.Dependents)+len(result.Tests))
+	for _, f := range a.Files {
+		refs = append(refs, memory.CodeRef{File: filepath.ToSlash(f)})
+	}
+	for _, s := range a.Symbols {
+		refs = append(refs, memory.CodeRef{SymbolName: s})
+	}
+	nodes := append(append([]topology.Node{}, result.Dependents...), testNodes(result.Tests)...)
+	refs = append(refs, nodesToRefs(nodes)...)
+	return refs
+}
+
+func testNodes(tests []affectedTest) []topology.Node {
+	out := make([]topology.Node, 0, len(tests))
+	for _, t := range tests {
+		out = append(out, t.Node)
+	}
+	return out
 }
 
 func parseTopologyAffectedArgs(raw json.RawMessage) (topologyAffectedArgs, error) {

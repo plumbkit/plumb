@@ -197,6 +197,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// read check must start clean rather than inherit the old root's paths.
 		s.readTracker.Reset()
 		s.writeTracker.Reset()
+		s.clearHintSeen()
 
 		adapter := ""
 		if language != LanguageNone {

@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
 )
 
@@ -46,11 +48,11 @@ func TestMemoryHintCache_Match(t *testing.T) {
 		t.Fatalf("expected 2 memories cached, got %d", len(mems))
 	}
 
-	got := matchingMemoryNames(mems, "internal/auth/login.go", 3)
+	got := matchingMemoryNames(mems, "internal/auth/login.go", nil, 3)
 	if len(got) != 1 || got[0] != "auth-gotchas" {
 		t.Errorf("expected [auth-gotchas], got %v", got)
 	}
-	if n := matchingMemoryNames(mems, "internal/db/store.go", 3); len(n) != 0 {
+	if n := matchingMemoryNames(mems, "internal/db/store.go", nil, 3); len(n) != 0 {
 		t.Errorf("non-matching path should yield no hints, got %v", n)
 	}
 }
@@ -61,7 +63,7 @@ func TestMatchingMemoryNames_RespectsMax(t *testing.T) {
 		{Name: "b", Paths: []string{"**"}},
 		{Name: "c", Paths: []string{"**"}},
 	}
-	if got := matchingMemoryNames(mems, "x.go", 2); len(got) != 2 {
+	if got := matchingMemoryNames(mems, "x.go", nil, 2); len(got) != 2 {
 		t.Errorf("max=2 should cap to 2, got %v", got)
 	}
 }
@@ -78,9 +80,52 @@ func TestMatchingMemoryNames_UserAuthoredClaimSlotsFirst(t *testing.T) {
 		{Name: "episodic-20260610-cccc", Paths: []string{"**"}, Confidence: memory.ConfidenceGenerated},
 		{Name: "zz-user-notes", Paths: []string{"**"}},
 	}
-	got := matchingMemoryNames(mems, "x.go", 3)
+	got := matchingMemoryNames(mems, "x.go", nil, 3)
 	if len(got) != 3 || got[0] != "zz-user-notes" {
 		t.Errorf("user-authored memory must claim the first hint slot, got %v", got)
+	}
+}
+
+// TestMatchingMemoryNames_SymbolRefs: a memory whose provenance references a
+// symbol present in the edited file matches even when no paths glob does; a
+// nil symbol set skips the symbol pass entirely.
+func TestMatchingMemoryNames_SymbolRefs(t *testing.T) {
+	mems := []memory.Memory{
+		{Name: "lock-design", SourceSymbols: []string{"AcquireDaemonLock"}},
+		{Name: "other", SourceSymbols: []string{"Unrelated"}},
+	}
+	got := matchingMemoryNames(mems, "internal/cli/lock.go", map[string]bool{"AcquireDaemonLock": true}, 3)
+	if len(got) != 1 || got[0] != "lock-design" {
+		t.Errorf("symbol ref should match, got %v", got)
+	}
+	if got := matchingMemoryNames(mems, "internal/cli/lock.go", nil, 3); len(got) != 0 {
+		t.Errorf("nil symbol set must skip the symbol pass, got %v", got)
+	}
+}
+
+// TestEnrichToolOutput_HintOnceQuiet: a memory hints on the first matching
+// read, stays quiet for the rest of the session, and hints again after a
+// re-pin clears the suppression set.
+func TestEnrichToolOutput_HintOnceQuiet(t *testing.T) {
+	ws := t.TempDir()
+	writePathMemory(t, ws, "auth-gotchas", "internal/auth/**")
+
+	s := &connSession{store: config.NewStore(config.Defaults()), hintCache: &memoryHintCache{}}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
+	s.applyProjectConfig(ws)
+
+	args := json.RawMessage(`{"file_path":"` + ws + `/internal/auth/login.go"}`)
+	ctx := context.Background()
+
+	if out := s.enrichToolOutput(ctx, "read_file", args, "body"); !strings.Contains(out, "[Hint:") {
+		t.Fatalf("first matching read should hint: %q", out)
+	}
+	if out := s.enrichToolOutput(ctx, "read_file", args, "body"); strings.Contains(out, "[Hint:") {
+		t.Fatalf("repeat hint must stay quiet for the session: %q", out)
+	}
+	s.clearHintSeen() // what a re-pin does
+	if out := s.enrichToolOutput(ctx, "read_file", args, "body"); !strings.Contains(out, "[Hint:") {
+		t.Fatalf("hint should fire again after re-pin: %q", out)
 	}
 }
 

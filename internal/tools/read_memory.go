@@ -7,12 +7,14 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 type readMemoryTool struct {
 	ws      WorkspaceFn
 	guard   BoundaryGuard
 	indexFn func() *memory.Index
+	topoFn  func() *topology.Store
 }
 
 func NewReadMemory(ws WorkspaceFn) *readMemoryTool { return &readMemoryTool{ws: ws} }
@@ -26,6 +28,13 @@ func (t *readMemoryTool) WithBoundary(guard BoundaryGuard) *readMemoryTool {
 // (recency nudges ranking).
 func (t *readMemoryTool) WithIndex(fn func() *memory.Index) *readMemoryTool {
 	t.indexFn = fn
+	return t
+}
+
+// WithTopology wires the topology store so a generated memory's referenced
+// symbols can be stale-checked against the live code map.
+func (t *readMemoryTool) WithTopology(fn func() *topology.Store) *readMemoryTool {
+	t.topoFn = fn
 	return t
 }
 
@@ -49,7 +58,7 @@ func (*readMemoryTool) InputSchema() json.RawMessage {
 }`)
 }
 
-func (t *readMemoryTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *readMemoryTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		Name      string `json:"name"`
 		Workspace string `json:"workspace"`
@@ -73,6 +82,9 @@ func (t *readMemoryTool) Execute(_ context.Context, args json.RawMessage) (strin
 	}
 	if rec, merr := memory.ReadMeta(ws, a.Name); merr == nil {
 		content += memoryProvenanceFooter(rec)
+		if t.topoFn != nil {
+			content += staleSymbolsNote(ctx, t.topoFn(), rec)
+		}
 	}
 	if ix := resolveMemoryIndex(t.indexFn, ws); ix != nil {
 		_ = ix.TouchUsed(a.Name)
@@ -102,4 +114,35 @@ func memoryProvenanceFooter(rec memory.Record) string {
 		detail = " — " + strings.Join(parts, " · ")
 	}
 	return fmt.Sprintf("\n\n---\n[provenance] %s%s", rec.Confidence, detail)
+}
+
+// staleSymbolsMax caps the per-read topology lookups so a memory with a huge
+// provenance trail cannot turn one read into dozens of index queries.
+const staleSymbolsMax = 8
+
+// staleSymbolsNote checks a memory's referenced source_symbols against the
+// live topology index and reports the ones that no longer exist — a renamed
+// or deleted symbol means the memory may describe code that is gone. Silent
+// (returns "") when there is no store, no referenced symbols, or every symbol
+// still resolves; the check never fails the read.
+func staleSymbolsNote(ctx context.Context, store *topology.Store, rec memory.Record) string {
+	if store == nil || len(rec.SourceSymbols) == 0 {
+		return ""
+	}
+	syms := rec.SourceSymbols
+	if len(syms) > staleSymbolsMax {
+		syms = syms[:staleSymbolsMax]
+	}
+	var missing []string
+	for _, sym := range syms {
+		nodes, err := store.ResolveNodes(ctx, sym, topology.NodeHint{})
+		if err == nil && len(nodes) == 0 {
+			missing = append(missing, sym)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n[stale-check] referenced symbols no longer in the code map: %s — this memory may describe code that has moved or been removed.",
+		strings.Join(missing, ", "))
 }

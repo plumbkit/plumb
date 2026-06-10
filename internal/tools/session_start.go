@@ -205,8 +205,8 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	writeSessionCommits(&sb, ws)
 	writeSessionWorkingTree(&sb, ws)
 	t.writeSessionGitPolicy(&sb, ws)
-	t.writeSessionRecentFiles(&sb, ws)
-	writeSessionMemories(&sb, ws)
+	recent := t.writeSessionRecentFiles(&sb, ws)
+	writeSessionMemories(&sb, ws, recent)
 	t.writeSessionEpisodic(&sb, ws)
 	clientName := ""
 	if t.clientNameFn != nil {
