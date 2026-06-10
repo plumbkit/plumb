@@ -307,7 +307,7 @@ Pyright is the worked example; full guide in `docs/adding-an-lsp.md`.
 4. Register the tool in `handleConn` (`internal/cli/daemon.go`); write tools use the shared `writeDeps`.
 5. Unit-test in `internal/tools/<name>_test.go` (`WriteDeps{}` is the nil-safe setup); document in `docs/tools.md` and update the tool table below.
 
-## Available tools (50)
+## Available tools (51)
 
 Concise index only. Full behaviour, schemas, and per-tool steering live in each tool's MCP description (`tools/list`); sources are `internal/tools/<name>.go`.
 
@@ -319,6 +319,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - **Search/replace and git:** `find_replace` is dry-run by default; prefer `rename_symbol` for identifiers. `git` is tiered by policy (read/write/destructive/network), with typed `add`/`commit` and confirmation for dangerous tiers.
 - **Other utilities:** `git_init`, `file_diff`, `version`, `daemon_info`, `rename_session`, `workspace_sessions`.
 - **Topology:** `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`, `structural_query` use the SQLite/FTS5 index at `<workspace>/.plumb/topology.db`.
+- **Ranked discovery:** `workspace_search` is the broker over the indexed corpora — code and docs via topology FTS, memories via the memory FTS index — interleaved by per-corpus rank and labelled with `corpus`/`source`/`field`/`score`/`why` plus per-corpus index freshness; `exact_match=false` always (it is discovery, never proof of absence — the exact lane stays `search_in_files`). Discovery ladder: `workspace_search` → topology/LSP → `search_in_files` → bounded `read_file`.
 - **Memory:** `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories`, `relevant_memories` operate on per-workspace markdown memories under `<workspace>/.plumb/memories/`. `search_memories` is FTS5-ranked when the index is fresh (grep fallback otherwise; `mode` = auto/fts/grep); `read_memory` shows a provenance footer for generated memories; writes/deletes keep the index current. See `[memory]` config.
 
 ## TUI conventions (Bubble Tea v2)

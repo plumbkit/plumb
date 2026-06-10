@@ -80,8 +80,9 @@ func (*TopologySearch) Description() string {
 		"classes, and other named entities by name, tokenised identifier (camelCase/snake_case), " +
 		"qualified name, signature, or docstring. Results include kind, file path, line range, " +
 		"match field, score, and optional snippet. Source is 'topology' (approximate; use " +
-		"search_in_files for exact filesystem matches). Returns a clear message when the index " +
-		"is disabled or empty."
+		"search_in_files for exact filesystem matches). Code-structure corpus only — for ranked " +
+		"discovery that also spans docs and memories, use workspace_search (this tool is one of " +
+		"its backends). Returns a clear message when the index is disabled or empty."
 }
 
 type topologySearchArgs struct {

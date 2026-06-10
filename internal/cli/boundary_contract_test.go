@@ -66,6 +66,7 @@ var knownToolGuarding = map[string]string{
 	"NewRenameSession":    "none",
 	"NewSessionStart":     "none", // workspace arg is for deliberate re-pinning, not file access
 	"NewTopologySearch":   "none",
+	"NewWorkspaceSearch":  "none", // queries the pinned connection's indexes; no user path input
 	"NewTopologyExplore":  "none",
 	"NewTopologyImpact":   "none",
 	"NewTopologyAffected": "none", // queries the topology DB by symbol/file name; no direct FS access

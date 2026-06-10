@@ -122,7 +122,7 @@ func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSche
 func (t *SearchInFiles) Description() string {
 	return "Exact scan of current file contents — literal text by default, regex when use_regex=true. " +
 		"Use search_in_files when you need every occurrence, exact verification, audits, or safe replacement prep. " +
-		"For broad conceptual discovery (\"where is daemon locking handled?\"), prefer topology_search instead. " +
+		"For broad conceptual discovery (\"where is daemon locking handled?\"), prefer workspace_search (ranked, across code/docs/memories) or topology_search instead. " +
 		"For symbol name lookups (finding a function, type, or variable by name), prefer workspace_symbols — " +
 		"it uses the LSP index and returns results instantly. " +
 		"Prefer this over shelling out to grep/rg: " +

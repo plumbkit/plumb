@@ -343,6 +343,22 @@ its candidates and falls back to plain FTS5 (`mode=ranked`) on any error. Pass
 `rerank:false` to force the plain ranking, `rerank:true` to force re-rank when
 configured. See `docs/internal/semantic-search-design.md`.
 
+### `workspace_search`
+Ranked discovery **broker** across the workspace's indexed corpora: **code**
+and **docs** (Markdown/HTML sections) via the topology FTS5 index, and
+**memory** via the memory FTS5 index. Results are ranked within each corpus and
+interleaved round-robin by per-corpus rank (raw FTS5 scores are not comparable
+across indexes); every hit is labelled `corpus`, `source`, `field`, `score`,
+and `why`, and the header reports per-corpus index freshness
+(`fresh|stale|building|missing|skipped`) plus `exact_match=false` — this is
+discovery, never proof of absence. A stale memory index still serves (honestly
+labelled) and kicks an async reindex. Decision rule: use `workspace_search`
+for conceptual questions ("where is daemon locking handled?"); use
+`search_in_files` for exact literal/regex matches over current file contents.
+Ladder: `workspace_search` → topology/LSP → `search_in_files` → bounded
+`read_file`. **Inputs:** `query` (required), `corpora` (optional subset of
+`code`/`docs`/`memory`; default all), `limit` (default 20, max 100).
+
 ### `topology_explore`
 BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`
 (default 2, max 4), `max_nodes` (default 50, max 200), `max_bytes` (default

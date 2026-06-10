@@ -38,7 +38,7 @@ func (*searchMemoriesTool) Description() string {
 
 When the FTS5 memory index is available and fresh, returns ranked hits (by relevance, with a bonus for user-authored memories) annotated source=memory-fts. Otherwise falls back to a deterministic grep over the markdown files, returning each match with the memory name and line. Smart-case (case-insensitive if 'pattern' is all lowercase) unless 'case_sensitive' is set; 'use_regex' forces the grep path. 'mode' (auto|fts|grep) overrides the choice; default auto.
 
-Useful when you don't know which memory contains a piece of context — much faster than reading every memory.`
+Memory-only corpus with a deterministic grep fallback — for ranked discovery across code, docs, AND memories in one call, use workspace_search instead. Useful when you don't know which memory contains a piece of context — much faster than reading every memory.`
 }
 
 func (*searchMemoriesTool) InputSchema() json.RawMessage {
