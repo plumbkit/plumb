@@ -15,6 +15,10 @@ func TestHintRelPath(t *testing.T) {
 		`{"path":"internal/auth/login.go"}`:          "internal/auth/login.go",
 		`{"file_path":"/other/x.go"}`:                "", // outside workspace
 		`{}`:                                         "", // no path arg
+		// An in-workspace dir literally named "..config" must still hint — a bare
+		// ".." prefix check would wrongly reject it as an escape.
+		`{"file_path":"/ws/..config/app.go"}`: "..config/app.go",
+		`{"path":"../escape.go"}`:             "", // genuine escape
 	}
 	for in, want := range cases {
 		if got := hintRelPath(ws, json.RawMessage(in)); got != want {

@@ -73,7 +73,7 @@ func collectHits(rows interface {
 		h := Hit{
 			Name:        name,
 			Description: desc,
-			Field:       matchMemoryField(query, name, tokens, desc, body, globs),
+			Field:       matchMemoryField(query, name, tokens, desc, body, globs, spaths, ssyms),
 			Confidence:  confidence,
 			Score:       -rank,
 		}
@@ -102,9 +102,10 @@ func buildMemoryFTSQuery(query string) string {
 // matchMemoryField returns the FTS column most likely responsible for the match,
 // by substring-checking the query terms. Heuristic — FTS5 does not expose the
 // matched column without fts5_highlight().
-func matchMemoryField(query, name, tokens, desc, body, globs string) string {
+func matchMemoryField(query, name, tokens, desc, body, globs, spaths, ssyms string) string {
 	nl, tl, dl, bl, gl := strings.ToLower(name), strings.ToLower(tokens),
 		strings.ToLower(desc), strings.ToLower(body), strings.ToLower(globs)
+	spl, ssl := strings.ToLower(spaths), strings.ToLower(ssyms)
 	for t := range strings.FieldsSeq(strings.ToLower(query)) {
 		t = strings.Trim(t, `"`)
 		if t == "" {
@@ -119,6 +120,10 @@ func matchMemoryField(query, name, tokens, desc, body, globs string) string {
 			return "description"
 		case strings.Contains(gl, t):
 			return "path"
+		case strings.Contains(spl, t):
+			return "source_paths"
+		case strings.Contains(ssl, t):
+			return "source_symbols"
 		case strings.Contains(bl, t):
 			return "body"
 		}

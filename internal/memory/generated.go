@@ -54,6 +54,10 @@ func buildProvenanceFrontmatter(name, description string, prov Provenance) strin
 		sb.WriteString("description: " + strings.ReplaceAll(description, "\n", " ") + "\n")
 	}
 	sb.WriteString("confidence: " + string(prov.Confidence) + "\n")
+	// `paths:` makes the generated memory hint-match the files it was distilled
+	// from (deduped) — the same frontmatter key a hand-written memory uses for
+	// auto-attach. source_paths below is the raw provenance trail (kept verbatim).
+	writeListLine(&sb, "paths", dedupeStrings(prov.SourcePaths))
 	writeListLine(&sb, "source_session", []string{prov.SourceSession})
 	writeListLine(&sb, "source_paths", prov.SourcePaths)
 	writeListLine(&sb, "source_symbols", prov.SourceSymbols)
@@ -66,6 +70,22 @@ func buildProvenanceFrontmatter(name, description string, prov Provenance) strin
 	}
 	sb.WriteString("---\n\n")
 	return sb.String()
+}
+
+// dedupeStrings returns values with blanks dropped and first-seen order
+// preserved. Used for the generated `paths:` glob list.
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 func writeListLine(sb *strings.Builder, key string, values []string) {

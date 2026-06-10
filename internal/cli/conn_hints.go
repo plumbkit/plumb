@@ -118,7 +118,9 @@ func hintRelPath(ws string, args json.RawMessage) string {
 		abs = filepath.Join(ws, abs)
 	}
 	rel, err := filepath.Rel(ws, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	// Reject only a genuine escape (".." or "../…"); an in-workspace dir literally
+	// named "..config" must still hint, so don't match on a bare ".." prefix.
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return ""
 	}
 	return filepath.ToSlash(rel)
