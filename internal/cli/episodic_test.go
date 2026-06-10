@@ -1,10 +1,17 @@
 package cli
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/redact"
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -59,5 +66,110 @@ func TestClampRunes(t *testing.T) {
 	}
 	if got := clampRunes("short", 0); got != "short" {
 		t.Errorf("zero budget should be a no-op, got %q", got)
+	}
+}
+
+// TestGenerateEpisodicSummary_Integration exercises the full connSession path:
+// seed a session's tool_calls → generateEpisodicSummary reads them, builds a
+// summary, redacts it, and writes it via the stats Writer → read it back through
+// the same LatestEpisodic accessor session_start uses. This is the
+// idle→episodic→surface loop minus the reaper trigger (covered separately below).
+func TestGenerateEpisodicSummary_Integration(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+
+	store := config.NewStore(config.Defaults()) // Memory.GeneratedSummaries defaults true
+	ss := newStatsStore()
+	defer ss.Close()
+
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, ss, newSharedBudgets())
+	defer s.close()
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
+
+	// Seed this session's tool_calls via a direct synchronous RW handle, then
+	// close it so only the stats Writer touches the DB during generation.
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatalf("stats.Open: %v", err)
+	}
+	now := time.Now()
+	for _, c := range []stats.Call{
+		{Workspace: ws, SessionID: s.sessID, Tool: "edit_file", CalledAt: now, InputJSON: `{"file_path":"/p/auth.go"}`, Success: true},
+		{Workspace: ws, SessionID: s.sessID, Tool: "find_references", CalledAt: now, InputJSON: `{"name":"UserSession"}`, Success: true},
+		{Workspace: ws, SessionID: s.sessID, Tool: "read_file", CalledAt: now, InputJSON: `{}`, Success: true},
+	} {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	db.Close()
+
+	s.generateEpisodicSummary()
+
+	// The episodic insert rides the async stats Writer (200ms flush); retry.
+	var got stats.Episodic
+	deadline := time.After(3 * time.Second)
+	for {
+		if ro, _ := stats.SharedReadOnly(); ro != nil {
+			if e, ok, _ := ro.LatestEpisodic(ws); ok {
+				got = e
+				break
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatal("episodic summary was not written within the deadline")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if !strings.Contains(got.Summary, "auth.go") {
+		t.Errorf("summary missing touched file: %q", got.Summary)
+	}
+	if !strings.Contains(got.Summary, "UserSession") {
+		t.Errorf("summary missing symbol: %q", got.Summary)
+	}
+	if got.WriteCount != 1 || got.ReadCount != 2 {
+		t.Errorf("counts: write=%d read=%d (want 1/2)", got.WriteCount, got.ReadCount)
+	}
+}
+
+// TestSummariseIdle_FiresClosureOncePerSpell covers the reaper trigger: a session
+// idle past the threshold has its episodic-summary closure fired exactly once per
+// idle spell (re-arming only after new activity).
+func TestSummariseIdle_FiresClosureOncePerSpell(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	sessID, err := session.Register(session.Info{Name: "idle-test", DaemonVersion: "test"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// Age the session file so List() reports it as idle (LastSeenAt = mtime).
+	dir, err := session.Dir()
+	if err != nil {
+		t.Fatalf("session.Dir: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(filepath.Join(dir, sessID+".json"), old, old); err != nil {
+		t.Fatalf("age session file: %v", err)
+	}
+
+	var fired int32
+	reg := newConnRegistry()
+	reg.add(sessID, connHandle{summarise: func() { atomic.AddInt32(&fired, 1) }})
+
+	reg.summariseIdle(1 * time.Minute)
+	deadline := time.After(time.Second)
+	for atomic.LoadInt32(&fired) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("summarise closure did not fire for an idle session")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Second pass within the same idle spell must not re-fire (dedup).
+	reg.summariseIdle(1 * time.Minute)
+	time.Sleep(100 * time.Millisecond)
+	if n := atomic.LoadInt32(&fired); n != 1 {
+		t.Errorf("expected exactly one summarise per idle spell, got %d", n)
 	}
 }
