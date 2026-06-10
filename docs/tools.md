@@ -40,12 +40,24 @@ These apply across many tools:
   uncommitted git changes unless you pass `dirty_ok: true`.
 - **`expected_mtime` / `expected_sha`.** `read_file` and `read_symbol` emit a
   header line — `# plumb-read mtime=<RFC3339Nano> sha256=<hash> indent=<…>` —
-  whose `mtime`/`sha256` you can pass back to `edit_file` for optimistic
-  concurrency checks.
+  whose `mtime`/`sha256` you can pass back to **`edit_file` *or* `write_file`**
+  for optimistic concurrency checks (the write is refused if the file changed
+  since you read it).
+- **Automatic staleness guard.** Even without `expected_mtime`, if this session
+  read a file and it then changed on disk before your write, `write_file`
+  **refuses** (pass `overwrite_changed: true` to override) and `edit_file`
+  **warns** but still applies. A file the session never read — including a
+  brand-new one — is never flagged, and a write you yourself just made is not a
+  change, so consecutive edits to your own file are never flagged.
 - **Line-number gutter.** `read_file` and `read_symbol` prefix every content
   line with its 1-based file line number and a tab (`cat -n` style), so range
   math is exact. The gutter is **display-only** — strip the leading `<n>\t`
-  before using a line as an `edit_file` or `find_replace` `old_string`.
+  before using a line as an `edit_file` or `find_replace` `old_string`. (If you
+  forget, `edit_file` strips an unambiguous pasted gutter for you and says so.)
+- **`# plumb-note` / `# plumb-warn` lines** are out-of-band annotations plumb
+  adds to a tool response (large-file `file_outline` nudges, staleness warnings,
+  a one-shot "daemon reconnected" note after a transparent reconnect). They are
+  informational — never part of file content.
 
 ---
 
