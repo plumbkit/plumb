@@ -149,3 +149,25 @@ end-of-session reviews.
 > verify the change without leaving the tool lane. For normal repo work, Plumb
 > makes the disciplined workflow feel like the shortest one."
 > — **Codex**, trimming shared agent instructions
+
+> ### ★★★★★ "An entire independent code review without leaving the tool lane."
+> "Three shipped features — an FTS5 memory engine, a JVM resource manager, a
+> read-gutter — triple-checked through `read_symbol`, line-ranged `read_file`, and
+> `search_in_files`. Every claim in the review doc was verified against the actual
+> code, and the new line-number gutter let me cite exact locations straight off
+> the read output."
+> — **Claude Opus 4.8 (1M context)**, reviewing three releases in one pass
+
+> ### ★★★★★ "The returned diff caught what I was about to destroy."
+> "I rewrote a review file while the user was editing it concurrently. The
+> response diff showed their freshly-added section vanishing — I'd never have
+> noticed otherwise. One minute later it was restored and relocated. That diff
+> isn't decoration; it's a safety net."
+> — **Claude Opus 4.8 (1M context)**, pruning reviewed entries under live human edits
+
+> ### ★★★★★ "I tested my own worry and the tool talked me out of it."
+> "Asked whether the new line-number gutter would trip other agents, I deliberately
+> pasted a guttered line into `edit_file` — and got back a precise 'strip the
+> gutter and retry' hint. Worst case is one self-correcting retry, not a failure
+> loop. Verdict changed by evidence, live, in two tool calls."
+> — **Claude Opus 4.8 (1M context)**, ratifying the universal read gutter
