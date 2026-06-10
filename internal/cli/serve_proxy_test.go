@@ -49,9 +49,10 @@ func TestEnvelopeClassification(t *testing.T) {
 // mockDaemon serves the daemon side of a net.Pipe: it answers initialize, ping,
 // and generic requests. Behaviour is controllable to simulate crash and hang.
 type mockDaemon struct {
-	conn        net.Conn     // daemon side of the pipe
-	hangPing    *atomic.Bool // when true, ping requests get no reply (hung)
-	crashOnTool bool         // close the connection on the first tool call (crash)
+	conn          net.Conn     // daemon side of the pipe
+	hangPing      *atomic.Bool // when true, ping requests get no reply (hung)
+	crashOnTool   bool         // close the connection on the first tool call (crash)
+	mcpToolResult bool         // answer tool calls with an MCP content-array result shape
 }
 
 func startMockDaemon(m *mockDaemon) {
@@ -77,6 +78,11 @@ func startMockDaemon(m *mockDaemon) {
 				if m.crashOnTool {
 					_ = m.conn.Close()
 					return
+				}
+				if m.mcpToolResult {
+					_ = writeFrame(m.conn, fmt.Appendf(nil,
+						`{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}]}}`, e.ID))
+					continue
 				}
 				_ = writeFrame(m.conn, fmt.Appendf(nil,
 					`{"jsonrpc":"2.0","id":%s,"result":{"method":%q}}`, e.ID, e.Method))
@@ -214,6 +220,81 @@ func TestProxyCrashRecovery(t *testing.T) {
 		t.Fatalf("expected result for id 6 from replacement daemon, got %q", frame)
 	}
 	_ = h.clientIn.Close()
+}
+
+// TestProxyReconnectNote verifies the one-shot daemon-reconnected note: after a
+// transparent reconnect, the FIRST tools/call result carries the note, and the
+// next one does not.
+func TestProxyReconnectNote(t *testing.T) {
+	t.Parallel()
+
+	_, initialProxySide := newPipeDaemon(func(m *mockDaemon) { m.crashOnTool = true })
+	h := startProxy(t, initialProxySide, 0, 0)
+	_, replProxySide := newPipeDaemon(func(m *mockDaemon) { m.mcpToolResult = true })
+	h.dialQueue <- replProxySide
+
+	h.start()
+	h.handshake()
+
+	// Trigger the crash + reconnect; the in-flight id 5 gets the retryable error.
+	h.write(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}`)
+	if frame := h.read(3 * time.Second); !strings.Contains(frame, `"id":5`) || !strings.Contains(frame, "daemon restarted") {
+		t.Fatalf("expected synthesised error for in-flight id 5, got %q", frame)
+	}
+
+	// First tools/call after the reconnect: result carries the one-shot note,
+	// appended as an extra content item (the original "ok" text is preserved).
+	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
+	frame := h.read(3 * time.Second)
+	if !strings.Contains(frame, `"id":6`) || !strings.Contains(frame, "daemon reconnected") {
+		t.Fatalf("expected reconnect note on the first tool call after reconnect, got %q", frame)
+	}
+	if !strings.Contains(frame, `"ok"`) {
+		t.Fatalf("the original tool result content must be preserved, got %q", frame)
+	}
+
+	// Second tools/call: no note (strictly one-shot).
+	h.write(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}`)
+	if frame := h.read(3 * time.Second); strings.Contains(frame, "daemon reconnected") {
+		t.Fatalf("reconnect note must be one-shot, but a second tool call also carried it: %q", frame)
+	}
+	_ = h.clientIn.Close()
+}
+
+func TestInjectReconnectNote(t *testing.T) {
+	t.Parallel()
+
+	// Well-formed tools/call result: note appended, original content preserved.
+	good := []byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello"}]}}`)
+	out, ok := injectReconnectNote(good, "v9.9.9")
+	if !ok {
+		t.Fatal("expected injection into a well-formed tools/call result")
+	}
+	s := string(out)
+	if !strings.Contains(s, "hello") || !strings.Contains(s, "daemon reconnected") || !strings.Contains(s, "v9.9.9") {
+		t.Fatalf("expected note appended alongside original content, got %q", s)
+	}
+
+	// Fail-safe shapes: each returns the input unchanged with ok=false.
+	for _, c := range []struct {
+		name  string
+		frame string
+	}{
+		{"error response", `{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"x"}}`},
+		{"result without content", `{"jsonrpc":"2.0","id":3,"result":{"method":"x"}}`},
+		{"not json", `not json at all`},
+		{"content not array", `{"jsonrpc":"2.0","id":3,"result":{"content":"oops"}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := injectReconnectNote([]byte(c.frame), "v1")
+			if ok {
+				t.Fatalf("expected ok=false for %s", c.name)
+			}
+			if string(got) != c.frame {
+				t.Fatalf("a refused injection must return the frame unchanged, got %q", got)
+			}
+		})
+	}
 }
 
 func TestProxyGivesUpAfterMaxReconnects(t *testing.T) {

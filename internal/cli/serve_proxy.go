@@ -87,6 +87,13 @@ type reconnectingProxy struct {
 	reqMu       sync.Mutex
 	outstanding map[string]json.RawMessage
 
+	// reconnected is set when the proxy transparently re-establishes the daemon
+	// connection (only ever inside reconnect(), which fires solely on an
+	// existing connection's failure — never for the initial connect, so it
+	// cannot false-fire for a brand-new client). The first content-bearing tool
+	// result after it is set carries a one-shot reconnect note, then it clears.
+	reconnected atomic.Bool
+
 	pongMu sync.Mutex
 	pongCh map[string]chan struct{}
 
@@ -313,11 +320,38 @@ func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {
 			return // heartbeat pong — never forwarded to the client
 		}
 		p.resolveResponse(key)
+		frame = p.annotateReconnect(frame)
 	}
 	p.writeClient(frame)
 }
 
+// annotateReconnect appends a one-shot "daemon reconnected" note to the first
+// content-bearing tool result after a transparent reconnect, so a
+// silently-changed tool contract (e.g. a rebuilt daemon's new output format) is
+// attributable rather than spooky. It is called for every daemon response while
+// the flag is set and consumes the flag ONLY when injection actually succeeds —
+// so the note lands on a real tool result, not on a ping/initialize/error
+// response that happens to be the first frame back. The shape check inside
+// injectReconnectNote (a `result.content` array) is the filter, which is why no
+// request-id correlation is needed: the response can race ahead of its own
+// request being tracked (track-after-write), so id-matching would be unreliable.
+//
+// pumpDaemonToClient is the sole caller and runs single-threaded, so the
+// Load/Store pair needs no CAS.
+func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
+	if !p.reconnected.Load() {
+		return frame
+	}
+	annotated, ok := injectReconnectNote(frame, Version)
+	if !ok {
+		return frame // not a tool result — keep the note armed for the next response
+	}
+	p.reconnected.Store(false)
+	return annotated
+}
+
 // resolveResponse marks the initialize handshake answered or de-tracks a
+// completed request so it is not error-synthesised on a later reconnect. It
 // completed request so it is not error-synthesised on a later reconnect.
 func (p *reconnectingProxy) resolveResponse(key string) {
 	p.hsMu.Lock()
@@ -370,6 +404,11 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 			fr, herr := p.replayHandshake(conn)
 			if herr == nil {
 				p.failOutstanding()
+				// Arm the one-shot reconnect note BEFORE publishing: publish makes
+				// the new connection live to the pumps, so a tool call can be
+				// written and its result processed the instant publish returns. Set
+				// the flag first so that first post-reconnect result always sees it.
+				p.reconnected.Store(true)
 				gen := p.publish(conn, fr)
 				p.daemonPID.Store(int64(readDaemonPID())) // track the PID we are now connected to
 				slog.Warn("serve: reconnected to daemon after failure", "attempt", attempt, "generation", gen)

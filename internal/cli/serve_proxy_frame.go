@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -97,4 +98,62 @@ func cloneBytes(b []byte) []byte {
 	c := make([]byte, len(b))
 	copy(c, b)
 	return c
+}
+
+// injectReconnectNote appends a one-shot informational note as an extra text
+// content item to a tools/call result frame, so the agent learns its plumb
+// daemon was transparently reconnected (and may have changed behaviour) on the
+// first response after a reconnect.
+//
+// It is deliberately additive — it only *appends* a content item, never edits
+// existing text — and fully fail-safe: any frame that is not a well-formed MCP
+// tools/call result (an error response, a result with no content array,
+// anything that does not round-trip) is returned unchanged with ok=false, so a
+// malformed injection can never corrupt a real tool result.
+func injectReconnectNote(frame []byte, version string) (out []byte, ok bool) {
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(frame, &full); err != nil {
+		return frame, false
+	}
+	resultRaw, hasResult := full["result"]
+	if !hasResult {
+		return frame, false // an error response has no result — leave it untouched
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(resultRaw, &result); err != nil {
+		return frame, false
+	}
+	contentRaw, hasContent := result["content"]
+	if !hasContent {
+		return frame, false // not the MCP tools/call result shape
+	}
+	// content is populated by Unmarshal, so a prealloc would be discarded.
+	var content []json.RawMessage //nolint:prealloc // filled by json.Unmarshal below
+	if err := json.Unmarshal(contentRaw, &content); err != nil {
+		return frame, false
+	}
+	note, err := json.Marshal(map[string]string{
+		"type": "text",
+		"text": fmt.Sprintf("# plumb-note: plumb daemon reconnected (now %s) — your session state "+
+			"(read-tracking, caches) was rebuilt and tool-output behaviour may have changed since your previous call.", version),
+	})
+	if err != nil {
+		return frame, false
+	}
+	content = append(content, note)
+	newContent, err := json.Marshal(content)
+	if err != nil {
+		return frame, false
+	}
+	result["content"] = newContent
+	newResult, err := json.Marshal(result)
+	if err != nil {
+		return frame, false
+	}
+	full["result"] = newResult
+	newFrame, err := json.Marshal(full)
+	if err != nil {
+		return frame, false
+	}
+	return newFrame, true
 }
