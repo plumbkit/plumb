@@ -148,11 +148,11 @@ func renderEpisodic(touched, symbols []string, readN, writeN int) string {
 }
 
 // isEpisodicWrite reports whether a call mutated files. find_replace is a write
-// only when it actually applied (apply==true); its default dry-run is a read.
+// only when dry_run is explicitly false; its default dry-run is a read.
 func isEpisodicWrite(tool string, args map[string]any) bool {
 	if tool == "find_replace" {
-		apply, _ := args["apply"].(bool)
-		return apply
+		dryRun, ok := args["dry_run"].(bool)
+		return ok && !dryRun
 	}
 	return episodicWriteTools[tool]
 }

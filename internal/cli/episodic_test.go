@@ -62,19 +62,20 @@ func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 }
 
 // TestBuildEpisodic_TransactionAndFindReplace: transaction_apply paths are
-// nested under operations[], and find_replace is a write only when it applied.
+// nested under operations[], and find_replace is a write only when dry_run=false.
 func TestBuildEpisodic_TransactionAndFindReplace(t *testing.T) {
 	calls := []stats.Call{
 		{Tool: "transaction_apply", InputJSON: `{"operations":[{"path":"/ws/a.go"},{"from":"/ws/b.go","to":"/ws/c.go"}]}`},
-		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/dry.go","apply":false}`},    // dry-run → read
-		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/applied.go","apply":true}`}, // applied → write
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/default-dry.go"}`},             // default dry-run → read
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/dry.go","dry_run":true}`},      // explicit dry-run → read
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/applied.go","dry_run":false}`}, // applied → write
 	}
 	summary, touched, readN, writeN := buildEpisodic(calls)
 	if writeN != 2 {
 		t.Errorf("writeN = %d, want 2 (transaction_apply + applied find_replace)", writeN)
 	}
-	if readN != 1 {
-		t.Errorf("readN = %d, want 1 (the dry-run find_replace)", readN)
+	if readN != 2 {
+		t.Errorf("readN = %d, want 2 (default + explicit dry-run find_replace)", readN)
 	}
 	want := map[string]bool{"a.go": true, "b.go": true, "c.go": true, "applied.go": true}
 	for _, f := range touched {
@@ -86,8 +87,10 @@ func TestBuildEpisodic_TransactionAndFindReplace(t *testing.T) {
 	if len(want) > 0 {
 		t.Errorf("missing touched files: %v (got %v)", want, touched)
 	}
-	if strings.Contains(summary, "dry.go") {
-		t.Errorf("a dry-run find_replace must not contribute a touched file: %s", summary)
+	for _, name := range []string{"default-dry.go", "dry.go"} {
+		if strings.Contains(summary, name) {
+			t.Errorf("a dry-run find_replace must not contribute touched file %s: %s", name, summary)
+		}
 	}
 }
 

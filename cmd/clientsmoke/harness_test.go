@@ -226,20 +226,22 @@ func mkTmpHome(t *testing.T) string {
 	return tmpHome
 }
 
-// isolatedEnv overrides HOME and every XDG base dir so the daemon a client
-// spawns uses a fresh socket / data / config tree — leaving the developer's
-// real daemon and client configs untouched. All other environment (notably API
-// keys) is inherited, which is what lets the auth tier reach the provider.
+// isolatedEnv overrides HOME, every XDG base dir, and client-specific config
+// roots so the daemon a client spawns uses a fresh socket / data / config tree —
+// leaving the developer's real daemon and client configs untouched. All other
+// environment (notably API keys) is inherited, which is what lets the auth tier
+// reach the provider.
 func isolatedEnv(tmpHome string, extra ...string) []string {
 	base := os.Environ()
-	out := make([]string, 0, len(base)+8)
+	out := make([]string, 0, len(base)+9)
 	for _, e := range base {
 		switch {
 		case strings.HasPrefix(e, "HOME="),
 			strings.HasPrefix(e, "XDG_CONFIG_HOME="),
 			strings.HasPrefix(e, "XDG_CACHE_HOME="),
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
-			strings.HasPrefix(e, "XDG_STATE_HOME="):
+			strings.HasPrefix(e, "XDG_STATE_HOME="),
+			strings.HasPrefix(e, "CODEX_HOME="):
 			continue
 		default:
 			out = append(out, e)
@@ -251,8 +253,29 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 		"XDG_CACHE_HOME="+filepath.Join(tmpHome, ".cache"),
 		"XDG_DATA_HOME="+filepath.Join(tmpHome, ".local", "share"),
 		"XDG_STATE_HOME="+filepath.Join(tmpHome, ".local", "state"),
+		"CODEX_HOME="+filepath.Join(tmpHome, ".codex"),
 	)
 	return append(out, extra...)
+}
+
+func TestIsolatedEnv_ScrubsCodexHome(t *testing.T) {
+	t.Setenv("CODEX_HOME", "/real/codex")
+	tmpHome := t.TempDir()
+	env := isolatedEnv(tmpHome)
+
+	want := "CODEX_HOME=" + filepath.Join(tmpHome, ".codex")
+	seen := 0
+	for _, e := range env {
+		if strings.HasPrefix(e, "CODEX_HOME=") {
+			seen++
+			if e != want {
+				t.Fatalf("CODEX_HOME = %q, want %q", e, want)
+			}
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("CODEX_HOME entries = %d, want 1", seen)
+	}
 }
 
 // makeBareFixture creates a temp workspace with just a .plumb/ marker — enough

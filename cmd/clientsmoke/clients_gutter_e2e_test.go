@@ -51,7 +51,8 @@ func TestClientsAuth_GutterRoundTrip(t *testing.T) {
 			tmpHome := mkTmpHome(t)
 			fixture := makeBareFixture(t)
 			target := filepath.Join(fixture, "target.txt")
-			if err := os.WriteFile(target, []byte("one\ntwo\nALPHA marker line\nfour\nfive\n"), 0o644); err != nil {
+			original := "one\ntwo\nALPHA marker line\nfour\nfive\n"
+			if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
 				t.Fatal(err)
 			}
 
@@ -90,14 +91,14 @@ func TestClientsAuth_GutterRoundTrip(t *testing.T) {
 			case gutterLeak.MatchString(body):
 				t.Fatalf("FAIL %s: a line-number gutter leaked into the file — forgiveness did not strip a pasted gutter:\n%s",
 					spec.name, body)
-			case strings.Contains(body, "OMEGA"):
-				t.Logf("PASS %s: edit applied through the gutter with no leak", spec.name)
-			case strings.Contains(body, "ALPHA"):
+			case body == original:
 				// The model may simply not have performed the edit (auth tier is
 				// nondeterministic); that is a non-result, not a gutter failure.
 				t.Skipf("inconclusive %s: file unchanged — the model did not perform the edit this run", spec.name)
+			case strings.Contains(body, "OMEGA") && !strings.Contains(body, "ALPHA"):
+				t.Logf("PASS %s: edit applied through the gutter with no leak", spec.name)
 			default:
-				t.Logf("note %s: file changed but neither ALPHA nor OMEGA present; body:\n%s", spec.name, body)
+				t.Fatalf("FAIL %s: file changed but did not complete the requested ALPHA→OMEGA replacement:\n%s", spec.name, body)
 			}
 		})
 	}
