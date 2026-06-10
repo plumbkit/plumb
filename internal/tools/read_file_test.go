@@ -478,3 +478,20 @@ func TestReadFile_BinaryFile(t *testing.T) {
 		t.Fatalf("expected binary error message, got: %v", err)
 	}
 }
+
+func TestReadFile_TruncationSuggestsOutline(t *testing.T) {
+	// A file larger than the 200 KiB cap is truncated; the truncation note should
+	// point at file_outline as the one-call alternative to a blind whole-file read.
+	big := strings.Repeat("package x // filler line to exceed the read cap\n", 6000) // ~270 KiB
+	path := writeTextFile(t, big)
+	out, err := callReadFile(t, map[string]any{"file_path": path})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "output truncated") {
+		t.Fatalf("expected a truncation note for an over-cap file")
+	}
+	if !strings.Contains(out, "file_outline") {
+		t.Errorf("truncation note should suggest file_outline, got tail: %q", out[len(out)-200:])
+	}
+}

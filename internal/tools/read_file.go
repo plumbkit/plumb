@@ -263,7 +263,8 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, firstLine 
 	}
 	sb.WriteString(content)
 	if truncated {
-		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections)")
+		sb.WriteString("\n… (output truncated at 200 KiB — use start_line/end_line to read specific sections, " +
+			"or file_outline for a one-call structural map of the whole file: symbols/sections without the body)")
 	}
 	return sb.String()
 }
