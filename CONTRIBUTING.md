@@ -30,7 +30,8 @@ would have fixed.
 make verify          # build + test + lint — run this before every push
 ```
 
-Other useful targets: `make test`, `make test-race`, `make lint`, `make tidy`.
+Other useful targets: `make test`, `make test-race`, `make lint`, `make integration-test`
+(needs gopls/pyright on `PATH`), `make tidy`.
 
 **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the
 standalone `gofumpt -w` binary — the two can pin different versions and produce phantom
@@ -62,6 +63,59 @@ lint failures.
 - Integration tests requiring external binaries (gopls, pyright, …) **must** be gated
   with `//go:build integration`.
 - Don't chase TUI coverage.
+
+## Testing MCP client integrations
+
+Plumb registers itself as a stdio MCP server for many client CLIs via
+`plumb setup <client>`. The on-demand **`cmd/clientsmoke` harness** verifies those
+clients actually work *through* plumb, non-interactively (no TUI blocks). It is gated
+behind its own build tags, so it never runs in CI or `make verify` beyond a compile
+check — run it yourself when you touch client setup or want to validate a new client.
+Full detail: [`docs/internal/client-testing.md`](docs/internal/client-testing.md).
+
+**Install the client CLIs** (idempotent; installs CLIs only, never API keys):
+
+```sh
+make install-clients      # or: ./scripts/install-clients.sh
+```
+
+Prerequisites: Node 20+ (npm clients), Python 3.8+ (hermes), `curl` (script-installed
+clients). Some installers drop binaries in `~/.local/bin` or `~/.npm-global/bin` — add
+those to `PATH` if a binary isn't found.
+
+**Connection tier** — no API keys, deterministic. Confirms each installed client
+completes the MCP handshake with plumb, asserted on plumb's own session record rather
+than each CLI's output:
+
+```sh
+make clients-test
+```
+
+Verified-passing: gemini, qwen, opencode, hermes (needs its `[mcp]` extra), claude-code.
+cursor-agent, codex, auggie, crush, and goose have no auth-free connecting probe and are
+skipped here (still drivable in the auth tier).
+
+**Auth tier** — drives a real headless LLM prompt to force a plumb tool call, then
+asserts a `tool_calls` row in the stats DB. It **costs money** and runs only the clients
+whose API key is exported; the rest skip automatically:
+
+```sh
+OPENAI_API_KEY=…  ANTHROPIC_API_KEY=…  GEMINI_API_KEY=…  make clients-test-auth
+```
+
+| Env var | Clients it enables |
+|---|---|
+| `OPENAI_API_KEY` | codex, qwen, opencode, crush, goose, hermes |
+| `ANTHROPIC_API_KEY` | claude-code (also valid for opencode/crush) |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | gemini |
+| `CURSOR_API_KEY` | cursor-agent |
+| `AUGMENT_API_TOKEN` | auggie |
+
+The auth tier is **nondeterministic** (it asserts the model *chose* to call a plumb
+tool): use it to confirm a new client integration works, not as a gate. Per-client
+auto-approve/auth flags are version-sensitive — see the spec table in
+`cmd/clientsmoke/harness_test.go`. `make build-clients` compile-checks both tiers and is
+folded into `make verify`. To add a client, add a `clientSpec` to `clientSpecs()`.
 
 ## Commits
 
