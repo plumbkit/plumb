@@ -42,7 +42,7 @@ On an unfamiliar codebase, agents and developers hit the same bottleneck:
 
 Topology fills the gap: **broad, structural answers, available immediately** —
 even before (or entirely without) a language server, and even when the code
-doesn't compile. For an AI agent that is a large token saving: it can pinpoint
+doesn't compile. For an AI agent that is a big token-efficiency win: it can pinpoint
 the right few files instead of reading dozens.
 
 ## Benefits at a glance

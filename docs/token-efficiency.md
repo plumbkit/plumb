@@ -107,7 +107,7 @@ The practical agent rule: a single long-running session is cheaper than many sho
 
 ## Future Roadmap for Plumb Efficiency
 
-Features that would shift token-saving from "the agent has to remember to be careful" to "plumb does it automatically." Ordered by estimated impact.
+Features that would shift token efficiency from "the agent has to remember to be careful" to "plumb does it automatically." Ordered by estimated impact.
 
 ### High impact
 

@@ -5,9 +5,9 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/plumbkit/plumb)](https://goreportcard.com/report/github.com/plumbkit/plumb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Give your coding agent real IDE intelligence — and let it run unattended without corrupting your code.**
+**IDE intelligence for agents — with guardrails for unattended work.**
 
-Plumb is an [MCP](https://modelcontextprotocol.io) server that bridges AI coding agents to [LSP](https://microsoft.github.io/language-server-protocol/) language servers — the same ones your editor uses. Other tools make an agent *semantic*. Plumb makes it semantic **and safe**: concurrency-correct atomic writes, multi-file transactions with rollback, a crash-resilient daemon, and scoped filesystem + git access you control. It's a single pure-Go binary — no Python or Node toolchain to install.
+Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a tree-sitter code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. A single binary; nothing else to install.
 
 <!-- TODO(launch): record a 20–30s asciinema/vhs demo (agent editing a multi-file Go
      project + recovering from a forced daemon crash) and embed it here as
@@ -19,7 +19,7 @@ Plumb is an [MCP](https://modelcontextprotocol.io) server that bridges AI coding
 
 LLM agents usually work by reading whole files into the context window — token-heavy, lossy at scale, blind to symbol semantics, and unsafe to let loose on a real repo. Plumb is built on three pillars, in priority order.
 
-### 1. Reliability & write-safety (the part nobody else gets right)
+### 1. Reliability & write-safety
 Leaving an agent to edit a codebase for an hour is only viable if writes can't corrupt files and a crash can't wedge your session.
 
 - **Atomic I/O** — every write is staged in a temp file and renamed into place. No partial writes, ever. Symlink-aware, CRLF-tolerant.
@@ -113,7 +113,7 @@ Warm servers (no re-indexing each chat), shared per-path locks across all connec
 
 ## Monitoring (TUI)
 
-Run `plumb` with no arguments to launch a live [Bubble Tea](https://github.com/charmbracelet/bubbletea) dashboard: daemon health and tokens saved, a session inspector for every tool call, and streaming logs with follow + filtering.
+Run `plumb` with no arguments to launch a live [Bubble Tea](https://github.com/charmbracelet/bubbletea) dashboard: daemon health and token-efficiency stats, a session inspector for every tool call, and streaming logs with follow + filtering.
 
 ---
 
@@ -145,19 +145,9 @@ Full settings reference: [**docs/configuration.md**](docs/configuration.md).
 
 ---
 
-## How Plumb compares
+## The bet
 
-| | **Plumb** | **Serena** | Thin `lsp-mcp` bridges | Agent's built-in file tools |
-|---|---|---|---|---|
-| LSP-backed semantics | ✅ | ✅ | ✅ (often 1 language) | ❌ |
-| Concurrency-safe atomic writes | ✅ | ⚠️ | ❌ | ❌ |
-| Multi-file transactions w/ rollback | ✅ | ❌ | ❌ | ❌ |
-| Crash-resilient daemon / auto-recovery | ✅ | ⚠️ (crashes reported) | ❌ | n/a |
-| Scoped path + tiered git safety | ✅ | ⚠️ | ❌ | ❌ |
-| Single binary, no runtime deps | ✅ (pure Go) | ❌ (Python) | varies | n/a |
-| Language breadth (full LSP) | Focused, validated tiers | 40+ (mostly install-it-yourself) | 1–few | n/a |
-
-Plumb's bet: most agents can already *read* code well enough. What's missing is the ability to *write* — concurrently, transactionally, and recoverably — without supervision. If you need maximum language breadth today, [Serena](https://github.com/oraios/serena) is excellent; if you need an agent you can trust to edit a real codebase unattended, that's Plumb.
+Agents can already *read* code well enough. What's missing is the ability to *write* — concurrently, transactionally, and recoverably — without supervision. Plumb prioritises exactly that, and keeps the language support claims honest along the way.
 
 ---
 
