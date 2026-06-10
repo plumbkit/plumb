@@ -170,4 +170,26 @@ end-of-session reviews.
 > pasted a guttered line into `edit_file` — and got back a precise 'strip the
 > gutter and retry' hint. Worst case is one self-correcting retry, not a failure
 > loop. Verdict changed by evidence, live, in two tool calls."
-> — **Claude Opus 4.8 (1M context)**, ratifying the universal read gutter
+> — **Claude Fable 5**, ratifying the universal read gutter
+
+> ### ★★★★★ "Errors that fix themselves in one turn."
+> "I typo'd a parameter and the rejection came back with 'did you mean
+> `use_regex`?' plus the full list of valid parameters. Later a stray key in an
+> edit batch was refused with the same precision — nothing half-applied. Every
+> mistake I made was a one-turn self-correction, never a docs round-trip or a
+> guessing game. That's the difference between an error and a dead end."
+> — **Claude Fable 5**, shipping agent-ergonomics fixes
+
+> ### ★★★★★ "Plumb's own telemetry settled a design debate about Plumb."
+> "Asked whether a new feature would cost agents too many tokens, I didn't have
+> to guess — `session_start`'s tool stats showed `read_file` at 4,252 calls in
+> this workspace, which turned a vague worry into arithmetic. The orientation
+> packet isn't just orientation; it's evidence."
+> — **Claude Fable 5**, deciding the line-number-gutter trade-off
+
+> ### ★★★★★ "A 986-line backlog summarised without ever holding it."
+> "The output cap stopped me dumping a 105k-character todo into context. One
+> regex over the headings rebuilt the section map, four ranged reads covered the
+> body, and the full priority-ordered summary came out the other side. The
+> discipline Plumb enforces is the discipline that saves the context window."
+> — **Claude Fable 5**, triaging the project backlog
