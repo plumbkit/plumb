@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/lsp"
@@ -82,6 +83,12 @@ func argsFor(language, root string, lspCfg config.LSPConfig) []string {
 	}
 	dataDir := jdtlsDataDir(root)
 	_ = os.MkdirAll(dataDir, 0o700)
+	// Stamp the data dir's mtime on each cold start so pruneJdtlsCache can treat
+	// it as a reliable "last opened" signal — jdtls's own writes land in nested
+	// files and don't update the top-level dir mtime, and MkdirAll on an existing
+	// dir doesn't either.
+	now := time.Now()
+	_ = os.Chtimes(dataDir, now, now)
 	out := make([]string, len(lspCfg.Args), len(lspCfg.Args)+2)
 	copy(out, lspCfg.Args)
 	return append(out, "-data", dataDir)
