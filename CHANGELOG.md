@@ -4,6 +4,10 @@
 
 Concurrency-safety and reconnect-robustness pass from the 0.9.10–0.9.12 review session (see `internal/feedbacks.md`): close the write-path gaps that let a concurrent peer's or a human's edit be clobbered without warning, make a daemon-restart-induced state loss self-explaining instead of silent, and point agents at `file_outline` when a read is truncated.
 
+### Changed
+
+- **The "no workspace / no repository resolved" errors now name the likely cause and the fix.** When a daemon restarts (after a rebuild or upgrade) it clears every connection's in-memory workspace pin, so a previously-working session's next path-bearing or `git` call fails — and the old error gave no hint why (observed live: a `git commit` failing with a bare "no repository resolved" mid-session after a restart). Both `git`'s no-repo error and the shared `noWorkspaceError` now explain that a daemon restart clears the pin and that `session_start` re-attaches, turning a silent state-loss into a self-explaining one. (The fully proactive alternative — a one-shot note pushed on the first response after a reconnect — was scoped out: the resilient proxy replays the captured `initialize` verbatim, so the daemon cannot distinguish a reconnect from a brand-new client without fragile handshake-frame surgery or false-firing on every new connection. See `docs/internal/todo-to-review.md`.) Guarded by `TestNoWorkspaceError_SelfExplaining` and an extended `TestGit_RefusesWhenNoRepoResolved`.
+
 ### Added
 
 - **`write_file` now accepts `expected_mtime` / `expected_sha`** (from a prior `read_file` header), the same optimistic-concurrency guard `edit_file` already had. When provided, the write is refused if the file changed since you read it — so a full-content overwrite can no longer silently clobber a concurrent change. Previously `write_file` had **no** way to guard a whole-file replacement, the most destructive write, against an under-the-feet change. Guarded by `TestWriteFile_ExpectedMtimeGuard` and `TestWriteFile_ExpectedShaGuard`.

@@ -153,7 +153,8 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 	// fall through to the daemon's cwd (a different connection's project — a
 	// cross-session isolation leak), so refuse instead.
 	if a.Repo == "" {
-		return fmt.Errorf("git: no repository resolved — pass an explicit \"repo\" or attach a workspace with session_start")
+		return fmt.Errorf("git: no repository resolved — call session_start to attach a workspace, or pass an explicit \"repo\". " +
+			"If this session was working a moment ago, the daemon may have restarted (e.g. after a rebuild or upgrade), which clears the per-connection workspace pin — re-run session_start to re-attach")
 	}
 	if err := t.deps.checkBoundary(a.Repo); err != nil {
 		return fmt.Errorf("git: %w", err)

@@ -252,6 +252,23 @@ func TestGit_RefusesWhenNoRepoResolved(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no repository resolved") {
 		t.Fatalf("expected fail-closed 'no repository resolved' error, got out=%q err=%v", out, err)
 	}
+	// The error should be self-explaining about the common cause (a daemon
+	// restart clearing the pin) and the fix, so a previously-working session
+	// isn't left guessing why git suddenly can't resolve a repo.
+	for _, want := range []string{"session_start", "restart"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("no-repo error should mention %q: %v", want, err)
+		}
+	}
+}
+
+func TestNoWorkspaceError_SelfExplaining(t *testing.T) {
+	msg := noWorkspaceError().Error()
+	for _, want := range []string{"no workspace resolved", "session_start", "restart"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("noWorkspaceError should mention %q: %q", want, msg)
+		}
+	}
 }
 
 // TestGit_DefaultRepoFollowsWorkspace asserts an omitted repo resolves to the
