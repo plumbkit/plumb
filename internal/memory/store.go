@@ -28,6 +28,7 @@ type Memory struct {
 	Paths       []string // glob patterns from frontmatter `paths:` for auto-attach
 	Path        string
 	SizeBytes   int64
+	ContentSHA  string // sha256 of the full file; "" if the body was not read
 }
 
 // Dir returns the memories directory path for workspace.
@@ -72,6 +73,10 @@ func List(workspace string) ([]Memory, error) {
 		m := Memory{Name: name, Path: path, SizeBytes: info.Size()}
 		if data, err := os.ReadFile(path); err == nil {
 			m.Description, m.Paths = parseFrontmatterFull(data)
+			// The bytes are already in hand for the frontmatter parse, so hashing
+			// here is near-free and lets Fresh do exact content comparison (catching
+			// a same-size, same-mtime edit) without a second read.
+			m.ContentSHA = sha256Hex(data)
 		}
 		out = append(out, m)
 	}

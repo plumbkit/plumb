@@ -187,9 +187,12 @@ func (ix *Index) Close() error {
 }
 
 // Fresh reports whether the index matches the markdown files on disk, comparing
-// each file's mtime and size against the stored anchor. It deliberately does not
-// read bodies, so it is cheap enough to gate every search. A drift (new, deleted,
-// or modified file) returns false; the caller then Reindexes or falls back to grep.
+// each file's full-content sha256 against the stored hash. List already reads
+// every file's bytes (for the frontmatter parse) and hashes them, so this is an
+// exact content check at near-zero extra cost — and unlike an mtime+size anchor
+// it cannot be fooled by a same-size edit that leaves the mtime untouched. A
+// drift (new, deleted, or modified file) returns false; the caller then
+// Reindexes or falls back to grep.
 func (ix *Index) Fresh(workspace string) (bool, error) {
 	mems, err := List(workspace)
 	if err != nil {
@@ -202,16 +205,15 @@ func (ix *Index) Fresh(workspace string) (bool, error) {
 
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	rows, err := ix.db.Query(`SELECT name, mtime_ns, size_bytes FROM memory_files`)
+	rows, err := ix.db.Query(`SELECT name, content_sha FROM memory_files`)
 	if err != nil {
 		return false, fmt.Errorf("memory: read file anchors: %w", err)
 	}
 	defer rows.Close()
 	indexed := 0
 	for rows.Next() {
-		var name string
-		var mtime, size int64
-		if err := rows.Scan(&name, &mtime, &size); err != nil {
+		var name, sha string
+		if err := rows.Scan(&name, &sha); err != nil {
 			continue
 		}
 		indexed++
@@ -219,9 +221,8 @@ func (ix *Index) Fresh(workspace string) (bool, error) {
 		if !ok {
 			return false, nil // indexed a memory that no longer exists on disk
 		}
-		st, err := os.Stat(m.Path)
-		if err != nil || st.ModTime().UnixNano() != mtime || st.Size() != size {
-			return false, nil
+		if m.ContentSHA == "" || m.ContentSHA != sha {
+			return false, nil // unreadable or content drifted
 		}
 	}
 	if err := rows.Err(); err != nil {

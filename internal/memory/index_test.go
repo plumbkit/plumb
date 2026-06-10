@@ -232,6 +232,44 @@ func TestIndex_UserRanksAboveGenerated(t *testing.T) {
 	}
 }
 
+// TestIndex_FreshDetectsSameSizeSameMTimeEdit pins the freshness anchor to the
+// content hash, not mtime+size: a same-byte-count edit with the mtime pinned to
+// its previous value must still read as stale. (An mtime+size anchor would miss
+// this; the hash catches it because List already reads and hashes the bytes.)
+func TestIndex_FreshDetectsSameSizeSameMTimeEdit(t *testing.T) {
+	ix, ws := openTestIndex(t)
+	if err := Write(ws, "note", "AAAAAAAAAA", ""); err != nil { // 10-byte body
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := ix.Reindex(ws); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+	if fresh, _ := ix.Fresh(ws); !fresh {
+		t.Fatal("expected fresh immediately after reindex")
+	}
+
+	path, _ := Path(ws, "note")
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	// Overwrite with the SAME byte count, then restore the original mtime — the
+	// exact case an mtime+size anchor cannot see.
+	if err := os.WriteFile(path, []byte("BBBBBBBBBB"), 0o600); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if err := os.Chtimes(path, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if newSt, _ := os.Stat(path); newSt.Size() != st.Size() || newSt.ModTime() != st.ModTime() {
+		t.Fatalf("test setup failed to preserve size+mtime: size %d→%d", st.Size(), newSt.Size())
+	}
+
+	if fresh, _ := ix.Fresh(ws); fresh {
+		t.Error("content changed under a pinned mtime+size — must read as stale (hash anchor)")
+	}
+}
+
 func TestIndex_FreshReindexAndRemove(t *testing.T) {
 	ix, ws := openTestIndex(t)
 	ctx := context.Background()
