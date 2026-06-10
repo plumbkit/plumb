@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/redact"
@@ -60,12 +61,33 @@ func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 	}
 }
 
-func TestClampRunes(t *testing.T) {
-	if got := clampRunes("hello world", 5); got != "hello…" {
-		t.Errorf("clampRunes = %q", got)
-	}
-	if got := clampRunes("short", 0); got != "short" {
+func TestClampBytes(t *testing.T) {
+	if got := clampBytes("short", 0); got != "short" {
 		t.Errorf("zero budget should be a no-op, got %q", got)
+	}
+	if got := clampBytes("short", 100); got != "short" {
+		t.Errorf("fits-in-budget should be a no-op, got %q", got)
+	}
+	if got := clampBytes("hello world", 5); got != "he…" {
+		t.Errorf("clampBytes(hello world, 5) = %q, want \"he…\" (5 bytes)", got)
+	}
+	// Multi-byte: every result must stay within the BYTE budget and be valid UTF-8.
+	for _, c := range []struct {
+		in     string
+		budget int
+	}{
+		{"日本語テスト", 9}, // 3 bytes/char
+		{"😀😀😀😀", 7},   // 4 bytes/char
+		{"abc", 2},    // budget below the ellipsis width
+		{"héllo wörld", 6},
+	} {
+		got := clampBytes(c.in, c.budget)
+		if len(got) > c.budget {
+			t.Errorf("clampBytes(%q, %d) = %q is %d bytes, over budget", c.in, c.budget, got, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("clampBytes(%q, %d) = %q is not valid UTF-8", c.in, c.budget, got)
+		}
 	}
 }
 

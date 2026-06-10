@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/redact"
@@ -56,7 +57,7 @@ func (s *connSession) generateEpisodicSummary() {
 		return
 	}
 	summary, _ = redact.Redact(summary)
-	summary = clampRunes(summary, episodicBudget(mcfg))
+	summary = clampBytes(summary, episodicBudget(mcfg))
 	s.statsStore.RecordEpisodic(stats.Episodic{
 		Workspace:    ws,
 		SessionID:    s.sessID,
@@ -195,13 +196,32 @@ func plural(n int) string {
 	return "s"
 }
 
-func clampRunes(s string, budget int) string {
-	if budget <= 0 {
+// clampBytes truncates s so the result is at most budget BYTES, including the
+// trailing ellipsis, cut on a UTF-8 rune boundary. A no-op when s already fits
+// or budget <= 0. The config knobs are named *_bytes, so a multi-byte (CJK /
+// emoji) summary or hint must be measured in bytes, not rune count.
+func clampBytes(s string, budget int) string {
+	if budget <= 0 || len(s) <= budget {
 		return s
 	}
-	r := []rune(s)
-	if len(r) <= budget {
+	const ell = "…"
+	if budget <= len(ell) {
+		return truncateToBytes(s, budget) // no room for content + ellipsis
+	}
+	return truncateToBytes(s, budget-len(ell)) + ell
+}
+
+// truncateToBytes returns the longest prefix of s that is at most n bytes and
+// ends on a rune boundary.
+func truncateToBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
 		return s
 	}
-	return string(r[:budget]) + "…"
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n-- // back up off a continuation byte to the rune boundary
+	}
+	return s[:n]
 }

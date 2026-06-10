@@ -168,9 +168,20 @@ func (ix *Index) Workspace() string {
 	return ix.workspace
 }
 
-// Close releases the index database.
+// Close releases the underlying database. It takes ix.mu so the close never
+// overlaps a concurrent Upsert/Remove/Reindex on the same handle (they all hold
+// ix.mu during their db work) — e.g. the daemon's shutdown CloseAll firing while
+// a just-Acquired index is mid background reindex. ix.db is deliberately NOT
+// nilled: a Reindex that acquires the mutex after Close then sees a *closed*
+// (non-nil) handle and fails cleanly with "sql: database is closed" (logged and
+// swallowed by the best-effort callers), rather than nil-dereferencing.
 func (ix *Index) Close() error {
-	if ix == nil || ix.db == nil {
+	if ix == nil {
+		return nil
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if ix.db == nil {
 		return nil
 	}
 	return ix.db.Close()

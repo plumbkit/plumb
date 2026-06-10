@@ -58,6 +58,27 @@ func TestIndex_ReindexAsyncConcurrent(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // let any in-flight reindex finish before Close
 }
 
+// TestIndex_CloseRaceWithReindex: Close must not race or panic against a
+// concurrent Reindex on the same handle (run under -race). A Close that wins
+// leaves a closed handle; the Reindex then errors cleanly (never nil-derefs).
+func TestIndex_CloseRaceWithReindex(t *testing.T) {
+	for range 20 {
+		ws := t.TempDir()
+		ix, err := OpenIndex(ws)
+		if err != nil {
+			t.Fatalf("OpenIndex: %v", err)
+		}
+		if err := Write(ws, "m", "some body content", "d"); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = ix.Reindex(ws) }()
+		go func() { defer wg.Done(); _ = ix.Close() }()
+		wg.Wait()
+	}
+}
+
 // TestSplitIdentifier locks the code-aware tokenisation. The expected outputs
 // mirror internal/topology's splitIdentifier (the copy's reference behaviour).
 func TestSplitIdentifier(t *testing.T) {

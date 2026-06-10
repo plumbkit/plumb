@@ -142,5 +142,5 @@ func hintBlock(names []string, budget int) string {
 	}
 	block := fmt.Sprintf("\n\n[Hint: relevant %s attached to this path: %s — call read_memory to view.]",
 		noun, strings.Join(quoted, ", "))
-	return clampRunes(block, budget)
+	return clampBytes(block, budget)
 }
