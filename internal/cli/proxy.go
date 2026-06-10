@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -18,6 +20,19 @@ import (
 type clientProxy struct {
 	mu  sync.RWMutex
 	cur lsp.Client
+	// lastUsed is the unix-nanosecond timestamp of the most recent tool call
+	// routed through this proxy. It lives here (not on poolEntry) so the routing
+	// hot path can record activity lock-free — route()/primaryClient() already
+	// hold the proxy, avoiding a pool-mutex map lookup per tool call. The pool's
+	// idle-hibernation janitor and LRU eviction read it.
+	lastUsed atomic.Int64
+}
+
+// touch records that a tool call was just routed through this proxy. Lock-free;
+// called on the hot path. Deliberately NOT folded into get(), which also fires
+// for teardown and capability probes that must not reset the idle clock.
+func (p *clientProxy) touch() {
+	p.lastUsed.Store(time.Now().UnixNano())
 }
 
 func (p *clientProxy) set(c lsp.Client) {

@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -101,13 +100,10 @@ type poolEntry struct {
 	sup      *lsp.Supervisor
 	watcher  *lspFSWatcher
 
-	// lastUsed is the unix-nanosecond timestamp of the most recent tool call
-	// routed to this entry (see workspacePool.touch). It drives idle hibernation
-	// and LRU eviction. Atomic so the janitor reads it without taking p.mu.
-	lastUsed atomic.Int64
-
 	// state is the hibernation lifecycle (poolActive / poolHibernating /
-	// poolHibernated). Guarded by workspacePool.mu.
+	// poolHibernated). Guarded by workspacePool.mu. The activity timestamp that
+	// drives hibernation lives on proxy.lastUsed (touched lock-free on the hot
+	// path), not here.
 	state poolLifecycle
 
 	// refs counts the sessions that hold this root as their PINNED primary
@@ -288,7 +284,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
 	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c, state: poolActive}
-	e.lastUsed.Store(time.Now().UnixNano())
+	proxy.touch()
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
 		OnStart: poolOnStart(language, root, rootURI, inv, proxy),

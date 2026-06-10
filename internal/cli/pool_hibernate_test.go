@@ -25,21 +25,17 @@ func hibernatePool(language string, idle time.Duration, max int) *workspacePool 
 	}
 }
 
-// TestPool_TouchUpdatesLastUsed verifies the activity signal: touch advances an
-// entry's lastUsed, and an unknown (root, language) is a safe no-op.
-func TestPool_TouchUpdatesLastUsed(t *testing.T) {
-	p := hibernatePool("java", time.Minute, 0)
-	installEntryLang(p, "/root", "java", &stubClient{})
-
-	before := p.lookup("/root", "java").lastUsed.Load()
+// TestClientProxy_TouchUpdatesLastUsed verifies the activity signal: touch
+// advances the proxy's lastUsed timestamp (the lock-free hot-path hook the
+// janitor and LRU eviction read).
+func TestClientProxy_TouchUpdatesLastUsed(t *testing.T) {
+	cp := &clientProxy{}
+	before := cp.lastUsed.Load()
 	time.Sleep(2 * time.Millisecond)
-	p.touch("/root", "java")
-	after := p.lookup("/root", "java").lastUsed.Load()
-	if after <= before {
-		t.Fatalf("touch did not advance lastUsed: before=%d after=%d", before, after)
+	cp.touch()
+	if cp.lastUsed.Load() <= before {
+		t.Fatalf("touch did not advance lastUsed: before=%d after=%d", before, cp.lastUsed.Load())
 	}
-
-	p.touch("/missing", "java") // must not panic
 }
 
 // TestPool_HibernateIdle_ReclaimsButKeepsEntry verifies the core hibernation
@@ -52,7 +48,7 @@ func TestPool_HibernateIdle_ReclaimsButKeepsEntry(t *testing.T) {
 	e := p.lookup("/root", "java")
 	warmCache := cache.New(time.Minute)
 	e.cache = warmCache
-	e.lastUsed.Store(time.Now().Add(-time.Hour).UnixNano())
+	e.proxy.lastUsed.Store(time.Now().Add(-time.Hour).UnixNano())
 
 	p.hibernateIdle()
 
@@ -76,7 +72,7 @@ func TestPool_HibernateIdle_SkipsRecentlyActive(t *testing.T) {
 	p := hibernatePool("java", time.Hour, 0)
 	cp := installEntryLang(p, "/root", "java", &stubClient{})
 	e := p.lookup("/root", "java")
-	e.lastUsed.Store(time.Now().UnixNano())
+	e.proxy.lastUsed.Store(time.Now().UnixNano())
 
 	p.hibernateIdle()
 
@@ -94,7 +90,7 @@ func TestPool_HibernateIdle_SkipsZeroTimeout(t *testing.T) {
 	p := hibernatePool("go", 0, 0)
 	installEntryLang(p, "/root", "go", &stubClient{})
 	e := p.lookup("/root", "go")
-	e.lastUsed.Store(time.Now().Add(-24 * time.Hour).UnixNano())
+	e.proxy.lastUsed.Store(time.Now().Add(-24 * time.Hour).UnixNano())
 
 	p.hibernateIdle()
 
@@ -111,8 +107,8 @@ func TestPool_OverBudgetVictim(t *testing.T) {
 	installEntryLang(p, "/a", "java", &stubClient{})
 	installEntryLang(p, "/b", "java", &stubClient{})
 	now := time.Now()
-	p.lookup("/a", "java").lastUsed.Store(now.Add(-10 * time.Minute).UnixNano()) // oldest
-	p.lookup("/b", "java").lastUsed.Store(now.UnixNano())
+	p.lookup("/a", "java").proxy.lastUsed.Store(now.Add(-10 * time.Minute).UnixNano()) // oldest
+	p.lookup("/b", "java").proxy.lastUsed.Store(now.UnixNano())
 
 	if v := p.overBudgetVictimLocked("java", 0); v != nil {
 		t.Fatal("unlimited cap (0) must select no victim")

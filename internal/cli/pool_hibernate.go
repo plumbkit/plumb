@@ -18,20 +18,9 @@ import (
 // This file holds the pool's dynamic-resource-manager concern: idle hibernation
 // of heavyweight language servers, LRU eviction, the janitor goroutine, live
 // PID/RSS reporting, and jdtls-data cache pruning. The acquire/release/teardown
-// lifecycle and pool state live in pool.go; poolEntry.lastUsed/state and the
-// poolLifecycle type are declared there.
-
-// touch records that a tool call was routed to (root, language) just now, so the
-// hibernation janitor and LRU eviction see the entry as recently active. Called
-// from the routing proxy at the point a live client is handed to a tool — not
-// from clientProxy.get(), which also fires for teardown and capability probes
-// that must not reset the idle clock. A no-op for an unknown or hibernated
-// entry. Concurrency-safe (atomic store; brief map lookup under p.mu).
-func (p *workspacePool) touch(root, language string) {
-	if e := p.lookup(root, language); e != nil {
-		e.lastUsed.Store(time.Now().UnixNano())
-	}
-}
+// lifecycle and pool state live in pool.go; the poolLifecycle type and
+// poolEntry.state are declared there, and the activity timestamp on
+// clientProxy.lastUsed (proxy.go).
 
 // lspStatusReport renders one tab-separated line per pooled language server —
 // language, root, lifecycle state, PID, RSS bytes, idle seconds — for the
@@ -51,7 +40,7 @@ func (p *workspacePool) lspStatusReport() string {
 		if e.sup != nil {
 			pid = e.sup.PID()
 		}
-		rows = append(rows, row{k.language, k.root, e.state.String(), pid, e.lastUsed.Load()})
+		rows = append(rows, row{k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load()})
 	}
 	p.mu.Unlock()
 	sort.Slice(rows, func(i, j int) bool {
@@ -160,7 +149,7 @@ func (p *workspacePool) hibernateIdle() {
 		if !ok || cfg.IdleTimeout.Duration <= 0 {
 			continue
 		}
-		if now-e.lastUsed.Load() > int64(cfg.IdleTimeout.Duration) {
+		if now-e.proxy.lastUsed.Load() > int64(cfg.IdleTimeout.Duration) {
 			victims = append(victims, e)
 		}
 	}
@@ -188,7 +177,7 @@ func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) 
 	}
 	victim := running[0]
 	for _, e := range running[1:] {
-		if e.lastUsed.Load() < victim.lastUsed.Load() {
+		if e.proxy.lastUsed.Load() < victim.proxy.lastUsed.Load() {
 			victim = e
 		}
 	}
@@ -257,6 +246,6 @@ func (p *workspacePool) wakeLocked(e *poolEntry) (<-chan error, error) {
 		watcher.Start()
 	}
 	e.state = poolActive
-	e.lastUsed.Store(time.Now().UnixNano())
+	e.proxy.touch()
 	return readyCh, nil
 }
