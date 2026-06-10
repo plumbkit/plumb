@@ -47,8 +47,8 @@ func (*searchMemoriesTool) InputSchema() json.RawMessage {
 		"properties":{
 			"pattern":{"type":"string","description":"Text or regex pattern to search for."},
 			"use_regex":{"type":"boolean","default":false,"description":"Treat pattern as a regex. Forces the grep path (FTS is not regex)."},
-			"case_sensitive":{"type":"boolean","description":"Default: smart-case."},
-			"mode":{"type":"string","enum":["auto","fts","grep"],"description":"Search strategy. auto (default): ranked FTS when the index is fresh, else grep. fts: force ranked FTS (reindex if stale). grep: force literal/regex grep."},
+			"case_sensitive":{"type":"boolean","description":"Default: smart-case. Setting this forces the grep path (FTS is case-insensitive)."},
+			"mode":{"type":"string","enum":["auto","fts","grep"],"description":"Search strategy. auto (default): ranked FTS when the index is fresh, falling back to grep when the index is stale OR FTS finds no hits (FTS matches whole tokens, grep matches substrings). fts: force ranked FTS (reindex if stale; keeps an empty result). grep: force literal/regex grep."},
 			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
 		},
 		"required":["pattern"],
@@ -96,15 +96,22 @@ func (t *searchMemoriesTool) Execute(ctx context.Context, args json.RawMessage) 
 
 // searchFTS runs the ranked FTS path when an index is present and either fresh
 // (mode auto) or force-reindexed (mode fts). Returns handled=false to defer to
-// grep (mode grep, regex patterns, no index, a stale auto query, or any error).
+// grep. It defers when: mode=grep, a regex or case-sensitive query (FTS5's
+// unicode61 tokeniser is whole-token and case-insensitive), no index, a stale
+// auto query, any error, OR (mode auto) zero FTS hits — because FTS cannot
+// represent a substring the tokeniser splits away (e.g. "essio" for
+// "UserSession"), so grep, which does substring matching, must get a chance.
+// mode=fts keeps the explicit empty FTS result. A stale auto query also kicks an
+// async reindex so subsequent queries self-heal back onto FTS.
 func (t *searchMemoriesTool) searchFTS(ctx context.Context, ix *memory.Index, ws string, a searchMemoriesArgs) (string, bool) {
-	if a.Mode == "grep" || a.UseRegex || ix == nil {
+	if a.Mode == "grep" || a.UseRegex || ix == nil || (a.CaseSensitive != nil && *a.CaseSensitive) {
 		return "", false
 	}
 	fresh, _ := ix.Fresh(ws)
 	if !fresh {
 		if a.Mode != "fts" {
-			return "", false // auto + stale → grep
+			ix.ReindexAsync(ws) // self-heal for the next query; this one greps
+			return "", false    // auto + stale → grep
 		}
 		if _, err := ix.Reindex(ws); err != nil {
 			return "", false
@@ -113,6 +120,9 @@ func (t *searchMemoriesTool) searchFTS(ctx context.Context, ix *memory.Index, ws
 	hits, err := ix.Search(ctx, a.Pattern, memory.SearchOpts{Limit: 50, Snippets: true})
 	if err != nil {
 		return "", false
+	}
+	if len(hits) == 0 && a.Mode != "fts" {
+		return "", false // auto + zero FTS hits → let grep try a substring match
 	}
 	return formatMemoryHits(a.Pattern, hits), true
 }

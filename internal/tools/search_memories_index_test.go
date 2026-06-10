@@ -107,6 +107,76 @@ func TestSearchMemories_FtsModeReindexesStale(t *testing.T) {
 	}
 }
 
+// TestSearchMemories_AutoZeroFtsHitFallsToGrep is the substring-regression fix:
+// on a FRESH index, a substring FTS can't tokenise ("essio" inside
+// "UserSession") must still be found via the grep fallback.
+func TestSearchMemories_AutoZeroFtsHitFallsToGrep(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := memory.OpenIndex(ws)
+	if err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	defer ix.Close()
+	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	if err := memory.WriteIndexed(ix, ws, "user-session-notes", "the UserSession lifecycle", "d"); err != nil {
+		t.Fatalf("WriteIndexed: %v", err)
+	}
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"essio"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "source=memory-fts") {
+		t.Errorf("auto mode with zero FTS hits should fall back to grep, got FTS:\n%s", out)
+	}
+	if !strings.Contains(out, "user-session-notes") {
+		t.Errorf("grep fallback should find the substring, got:\n%s", out)
+	}
+}
+
+// TestSearchMemories_CaseSensitiveForcesGrep: FTS5 is case-insensitive, so an
+// explicit case_sensitive request must take the grep path.
+func TestSearchMemories_CaseSensitiveForcesGrep(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := memory.OpenIndex(ws)
+	if err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	defer ix.Close()
+	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	if err := memory.WriteIndexed(ix, ws, "notes", "UserSession lifecycle", "d"); err != nil {
+		t.Fatalf("WriteIndexed: %v", err)
+	}
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"UserSession","case_sensitive":true}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "source=memory-fts") {
+		t.Errorf("case_sensitive must force grep, got FTS:\n%s", out)
+	}
+}
+
+// TestSearchMemories_FtsModeKeepsEmptyResult: an explicit mode=fts query keeps
+// the empty FTS result (no implicit grep fallback).
+func TestSearchMemories_FtsModeKeepsEmptyResult(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := memory.OpenIndex(ws)
+	if err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	defer ix.Close()
+	tool := NewSearchMemories(func() string { return ws }).WithIndex(func() *memory.Index { return ix })
+	if err := memory.WriteIndexed(ix, ws, "notes", "UserSession lifecycle", "d"); err != nil {
+		t.Fatalf("WriteIndexed: %v", err)
+	}
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"pattern":"essio","mode":"fts"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "source=memory-fts") || !strings.Contains(out, "No memory matches") {
+		t.Errorf("mode=fts must keep the empty FTS result, got:\n%s", out)
+	}
+}
+
 func TestSearchMemories_NilIndexUsesGrep(t *testing.T) {
 	ws := t.TempDir()
 	if err := memory.Write(ws, "n", "zebra-unique-token", "d"); err != nil {

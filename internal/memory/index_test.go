@@ -3,8 +3,60 @@ package memory
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
+	"time"
 )
+
+// TestIndex_ReindexAsyncSelfHeals: a memory written to disk behind the index
+// makes it stale; ReindexAsync brings it fresh in the background.
+func TestIndex_ReindexAsyncSelfHeals(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := OpenIndex(ws)
+	if err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	defer ix.Close()
+	if err := Write(ws, "fresh", "alpha-zebra-token", "d"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if fresh, _ := ix.Fresh(ws); fresh {
+		t.Fatal("expected the index to be stale before reindex")
+	}
+	ix.ReindexAsync(ws)
+	deadline := time.After(3 * time.Second)
+	for {
+		if fresh, _ := ix.Fresh(ws); fresh {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("ReindexAsync did not make the index fresh")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// TestIndex_ReindexAsyncConcurrent: the CAS guard admits one runner; many
+// concurrent callers are safe (run under -race).
+func TestIndex_ReindexAsyncConcurrent(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := OpenIndex(ws)
+	if err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	defer ix.Close()
+	if err := Write(ws, "m", "body", "d"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); ix.ReindexAsync(ws) }()
+	}
+	wg.Wait()
+	time.Sleep(200 * time.Millisecond) // let any in-flight reindex finish before Close
+}
 
 // TestSplitIdentifier locks the code-aware tokenisation. The expected outputs
 // mirror internal/topology's splitIdentifier (the copy's reference behaviour).

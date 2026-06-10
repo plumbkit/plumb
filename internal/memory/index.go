@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -113,6 +115,8 @@ type Index struct {
 	mu        sync.Mutex
 	db        *sql.DB
 	workspace string
+	// reindexing guards ReindexAsync: at most one background reindex per index.
+	reindexing atomic.Bool
 }
 
 // IndexDBPath returns the canonical path to the memory index for a workspace.
@@ -244,6 +248,22 @@ func (ix *Index) Reindex(workspace string) (int, error) {
 		return changed, err
 	}
 	return changed, nil
+}
+
+// ReindexAsync runs Reindex in the background, at most one in flight per index
+// (a CAS guard drops the call when a reindex is already running). Used to
+// self-heal a stale index after an auto-mode search fell back to grep, so the
+// next query can use FTS. Errors are logged at Debug, not returned.
+func (ix *Index) ReindexAsync(workspace string) {
+	if ix == nil || !ix.reindexing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer ix.reindexing.Store(false)
+		if _, err := ix.Reindex(workspace); err != nil {
+			slog.Debug("memory: async reindex failed", "workspace", workspace, "err", err)
+		}
+	}()
 }
 
 func (ix *Index) isCurrent(name, sha string) bool {
