@@ -179,8 +179,13 @@ func clientSpecs() []clientSpec {
 		{
 			name: "codex", binary: "codex", setupArgs: []string{"setup", "codex"},
 			connect: false, connectSkip: "`codex mcp list` is a static config/auth echo — no MCP handshake (use the auth tier)",
-			authKeys:   []string{"OPENAI_API_KEY"},
-			promptArgs: func(p string) []string { return []string{"exec", "--full-auto", p} },
+			prep:     codexLogin,
+			authKeys: []string{"OPENAI_API_KEY"},
+			// No sandbox: workspace-write cancels the MCP tool call (plumb serve can't
+			// reach its daemon socket); bypass lets the handshake + tool call complete.
+			promptArgs: func(p string) []string {
+				return []string{"exec", "--dangerously-bypass-approvals-and-sandbox", p}
+			},
 		},
 		{
 			name: "auggie", binary: "auggie", setupArgs: []string{"setup", "augment"},
@@ -191,8 +196,9 @@ func clientSpecs() []clientSpec {
 		{
 			name: "crush", binary: "crush", setupArgs: []string{"setup", "crush"},
 			connect: false, connectSkip: "Crush surfaces MCP status only in its TUI; no non-interactive connecting probe",
-			authKeys:   []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY"},
-			promptArgs: func(p string) []string { return []string{"run", "--yolo", p} },
+			authKeys: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY"},
+			// `crush run` is non-interactive and auto-executes; it has no --yolo flag.
+			promptArgs: func(p string) []string { return []string{"run", p} },
 		},
 		{
 			name: "goose", binary: "goose", setupArgs: []string{"setup", "goose"},
@@ -386,6 +392,24 @@ func enableCursorMCP(t *testing.T, _, fixture string, env []string) {
 	cmd.Dir = fixture
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Logf("cursor-agent mcp enable plumb (non-fatal): %v\n%s", err, out)
+	}
+}
+
+// codexLogin authenticates codex from OPENAI_API_KEY. `codex exec` does not read
+// the env var — it needs a prior login that writes auth.json into the (isolated)
+// CODEX_HOME/~/.codex. Best-effort: a failure is logged, not fatal.
+func codexLogin(t *testing.T, _, fixture string, env []string) {
+	t.Helper()
+	key := os.Getenv("OPENAI_API_KEY")
+	if key == "" {
+		return
+	}
+	cmd := exec.Command("codex", "login", "--with-api-key")
+	cmd.Env = env
+	cmd.Dir = fixture
+	cmd.Stdin = strings.NewReader(key)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("codex login --with-api-key (non-fatal): %v\n%s", err, out)
 	}
 }
 

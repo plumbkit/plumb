@@ -14,10 +14,16 @@ import (
 // agent plus a model round-trip plus a plumb tool call.
 const authTimeout = 180 * time.Second
 
-// toolPrompt forces the agent to invoke a plumb tool. `version` is read-only,
-// fast, and side-effect-free, yet still lands a tool_calls row in stats.db.
-const toolPrompt = "Use the plumb MCP server's \"version\" tool to report plumb's version. " +
-	"You must call the tool — do not answer from memory or use any other tool."
+// toolPrompt forces the agent to invoke a PATH-BEARING plumb tool. plumb only
+// records a tool call in stats once it resolves a workspace root, and it derives
+// that root from a path argument (seedPathFromArgs) — so a path-less call like
+// `version` on a connection that never attached a workspace leaves no row. A
+// list_directory on the fixture's absolute path always resolves the root, making
+// the stats signal reliable regardless of how the model paraphrases the output.
+func toolPrompt(dir string) string {
+	return "Use the plumb MCP server's list_directory tool to list the directory \"" + dir +
+		"\". Call that plumb tool with exactly that path. Do not use any other tool or answer from memory."
+}
 
 // TestClientsAuth is the LLM AUTH tier. For each client whose API key is present
 // in the environment, it drives a headless prompt that forces a plumb tool call
@@ -58,7 +64,7 @@ func TestClientsAuth(t *testing.T) {
 				spec.prep(t, tmpHome, fixture, env)
 			}
 
-			args := spec.promptArgs(toolPrompt)
+			args := spec.promptArgs(toolPrompt(fixture))
 			ctx, cancel := context.WithTimeout(context.Background(), authTimeout)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, spec.binary, args...)
@@ -68,12 +74,31 @@ func TestClientsAuth(t *testing.T) {
 			t.Logf("auth via %s\n$ %s %s  (exit=%v)\n%s",
 				keyName, spec.binary, strings.Join(args, " "), runErr, truncate(out, 3000))
 
-			n, tools := countToolCalls(t, tmpHome)
+			// plumb's stats Writer is async/batched; a graceful daemon stop drains it
+			// (stats.TestWriter_DrainsOnClose), making the tool_calls row durable before
+			// we read — otherwise the row can lag the client's exit and read as 0.
+			stopDaemon(env)
+			n, tools := pollToolCalls(t, tmpHome, 8*time.Second)
 			if n == 0 {
 				t.Fatalf("FAIL %s: agent ran but plumb recorded no tool call — the model did not invoke a plumb tool.\noutput:\n%s",
 					spec.name, truncate(out, 3000))
 			}
 			t.Logf("PASS %s: plumb recorded %d tool call(s) [%s]", spec.name, n, tools)
 		})
+	}
+}
+
+// pollToolCalls reads the stats DB until a tool_calls row appears or timeout
+// elapses, absorbing the small lag between the daemon stop and the WAL becoming
+// visible to a fresh read-only handle.
+func pollToolCalls(t *testing.T, tmpHome string, timeout time.Duration) (int, string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		n, tools := countToolCalls(t, tmpHome)
+		if n > 0 || time.Now().After(deadline) {
+			return n, tools
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 }
