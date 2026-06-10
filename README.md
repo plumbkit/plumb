@@ -87,10 +87,10 @@ Plumb negotiates LSP capabilities per language and also ships a pure-Go tree-sit
 |---|---|---|
 | **First-class** (CI-tested, real-binary integration) | **Go** (gopls), **Python** (pyright) | Full LSP: definitions, references, rename, diagnostics, hierarchies + all write tools |
 | **Validated, opt-in** | **Java** (jdtls), **Rust** (rust-analyzer), **Swift** (sourcekit-lsp) | Full LSP; enable per-language and put the server on `$PATH` |
-| **Experimental, opt-in** | **TypeScript/JS**, **Kotlin**, **Zig**, **HTML** | Works; less battle-tested. Enable with `[lsp.<lang>] enabled = true` |
+| **Experimental, opt-in** | **TypeScript/JS**, **Kotlin**, **Zig**, **HTML** | Navigation works against the real servers; diagnostics validation is still in progress. Enable with `[lsp.<lang>] enabled = true` |
 | **Search & navigation** (tree-sitter, no LSP needed) | 15+ incl. JS/TS/TSX, Bash, SQL, HCL, Dockerfile, TOML, YAML, Markdown | Ranked symbol search, outlines, graph exploration via the Topology index |
 
-Real-binary validation has been exercised on **macOS and Linux** (see CI). Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues) — the daemon's Unix-socket architecture needs a port.
+Real-binary validation has been exercised on **macOS**; Linux integration runs in CI and is being hardened pre-v1. Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues) — the daemon's Unix-socket architecture needs a port.
 
 ---
 
