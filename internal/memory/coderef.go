@@ -1,6 +1,9 @@
 package memory
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // CodeRef identifies a code entity by rebuild-proof fields; zero-value fields
 // simply do not participate in matching. It is the topology ↔ memory join
@@ -57,11 +60,19 @@ func MemoriesForRefs(mems []Memory, refs []CodeRef, max int) []RefHit {
 
 // refMatch reports whether m relates to any of refs, and why. Symbol matches
 // outrank path matches in the reported reason because they are the stronger
-// signal (an exact identifier, not a glob).
+// signal (an exact identifier, not a glob). Stored source_symbols are compared
+// both verbatim and by base segment — symbol-query args (the provenance
+// source) may use the dotted ReceiverType.MethodName form while topology node
+// names are bare.
 func refMatch(m Memory, refs []CodeRef) (string, bool) {
 	for _, r := range refs {
-		if r.SymbolName != "" && slices.Contains(m.SourceSymbols, r.SymbolName) {
-			return "references symbol " + r.SymbolName, true
+		if r.SymbolName == "" {
+			continue
+		}
+		for _, stored := range m.SourceSymbols {
+			if stored == r.SymbolName || SymbolBase(stored) == r.SymbolName {
+				return "references symbol " + r.SymbolName, true
+			}
 		}
 	}
 	for _, r := range refs {
@@ -76,4 +87,17 @@ func refMatch(m Memory, refs []CodeRef) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// SymbolBase returns the bare symbol name of a possibly-qualified reference:
+// the segment after the last dot, e.g. "Model.renderDashboard" →
+// "renderDashboard" and "(*Server).Start" → "Start". A bare name returns
+// unchanged. Provenance source_symbols come from symbol-query tool args,
+// which accept the dotted form; comparisons against bare topology node names
+// must tolerate it.
+func SymbolBase(s string) string {
+	if i := strings.LastIndexByte(s, '.'); i >= 0 && i+1 < len(s) {
+		return s[i+1:]
+	}
+	return s
 }

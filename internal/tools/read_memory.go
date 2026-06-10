@@ -122,9 +122,12 @@ const staleSymbolsMax = 8
 
 // staleSymbolsNote checks a memory's referenced source_symbols against the
 // live topology index and reports the ones that no longer exist — a renamed
-// or deleted symbol means the memory may describe code that is gone. Silent
-// (returns "") when there is no store, no referenced symbols, or every symbol
-// still resolves; the check never fails the read.
+// or deleted symbol means the memory may describe code that is gone. A dotted
+// reference ("Model.renderDashboard" — the form symbol-query args accept) is
+// retried by its base segment before being declared missing, because topology
+// node names are bare and the qualified form differs ("(*Model).renderDashboard").
+// Silent (returns "") when there is no store, no referenced symbols, or every
+// symbol still resolves; the check never fails the read.
 func staleSymbolsNote(ctx context.Context, store *topology.Store, rec memory.Record) string {
 	if store == nil || len(rec.SourceSymbols) == 0 {
 		return ""
@@ -135,14 +138,30 @@ func staleSymbolsNote(ctx context.Context, store *topology.Store, rec memory.Rec
 	}
 	var missing []string
 	for _, sym := range syms {
-		nodes, err := store.ResolveNodes(ctx, sym, topology.NodeHint{})
-		if err == nil && len(nodes) == 0 {
-			missing = append(missing, sym)
+		if symbolResolves(ctx, store, sym) {
+			continue
 		}
+		missing = append(missing, sym)
 	}
 	if len(missing) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("\n[stale-check] referenced symbols no longer in the code map: %s — this memory may describe code that has moved or been removed.",
 		strings.Join(missing, ", "))
+}
+
+// symbolResolves reports whether sym (verbatim, or by base segment when
+// dotted) resolves to at least one indexed node. A resolution error counts as
+// resolving — the stale-check must stay conservative and never flag on a
+// flaky lookup.
+func symbolResolves(ctx context.Context, store *topology.Store, sym string) bool {
+	nodes, err := store.ResolveNodes(ctx, sym, topology.NodeHint{})
+	if err != nil || len(nodes) > 0 {
+		return true
+	}
+	if base := memory.SymbolBase(sym); base != sym {
+		nodes, err = store.ResolveNodes(ctx, base, topology.NodeHint{})
+		return err != nil || len(nodes) > 0
+	}
+	return false
 }

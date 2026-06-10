@@ -352,4 +352,25 @@ func TestMemoryDetailShowsDatesAndStrippedBody(t *testing.T) {
 	if !strings.Contains(plain, "alpha body line") {
 		t.Errorf("body missing:\n%s", plain)
 	}
+	if strings.Contains(plain, "Origin") {
+		t.Errorf("a user-authored memory must not show an Origin row:\n%s", plain)
+	}
+}
+
+// TestMemoryDetailShowsOriginForGenerated: a machine-written memory's detail
+// panel discloses its provenance so it is never mistaken for a hand-written
+// note.
+func TestMemoryDetailShowsOriginForGenerated(t *testing.T) {
+	RebuildStyles()
+	ws := t.TempDir()
+	if err := memory.WriteGenerated(nil, ws, "episodic-demo", "session summary", "body", memory.Provenance{}); err != nil {
+		t.Fatal(err)
+	}
+	m := &Model{currentSection: 2, sessions: []session.Info{{ID: "1", Folder: ws}}}
+	m.refreshMemories()
+
+	plain := ansiStripForTest(strings.Join(m.memoryRightLines(60), "\n"))
+	if !strings.Contains(plain, "Origin") || !strings.Contains(plain, "generated") {
+		t.Errorf("generated memory detail should show an Origin row with its confidence:\n%s", plain)
+	}
 }

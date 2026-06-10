@@ -231,6 +231,9 @@ func (m *Model) memoryRightLines(rw int) []string {
 	if !mem.ModTime.IsZero() {
 		lines = append(lines, memDetailRow("Updated", mem.ModTime.Local().Format(dateFormat)))
 	}
+	if !mem.UserAuthored() {
+		lines = append(lines, memDetailRow("Origin", string(mem.Confidence)+" (machine-written)"))
+	}
 	if len(mem.Paths) > 0 {
 		lines = append(lines, memDetailRow("Paths", strings.Join(mem.Paths, ", ")))
 	}

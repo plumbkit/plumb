@@ -84,17 +84,19 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	if name == "edit_file" || name == "write_file" {
 		syms = s.editedFileSymbols(ctx, ws, rel)
 	}
-	names := s.unseenHints(matchingMemoryNames(s.hintCache.memories(ws), rel, syms, hintMaxHints(mcfg)))
+	names := s.unseenHints(matchingMemoryNames(s.hintCache.memories(ws), rel, syms), hintMaxHints(mcfg))
 	if len(names) == 0 {
 		return text
 	}
 	return text + hintBlock(names, mcfg.HintBudgetBytes)
 }
 
-// unseenHints filters names down to those not yet hinted this session and
-// records the survivors. Clearing happens on re-pin (clearHintSeen), so a new
-// project starts fresh.
-func (s *connSession) unseenHints(names []string) []string {
+// unseenHints filters names down to those not yet hinted this session, caps
+// the result at max, and records only the survivors as seen. Suppression runs
+// BEFORE the cap so an already-hinted memory frees its slot for the next
+// unseen match instead of permanently blocking everything ranked below it.
+// Clearing happens on re-pin (clearHintSeen), so a new project starts fresh.
+func (s *connSession) unseenHints(names []string, max int) []string {
 	s.hintSeenMu.Lock()
 	defer s.hintSeenMu.Unlock()
 	if s.hintSeen == nil {
@@ -107,6 +109,9 @@ func (s *connSession) unseenHints(names []string) []string {
 		}
 		s.hintSeen[n] = true
 		out = append(out, n)
+		if len(out) == max {
+			break
+		}
 	}
 	return out
 }
@@ -138,13 +143,15 @@ func (s *connSession) editedFileSymbols(ctx context.Context, ws, rel string) map
 	return set
 }
 
-// matchingMemoryNames returns up to max memory names whose paths globs match
-// rel, or whose provenance source_symbols intersect syms (nil syms skips the
-// symbol pass). User-authored memories always claim slots before generated
-// ones — every idle session can mint an episodic-* memory attached to the same
-// hot files, and those must never crowd a hand-written note out of the capped
-// hint block.
-func matchingMemoryNames(mems []memory.Memory, rel string, syms map[string]bool, max int) []string {
+// matchingMemoryNames returns every memory name whose paths globs match rel,
+// or whose provenance source_symbols intersect syms (nil syms skips the
+// symbol pass), user-authored first. The hint cap is applied by unseenHints
+// AFTER suppression filtering — capping here would let seen memories
+// permanently block unseen ones ranked below them. User-authored memories
+// always come before generated ones — every idle session can mint an
+// episodic-* memory attached to the same hot files, and those must never
+// crowd a hand-written note out of the capped hint block.
+func matchingMemoryNames(mems []memory.Memory, rel string, syms map[string]bool) []string {
 	var user, generated []string
 	for _, m := range mems {
 		if !m.MatchesPath(rel) && !referencesAnySymbol(m, syms) {
@@ -156,16 +163,16 @@ func matchingMemoryNames(mems []memory.Memory, rel string, syms map[string]bool,
 			generated = append(generated, m.Name)
 		}
 	}
-	names := append(user, generated...)
-	if len(names) > max {
-		names = names[:max]
-	}
-	return names
+	return append(user, generated...)
 }
 
+// referencesAnySymbol reports whether any of m's provenance source_symbols is
+// in syms — comparing both the stored form and its base segment, because
+// symbol-query args (the provenance source) may use the dotted
+// ReceiverType.MethodName form while topology node names are bare.
 func referencesAnySymbol(m memory.Memory, syms map[string]bool) bool {
 	for _, sym := range m.SourceSymbols {
-		if syms[sym] {
+		if syms[sym] || syms[memory.SymbolBase(sym)] {
 			return true
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/memory"
@@ -141,9 +142,11 @@ func (t *WorkspaceSearch) Execute(ctx context.Context, raw json.RawMessage) (str
 	return formatWorkspaceSearch(a, merged, topoStatus, memStatus), nil
 }
 
-// searchTopology queries the topology FTS index once and partitions the hits
-// into the code and docs corpora (doc sections and Markdown/HTML files are
-// docs; everything else is code).
+// searchTopology queries the topology FTS index for the code and docs corpora.
+// The two corpora get SEPARATE query budgets: docs is served by dedicated
+// language-filtered queries (Markdown, HTML), not by whatever doc nodes happen
+// to survive a shared ranked list — in a code-heavy repo the top hits are all
+// code, and a shared budget would starve the docs corpus entirely.
 func (t *WorkspaceSearch) searchTopology(ctx context.Context, a workspaceSearchArgs) (code, docs []wsHit, status string) {
 	if !a.wants("code") && !a.wants("docs") {
 		return nil, nil, "skipped"
@@ -153,33 +156,66 @@ func (t *WorkspaceSearch) searchTopology(ctx context.Context, a workspaceSearchA
 		return nil, nil, "missing"
 	}
 	status = topologyIndexStatus(store)
-	results, err := store.Search(ctx, a.Query, topology.SearchOpts{Limit: a.Limit * 2, Snippets: true})
-	if err != nil {
-		return nil, nil, status
+	if a.wants("code") {
+		code = t.searchCode(ctx, store, a)
 	}
-	for _, r := range results {
-		h := wsHit{
-			source:  "topology-fts",
-			path:    r.Node.Path,
-			line:    r.Node.StartLine,
-			label:   fmt.Sprintf("%s (%s)", r.Node.Name, r.Node.Kind),
-			field:   r.Field,
-			score:   r.Score,
-			snippet: r.Snippet,
-		}
-		if isDocNode(r.Node) {
-			h.corpus, h.why = "docs", docWhy(r.Field)
-			if a.wants("docs") {
-				docs = append(docs, h)
-			}
-			continue
-		}
-		h.corpus, h.why = "code", codeWhy(r.Field)
-		if a.wants("code") {
-			code = append(code, h)
-		}
+	if a.wants("docs") {
+		docs = searchDocs(ctx, store, a)
 	}
 	return code, docs, status
+}
+
+// searchCode returns the code-corpus hits: one ranked topology query with doc
+// nodes dropped (they are served by searchDocs' dedicated queries).
+func (t *WorkspaceSearch) searchCode(ctx context.Context, store *topology.Store, a workspaceSearchArgs) []wsHit {
+	results, err := store.Search(ctx, a.Query, topology.SearchOpts{Limit: a.Limit * 2, Snippets: true})
+	if err != nil {
+		return nil
+	}
+	var code []wsHit
+	for _, r := range results {
+		if isDocNode(r.Node) {
+			continue
+		}
+		h := topoHit(r)
+		h.corpus, h.why = "code", codeWhy(r.Field)
+		code = append(code, h)
+	}
+	return code
+}
+
+// searchDocs returns the docs-corpus hits via per-language queries (the
+// indexed doc languages), merged by score — scores from the same FTS index
+// are comparable.
+func searchDocs(ctx context.Context, store *topology.Store, a workspaceSearchArgs) []wsHit {
+	var docs []wsHit
+	for _, lang := range []string{"markdown", "html"} {
+		results, err := store.Search(ctx, a.Query, topology.SearchOpts{Limit: a.Limit, Snippets: true, Language: lang})
+		if err != nil {
+			continue
+		}
+		for _, r := range results {
+			h := topoHit(r)
+			h.corpus, h.why = "docs", docWhy(r.Field)
+			docs = append(docs, h)
+		}
+	}
+	sort.SliceStable(docs, func(i, j int) bool { return docs[i].score > docs[j].score })
+	return docs
+}
+
+// topoHit converts one topology search result into the broker's hit shape
+// (corpus and why are set by the caller).
+func topoHit(r topology.SearchResult) wsHit {
+	return wsHit{
+		source:  "topology-fts",
+		path:    r.Node.Path,
+		line:    r.Node.StartLine,
+		label:   fmt.Sprintf("%s (%s)", r.Node.Name, r.Node.Kind),
+		field:   r.Field,
+		score:   r.Score,
+		snippet: r.Snippet,
+	}
 }
 
 // searchMemory queries the memory FTS index. A stale index still serves

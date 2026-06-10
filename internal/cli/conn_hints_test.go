@@ -48,23 +48,29 @@ func TestMemoryHintCache_Match(t *testing.T) {
 		t.Fatalf("expected 2 memories cached, got %d", len(mems))
 	}
 
-	got := matchingMemoryNames(mems, "internal/auth/login.go", nil, 3)
+	got := matchingMemoryNames(mems, "internal/auth/login.go", nil)
 	if len(got) != 1 || got[0] != "auth-gotchas" {
 		t.Errorf("expected [auth-gotchas], got %v", got)
 	}
-	if n := matchingMemoryNames(mems, "internal/db/store.go", nil, 3); len(n) != 0 {
+	if n := matchingMemoryNames(mems, "internal/db/store.go", nil); len(n) != 0 {
 		t.Errorf("non-matching path should yield no hints, got %v", n)
 	}
 }
 
-func TestMatchingMemoryNames_RespectsMax(t *testing.T) {
-	mems := []memory.Memory{
-		{Name: "a", Paths: []string{"**"}},
-		{Name: "b", Paths: []string{"**"}},
-		{Name: "c", Paths: []string{"**"}},
+// TestUnseenHints_CapAfterSuppression: the hint cap applies AFTER the seen
+// filter, so an already-hinted memory frees its slot for the next unseen one
+// instead of permanently blocking everything ranked below the cap.
+func TestUnseenHints_CapAfterSuppression(t *testing.T) {
+	s := &connSession{}
+	if got := s.unseenHints([]string{"a", "b", "c"}, 2); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("first call should hint the top 2, got %v", got)
 	}
-	if got := matchingMemoryNames(mems, "x.go", nil, 2); len(got) != 2 {
-		t.Errorf("max=2 should cap to 2, got %v", got)
+	// a and b are now seen; c must claim the freed slot on the next call.
+	if got := s.unseenHints([]string{"a", "b", "c"}, 2); len(got) != 1 || got[0] != "c" {
+		t.Fatalf("seen memories must free their slots for unseen ones, got %v", got)
+	}
+	if got := s.unseenHints([]string{"a", "b", "c"}, 2); len(got) != 0 {
+		t.Fatalf("all seen → no hints, got %v", got)
 	}
 }
 
@@ -80,26 +86,32 @@ func TestMatchingMemoryNames_UserAuthoredClaimSlotsFirst(t *testing.T) {
 		{Name: "episodic-20260610-cccc", Paths: []string{"**"}, Confidence: memory.ConfidenceGenerated},
 		{Name: "zz-user-notes", Paths: []string{"**"}},
 	}
-	got := matchingMemoryNames(mems, "x.go", nil, 3)
-	if len(got) != 3 || got[0] != "zz-user-notes" {
-		t.Errorf("user-authored memory must claim the first hint slot, got %v", got)
+	got := matchingMemoryNames(mems, "x.go", nil)
+	if len(got) != 4 || got[0] != "zz-user-notes" {
+		t.Errorf("user-authored memory must come first, got %v", got)
 	}
 }
 
 // TestMatchingMemoryNames_SymbolRefs: a memory whose provenance references a
 // symbol present in the edited file matches even when no paths glob does; a
-// nil symbol set skips the symbol pass entirely.
+// nil symbol set skips the symbol pass entirely; a dotted stored reference
+// ("Model.renderDashboard" — the form read_symbol/find_symbol args accept)
+// still matches the bare node name.
 func TestMatchingMemoryNames_SymbolRefs(t *testing.T) {
 	mems := []memory.Memory{
 		{Name: "lock-design", SourceSymbols: []string{"AcquireDaemonLock"}},
 		{Name: "other", SourceSymbols: []string{"Unrelated"}},
 	}
-	got := matchingMemoryNames(mems, "internal/cli/lock.go", map[string]bool{"AcquireDaemonLock": true}, 3)
+	got := matchingMemoryNames(mems, "internal/cli/lock.go", map[string]bool{"AcquireDaemonLock": true})
 	if len(got) != 1 || got[0] != "lock-design" {
 		t.Errorf("symbol ref should match, got %v", got)
 	}
-	if got := matchingMemoryNames(mems, "internal/cli/lock.go", nil, 3); len(got) != 0 {
+	if got := matchingMemoryNames(mems, "internal/cli/lock.go", nil); len(got) != 0 {
 		t.Errorf("nil symbol set must skip the symbol pass, got %v", got)
+	}
+	dotted := []memory.Memory{{Name: "render-notes", SourceSymbols: []string{"Model.renderDashboard"}}}
+	if got := matchingMemoryNames(dotted, "internal/tui/model.go", map[string]bool{"renderDashboard": true}); len(got) != 1 {
+		t.Errorf("dotted stored symbol should match the bare node name, got %v", got)
 	}
 }
 

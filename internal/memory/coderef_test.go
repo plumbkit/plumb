@@ -86,3 +86,29 @@ func TestList_PopulatesSourceRefs(t *testing.T) {
 		t.Errorf("SourceSymbols = %v", m.SourceSymbols)
 	}
 }
+
+func TestSymbolBase(t *testing.T) {
+	cases := map[string]string{
+		"renderDashboard":       "renderDashboard",
+		"Model.renderDashboard": "renderDashboard",
+		"(*Server).Start":       "Start",
+		"a.b.c":                 "c",
+		"trailing.":             "trailing.", // degenerate: no base segment after the dot
+	}
+	for in, want := range cases {
+		if got := SymbolBase(in); got != want {
+			t.Errorf("SymbolBase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestMemoriesForRefs_DottedSourceSymbol: provenance source_symbols come from
+// symbol-query args, which accept the dotted ReceiverType.MethodName form —
+// they must still match a bare topology node name.
+func TestMemoriesForRefs_DottedSourceSymbol(t *testing.T) {
+	mems := []Memory{{Name: "render-notes", SourceSymbols: []string{"Model.renderDashboard"}}}
+	hits := MemoriesForRefs(mems, []CodeRef{{SymbolName: "renderDashboard"}}, 3)
+	if len(hits) != 1 || hits[0].Name != "render-notes" {
+		t.Fatalf("dotted source_symbol should match the bare ref name, got %+v", hits)
+	}
+}

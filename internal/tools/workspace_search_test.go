@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,6 +97,50 @@ func TestWorkspaceSearch_AllCorporaLabelled(t *testing.T) {
 	}
 	if !strings.Contains(out, "why=") || !strings.Contains(out, "score=") || !strings.Contains(out, "field=") {
 		t.Errorf("results must carry why/score/field labels:\n%s", out)
+	}
+}
+
+// TestWorkspaceSearch_DocsNotStarvedByCode: the docs corpus has its own query
+// budget — in a code-heavy workspace where dozens of symbols match the query,
+// the Markdown section must still surface instead of being crowded out of a
+// shared ranked list by higher-volume code hits.
+func TestWorkspaceSearch_DocsNotStarvedByCode(t *testing.T) {
+	ws := t.TempDir()
+	var src strings.Builder
+	src.WriteString("package demo\n\n")
+	for i := range 40 {
+		fmt.Fprintf(&src, "// DaemonHelper%02d touches the daemon lock.\nfunc DaemonHelper%02d() {}\n\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "demo.go"), []byte(src.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "guide.md"), []byte(wsSearchDocFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New(), treesitter.NewMarkdown()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		code, _ := store.Search(context.Background(), "daemon", topology.SearchOpts{Limit: 50})
+		docs, _ := store.Search(context.Background(), "daemon", topology.SearchOpts{Limit: 5, Language: "markdown"})
+		if len(code) >= 20 && len(docs) >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := NewWorkspaceSearch(func() string { return ws }, func() *topology.Store { return store })
+	out := runWorkspaceSearch(t, tool, map[string]any{"query": "daemon", "limit": 6, "corpora": []string{"code", "docs"}})
+	if !strings.Contains(out, "[docs]") {
+		t.Errorf("docs corpus starved by code hits — expected a [docs] result:\n%s", out)
+	}
+	if !strings.Contains(out, "[code]") {
+		t.Errorf("expected [code] results too:\n%s", out)
 	}
 }
 
