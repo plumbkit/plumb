@@ -236,14 +236,17 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	}
 
 	if e, ok := p.entries[poolKey{root, language}]; ok {
-		if pin {
-			p.pinLocked(e)
-		}
+		// Pin only AFTER any fallible step (wakeLocked): pinning before a wake that
+		// errors would leak a reference (refs incremented, no matching release) and
+		// cancel the grace timer on an entry that stays hibernated.
 		switch e.state {
 		case poolHibernated:
 			readyCh, err := p.wakeLocked(e)
 			if err != nil {
 				return nil, nil, err
+			}
+			if pin {
+				p.pinLocked(e)
 			}
 			slog.Info("pool: waking hibernated LS", "root", root, "language", e.language, "refs", e.refs)
 			return e, readyCh, nil
@@ -252,8 +255,14 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 			// Return the not-yet-ready entry so the caller retries (route surfaces
 			// "LSP server not yet ready"); the next acquire finds it hibernated and
 			// wakes it.
+			if pin {
+				p.pinLocked(e)
+			}
 			return e, nil, nil
 		default:
+			if pin {
+				p.pinLocked(e)
+			}
 			slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
 			return e, nil, nil
 		}

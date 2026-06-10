@@ -173,8 +173,8 @@ func (p *workspacePool) hibernateIdle() {
 // overBudgetVictimLocked returns the least-recently-used running entry of
 // language when starting one more would exceed max running servers, or nil when
 // max is unlimited (<=0) or the budget is not yet reached. Caller holds p.mu.
-func (p *workspacePool) overBudgetVictimLocked(language string, max int) *poolEntry {
-	if max <= 0 {
+func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) *poolEntry {
+	if maxRunning <= 0 {
 		return nil
 	}
 	var running []*poolEntry
@@ -183,7 +183,7 @@ func (p *workspacePool) overBudgetVictimLocked(language string, max int) *poolEn
 			running = append(running, e)
 		}
 	}
-	if len(running) < max {
+	if len(running) < maxRunning {
 		return nil
 	}
 	victim := running[0]
