@@ -347,9 +347,9 @@ func TestTotalTokensSavedSinceScopesByTime(t *testing.T) {
 
 	now := time.Now()
 	calls := []Call{
-		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now.Add(-time.Hour), Success: true},
-		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now, Success: true},
-		{SessionID: "sess-1", Workspace: "/w1", Tool: "search_in_files", CalledAt: now, Success: true},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now.Add(-time.Hour), Success: true, TokensSaved: 300, SavingsModelVersion: 3},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "find_symbol", CalledAt: now, Success: true, TokensSaved: 300, SavingsModelVersion: 3},
+		{SessionID: "sess-1", Workspace: "/w1", Tool: "search_in_files", CalledAt: now, Success: true, TokensSaved: 50, SavingsModelVersion: 3},
 	}
 	for _, c := range calls {
 		if err := db.Record(c); err != nil {
@@ -357,21 +357,18 @@ func TestTotalTokensSavedSinceScopesByTime(t *testing.T) {
 		}
 	}
 
-	// With empty client_name (legacy rows), the conservative unknown profile applies:
-	// find_symbol=300, search_in_files=50 → 350.
+	// Only the two rows at `now` fall in the window (the -1h find_symbol is excluded):
+	// stored 300 + 50 = 350.
 	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 350 {
 		t.Fatalf("TotalTokensSavedSince = %d, want 350", got)
 	}
 }
 
-// TestSavingsPrefersStoredOverRecompute proves the P1 read path: a row scored at
-// write time (savings_model_version > 0) reads back as its stored figure even
-// when that differs from what the profile recompute would give, while an unscored
-// legacy row (version 0) still recomputes. This is the provenance guarantee —
-// changing the profile table can no longer silently rewrite scored history. Both
-// read paths (TotalTokensSavedSince and Summary's per-tool tokensSavedFor) are
-// exercised.
-func TestSavingsPrefersStoredOverRecompute(t *testing.T) {
+// TestSavingsCountsStoredExcludesLegacy proves the P5 read path: only rows scored
+// at write time (tokens_saved stored, version > 0) count; an unscored legacy row
+// (version 0) carries 0 and is never recomputed. Both read paths
+// (TotalTokensSavedSince and Summary's per-tool tokensSavedFor) are exercised.
+func TestSavingsCountsStoredExcludesLegacy(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
 	db, err := Open()
@@ -381,18 +378,17 @@ func TestSavingsPrefersStoredOverRecompute(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now()
-	// Scored row: stored 999 deliberately differs from any profile value.
-	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "find_symbol", CalledAt: now, Success: true, TokensSaved: 999, SavingsModelVersion: 1}); err != nil {
+	// Scored row.
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "find_symbol", CalledAt: now, Success: true, TokensSaved: 999, SavingsModelVersion: 3}); err != nil {
 		t.Fatalf("Record scored: %v", err)
 	}
-	// Legacy row: unscored (version 0) → recomputed under the unknown profile
-	// (search_in_files = 50).
+	// Legacy row: unscored (version 0), tokens_saved defaults to 0 — excluded, not recomputed.
 	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "search_in_files", CalledAt: now, Success: true}); err != nil {
 		t.Fatalf("Record legacy: %v", err)
 	}
 
-	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 999+50 {
-		t.Fatalf("TotalTokensSavedSince = %d, want %d (stored 999 + recompute 50)", got, 999+50)
+	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 999 {
+		t.Fatalf("TotalTokensSavedSince = %d, want 999 (legacy excluded)", got)
 	}
 
 	sum, err := db.Summary(Filter{})
@@ -406,8 +402,8 @@ func TestSavingsPrefersStoredOverRecompute(t *testing.T) {
 	if byTool["find_symbol"] != 999 {
 		t.Fatalf("find_symbol stored savings = %d, want 999", byTool["find_symbol"])
 	}
-	if byTool["search_in_files"] != 50 {
-		t.Fatalf("search_in_files recomputed savings = %d, want 50", byTool["search_in_files"])
+	if byTool["search_in_files"] != 0 {
+		t.Fatalf("search_in_files legacy savings = %d, want 0 (excluded)", byTool["search_in_files"])
 	}
 }
 
