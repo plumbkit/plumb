@@ -184,11 +184,12 @@ func (d *DB) FirstCallAt() time.Time {
 	return time.UnixMilli(ms.Int64)
 }
 
-// tokensSavedFor totals estimated savings for one tool under filter.
+// tokensSavedFor totals savings for one tool under filter. Every row is consulted
+// (no fast-skip by tool name): a row scored under the counterfactual model can
+// carry savings for any tool, including the hot-path read/edit tools that the old
+// profile table never covered. savingsForRow keeps unscored legacy rows on the
+// recompute path.
 func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
-	if !HasSavingsModel(tool) {
-		return 0
-	}
 	where, args := filter.where()
 	var q string
 	if where == "" {
