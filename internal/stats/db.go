@@ -57,7 +57,11 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     input_json     TEXT    NOT NULL DEFAULT '',
     output_text    TEXT    NOT NULL DEFAULT '',
     client_name    TEXT    NOT NULL DEFAULT '',
-    client_version TEXT    NOT NULL DEFAULT ''
+    client_version TEXT    NOT NULL DEFAULT '',
+    tokens_saved          INTEGER NOT NULL DEFAULT 0,
+    savings_model_version INTEGER NOT NULL DEFAULT 0,
+    capability_tokens     INTEGER NOT NULL DEFAULT 0,
+    efficiency_tokens     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -93,6 +97,13 @@ var migrations = []migration{
 	// the baseline schema. Shares episodicMemoriesDDL with the baseline so the two
 	// can never drift.
 	{from: 7, to: 8, sql: episodicMemoriesDDL},
+	// v9–v12 add the per-call savings columns for the tokens-saved redesign
+	// (provenance + two-axis scoring). All default 0, so every existing row reads
+	// as unscored (savings_model_version = 0) until a scorer stamps it.
+	{from: 8, to: 9, addColumn: "tokens_saved", sql: `ALTER TABLE tool_calls ADD COLUMN tokens_saved          INTEGER NOT NULL DEFAULT 0`},
+	{from: 9, to: 10, addColumn: "savings_model_version", sql: `ALTER TABLE tool_calls ADD COLUMN savings_model_version INTEGER NOT NULL DEFAULT 0`},
+	{from: 10, to: 11, addColumn: "capability_tokens", sql: `ALTER TABLE tool_calls ADD COLUMN capability_tokens     INTEGER NOT NULL DEFAULT 0`},
+	{from: 11, to: 12, addColumn: "efficiency_tokens", sql: `ALTER TABLE tool_calls ADD COLUMN efficiency_tokens     INTEGER NOT NULL DEFAULT 0`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -175,7 +186,11 @@ func DBPathFor() string {
 //	6 — added client_name column (0.7.6+)
 //	7 — added client_version column (0.7.6+)
 //	8 — added episodic_memories table (0.9.10+)
-const SchemaVersion = 8
+//	9 — added tokens_saved column (tokens-saved redesign P0)
+//	10 — added savings_model_version column (tokens-saved redesign P0)
+//	11 — added capability_tokens column (tokens-saved redesign P0)
+//	12 — added efficiency_tokens column (tokens-saved redesign P0)
+const SchemaVersion = 12
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -274,6 +289,15 @@ type Call struct {
 	OutputText    string // full tool output (capped at 64 KiB)
 	ClientName    string // MCP clientInfo.name (e.g. "claude-code")
 	ClientVersion string // MCP clientInfo.version
+
+	// Savings accounting (tokens-saved redesign). Populated at write time by the
+	// scorer in the cli layer; SavingsModelVersion records which model produced
+	// the figures (0 = unscored/legacy). TokensSaved is the headline total;
+	// CapabilityTokens + EfficiencyTokens are the honest two-axis split.
+	TokensSaved         int
+	SavingsModelVersion int
+	CapabilityTokens    int
+	EfficiencyTokens    int
 }
 
 // maxStoredBytes caps the size of input_json and output_text stored per call.
@@ -290,8 +314,8 @@ func capString(s string) string {
 
 // insertCallSQL inserts one tool_calls row. Shared by Record and RecordBatch.
 const insertCallSQL = `INSERT INTO tool_calls
-	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // validateCall reports the required-field error for c, or nil when storable.
 func validateCall(c Call) error {
@@ -319,6 +343,7 @@ func callArgs(c Call) []any {
 		success, c.ErrorMsg,
 		capString(c.InputJSON), capString(c.OutputText),
 		c.ClientName, c.ClientVersion,
+		c.TokensSaved, c.SavingsModelVersion, c.CapabilityTokens, c.EfficiencyTokens,
 	}
 }
 

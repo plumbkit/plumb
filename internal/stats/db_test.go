@@ -381,7 +381,7 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	if v != SchemaVersion {
 		t.Errorf("user_version = %d, want %d", v, SchemaVersion)
 	}
-	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version"} {
+	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version", "tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
 		has, err := hasColumn(db.db, "tool_calls", col)
 		if err != nil {
 			t.Fatalf("hasColumn(%s): %v", col, err)
@@ -389,6 +389,68 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 		if !has {
 			t.Fatalf("tool_calls missing column %s", col)
 		}
+	}
+}
+
+// TestSavingsColumnsUnscoredByDefault proves P0 is a no-behaviour-change schema
+// add: a fresh database carries the four savings columns, and a row recorded
+// without explicit savings reads back as unscored (all zero), matching the
+// column defaults. Until a scorer populates them, nothing is double-counted.
+func TestSavingsColumnsUnscoredByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "read_file", CalledAt: time.Now(), Success: true}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	var savedTok, modelVer, capTok, effTok int
+	row := db.db.QueryRow(`SELECT tokens_saved, savings_model_version, capability_tokens, efficiency_tokens FROM tool_calls LIMIT 1`)
+	if err := row.Scan(&savedTok, &modelVer, &capTok, &effTok); err != nil {
+		t.Fatalf("scan savings columns: %v", err)
+	}
+	if savedTok != 0 || modelVer != 0 || capTok != 0 || effTok != 0 {
+		t.Fatalf("unscored row = (%d,%d,%d,%d), want all 0", savedTok, modelVer, capTok, effTok)
+	}
+}
+
+// TestMigrateAddsSavingsColumns proves the v8→v12 steps add the four savings
+// columns to an existing database and backfill legacy rows as unscored
+// (savings_model_version = 0), so historical data is never silently rescored.
+func TestMigrateAddsSavingsColumns(t *testing.T) {
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "v8.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+		t.Fatalf("seed v8 tool_calls: %v", err)
+	}
+	if _, err := raw.Exec(`INSERT INTO tool_calls (tool, called_at) VALUES ('read_file', 1)`); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	if err := migrate(raw, 8, SchemaVersion); err != nil {
+		t.Fatalf("migrate 8→%d: %v", SchemaVersion, err)
+	}
+	for _, col := range []string{"tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
+		has, err := hasColumn(raw, "tool_calls", col)
+		if err != nil {
+			t.Fatalf("hasColumn(%s): %v", col, err)
+		}
+		if !has {
+			t.Fatalf("migrated tool_calls missing %s", col)
+		}
+	}
+	var modelVer int
+	if err := raw.QueryRow(`SELECT savings_model_version FROM tool_calls LIMIT 1`).Scan(&modelVer); err != nil {
+		t.Fatalf("scan legacy row: %v", err)
+	}
+	if modelVer != 0 {
+		t.Fatalf("legacy row savings_model_version = %d, want 0 (unscored)", modelVer)
 	}
 }
 
