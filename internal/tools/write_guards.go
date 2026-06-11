@@ -56,23 +56,40 @@ func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error 
 }
 
 // changedSinceSessionRead reports whether this session read path earlier (via
-// the per-connection ReadTracker) and its on-disk mtime has advanced since — i.e.
-// a peer agent or a human edited it after this session's last read, with no
+// the per-connection ReadTracker) and its content has changed since — i.e. a
+// peer agent or a human edited it after this session's last read, with no
 // explicit expected_mtime/expected_sha guard to catch it.
 //
+// mtime is the cheap first signal: if it has advanced the file definitely
+// changed and no hashing is needed. When the mtime did NOT advance the content
+// can still differ (a same-tick write, or a tool that preserves mtime), so the
+// recorded read SHA is compared as the authoritative check. Hashing therefore
+// happens only in the ambiguous case, keeping the common write hash-free.
+//
 // It returns false when the file was never read this session (so creating or
-// blind-writing a brand-new file is never flagged), when reads is nil, or on a
-// stat error. write_file uses it to refuse-with-override; edit_file uses it to
-// warn (its str_replace anchor already protects the edited region, but the
-// surrounding file may have moved under the caller).
+// blind-writing a brand-new file is never flagged), when reads is nil, on a
+// stat error, or when no read SHA was recorded and the mtime did not advance.
+// write_file uses it to refuse-with-override; edit_file uses it to warn (its
+// str_replace anchor already protects the edited region, but the surrounding
+// file may have moved under the caller).
 func changedSinceSessionRead(reads *ReadTracker, path string) bool {
-	readAt := reads.Mtime(path)
-	if readAt.IsZero() {
+	entry, ok := reads.recorded(path)
+	if !ok {
 		return false
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return false
 	}
-	return info.ModTime().After(readAt)
+	if info.ModTime().After(entry.mtime) {
+		return true // mtime advanced — definitely changed; no hash needed
+	}
+	if entry.sha == "" {
+		return false // no recorded SHA to fall back on; trust the mtime verdict
+	}
+	current, err := fileSHA256(path)
+	if err != nil {
+		return false
+	}
+	return current != entry.sha
 }

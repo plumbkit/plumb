@@ -64,15 +64,88 @@ func TestReadTracker_Reset(t *testing.T) {
 
 	r := NewReadTracker()
 	now := time.Now()
-	r.Record("/tmp/a.go", now)
+	r.Record("/tmp/a.go", now, "")
 	r.Reset()
 	if !r.Mtime("/tmp/a.go").IsZero() {
 		t.Fatal("Reset should forget every recorded mtime")
 	}
-	r.Record("/tmp/b.go", now)
+	r.Record("/tmp/b.go", now, "")
 	if r.Mtime("/tmp/b.go").IsZero() {
 		t.Fatal("tracker should still record after Reset")
 	}
+}
+
+// TestChangedSinceSessionRead exercises the staleness guard's two-step logic:
+// an advanced mtime is the cheap signal, and a recorded SHA catches a content
+// change that left the mtime unchanged (the gap an mtime-only guard misses).
+func TestChangedSinceSessionRead(t *testing.T) {
+	write := func(p, content string) {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("never read this session", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "f")
+		write(p, "x")
+		if changedSinceSessionRead(NewReadTracker(), p) {
+			t.Error("a file never read this session must not be flagged")
+		}
+	})
+
+	t.Run("mtime advanced is flagged without hashing", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "f")
+		write(p, "x")
+		info, _ := os.Stat(p)
+		r := NewReadTracker()
+		r.Record(p, info.ModTime(), "stale-sha-never-read")
+		future := time.Now().Add(2 * time.Second)
+		_ = os.Chtimes(p, future, future)
+		if !changedSinceSessionRead(r, p) {
+			t.Error("an advanced mtime must be flagged")
+		}
+	})
+
+	t.Run("same mtime, unchanged content is not flagged", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "f")
+		write(p, "x")
+		info, _ := os.Stat(p)
+		sha, _ := fileSHA256(p)
+		r := NewReadTracker()
+		r.Record(p, info.ModTime(), sha)
+		if changedSinceSessionRead(r, p) {
+			t.Error("unchanged content with the same mtime must not be flagged")
+		}
+	})
+
+	t.Run("mtime preserved, content changed is flagged via sha", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "f")
+		write(p, "x")
+		info, _ := os.Stat(p)
+		readMtime := info.ModTime()
+		sha, _ := fileSHA256(p)
+		r := NewReadTracker()
+		r.Record(p, readMtime, sha)
+		write(p, "y")                            // peer rewrites content
+		_ = os.Chtimes(p, readMtime, readMtime) // ...but restores the mtime
+		if !changedSinceSessionRead(r, p) {
+			t.Error("a content change with a preserved mtime must be flagged via SHA")
+		}
+	})
+
+	t.Run("no recorded sha falls back to mtime verdict", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "f")
+		write(p, "x")
+		info, _ := os.Stat(p)
+		readMtime := info.ModTime()
+		r := NewReadTracker()
+		r.Record(p, readMtime, "") // pre-sha behaviour: no hash recorded
+		write(p, "y")
+		_ = os.Chtimes(p, readMtime, readMtime)
+		if changedSinceSessionRead(r, p) {
+			t.Error("with no recorded sha and an unchanged mtime the guard cannot detect the change")
+		}
+	})
 }
 
 // TestDirtyBlocksWrite_SessionAware is the core of the session-aware guard: a

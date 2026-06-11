@@ -284,7 +284,8 @@ func TestWriteFile_RefusesStaleOverwrite(t *testing.T) {
 	}
 	reads := NewReadTracker()
 	info, _ := os.Stat(path)
-	reads.Record(path, info.ModTime()) // this session read v1
+	sha, _ := fileSHA256(path)
+	reads.Record(path, info.ModTime(), sha) // this session read v1
 	tool := NewWriteFile(WriteDeps{Reads: reads})
 
 	// A peer edits the file after our read (advance the mtime past the read).

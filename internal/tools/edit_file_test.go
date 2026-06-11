@@ -652,7 +652,8 @@ func TestEditFile_StaleReadWarning(t *testing.T) {
 	}
 	reads := NewReadTracker()
 	info, _ := os.Stat(path)
-	reads.Record(path, info.ModTime()) // this session read the original
+	sha, _ := fileSHA256(path)
+	reads.Record(path, info.ModTime(), sha) // this session read the original
 	tool := NewEditFile(WriteDeps{Reads: reads})
 
 	// A peer appends to the file after our read; the edited region ("beta") stays.
@@ -681,7 +682,8 @@ func TestEditFile_NoStaleWarningWhenUnchanged(t *testing.T) {
 	_ = os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644)
 	reads := NewReadTracker()
 	info, _ := os.Stat(path)
-	reads.Record(path, info.ModTime())
+	sha, _ := fileSHA256(path)
+	reads.Record(path, info.ModTime(), sha)
 	tool := NewEditFile(WriteDeps{Reads: reads})
 	raw, _ := json.Marshal(map[string]any{
 		"file_path": path,

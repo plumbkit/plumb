@@ -227,11 +227,11 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
 	mtime := info.ModTime()
-	t.tracker.Record(fpath, mtime)
 	sha, err := fileSHA256(fpath)
 	if err != nil {
 		slog.Warn("read_symbol: computing sha256", "path", fpath, "err", err)
 	}
+	t.tracker.Record(fpath, mtime, sha)
 
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)

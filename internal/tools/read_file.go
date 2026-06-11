@@ -191,7 +191,6 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		return "", fmt.Errorf("read_file: %q is a directory — use list_files to browse directories", fpath)
 	}
 	mtime := info.ModTime()
-	t.tracker.Record(fpath, mtime)
 	concurrentNote := t.concurrentEditNote(fpath, mtime)
 
 	body, err := readFileBody(fpath, a)
@@ -203,6 +202,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	if err != nil {
 		slog.Warn("read_file: computing sha256", "path", fpath, "err", err)
 	}
+	t.tracker.Record(fpath, mtime, sha)
 
 	firstLine := 1
 	if body.start != nil && *body.start > 1 {

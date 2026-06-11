@@ -205,7 +205,8 @@ func (d WriteDeps) recordWritten(path string) {
 	d.Writes.Record(path)
 	if d.Reads != nil {
 		if info, err := os.Stat(path); err == nil {
-			d.Reads.Record(path, info.ModTime())
+			sha, _ := fileSHA256(path) // best-effort; empty on error
+			d.Reads.Record(path, info.ModTime(), sha)
 		}
 	}
 }
