@@ -20,6 +20,30 @@ func mustGitDir(t *testing.T, dir string) {
 	}
 }
 
+// TestRepinWorkspace_IgnoresInactiveLanguageOverride verifies the language
+// override is a no-op when the named language is not active (uninstalled,
+// disabled, or unknown): detection wins, so a typo or an absent server never
+// breaks the pin or attaches the wrong primary. detectTestPool has only go +
+// python, so "swift" is inactive; the git-rooted dir resolves as LanguageNone.
+func TestRepinWorkspace_IgnoresInactiveLanguageOverride(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	pool := detectTestPool()
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
+	defer s.close()
+	s.attachWorkspace(context.Background(), "file://"+root)
+
+	if _, err := s.repinWorkspace(context.Background(), root, "swift"); err != nil {
+		t.Fatalf("repin: %v", err)
+	}
+	if got := s.view().acquiredLanguage; got != LanguageNone {
+		t.Errorf("acquiredLanguage = %q, want %q (an inactive language override must be ignored)", got, LanguageNone)
+	}
+}
+
 // sessionFolder reads the persisted Folder for the session with the given ID.
 func sessionFolder(t *testing.T, id string) string {
 	t.Helper()
@@ -64,7 +88,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 		t.Fatalf("attach: workspace = %s, want %s", got, rootA)
 	}
 
-	newRoot, err := s.repinWorkspace(context.Background(), rootB)
+	newRoot, err := s.repinWorkspace(context.Background(), rootB, "")
 	if err != nil {
 		t.Fatalf("repin: %v", err)
 	}
@@ -76,7 +100,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 	}
 
 	// Re-pinning to the already-pinned root is a no-op (no error, same root).
-	again, err := s.repinWorkspace(context.Background(), rootB)
+	again, err := s.repinWorkspace(context.Background(), rootB, "")
 	if err != nil || again != rootB {
 		t.Fatalf("no-op repin: returned %s, err %v; want %s, nil", again, err, rootB)
 	}
@@ -100,7 +124,7 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
-	newRoot, err := s.repinWorkspace(context.Background(), bare)
+	newRoot, err := s.repinWorkspace(context.Background(), bare, "")
 	if err != nil {
 		t.Fatalf("repin to marker-less dir: %v", err)
 	}
@@ -130,12 +154,12 @@ func TestRepinWorkspace_ResetsTrackers(t *testing.T) {
 	writtenA := filepath.Join(rootA, "touched.go")
 	readA := filepath.Join(rootA, "seen.go")
 	s.writeTracker.Record(writtenA)
-	s.readTracker.Record(readA, time.Now())
+	s.readTracker.Record(readA, time.Now(), "")
 	if !s.writeTracker.Wrote(writtenA) || s.readTracker.Mtime(readA).IsZero() {
 		t.Fatal("precondition: tracker should hold the recorded paths before re-pin")
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
 		t.Fatalf("repin: %v", err)
 	}
 	if s.writeTracker.Wrote(writtenA) {
