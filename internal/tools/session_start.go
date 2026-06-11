@@ -208,11 +208,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	recent := t.writeSessionRecentFiles(&sb, ws)
 	writeSessionMemories(&sb, ws, recent)
 	t.writeSessionEpisodic(&sb, ws)
-	clientName := ""
-	if t.clientNameFn != nil {
-		clientName = t.clientNameFn()
-	}
-	writeSessionStats(&sb, ws, clientName)
+	writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)
 	return sb.String(), nil

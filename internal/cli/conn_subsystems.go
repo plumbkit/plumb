@@ -189,12 +189,6 @@ func (s *connSession) javaPostWriteNotify(ctx context.Context, path string) erro
 	})
 }
 
-// currentSavingsModelVersion stamps every row this scorer writes. v3 adds the
-// ranged-read efficiency delta (read tools now report a baseline whole-file size);
-// old rows keep the version they were scored under, and the read path trusts any
-// value > 0 over a recompute, so history is never silently rewritten.
-const currentSavingsModelVersion = 3
-
 // baselineBytesFrom extracts the whole-file byte count read_file/read_symbol
 // stamp into their plumb-read header (baseline=<bytes>), so the scorer can credit
 // the efficiency of a ranged or symbol read. Only the header (first line) carries
@@ -281,6 +275,6 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		TokensSaved:         saved.Total(),
 		CapabilityTokens:    saved.Capability,
 		EfficiencyTokens:    saved.Efficiency,
-		SavingsModelVersion: currentSavingsModelVersion,
+		SavingsModelVersion: clientcaps.ModelVersion,
 	})
 }

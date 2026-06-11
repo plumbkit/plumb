@@ -151,13 +151,19 @@ func (m Model) dashTokensWidget(inner int) []string {
 	labelGap := max(blockW+gap-lipgloss.Width(uptimeLabel), 1)
 	labelLine := strings.Repeat(" ", margin) + DetailStyle.Render(uptimeLabel) + strings.Repeat(" ", labelGap) + DetailStyle.Render(totalLabel)
 
-	content := make([]string, 0, blockH+2)
+	// The two honest axes behind the lifetime total: capability (work the client
+	// could not do natively) and efficiency (fewer tokens for the same result).
+	axisLine := strings.Repeat(" ", margin) + DetailStyle.Render(
+		"capability ~"+stats.FormatSavings(int(m.dashLifetimeAxes.Capability))+
+			" · efficiency ~"+stats.FormatSavings(int(m.dashLifetimeAxes.Efficiency)))
+
+	content := make([]string, 0, blockH+3)
 	for range blockH {
 		content = append(content, blockLine)
 	}
-	content = append(content, "", labelLine)
+	content = append(content, "", labelLine, axisLine)
 
-	return dashBox(" Tokens Saved ", inner, content)
+	return dashBox(" Token Efficiency ", inner, content)
 }
 
 func tokenSavingsBlockRow(tokens int64, groups int) string {
@@ -221,7 +227,7 @@ func dashCompactTopToolsTable(width int, tools []stats.ToolStat, kind dashTopToo
 		metricW = 12
 	)
 	toolW := max(width-callsW-metricW, 12)
-	metricHeader := "Tokens"
+	metricHeader := "Efficiency"
 	if kind == dashTopToolsUptime {
 		metricHeader = "Errors"
 	}
@@ -237,8 +243,8 @@ func dashCompactTopToolsTable(width int, tools []stats.ToolStat, kind dashTopToo
 	content := []string{header, sep}
 	for _, t := range tools {
 		metric := MutedStyle.Render("—")
-		if kind == dashTopToolsAllTime && t.TokensSaved > 0 {
-			metric = DetailStyle.Render("~" + stats.FormatSavings(int(t.TokensSaved)))
+		if eff := t.CapabilityTokens + t.EfficiencyTokens; kind == dashTopToolsAllTime && eff > 0 {
+			metric = DetailStyle.Render("~" + stats.FormatSavings(int(eff)))
 		}
 		if kind == dashTopToolsUptime && t.Errors > 0 {
 			metric = WarnStyle.Render(fmt.Sprintf("%d", t.Errors))
@@ -287,7 +293,7 @@ func dashTopToolsTable(title string, width int, tools []stats.ToolStat) []string
 		HintStyle.Width(cAvg).Align(lipgloss.Right).Render("Avg ms") +
 		HintStyle.Width(cP95).Align(lipgloss.Right).Render("P95 ms") +
 		HintStyle.Width(cErr).Align(lipgloss.Right).Render("Errors") +
-		HintStyle.Width(cTokens).Align(lipgloss.Right).Render("Tokens")
+		HintStyle.Width(cTokens).Align(lipgloss.Right).Render("Efficiency")
 	sep := SepStyle.Render(strings.Repeat("╌", max(width, lipgloss.Width(ansi.Strip(header)))))
 
 	content := []string{header, sep}
@@ -297,8 +303,8 @@ func dashTopToolsTable(title string, width int, tools []stats.ToolStat) []string
 			errStr = WarnStyle.Render(fmt.Sprintf("%d", t.Errors))
 		}
 		tokStr := MutedStyle.Render("—")
-		if t.TokensSaved > 0 {
-			tokStr = DetailStyle.Render("~" + stats.FormatSavings(int(t.TokensSaved)))
+		if eff := t.CapabilityTokens + t.EfficiencyTokens; eff > 0 {
+			tokStr = DetailStyle.Render("~" + stats.FormatSavings(int(eff)))
 		}
 		line := KeyStyle.Width(cTool).Render(truncate(t.Tool, cTool-1)) +
 			DetailStyle.Width(cCalls).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
@@ -328,7 +334,7 @@ func (m Model) dashProjectWidget(width int) []string {
 	content = append(content,
 		dashProjectMetricRow("Sessions", formatLargeInt(m.dashProjectSessions), m.dashProjectSessions, m.dashLifetimeSessions, inner),
 		dashProjectMetricRow("Tool Calls", formatLargeInt(m.dashProjectCalls), m.dashProjectCalls, m.dashLifetimeCalls, inner),
-		dashProjectMetricRow("Tokens Saved", "~"+stats.FormatSavings(int(m.dashProjectTokens)), m.dashProjectTokens, m.dashLifetimeTokens, inner),
+		dashProjectMetricRow("Efficiency", "~"+stats.FormatSavings(int(m.dashProjectTokens)), m.dashProjectTokens, m.dashLifetimeTokens, inner),
 		"",
 	)
 	for _, line := range tableLines {

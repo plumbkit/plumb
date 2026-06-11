@@ -637,3 +637,43 @@ func TestEpisodicSchemaParity(t *testing.T) {
 		}
 	}
 }
+
+// TestSavingsAxesAndPerToolSplit proves P4's read layer: SavingsAxes sums the two
+// stored axis columns, and Summary surfaces them per tool. A legacy row (version 0)
+// has no axis data and contributes nothing to either axis.
+func TestSavingsAxesAndPerToolSplit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "read_file", CalledAt: now, Success: true, TokensSaved: 150, CapabilityTokens: 100, EfficiencyTokens: 50, SavingsModelVersion: 3}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "find_symbol", CalledAt: now, Success: true}); err != nil {
+		t.Fatalf("Record legacy: %v", err)
+	}
+
+	axes := db.SavingsAxes(Filter{})
+	if axes.Capability != 100 || axes.Efficiency != 50 || axes.Total() != 150 {
+		t.Fatalf("SavingsAxes = %+v, want {Capability:100 Efficiency:50}", axes)
+	}
+
+	sum, err := db.Summary(Filter{})
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	var rf ToolStat
+	for _, s := range sum {
+		if s.Tool == "read_file" {
+			rf = s
+		}
+	}
+	if rf.CapabilityTokens != 100 || rf.EfficiencyTokens != 50 {
+		t.Fatalf("read_file ToolStat axes = (%d,%d), want (100,50)", rf.CapabilityTokens, rf.EfficiencyTokens)
+	}
+}

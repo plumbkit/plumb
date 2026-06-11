@@ -269,13 +269,13 @@ func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) { //nolint:gocyclo
 	for i, line := range lines {
 		plain[i] = ansiStripForTest(line)
 	}
-	if !strings.Contains(plain[0], "Tokens Saved") {
-		t.Fatalf("top menu = %#v, want tokens saved box title", plain)
+	if !strings.Contains(plain[0], "Token Efficiency") {
+		t.Fatalf("top menu = %#v, want token efficiency box title", plain)
 	}
 	if !strings.Contains(plain[1], "913k") {
 		t.Fatalf("token savings row = %q, want savings value", plain[1])
 	}
-	if !strings.Contains(plain[0], "╮ ╭─ Tokens Saved") {
+	if !strings.Contains(plain[0], "╮ ╭─ Token Efficiency") {
 		t.Fatalf("top menu = %q, want one-space widget gap", plain[0])
 	}
 }
@@ -1074,7 +1074,7 @@ func TestDashTopToolsTablesRenderWidgets(t *testing.T) { //nolint:gocyclo
 	RebuildStyles()
 	m := Model{
 		dashLifetimeTopTools: []stats.ToolStat{
-			{Tool: "diagnostics", Calls: 1800, AvgMs: 0, P95Ms: 0, TokensSaved: 442000},
+			{Tool: "diagnostics", Calls: 1800, AvgMs: 0, P95Ms: 0, TokensSaved: 442000, EfficiencyTokens: 442000},
 		},
 		dashUptimeTopTools: []stats.ToolStat{
 			{Tool: "read_file", Calls: 12, AvgMs: 1, P95Ms: 2, Errors: 1},
@@ -1089,7 +1089,7 @@ func TestDashTopToolsTablesRenderWidgets(t *testing.T) { //nolint:gocyclo
 	if !strings.Contains(plain[0], "Top Tools (all time)") || !strings.HasPrefix(plain[0], "╭─") {
 		t.Fatalf("all-time widget top = %q, want framed title", plain[0])
 	}
-	if !strings.Contains(plain[2], "Tool") || !strings.Contains(plain[2], "Calls") || !strings.Contains(plain[2], "Tokens") {
+	if !strings.Contains(plain[2], "Tool") || !strings.Contains(plain[2], "Calls") || !strings.Contains(plain[2], "Efficiency") {
 		t.Fatalf("all-time header = %q, want compact columns", plain[2])
 	}
 	if strings.Contains(plain[2], "Avg ms") || strings.Contains(plain[2], "P95 ms") || strings.Contains(plain[2], "Errors") {
@@ -1117,7 +1117,7 @@ func TestDashTopToolsTablesRenderWidgets(t *testing.T) { //nolint:gocyclo
 func TestDashTopToolsTablesRenderSideBySideWhenWide(t *testing.T) {
 	RebuildStyles()
 	m := Model{
-		dashLifetimeTopTools: []stats.ToolStat{{Tool: "diagnostics", Calls: 1800, TokensSaved: 442000}},
+		dashLifetimeTopTools: []stats.ToolStat{{Tool: "diagnostics", Calls: 1800, TokensSaved: 442000, EfficiencyTokens: 442000}},
 		dashUptimeTopTools:   []stats.ToolStat{{Tool: "read_file", Calls: 12, Errors: 1}},
 	}
 
@@ -1132,7 +1132,7 @@ func TestDashTopToolsTablesEqualFrameHeightSideBySide(t *testing.T) {
 	// All-time has many tools; uptime has one — the uptime frame must be padded to match.
 	lifetime := make([]stats.ToolStat, 8)
 	for i := range lifetime {
-		lifetime[i] = stats.ToolStat{Tool: fmt.Sprintf("tool_%d", i), Calls: int64(100 - i), TokensSaved: 1000}
+		lifetime[i] = stats.ToolStat{Tool: fmt.Sprintf("tool_%d", i), Calls: int64(100 - i), TokensSaved: 1000, EfficiencyTokens: 1000}
 	}
 	m := Model{
 		dashLifetimeTopTools: lifetime,
@@ -1168,7 +1168,7 @@ func TestDashProjectWidgetRendersTopToolsTableInsideWidget(t *testing.T) {
 		dashProjectCalls:     120,
 		dashProjectTokens:    32000,
 		dashProjectTopTools: []stats.ToolStat{
-			{Tool: "read_file", Calls: 12, AvgMs: 1, P95Ms: 2, TokensSaved: 4800},
+			{Tool: "read_file", Calls: 12, AvgMs: 1, P95Ms: 2, TokensSaved: 4800, CapabilityTokens: 4800},
 		},
 	}
 
@@ -1183,10 +1183,10 @@ func TestDashProjectWidgetRendersTopToolsTableInsideWidget(t *testing.T) {
 	if !strings.Contains(plain[2], "Sessions") || !strings.Contains(plain[2], "4 (50%)") || !strings.Contains(plain[2], "■") {
 		t.Fatalf("project sessions ratio row = %q, want proportional summary", plain[2])
 	}
-	if !strings.Contains(plain[4], "Tokens") || !strings.Contains(plain[4], "~32k (50%)") || !strings.Contains(plain[4], "■") {
-		t.Fatalf("project tokens ratio row = %q, want proportional summary", plain[4])
+	if !strings.Contains(plain[4], "Efficiency") || !strings.Contains(plain[4], "~32k (50%)") || !strings.Contains(plain[4], "■") {
+		t.Fatalf("project efficiency ratio row = %q, want proportional summary", plain[4])
 	}
-	if !strings.Contains(plain[6], "Top Tools") || !strings.Contains(plain[6], "Tokens") {
+	if !strings.Contains(plain[6], "Top Tools") || !strings.Contains(plain[6], "Efficiency") {
 		t.Fatalf("project top tools header = %q, want embedded table header", plain[6])
 	}
 	if !strings.Contains(plain[8], "read_file") || !strings.Contains(plain[8], "~4.8k") {
@@ -1303,7 +1303,7 @@ func TestDashStatsRowUsesThreeSpaceWidgetGap(t *testing.T) {
 	}
 
 	plainTop := ansiStripForTest(m.dashStatsRow(120)[0])
-	if !strings.Contains(plainTop, "╮   ╭─ Tokens Saved") {
+	if !strings.Contains(plainTop, "╮   ╭─ Token Efficiency") {
 		t.Fatalf("dashboard stats row = %q, want three-space widget gap", plainTop)
 	}
 }

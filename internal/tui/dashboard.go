@@ -65,7 +65,8 @@ func (m *Model) refreshDashboard() {
 	globalFilter := stats.Filter{}
 	m.dashLifetimeCalls = m.globalDB.TotalCalls(globalFilter)
 	m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
-	m.dashLifetimeTokens = m.globalDB.TotalTokensSaved(globalFilter)
+	m.dashLifetimeAxes = m.globalDB.SavingsAxes(globalFilter)
+	m.dashLifetimeTokens = m.dashLifetimeAxes.Total()
 	m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
 	now := time.Now()
 	chartBuckets := max(m.dashChartWidth, activityBuckets)
@@ -115,7 +116,8 @@ func (m *Model) refreshDashboardProject() {
 	pf := stats.Filter{Workspace: m.dashProjectFolder}
 	m.dashProjectCalls = m.globalDB.TotalCalls(pf)
 	m.dashProjectSessions = m.globalDB.TotalSessions(pf)
-	m.dashProjectTokens = m.globalDB.TotalTokensSaved(pf)
+	m.dashProjectAxes = m.globalDB.SavingsAxes(pf)
+	m.dashProjectTokens = m.dashProjectAxes.Total()
 	m.dashProjectTopTools, _ = m.globalDB.Summary(pf)
 }
 

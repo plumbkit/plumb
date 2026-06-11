@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/fsguard"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -243,7 +244,7 @@ func recentFirstMemories(mems []memory.Memory, recent []string) []memory.Memory 
 	return append(hot, rest...)
 }
 
-func writeSessionStats(sb *strings.Builder, ws, clientName string) {
+func writeSessionStats(sb *strings.Builder, ws string) {
 	db, err := stats.SharedReadOnly()
 	if err != nil || db == nil {
 		return
@@ -254,13 +255,16 @@ func writeSessionStats(sb *strings.Builder, ws, clientName string) {
 	}
 	sb.WriteString("## Most-used tools (this workspace)\n\n")
 	limit := min(len(toolStats), 5)
-	var totalSaved int64
 	for _, s := range toolStats[:limit] {
 		fmt.Fprintf(sb, "- %s: %d calls, avg %dms, p95 %dms\n", s.Tool, s.Calls, int64(s.AvgMs), s.P95Ms)
-		totalSaved += s.TokensSaved
 	}
-	if totalSaved > 0 {
-		fmt.Fprintf(sb, "\n~%s %s\n", stats.FormatSavings(int(totalSaved)), stats.SavingsLabel(clientName))
+	// Two honest axes instead of one "tokens saved" label: capability (work the
+	// client could not do natively) and efficiency (fewer tokens for the same
+	// result). Legacy rows carry neither and are simply absent here.
+	axes := db.SavingsAxes(stats.Filter{Workspace: ws})
+	if axes.Total() > 0 {
+		fmt.Fprintf(sb, "\n~%s capability + ~%s efficiency tokens (estimated, model v%d)\n",
+			stats.FormatSavings(int(axes.Capability)), stats.FormatSavings(int(axes.Efficiency)), clientcaps.ModelVersion)
 	}
 	sb.WriteString("\n")
 }

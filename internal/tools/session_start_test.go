@@ -89,7 +89,7 @@ func TestWriteSessionStats_IncludesP95(t *testing.T) {
 	}
 
 	var sb strings.Builder
-	writeSessionStats(&sb, "/ws", "claude-code")
+	writeSessionStats(&sb, "/ws")
 	out := sb.String()
 	if !strings.Contains(out, "Most-used tools") {
 		t.Fatalf("missing stats header:\n%s", out)

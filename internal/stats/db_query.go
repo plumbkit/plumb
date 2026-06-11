@@ -9,15 +9,17 @@ import (
 
 // ToolStat summarises calls for one tool.
 type ToolStat struct {
-	Tool          string
-	Calls         int64
-	AvgMs         float64
-	P95Ms         int64
-	TotalInputKB  float64
-	TotalOutputKB float64
-	Errors        int64
-	TokensSaved   int64
-	LastCalledAt  time.Time
+	Tool             string
+	Calls            int64
+	AvgMs            float64
+	P95Ms            int64
+	TotalInputKB     float64
+	TotalOutputKB    float64
+	Errors           int64
+	TokensSaved      int64 // headline total: capability + efficiency (legacy rows recomputed)
+	CapabilityTokens int64 // work enabled because the client had no native equivalent
+	EfficiencyTokens int64 // fewer tokens for the same result vs the client's own tools
+	LastCalledAt     time.Time
 }
 
 // ActivitySummary is a bucketed view of recent tool-call activity.
@@ -80,7 +82,9 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		         COALESCE(SUM(input_bytes), 0) AS total_in,
 		         COALESCE(SUM(output_bytes), 0) AS total_out,
 		         SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) AS errors,
-		         MAX(called_at) AS last_called
+		         MAX(called_at) AS last_called,
+		         COALESCE(SUM(capability_tokens), 0) AS cap_tokens,
+		         COALESCE(SUM(efficiency_tokens), 0) AS eff_tokens
 		  FROM tool_calls`
 	q := summaryBase + where + " GROUP BY tool ORDER BY calls DESC" //nolint:gosec // G202: see comment above
 
@@ -95,7 +99,7 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		var s ToolStat
 		var lastMs int64
 		var totalIn, totalOut int64
-		if err := rows.Scan(&s.Tool, &s.Calls, &s.AvgMs, &totalIn, &totalOut, &s.Errors, &lastMs); err != nil {
+		if err := rows.Scan(&s.Tool, &s.Calls, &s.AvgMs, &totalIn, &totalOut, &s.Errors, &lastMs, &s.CapabilityTokens, &s.EfficiencyTokens); err != nil {
 			continue
 		}
 		s.TotalInputKB = float64(totalIn) / 1024
@@ -501,6 +505,33 @@ func (d *DB) TotalSessions(filter Filter) int64 {
 // estimate based on per-tool alternative-cost multipliers (see savings.go).
 func (d *DB) TotalTokensSaved(filter Filter) int64 {
 	return d.TotalTokensSavedSince(time.Time{}, filter)
+}
+
+// AxisTotals is the two-axis savings split: capability (work enabled because the
+// client had no native equivalent) and efficiency (fewer tokens for the same
+// result the client could have obtained itself).
+type AxisTotals struct {
+	Capability int64
+	Efficiency int64
+}
+
+// Total is the headline figure: capability plus efficiency.
+func (a AxisTotals) Total() int64 { return a.Capability + a.Efficiency }
+
+// SavingsAxes sums the capability and efficiency token columns matching filter.
+// Only rows scored under the counterfactual model carry these columns; legacy
+// rows (savings_model_version 0) default both to 0 and contribute nothing, so the
+// axis view is honestly limited to data that could be split.
+func (d *DB) SavingsAxes(filter Filter) AxisTotals {
+	if d == nil {
+		return AxisTotals{}
+	}
+	where, args := filter.where()
+	//nolint:gosec // G202: where built from filter.where() using ? placeholders only
+	q := `SELECT COALESCE(SUM(capability_tokens), 0), COALESCE(SUM(efficiency_tokens), 0) FROM tool_calls` + where
+	var a AxisTotals
+	_ = d.db.QueryRow(q, args...).Scan(&a.Capability, &a.Efficiency)
+	return a
 }
 
 // TotalTokensSavedSince sums TokensSaved across matching calls recorded at or

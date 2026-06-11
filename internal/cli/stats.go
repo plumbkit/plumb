@@ -10,6 +10,7 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -78,13 +79,14 @@ func runStats(_ *cobra.Command, _ []string) error {
 
 	tui.RebuildStyles()
 
-	saved := db.TotalTokensSaved(filter)
+	axes := db.SavingsAxes(filter)
 
 	// Structured Context Block
 	fmt.Println(render.ContextBox(
 		fmt.Sprintf("%s\n%s",
 			render.ContractPath(ws),
-			tui.MutedStyle.Render(fmt.Sprintf("↳ %d total calls · ~%s tokens saved", total, stats.FormatSavings(int(saved)))),
+			tui.MutedStyle.Render(fmt.Sprintf("↳ %d total calls · ~%s capability + ~%s efficiency tokens (estimated, model v%d)",
+				total, stats.FormatSavings(int(axes.Capability)), stats.FormatSavings(int(axes.Efficiency)), clientcaps.ModelVersion)),
 		),
 		tui.SepStyle,
 	))
@@ -145,13 +147,9 @@ func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {
 	}
 
 	t1 := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
-		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors", "Saved")
+		Headers("Tool", "Calls", "Avg ms", "P95 ms", "Input", "Output", "Errors", "Capability", "Efficiency")
 
 	for _, s := range summary {
-		savedStr := "—"
-		if s.TokensSaved > 0 {
-			savedStr = "~" + stats.FormatSavings(int(s.TokensSaved)) + " tok"
-		}
 		t1.Row(
 			s.Tool,
 			fmt.Sprintf("%d", s.Calls),
@@ -160,10 +158,20 @@ func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {
 			fmt.Sprintf("%.1f KB", s.TotalInputKB),
 			fmt.Sprintf("%.1f KB", s.TotalOutputKB),
 			fmt.Sprintf("%d", s.Errors),
-			savedStr,
+			axisCell(s.CapabilityTokens),
+			axisCell(s.EfficiencyTokens),
 		)
 	}
 	return t1.Render(), nil
+}
+
+// axisCell renders one savings-axis token count for the stats table: an em dash
+// when zero, else a short approximate count.
+func axisCell(tokens int64) string {
+	if tokens <= 0 {
+		return "—"
+	}
+	return "~" + stats.FormatSavings(int(tokens))
 }
 
 func calcRecentWidths(recent []stats.RecentCall) (wWhen, wTool, wName int) {

@@ -1,5 +1,12 @@
 package clientcaps
 
+// ModelVersion is the savings-model version stamped on every row the scorer
+// writes. The read path trusts any row with version > 0 over a recompute, so old
+// rows keep the version they were scored under and history is never rewritten.
+// Bump it whenever a change below alters scores. v1 reproduced the legacy
+// profiles; v2 introduced this counterfactual model; v3 added ranged-read baselines.
+const ModelVersion = 3
+
 // Savings is the two-axis result of scoring one tool call. Capability is work the
 // client could not have done natively at all (dominant for thin clients);
 // Efficiency is fewer tokens for the same result the client could have obtained

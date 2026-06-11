@@ -127,7 +127,7 @@ func (m Model) renderTokenSavingsBox(dimmed bool) []string {
 		barWidth = 12
 	)
 
-	titleText := " Tokens Saved "
+	titleText := " Token Efficiency "
 	value := stats.FormatSavings(int(m.tokenSavings))
 	filledPart, unfilledPart := tokenSavingsBar(m.tokenSavings, barWidth)
 	content := " " + barStyle.Render(filledPart) + border.Render(unfilledPart) + " " + valueStyle.Render(value) + " "

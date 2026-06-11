@@ -144,6 +144,7 @@ type Model struct {
 	dashLifetimeCalls       int64
 	dashLifetimeSessions    int64
 	dashLifetimeTokens      int64
+	dashLifetimeAxes        stats.AxisTotals
 	dashLifetimeFirstAt     time.Time
 	dashLifetimeTopTools    []stats.ToolStat
 	dashUptimeTopTools      []stats.ToolStat
@@ -158,6 +159,7 @@ type Model struct {
 	dashProjectCalls        int64
 	dashProjectSessions     int64
 	dashProjectTokens       int64
+	dashProjectAxes         stats.AxisTotals
 	dashProjectTopTools     []stats.ToolStat
 	dashScroll              int
 	waitingForQuit          bool

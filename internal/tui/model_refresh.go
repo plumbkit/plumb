@@ -167,7 +167,7 @@ func (m *Model) refreshActivity(db *stats.DB, now time.Time) {
 		return
 	}
 	m.activity = activity
-	m.tokenSavings = db.TotalTokensSavedSince(start, stats.Filter{})
+	m.tokenSavings = db.SavingsAxes(stats.Filter{Since: start}).Total()
 	m.lastActivityAt = now
 	m.activitySession = ""
 }
