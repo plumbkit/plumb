@@ -129,7 +129,10 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 	}
 	var langs []langConfig
 	for name, lspCfg := range cfg.LSP {
-		if lspCfg.Enabled {
+		// Effective enablement: the user's intent gated on the server actually
+		// being installed (automatic mode). An enabled-but-uninstalled language
+		// is excluded so its root markers never pollute workspace detection.
+		if lspActive(lspCfg) {
 			langs = append(langs, langConfig{name: name, cfg: lspCfg})
 		}
 	}
@@ -225,7 +228,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	// language must collapse to the SAME (root, language) entry, never two
 	// servers for one logical workspace language.
 	if language == "" {
-		language = p.detectLanguageAt(root)
+		language = p.lspLanguageForRoot(root)
 		if language == "" {
 			return nil, nil, fmt.Errorf("no enabled language matches %s", root)
 		}

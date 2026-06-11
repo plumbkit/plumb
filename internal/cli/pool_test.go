@@ -342,6 +342,51 @@ func TestDetect_GitAtHomeViaSymlinkRefused(t *testing.T) {
 	}
 }
 
+// TestDetect_StrayHomeMarkerDoesNotCaptureViaPlumb is the regression test for
+// the "Swift/Xcode project misdetected as TypeScript" bug. A .plumb workspace
+// with no language marker of its own (an Xcode app has no SwiftPM Package.swift)
+// must NOT inherit a stray language marker sitting in $HOME — e.g. a global
+// ~/package.json left by npm. detectLanguageAt's ascent stops at $HOME, so the
+// workspace resolves as LanguageNone rather than the home marker's language.
+func TestDetect_StrayHomeMarkerDoesNotCaptureViaPlumb(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	mustWrite(t, filepath.Join(home, "go.mod"), "module stray\n") // the ~/package.json analogue
+	ws := filepath.Join(home, "Projects", "app")
+	mustMkdir(t, ws)
+	mustMkdir(t, filepath.Join(ws, ".plumb"))
+
+	pool := detectTestPool()
+	root, lang, err := pool.Detect(ws)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if root != ws {
+		t.Errorf("root: got %s, want %s", root, ws)
+	}
+	if lang != LanguageNone {
+		t.Errorf("language: got %s, want %s (a stray ~/go.mod must not capture the workspace)", lang, LanguageNone)
+	}
+}
+
+// TestDetect_StrayHomeMarkerRefusedViaAscent covers the same flaw on the main
+// Detect loop: a path below $HOME with no marker of its own and no nearer .git
+// must not resolve $HOME as a language workspace just because a stray marker
+// sits there. Detect skips $HOME's marker (as it already skips a $HOME .git)
+// and errors.
+func TestDetect_StrayHomeMarkerRefusedViaAscent(t *testing.T) {
+	home := freshTempDir(t)
+	t.Setenv("HOME", home)
+	mustWrite(t, filepath.Join(home, "go.mod"), "module stray\n")
+	sub := filepath.Join(home, "notes")
+	mustMkdir(t, sub)
+
+	pool := detectTestPool()
+	if _, _, err := pool.Detect(sub); err == nil {
+		t.Fatal("Detect: want error (a stray language marker at $HOME must not resolve $HOME as a workspace), got nil")
+	}
+}
+
 func TestSynthesiseRoot_GitDirAtSeed(t *testing.T) {
 	dir := freshTempDir(t)
 	mustMkdir(t, filepath.Join(dir, ".git"))

@@ -125,7 +125,13 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 // a workspace root via pool.Detect; when no marker is found the folder itself
 // becomes the workspace (SynthesiseRoot), so an explicit pin always succeeds.
 // Returns the resolved root.
-func (s *connSession) repinWorkspace(ctx context.Context, folder string) (string, error) {
+//
+// langOverride, when a non-empty active language, forces the primary language
+// instead of the detected one — for an ambiguous project (e.g. an Xcode app with
+// no SwiftPM Package.swift) where the agent knows the language detection cannot
+// infer. An unknown or inactive override is ignored (detection wins), so a typo
+// or an uninstalled server never breaks the pin.
+func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string) (string, error) {
 	folder = strings.TrimPrefix(folder, "file://")
 	if folder == "" || folder == "/" {
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
@@ -135,6 +141,9 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder string) (string
 		// No .plumb/marker/.git found — the folder itself becomes the workspace.
 		root = s.pool.SynthesiseRoot(folder)
 		language = LanguageNone
+	}
+	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
+		language = langOverride
 	}
 	if s.attachOrRepinTo(ctx, root, language) {
 		s.applyProjectConfig(root)
@@ -161,7 +170,7 @@ func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
 	if folder == "" || folder == "/" {
 		return // client reported no usable root — keep the current pin
 	}
-	if _, err := s.repinWorkspace(ctx, folder); err != nil {
+	if _, err := s.repinWorkspace(ctx, folder, ""); err != nil {
 		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
 	}
 }
@@ -176,7 +185,10 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 	changed := false
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
-		if root == prev {
+		// No-op only when neither the root NOR the primary language changes; a
+		// same-root language switch (a forced primary via session_start) must still
+		// re-acquire the new server.
+		if root == prev && language == v.acquiredLanguage {
 			return
 		}
 		changed = true

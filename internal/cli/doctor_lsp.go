@@ -103,20 +103,23 @@ func formatActiveLSPDetail(root, state, pid, rss string) string {
 }
 
 func checkLSPBinary(lang string, lspCfg config.LSPConfig) checkResult {
-	path, lookErr := exec.LookPath(lspCfg.Command)
-	if lookErr != nil {
-		if lspCfg.Enabled {
-			return checkResult{
-				name:   lang,
-				ok:     false,
-				detail: lspCfg.Command + " not found on PATH",
-				fix:    "install " + lspCfg.Command + " and ensure it is on your PATH",
-			}
-		}
+	// Languages are enabled by default and activate automatically when installed.
+	// Enabled is true unless the user explicitly set it false, so !Enabled here
+	// reliably means "excluded by config".
+	if !lspCfg.Enabled {
 		return checkResult{
 			name:   lang,
 			ok:     true,
-			detail: lspCfg.Command + " not installed — optional, enable in config.toml to activate",
+			detail: lspCfg.Command + " — disabled in config (enabled = false)",
+		}
+	}
+	path, lookErr := exec.LookPath(lspCfg.Command)
+	if lookErr != nil {
+		// Not installed is not a problem: an absent server is simply dormant.
+		return checkResult{
+			name:   lang,
+			ok:     true,
+			detail: lspCfg.Command + " not installed — optional; install it to activate automatically",
 		}
 	}
 
@@ -128,9 +131,7 @@ func checkLSPBinary(lang string, lspCfg config.LSPConfig) checkResult {
 	} else {
 		detail += "  (version unknown)"
 	}
-	if !lspCfg.Enabled {
-		detail += "  (disabled — enable in config.toml to activate)"
-	}
+	detail += "  (active)"
 	return checkResult{name: lang, ok: true, detail: detail}
 }
 

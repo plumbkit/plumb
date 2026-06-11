@@ -41,11 +41,25 @@ func (d Duration) MarshalText() ([]byte, error) {
 // LSPConfig holds per-language-server settings.
 // Concurrency: read-only after Load returns.
 type LSPConfig struct {
-	Command     string            `toml:"command"`
-	Args        []string          `toml:"args"`
-	RootMarkers []string          `toml:"root_markers"`
-	Env         map[string]string `toml:"env"`
-	Enabled     bool              `toml:"enabled"`
+	Command     string   `toml:"command"`
+	Args        []string `toml:"args"`
+	RootMarkers []string `toml:"root_markers"`
+	// WeakRootMarkers are promiscuous root markers (e.g. package.json,
+	// index.html) that appear in many projects not primarily of that language.
+	// Unlike RootMarkers they never identify the language of an ANCESTOR
+	// directory during workspace detection — they name the language only of the
+	// directory they sit in directly, and only when no RootMarker won. This
+	// stops a stray tooling package.json from hijacking a Go/Swift/Rust
+	// workspace as TypeScript.
+	WeakRootMarkers []string          `toml:"weak_root_markers"`
+	Env             map[string]string `toml:"env"`
+	// Enabled is the user's intent for this language server. It defaults to true,
+	// so an installed server is active automatically; the effective state is
+	// Enabled gated on the command being present on PATH (see the cli layer's
+	// lspActive), so a language whose server is not installed stays dormant at
+	// zero cost. Set false to exclude a language even when its server is
+	// installed.
+	Enabled bool `toml:"enabled"`
 	// IdleTimeout hibernates a language server that has gone this long without a
 	// tool call, reclaiming its process memory even while a session stays
 	// attached. The poolEntry and its warm cache are kept; the next tool call

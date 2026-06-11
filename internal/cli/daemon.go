@@ -173,15 +173,19 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// first parse — gotreesitter memoises the env value once.
 	applyParseMemoryBudget()
 
-	hasEnabled := false
+	// Languages are enabled by default and activate automatically when their
+	// server is installed (lspActive). A daemon with no installed server is still
+	// useful — topology, filesystem, git, and memory tools all work — so this is
+	// a warning, not a fatal error.
+	hasActive := false
 	for _, lspCfg := range cfg.LSP {
-		if lspCfg.Enabled {
-			hasEnabled = true
+		if lspActive(lspCfg) {
+			hasActive = true
 			break
 		}
 	}
-	if !hasEnabled {
-		return fmt.Errorf("no language servers enabled; edit ~/.config/plumb/config.toml")
+	if !hasActive {
+		slog.Warn("daemon: no language servers installed; LSP-backed tools are inactive (topology and filesystem tools still work). Install a server (e.g. gopls) to activate it automatically.")
 	}
 
 	// store is the daemon-singleton source of truth for the global base config.

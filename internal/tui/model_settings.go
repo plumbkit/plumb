@@ -362,26 +362,34 @@ func lspSettingItems(cfg config.Config) []settingItem {
 	for _, lang := range langs {
 		e := cfg.LSP[lang]
 		g := capFirst(lang)
-		missing := e.Enabled && e.Command != "" && !lspOnPath(e.Command)
-		enabledHelp := "Enable the " + lang + " language server (most non-Go/Python servers are opt-in)."
-		if missing {
-			enabledHelp = "(!) " + lang + " language server not found on PATH — install it or set the command."
+		// Languages are enabled by default and activate automatically when their
+		// server is installed. An enabled language whose binary is absent is
+		// "dormant" — normal, not an error; we flag it only so the user knows why
+		// it is inactive.
+		dormant := e.Enabled && e.Command != "" && !lspOnPath(e.Command)
+		enabledHelp := "Enabled languages activate automatically once their server is installed. Set off to exclude " + lang + " even when installed."
+		if dormant {
+			enabledHelp = lang + " is enabled but its server is not installed, so it is dormant. Install " + e.Command + " to activate it, or set off to exclude it."
+		}
+		enabledValue := onOff(e.Enabled)
+		if dormant {
+			enabledValue = "on (dormant)"
 		}
 		out = append(out,
 			settingItem{
-				group: g, label: "enabled", kind: settingToggle, key: skLSPEnabled, lspLang: lang, lspMissing: missing,
-				value: onOff(e.Enabled), help: enabledHelp,
+				group: g, label: "enabled", kind: settingToggle, key: skLSPEnabled, lspLang: lang, lspMissing: dormant,
+				value: enabledValue, help: enabledHelp,
 			},
 			settingItem{
-				group: g, label: "command", kind: settingText, key: skLSPCommand, lspLang: lang, lspMissing: missing,
+				group: g, label: "command", kind: settingText, key: skLSPCommand, lspLang: lang, lspMissing: dormant,
 				value: pathOrDefault(e.Command), help: "Executable for the " + lang + " language server. Enter to edit.",
 			},
 			settingItem{
-				group: g, label: "args", kind: settingList, key: skLSPArgs, lspLang: lang, lspMissing: missing,
+				group: g, label: "args", kind: settingList, key: skLSPArgs, lspLang: lang, lspMissing: dormant,
 				value: listSummary(e.Args), list: e.Args, help: "Command-line args passed to the " + lang + " server. Enter to edit.",
 			},
 			settingItem{
-				group: g, label: "root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang, lspMissing: missing,
+				group: g, label: "root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang, lspMissing: dormant,
 				value: listSummary(e.RootMarkers), list: e.RootMarkers, help: "Files that mark a " + lang + " project root. Enter to edit.",
 			},
 		)

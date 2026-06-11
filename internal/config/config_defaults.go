@@ -81,13 +81,13 @@ var defaults = Config{
 			Command:     "pyright-langserver",
 			Args:        []string{"--stdio"},
 			RootMarkers: []string{"pyproject.toml", "setup.py", "pyrightconfig.json"},
-			Enabled:     false,
+			Enabled:     true,
 		},
 		"java": {
 			Command:     "jdtls",
 			Args:        []string{},
 			RootMarkers: []string{"pom.xml", "build.gradle", "build.gradle.kts", ".classpath"},
-			Enabled:     false,
+			Enabled:     true,
 			// jdtls is heavyweight (15–40 s cold start, ~0.8–1.5 GB RSS): hibernate
 			// an idle JVM after 20 m and cap concurrent JVMs at 2.
 			IdleTimeout:   Duration{20 * time.Minute},
@@ -97,37 +97,38 @@ var defaults = Config{
 			Command:     "rust-analyzer",
 			Args:        []string{},
 			RootMarkers: []string{"Cargo.toml"},
-			Enabled:     false,
+			Enabled:     true,
 		},
 		"swift": {
 			Command:     "sourcekit-lsp",
 			Args:        []string{},
 			RootMarkers: []string{"Package.swift"},
-			Enabled:     false,
+			Enabled:     true,
 		},
 		"zig": {
 			Command:     "zls",
 			Args:        []string{},
 			RootMarkers: []string{"build.zig", "build.zig.zon"},
-			Enabled:     false,
+			Enabled:     true,
 		},
 		"typescript": {
-			Command:     "typescript-language-server",
-			Args:        []string{"--stdio"},
-			RootMarkers: []string{"tsconfig.json", "jsconfig.json", "package.json"},
-			Enabled:     false,
+			Command:         "typescript-language-server",
+			Args:            []string{"--stdio"},
+			RootMarkers:     []string{"tsconfig.json", "jsconfig.json"},
+			WeakRootMarkers: []string{"package.json"},
+			Enabled:         true,
 		},
 		"kotlin": {
 			Command:     "kotlin-language-server",
 			Args:        []string{},
 			RootMarkers: []string{"settings.gradle.kts", "build.gradle.kts"},
-			Enabled:     false,
+			Enabled:     true,
 		},
 		"html": {
-			Command:     "vscode-html-language-server",
-			Args:        []string{"--stdio"},
-			RootMarkers: []string{"index.html"},
-			Enabled:     false,
+			Command:         "vscode-html-language-server",
+			Args:            []string{"--stdio"},
+			WeakRootMarkers: []string{"index.html"},
+			Enabled:         true,
 		},
 	},
 }
@@ -174,6 +175,9 @@ func cloneLSPConfig(cfg LSPConfig) LSPConfig {
 	}
 	if cfg.RootMarkers != nil {
 		out.RootMarkers = append([]string(nil), cfg.RootMarkers...)
+	}
+	if cfg.WeakRootMarkers != nil {
+		out.WeakRootMarkers = append([]string(nil), cfg.WeakRootMarkers...)
 	}
 	if cfg.Env != nil {
 		out.Env = make(map[string]string, len(cfg.Env))

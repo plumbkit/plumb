@@ -230,9 +230,11 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 		addConfigSection(cfgTable, "lsp."+lang, [][]string{
 			{"enabled", fmt.Sprintf("%v", cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
+			{"active", lspActiveStatus(cfg), "derived"},
 			{"command", cfg.Command, sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command)},
 			{"args", fmt.Sprintf("%v", cfg.Args), sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args)},
 			{"root_markers", fmt.Sprintf("%v", cfg.RootMarkers), sourceFor("root_markers", defCfg.RootMarkers, globCfg.RootMarkers, cfg.RootMarkers)},
+			{"weak_root_markers", fmt.Sprintf("%v", cfg.WeakRootMarkers), sourceFor("weak_root_markers", defCfg.WeakRootMarkers, globCfg.WeakRootMarkers, cfg.WeakRootMarkers)},
 			{"env", fmt.Sprintf("%v", cfg.Env), sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env)},
 		})
 	}

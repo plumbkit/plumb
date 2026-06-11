@@ -23,6 +23,10 @@ var sessionStartSchema = json.RawMessage(`{
     "session_id": {
       "type": "string",
       "description": "Optional opaque identifier linking this plumb session to the caller's own session (e.g. a Claude Code conversation ID). When provided, plumb persists the ID and, if a recent session with the same ID ended within the last 24 h, inherits its name — so a resumed conversation keeps its session name in the TUI."
+    },
+    "language": {
+      "type": "string",
+      "description": "Optional override for the workspace's primary language when automatic detection cannot infer it — e.g. an Xcode app that has .swift sources but no SwiftPM Package.swift, so no root marker resolves. Pass the [lsp.<lang>] key (e.g. 'swift', 'typescript', 'rust') to force that language server as the primary, so workspace_symbols and the call/type hierarchies work. The server must be installed and enabled; an unknown, uninstalled, or disabled language is ignored and normal detection applies. Honoured on the connection's current workspace, or alongside an explicit 'workspace' arg."
     }
   },
   "additionalProperties": false
@@ -63,17 +67,17 @@ type RootsResolver func(ctx context.Context) string
 // wrong project.
 type SessionStart struct {
 	ws           WorkspaceFn
-	diag         diagnosticsSource                                           // may be nil; diagnostics section skipped when nil
-	roots        RootsResolver                                               // may be nil; roots/list fallback skipped when nil
-	refuseFn     func() bool                                                 // may be nil; treated as false (no refusal)
-	clientNameFn func() string                                               // may be nil; returns current MCP client name
-	topo         topologyStoreFn                                             // may be nil; returns the live topology store, or nil when disabled
-	gitPolicyFn  func() GitPolicy                                            // may be nil; git policy section skipped when nil
-	lspLangFn    func() string                                               // may be nil; the LSP language attached to this session ("" when none)
-	externalIDFn func(id string) string                                      // may be nil; links session to external ID, returns inherited name
-	pinConflict  func(requested string)                                      // may be nil; records a same-connection workspace switch attempt
-	repin        func(ctx context.Context, workspace string) (string, error) // may be nil; re-pins the connection to an explicit workspace
-	episodicFn   func(ws string) (string, bool)                              // may be nil; returns the last episodic summary for the workspace
+	diag         diagnosticsSource                                                     // may be nil; diagnostics section skipped when nil
+	roots        RootsResolver                                                         // may be nil; roots/list fallback skipped when nil
+	refuseFn     func() bool                                                           // may be nil; treated as false (no refusal)
+	clientNameFn func() string                                                         // may be nil; returns current MCP client name
+	topo         topologyStoreFn                                                       // may be nil; returns the live topology store, or nil when disabled
+	gitPolicyFn  func() GitPolicy                                                      // may be nil; git policy section skipped when nil
+	lspLangFn    func() string                                                         // may be nil; the LSP language attached to this session ("" when none)
+	externalIDFn func(id string) string                                                // may be nil; links session to external ID, returns inherited name
+	pinConflict  func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
+	repin        func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
+	episodicFn   func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
 }
 
 // WithEpisodic wires an accessor for the most recent episodic summary, surfaced
@@ -145,7 +149,7 @@ func (t *SessionStart) WithPinConflict(fn func(requested string)) *SessionStart 
 // returns the resolved root. Nil-safe: with no callback wired, session_start
 // falls back to the historical "start a new connection" refusal. Returns the
 // receiver for chaining.
-func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace string) (string, error)) *SessionStart {
+func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace, language string) (string, error)) *SessionStart {
 	t.repin = fn
 	return t
 }
@@ -197,6 +201,14 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 		}
 	}
 	lang, lspKey := detectLanguageInfo(ws)
+	// A forced/attached primary may have no root marker (e.g. swift pinned on an
+	// Xcode app with no Package.swift), so marker detection returns nothing. Prefer
+	// the language actually attached to this session for the display and guidance.
+	if t.lspLangFn != nil {
+		if attached := t.lspLangFn(); attached != "" && attached != lspKey {
+			lang, lspKey = labelForLSPKey(attached), attached
+		}
+	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
 	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom)
@@ -220,6 +232,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.RawMessage) (ws string, repinnedFrom string, err error) {
 	var a struct {
 		Workspace string `json:"workspace"`
+		Language  string `json:"language"`
 	}
 	_ = json.Unmarshal(raw, &a)
 	// The daemon's attached root is authoritative. onBeforeTool resolves and
@@ -228,10 +241,14 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
 		if current := t.ws(); current != "" {
-			if a.Workspace != "" && !sameDir(a.Workspace, current) {
-				return t.repinExplicit(ctx, current, a.Workspace)
+			switch {
+			case a.Workspace != "" && !sameDir(a.Workspace, current):
+				return t.repinExplicit(ctx, current, a.Workspace, a.Language)
+			case a.Language != "":
+				return t.forceLanguage(ctx, current, a.Language)
+			default:
+				return current, "", nil
 			}
-			return current, "", nil
 		}
 	}
 	// Not attached yet: honour an explicit arg, then ask the client for roots.
@@ -239,6 +256,13 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// a reliable per-session signal (it is shared across all connections), and
 	// guessing it produced confidently-wrong "workspaces".
 	if a.Workspace != "" {
+		if a.Language != "" && t.repin != nil {
+			root, rerr := t.repin(ctx, a.Workspace, a.Language)
+			if rerr != nil {
+				return "", "", fmt.Errorf("session_start: pinning %s as %s: %w", a.Workspace, a.Language, rerr)
+			}
+			return root, "", nil
+		}
 		return a.Workspace, "", nil
 	}
 	if t.roots != nil {
@@ -256,7 +280,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 // otherwise a connection reused across conversations stays welded to the first
 // project it touched, with no in-session escape. When no re-pin callback is
 // wired (older wiring / tests), it falls back to the historical refusal.
-func (t *SessionStart) repinExplicit(ctx context.Context, current, requested string) (string, string, error) {
+func (t *SessionStart) repinExplicit(ctx context.Context, current, requested, language string) (string, string, error) {
 	if t.repin == nil {
 		if t.pinConflict != nil {
 			t.pinConflict(requested)
@@ -266,9 +290,30 @@ func (t *SessionStart) repinExplicit(ctx context.Context, current, requested str
 			current, requested,
 		)
 	}
-	newRoot, err := t.repin(ctx, requested)
+	newRoot, err := t.repin(ctx, requested, language)
 	if err != nil {
 		return "", "", fmt.Errorf("session_start: re-pinning to %s: %w", requested, err)
 	}
-	return newRoot, current, nil
+	// Suppress the "re-pinned" banner when the requested path resolves to the
+	// same root (e.g. a subdir of the current project, or a language-only pin):
+	// no project switch actually happened.
+	from := current
+	if sameDir(newRoot, current) {
+		from = ""
+	}
+	return newRoot, from, nil
+}
+
+// forceLanguage re-pins the connection's CURRENT workspace to a forced primary
+// language (the session_start `language` arg without a project switch). With no
+// re-pin callback wired it ignores the override rather than failing — the
+// orientation packet must still return.
+func (t *SessionStart) forceLanguage(ctx context.Context, current, language string) (string, string, error) {
+	if t.repin == nil {
+		return current, "", nil
+	}
+	if _, err := t.repin(ctx, current, language); err != nil {
+		return "", "", fmt.Errorf("session_start: pinning language %s: %w", language, err)
+	}
+	return current, "", nil
 }

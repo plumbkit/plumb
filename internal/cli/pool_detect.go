@@ -37,49 +37,126 @@ const LanguageNone = "none"
 // If no marker is found, walk up to the parent. If we walk past the filesystem
 // root, return an error.
 func (p *workspacePool) Detect(start string) (root, language string, err error) {
-	// Stat $HOME once so the .git guard below can compare by filesystem
-	// identity (os.SameFile) rather than by string — a raw compare is defeated
-	// by a trailing slash or a symlink/firmlink alias of $HOME.
-	var homeInfo os.FileInfo
-	if home, herr := os.UserHomeDir(); herr == nil && home != "" {
-		homeInfo, _ = os.Stat(home)
-	}
+	homeInfo := homeFileInfo()
 	d := filepath.Clean(start)
+	first := true
 	for {
 		// Highest priority: explicit .plumb marker. Honour it even when no
 		// LSP language matches — the user has declared this directory a
 		// plumb workspace, and stats / project config should follow that
-		// declaration regardless of whether gopls or pyright can attach.
+		// declaration regardless of whether a language server can attach.
 		if _, err := os.Stat(filepath.Join(d, ".plumb")); err == nil {
-			if lang := p.detectLanguageAt(d); lang != "" {
+			return d, p.languageForRoot(d), nil
+		}
+		// Next: first language whose STRONG root marker exists at d. Skip $HOME
+		// (by filesystem identity) so a stray ~/go.mod cannot turn all of $HOME
+		// into a language workspace for any path beneath it.
+		if !sameDirAs(d, homeInfo) {
+			if lang := p.strongLangAt(d); lang != "" {
 				return d, lang, nil
 			}
-			return d, LanguageNone, nil
 		}
-		// Next: first language whose root marker exists.
-		for _, l := range p.langs {
-			for _, marker := range l.cfg.RootMarkers {
-				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
-					return d, l.name, nil
-				}
-			}
-		}
-		// Lowest priority: a .git directory marks a project boundary even
-		// without a language. Skip $HOME (by filesystem identity, so a
-		// non-canonical spelling cannot defeat the guard) so a dotfiles repo
-		// there does not capture the whole home directory, and skip the
-		// filesystem root.
+		// A .git directory marks a project boundary even without a strong
+		// marker. A weak, promiscuous marker (package.json, index.html) names
+		// the language only at such a boundary — or at the directory the caller
+		// pointed at (first iteration) — never at an arbitrary ancestor, so a
+		// stray tooling package.json up the tree cannot hijack the workspace.
+		gitHere := false
 		if d != filepath.Dir(d) && !sameDirAs(d, homeInfo) {
 			if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-				return d, LanguageNone, nil
+				gitHere = true
 			}
 		}
+		if (gitHere || first) && !sameDirAs(d, homeInfo) {
+			if lang := p.weakLangAt(d); lang != "" {
+				return d, lang, nil
+			}
+		}
+		if gitHere {
+			return d, LanguageNone, nil
+		}
+		first = false
 		parent := filepath.Dir(d)
 		if parent == d {
 			return "", "", fmt.Errorf("no project root found in or above %s", start)
 		}
 		d = parent
 	}
+}
+
+// homeFileInfo stats $HOME once for os.SameFile identity comparisons (robust to
+// trailing slashes and symlink/firmlink aliasing where a string compare is
+// defeated). Returns nil when the home directory is undeterminable, leaving the
+// $HOME guards inert rather than refusing a legitimate repo.
+func homeFileInfo() os.FileInfo {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	info, _ := os.Stat(home)
+	return info
+}
+
+// strongLangAt returns the first active language whose RootMarkers exist
+// directly in dir, or "". Single directory, no ascent.
+func (p *workspacePool) strongLangAt(dir string) string {
+	for _, l := range p.langs {
+		for _, marker := range l.cfg.RootMarkers {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				return l.name
+			}
+		}
+	}
+	return ""
+}
+
+// hasActiveLanguage reports whether name is an active (enabled + installed)
+// language in this pool — the set workspace detection and routing consult. Used
+// to validate a caller-supplied language override before pinning it.
+func (p *workspacePool) hasActiveLanguage(name string) bool {
+	for _, l := range p.langs {
+		if l.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// weakLangAt returns the first active language whose WeakRootMarkers exist
+// directly in dir, or "". Weak markers (package.json, index.html) are
+// promiscuous, so they only name the language of the directory they sit in —
+// never an ancestor — which is what keeps a stray package.json from capturing
+// an unrelated workspace.
+func (p *workspacePool) weakLangAt(dir string) string {
+	for _, l := range p.langs {
+		for _, marker := range l.cfg.WeakRootMarkers {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				return l.name
+			}
+		}
+	}
+	return ""
+}
+
+// languageForRoot resolves the language for an already-determined workspace root
+// (a .plumb marker, or a re-pin): a strong marker at the root or an ancestor,
+// else a weak marker at the root itself, else LanguageNone.
+func (p *workspacePool) languageForRoot(dir string) string {
+	if lang := p.lspLanguageForRoot(dir); lang != "" {
+		return lang
+	}
+	return LanguageNone
+}
+
+// lspLanguageForRoot returns the LSP language owning dir — a strong marker at
+// dir or any ancestor (bounded at $HOME), else a weak marker at dir itself — or
+// "" when none. Unlike languageForRoot it returns "" (not LanguageNone) so
+// callers that need an actual server language can tell "no language" apart.
+func (p *workspacePool) lspLanguageForRoot(dir string) string {
+	if lang := p.detectLanguageAt(dir); lang != "" {
+		return lang
+	}
+	return p.weakLangAt(dir)
 }
 
 // sameDirAs reports whether dir refers to the same directory as info (typically
@@ -123,18 +200,23 @@ func (p *workspacePool) SynthesiseRoot(seedDir string) string {
 	}
 }
 
-// detectLanguageAt returns the language for dir based on which root marker
-// is present at dir or any ancestor. Used after a .plumb/ marker is found
-// to determine which adapter to start.
+// detectLanguageAt returns the language whose STRONG root marker is present at
+// dir or any ancestor, or "". Used to resolve the adapter for an already-known
+// root. Weak markers are not consulted here (see weakLangAt / lspLanguageForRoot).
+//
+// The ancestor walk stops at $HOME, mirroring Detect's .git fallback guard: a
+// stray language marker in the home directory (e.g. a global ~/go.mod) must not
+// capture every .plumb workspace beneath it. $HOME and anything above it are
+// never a project root, so they are never consulted for the language.
 func (p *workspacePool) detectLanguageAt(dir string) string {
+	homeInfo := homeFileInfo()
 	d := dir
 	for {
-		for _, l := range p.langs {
-			for _, marker := range l.cfg.RootMarkers {
-				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
-					return l.name
-				}
-			}
+		if sameDirAs(d, homeInfo) {
+			return ""
+		}
+		if lang := p.strongLangAt(d); lang != "" {
+			return lang
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
