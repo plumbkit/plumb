@@ -33,3 +33,31 @@ jobs:
           # PAT with `repo` scope on plumbkit/homebrew-plumb, so the formula can be
           # pushed cross-repo. Create the tap repo and this secret before tagging.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  publish-mcp:
+    # Republish to the official MCP Registry after the GitHub release exists, so the
+    # registry never advertises a version without a real release behind it.
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # GitHub OIDC proves the io.github.plumbkit namespace — no secret needed
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Stamp server.json version from the tag
+        # Defensive: version_meta_test.go already pins server.json == VERSION at commit time;
+        # this guards a hand-cut tag and is idempotent when they already match.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to the MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to the MCP Registry
+        run: ./mcp-publisher publish
