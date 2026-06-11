@@ -552,6 +552,37 @@ func TestSessionStart_DesktopGuidance(t *testing.T) {
 	}
 }
 
+// TestSessionStart_LanguageOverride verifies the `language` arg forces the
+// primary language on the current workspace (via the repin callback), shows the
+// forced language in the identity line even when no root marker named it, and
+// does not announce a project re-pin (no workspace switch happened).
+func TestSessionStart_LanguageOverride(t *testing.T) {
+	attached := t.TempDir()
+	var gotWs, gotLang string
+	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+		WithLSPLanguage(func() string { return "swift" }). // server attached after the forced pin
+		WithRepin(func(_ context.Context, ws, lang string) (string, error) {
+			gotWs, gotLang = ws, lang
+			return ws, nil
+		})
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"language":"swift"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if gotLang != "swift" {
+		t.Errorf("repin received language %q, want swift", gotLang)
+	}
+	if gotWs != attached {
+		t.Errorf("repin received workspace %q, want the current %q", gotWs, attached)
+	}
+	if !strings.Contains(out, "Language: Swift") {
+		t.Errorf("display should show the forced Swift primary\n%s", out)
+	}
+	if strings.Contains(out, "Re-pinned this connection") {
+		t.Errorf("a language-only pin must not announce a project re-pin\n%s", out)
+	}
+}
+
 // TestSessionStart_WorkspaceResolution covers the resolution chain after the
 // os.Getwd() phantom was removed: the daemon's attached root wins, an explicit
 // arg is honoured only when nothing is attached, and nothing-resolves errors
@@ -579,7 +610,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		target := t.TempDir()
 		var got string
 		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
-			WithRepin(func(_ context.Context, ws string) (string, error) {
+			WithRepin(func(_ context.Context, ws, _ string) (string, error) {
 				got = ws
 				return ws, nil
 			})

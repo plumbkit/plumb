@@ -70,7 +70,7 @@ func TestSessionView_ConcurrentReadsDuringMutation(t *testing.T) {
 			if i%2 == 0 {
 				target = rootB
 			}
-			if _, err := s.repinWorkspace(context.Background(), target); err != nil {
+			if _, err := s.repinWorkspace(context.Background(), target, ""); err != nil {
 				t.Errorf("repin: %v", err)
 				break
 			}

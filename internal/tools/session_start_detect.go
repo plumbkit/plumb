@@ -127,6 +127,37 @@ func detectLanguageInfo(ws string) (label, key string) {
 	return "", ""
 }
 
+// labelForLSPKey maps an [lsp.<key>] config key to the human-readable language
+// label used in the session_start identity line. It is the inverse of the key
+// column in detectLanguageInfo, for when the attached primary has no root marker
+// (e.g. swift forced on an Xcode app) and must still display a name.
+func labelForLSPKey(key string) string {
+	switch key {
+	case "go":
+		return "Go"
+	case "python":
+		return "Python"
+	case "typescript":
+		return "TypeScript"
+	case "javascript":
+		return "JavaScript"
+	case "rust":
+		return "Rust"
+	case "swift":
+		return "Swift"
+	case "zig":
+		return "Zig"
+	case "kotlin":
+		return "Kotlin"
+	case "java":
+		return "Java"
+	case "html":
+		return "HTML"
+	default:
+		return key
+	}
+}
+
 // gitBranch returns the current branch name, or "" if not a git repo / git
 // is unavailable. Best-effort with a short timeout.
 func gitBranch(ws string) string {

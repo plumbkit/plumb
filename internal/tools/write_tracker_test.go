@@ -126,7 +126,7 @@ func TestChangedSinceSessionRead(t *testing.T) {
 		sha, _ := fileSHA256(p)
 		r := NewReadTracker()
 		r.Record(p, readMtime, sha)
-		write(p, "y")                            // peer rewrites content
+		write(p, "y")                           // peer rewrites content
 		_ = os.Chtimes(p, readMtime, readMtime) // ...but restores the mtime
 		if !changedSinceSessionRead(r, p) {
 			t.Error("a content change with a preserved mtime must be flagged via SHA")
