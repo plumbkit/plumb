@@ -42,6 +42,8 @@ The same primitives your editor has, exposed as structured tools:
 - **Scoped access you control** — a per-connection path allowlist (read-only vs read-write roots) plus tiered git gating (destructive and network operations are off by default and need explicit confirmation). See [SECURITY.md](SECURITY.md).
 - **One-round-trip bootstrap** — `session_start` returns workspace, branch, recent commits, diagnostics, and project memory.
 
+See the measured, reproducible numbers behind this: [**docs/use-cases.md**](docs/use-cases.md) — reading one function is ~8× less context than the whole file, and `find_references` returns the real call sites where a text search is ~44% noise.
+
 ---
 
 ## Install
