@@ -33,6 +33,7 @@ var (
 	selftestTopology = []string{
 		"topology_status", "topology_search", "topology_explore",
 		"topology_impact", "topology_affected", "topology_routes",
+		"structural_query", "workspace_search",
 	}
 
 	selftestMemoryRead = []string{
@@ -46,7 +47,7 @@ var (
 
 	selftestMemoryWrite = []string{"write_memory", "delete_memory"}
 
-	selftestSession = []string{"rename_session"}
+	selftestSession = []string{"rename_session", "workspace_sessions"}
 
 	selftestSymbolEdit = []string{
 		"rename_symbol", "replace_symbol_body", "insert_before_symbol",
