@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm install-clients clients-test clients-test-auth build-clients
+.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -88,6 +88,32 @@ clients-test-auth: $(TESTCACHE)
 build-clients: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients ./cmd/clientsmoke/...
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients_e2e ./cmd/clientsmoke/...
+
+# ── Docker-based Linux testing (opt-in; never part of `make verify`). ─────────
+# plumb is developed on macOS; these run the Linux suites in a container so a
+# macOS developer can reproduce them locally. arm64-native by default on Apple
+# Silicon; set DOCKER_PLATFORM=linux/amd64 for amd64 fidelity (QEMU-emulated).
+DOCKER_PLATFORM      ?=
+DOCKER_PLATFORM_FLAG := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
+
+# docker-integration mirrors the CI `integration` job (real gopls + pyright) on
+# Linux, locally. The repo is bind-mounted so the image always reflects the
+# working tree; named volumes cache the Go build + module caches across reruns.
+docker-integration:
+	docker build $(DOCKER_PLATFORM_FLAG) -f build/docker/integration.Dockerfile -t plumb-integration build/docker
+	docker run --rm $(DOCKER_PLATFORM_FLAG) \
+		-v "$(CURDIR)":/src \
+		-v plumb-gocache:/root/.cache/go-build \
+		-v plumb-gomod:/go/pkg/mod \
+		plumb-integration
+
+# docker-cleanroom proves a fresh Debian with NO toolchain can install and run
+# plumb end-to-end: a multi-stage build compiles the binary, then a slim runtime
+# (bash + python3 only) drives the two-agents MCP demo. The demo's exit code is
+# the verdict — the automatable form of "clean-VM verification" before tagging.
+docker-cleanroom:
+	docker build $(DOCKER_PLATFORM_FLAG) -f build/docker/cleanroom.Dockerfile -t plumb-cleanroom --build-arg VERSION=$(VERSION) .
+	docker run --rm $(DOCKER_PLATFORM_FLAG) plumb-cleanroom
 
 lint:
 	golangci-lint run

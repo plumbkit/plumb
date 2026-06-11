@@ -1,0 +1,14 @@
+# Build-context hygiene for build/docker/cleanroom.Dockerfile (context = repo
+# root). The builder needs Go source, go.mod/go.sum and docs/demos/; nothing
+# else. build/docker/integration.Dockerfile bind-mounts the repo and ignores
+# this file. Do NOT exclude docs/ wholesale — cleanroom copies the demo script
+# from docs/demos/.
+.git
+.testcache
+/plumb
+*.pprof
+*.test
+*.heap
+docs/assets
+site
+.claude
