@@ -122,7 +122,15 @@ question as well".
 
 ## Reproduce it yourself
 
+The numbers above were taken at commit `a0885ea`. Check it out first, because later commits — including
+*this very document*, which mentions `FormatSavings` many times — add more textual matches. (If you run
+`rg FormatSavings` on the current tree you'll get more than 16 hits, most of them prose in this page and
+in `docs/internal/`. That is Scenario 4's point happening live: text search counts every mention, not
+just the code that uses the symbol.)
+
 ```sh
+git checkout a0885ea   # the commit these numbers were measured at
+
 # Scenario 1 — native search (exact bytes)
 rg -n FormatSavings | wc -lc
 grep -rn FormatSavings . | wc -lc
@@ -136,5 +144,5 @@ grep -rn FormatSavings . | sed 's|:.*||' | sort | uniq -c
 ```
 
 The Plumb-side figures come from calling `search_in_files`, `read_symbol`, `file_outline` and
-`find_references` through any MCP client and measuring the response. Re-run on a later commit
-and the absolute numbers will drift; the shape of the result should not.
+`find_references` through any MCP client and measuring the response. Re-run on a later commit and
+the absolute numbers will drift; the shape of the result should not.
