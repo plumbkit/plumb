@@ -104,6 +104,39 @@ func TestSwift_KindsExtracted(t *testing.T) {
 	}
 }
 
+// TestSwift_ImplicitlyUnwrappedOptionalProperty is the regression test for the
+// AppKit/UIKit outline-collapse bug: the grammar cannot parse an implicitly-
+// unwrapped optional type (`var x: T!`) and emits an ERROR that cascades and
+// drops the entire enclosing class and its members. The extractor's reparse
+// recovery must restore the class, the property, and the methods. Mirrors the
+// reported NoCaps AppDelegate.
+func TestSwift_ImplicitlyUnwrappedOptionalProperty(t *testing.T) {
+	src := []byte(`import AppKit
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    private var menuBarManager: MenuBarManager!
+    @IBOutlet var label: NSTextField!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+    }
+}
+`)
+	nodes, _, err := NewSwift().Extract(context.Background(), "AppDelegate.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if !slices.Contains(names(nodes, topology.KindClass), "AppDelegate") {
+		t.Errorf("class AppDelegate dropped — IUO `T!` property collapsed the type; classes=%v", names(nodes, topology.KindClass))
+	}
+	if !slices.Contains(names(nodes, topology.KindMethod), "applicationDidFinishLaunching") {
+		t.Errorf("method applicationDidFinishLaunching dropped; methods=%v", names(nodes, topology.KindMethod))
+	}
+	if !slices.Contains(names(nodes, topology.KindVariable), "menuBarManager") {
+		t.Errorf("property menuBarManager dropped; variables=%v", names(nodes, topology.KindVariable))
+	}
+}
+
 func TestSwift_MethodContainmentCertain(t *testing.T) {
 	nodes, edges, err := NewSwift().Extract(context.Background(), "svc.swift", swiftSrc)
 	if err != nil {
