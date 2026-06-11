@@ -72,11 +72,13 @@ var toolModels = map[string]toolModel{
 }
 
 // Score computes the two-axis savings for one completed tool call. A failed call
-// (output cleared upstream) scores zero. batchSize is the number of items a
-// batching tool processed (paths/operations length from input_json); it is
-// ignored for non-batching tools. The model is described in
-// docs/internal/tokens_saved_redesign.md §4.2.
-func Score(tool, clientName string, outputBytes, batchSize int, success bool) Savings {
+// (output cleared upstream) scores zero. baselineBytes is the whole-file size a
+// read/symbol tool reported in its header, letting a capable client be credited
+// the efficiency of a ranged read (zero when absent or for non-read tools).
+// batchSize is the number of items a batching tool processed (paths/operations
+// length from input_json), ignored for non-batching tools. The model is described
+// in docs/internal/tokens_saved_redesign.md §4.2.
+func Score(tool, clientName string, outputBytes, baselineBytes, batchSize int, success bool) Savings {
 	if !success {
 		return Savings{}
 	}
@@ -86,12 +88,13 @@ func Score(tool, clientName string, outputBytes, batchSize int, success bool) Sa
 	}
 	caps := Lookup(clientName)
 	out := tokensFor(caps.Tokeniser, m.content, outputBytes)
+	baseline := tokensFor(caps.Tokeniser, m.content, baselineBytes)
 
 	switch m.cat {
 	case catRead:
-		return scoreCapabilityGated(caps.NativeFileRead, out)
+		return scoreCapabilityGated(caps.NativeFileRead, out, baseline)
 	case catSearch:
-		return scoreCapabilityGated(caps.NativeSearch, out)
+		return scoreCapabilityGated(caps.NativeSearch, out, baseline)
 	case catSemantic:
 		return scoreSemantic(caps, m.reconstruct, out)
 	case catBatch:
@@ -102,12 +105,16 @@ func Score(tool, clientName string, outputBytes, batchSize int, success bool) Sa
 }
 
 // scoreCapabilityGated credits the full delivered context as capability when the
-// client has no native equivalent, and zero otherwise — the same-result
-// efficiency delta for a capable client needs a ranged-read baseline, which the
-// scorer does not have until P3 captures it.
-func scoreCapabilityGated(hasNative bool, outputTokens int) Savings {
+// client has no native equivalent. A capable client would have read the whole
+// file itself, so its saving is the efficiency delta a ranged or symbol read
+// avoided pulling into context (baseline minus output); a whole-file read saves
+// nothing because baseline equals output.
+func scoreCapabilityGated(hasNative bool, outputTokens, baselineTokens int) Savings {
 	if !hasNative {
 		return Savings{Capability: outputTokens}
+	}
+	if delta := baselineTokens - outputTokens; delta > 0 {
+		return Savings{Efficiency: delta}
 	}
 	return Savings{}
 }

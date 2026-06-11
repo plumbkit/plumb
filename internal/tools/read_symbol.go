@@ -235,10 +235,12 @@ func (t *ReadSymbol) formatReadSymbolResult(fpath, name string, matches []protoc
 
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
+	// baseline is the whole-file byte size: reading one symbol instead of the whole
+	// file is the efficiency the savings scorer credits.
 	if sha != "" {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s\n", mtimeStr, sha)
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s baseline=%d\n", mtimeStr, sha, info.Size())
 	} else {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s\n", mtimeStr)
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s baseline=%d\n", mtimeStr, info.Size())
 	}
 	// For clients whose native Edit tool conflicts with plumb's read-state
 	// tracking, point at edit_file the moment the agent has the symbol body.

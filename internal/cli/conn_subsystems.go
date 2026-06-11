@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
@@ -187,11 +189,37 @@ func (s *connSession) javaPostWriteNotify(ctx context.Context, path string) erro
 	})
 }
 
-// currentSavingsModelVersion stamps every row this scorer writes. v2 is the
-// counterfactual capability model (internal/clientcaps); old rows keep the
-// version they were scored under, and the read path trusts any value > 0 over a
-// recompute, so history is never silently rewritten.
-const currentSavingsModelVersion = 2
+// currentSavingsModelVersion stamps every row this scorer writes. v3 adds the
+// ranged-read efficiency delta (read tools now report a baseline whole-file size);
+// old rows keep the version they were scored under, and the read path trusts any
+// value > 0 over a recompute, so history is never silently rewritten.
+const currentSavingsModelVersion = 3
+
+// baselineBytesFrom extracts the whole-file byte count read_file/read_symbol
+// stamp into their plumb-read header (baseline=<bytes>), so the scorer can credit
+// the efficiency of a ranged or symbol read. Only the header (first line) carries
+// it; returns 0 when absent.
+func baselineBytesFrom(output string) int {
+	const key = "baseline="
+	line := output
+	if i := strings.IndexByte(output, '\n'); i >= 0 {
+		line = output[:i]
+	}
+	i := strings.Index(line, key)
+	if i < 0 {
+		return 0
+	}
+	rest := line[i+len(key):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0
+	}
+	return n
+}
 
 // batchSizeFor reports how many items a batching tool processed, read from the
 // raw args, so the scorer can credit the per-call overhead avoided. Non-batching
@@ -235,7 +263,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	}
 	// Score savings under the counterfactual model. Failed calls (output cleared
 	// upstream) score 0 by construction inside Score.
-	saved := clientcaps.Score(toolName, clientName, len(output), batchSizeFor(toolName, args), !isError)
+	saved := clientcaps.Score(toolName, clientName, len(output), baselineBytesFrom(output), batchSizeFor(toolName, args), !isError)
 	s.statsStore.Record(root, stats.Call{
 		SessionID:           s.sessID,
 		SessionName:         sessionName,

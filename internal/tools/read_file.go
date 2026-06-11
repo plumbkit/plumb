@@ -209,7 +209,7 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		firstLine = *body.start
 	}
 	largeNote := t.largeReadNote(fpath, len(body.content), body.truncated, body.ranged)
-	return t.formatOutput(mtime, sha, body.content, firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
+	return t.formatOutput(mtime, sha, body.content, info.Size(), firstLine, body.hasLines, body.truncated, t.outsideLabel(fpath), concurrentNote, largeNote), nil
 }
 
 // readBody is the decoded result of reading (a slice of) a file.
@@ -286,18 +286,19 @@ func (t *ReadFile) largeReadNote(path string, size int, truncated, ranged bool) 
 // (mtime + optional sha + indent), an optional edit-lane hint line for clients
 // whose native Edit tool conflicts with plumb's read-state, a blank separator,
 // then the (possibly truncated) content.
-func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, firstLine int, number, truncated bool, outsideLabel, concurrentNote, largeNote string) string {
+func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, baseline int64, firstLine int, number, truncated bool, outsideLabel, concurrentNote, largeNote string) string {
 	var sb strings.Builder
 	mtimeStr := mtime.Format(time.RFC3339Nano)
 	// lines/chars describe the body actually returned (a ranged read reflects the
 	// slice). chars is rune count, not bytes — context-window limits are
 	// character-denominated and bytes mislead for any non-ASCII text
-	// (internal/feedbacks.md 2026-06-08).
+	// (internal/feedbacks.md 2026-06-08). baseline is the whole-file byte size, so
+	// the savings scorer can value a ranged read against the cost of reading it all.
 	lines, chars := displayLineCount(content), utf8.RuneCountInString(content)
 	if sha != "" {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s lines=%d chars=%d\n", mtimeStr, sha, classifyIndent(content), lines, chars)
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s sha256=%s indent=%s lines=%d chars=%d baseline=%d\n", mtimeStr, sha, classifyIndent(content), lines, chars, baseline)
 	} else {
-		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s lines=%d chars=%d\n", mtimeStr, classifyIndent(content), lines, chars)
+		fmt.Fprintf(&sb, "# plumb-read mtime=%s indent=%s lines=%d chars=%d baseline=%d\n", mtimeStr, classifyIndent(content), lines, chars, baseline)
 	}
 	if concurrentNote != "" {
 		sb.WriteString(concurrentNote)
