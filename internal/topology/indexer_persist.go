@@ -15,14 +15,14 @@ import (
 // extraction concerns — see indexer.go for the worker loop, indexer_extract.go
 // for extraction, and indexer_resync.go for the full-tree walk.
 
-func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, hash string, nodes []Node, edges []Edge) error {
+func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, hash, lang string, nodes []Node, edges []Edge) error {
 	tx, err := idx.db.Begin()
 	if err != nil {
 		return fmt.Errorf("topology: begin tx: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	newFileID, err := upsertFileRecord(tx, fileID, relPath, info, hash)
+	newFileID, err := upsertFileRecord(tx, fileID, relPath, info, hash, lang)
 	if err != nil {
 		return err
 	}
@@ -47,12 +47,12 @@ func (idx *Indexer) recordFileError(relPath string, info os.FileInfo, extractErr
 	return err
 }
 
-func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo, hash string) (int64, error) {
+func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo, hash, lang string) (int64, error) {
 	if fileID == 0 {
 		res, err := tx.Exec(
-			`INSERT INTO topology_files(path, mtime_ns, content_hash, indexed_at, error_msg)
-             VALUES (?, ?, ?, ?, '')`,
-			relPath, info.ModTime().UnixNano(), hash, time.Now().UnixNano())
+			`INSERT INTO topology_files(path, language, mtime_ns, content_hash, indexed_at, error_msg)
+             VALUES (?, ?, ?, ?, ?, '')`,
+			relPath, lang, info.ModTime().UnixNano(), hash, time.Now().UnixNano())
 		if err != nil {
 			return 0, fmt.Errorf("topology: insert file: %w", err)
 		}
@@ -60,8 +60,8 @@ func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo
 		return id, nil
 	}
 	_, err := tx.Exec(
-		`UPDATE topology_files SET mtime_ns=?, content_hash=?, indexed_at=?, error_msg='' WHERE id=?`,
-		info.ModTime().UnixNano(), hash, time.Now().UnixNano(), fileID)
+		`UPDATE topology_files SET language=?, mtime_ns=?, content_hash=?, indexed_at=?, error_msg='' WHERE id=?`,
+		lang, info.ModTime().UnixNano(), hash, time.Now().UnixNano(), fileID)
 	if err != nil {
 		return 0, fmt.Errorf("topology: update file: %w", err)
 	}

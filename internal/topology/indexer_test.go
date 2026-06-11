@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -68,6 +69,36 @@ func TestIndexer_ProcessUpsert_Insert(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE path = 'main.go'`).Scan(&fileCount) //nolint:errcheck
 	if fileCount != 1 {
 		t.Errorf("expected 1 file record, got %d", fileCount)
+	}
+}
+
+// TestIndexer_PopulatesLanguageInStatus is the regression test for the empty
+// topology_status "languages" line: the indexer must write topology_files.language
+// on upsert, so Status().Languages (and FormatStatus's "languages:" line) reflect
+// the indexed languages instead of always being empty.
+func TestIndexer_PopulatesLanguageInStatus(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc Run() {}\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	if err := idx.processUpsert(context.Background(), "main.go"); err != nil {
+		t.Fatalf("processUpsert: %v", err)
+	}
+
+	var lang string
+	db.QueryRow(`SELECT language FROM topology_files WHERE path = 'main.go'`).Scan(&lang) //nolint:errcheck
+	if lang != "go" {
+		t.Errorf("topology_files.language = %q, want \"go\" (indexer must record the file language)", lang)
+	}
+	if langs := Report(db, dir, idx).Languages; !slices.Contains(langs, "go") {
+		t.Errorf("Status().Languages = %v, want it to contain \"go\"", langs)
 	}
 }
 

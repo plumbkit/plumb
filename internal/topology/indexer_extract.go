@@ -32,7 +32,7 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	}
 	// Read and hash before the staleness check so a backup-restore that
 	// resets mtime but changes content is still re-indexed.
-	nodes, edges, hash, err := idx.extractPath(ctx, absPath, relPath)
+	nodes, edges, hash, lang, err := idx.extractPath(ctx, absPath, relPath)
 	if err != nil {
 		return idx.recordFileError(relPath, info, err)
 	}
@@ -43,7 +43,7 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	if !stale {
 		return nil
 	}
-	return idx.persistFile(fileID, relPath, info, hash, nodes, edges)
+	return idx.persistFile(fileID, relPath, info, hash, lang, nodes, edges)
 }
 
 // isStale returns true when either the mtime or the content hash differs from
@@ -61,23 +61,23 @@ func (idx *Indexer) isStale(relPath string, info os.FileInfo, hash string) (stal
 	return dbMtime != info.ModTime().UnixNano() || dbHash != hash, fileID, nil
 }
 
-func (idx *Indexer) extractPath(ctx context.Context, absPath, relPath string) (nodes []Node, edges []Edge, hash string, err error) {
+func (idx *Indexer) extractPath(ctx context.Context, absPath, relPath string) (nodes []Node, edges []Edge, hash, lang string, err error) {
 	ex := findExtractor(relPath, idx.extractors)
 	if ex == nil {
-		return nil, nil, "", nil
+		return nil, nil, "", "", nil
 	}
 	src, readErr := os.ReadFile(absPath) //nolint:gosec // G304: path derived from workspace root + relative path validated by caller
 	if readErr != nil {
-		return nil, nil, "", readErr
+		return nil, nil, "", "", readErr
 	}
 	h := sha256.Sum256(src)
 	hash = fmt.Sprintf("%x", h)
 	if skipOversizedGrammar(relPath, ex.Language(), len(src)) {
 		// Recorded with this hash and zero symbols, so isStale won't re-attempt it.
-		return nil, nil, hash, nil
+		return nil, nil, hash, ex.Language(), nil
 	}
 	nodes, edges, err = safeExtract(ctx, ex, relPath, src)
-	return nodes, edges, hash, err
+	return nodes, edges, hash, ex.Language(), err
 }
 
 // skipOversizedGrammar reports whether a file should be recorded without parsing

@@ -217,7 +217,7 @@ func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(s.workspace, rel)
 	}
-	nodes, _, _, err := s.idx.extractPath(ctx, abs, rel)
+	nodes, _, _, _, err := s.idx.extractPath(ctx, abs, rel)
 	return nodes, err
 }
 
