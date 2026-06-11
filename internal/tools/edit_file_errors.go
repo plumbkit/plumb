@@ -103,44 +103,44 @@ func matchLineEndings(s, ref string) string {
 
 // summariseLineChanges returns a compact human-readable description of which
 // line numbers changed between before and after. Best-effort: shows up to 5
-// ranges; collapses adjacent differing lines into a single range.
+// ranges; collapses adjacent changed lines into a single range. Line numbers
+// refer to the resulting (after) file and are derived from a Myers edit script
+// (shared with the unified diff), so an insertion does not falsely flag every
+// line below it.
 func summariseLineChanges(before, after string) string {
 	if before == after {
 		return ""
 	}
-	bl := strings.Split(before, "\n")
-	al := strings.Split(after, "\n")
+	script := computeEditScript(diffSplitLines(before), diffSplitLines(after))
 
 	type rng struct{ start, end int }
 	var ranges []rng
 
-	// Walk both line arrays in parallel, treating the shorter as padded.
-	max := len(bl)
-	if len(al) > max {
-		max = len(al)
-	}
-	inRun := false
-	var runStart int
-	for i := 0; i < max; i++ {
-		var b, a string
-		if i < len(bl) {
-			b = bl[i]
+	// Walk the edit script tracking the new-file line number; each maximal run of
+	// non-common lines (additions and/or deletions) collapses to one range.
+	newLine := 1
+	for i := 0; i < len(script); {
+		if script[i].kind == ' ' {
+			newLine++
+			i++
+			continue
 		}
-		if i < len(al) {
-			a = al[i]
-		}
-		if b != a {
-			if !inRun {
-				runStart = i + 1
-				inRun = true
+		runStart := newLine
+		added := false
+		for i < len(script) && script[i].kind != ' ' {
+			if script[i].kind == '+' {
+				added = true
+				newLine++
 			}
-		} else if inRun {
-			ranges = append(ranges, rng{runStart, i})
-			inRun = false
+			i++
 		}
-	}
-	if inRun {
-		ranges = append(ranges, rng{runStart, max})
+		// A run that added lines spans them; a pure deletion has no new line of
+		// its own, so point at the line now occupying its position.
+		if added {
+			ranges = append(ranges, rng{runStart, newLine - 1})
+		} else {
+			ranges = append(ranges, rng{runStart, runStart})
+		}
 	}
 	if len(ranges) == 0 {
 		return ""
