@@ -364,6 +364,53 @@ func TestTotalTokensSavedSinceScopesByTime(t *testing.T) {
 	}
 }
 
+// TestSavingsPrefersStoredOverRecompute proves the P1 read path: a row scored at
+// write time (savings_model_version > 0) reads back as its stored figure even
+// when that differs from what the profile recompute would give, while an unscored
+// legacy row (version 0) still recomputes. This is the provenance guarantee —
+// changing the profile table can no longer silently rewrite scored history. Both
+// read paths (TotalTokensSavedSince and Summary's per-tool tokensSavedFor) are
+// exercised.
+func TestSavingsPrefersStoredOverRecompute(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	// Scored row: stored 999 deliberately differs from any profile value.
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "find_symbol", CalledAt: now, Success: true, TokensSaved: 999, SavingsModelVersion: 1}); err != nil {
+		t.Fatalf("Record scored: %v", err)
+	}
+	// Legacy row: unscored (version 0) → recomputed under the unknown profile
+	// (search_in_files = 50).
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "search_in_files", CalledAt: now, Success: true}); err != nil {
+		t.Fatalf("Record legacy: %v", err)
+	}
+
+	if got := db.TotalTokensSavedSince(now.Add(-time.Minute), Filter{}); got != 999+50 {
+		t.Fatalf("TotalTokensSavedSince = %d, want %d (stored 999 + recompute 50)", got, 999+50)
+	}
+
+	sum, err := db.Summary(Filter{})
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	byTool := map[string]int64{}
+	for _, s := range sum {
+		byTool[s.Tool] = s.TokensSaved
+	}
+	if byTool["find_symbol"] != 999 {
+		t.Fatalf("find_symbol stored savings = %d, want 999", byTool["find_symbol"])
+	}
+	if byTool["search_in_files"] != 50 {
+		t.Fatalf("search_in_files recomputed savings = %d, want 50", byTool["search_in_files"])
+	}
+}
+
 func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)

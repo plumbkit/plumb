@@ -186,8 +186,17 @@ func (s *connSession) javaPostWriteNotify(ctx context.Context, path string) erro
 	})
 }
 
+// currentSavingsModelVersion stamps every row this scorer writes. P1 reproduces
+// the legacy per-client profile numbers (see stats.TokensSavedForClient); later
+// phases bump it as the model evolves. Old rows keep the version they were scored
+// under, and the read path trusts any value > 0 over a recompute, so history is
+// never silently rewritten.
+const currentSavingsModelVersion = 1
+
 // onAfterTool records a completed tool call in the stats store and refreshes
-// the session's last-seen timestamp so idle detection stays accurate.
+// the session's last-seen timestamp so idle detection stays accurate. Savings are
+// scored here, at write time: this is the single point where the tool name,
+// client identity, raw args and output all co-exist.
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 	session.Touch(s.sessID)
 	v := s.view()
@@ -201,19 +210,27 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	if root == "" {
 		return
 	}
+	// A failed call has its output cleared upstream, so score it 0 rather than
+	// letting the recompute path credit the full alternative cost for an empty result.
+	tokensSaved := 0
+	if !isError {
+		tokensSaved = stats.TokensSavedForClient(toolName, clientName, len(output))
+	}
 	s.statsStore.Record(root, stats.Call{
-		SessionID:     s.sessID,
-		SessionName:   sessionName,
-		Tool:          toolName,
-		CalledAt:      time.Now(),
-		DurationMs:    dur.Milliseconds(),
-		InputBytes:    len(args),
-		OutputBytes:   len(output),
-		Success:       !isError,
-		ErrorMsg:      errMsg,
-		InputJSON:     string(args),
-		OutputText:    output,
-		ClientName:    clientName,
-		ClientVersion: clientVersion,
+		SessionID:           s.sessID,
+		SessionName:         sessionName,
+		Tool:                toolName,
+		CalledAt:            time.Now(),
+		DurationMs:          dur.Milliseconds(),
+		InputBytes:          len(args),
+		OutputBytes:         len(output),
+		Success:             !isError,
+		ErrorMsg:            errMsg,
+		InputJSON:           string(args),
+		OutputText:          output,
+		ClientName:          clientName,
+		ClientVersion:       clientVersion,
+		TokensSaved:         tokensSaved,
+		SavingsModelVersion: currentSavingsModelVersion,
 	})
 }

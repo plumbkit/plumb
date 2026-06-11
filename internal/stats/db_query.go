@@ -192,10 +192,10 @@ func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
 	where, args := filter.where()
 	var q string
 	if where == "" {
-		q = `SELECT output_bytes, COALESCE(client_name, '') FROM tool_calls WHERE tool=?`
+		q = `SELECT output_bytes, COALESCE(client_name, ''), tokens_saved, savings_model_version FROM tool_calls WHERE tool=?`
 		args = []any{tool}
 	} else {
-		q = `SELECT output_bytes, COALESCE(client_name, '') FROM tool_calls` + where + ` AND tool=?` //nolint:gosec // G202: where built from filter.where() using ? placeholders only
+		q = `SELECT output_bytes, COALESCE(client_name, ''), tokens_saved, savings_model_version FROM tool_calls` + where + ` AND tool=?` //nolint:gosec // G202: where built from filter.where() using ? placeholders only
 		args = append(args, tool)
 	}
 	rows, err := d.db.Query(q, args...)
@@ -205,13 +205,25 @@ func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
 	defer rows.Close()
 	var total int64
 	for rows.Next() {
-		var out int
+		var out, modelVersion int
 		var clientName string
-		if err := rows.Scan(&out, &clientName); err == nil {
-			total += int64(TokensSavedForClient(tool, clientName, out))
+		var stored int64
+		if err := rows.Scan(&out, &clientName, &stored, &modelVersion); err == nil {
+			total += savingsForRow(tool, clientName, out, stored, modelVersion)
 		}
 	}
 	return total
+}
+
+// savingsForRow returns the savings credited to one tool_calls row. A row scored
+// at write time (savings_model_version > 0) is trusted as stored — provenance over
+// recompute; an unscored legacy row (version 0) is recomputed under the profile
+// model so historical totals stay populated until that legacy data is retired.
+func savingsForRow(tool, clientName string, outputBytes int, stored int64, modelVersion int) int64 {
+	if modelVersion > 0 {
+		return stored
+	}
+	return int64(TokensSavedForClient(tool, clientName, outputBytes))
 }
 
 // p95All fetches duration_ms for all rows matching filter in a single query
@@ -506,7 +518,7 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 		args = append(args, since.UnixMilli())
 	}
 	// where is built by filter.where() using ? placeholders; no user values interpolated.
-	q := `SELECT tool, output_bytes, COALESCE(client_name, '') FROM tool_calls` + where //nolint:gosec // G202: see comment above
+	q := `SELECT tool, output_bytes, COALESCE(client_name, ''), tokens_saved, savings_model_version FROM tool_calls` + where //nolint:gosec // G202: see comment above
 	rows, err := d.db.Query(q, args...)
 	if err != nil {
 		return 0
@@ -515,11 +527,12 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 	var total int64
 	for rows.Next() {
 		var tool, clientName string
-		var out int
-		if err := rows.Scan(&tool, &out, &clientName); err != nil {
+		var out, modelVersion int
+		var stored int64
+		if err := rows.Scan(&tool, &out, &clientName, &stored, &modelVersion); err != nil {
 			continue
 		}
-		total += int64(TokensSavedForClient(tool, clientName, out))
+		total += savingsForRow(tool, clientName, out, stored, modelVersion)
 	}
 	return total
 }
