@@ -14,6 +14,8 @@ type textEditor struct {
 	lspLang string
 	title   string
 	input   string
+
+	fieldWidth int // per-render field width from the screen size; 0 falls back to listFieldWidth
 }
 
 func newTextEditor(key settingKey, lspLang, title, current string) *textEditor {
@@ -43,12 +45,22 @@ func (e *textEditor) Update(msg tea.KeyPressMsg) (done, save bool) {
 	return false, false
 }
 
+// paste appends pasted text to the input field.
+func (e *textEditor) paste(text string) {
+	e.input += text
+}
+
 func (e *textEditor) renderModal(bg string, width, height int) string {
+	e.fieldWidth = editorFieldWidth(width, len([]rune(e.input))+1)
 	return spliceOverlay(bg, e.box(), width, height)
 }
 
 func (e *textEditor) box() string {
-	content := []string{editorInputField(e.input, listFieldWidth)}
+	width := e.fieldWidth
+	if width == 0 {
+		width = listFieldWidth
+	}
+	content := []string{editorInputField(e.input, width)}
 	status := editorHints([2]string{"enter", "save"}, [2]string{"esc", "cancel"})
 	return editorModalBox(e.title, content, status)
 }

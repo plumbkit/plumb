@@ -71,6 +71,16 @@ func (r *renameSessionModal) Update(msg tea.Msg) (renameSessionModal, bool) {
 	return *r, false
 }
 
+// paste appends pasted text to the name input and re-validates.
+func (r *renameSessionModal) paste(text string) {
+	r.input += text
+	if err := r.validateInput(); err != nil {
+		r.validationErr = err.Error()
+	} else {
+		r.validationErr = ""
+	}
+}
+
 // renderModal composites the modal box, centred, over the (already dimmed)
 // background. spliceOverlay handles the centring — the box positions itself.
 func (r renameSessionModal) renderModal(bg string, width, height int) string {

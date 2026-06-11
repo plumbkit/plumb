@@ -330,3 +330,22 @@ func spliceOverlayAt(bg, overlay string, sx, sy int) string {
 	}
 	return strings.Join(bgLines, "\n")
 }
+
+// sanitisePaste flattens bracketed-paste content for a single-line input:
+// newlines and tabs become spaces, other control runes are dropped, and the
+// result is trimmed. Unlike typed input, pasted text may carry any printable
+// rune (paths and names are not ASCII-only).
+func sanitisePaste(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteRune(' ')
+		case r < 32 || r == 127:
+			// drop control runes
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}

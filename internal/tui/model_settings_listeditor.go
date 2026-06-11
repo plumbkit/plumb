@@ -22,6 +22,8 @@ type listEditor struct {
 	adding  bool   // true while typing in the input field (adding or editing)
 	editing bool   // true while the input replaces the entry at cursor (vs appends a new one)
 	input   string // text buffer while adding/editing
+
+	fieldWidth int // per-render field width from the screen size; 0 falls back to listFieldWidth
 }
 
 func newListEditor(key settingKey, title string, entries []string) *listEditor {
@@ -68,6 +70,15 @@ func (e *listEditor) Update(msg tea.KeyPressMsg) (done, save bool) {
 	return false, false
 }
 
+// paste inserts pasted text into the input field, first opening a new-entry
+// input when the editor is browsing — so a bare paste "just works" as add.
+func (e *listEditor) paste(text string) {
+	if !e.adding {
+		e.adding, e.editing, e.input = true, false, ""
+	}
+	e.input += text
+}
+
 // updateAdding handles keys while typing a new entry.
 func (e *listEditor) updateAdding(msg tea.KeyPressMsg) {
 	switch msg.String() {
@@ -99,14 +110,49 @@ func (e *listEditor) updateAdding(msg tea.KeyPressMsg) {
 
 // renderModal composites the editor box centred over the dimmed background.
 func (e *listEditor) renderModal(bg string, width, height int) string {
+	e.fieldWidth = editorFieldWidth(width, e.neededWidth())
 	return spliceOverlay(bg, e.box(), width, height)
 }
 
+// neededWidth is the widest content the editor wants to show un-truncated:
+// the longest entry, or the live input plus its trailing cursor cell.
+func (e *listEditor) neededWidth() int {
+	n := len([]rune(e.input)) + 1
+	for _, entry := range e.entries {
+		n = max(n, len([]rune(entry)))
+	}
+	return n
+}
+
 const (
-	listFieldWidth   = 32
-	editorContentPad = 3 // gap between the border and content rows
-	editorFramePad   = 1 // gap between the border and the status bar
+	listFieldWidth    = 32
+	editorContentPad  = 3 // gap between the border and content rows
+	editorFramePad    = 1 // gap between the border and the status bar
+	editorModalMargin = 4 // minimum gap between the modal frame and each screen edge
+	// editorFieldChrome is the width the frame adds around an input field: two
+	// border cells, the content padding, and the "[ " / " ]" brackets.
+	editorFieldChrome = 2 + 2*editorContentPad + 4
 )
+
+// editorFieldWidth sizes an editor field: at least listFieldWidth, growing to
+// fit needed cells, capped so the modal keeps editorModalMargin clear of each
+// screen edge. A non-positive screen width keeps the default.
+func editorFieldWidth(screenW, needed int) int {
+	if screenW <= 0 {
+		return listFieldWidth
+	}
+	maxW := screenW - 2*editorModalMargin - editorFieldChrome
+	return max(min(max(listFieldWidth, needed), maxW), 8)
+}
+
+// field is the active field width — fieldWidth when a render has sized it,
+// otherwise the listFieldWidth default.
+func (e *listEditor) field() int {
+	if e.fieldWidth > 0 {
+		return e.fieldWidth
+	}
+	return listFieldWidth
+}
 
 func (e *listEditor) box() string {
 	rows, status := e.content()
@@ -191,9 +237,9 @@ func (e *listEditor) content() (rows []string, status string) {
 			continue
 		}
 		if !e.adding && i == e.cursor { // selected: cursor + entry in the selection colour
-			rows = append(rows, SelectedStyle.Render("❯ "+truncList(entry)))
+			rows = append(rows, SelectedStyle.Render("❯ "+truncList(entry, e.field())))
 		} else { // others: a muted bullet marks each entry
-			rows = append(rows, MutedStyle.Render("∙ ")+ItemStyle.Render(truncList(entry)))
+			rows = append(rows, MutedStyle.Render("∙ ")+ItemStyle.Render(truncList(entry, e.field())))
 		}
 	}
 	if e.adding && !e.editing { // a new entry is appended at the end
@@ -210,12 +256,12 @@ func (e *listEditor) content() (rows []string, status string) {
 // addRow renders the editable input field; only shown while adding (triggered by
 // `a`, not by selecting a row).
 func (e *listEditor) addRow() string {
-	return editorInputField(e.input, listFieldWidth)
+	return editorInputField(e.input, e.field())
 }
 
-func truncList(s string) string {
-	if r := []rune(s); len(r) > listFieldWidth {
-		return string(r[:listFieldWidth-1]) + "…"
+func truncList(s string, width int) string {
+	if r := []rune(s); len(r) > width {
+		return string(r[:width-1]) + "…"
 	}
 	return s
 }

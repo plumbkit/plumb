@@ -25,6 +25,7 @@ func (m Model) settingsDisplayLines(rowsW int) []string {
 		return []string{MutedStyle.Render(msg)}
 	}
 	labelW, valueW := settingsColumnWidths(m.settingsItems)
+	valueW = clampSettingsValueW(valueW, labelW, m.settingsItems, rowsW)
 	logical := settingsLogicalLines(m.settingsItems)
 	wsScope := !m.currentScope().global
 	missing := map[string]bool{} // language groups with an enabled-but-missing server
@@ -41,7 +42,7 @@ func (m Model) settingsDisplayLines(rowsW int) []string {
 		case slRow:
 			it := m.settingsItems[ln.item]
 			if ln.cont > 0 {
-				out[i] = settingsContLine(it, ln.cont, labelW, wsScope)
+				out[i] = settingsContLine(it, ln.cont, labelW, valueW, wsScope)
 			} else {
 				out[i] = settingsRowDisplay(it, ln.item == m.settingsCursor, wsScope, labelW, valueW)
 			}
@@ -52,9 +53,27 @@ func (m Model) settingsDisplayLines(rowsW int) []string {
 	return out
 }
 
+// clampSettingsValueW caps the value column so the widest row (value plus its
+// control) still fits the pane — an over-wide row would be wrapped by the
+// fixed-width cell render and corrupt the layout. Values are ellipsis-truncated
+// to the capped width instead.
+func clampSettingsValueW(valueW, labelW int, items []settingItem, rowsW int) int {
+	maxCtrl := 0
+	for _, it := range items {
+		if w := lipgloss.Width(settingControl(it)); w > maxCtrl {
+			maxCtrl = w
+		}
+	}
+	// 3 = the leading space plus the 2-cell cursor column.
+	if maxW := rowsW - labelW - maxCtrl - 3; valueW > maxW {
+		return max(maxW, 8)
+	}
+	return valueW
+}
+
 // settingsContLine renders a list-entry continuation line, padded so the entry
 // aligns under the value column of the row above. Missing-LSP rows render red.
-func settingsContLine(it settingItem, idx, labelW int, wsScope bool) string {
+func settingsContLine(it settingItem, idx, labelW, valueW int, wsScope bool) string {
 	style := DetailStyle
 	if wsScope && !it.overridden {
 		style = FadedStyle
@@ -64,7 +83,7 @@ func settingsContLine(it settingItem, idx, labelW int, wsScope bool) string {
 	}
 	entry := ""
 	if idx < len(it.list) {
-		entry = it.list[idx]
+		entry = truncate(it.list[idx], valueW-2)
 	}
 	return strings.Repeat(" ", labelW+3) + style.Render(entry)
 }
@@ -88,7 +107,9 @@ func settingsHeaderDisplay(group string, innerW int, warn bool) string {
 // superscript ⁴/⁵ after the numeral marks override vs inherited.
 func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW int) string {
 	label := rowLabel(it)
-	value := fmt.Sprintf("%-*s", valueW, rowValues(it)[0])
+	// Truncate two short of the column so an over-long value keeps a gap
+	// before the control instead of running into it.
+	value := fmt.Sprintf("%-*s", valueW, truncate(rowValues(it)[0], valueW-2))
 	ctrl := settingControl(it)
 
 	numeral, numeralPlain := reloadNumeral(it.key)

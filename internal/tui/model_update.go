@@ -33,6 +33,20 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m = m.handleWindowSizeMsg(msg)
+	case tea.KeyPressMsg:
+		return m.handleKeyMsg(msg)
+	case tea.PasteMsg:
+		return m.handlePasteMsg(msg), nil
+	default:
+		return m.handleMouseMsg(msg), nil
+	}
+	return m, nil
+}
+
+// handleMouseMsg routes the mouse message family; any other message falls
+// through unchanged.
+func (m Model) handleMouseMsg(msg tea.Msg) Model {
+	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
 		m.handleLeftMouseClick(msg.Mouse())
 	case tea.MouseWheelMsg:
@@ -50,10 +64,37 @@ func (m Model) updateInner(msg tea.Msg) (Model, tea.Cmd) {
 		}
 	case tea.MouseReleaseMsg:
 		m.draggingDivider = false
-	case tea.KeyPressMsg:
-		return m.handleKeyMsg(msg)
 	}
-	return m, nil
+	return m
+}
+
+// handlePasteMsg routes bracketed-paste text to whichever text input is
+// active, in the same priority order as handleOverlayKey. Pasted text is
+// flattened to a single line; with no input open the paste is dropped rather
+// than spilling into keybindings.
+func (m Model) handlePasteMsg(msg tea.PasteMsg) Model {
+	text := sanitisePaste(msg.Content)
+	if text == "" {
+		return m
+	}
+	switch {
+	case m.renameModal != nil:
+		m.renameModal.paste(text)
+	case m.settingsListEditor != nil:
+		m.settingsListEditor.paste(text)
+	case m.settingsTextEditor != nil:
+		m.settingsTextEditor.paste(text)
+	case m.showPopup || m.showThemePicker || m.showHelp || m.sectionMenuOpen:
+		// no text input in these overlays
+	case m.currentSection == 2 && m.memoryFilterActive:
+		m.memoryFilter += text
+		m.resetMemoryFilterView()
+	case m.currentSection == 3 && !m.logDetailOpen:
+		m.logFilter += text
+		m.logScroll = 0
+		m.logCursor = 0
+	}
+	return m
 }
 
 func (m Model) handlePollMsg() (Model, tea.Cmd) {
