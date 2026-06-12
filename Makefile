@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom
+.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -138,6 +138,12 @@ tidy:
 # only Go + wazero. Run after updating the vendored grammar or runtime.
 ts-wasm:
 	bash internal/topology/extractors/wasmts/csrc/build.sh
+
+# swift-wasm regenerates the embedded Swift tree-sitter wasm (canonical
+# alex-pinkus grammar + its C external scanner) from the vendored C sources.
+# Dev-only — requires `zig`; building/running plumb needs only Go + wazero.
+swift-wasm:
+	bash internal/topology/extractors/wasmts/csrc/build-swift.sh
 
 # verify is the definition of "ready to commit": build + test + lint + an
 # integration-tag compile pass (build-integration) + the file-size guard.

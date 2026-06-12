@@ -162,7 +162,7 @@ var extractorCtors = map[string]func() topology.Extractor{
 	"rust":       func() topology.Extractor { return treesitter.NewRust() },
 	"zig":        func() topology.Extractor { return treesitter.NewZig() },
 	"kotlin":     func() topology.Extractor { return treesitter.NewKotlin() },
-	"swift":      func() topology.Extractor { return treesitter.NewSwift() },
+	"swift":      func() topology.Extractor { return wasmts.NewSwift() },
 	"java":       func() topology.Extractor { return treesitter.NewJava() },
 	"bash":       func() topology.Extractor { return treesitter.NewBash() },
 	"hcl":        func() topology.Extractor { return treesitter.NewHCL() },

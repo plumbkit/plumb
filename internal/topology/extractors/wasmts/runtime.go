@@ -11,15 +11,7 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
-// ts.wasm bundles the canonical tree-sitter runtime + tree-sitter-typescript
-// (typescript + tsx) grammars, compiled to wasm32-wasi by csrc/build.sh. It is
-// committed so building plumb needs only Go + wazero (no C toolchain). See
-// csrc/NOTICE.md for provenance and regeneration.
-//
-//go:embed ts.wasm
-var tsWasm []byte
-
-// runtime wraps one wazero instance of the bundled tree-sitter wasm.
+// runtime wraps one wazero instance of a bundled tree-sitter wasm.
 //
 // Concurrency: NOT safe for concurrent use. tree-sitter nodes are pointers into
 // the module's shared linear memory, so a parse and the tree walk that follows
@@ -42,27 +34,29 @@ type runtime struct {
 	nType, nStartByte, nEndByte                     api.Function
 	nIsNull                                         api.Function
 
-	tsLang, tsxLang uint64
+	langs map[string]uint64 // grammar export name → TSLanguage pointer
 
 	arena []uint64 // node/string ptrs allocated during the current parse
 	err   error    // sticky wazero error for the current parse
 }
 
-// newRuntime compiles and instantiates the embedded tree-sitter wasm once.
-func newRuntime(ctx context.Context) (*runtime, error) {
+// newRuntime compiles and instantiates a bundled tree-sitter wasm once, loading
+// each grammar export in exports into the langs map.
+func newRuntime(ctx context.Context, wasm []byte, exports []string) (*runtime, error) {
 	wzr := wazero.NewRuntime(ctx)
 	wasi_snapshot_preview1.MustInstantiate(ctx, wzr)
 
-	compiled, err := wzr.CompileModule(ctx, tsWasm)
+	compiled, err := wzr.CompileModule(ctx, wasm)
 	if err != nil {
-		return nil, fmt.Errorf("compiling ts.wasm: %w", err)
+		return nil, fmt.Errorf("compiling wasm: %w", err)
 	}
 	mod, err := wzr.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithName(""))
 	if err != nil {
-		return nil, fmt.Errorf("instantiating ts.wasm: %w", err)
+		return nil, fmt.Errorf("instantiating wasm: %w", err)
 	}
 
 	r := &runtime{
+		langs:         map[string]uint64{},
 		wzr:           wzr,
 		mod:           mod,
 		malloc:        mod.ExportedFunction("malloc"),
@@ -84,15 +78,13 @@ func newRuntime(ctx context.Context) (*runtime, error) {
 		nIsNull:       mod.ExportedFunction("ts_node_is_null"),
 	}
 
-	lang, err := r.loadLang(ctx, "tree_sitter_typescript")
-	if err != nil {
-		return nil, err
+	for _, exp := range exports {
+		lang, err := r.loadLang(ctx, exp)
+		if err != nil {
+			return nil, err
+		}
+		r.langs[exp] = lang
 	}
-	r.tsLang = lang
-	if lang, err = r.loadLang(ctx, "tree_sitter_tsx"); err != nil {
-		return nil, err
-	}
-	r.tsxLang = lang
 	return r, nil
 }
 

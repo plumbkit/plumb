@@ -12,6 +12,11 @@ import (
 
 // SwiftExtractor extracts Swift symbols using the gotreesitter Swift grammar.
 //
+// As of 0.9.17 Swift is extracted via the canonical grammar compiled to WASM
+// (internal/topology/extractors/wasmts); this pure-Go extractor — and its
+// recoverIUOBangs workaround below — survive only as the wasm init-failure
+// fallback. See the todo.md follow-ups to retire both once WASM is proven.
+//
 // Concurrency: stateless after construction and safe for concurrent use; a
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
