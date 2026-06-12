@@ -53,6 +53,10 @@ func (w *swiftWalk) walk(n node, enclosing int64, inFunc, testCtx bool) {
 		if !inFunc {
 			w.addEnumEntry(n, enclosing)
 		}
+	case "typealias_declaration", "protocol_typealias_declaration":
+		if !inFunc {
+			w.addTypealias(n, enclosing)
+		}
 	case "import_declaration":
 		w.addImport(n)
 	default:
@@ -232,6 +236,25 @@ func (w *swiftWalk) addEnumEntry(n node, enclosing int64) {
 	}
 }
 
+// addTypealias records a `typealias Foo = Bar` declaration as a KindType.
+func (w *swiftWalk) addTypealias(n node, enclosing int64) {
+	nm := n.childByFieldName("name")
+	if nm.isNull() || nm.kind() != "type_identifier" {
+		return
+	}
+	idx := int64(len(w.nodes))
+	w.nodes = append(w.nodes, topology.Node{
+		Kind:      topology.KindType,
+		Name:      nm.text(w.src),
+		Qualified: nm.text(w.src),
+		StartLine: w.line(n.startByte()),
+		EndLine:   w.line(n.endByte()),
+		Language:  "swift",
+		Path:      w.path,
+	})
+	w.containedBy(enclosing, idx)
+}
+
 func (w *swiftWalk) addImport(n node) {
 	id := n.childByType("identifier")
 	if id.isNull() {
@@ -291,6 +314,25 @@ func (w *swiftWalk) funcName(n node) string {
 	}
 	if id := n.childByType("simple_identifier"); !id.isNull() {
 		return id.text(w.src)
+	}
+	return w.operatorName(n)
+}
+
+// operatorName returns the operator token of an operator function (`static func
+// + …`) — the token immediately after the `func` keyword. Empty for a normal
+// function (whose name is a simple_identifier handled above).
+func (w *swiftWalk) operatorName(n node) string {
+	kids := n.children()
+	for i, c := range kids {
+		if c.kind() != "func" || i+1 >= len(kids) {
+			continue
+		}
+		op := kids[i+1]
+		t := strings.TrimSpace(op.text(w.src))
+		if t != "" && t != "(" && op.kind() != "simple_identifier" {
+			return t
+		}
+		return ""
 	}
 	return ""
 }

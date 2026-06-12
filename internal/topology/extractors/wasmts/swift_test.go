@@ -197,6 +197,36 @@ final class Handle {
 	}
 }
 
+// TestSwift_OperatorsAndTypealias confirms operator functions (named by their
+// operator token) and typealiases are extracted.
+func TestSwift_OperatorsAndTypealias(t *testing.T) {
+	src := []byte(`typealias Handler = (Int) -> Void
+
+struct Vec: Equatable {
+    let x: Double
+    typealias Scalar = Double
+    static func == (l: Vec, r: Vec) -> Bool { l.x == r.x }
+    static func + (l: Vec, r: Vec) -> Vec { l }
+}
+`)
+	nodes, _, err := NewSwift().Extract(context.Background(), "v.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	types := swiftNames(nodes, topology.KindType)
+	for _, want := range []string{"Handler", "Scalar"} {
+		if !slices.Contains(types, want) {
+			t.Errorf("typealias %q not extracted; types=%v", want, types)
+		}
+	}
+	methods := swiftNames(nodes, topology.KindMethod)
+	for _, want := range []string{"==", "+"} {
+		if !slices.Contains(methods, want) {
+			t.Errorf("operator method %q not extracted; methods=%v", want, methods)
+		}
+	}
+}
+
 // TestSwift_Containment confirms members are contained by their enclosing type.
 func TestSwift_Containment(t *testing.T) {
 	nodes, edges, err := NewSwift().Extract(context.Background(), "svc.swift", swiftSrc)
