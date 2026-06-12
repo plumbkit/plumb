@@ -5,10 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
 )
+
+// markerPresent reports whether root marker exists directly in dir. A marker
+// containing '*' is glob-matched (e.g. "*.xcodeproj" for an Xcode project whose
+// name is unknown ahead of time); otherwise it is an exact filename.
+func markerPresent(dir, marker string) bool {
+	if strings.ContainsRune(marker, '*') {
+		matches, _ := filepath.Glob(filepath.Join(dir, marker))
+		return len(matches) > 0
+	}
+	_, err := os.Stat(filepath.Join(dir, marker))
+	return err == nil
+}
 
 // LanguageNone is the sentinel language returned by Detect for workspaces
 // that are explicitly marked (via .plumb/) but have no enabled LSP language.
@@ -102,7 +115,7 @@ func homeFileInfo() os.FileInfo {
 func (p *workspacePool) strongLangAt(dir string) string {
 	for _, l := range p.langs {
 		for _, marker := range l.cfg.RootMarkers {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			if markerPresent(dir, marker) {
 				return l.name
 			}
 		}
@@ -130,7 +143,7 @@ func (p *workspacePool) hasActiveLanguage(name string) bool {
 func (p *workspacePool) weakLangAt(dir string) string {
 	for _, l := range p.langs {
 		for _, marker := range l.cfg.WeakRootMarkers {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			if markerPresent(dir, marker) {
 				return l.name
 			}
 		}

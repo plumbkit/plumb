@@ -396,7 +396,7 @@ func detectAnyLanguageAt(dir string, cfg config.Config) string {
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
 		for _, name := range langs {
 			for _, marker := range cfg.LSP[name].RootMarkers {
-				if _, err := os.Stat(filepath.Join(d, marker)); err == nil {
+				if markerPresent(d, marker) {
 					return name
 				}
 			}

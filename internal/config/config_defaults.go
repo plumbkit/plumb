@@ -100,9 +100,11 @@ var defaults = Config{
 			Enabled:     true,
 		},
 		"swift": {
-			Command:     "sourcekit-lsp",
-			Args:        []string{},
-			RootMarkers: []string{"Package.swift"},
+			Command: "sourcekit-lsp",
+			Args:    []string{},
+			// Package.swift is the SwiftPM root; *.xcodeproj/*.xcworkspace cover
+			// Xcode-app projects that have no SwiftPM manifest (glob-matched).
+			RootMarkers: []string{"Package.swift", "*.xcodeproj", "*.xcworkspace"},
 			Enabled:     true,
 		},
 		"zig": {
