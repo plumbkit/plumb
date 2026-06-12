@@ -230,7 +230,7 @@ type TopologyConfig struct {
 // These are TUI-layer preferences; project-local overrides are not supported.
 type UIConfig struct {
 	// Theme is the key of the active colour theme in tui.AvailableThemes.
-	// Default "nordico". Persisted by the TUI theme picker via SaveTheme.
+	// Default "plumb". Persisted by the TUI theme picker via SaveTheme.
 	Theme string `toml:"theme"`
 	// PathStyle controls how workspace folder paths are abbreviated in the
 	// Sessions sidebar. "compact" (default) shows the tilde-home prefix, the

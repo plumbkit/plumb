@@ -152,10 +152,10 @@ Layered and hot-reloaded (`gitPolicyFn`). Classification is *safe-biased* (`clas
 
 ```toml
 [ui]
-theme = "nordico"   # built-in theme name; must match a key in tui.AvailableThemes
+theme = "plumb"   # built-in theme name; must match a key in tui.AvailableThemes
 ```
 
-Built-ins: `nordico`, `darcula`, `dracula`, `gruvbox` (dark); `github-light`, `solarized-light` (light). Written live by the theme picker, read at startup; `config.Save` rewrites the whole file, so user TOML comments are lost on first save. Project config ignores `[ui]`.
+Built-ins: `nordico`, `darcula`, `dracula`, `gruvbox`, `plumb` (dark); `github-light`, `solarized-light`, `plumb-light` (light). The `plumb`/`plumb-light` pair is derived from the project website's own terracotta/sage palette (`site/index.html`). Written live by the theme picker, read at startup; `config.Save` rewrites the whole file, so user TOML comments are lost on first save. Project config ignores `[ui]`.
 
 ### `[lsp_query]` — LSP tool-call timeout
 

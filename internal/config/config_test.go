@@ -454,10 +454,10 @@ func TestLoadProject_OverridesWorkspace(t *testing.T) {
 	}
 }
 
-func TestDefaults_UIThemeIsNordico(t *testing.T) {
+func TestDefaults_UIThemeIsPlumb(t *testing.T) {
 	cfg := Defaults()
-	if cfg.UI.Theme != "nordico" {
-		t.Errorf("UI.Theme default = %q, want %q", cfg.UI.Theme, "nordico")
+	if cfg.UI.Theme != "plumb" {
+		t.Errorf("UI.Theme default = %q, want %q", cfg.UI.Theme, "plumb")
 	}
 }
 

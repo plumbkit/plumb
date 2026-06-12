@@ -76,6 +76,8 @@ func TestIsLightTheme_Classification(t *testing.T) {
 		{"gruvbox", false},
 		{"github-light", true},
 		{"solarized-light", true},
+		{"plumb", false},
+		{"plumb-light", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,9 +92,9 @@ func TestIsLightTheme_Classification(t *testing.T) {
 	}
 }
 
-// TestTheme_AllSixThemesRegistered guards against accidental omissions.
-func TestTheme_AllSixThemesRegistered(t *testing.T) {
-	want := []string{"darcula", "dracula", "github-light", "gruvbox", "nordico", "solarized-light"}
+// TestTheme_AllThemesRegistered guards against accidental omissions.
+func TestTheme_AllThemesRegistered(t *testing.T) {
+	want := []string{"darcula", "dracula", "github-light", "gruvbox", "nordico", "plumb", "plumb-light", "solarized-light"}
 	names := ThemeNames()
 	if len(names) != len(want) {
 		t.Errorf("len(ThemeNames()) = %d, want %d; got %v", len(names), len(want), names)

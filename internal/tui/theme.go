@@ -227,13 +227,61 @@ var SolarizedLight = Theme{
 	ChromaStyle:         "solarized-light",
 }
 
+// Plumb is the dark variant of plumb's own brand palette, lifted from the
+// project website (site/index.html): a warm near-black background with earthy
+// terracotta/amber accents and a sage green. Pairs with PlumbLight.
+var Plumb = Theme{
+	Accent:              lipgloss.Color("#E08A55"), // site dark --acc — warm amber
+	Border:              lipgloss.Color("#2E2F27"), // site dark --rule
+	PanelTitle:          lipgloss.Color("#ECE8DC"), // site dark --tx
+	TextPrimary:         lipgloss.Color("#ECE8DC"), // site dark --tx
+	TextSecondary:       lipgloss.Color("#D4CFC0"), // between --tx and --soft
+	TextMuted:           lipgloss.Color("#AAA595"), // site dark --soft
+	TextInactive:        lipgloss.Color("#3A3B31"), // dim — panel behind popup
+	TextFaded:           lipgloss.Color("#787465"), // site dark --faint — lost focus
+	TextHint:            lipgloss.Color("#B8B2A2"), // between --soft and --tx
+	Key:                 lipgloss.Color("#5CB88A"), // site dark --grn — sage
+	ItemText:            lipgloss.Color("#C9C4B5"), // soft light text
+	Success:             lipgloss.Color("#5CB88A"), // site dark --grn
+	Warning:             lipgloss.Color("#D9694A"), // warm red, distinct from amber accent
+	ScrollThumb:         lipgloss.Color("#E08A55"), // = Accent
+	ScrollTrack:         lipgloss.Color("#2E2F27"), // = Border
+	SelectionBackground: lipgloss.Color("#22231D"), // site dark --card2
+	ContrastText:        lipgloss.Color("0"),       // black — accent is bright amber
+	ChromaStyle:         "gruvbox",
+}
+
+// PlumbLight is the light variant of plumb's brand palette, lifted from the
+// project website (site/index.html): a warm off-white background with a deep
+// terracotta accent and forest green. Pairs with Plumb.
+var PlumbLight = Theme{
+	Accent:              lipgloss.Color("#B35A2E"), // site light --acc — terracotta
+	Border:              lipgloss.Color("#E5E2D8"), // site light --rule
+	PanelTitle:          lipgloss.Color("#191813"), // site light --tx
+	TextPrimary:         lipgloss.Color("#191813"), // site light --tx
+	TextSecondary:       lipgloss.Color("#56524A"), // site light --soft
+	TextMuted:           lipgloss.Color("#8D887C"), // site light --faint
+	TextInactive:        lipgloss.Color("#D8D4C8"), // dim — panel behind popup
+	TextFaded:           lipgloss.Color("#A8A294"), // lost focus
+	TextHint:            lipgloss.Color("#6E6A60"), // between --soft and --tx
+	Key:                 lipgloss.Color("#2F6E4F"), // site light --grn — forest
+	ItemText:            lipgloss.Color("#191813"), // site light --tx
+	Success:             lipgloss.Color("#2F6E4F"), // site light --grn
+	Warning:             lipgloss.Color("#B3302A"), // clear red, distinct from terracotta accent
+	ScrollThumb:         lipgloss.Color("#B35A2E"), // = Accent
+	ScrollTrack:         lipgloss.Color("#E5E2D8"), // = Border
+	SelectionBackground: lipgloss.Color("#F1EFE8"), // site light --card2
+	ContrastText:        lipgloss.Color("15"),      // white — accent is dark terracotta
+	ChromaStyle:         "gruvbox-light",
+}
+
 // ActiveTheme is the theme used by RebuildStyles. Set it before calling
-// tui.Run() to select a different built-in theme. Defaults to Nordico.
-var ActiveTheme = Nordico
+// tui.Run() to select a different built-in theme. Defaults to Plumb.
+var ActiveTheme = Plumb
 
 // ActiveThemeName is the key in AvailableThemes for the current ActiveTheme.
 // Updated by the theme picker alongside ActiveTheme.
-var ActiveThemeName = "nordico"
+var ActiveThemeName = "plumb"
 
 // AvailableThemes is the catalogue of built-in themes, keyed by the name
 // stored in the [ui] config section.
@@ -244,6 +292,8 @@ var AvailableThemes = map[string]Theme{
 	"gruvbox":         Gruvbox,
 	"github-light":    GithubLight,
 	"solarized-light": SolarizedLight,
+	"plumb":           Plumb,
+	"plumb-light":     PlumbLight,
 }
 
 // ThemeNames returns the sorted list of available theme names, used by the

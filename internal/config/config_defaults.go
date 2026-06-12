@@ -8,7 +8,7 @@ import (
 var defaults = Config{
 	LogLevel:  "info",
 	LogFormat: "text",
-	UI:        UIConfig{Theme: "nordico", PathStyle: "compact"},
+	UI:        UIConfig{Theme: "plumb", PathStyle: "compact"},
 	Cache: CacheConfig{
 		TTL:     Duration{5 * time.Minute},
 		MaxSize: 1000,
