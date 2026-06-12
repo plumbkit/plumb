@@ -2,7 +2,16 @@
 
 ## 0.9.19 (unreleased)
 
-Public website launch refresh: the modern landing page is now the published site, with refreshed logo-derived favicons and social preview assets.
+Public website launch refresh: the modern landing page is now the published site, with refreshed logo-derived favicons and social preview assets. Plus review-pass fixes to the 0.9.17 write-tool and detection work.
+
+### Fixed
+
+- **`edit_file` now computes its Myers edit script once per successful edit instead of twice.** `formatEditFileSuccess` ran `computeEditScript` over the same before/after content twice — once for the "lines changed" summary and again for the unified diff — so an edit with `show_write_diff` on (the default) paid the diff cost twice. The script is now computed once and shared by both via the new `summariseEditScript` and `renderUnifiedDiff` helpers; the public `summariseLineChanges`/`unifiedDiff` wrappers are unchanged for their other callers. Behaviour-preserving (covered by the existing `TestSummariseLineChanges*` and `edit_file` diff tests).
+- **Workspace language detection's display path now stops at `$HOME`.** `detectAnyLanguageAt` — which fills the TUI's "detected language" label for a `LanguageNone` workspace — walked ancestors with no `$HOME` boundary, unlike the authoritative `Detect`/`detectLanguageAt` walks fixed in 0.9.17, so a stray `~/package.json` (or other home marker) could cosmetically mislabel a markerless workspace beneath `$HOME`. It now stops at `$HOME` like the other walks. Guarded by `TestDetectAnyLanguageAt_StopsAtHome`.
+
+### Tests
+
+- **Closed two coverage gaps in the 0.9.17 Settings fixes:** `TestClampSettingsValueW` exercises the value-column clamp (the layout-corruption fix), and `TestHandlePasteMsg_Routing` exercises the paste-routing priority (list editor, rename-modal precedence, drop-when-no-input). Both were previously only exercised indirectly.
 
 ### Changed
 

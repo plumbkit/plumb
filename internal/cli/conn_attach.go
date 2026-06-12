@@ -393,7 +393,14 @@ func detectAnyLanguageAt(dir string, cfg config.Config) string {
 		}
 		return langs[i] < langs[j]
 	})
+	homeInfo := homeFileInfo()
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		// Stop at $HOME, mirroring the pool's Detect/detectLanguageAt walks: a stray
+		// marker in the home directory (e.g. a global ~/package.json) must not be
+		// reported as the detected language for a workspace beneath it.
+		if sameDirAs(d, homeInfo) {
+			return ""
+		}
 		for _, name := range langs {
 			for _, marker := range cfg.LSP[name].RootMarkers {
 				if markerPresent(d, marker) {

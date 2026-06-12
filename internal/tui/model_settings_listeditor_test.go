@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 func TestEditorFieldWidth(t *testing.T) {
 	tests := []struct {
@@ -60,4 +64,39 @@ func TestListEditorPaste(t *testing.T) {
 	if e.input != "/pasted/path/more" {
 		t.Fatalf("input after second paste = %q, want %q", e.input, "/pasted/path/more")
 	}
+}
+
+// TestHandlePasteMsg_Routing covers the priority order in handlePasteMsg: an
+// open list editor receives the paste, but an open rename modal outranks it, and
+// a paste with no text input active is dropped (never spilled into keybindings).
+func TestHandlePasteMsg_Routing(t *testing.T) {
+	t.Run("routes to the list editor when it is the only input", func(t *testing.T) {
+		m := Model{settingsListEditor: newListEditor(skReadRoots, "Read roots", nil)}
+		m = m.handlePasteMsg(tea.PasteMsg{Content: "  /pasted\n"})
+		if m.settingsListEditor.input != "/pasted" {
+			t.Fatalf("list editor input = %q, want %q (paste sanitised + routed)", m.settingsListEditor.input, "/pasted")
+		}
+	})
+
+	t.Run("rename modal outranks the list editor", func(t *testing.T) {
+		m := Model{
+			renameModal:        &renameSessionModal{},
+			settingsListEditor: newListEditor(skReadRoots, "Read roots", nil),
+		}
+		m = m.handlePasteMsg(tea.PasteMsg{Content: "name"})
+		if m.renameModal.input != "name" {
+			t.Fatalf("rename modal input = %q, want %q", m.renameModal.input, "name")
+		}
+		if m.settingsListEditor.input != "" {
+			t.Fatalf("list editor must not receive the paste when a rename modal is open; got %q", m.settingsListEditor.input)
+		}
+	})
+
+	t.Run("paste with no active input is dropped", func(t *testing.T) {
+		m := Model{}
+		m = m.handlePasteMsg(tea.PasteMsg{Content: "ignored"})
+		if m.memoryFilter != "" || m.logFilter != "" {
+			t.Fatalf("paste leaked into a filter: memoryFilter=%q logFilter=%q", m.memoryFilter, m.logFilter)
+		}
+	})
 }

@@ -28,10 +28,15 @@ func unifiedDiff(path, oldContent, newContent string) string {
 	if oldContent == newContent {
 		return ""
 	}
-	oldLines := diffSplitLines(oldContent)
-	newLines := diffSplitLines(newContent)
-	ops := computeEditScript(oldLines, newLines)
-	hunks := groupHunks(ops, 3)
+	script := computeEditScript(diffSplitLines(oldContent), diffSplitLines(newContent))
+	return renderUnifiedDiff(path, script)
+}
+
+// renderUnifiedDiff formats a pre-computed edit script as a unified diff. Split
+// from unifiedDiff so a caller that already has the script (formatEditFileSuccess,
+// which also feeds it to summariseEditScript) renders without a second Myers pass.
+func renderUnifiedDiff(path string, script editScript) string {
+	hunks := groupHunks(script, 3)
 	if len(hunks) == 0 {
 		return ""
 	}

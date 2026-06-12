@@ -54,7 +54,10 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 	if len(edits) > 1 {
 		noun = "edits"
 	}
-	summary := summariseLineChanges(before, content)
+	// Compute the edit script once and feed both the line summary and the diff,
+	// so a successful edit never pays two Myers passes over the same content.
+	script := computeEditScript(diffSplitLines(before), diffSplitLines(content))
+	summary := summariseEditScript(script)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "applied %d %s to %s %s", len(edits), noun, path, sizeSummary(content))
 	if attempt > 1 {
@@ -71,7 +74,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 		sb.WriteString(summary)
 	}
 	if t.deps.showWriteDiff() {
-		if d := unifiedDiff(path, before, content); d != "" {
+		if d := renderUnifiedDiff(path, script); d != "" {
 			sb.WriteString("\n")
 			sb.WriteString(d)
 		}

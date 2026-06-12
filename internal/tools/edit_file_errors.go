@@ -111,8 +111,14 @@ func summariseLineChanges(before, after string) string {
 	if before == after {
 		return ""
 	}
-	script := computeEditScript(diffSplitLines(before), diffSplitLines(after))
+	return summariseEditScript(computeEditScript(diffSplitLines(before), diffSplitLines(after)))
+}
 
+// summariseEditScript renders the compact "lines changed: …" summary from a
+// pre-computed edit script. Split from summariseLineChanges so a caller that
+// already has the script (formatEditFileSuccess, which also feeds it to
+// renderUnifiedDiff) summarises without a second Myers pass.
+func summariseEditScript(script editScript) string {
 	type rng struct{ start, end int }
 	var ranges []rng
 
