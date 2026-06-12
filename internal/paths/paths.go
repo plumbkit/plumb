@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/adrg/xdg"
 )
@@ -59,6 +60,14 @@ var (
 	// variable, so callers can surface it. Guarded by reloadMu (held whenever
 	// read or written).
 	recovered = map[string]Hijack{}
+	// recoveryDisabledInTest turns off hijack recovery while running under
+	// `go test`. Tests across the codebase sandbox XDG base dirs into temp
+	// directories but inherit the developer shell's TSM_ORIG_* companions, which
+	// would otherwise make recovery redirect those sandboxes back to the real
+	// base dirs — a test writing a fixture then clobbers the user's real config.
+	// Guarded by reloadMu. This package's own recovery tests flip it false via
+	// enableRecoveryForTest to exercise the real behaviour with fake values.
+	recoveryDisabledInTest = testing.Testing()
 )
 
 // RecoveredHijacks returns the session-manager hijacks plumb has detected and
@@ -157,11 +166,24 @@ func unhijack(envVar string) func() {
 // recoveredBase decides whether envVar has been hijacked into a temp directory
 // by a session manager and, if so, what value to use instead. It only acts when
 // the tsm-style TSM_ORIG_<var> companion is present — that companion is the
-// unambiguous signal that something rewrote the variable, and gating on it keeps
-// legitimate temp-dir XDG usage (CI, tests, sandboxes) untouched. Returns the
+// unambiguous signal that something rewrote the variable. Returns the
 // recovered value (empty ⇒ drop the override and use the OS-native default) and
 // whether a recovery applies.
+//
+// Recovery is disabled by default under `go test` (see recoveryDisabledInTest).
+// A test in any package that sandboxes a base dir into a temp directory
+// (t.TempDir + t.Setenv) inherits the developer's TSM_ORIG_* companion from a
+// tsm-managed shell; without this guard the companion would make recovery
+// redirect the sandbox back to the real ~/.config, so a test writing a config
+// fixture would clobber the user's actual config. Tests must own their base
+// dirs. This package's own recovery tests, which validate the recovery itself
+// with controlled fake values, opt back in via enableRecoveryForTest.
 func recoveredBase(envVar string) (value string, isHijacked bool) {
+	// Read under reloadMu (held by the base() caller), the same lock
+	// enableRecoveryForTest takes when flipping the flag.
+	if recoveryDisabledInTest {
+		return "", false
+	}
 	orig, hasOrig := os.LookupEnv("TSM_ORIG_" + envVar)
 	if !hasOrig {
 		return "", false

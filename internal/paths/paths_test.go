@@ -72,6 +72,7 @@ func TestConfigDir_HonoursTempXDGWithoutHijackSignal(t *testing.T) {
 // in TSM_ORIG_XDG_CONFIG_HOME. plumb must recover the stashed original rather
 // than land config in the throwaway dir.
 func TestConfigDir_RecoversTSMHijack(t *testing.T) {
+	enableRecoveryForTest(t)
 	hijacked := tempPath("tsm-501", ".fish", "plumb-4") // tsm's per-session temp dir
 	// A plausible real config home, deliberately not under any temp root.
 	orig := filepath.Join(string(filepath.Separator), "home", "fake", ".config")
@@ -89,6 +90,7 @@ func TestConfigDir_RecoversTSMHijack(t *testing.T) {
 // override and resolves the OS-native default rather than trusting either temp
 // path.
 func TestConfigDir_HijackWithTempOriginFallsBackToDefault(t *testing.T) {
+	enableRecoveryForTest(t)
 	hijacked := tempPath("tsm-501", "plumb-4")
 	origTemp := tempPath("tsm-501", "orig")
 	home := filepath.Join(string(filepath.Separator), "home", "fake")
@@ -108,6 +110,7 @@ func TestConfigDir_HijackWithTempOriginFallsBackToDefault(t *testing.T) {
 // TestRecoveredHijacks_ReportsRecovery confirms a recovered hijack is recorded
 // and surfaced (the daemon log and `plumb config show` read it from here).
 func TestRecoveredHijacks_ReportsRecovery(t *testing.T) {
+	enableRecoveryForTest(t)
 	reloadMu.Lock()
 	recovered = map[string]Hijack{} // isolate from any recovery recorded earlier in the run
 	reloadMu.Unlock()
@@ -164,6 +167,25 @@ func TestUnderTempDir(t *testing.T) {
 // session-manager hijack actually targets — independent of GOTMPDIR.
 func tempPath(parts ...string) string {
 	return filepath.Join(append([]string{os.TempDir()}, parts...)...)
+}
+
+// enableRecoveryForTest re-enables hijack recovery, which is disabled by default
+// under `go test` (recoveryDisabledInTest) so other packages' sandboxed XDG dirs
+// stay hermetic. Only this package's recovery tests need the real behaviour, and
+// they drive it with controlled fake values (never the real ~/.config), so they
+// cannot clobber anything. Restored on cleanup; serialised through reloadMu, the
+// lock recoveredBase reads the flag under.
+func enableRecoveryForTest(t *testing.T) {
+	t.Helper()
+	reloadMu.Lock()
+	prev := recoveryDisabledInTest
+	recoveryDisabledInTest = false
+	reloadMu.Unlock()
+	t.Cleanup(func() {
+		reloadMu.Lock()
+		recoveryDisabledInTest = prev
+		reloadMu.Unlock()
+	})
 }
 
 // unsetEnv clears key for the duration of the test, restoring its prior state on
