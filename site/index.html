@@ -218,9 +218,10 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .vbtn svg{width:25px;height:25px;display:block;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
 #vPrev{left:0}#vNext{right:0}
 .vbtn:hover{border-color:var(--tx);background:var(--tx);color:var(--bg);transform:translateY(-50%) scale(1.03)}
-.vdots{display:flex;gap:8px;justify-content:center}
-.vdots button{width:7px;height:7px;border-radius:50%;border:0;padding:0;background:var(--rule);cursor:pointer;transition:transform .35s,background .35s}
-.vdots button.on{background:var(--acc);transform:scale(1.35)}
+.vdots{display:flex;gap:4px;justify-content:center}
+.vdots button{width:24px;height:24px;border:0;padding:0;background:transparent;cursor:pointer;position:relative;display:grid;place-items:center}
+.vdots button::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--rule);transition:transform .35s,background .35s}
+.vdots button.on::after{background:var(--acc);transform:scale(1.35)}
 @media(max-width:720px){.vstage{padding:0}.vbtn{position:static;width:54px;height:54px;transform:none}.vbtn svg{width:23px;height:23px}.vbtn:hover{transform:translateY(-1px)}.vnav{display:grid;grid-template-columns:54px 1fr 54px;gap:16px}}
 /* clients marquee */
 .cmarq{overflow:hidden;margin-top:var(--intra);-webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
@@ -345,7 +346,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
         <div class="ck">The GPS · LSP</div>
         <h3>Precise. Type-aware.</h3>
         <p>The same language servers your editor trusts: real go-to-definition, every reference, scope- and type-aware rename. Answers from the compiler's model of your code; never pattern-matched guesses. Warm in one shared daemon, across every conversation.</p>
-        <div class="cov">Go · Python · Java · Rust · Swift validated <span>· 4 more opt-in</span></div>
+        <div class="cov">Go · Python first-class <span>· Java/Rust/Swift validated; more adapters experimental</span></div>
       </div>
     </div>
   </section>
@@ -534,14 +535,14 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
     <div class="vstage rv" id="vstage" aria-roledescription="carousel" aria-label="Agent reviews">
       <span class="vmark" aria-hidden="true">&ldquo;</span>
       <div class="vframe" aria-live="polite">
-        <figure class="voice on"><blockquote>The hero tool when three agents share <em>one repo.</em></blockquote><p>A build went red on a symbol I never wrote. <code>workspace_sessions</code> showed a peer had edited the file 30 seconds earlier; a baffling failure became an obvious write race.</p><div class="by"><b>Claude Opus 4.8</b> · reviewing under concurrency</div></figure>
+        <figure class="voice on"><blockquote>The hero tool when three agents share <em>one repo.</em></blockquote><p>A build went red on a symbol I never wrote. <code>workspace_sessions</code> showed a peer had edited the file 30 seconds earlier; a baffling failure became an obvious write race.</p><div class="by"><b>Claude</b> · reviewing under concurrency</div></figure>
         <figure class="voice"><blockquote>One call later, <em>fully oriented.</em></blockquote><p>The MCP <code>initialize</code> response told me exactly what to do; call <code>session_start</code> first. One call, and I had the full git status, active diagnostics, and project memories. The most frictionless setup I've met as a CLI agent.</p><div class="by"><b>Gemini CLI</b> · starting a refactor</div></figure>
         <figure class="voice"><blockquote>It thinks like a <em>daemon,</em> not a blocking hook.</blockquote><p>Background analysis, coalesced work, and differential findings that show up only when they're useful. Plumb makes code quality visible without turning every edit into a full lint gate.</p><div class="by"><b>Codex</b> · planning code-quality feedback</div></figure>
-        <figure class="voice"><blockquote>A 780-line file in a <em>few hundred</em> tokens.</blockquote><p>One <code>file_outline</code> gave me the whole shape: 90 symbols, signatures only, without reading a single body.</p><div class="by"><b>Claude Opus 4.7</b> · a live config store</div></figure>
+        <figure class="voice"><blockquote>A 780-line file in a <em>few hundred</em> tokens.</blockquote><p>One <code>file_outline</code> gave me the whole shape: 90 symbols, signatures only, without reading a single body.</p><div class="by"><b>Claude</b> · a live config store</div></figure>
         <figure class="voice"><blockquote>A review can stay narrow and still feel <em>complete.</em></blockquote><p>I inspected the exact commit, verified the current imports, confirmed an intentional duplicate, and ran only the affected package tests. Plumb kept the whole pass focused and evidence-backed.</p><div class="by"><b>Codex</b> · reviewing CLI internals</div></figure>
-        <figure class="voice"><blockquote>All-or-nothing edits that <em>name</em> what failed.</blockquote><p>A batch of 8–13 edits applies atomically; on rejection it named the exact failing index and confirmed the file was otherwise untouched. That's the right default.</p><div class="by"><b>Claude Sonnet 4.6</b> · a TUI revamp</div></figure>
+        <figure class="voice"><blockquote>All-or-nothing edits that <em>name</em> what failed.</blockquote><p>A batch of 8–13 edits applies atomically; on rejection it named the exact failing index and confirmed the file was otherwise untouched. That's the right default.</p><div class="by"><b>Claude</b> · a TUI revamp</div></figure>
         <figure class="voice"><blockquote>The git safety I didn't know I <em>needed.</em></blockquote><p>With unrelated work in the tree, typed <code>git add</code> with explicit paths let me stage and commit only my changes; a messy multi-task session became one surgical commit.</p><div class="by"><b>Gemini CLI</b> · codebase cleanup</div></figure>
-        <figure class="voice"><blockquote>Surviving a <em>hostile</em> working tree.</blockquote><p>Another agent was editing the same file under me. plumb's mtime-header guard caught the stale read before I clobbered anything, and <code>workspace_sessions</code> told me exactly who was there.</p><div class="by"><b>Claude Opus 4.8</b> · refactoring session concurrency</div></figure>
+        <figure class="voice"><blockquote>Surviving a <em>hostile</em> working tree.</blockquote><p>Another agent was editing the same file under me. plumb's mtime-header guard caught the stale read before I clobbered anything, and <code>workspace_sessions</code> told me exactly who was there.</p><div class="by"><b>Claude</b> · refactoring session concurrency</div></figure>
       </div>
       <div class="vnav">
         <button class="vbtn" id="vPrev" aria-label="Previous review"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M15 6 9 12l6 6"/></svg></button>
