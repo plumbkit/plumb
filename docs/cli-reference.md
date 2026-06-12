@@ -200,11 +200,12 @@ Inspect plumb's resolved configuration. See the
 | Subcommand | Description |
 |---|---|
 | `plumb config print` | Print the resolved configuration as TOML. |
-| `plumb config show [--workspace <dir>]` | Show the resolved configuration with **source provenance** — which layer (default, global, project, env) set each value. |
+| `plumb config show [--workspace <dir>]` | Show the resolved configuration with **source provenance** — which layer (default, global, project, env) set each value. Includes a **Directories** section listing plumb's config, data, state, log, and runtime directories. |
 
 | Flag | Applies to | Default | Effect |
 |---|---|---|---|
 | `--workspace <dir>` | `show` | current dir | Resolve project-layer config from this workspace. |
+| `--adapters` | `show` | off | Print only the language-server adapter table (language, server, validation tier, activation state). Aliases: `--adapter`, `--lsp`, `--lsps`, `--integration`, `--integrations`. |
 
 ---
 

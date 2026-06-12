@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/tui"
 )
@@ -53,7 +54,10 @@ var configPrintCmd = &cobra.Command{
 	},
 }
 
-var configShowWorkspace string
+var (
+	configShowWorkspace string
+	configShowAdapters  bool
+)
 
 var configShowCmd = &cobra.Command{
 	Use:   "show",
@@ -61,7 +65,11 @@ var configShowCmd = &cobra.Command{
 	Long: `Print the resolved configuration as plumb actually sees it, with each
 layer (defaults → global → project → env) labelled so you can tell where
 each value came from. Pass --workspace to include a project-local
-.plumb/config.toml in the merge.`,
+.plumb/config.toml in the merge.
+
+Pass --adapters to print only the language-server adapter table (language,
+server binary, validation tier, and live activation state). Aliases: --adapter,
+--lsp, --lsps, --integration, --integrations.`,
 	RunE: runConfigShow,
 }
 
@@ -89,6 +97,9 @@ restart are flagged by 'plumb config show'.`,
 func init() {
 	configShowCmd.Flags().StringVar(&configShowWorkspace, "workspace", "",
 		"Workspace directory to merge .plumb/config.toml from (defaults to current dir)")
+	configShowCmd.Flags().BoolVar(&configShowAdapters, "adapters", false,
+		"Print only the language-server adapter table (aliases: --adapter, --lsp, --lsps, --integration, --integrations)")
+	configShowCmd.Flags().SetNormalizeFunc(normaliseAdapterFlag)
 	configCmd.AddCommand(configPrintCmd, configShowCmd, configReloadCmd)
 }
 
@@ -116,12 +127,18 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	tui.RebuildStyles()
 	PrintLogo()
+	printRecoveredHijacks()
+
+	if configShowAdapters {
+		printAdaptersView(projectCfg)
+		return nil
+	}
 
 	tableBase := configShowTableBase
 
 	// 1. Workspace Context
 	fmt.Printf("Workspace Context\n")
-	ctxTable := tableBase().Headers("Context", "Exists", "Path")
+	ctxTable := tableBase().Headers("Context", "Exists", "Path").StyleFunc(configShowColStyle(1))
 
 	globalPath := config.GlobalConfigPath()
 	projectPath := config.ProjectConfigPath(ws)
@@ -134,18 +151,15 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	ctxTable.Row("workspace", tui.OkStyle.Render("✓"), contractConfigPath(ws))
 	fmt.Println(renderConfigShowTable(ctxTable))
 
+	// 1b. Directories — where plumb keeps its runtime, data, and log files.
+	printDirectoriesSection()
+
 	// 2. MCP Integration Status
 	fmt.Printf("\nMCP Integration Status\n")
 
 	mcpTable := configShowTableBase().
 		Headers("Client", "Exists", "Registered", "Path").
-		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().Padding(0, 1)
-			if row == table.HeaderRow {
-				return s.Inherit(tui.HintStyle)
-			}
-			return s
-		})
+		StyleFunc(configShowColStyle(1, 2))
 
 	for _, c := range allSetupClients() {
 		path, _ := c.pathFn()
@@ -256,6 +270,29 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	return nil
+}
+
+// printDirectoriesSection lists the base directories plumb resolves through
+// internal/paths — config, data, state, logs, and the runtime/cache dir — so a
+// user can find the daemon log folder, stats database, and socket without
+// reading the source. Paths are resolved (not created) here, so a directory the
+// daemon has not yet materialised shows as missing.
+func printDirectoriesSection() {
+	fmt.Printf("\nDirectories\n")
+	dirTable := configShowTableBase().Headers("Directory", "Exists", "Path", "Holds").
+		StyleFunc(configShowColStyle(1))
+
+	rows := []struct{ name, path, holds string }{
+		{"config", paths.ConfigDir(), "config.toml"},
+		{"data", paths.DataDir(), "sessions, stats.db"},
+		{"state", paths.StateDir(), "regenerable state"},
+		{"logs", paths.LogDir(), "daemon.log"},
+		{"runtime", paths.CacheDir(), "socket, pid, locks, version"},
+	}
+	for _, r := range rows {
+		dirTable.Row(r.name, existsIcon(r.path), contractConfigPath(r.path), tui.MutedStyle.Render(r.holds))
+	}
+	fmt.Println(renderConfigShowTable(dirTable))
 }
 
 func formatConfigVal(val string) string {
