@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5150 2320" role="img" aria-label="plumb" fill="#1c1a16">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5150 2320" role="img" aria-label="plumb" fill="currentColor">
   <!-- plumb wordmark. p = mirrored b; bowl provides the full stem; descender bob is a hollow diamond (true transparent centre via mask). -->
   <defs><clipPath id='bc' clipPathUnits='userSpaceOnUse'><rect x='-300' y='-336.5' width='2200' height='2936.5'/></clipPath><mask id='hole' maskUnits='userSpaceOnUse' x='-300' y='-1000' width='2200' height='4000'><rect x='-300' y='-1000' width='2200' height='4000' fill='#fff'/><path d='M201.00 -302.58 L312.05 -426.95 L201.00 -598.70 L89.95 -426.95 Z' fill='#000'/></mask></defs>
   <g transform="translate(0,1560) scale(1,-1)">

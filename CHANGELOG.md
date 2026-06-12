@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.19 (unreleased)
+
+Public website launch refresh: the modern landing page is now the published site, with refreshed logo-derived favicons and social preview assets.
+
+### Changed
+
+- **The public website now uses the modern multi-agent launch page.** `site/index.html` has been replaced with the polished modern page, the temporary draft HTML files have been removed, and the page now ships with refreshed favicon and Open Graph assets generated from the plumb logo.
+
 ## 0.9.18 (unreleased)
 
 Swift's structural extraction moved off the pure-Go gotreesitter port onto the canonical grammar compiled to WASM, fixing the implicitly-unwrapped-optional collapse at the root, plus a dependency refresh.

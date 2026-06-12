@@ -1,18 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <!-- plumb social card · 1200x630. Source for og-image.png — regenerate with: rsvg-convert og-image.svg -o og-image.png -->
-  <!-- palette mirrors site/index.html :root -->
-  <rect width="1200" height="630" fill="#f3efe6"/>
+  <!-- palette mirrors the launch site dark theme -->
+  <rect width="1200" height="630" fill="#121310"/>
 
-  <!-- editorial double frame -->
-  <rect x="28" y="28" width="1144" height="574" fill="none" stroke="#d6cfbf" stroke-width="1.5"/>
-  <rect x="36" y="36" width="1128" height="558" fill="none" stroke="#d6cfbf" stroke-width="1"/>
+  <!-- quiet editorial frame -->
+  <rect x="30" y="30" width="1140" height="570" fill="none" stroke="#2e2f27" stroke-width="1.5"/>
+  <rect x="40" y="40" width="1120" height="550" fill="none" stroke="#24251f" stroke-width="1"/>
 
   <!-- kicker -->
-  <text x="100" y="150" font-family="JetBrains Mono, monospace" font-size="20" font-weight="500"
-        letter-spacing="4.8" fill="#a4502b">IDE INTELLIGENCE FOR AI AGENTS</text>
+  <text x="100" y="130" font-family="JetBrains Mono, ui-monospace, monospace" font-size="19" font-weight="500"
+        letter-spacing="5" fill="#e08a55">THE WORKSPACE LAYER FOR AGENT FLEETS</text>
 
   <!-- plumb wordmark (exact vectors from logo.svg) -->
-  <svg x="94" y="196" width="500" height="225" viewBox="0 0 5150 2320" fill="#1c1a16">
+  <svg x="96" y="170" width="520" height="234" viewBox="0 0 5150 2320" fill="#ece8dc">
     <defs><clipPath id='bc' clipPathUnits='userSpaceOnUse'><rect x='-300' y='-336.5' width='2200' height='2936.5'/></clipPath><mask id='hole' maskUnits='userSpaceOnUse' x='-300' y='-1000' width='2200' height='4000'><rect x='-300' y='-1000' width='2200' height='4000' fill='#fff'/><path d='M201.00 -302.58 L312.05 -426.95 L201.00 -598.70 L89.95 -426.95 Z' fill='#000'/></mask></defs>
     <g transform="translate(0,1560) scale(1,-1)">
       <g mask='url(#hole)'><g clip-path='url(#bc)'><g transform='translate(0 873) scale(1 -1)'><path d='M303 1467V76.5L119 -6Q115.5 -8 111.75 -9.5Q108 -11 104 -11Q100.5 -11 97.75 -8.5Q95 -6 95 -2V1375Q95 1380.5 92.25 1383.75Q89.5 1387 82.5 1387H11Q7 1387 5.0 1389.0Q3 1391 3 1393.5Q3 1397 5.25 1398.5Q7.5 1400 11 1401L274.5 1474.5Q283 1477 286.25 1477.5Q289.5 1478 293 1478Q298 1478 300.5 1474.75Q303 1471.5 303 1467ZM288 721 278 732Q354 821.5 422.5 857.25Q491 893 574 893Q680 893 762.75 840.5Q845.5 788 892.75 691.0Q940 594 940 460.5Q940 316 887.5 207.75Q835 99.5 742.0 39.75Q649 -20 528 -20Q428 -20 362.0 20.75Q296 61.5 255 131L272 139Q302.5 79 354.75 43.5Q407 8 478 8Q547 8 603.75 52.0Q660.5 96 694.0 191.5Q727.5 287 727.5 440.5Q727.5 580 698.75 670.75Q670 761.5 619.75 806.25Q569.5 851 504 851Q453.5 851 397.5 820.25Q341.5 789.5 288 721Z'/></g></g><path d='M201.00 -220.00 L381.00 -421.60 L201.00 -700.00 L21.00 -421.60 Z'/></g>
@@ -23,13 +23,15 @@
     </g>
   </svg>
 
-  <!-- tagline · serif italic -->
-  <text x="100" y="500" font-family="Georgia, serif" font-style="italic" font-size="46" fill="#4a463d">an instrument for thinking machines</text>
+  <!-- launch claim -->
+  <text x="100" y="468" font-family="Inter, Arial, sans-serif" font-size="46" font-weight="700" fill="#ece8dc">One workspace. Every agent.</text>
+  <text x="100" y="522" font-family="Inter, Arial, sans-serif" font-size="46" font-weight="700" fill="#e08a55">Zero collisions.</text>
 
   <!-- footer strip · mono -->
-  <text x="100" y="556" font-family="JetBrains Mono, monospace" font-size="19" fill="#8a8475">50 tools over MCP&#160;&#160;&#183;&#160;&#160;real language servers&#160;&#160;&#183;&#160;&#160;open source, MIT</text>
+  <text x="100" y="570" font-family="JetBrains Mono, ui-monospace, monospace" font-size="18" fill="#aaa595">real language servers · concurrency-safe edits · open source, MIT</text>
 
-  <!-- accent · descender-diamond echo, rust -->
-  <path d="M1086 232 L1116 198 L1086 150 L1056 198 Z" fill="#a4502b"/>
-  <path d="M1086 300 L1124 257 L1086 198 L1048 257 Z" fill="#2f5141"/>
+  <!-- accent · descender-diamond echo, rust/green -->
+  <path d="M1046 172 L1082 132 L1046 74 L1010 132 Z" fill="#e08a55"/>
+  <path d="M1046 250 L1092 198 L1046 132 L1000 198 Z" fill="#264535"/>
+  <path d="M1046 171 L1068 146 L1046 109 L1024 146 Z" fill="#121310"/>
 </svg>
