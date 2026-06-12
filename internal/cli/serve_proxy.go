@@ -521,10 +521,12 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 			answered := p.initializeAnswered
 			p.initializeAnswered = true
 			// The replayed response comes from the freshly started daemon — the
-			// version the upcoming reconnect note must report.
-			if v := serverInfoVersion(frame); v != "" {
-				p.daemonVersion = v
-			}
+			// version the upcoming reconnect note must report. Adopt it
+			// *unconditionally*, including "" for a legacy daemon with no
+			// serverInfo: a modern→legacy replacement must fall back to the proxy
+			// version in the note, not keep reporting the dead modern daemon's
+			// stale version.
+			p.daemonVersion = serverInfoVersion(frame)
 			p.hsMu.Unlock()
 			if !answered {
 				p.writeClient(frame)

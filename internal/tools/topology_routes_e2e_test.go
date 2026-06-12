@@ -12,7 +12,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/topology"
-	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
+	"github.com/plumbkit/plumb/internal/topology/extractors/wasmts"
 )
 
 // TestTopologyRoutes_ArgumentParserEndToEnd indexes a real Swift ArgumentParser
@@ -37,8 +37,11 @@ struct Greet: ParsableCommand {
 		t.Fatal(err)
 	}
 
+	// Use the production Swift extractor (wasmts, the canonical-grammar WASM
+	// route) so this e2e exercises the real route path, not the init-failure
+	// fallback (treesitter.NewSwift).
 	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
-		[]topology.Extractor{treesitter.NewSwift()})
+		[]topology.Extractor{wasmts.NewSwift()})
 	if err != nil {
 		t.Fatalf("topology.Open: %v", err)
 	}

@@ -402,6 +402,51 @@ func TestProxyReconnectNote_LegacyDaemonShape(t *testing.T) {
 	_ = h.clientIn.Close()
 }
 
+// TestProxyReconnectNote_ModernThenLegacy: a modern daemon (one that reports a
+// serverInfo.version) is replaced on reconnect by a legacy one (no serverInfo).
+// The note must fall back to the proxy's own version, NOT keep reporting the
+// dead modern daemon's stale version. Regression for consumeInitializeResponse
+// only capturing the version when non-empty (which left the modern version
+// cached across a modern→legacy replacement).
+func TestProxyReconnectNote_ModernThenLegacy(t *testing.T) {
+	t.Parallel()
+
+	_, initialProxySide := newPipeDaemon(func(m *mockDaemon) {
+		m.crashOnTool = true
+		m.version = "2.0.0-orig" // modern initial daemon: reports a version
+	})
+	h := startProxy(t, initialProxySide, 0, 0)
+	_, replProxySide := newPipeDaemon(func(m *mockDaemon) {
+		m.mcpToolResult = true
+		m.noServerInfo = true // legacy replacement: no serverInfo at all
+	})
+	h.dialQueue <- replProxySide
+
+	h.start()
+	h.handshake() // captures the modern daemon's "2.0.0-orig"
+
+	h.write(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}`)
+	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":5`) {
+		t.Fatalf("expected synthesised error for in-flight id 5, got %q", frame)
+	}
+
+	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
+	frame := h.read(10 * time.Second)
+	if !strings.Contains(frame, "daemon reconnected") {
+		t.Fatalf("expected reconnect note, got %q", frame)
+	}
+	if !strings.Contains(frame, "(now "+Version+")") {
+		t.Fatalf("a legacy replacement must fall back to the proxy version, got %q", frame)
+	}
+	if strings.Contains(frame, "2.0.0-orig") {
+		t.Fatalf("note must not report the dead modern daemon's stale version, got %q", frame)
+	}
+	if strings.Contains(frame, "serve proxy is still") {
+		t.Fatalf("fallback must not claim a version lag, got %q", frame)
+	}
+	_ = h.clientIn.Close()
+}
+
 // TestTrackOutstanding_LateTrackAfterReconnect: the daemon dies — and the
 // reconnect sweep runs — in the gap between a successful write and
 // trackOutstanding's store (track-after-write). The post-store generation

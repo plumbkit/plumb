@@ -5,6 +5,7 @@
 # from docs/demos/.
 .git
 .testcache
+.plumb
 /plumb
 *.pprof
 *.test
