@@ -150,7 +150,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTopologyStatus(topoFn, s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewTopologySearch(topoFn).WithSemantics(s.semanticRerank))
 	srv.Register(tools.NewTopologyExplore(topoFn).WithMemories(s.workspace))
-	srv.Register(tools.NewTopologyImpact(topoFn).WithCrossFileCallers(tools.NewLSPCrossFileCallers(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout)))
+	srv.Register(tools.NewTopologyImpact(topoFn).WithCrossFileCallers(tools.NewLSPCrossFileCallers(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace)))
 	srv.Register(tools.NewTopologyAffected(topoFn).WithMemories(s.workspace))
 	srv.Register(tools.NewTopologyRoutes(topoFn))
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspace))

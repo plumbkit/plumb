@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,13 +37,25 @@ type CrossFileCallersFunc func(ctx context.Context, path, name string) []CallerS
 // SelectionRange (the same position get_definition/find_references query),
 // requests its references, and keeps those outside the symbol's own file.
 // Returns nil when client is nil.
-func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) CrossFileCallersFunc {
+//
+// workspaceFn supplies the current workspace root (evaluated per call, so a
+// re-pinned connection is handled). It absolutises the incoming path: topology
+// node paths are workspace-relative, but the language server needs an absolute
+// file:// URI, so a relative path is joined onto the root before the query.
+func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, workspaceFn func() string) CrossFileCallersFunc {
 	if client == nil {
 		return nil
 	}
 	return func(ctx context.Context, path, name string) []CallerSite {
 		if name == "" || path == "" {
 			return nil
+		}
+		root := ""
+		if workspaceFn != nil {
+			root = workspaceFn()
+		}
+		if !filepath.IsAbs(path) && root != "" {
+			path = filepath.Join(root, path)
 		}
 		uri := toFileURI(path)
 
@@ -63,7 +76,7 @@ func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time
 		if err != nil {
 			return nil
 		}
-		return crossFileSites(locs, uri)
+		return crossFileSites(locs, uri, root)
 	}
 }
 
@@ -92,8 +105,10 @@ func cachedDocumentSymbols(ctx context.Context, client lsp.Client, c *cache.Cach
 }
 
 // crossFileSites distils reference locations into distinct caller sites outside
-// selfURI, ordered by path then line for deterministic output.
-func crossFileSites(locs []protocol.Location, selfURI string) []CallerSite {
+// selfURI, ordered by path then line for deterministic output. Paths are made
+// workspace-relative when they fall under workspaceRoot, so the block matches
+// topology's relative-path style; paths outside the root stay absolute.
+func crossFileSites(locs []protocol.Location, selfURI, workspaceRoot string) []CallerSite {
 	self := strings.TrimPrefix(selfURI, "file://")
 	seen := map[string]bool{}
 	var out []CallerSite
@@ -102,6 +117,7 @@ func crossFileSites(locs []protocol.Location, selfURI string) []CallerSite {
 		if p == self {
 			continue // intra-file: the topology call graph already covers it
 		}
+		p = relativeToRoot(p, workspaceRoot)
 		line := int(l.Range.Start.Line) + 1
 		key := p + ":" + strconv.Itoa(line)
 		if seen[key] {
@@ -117,4 +133,18 @@ func crossFileSites(locs []protocol.Location, selfURI string) []CallerSite {
 		return out[i].Line < out[j].Line
 	})
 	return out
+}
+
+// relativeToRoot returns p relative to root when p is inside it, else p
+// unchanged. Keeps the cross-file caller block consistent with topology's
+// workspace-relative paths.
+func relativeToRoot(p, root string) string {
+	if root == "" {
+		return p
+	}
+	rel, err := filepath.Rel(root, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return p
+	}
+	return rel
 }

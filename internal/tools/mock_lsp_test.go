@@ -25,6 +25,7 @@ type mockLSP struct {
 	// start (the keyword). See TestGetDefinition_ByName_UsesSelectionRange.
 	lastDefPos protocol.Position
 	lastRefPos protocol.Position
+	lastRefURI string // URI of the most recent References call (asserts path absolutisation)
 }
 
 func (m *mockLSP) Initialize(_ context.Context, _ protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -72,6 +73,7 @@ func (m *mockLSP) Definition(_ context.Context, p protocol.DefinitionParams) ([]
 
 func (m *mockLSP) References(_ context.Context, p protocol.ReferenceParams) ([]protocol.Location, error) {
 	m.lastRefPos = p.Position
+	m.lastRefURI = p.TextDocument.URI
 	return m.locations, m.err
 }
 
