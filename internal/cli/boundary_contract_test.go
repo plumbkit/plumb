@@ -68,7 +68,7 @@ var knownToolGuarding = map[string]string{
 	"NewTopologySearch":   "none",
 	"NewWorkspaceSearch":  "none", // queries the pinned connection's indexes; no user path input
 	"NewTopologyExplore":  "none",
-	"NewTopologyImpact":   "none",
+	"NewTopologyImpact":   "none", // topology DB by name; the LSP cross-file caller enrichment routes through the proxy-guarded sessionProxy, no direct user path input
 	"NewTopologyAffected": "none", // queries the topology DB by symbol/file name; no direct FS access
 	"NewTopologyRoutes":   "none",
 	"NewStructuralQuery":  "none", // queries the topology DB; reads bodies only under the pinned workspace root, no user path input

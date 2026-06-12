@@ -120,14 +120,14 @@ func (t *GetDefinition) executeByName(ctx context.Context, uri, name string) (st
 
 	if len(matches) == 1 {
 		sym := matches[0]
-		return t.executeByPosition(ctx, uri, sym.Range.Start.Line, sym.Range.Start.Character)
+		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character)
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d matches for %q:\n", len(matches), name)
 	for _, sym := range matches {
-		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.Range.Start.Line+1)
-		result, err := t.executeByPosition(ctx, uri, sym.Range.Start.Line, sym.Range.Start.Character)
+		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
+		result, err := t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue

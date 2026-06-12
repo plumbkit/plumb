@@ -135,14 +135,14 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 	if len(matches) == 1 {
 		sym := matches[0]
-		return t.executeByPosition(ctx, uri, sym.Range.Start.Line, sym.Range.Start.Character, includeDecl)
+		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl)
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "References for %q (%d symbol matches):\n", name, len(matches))
 	for _, sym := range matches {
-		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.Range.Start.Line+1)
-		result, err := t.queryReferences(ctx, uri, sym.Range.Start.Line, sym.Range.Start.Character, includeDecl)
+		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
+		result, err := t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue

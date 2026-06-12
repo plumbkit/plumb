@@ -55,11 +55,23 @@ var topologyImpactSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type TopologyImpact struct {
 	storeFn func() *topology.Store
+	// callersFn, when set, supplies cross-file caller sites for a callable
+	// centre symbol via the language server — the topology call graph is
+	// intra-file only, so this fills the cross-file/cross-package caller gap.
+	callersFn CrossFileCallersFunc
 }
 
 // NewTopologyImpact returns a new TopologyImpact tool.
 func NewTopologyImpact(storeFn func() *topology.Store) *TopologyImpact {
 	return &TopologyImpact{storeFn: storeFn}
+}
+
+// WithCrossFileCallers wires an LSP-backed cross-file caller resolver so the
+// inward section is augmented with callers in other files. Returns the receiver
+// for chaining; a nil fn leaves the tool topology-only.
+func (t *TopologyImpact) WithCrossFileCallers(fn CrossFileCallersFunc) *TopologyImpact {
+	t.callersFn = fn
+	return t
 }
 
 func (*TopologyImpact) Name() string                 { return "topology_impact" }
@@ -68,7 +80,10 @@ func (*TopologyImpact) Description() string {
 	return "Bidirectional BFS blast-radius analysis around a named symbol. " +
 		"Returns two sections: 'depends on' (outward — what the symbol depends on) and " +
 		"'depended on by' (inward — what depends on this symbol). " +
-		"Primary use: assess blast radius before a refactor. Source is 'topology' (approximate). " +
+		"Primary use: assess blast radius before a refactor. Source is 'topology' (approximate); " +
+		"the topology call graph is intra-file, so for a function/method the inward section is " +
+		"augmented with a 'cross-file callers' block resolved via the language server (source=lsp) " +
+		"when one is available. " +
 		"Returns a clear message when topology is disabled or the symbol is not in the index."
 }
 
@@ -98,7 +113,8 @@ func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatImpactResult(result, a, alts), nil
+	callers := t.crossFileCallers(ctx, result)
+	return formatImpactResult(result, a, alts, callers), nil
 }
 
 func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
@@ -152,7 +168,26 @@ func (t *TopologyImpact) run(ctx context.Context, store *topology.Store, a topol
 	return result, cands[1:], nil
 }
 
-func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs, alts []topology.Node) string {
+// crossFileCallers resolves cross-file caller sites for the centre symbol when a
+// resolver is wired and the symbol is callable (function/method/test). Returns
+// nil otherwise — the topology call graph already covers same-file callers.
+func (t *TopologyImpact) crossFileCallers(ctx context.Context, result *topology.ImpactResult) []CallerSite {
+	if t.callersFn == nil || result == nil {
+		return nil
+	}
+	switch string(result.Centre.Kind) {
+	case "function", "method", "test":
+		return t.callersFn(ctx, result.Centre.Path, result.Centre.Name)
+	default:
+		return nil
+	}
+}
+
+// maxCrossFileCallerSites caps the cross-file caller block so a heavily-called
+// symbol cannot flood the output; the rest are summarised as a remainder.
+const maxCrossFileCallerSites = 25
+
+func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs, alts []topology.Node, callers []CallerSite) string {
 	if result == nil {
 		return fmt.Sprintf("topology_impact: symbol %q not found in the index", a.Name)
 	}
@@ -168,8 +203,30 @@ func formatImpactResult(result *topology.ImpactResult, a topologyImpactArgs, alt
 	writeImpactSection(&sb, "depends on (outward)", result.DependsOn)
 	sb.WriteString("\n")
 	writeImpactSection(&sb, "depended on by (inward)", result.DependedOnBy)
+	writeCrossFileCallers(&sb, callers)
 
 	return strings.TrimRight(sb.String(), "\n") + topologyAmbiguityNote(a.Name, alts)
+}
+
+// writeCrossFileCallers appends the LSP-resolved cross-file caller block under
+// the inward section. The topology call graph is intra-file, so these callers
+// (in other files/packages) are not in result.DependedOnBy; they are labelled
+// source=lsp to keep the provenance honest. A no-op when there are none.
+func writeCrossFileCallers(sb *strings.Builder, callers []CallerSite) {
+	if len(callers) == 0 {
+		return
+	}
+	shown := callers
+	if len(shown) > maxCrossFileCallerSites {
+		shown = shown[:maxCrossFileCallerSites]
+	}
+	fmt.Fprintf(sb, "  cross-file callers (source=lsp, %d site(s)):\n", len(callers))
+	for _, c := range shown {
+		fmt.Fprintf(sb, "    %s:%d\n", c.Path, c.Line)
+	}
+	if len(callers) > len(shown) {
+		fmt.Fprintf(sb, "    [+%d more]\n", len(callers)-len(shown))
+	}
 }
 
 func writeImpactSection(sb *strings.Builder, label string, nb *topology.Neighbourhood) {

@@ -62,11 +62,35 @@ func TestTopologyAmbiguityNote(t *testing.T) {
 
 func TestTopologyImpact_FormatNilResult(t *testing.T) {
 	a := topologyImpactArgs{Name: "foo", Depth: 3, EdgeKinds: []string{"calls"}}
-	out := formatImpactResult(nil, a, nil)
+	out := formatImpactResult(nil, a, nil, nil)
 	if strings.Contains(out, "disabled") {
 		t.Errorf("nil result is a not-found case, not 'disabled'; got: %s", out)
 	}
 	if !strings.Contains(out, "not found in the index") {
 		t.Errorf("expected not-found message, got: %s", out)
+	}
+}
+
+// TestWriteCrossFileCallers_LabelAndCap covers the LSP cross-file caller block:
+// nothing when empty, an lsp-labelled count, and a capped list with a remainder.
+func TestWriteCrossFileCallers_LabelAndCap(t *testing.T) {
+	var none strings.Builder
+	writeCrossFileCallers(&none, nil)
+	if none.Len() != 0 {
+		t.Errorf("expected no output for no callers, got %q", none.String())
+	}
+
+	var callers []CallerSite
+	for i := 0; i < maxCrossFileCallerSites+5; i++ {
+		callers = append(callers, CallerSite{Path: "x.go", Line: i + 1})
+	}
+	var sb strings.Builder
+	writeCrossFileCallers(&sb, callers)
+	out := sb.String()
+	if !strings.Contains(out, "cross-file callers (source=lsp, 30 site(s))") {
+		t.Errorf("expected labelled total count, got:\n%s", out)
+	}
+	if !strings.Contains(out, "[+5 more]") {
+		t.Errorf("expected remainder note for the cap, got:\n%s", out)
 	}
 }

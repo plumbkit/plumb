@@ -18,6 +18,13 @@ type mockLSP struct {
 	err          error
 	renameResult *protocol.WorkspaceEdit // returned by Rename when non-nil
 	block        bool                    // when true, query methods wait for ctx cancellation
+
+	// lastDefPos / lastRefPos record the Position of the most recent
+	// Definition / References call, so a test can assert the tool queried the
+	// identifier (DocumentSymbol SelectionRange) rather than the declaration
+	// start (the keyword). See TestGetDefinition_ByName_UsesSelectionRange.
+	lastDefPos protocol.Position
+	lastRefPos protocol.Position
 }
 
 func (m *mockLSP) Initialize(_ context.Context, _ protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -58,11 +65,13 @@ func (m *mockLSP) DocumentSymbols(ctx context.Context, _ protocol.DocumentSymbol
 	return m.docSymbols, m.err
 }
 
-func (m *mockLSP) Definition(_ context.Context, _ protocol.DefinitionParams) ([]protocol.Location, error) {
+func (m *mockLSP) Definition(_ context.Context, p protocol.DefinitionParams) ([]protocol.Location, error) {
+	m.lastDefPos = p.Position
 	return m.locations, m.err
 }
 
-func (m *mockLSP) References(_ context.Context, _ protocol.ReferenceParams) ([]protocol.Location, error) {
+func (m *mockLSP) References(_ context.Context, p protocol.ReferenceParams) ([]protocol.Location, error) {
+	m.lastRefPos = p.Position
 	return m.locations, m.err
 }
 
