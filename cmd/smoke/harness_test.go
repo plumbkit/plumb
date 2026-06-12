@@ -320,6 +320,16 @@ func (c *mcpClient) send(method string, params any) (json.RawMessage, error) {
 		}
 		msg["params"] = json.RawMessage(b)
 	}
+	// Register the pending response channel BEFORE writing the request, closing
+	// the send→recv race: a daemon that answers faster than the caller reaches
+	// recv() would otherwise have its response dropped by readLoop (no pending
+	// entry yet), hanging the call until timeout. Surfaced as an intermittent,
+	// load-sensitive, tool-agnostic smoke-test "hang".
+	c.pendingMu.Lock()
+	if _, exists := c.pending[string(rawID)]; !exists {
+		c.pending[string(rawID)] = make(chan mcpMsg, 1)
+	}
+	c.pendingMu.Unlock()
 	c.encMu.Lock()
 	err := c.enc.Encode(msg)
 	c.encMu.Unlock()
@@ -338,12 +348,18 @@ func (c *mcpClient) notify(method string, params any) error {
 	return c.enc.Encode(msg)
 }
 
-// recv waits for the response matching the given id within deadline.
+// recv waits for the response matching the given id within deadline. The
+// pending channel is normally registered by send() before the request was
+// written (closing the send→recv drop race); recv reuses it, registering one
+// only if a caller used recv without a prior send().
 func (c *mcpClient) recv(id json.RawMessage, timeout time.Duration) (mcpMsg, error) {
 	key := string(id)
-	ch := make(chan mcpMsg, 1)
 	c.pendingMu.Lock()
-	c.pending[key] = ch
+	ch := c.pending[key]
+	if ch == nil {
+		ch = make(chan mcpMsg, 1)
+		c.pending[key] = ch
+	}
 	c.pendingMu.Unlock()
 	defer func() {
 		c.pendingMu.Lock()
