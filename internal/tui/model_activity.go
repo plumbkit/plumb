@@ -123,19 +123,14 @@ func (m Model) renderTokenSavingsBox(dimmed bool) []string {
 		valueStyle = InactiveStyle
 	}
 
-	const (
-		barWidth = 12
-	)
-
 	titleText := " Token Efficiency "
 	value := stats.FormatSavings(int(m.tokenSavings))
+	// 3 = leading space + space before value + trailing space
+	minInnerWidth := lipgloss.Width("─") + lipgloss.Width(titleText) + 2
+	barWidth := max(minInnerWidth-3-lipgloss.Width(value), 1)
+	innerWidth := max(1+barWidth+1+lipgloss.Width(value)+1, minInnerWidth)
 	filledPart, unfilledPart := tokenSavingsBar(m.tokenSavings, barWidth)
 	content := " " + barStyle.Render(filledPart) + border.Render(unfilledPart) + " " + valueStyle.Render(value) + " "
-	innerWidth := lipgloss.Width(content)
-	minInnerWidth := lipgloss.Width("─") + lipgloss.Width(titleText)
-	if innerWidth < minInnerWidth {
-		innerWidth = minInnerWidth
-	}
 	topFill := max(innerWidth-lipgloss.Width("─")-lipgloss.Width(titleText), 0)
 
 	return []string{
