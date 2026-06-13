@@ -72,9 +72,13 @@ var defaults = Config{
 	},
 	LSP: map[string]LSPConfig{
 		"go": {
-			Command:     "gopls",
-			Args:        []string{},
-			RootMarkers: []string{"go.mod"},
+			Command: "gopls",
+			Args:    []string{},
+			// go.work is a strong Go root too: it mounts a multi-module workspace
+			// (e.g. a vendored repo or a submodule) whose modules may live in
+			// subdirectories, so the go.work directory — not the nested go.mod — is
+			// the root gopls wants.
+			RootMarkers: []string{"go.mod", "go.work"},
 			Enabled:     true,
 		},
 		"python": {

@@ -66,7 +66,7 @@ func detectTestPool() *workspacePool {
 		cacheTTL: time.Minute, // mirror production: a zero TTL would panic cache.New's ticker
 		langs: []langConfig{
 			{name: "go", cfg: config.LSPConfig{
-				RootMarkers: []string{"go.mod"},
+				RootMarkers: []string{"go.mod", "go.work"},
 				Enabled:     true,
 			}},
 			{name: "python", cfg: config.LSPConfig{
@@ -266,6 +266,27 @@ func TestDetect_LanguageMarkerWinsOverGit(t *testing.T) {
 	}
 	if lang != "go" {
 		t.Errorf("language: got %s, want go (go.mod must beat .git)", lang)
+	}
+}
+
+// TestDetect_GoWorkResolvesGo verifies that a directory carrying only a go.work
+// file (no go.mod) resolves as Go. go.work mounts a multi-module workspace whose
+// modules can live in subdirectories (e.g. a submodule), so the go.work
+// directory — not a nested go.mod — is the root gopls wants.
+func TestDetect_GoWorkResolvesGo(t *testing.T) {
+	dir := freshTempDir(t)
+	mustWrite(t, filepath.Join(dir, "go.work"), "go 1.26\n\nuse ./mod\n")
+
+	pool := detectTestPool()
+	gotRoot, lang, err := pool.Detect(dir)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if gotRoot != dir {
+		t.Errorf("root: got %s, want %s", gotRoot, dir)
+	}
+	if lang != "go" {
+		t.Errorf("language: got %s, want go (go.work alone must resolve as Go)", lang)
 	}
 }
 
