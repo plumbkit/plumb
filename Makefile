@@ -157,6 +157,8 @@ site:
 verify: build test lint build-integration build-clients check-size
 
 install-hooks:
-	cp scripts/pre-commit .git/hooks/pre-commit
-	chmod +x .git/hooks/pre-commit
-	@echo "Pre-commit hook installed. Run 'make verify' before every push."
+	@hooks="$$(git rev-parse --git-path hooks)"; \
+	mkdir -p "$$hooks"; \
+	cp scripts/pre-commit "$$hooks/pre-commit"; \
+	chmod +x "$$hooks/pre-commit"; \
+	echo "Pre-commit hook installed at $$hooks/pre-commit. Run 'make verify' before every push."
