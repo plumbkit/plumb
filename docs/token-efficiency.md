@@ -42,7 +42,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 These are mistakes Claude (and other LLM agents) actually make in practice — captured here so they can be defended against either by the agent's own discipline or by plumb's defaults.
 
 ### Re-reading a file the agent itself just wrote
-The single most common failure mode. The post-write response says "wrote 142 bytes", which feels too thin to "trust", so the agent calls `read_file` again to look at the result. This doubles the token cost of every write. The fix on plumb's side is in the roadmap (return a unified diff in the write response); on the agent's side, the discipline is to stop reading unless an error was returned.
+The single most common failure mode. The post-write response says "wrote 142 bytes", which feels too thin to "trust", so the agent calls `read_file` again to look at the result. This doubles the token cost of every write. On plumb's side, `edit_file`/`write_file` already return a unified diff by default (`[edits] show_write_diff`), so the success response shows exactly what changed; on the agent's side, the discipline is to stop reading unless an error was returned.
 
 ### Reading a 5 KB file to change one line
 A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `list_symbols → find_symbol → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
@@ -99,7 +99,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 
 Anthropic's prompt cache has a 5-minute TTL on the conversation prefix. Plumb's design intersects with this in three ways:
 
-1.  **Tool schemas are stable across turns.** Plumb registers the same 47 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
+1.  **Tool schemas are stable across turns.** Plumb registers the same 51 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
 2.  **Tool outputs do not cache.** Anything plumb returns is part of the conversation, not the cached prefix. Returning shorter outputs is *always* a direct win — there's no "cached call" rebate.
 3.  **`session_start` output is not cached.** It runs once at session start, but its output sits in the conversation thereafter. Keep it lean by default and lazy-load (a roadmap item) for the heavy bits.
 
@@ -111,7 +111,7 @@ Features that would shift token efficiency from "the agent has to remember to be
 
 ### High impact
 
-*   **Automatic diff returns from write tools.** `edit_file`, `write_file`, and `transaction_apply` return a unified diff (or "no diff: nothing changed") instead of just a "wrote N bytes" line. Closes the largest single token sink (the post-write re-read). For very large diffs, return the diff stat + first hunk + "use `file_diff` for the rest".
+*   **Automatic diff returns from write tools (shipped — `[edits] show_write_diff`, default on).** `edit_file`/`write_file` return a unified diff (or "no diff: nothing changed") instead of just a "wrote N bytes" line. Closes the largest single token sink (the post-write re-read). For very large diffs, return the diff stat + first hunk + "use `file_diff` for the rest".
 *   **Error payloads designed for one-round recovery.** Today, `edit_file` failures like "old_str matched twice" send back the error and force the agent to re-read the file to figure out where. Instead: include the surrounding 5 lines of *each* match in the error, plus the file's current mtime. The agent gets enough to retry with a more specific `old_str` without burning a `read_file` call.
 *   **`stat` tool.** A lightweight tool that returns only mtime + size + line count for a path. Used by agents recovering from concurrent-write errors so they don't have to re-read the body just to grab a fresh mtime.
 *   **Mtime auto-propagation within a session.** Plumb already tracks per-session `ReadTracker` state including mtime. `edit_file` could default to the last-read mtime for that path automatically; the agent only needs to override it explicitly. Removes the verbose `expected_mtime` copy step from every edit.

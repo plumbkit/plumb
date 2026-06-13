@@ -407,8 +407,10 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   PATH.
 - **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. Note the
   `build.gradle.kts` overlap with Java's markers — with both `[lsp.java]` and
-  `[lsp.kotlin]` enabled, the alphabetical detect order makes Java win for a
-  shared marker. Both are opt-in, so this is a non-issue by default.
+  `[lsp.kotlin]` active, the alphabetical detect order makes Java win for a
+  shared marker. Both activate automatically when their server is on PATH; if
+  both are present, force Kotlin with `session_start({"language": "kotlin"})` or
+  set `[lsp.java] enabled = false`.
 - **Workspace model**: requires `rootUri` at the project root; resolves the
   classpath from the Gradle/Maven build files (slow on first attach).
 - **Init options**: none — `DefaultInitParams` sends no `initializationOptions`.

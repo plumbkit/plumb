@@ -9,10 +9,6 @@
 
 Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a tree-sitter code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. A single binary; nothing else to install.
 
-<!-- TODO(launch): record a 20–30s asciinema/vhs demo (agent editing a multi-file Go
-     project + recovering from a forced daemon crash) and embed it here as
-     docs/assets/demo.gif. This single asset converts better than any paragraph. -->
-
 ---
 
 ## Why Plumb
@@ -90,8 +86,8 @@ Plumb negotiates LSP capabilities per language and also ships a pure-Go tree-sit
 | Tier | Languages | What you get |
 |---|---|---|
 | **First-class** (CI-tested, real-binary integration) | **Go** (gopls), **Python** (pyright) | Full LSP: definitions, references, rename, diagnostics, hierarchies + all write tools |
-| **Validated, opt-in** | **Java** (jdtls), **Rust** (rust-analyzer), **Swift** (sourcekit-lsp) | Full LSP; enable per-language and put the server on `$PATH` |
-| **Experimental, opt-in** | **TypeScript/JS**, **Kotlin**, **Zig**, **HTML** | Navigation works against the real servers; diagnostics validation is still in progress. Enable with `[lsp.<lang>] enabled = true` |
+| **Validated** | **Java** (jdtls), **Rust** (rust-analyzer), **Swift** (sourcekit-lsp) | Full LSP; just put the server on `$PATH` and it activates automatically |
+| **Experimental** | **TypeScript/JS**, **Kotlin**, **Zig**, **HTML** | Navigation works against the real servers; diagnostics validation is still in progress. Put the server on `$PATH` to activate (exclude any language with `[lsp.<lang>] enabled = false`) |
 | **Search & navigation** (tree-sitter, no LSP needed) | 15+ incl. JS/TS/TSX, Bash, SQL, HCL, Dockerfile, TOML, YAML, Markdown | Ranked symbol search, outlines, graph exploration via the Topology index |
 
 Real-binary validation has been exercised on **macOS**; Linux integration runs in CI and is being hardened pre-v1. Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues) — the daemon's Unix-socket architecture needs a port.
@@ -123,7 +119,7 @@ Run `plumb` with no arguments to launch a live [Bubble Tea](https://github.com/c
 
 ## Core capabilities
 
-Plumb exposes **50 tools**. The ones you'll use constantly:
+Plumb exposes **51 tools**. The ones you'll use constantly:
 
 `session_start` · `find_symbol` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
 

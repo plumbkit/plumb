@@ -79,7 +79,7 @@ flowchart LR
 - **Topology is the Map.** Use it for discovery: "where is the routing logic?",
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
-  is syntactic (Go AST, tree-sitter Python/JavaScript/TypeScript/Rust/Zig/Kotlin/Swift/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown, and a TSX/JSX regex extractor), so it offers
+  is syntactic (Go AST; pure-Go tree-sitter for Python/JavaScript/Rust/Zig/Kotlin/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown; and canonical-grammar WASM for TypeScript/TSX/JSX and Swift), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
   (`get_definition`, `find_references`, `rename_symbol`, `diagnostics`) make and
