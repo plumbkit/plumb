@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **48** structured tools to AI assistants. Every write tool is
+Plumb exposes **51** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -325,8 +325,8 @@ activity only; they do not infer architectural lessons.
 ## Topology
 
 A persistent SQLite/FTS5 semantic index at `<workspace>/.plumb/topology.db`.
-Enabled via `[topology] enabled = true`; all tools degrade gracefully when it's
-off. See the [Topology guide](topology.md).
+On by default (`[topology] enabled = false` opts out); all tools degrade
+gracefully when it's off. See the [Topology guide](topology.md).
 
 ### `topology_status`
 Index health: file count, entity count, DB size, indexed languages, last sync,

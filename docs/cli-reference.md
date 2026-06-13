@@ -22,6 +22,7 @@ language `none`.
 | [`plumb serve`](#plumb-serve) | Start the MCP server over stdio (the command MCP clients run) |
 | [`plumb daemon`](#plumb-daemon) | Run the shared background daemon (usually automatic) |
 | [`plumb stop`](#plumb-stop) | Stop the background daemon |
+| [`plumb restart`](#plumb-restart) | Restart the daemon (stop + fresh spawn) |
 | [`plumb init`](#plumb-init) | Create a `.plumb/` workspace marker |
 | [`plumb setup`](#plumb-setup) | Register plumb as an MCP server for a client |
 | [`plumb doctor`](#plumb-doctor) | Run health checks |
@@ -30,6 +31,7 @@ language `none`.
 | [`plumb stats`](#plumb-stats) | Show tool-call statistics (alias: `status`) |
 | [`plumb diagnostics`](#plumb-diagnostics) | Print LSP diagnostics (alias: `diag`, `diags`) |
 | [`plumb log-level`](#plumb-log-level) | Change the running daemon's log level |
+| [`plumb debug`](#plumb-debug) | Daemon introspection: memory, heap/stack dumps, LSP state |
 | [`plumb version`](#plumb-version) | Print version information |
 
 ---
@@ -60,15 +62,18 @@ plumb serve
 ```
 
 Start the MCP server over stdio. **This is the command MCP clients invoke.**
-`serve` is a thin proxy: it dials the daemon's Unix socket — spawning
-`plumb daemon` if none is running — and then copies bytes between the client's
-stdin/stdout and the socket until EOF. It registers no tools and owns no
-language-server processes itself.
+`serve` is a resilient, frame-aware proxy: it dials the daemon's Unix socket —
+spawning `plumb daemon` if none is running — and proxies MCP frames between the
+client and the socket. On a daemon crash or hang it respawns the daemon and
+replays the captured `initialize` handshake, so the client never notices. It
+registers no tools and owns no language-server processes itself.
 
 If the running daemon's build version differs from this binary's, `serve`
-prints a warning to stderr suggesting `plumb stop` to refresh.
+prints a warning to stderr suggesting `plumb restart` to refresh.
 
-No flags.
+| Flag | Default | Effect |
+|---|---|---|
+| `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
 
 ---
 
@@ -106,8 +111,24 @@ binary upgrades that changed the socket/PID path.
 |---|---|---|
 | `--force` | `false` | Stop without asking for confirmation. |
 
-Use `plumb stop` after rebuilding the binary so the next `serve` starts a daemon
-running your new code.
+Use `plumb stop` (or `plumb restart`) after rebuilding the binary so the next
+`serve` starts a daemon running your new code.
+
+---
+
+## `plumb restart`
+
+```
+plumb restart [--force]
+```
+
+Stop the running daemon and bring a fresh one straight back up — the resilient
+proxy reconnects active clients. Use it after rebuilding so new code activates
+without manually stopping and waiting for the next `serve`.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--force` | `false` | Skip the confirmation prompt. |
 
 ---
 
@@ -152,6 +173,13 @@ modifying it.
 | `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) |
 | `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) |
 | `plumb setup gemini` | `~/.gemini/settings.json` |
+| `plumb setup cursor` | `~/.cursor/mcp.json` |
+| `plumb setup augment` | `~/.augment/settings.json` |
+| `plumb setup qwen` | `~/.qwen/settings.json` |
+| `plumb setup opencode` | `~/.config/opencode/opencode.json` |
+| `plumb setup crush` | `~/.config/crush/crush.json` |
+| `plumb setup goose` | `~/.config/goose/config.yaml` |
+| `plumb setup hermes` | `~/.hermes/config.yaml` |
 
 | Flag | Applies to | Effect |
 |---|---|---|
@@ -200,6 +228,7 @@ Inspect plumb's resolved configuration. See the
 | Subcommand | Description |
 |---|---|
 | `plumb config print` | Print the resolved configuration as TOML. |
+| `plumb config reload` | Tell the running daemon to re-read global config now (same as the fsnotify watch). |
 | `plumb config show [--workspace <dir>]` | Show the resolved configuration with **source provenance** — which layer (default, global, project, env) set each value. Includes a **Directories** section listing plumb's config, data, state, log, and runtime directories. |
 
 | Flag | Applies to | Default | Effect |
@@ -233,7 +262,7 @@ plumb stats [--workspace <dir>] [--limit <n>]
 Aliases: **`plumb status`**.
 
 Show tool-call statistics for a workspace: a per-tool summary (calls, average
-and P95 latency, input/output bytes, errors, estimated tokens saved) and a list
+and P95 latency, input/output bytes, errors, token-efficiency estimate) and a list
 of the most recent calls.
 
 | Flag | Default | Effect |
@@ -284,6 +313,23 @@ The change lasts for the daemon's lifetime only — it does not persist.
 
 To make a level permanent, set `log_level` in `~/.config/plumb/config.toml`.
 Fails clearly if the daemon is not running.
+
+---
+
+## `plumb debug`
+
+```
+plumb debug <subcommand>
+```
+
+Daemon introspection over the control socket. Requires a running daemon.
+
+| Subcommand | Description |
+|---|---|
+| `plumb debug mem` | Print a `runtime.ReadMemStats` snapshot (heap, GC count, goroutines). |
+| `plumb debug heap` | Force a GC and write a `runtime/pprof` heap profile to the cache dir. |
+| `plumb debug stacks` | Write a full goroutine stack dump (the `SIGQUIT`-equivalent) for diagnosing a hang. |
+| `plumb debug lsp` | List each language server's state, PID, RSS, and idle time. |
 
 ---
 
