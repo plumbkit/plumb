@@ -1,0 +1,14 @@
+# gitleaks configuration.
+#
+# Extends the built-in ruleset and allowlists the redaction-package test
+# fixtures: internal/redact/*_test.go deliberately contains secret-shaped
+# strings (AWS's canonical EXAMPLE key, the jwt.io sample token, sequential
+# placeholders) so the scrubber can be tested. They are not live credentials.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secret fixtures for the redaction scrubber tests"
+paths = [
+  '''internal/redact/.*_test\.go''',
+]

@@ -24,10 +24,10 @@ func TestLSPCrossFileCallers_RelativePathAndFiltering(t *testing.T) {
 	mock := &mockLSP{
 		docSymbols: symbolWithKeywordRange("RecoveredHijacks"),
 		locations: []protocol.Location{
-			loc("file:///ws/internal/paths/paths.go", 10),     // self file → excluded
-			loc("file:///ws/internal/cli/hijack.go", 26),      // cross-file
-			loc("file:///ws/internal/cli/hijack.go", 41),      // cross-file
-			loc("file:///ws/internal/cli/hijack.go", 41),      // duplicate → collapsed
+			loc("file:///ws/internal/paths/paths.go", 10), // self file → excluded
+			loc("file:///ws/internal/cli/hijack.go", 26),  // cross-file
+			loc("file:///ws/internal/cli/hijack.go", 41),  // cross-file
+			loc("file:///ws/internal/cli/hijack.go", 41),  // duplicate → collapsed
 		},
 	}
 	fn := tools.NewLSPCrossFileCallers(mock, nil, time.Minute, 0, func() string { return root })
