@@ -20,7 +20,7 @@ Requirements on PATH: agg (brew install agg), ffmpeg. Plus the Nerd font install
 (default "FiraCode Nerd Font Mono"; install the Nerd Fonts cask or pass --font).
 
 Usage:
-    python3 scripts/build-tui-video.py            # cast=./plumb_tui -> site/
+    python3 scripts/build-tui-video.py            # cast=site/plumb_tui.cast -> site/
     python3 scripts/build-tui-video.py --cast rec.cast --name plumb_tui --out-dir site
 """
 
@@ -191,7 +191,7 @@ def render_variant(label, cast_v2, bg, fg, palette, gif, out_base, args):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Render a plumb TUI asciicast into light + dark web videos.")
-    ap.add_argument("--cast", default="plumb_tui", help="asciicast file (v2 or v3). Default: ./plumb_tui")
+    ap.add_argument("--cast", default="site/plumb_tui.cast", help="asciicast file (v2 or v3). Default: site/plumb_tui.cast")
     ap.add_argument("--out-dir", default="site", help="output directory. Default: site")
     ap.add_argument("--name", default="plumb_tui", help="output basename. Default: plumb_tui")
     ap.add_argument("--font", default=FONT)

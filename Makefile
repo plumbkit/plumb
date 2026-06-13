@@ -146,8 +146,8 @@ swift-wasm:
 	bash internal/topology/extractors/wasmts/csrc/build-swift.sh
 
 # site (re)generates the landing-page TUI demo videos (light + dark, webm + mp4)
-# from the asciicast at ./plumb_tui into site/. Re-record with `asciinema rec
-# plumb_tui` (use ~100x26; see docs in the script), then run `make site`.
+# from the asciicast at site/plumb_tui.cast into site/. Re-record with `asciinema
+# rec site/plumb_tui.cast` (use ~100x26; see docs in the script), then run `make site`.
 # Dev-only — requires `agg` (brew install agg), `ffmpeg`, and the Nerd font.
 site:
 	python3 scripts/build-tui-video.py
