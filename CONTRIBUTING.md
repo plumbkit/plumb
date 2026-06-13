@@ -5,9 +5,9 @@ make a change land cleanly.
 
 ## Before you start
 
-- **Read `AGENTS.md`** (the canonical project brief — `CLAUDE.md`, `GEMINI.md`, and
-  `CHATGPT.md` are symlinks to it). It explains the architecture, the layering rules,
-  and the invariants that matter.
+- **Read `AGENTS.md`** (the canonical project brief — `CLAUDE.md` and `GEMINI.md` are
+  symlinks to it, and Codex/ChatGPT read it directly). It explains the architecture,
+  the layering rules, and the invariants that matter.
 - **Discuss large changes first.** For anything beyond a bug fix or small improvement,
   open an issue so we can agree the approach before you invest the effort.
 

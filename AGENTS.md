@@ -2,7 +2,7 @@
 
 > Source of truth: edit `AGENTS.md` only.
 >
-> `CLAUDE.md`, `GEMINI.md`, and `CHATGPT.md` are repository symlinks to this file for client compatibility. Do not replace, unlink, rewrite, or edit those symlink paths directly. If an instruction change is needed, update `AGENTS.md`; the linked files will reflect it automatically.
+> `CLAUDE.md` and `GEMINI.md` are repository symlinks to this file for client compatibility; Codex and ChatGPT read `AGENTS.md` directly. Do not replace, unlink, rewrite, or edit those symlink paths directly. If an instruction change is needed, update `AGENTS.md`; the linked files will reflect it automatically.
 >
 > These agent-context files are tracked in git to ensure a consistent, high-quality experience for AI assistants.
 
