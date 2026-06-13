@@ -246,7 +246,7 @@ func applySearchDeadline(ctx context.Context) (context.Context, context.CancelFu
 // file rather than a directory, the search is scoped to THAT file (onlyFile is
 // the absolute path; root is its parent so relative paths still resolve) — a
 // file path is more specific than its directory, so scoping to it is what the
-// caller almost always meant (internal/feedbacks.md 2026-06-04 / HTML #6).
+// caller almost always meant (from dogfooding feedback).
 func resolveSearchRoot(a searchInFilesArgs, ws WorkspaceFn, guard BoundaryGuard) (root, onlyFile, note string, err error) {
 	root = resolvePath(a.Path, ws)
 	if checkErr := guard.check(root); checkErr != nil {

@@ -71,7 +71,6 @@ Plumb registers itself as a stdio MCP server for many client CLIs via
 clients actually work *through* plumb, non-interactively (no TUI blocks). It is gated
 behind its own build tags, so it never runs in CI or `make verify` beyond a compile
 check — run it yourself when you touch client setup or want to validate a new client.
-Full detail: [`docs/internal/client-testing.md`](docs/internal/client-testing.md).
 
 **Install the client CLIs** (idempotent; installs CLIs only, never API keys):
 
@@ -129,8 +128,7 @@ Conventional commits:
 
 Types: `feat`, `fix`, `refactor`, `test`, `docs`, `ci`, `chore`. Prefer **one commit
 per discrete change**, each with a `CHANGELOG.md` entry — bisectable history beats
-squashed PRs. When you complete an item from `docs/internal/todo.md`, delete its section
-in the same commit that adds the changelog entry.
+squashed PRs.
 
 ## Licensing of contributions
 

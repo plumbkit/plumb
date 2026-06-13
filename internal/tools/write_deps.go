@@ -135,7 +135,7 @@ const longPostWriteDiagWindow = 5 * time.Second
 // When awaitFresh is set the wait is extended to longPostWriteDiagWindow so the
 // result is trustworthy, and a clean fresh pass is stated explicitly rather than
 // implied by silence — closing the "I had to shell out to go build to be sure"
-// gap in internal/feedbacks.md. A globally-disabled post-write window
+// gap reported in dogfooding. A globally-disabled post-write window
 // (negative) is still honoured (await is a no-op).
 func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool) string {
 	if d.Diag == nil {

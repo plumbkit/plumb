@@ -28,7 +28,7 @@ type builder func(root node, relPath string, src []byte, lines *lineMap) ([]topo
 // compiled to WASM and driven by wazero. Unlike the pure-Go gotreesitter
 // runtime, the canonical grammars parse constructs that defeat the port —
 // typed arrow parameters in TSX, implicitly-unwrapped optional types in Swift —
-// without cascading ERROR nodes (see docs/internal/treesitter-plan.md).
+// without cascading ERROR nodes.
 //
 // Each instance owns its own lazily-initialised wazero runtime, built on first
 // Extract and reused for the daemon's lifetime, so a workspace that never sees a

@@ -76,8 +76,7 @@ const acceptDrainGrace = 2 * time.Second
 // truncate a topology resync (WAL-safe, but the resync is lost). The added
 // headroom covers the normal unbounded teardown while still bounding a
 // genuinely wedged step. Bounding the topology/supervisor stops outright (so
-// the orderly path is provably under this deadline) is tracked in
-// docs/internal/todo.md.
+// the orderly path is provably under this deadline) is tracked internally.
 const shutdownHardDeadline = acceptDrainGrace + poolCloseGrace + 4*time.Second
 
 // armShutdownWatchdog forces process exit shutdownHardDeadline after ctx is
@@ -347,7 +346,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 
 // serverWriteTimeout is the per-connection response-write deadline. A blocked
 // socket write would otherwise hold the connection's write mutex forever and
-// wedge every later reply (see docs/internal/todo.md). PLUMB_WRITE_TIMEOUT
+// wedge every later reply. PLUMB_WRITE_TIMEOUT
 // accepts a Go duration; "0"/"off"/"disable" disables the deadline. An unset or
 // unparseable value uses mcp's built-in default.
 func serverWriteTimeout() time.Duration {

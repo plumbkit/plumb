@@ -15,7 +15,7 @@ import (
 // extractor and TypeScript (.ts) by the tree-sitter TypeScript extractor; only
 // .tsx/.jsx remain here because gotreesitter v0.19.1's TSX grammar still
 // cascades on typed arrow parameters even with the regenerated TSX lex-states
-// (see docs/internal/treesitter-plan.md).
+// (see the internal tree-sitter design notes).
 type Extractor struct{}
 
 // New returns a new TSX/JSX Extractor.

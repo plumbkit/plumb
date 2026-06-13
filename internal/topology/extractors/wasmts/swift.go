@@ -16,7 +16,7 @@ import (
 // implicitly-unwrapped optional type (`var x: T!`) — it emits an ERROR that
 // cascades and collapses the enclosing type, dropping it and all its members
 // from the outline (pervasive in AppKit/UIKit). The canonical grammar parses it
-// cleanly. See docs/internal/treesitter-plan.md.
+// cleanly.
 //
 //go:embed swift.wasm
 var swiftWasm []byte

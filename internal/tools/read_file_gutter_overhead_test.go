@@ -11,7 +11,7 @@ import (
 // adds, so the "will it cost too many tokens?" decision rests on numbers, not an
 // estimate. It runs over this package's own Go sources (real code) plus a
 // short-line worst case, logs the percentage, and asserts a sane ceiling. The
-// numbers it prints are recorded in docs/internal/todo-to-review.md.
+// numbers it prints are recorded internally.
 //
 // Token overhead tracks byte overhead closely for ASCII source: the gutter adds
 // one line-number token + one tab per line, and a line number is ~1 token, so

@@ -7,9 +7,8 @@
 // packages, so any layer can consult it without import cycles. The registry is
 // immutable after initialisation and therefore safe for concurrent use.
 //
-// See docs/internal/treesitter-plan.md for the rationale (the per-language
-// provider registry and the "tree-sitter is the Map, LSP is the GPS"
-// separation of concerns).
+// The per-language provider registry follows the "tree-sitter is the Map,
+// LSP is the GPS" separation of concerns.
 package langsupport
 
 import (

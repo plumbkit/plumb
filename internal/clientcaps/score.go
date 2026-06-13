@@ -83,8 +83,7 @@ var toolModels = map[string]toolModel{
 // read/symbol tool reported in its header, letting a capable client be credited
 // the efficiency of a ranged read (zero when absent or for non-read tools).
 // batchSize is the number of items a batching tool processed (paths/operations
-// length from input_json), ignored for non-batching tools. The model is described
-// in docs/internal/tokens_saved_redesign.md §4.2.
+// length from input_json), ignored for non-batching tools. The model is described internally.
 func Score(tool, clientName string, outputBytes, baselineBytes, batchSize int, success bool) Savings {
 	if !success {
 		return Savings{}

@@ -9,7 +9,7 @@
 # Why WASM for Swift: the pure-Go gotreesitter port cannot reduce an implicitly-
 # unwrapped optional type (`var x: T!`) — it emits an ERROR that collapses the
 # enclosing type. The canonical grammar + its canonical C external scanner parse
-# it correctly, so we run them via wazero. See docs/internal/treesitter-plan.md.
+# it correctly, so we run them via wazero.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

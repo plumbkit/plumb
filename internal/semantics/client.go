@@ -1,6 +1,6 @@
 // Package semantics provides the embedding client for opt-in semantic re-rank
 // of topology_search. It talks to hosted or user-run HTTP endpoints only — plumb
-// never bundles or supervises a model (see docs/internal/semantic-search-design.md).
+// never bundles or supervises a model.
 //
 // Most providers speak the OpenAI wire format, so one client covers OpenAI,
 // Voyage, Jina, Mistral, and any self-run OpenAI-compatible server (Ollama,

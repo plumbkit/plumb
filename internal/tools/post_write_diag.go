@@ -74,7 +74,7 @@ type postWriteDiagSource interface {
 // sizeSummary renders a "(N bytes, L lines, C chars)" suffix for write/edit
 // responses. chars is the rune count (multibyte-aware): context-window limits
 // are character-denominated, so byte-only counts mislead on non-ASCII content
-// (internal/feedbacks.md 2026-06-08, the AGENTS.md-trim session).
+// (from dogfooding feedback).
 func sizeSummary(content string) string {
 	return fmt.Sprintf("(%d bytes, %d lines, %d chars)", len(content), displayLineCount(content), utf8.RuneCountInString(content))
 }
@@ -123,7 +123,7 @@ func renderDiagGroup(sb *strings.Builder, label string, diags []protocol.Diagnos
 // compact suffix appended to write/edit_file output. Returns "" if none.
 //
 // Two staleness guards reduce phantom breakage after a write — the single
-// most-reported friction in internal/feedbacks.md:
+// most-reported dogfooding friction:
 //
 //   - fresh=false: the language server had not re-published within the wait
 //     window, so the whole snapshot predates this write. Rendering its
@@ -142,7 +142,7 @@ func formatPostWriteDiagnostics(d []protocol.Diagnostic, fresh bool, newLineCoun
 	if !fresh {
 		// The snapshot predates this write — every finding in it is pre-edit.
 		// Surface a single pending line rather than stale groups that read as
-		// fresh breakage (internal/feedbacks.md 2026-06-09).
+		// fresh breakage (from dogfooding feedback).
 		return "\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
 	}
 	var errs, warns, stale []protocol.Diagnostic

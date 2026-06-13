@@ -292,7 +292,7 @@ func (t *ReadFile) formatOutput(mtime time.Time, sha, content string, baseline i
 	// lines/chars describe the body actually returned (a ranged read reflects the
 	// slice). chars is rune count, not bytes — context-window limits are
 	// character-denominated and bytes mislead for any non-ASCII text
-	// (internal/feedbacks.md 2026-06-08). baseline is the whole-file byte size, so
+	// (from dogfooding feedback). baseline is the whole-file byte size, so
 	// the savings scorer can value a ranged read against the cost of reading it all.
 	lines, chars := displayLineCount(content), utf8.RuneCountInString(content)
 	if sha != "" {

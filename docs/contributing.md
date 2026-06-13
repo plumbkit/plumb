@@ -79,9 +79,3 @@ history over squashed PRs.
 - Integration tests requiring external binaries (gopls, pyright) are gated with
   `//go:build integration`.
 - Don't chase TUI coverage.
-
-## Internal working docs
-
-Active TODOs, design notes, and review queues live under
-[`docs/internal/`](internal/) and are not part of the published documentation
-set.

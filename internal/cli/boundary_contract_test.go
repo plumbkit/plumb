@@ -8,7 +8,7 @@ import (
 
 // knownToolGuarding maps each tools.New* constructor used in registerAllTools
 // to its boundary-guard category. This is the D10 contract from the
-// path-access design doc (docs/internal/path-access-design.md).
+// path-access design doc.
 //
 // Categories:
 //

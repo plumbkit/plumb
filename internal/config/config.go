@@ -302,8 +302,7 @@ type MemoryConfig struct {
 
 // SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by
 // default. The embedder is always a hosted or user-run HTTP endpoint — plumb
-// never bundles or supervises a model. Project-overridable. See the design in
-// docs/internal/semantic-search-design.md.
+// never bundles or supervises a model. Project-overridable.
 //
 // Key resolution: APIKey (a literal key in config) wins; when empty, the key is
 // read from the environment variable named by APIKeyEnv (or the provider

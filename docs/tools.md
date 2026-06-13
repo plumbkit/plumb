@@ -341,7 +341,7 @@ by semantic similarity to the query — the output is annotated
 `mode=fts+semantic`. FTS5 stays the authoritative spine: re-rank only re-orders
 its candidates and falls back to plain FTS5 (`mode=ranked`) on any error. Pass
 `rerank:false` to force the plain ranking, `rerank:true` to force re-rank when
-configured. See `docs/internal/semantic-search-design.md`.
+configured.
 
 ### `workspace_search`
 Ranked discovery **broker** across the workspace's indexed corpora: **code**

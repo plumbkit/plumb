@@ -99,7 +99,7 @@ pipeline has four parts:
    Java use the pure-Go gotreesitter runtime; JavaScript (`.js`/`.mjs`/`.cjs`)
    and TypeScript (`.ts`) also use gotreesitter; and only TSX/JSX (`.tsx`/`.jsx`)
    still use a fast regex scanner (gotreesitter's TSX grammar cascades on typed
-   arrow params — see `docs/internal/treesitter-plan.md`).
+   arrow params).
    None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
    tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual

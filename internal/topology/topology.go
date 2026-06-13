@@ -22,7 +22,7 @@ const (
 	// YAML key. Used by the config/markup tree-sitter extractors. NOTE: a member
 	// field/property of a *code* type (struct field, class property) is NOT a
 	// KindField — it is a KindConstant (when declared immutable) or KindVariable,
-	// per the extractor conventions in docs/internal/extractor-conventions.md.
+	// per the documented extractor conventions.
 	KindField NodeKind = "field"
 	// KindSection is a document heading (a Markdown section). Used by the
 	// markup tree-sitter extractors for navigable document outlines.

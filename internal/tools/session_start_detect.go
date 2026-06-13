@@ -188,7 +188,7 @@ func gitRecentCommits(ws string, n int) []string {
 // uncommitted changes to tracked files (staged + unstaged vs HEAD), capped to
 // maxLines lines. Empty when the tree is clean or not a git repo. Lets an agent
 // see *what* was already changed at orientation instead of guessing from a bare
-// file list (internal/feedbacks.md 2026-06-04).
+// file list (from dogfooding feedback).
 func gitWorkingTreeSummary(ws string, maxLines int) string {
 	cmd := exec.Command("git", "-C", ws, "diff", "--stat", "HEAD")
 	out, err := cmd.Output()

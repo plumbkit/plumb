@@ -17,7 +17,7 @@ import (
 // present (the parse errors / the class collapses). When a future gotreesitter
 // release fixes it, this assertion flips and fails — the signal that the
 // recoverIUOBangs workaround AND this gotreesitter Swift fallback can be removed.
-// See docs/internal/treesitter-plan.md and the todo.md follow-ups.
+// See the internal tree-sitter design notes and follow-ups.
 func TestSwift_IUO_GotreesitterStillBroken(t *testing.T) {
 	src := []byte("class VC {\n    var manager: Manager!\n    func go() {}\n}\n")
 	lang := grammars.SwiftLanguage()
