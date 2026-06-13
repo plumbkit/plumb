@@ -49,8 +49,9 @@ the right few files instead of reading dozens.
 
 - **Instant.** Answers come from a local SQLite/FTS5 database — no
   language-server boot, no per-conversation indexing wait.
-- **Works without a language server.** Useful for JavaScript/TypeScript (which
-  has no LSP adapter in plumb) and for any project where the LSP isn't installed.
+- **Works without a language server.** Useful for any project where the relevant
+  language server isn't installed, and for config/markup formats that have no LSP
+  at all.
 - **Tolerant of broken code.** It's syntactic, so it keeps working mid-refactor
   when the code won't compile.
 - **Structural, not just textual.** Ranked symbol search, neighbourhood

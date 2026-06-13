@@ -31,10 +31,13 @@ everything else is inherited from the layer below.
 4. **Environment variables** — highest precedence; useful for one-off overrides
    without editing files.
 
-The `[edits]`, `[walk]`, and `[git]` sections are **hot-reloaded**: the daemon
-polls the project `config.toml` every 30 seconds and re-applies changes without
-a reconnect. `[ui]`, `[lsp_query]`, and the `[lsp.*]` servers are **global-only**
-(read once at daemon start).
+Most sections are **hot-reloaded** without a reconnect: an `fsnotify` watch on
+the global `config.toml` (plus the `reload-config` control command and
+`plumb config reload`) re-reads the file and re-merges every live session's
+project view. `[edits]`, `[walk]`, `[git]`, `[topology]`, `[session]`,
+`[memory]`, and `[semantics]` apply live. The restart-bound exceptions are the
+`[lsp.*]` servers, `[cache]`, and `log_format`; `plumb config show` and
+`daemon_info` flag those as restart-needed.
 
 ## File locations
 
@@ -57,7 +60,7 @@ a reconnect. `[ui]`, `[lsp_query]`, and the `[lsp.*]` servers are **global-only*
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
-| `theme` | string | `"nordico"` | Active colour theme. Set interactively via the TUI **Settings** picker, which persists it here. |
+| `theme` | string | `"plumb"` | Active colour theme. Set interactively via the TUI **Settings** picker, which persists it here. |
 
 ## `[cache]` — session symbol cache
 
@@ -94,6 +97,9 @@ project.
 |---|---|---|---|---|
 | `auto_attach` | bool | `false` | `PLUMB_AUTO_ATTACH` | When detection finds no marker at all (no `.plumb/`, language marker, or `.git/`), fall back to a synthetic root (the seed directory). Stats, TUI, and project config work; LSP is unavailable. |
 | `auto_attach_persist` | bool | `false` | `PLUMB_AUTO_ATTACH_PERSIST` | Create `.plumb/` at the synthetic root on first attach so later sessions resolve normally. **Implies `auto_attach`.** |
+| `allow_dependency_reads` | bool | `true` | — | For a Go session, allow read/search (never write) into the module cache (`GOMODCACHE`) + `GOROOT`. |
+| `extra_roots` | []string | `[]` | — | Additional read-**write** directories, additive to the workspace (`$VAR`-expanded). |
+| `read_roots` | []string | `[]` | — | Additional read-**only** directories — vendored deps, shared libs (`$VAR`-expanded). |
 
 ## `[git]` — tiered git-tool gating
 
@@ -147,6 +153,41 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 
 Global or per-project; no environment override. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
 
+## `[memory]` — per-workspace memory engine
+
+Markdown memories under `<workspace>/.plumb/memories/` are the source of truth;
+`memory.db` is a rebuildable FTS5 index. Project-overridable; no env override.
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `enabled` | bool | `true` | The `memory.db` FTS5 index backing ranked `search_memories`. Off ⇒ memory tools use a grep fallback. |
+| `generated_summaries` | bool | `true` | Write rule-based episodic summaries (no LLM, always redacted) when a session goes idle. |
+| `inject_hints` | bool | `true` | Append a compact "[Hint: relevant memory …]" block to path-bearing tool responses. |
+| `hint_budget_bytes` | int | `512` | Byte cap on an injected hint block. |
+| `episodic_budget_bytes` | int | `1024` | Byte cap on the "last session" summary in `session_start`. |
+| `max_hints` | int | `3` | Max memories hinted per response. |
+| `idle_summary_minutes` | int | `0` | Idle threshold before an episodic summary; `0` falls back to `[session] idle_threshold_minutes`. |
+| `generated_memory_keep` | int | `50` | Newest generated episodic memories retained per workspace; `0` disables pruning. |
+
+## `[semantics]` — opt-in semantic re-rank for `topology_search`
+
+Off by default — zero cost until enabled. When on, `topology_search` re-ranks its
+FTS5 candidates by embedding similarity (`mode=fts+semantic`); FTS5 stays the
+authoritative spine and any error falls back to plain ranking. **API /
+bring-your-own-endpoint only — plumb never bundles, downloads, or supervises a
+model.** Project-overridable, hot-reloaded.
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turn semantic re-rank on. |
+| `provider` | string | `"openai"` | Preset: `openai` \| `voyage` \| `jina` \| `mistral` \| `cohere` \| `custom`. |
+| `model` | string | `""` | Embedding model id; `""` uses the preset default. |
+| `base_url` | string | `""` | Override the provider API base; **required** for `custom` (Ollama / llama.cpp / LM Studio / TEI / vLLM). |
+| `api_key` | string | `""` | Literal key — highest precedence. Prefer `api_key_env`. |
+| `api_key_env` | string | `""` | Env var holding the key, used when `api_key` is empty; `""` uses the preset default (e.g. `OPENAI_API_KEY`). |
+| `rerank_candidates` | int | `50` | How many FTS5 hits to re-rank. |
+| `timeout` | duration | `"10s"` | Per embedding HTTP call. |
+
 ## `[lsp_query]` — LSP operation timeout (global only)
 
 | Field | Type | Default | Env | Effect |
@@ -155,13 +196,17 @@ Global or per-project; no environment override. Activity is a tool call: the ses
 
 ## `[lsp.<language>]` — language servers
 
-A map keyed by language name. Go is enabled by default; **Python and Java are
-disabled by default**.
+A map keyed by language name. **Every supported language is enabled by default**
+and activates automatically when its server binary is on `PATH` (checked with
+`exec.LookPath`). Installing `rust-analyzer` turns on Rust for every Cargo
+project with no config; a language whose server is absent stays dormant at zero
+cost and its markers never enter detection.
 
-> **Important:** installing a language-server binary is not enough. Plumb only
-> recognises a language and starts its server when that language's
-> `enabled = true`. To use Python, install `pyright` **and** set
-> `[lsp.python] enabled = true`. Likewise for Java (`jdtls` + Java 21+).
+> **The knob is the opposite of "enable":** set `[lsp.<lang>] enabled = false` to
+> *exclude* a language even when its server is installed. `plumb config show`
+> prints an `active` row per language (`yes (installed)` /
+> `no (… not installed)` / `no (disabled in config)`); `plumb doctor` reports the
+> same.
 
 | Field | Type | Effect |
 |---|---|---|
@@ -173,23 +218,29 @@ disabled by default**.
 | `idle_timeout` | duration | Hibernate the server (stop its process, keep the warm cache) after this long without a tool call; the next call restarts it. `0` disables. Default `0`, except `java` = `20m`. Restart-needed. |
 | `max_workspaces` | int | Cap on concurrently-running servers of this language; the least-recently-used is hibernated before starting another. `0` = unlimited. Default `0`, except `java` = `2`. Restart-needed. |
 
-Built-in defaults:
+Built-in defaults (all `enabled = true`; the *effective* set is whichever of
+these servers are installed):
 
-| Language | `command` | `args` | `root_markers` | `enabled` |
-|---|---|---|---|---|
-| `go` | `gopls` | `[]` | `go.mod` | **`true`** |
-| `python` | `pyright-langserver` | `--stdio` | `pyproject.toml`, `setup.py`, `pyrightconfig.json` | `false` |
-| `java` | `jdtls` | `[]` (plumb appends `-data <dir>`) | `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath` | `false` |
+| Language | `command` | `root_markers` |
+|---|---|---|
+| `go` | `gopls` | `go.mod` |
+| `python` | `pyright-langserver --stdio` | `pyproject.toml`, `setup.py`, `pyrightconfig.json` |
+| `rust` | `rust-analyzer` | `Cargo.toml` |
+| `swift` | `sourcekit-lsp` | `Package.swift`, `*.xcodeproj`, `*.xcworkspace` |
+| `typescript` | `typescript-language-server --stdio` | `tsconfig.json`, `jsconfig.json` (weak: `package.json`) |
+| `java` | `jdtls` (plumb appends `-data <dir>`) | `pom.xml`, `build.gradle`, `build.gradle.kts`, `.classpath` |
+| `zig` | `zls` | `build.zig`, `build.zig.zon` |
+| `kotlin` | `kotlin-language-server` | `settings.gradle.kts`, `build.gradle.kts` |
+| `html` | `vscode-html-language-server --stdio` | weak: `index.html` |
+
+Go and Python are validated; the rest are experimental (see the *Adapter
+validation status* table in `AGENTS.md`).
 
 jdtls is heavyweight (~0.8–1.5 GB RSS); it defaults to `idle_timeout = "20m"` and
 `max_workspaces = 2` so idle JVMs are hibernated and concurrent JVMs are capped.
 If your `jdtls` launcher is not named `jdtls` on `PATH` (e.g. `jdtls.sh`,
 `jdtls.bat`, or an absolute path), set `command` accordingly. Use
 `plumb debug lsp` to see each server's state, PID, RSS, and idle time.
-
-(Rust, Swift, Zig, TypeScript/JavaScript, Kotlin, and HTML are also available,
-all `enabled = false` by default — see the *Adapter validation status* table in
-`AGENTS.md`.)
 
 ### Multiple language servers in one project
 
@@ -262,7 +313,7 @@ log_format = "text"      # text | json
 log_file   = ""          # empty = daemon log under the OS log dir (~/Library/Logs/plumb on macOS)
 
 [ui]
-theme = "nordico"        # global only; set via the TUI Settings picker
+theme = "plumb"          # global only; set via the TUI Settings picker
 
 [cache]
 ttl      = "5m"
@@ -325,11 +376,14 @@ enabled      = true
 command      = "pyright-langserver"
 args         = ["--stdio"]
 root_markers = ["pyproject.toml", "setup.py", "pyrightconfig.json"]
-enabled      = false     # install pyright AND set true to activate Python
+enabled      = true      # auto-activates when pyright-langserver is on PATH; false excludes
 
 [lsp.java]
 command      = "jdtls"
 args         = []
 root_markers = ["pom.xml", "build.gradle", "build.gradle.kts", ".classpath"]
-enabled      = false     # install jdtls + Java 21+ AND set true to activate Java
+enabled      = true      # auto-activates when jdtls (+ Java 21+) is on PATH; false excludes
+
+# rust, swift, typescript, zig, kotlin, and html share the same shape and are
+# also enabled by default — each activates when its server binary is on PATH.
 ```

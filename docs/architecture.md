@@ -28,13 +28,13 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
-| `internal/tools` | MCP tool implementations (47 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
+| `internal/tools` | MCP tool implementations (51 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
-| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 7) |
+| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 12); also holds the `episodic_memories` table for idle-session summaries |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
-| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST, Python regex, and TypeScript/JS regex extractors (`extractors/{golang,python,typescript}`); search + BFS explore/impact/affected/routes |
+| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter, many languages) + canonical-grammar WASM via wazero for TypeScript/TSX/JSX + Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
 | `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
 | `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
@@ -44,7 +44,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/lsp/protocol` | LSP types and method-name constants |
 | `internal/lsp/adapters/gopls` | Validated Go adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/pyright` | Validated Python adapter (unit- + integration-tested) |
-| `internal/lsp/adapters/jdtls` | Experimental Java adapter; enable via `[lsp.java] enabled = true`; requires Java 21+ and jdtls on PATH |
+| `internal/lsp/adapters/jdtls` | Experimental Java adapter; activates automatically when `jdtls` (+ a Java 21+ runtime) is on PATH; set `[lsp.java] enabled = false` to exclude |
 | `internal/config` | TOML config, XDG path resolution, project-config merging; `config.Store` holds the live global base (atomic pointer + generation + observers) for hot-reload |
 | `internal/domain` | Reserved for future shared domain types (currently empty) |
 | `internal/workspace` | Reserved for future routing logic (currently empty) |
@@ -69,7 +69,7 @@ flowchart LR
 ```
 
 ### 1. Plumb Topology (The Map)
-Topology uses **Go AST, Python regex, and TypeScript/JS regex extractors** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). Enabled via `[topology] enabled = true` in the project config. It is exposed through six tools: `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, and `topology_routes`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
+Topology uses **Go AST plus pure-Go tree-sitter (gotreesitter) and canonical-grammar WASM (wazero) extractors** spanning many languages, and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). **On by default** (opt out with `[topology] enabled = false`). It is exposed through the `topology_*` tools (`topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`) plus `structural_query`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
 *   **Strengths:** Instant availability (no LSP boot time), minimal memory footprint, handles broken code gracefully, FTS5 ranked search, BFS neighbourhood exploration.
 *   **Role in Plumb:** Discovery engine. When an agent asks "Where is the routing logic?" or needs to see a symbol's neighbourhood, Topology handles it without waiting for the language server to index.
 *   **Trade-offs:** Syntactic extraction only — no type resolution. "Broad" recall, not compiler-level precision.
@@ -167,8 +167,8 @@ Key design properties:
   primary is torn down after a 90 s idle grace so it stays warm across a quick
   disconnect-reconnect but is eventually reclaimed when the workspace is idle.
   **Secondary** servers start lazily on the first file of their language and
-  live to daemon shutdown. Enable a secondary with `[lsp.<lang>] enabled =
-  true`.
+  live to daemon shutdown. A secondary activates automatically when its server
+  binary is on PATH (`[lsp.<lang>] enabled = false` excludes it).
 - **Per-connection sessions** — `handleConn` registers a `session.Info`
   immediately on connection (with `Folder=""` until workspace resolves). The
   session is then patched as workspace and client identity become known.
@@ -227,7 +227,11 @@ CREATE TABLE tool_calls (
     input_json   TEXT    NOT NULL DEFAULT '',   -- raw tool args, capped
     output_text    TEXT  NOT NULL DEFAULT '',   -- tool output, capped
     client_name    TEXT  NOT NULL DEFAULT '',   -- MCP clientInfo.name
-    client_version TEXT  NOT NULL DEFAULT ''    -- MCP clientInfo.version
+    client_version TEXT  NOT NULL DEFAULT '',   -- MCP clientInfo.version
+    tokens_saved          INTEGER NOT NULL DEFAULT 0,  -- counterfactual savings total
+    savings_model_version INTEGER NOT NULL DEFAULT 0,  -- scoring-model version (0 = pre-redesign, excluded)
+    capability_tokens     INTEGER NOT NULL DEFAULT 0,  -- work a thin client couldn't do natively
+    efficiency_tokens     INTEGER NOT NULL DEFAULT 0   -- fewer tokens for the same result
 );
 CREATE INDEX idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
@@ -257,7 +261,7 @@ workspace, session, timing, and I/O sizes. The workspace and session fields are
 required row attributes because the single stats database contains all projects
 served by the single daemon.
 
-Schema versioning is driven by `PRAGMA user_version` (currently 7). `stats.Open()`
+Schema versioning is driven by `PRAGMA user_version` (currently 12). `stats.Open()`
 (the daemon — the single writer) applies forward migrations (`ALTER TABLE ADD
 COLUMN`) when the on-disk version is older, then stamps the current version, so
 existing history is preserved across upgrades. `OpenReadOnly()` (TUI, `plumb
@@ -312,10 +316,12 @@ making cross-project memory access possible.
 
 ## Startup sequence
 
-`plumb serve` is a thin stdio proxy: it takes the spawn lock, dials the daemon
-socket (spawning `plumb daemon` if none is running), then copies bytes between
-the client's stdin/stdout and the Unix socket until EOF. It registers no tools
-and owns no LSP processes.
+`plumb serve` is a resilient stdio proxy: it takes the spawn lock, dials the
+daemon socket (spawning `plumb daemon` if none is running), and proxies MCP
+frames between the client and the Unix socket. It is frame-aware and
+reconnecting — on a daemon crash or hang it respawns the daemon and replays the
+captured `initialize` handshake so the client never notices (`--no-reconnect`
+falls back to a plain byte copy). It registers no tools and owns no LSP processes.
 
 ```mermaid
 sequenceDiagram

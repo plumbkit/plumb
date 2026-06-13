@@ -11,22 +11,23 @@ language servers your editor uses. For the bigger picture, see the
 
 ## 1. Prerequisites
 
-**A language server for each language you work in, on your `PATH`:**
+**A language server for each language you work in, on your `PATH`.** Plumb
+activates a language automatically when its server binary is installed — there
+is no per-language config step:
 
 ```sh
-# Go (enabled by default)
-go install golang.org/x/tools/gopls@latest
-
-# Python (optional — see "Enabling more languages" below)
-npm install -g pyright
-
-# Java (optional) — install jdtls and a Java 21+ runtime
+go install golang.org/x/tools/gopls@latest    # Go
+npm install -g pyright                          # Python
+# Java: jdtls + a Java 21+ runtime
+# also: rust-analyzer, sourcekit-lsp, zls, typescript-language-server,
+#       kotlin-language-server, vscode-html-language-server
 ```
 
-Only Go is enabled out of the box. Python and Java require an extra config step
-([see below](#enabling-more-languages)).
+Every supported language is enabled by default and activates the moment its
+server is on your `PATH`. To *exclude* one even when its server is installed,
+set `[lsp.<lang>] enabled = false` (see [below](#enabling-more-languages)).
 
-**The Go toolchain** (1.23+) if you install plumb with `go install` or build
+**The Go toolchain** (1.26+) if you install plumb with `go install` or build
 from source.
 
 ## 2. Install plumb
@@ -123,20 +124,26 @@ plumb stats         # per-tool call statistics for this workspace
 
 ## Enabling more languages
 
-Installing a language-server binary is **not** enough — plumb only recognises a
-language and starts its server when that language is enabled in config. To turn
-on Python, add to `~/.config/plumb/config.toml` (global) or
-`<workspace>/.plumb/config.toml` (project):
+Installing a language-server binary is all it takes — plumb enables every
+supported language by default and activates one automatically when its server is
+on your `PATH`. Install `pyright-langserver` and Python is live; install
+`rust-analyzer` and every Cargo project resolves as Rust; and so on. Restart the
+daemon (`plumb stop`) or start a new session to pick up a newly-installed server.
+
+Go and Python are validated; Rust, Swift, Zig, TypeScript/JavaScript, Kotlin, and
+HTML are experimental (see the *Adapter validation status* table in `AGENTS.md`).
+
+To **exclude** a language even when its server is installed, set `enabled = false`
+in `~/.config/plumb/config.toml` (global) or `<workspace>/.plumb/config.toml`
+(project):
 
 ```toml
 [lsp.python]
-enabled = true
+enabled = false   # don't activate Python even though pyright is on PATH
 ```
 
-Then make sure `pyright-langserver` is on your `PATH`. Java is analogous
-(`[lsp.java] enabled = true`, plus `jdtls` and a Java 21+ runtime). See the
-[Configuration reference](configuration.md#lsplanguage--language-servers) for
-the full per-language settings.
+See the [Configuration reference](configuration.md#lsplanguage--language-servers)
+for the full per-language settings.
 
 ## After a rebuild
 

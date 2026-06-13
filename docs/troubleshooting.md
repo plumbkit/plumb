@@ -74,11 +74,15 @@ fix won't be active — restart it with `plumb stop --force` (it respawns on the
 next client request). The TUI footer shows the running daemon version; if it
 lags your `plumb version`, the daemon needs restarting.
 
-## Python or Java tools don't work
+## A language's tools don't work
 
-Installing the language-server binary is not enough — the language must be
-enabled in config. Add `[lsp.python] enabled = true` (or `[lsp.java]`) and make
-sure the binary (`pyright-langserver` / `jdtls` + Java 21+) is on your `PATH`.
+Plumb activates a language automatically when its server binary is on your
+`PATH` — so the usual cause is a missing or unfound server. Confirm the binary
+(`pyright-langserver`, `rust-analyzer`, `jdtls` + Java 21+, …) is installed and
+on `PATH`, then restart the daemon (`plumb stop`) so a running daemon picks it
+up. `plumb doctor` and `plumb config show` print an `active` row per language
+telling you whether it's installed and enabled. If a language is *active* but you
+want it off, set `[lsp.<lang>] enabled = false`.
 See [Getting Started → Enabling more languages](getting-started.md#enabling-more-languages).
 
 ## No diagnostics appear after a write
@@ -98,9 +102,13 @@ The LSP position index is stale after in-session edits. Recovery options:
 
 ## "LSP server not yet ready" / language is `none`
 
-The workspace is marked (`.plumb/` present) but has no *enabled* LSP language.
-Filesystem tools, stats, and topology still work; LSP-backed tools won't until a
-language attaches. Enable the relevant `[lsp.<language>]` and install its binary.
+The workspace resolved but no LSP language attached — either no language server
+for the project's language is installed (install it and restart the daemon with
+`plumb stop`), or the root has no recognised language marker. Filesystem tools,
+stats, and topology still work; LSP-backed tools won't until a language attaches.
+For a project with sources but no marker (e.g. a loose Xcode / `.swift`
+directory), pass `session_start({"language": "swift"})` to force the primary
+server.
 
 ## Too much (or too little) log output
 
