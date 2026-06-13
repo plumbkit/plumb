@@ -21,6 +21,8 @@
 <meta name="twitter:image" content="https://getplumb.sh/og-image.png">
 <meta name="twitter:image:alt" content="plumb: one workspace, every agent, zero collisions">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -81,16 +83,13 @@ header.scrolled .nav{background:color-mix(in srgb,var(--card) 72%,transparent);b
 .cp{background:none;border:1px solid var(--rule);border-radius:7px;color:var(--faint);font-family:var(--mono);font-size:11px;padding:4px 11px;cursor:pointer;flex:0 0 auto}
 .cp:hover{color:var(--tx);border-color:var(--tx)}
 /* open stats row */
-.stats{display:grid;grid-template-columns:repeat(4,1fr);max-width:940px;margin:68px auto 0;gap:38px 24px}
-@media(max-width:640px){.stats{grid-template-columns:1fr 1fr;gap:36px 14px}}
-.stat{text-align:center;padding:0 18px;position:relative;min-width:0}
-.stat .sig{width:96px;height:60px;margin:0 auto 16px;display:grid;place-items:center;color:var(--faint)}
-.stat .sig svg{width:96px;height:60px;overflow:visible;display:block}
-.stat .sig .a{stroke:var(--acc)}.stat .sig .g{stroke:var(--grn)}.stat .sig .f{stroke:var(--faint)}.stat .sig .r{stroke:var(--rule)}
-.stat .sig .fill-a{fill:var(--acc)}.stat .sig .fill-g{fill:var(--grn)}.stat .sig .fill-c{fill:var(--card)}.stat .sig .fill-f{fill:var(--faint)}
-.stat .n{font-size:clamp(38px,4.9vw,58px);font-weight:700;letter-spacing:-.045em;line-height:1}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);max-width:920px;margin:68px auto 0}
+@media(max-width:640px){.stats{grid-template-columns:1fr 1fr;gap:42px 0}.stat+.stat::before{display:none}}
+.stat{text-align:center;padding:6px 22px;position:relative;min-width:0}
+.stat+.stat::before{content:"";position:absolute;left:0;top:14%;height:72%;width:1px;background:var(--rule)}
+.stat .n{font-size:clamp(44px,6vw,72px);font-weight:700;letter-spacing:-.05em;line-height:1}
 .stat .n em{font-style:normal;color:var(--acc)}
-.stat .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-top:12px;line-height:1.45}
+.stat .l{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-top:14px;line-height:1.45}
 /* sections; open editorial */
 section.blk{padding-top:110px;scroll-margin-top:96px}
 .blk h2{font-size:clamp(30px,4.8vw,54px);font-weight:700;letter-spacing:-.04em;line-height:1.04;max-width:22ch;margin-top:14px}
@@ -170,6 +169,28 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .duo p{font-size:14.5px;color:var(--soft)}
 .duo .cov{margin-top:16px;font-family:var(--mono);font-size:12px;color:var(--soft)}
 .duo .cov span{color:var(--faint)}
+/* supported language servers */
+/* lsp adapters; reuses the .qcard terminal frame (wireframe, no bg, no shadow) */
+.lspcfg.qcard{max-width:720px}
+.lspcfg .body{padding:22px 24px;font-family:var(--mono);font-size:13px;overflow-x:auto}
+.lspcfg .cmd{color:var(--tx);line-height:2;white-space:nowrap;margin-bottom:8px}
+.lspcfg .cmd .p{color:var(--grn)}
+.lspcfg .cmd .ok{color:var(--acc)}
+.lspcfg table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:12.5px}
+.lspcfg th{text-align:left;font-weight:400;color:var(--faint);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:0 28px 10px 0}
+.lspcfg td{padding:6px 28px 6px 0;color:var(--soft)}
+.lspcfg th:last-child,.lspcfg td:last-child{padding-right:0}
+.lspcfg td.lng{color:var(--tx);font-weight:500}
+.lspcfg .t1{color:var(--grn)}
+.lspcfg .t2{color:color-mix(in srgb,var(--grn) 72%,var(--faint))}
+.lspcfg .t3{color:var(--acc)}
+.lspcfg .rdy::before{content:"\25CF";color:var(--grn);margin-right:7px}
+.lspcfg .gat::before{content:"\25CB";color:var(--faint);margin-right:7px}
+.lspcfg .foot{padding:14px 24px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+.lspcfg .foot b{color:var(--tx);font-weight:600}
+.lspcfg .foot .ok{color:var(--acc)}
+.lspcfg .foot code{font-family:var(--mono);font-size:.92em;color:var(--acc)}
+@media(max-width:680px){.lspcfg .body,.lspcfg table{font-size:11px}.lspcfg th,.lspcfg td{padding-right:16px}}
 /* tools; open columns, hairline rules */
 .toolcols{display:grid;grid-template-columns:repeat(3,1fr);gap:46px 44px;margin-top:var(--intra);text-align:left}
 @media(max-width:860px){.toolcols{grid-template-columns:1fr 1fr}}
@@ -234,9 +255,25 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .clnote{text-align:center;font-family:var(--mono);font-size:12.5px;color:var(--faint);margin-top:24px}
 .clnote code{color:var(--acc)}
 /* quickstart */
-.qnote{color:var(--soft);max-width:58ch;margin:16px auto 0;font-size:14.5px}
-.qnote code{font-family:var(--mono);font-size:.9em;color:var(--acc)}
-.qnote + .qcard{margin-top:28px}
+/* tui demo subsection */
+.tuiblock{max-width:1024px;margin:var(--intra) auto 0}
+.tuiblock .k{justify-content:center}
+.tuiblock h3{font-size:clamp(24px,3.4vw,34px);font-weight:700;letter-spacing:-.035em;line-height:1.1;margin-top:14px}
+.tuiblock .tdesc{color:var(--soft);max-width:62ch;margin:14px auto 0;font-size:15px}
+.tuiblock .tdesc b{color:var(--tx);font-weight:600}
+.tuiblock .tdesc code{font-family:var(--mono);font-size:.9em;color:var(--acc)}
+.tuicard.qcard{max-width:none;margin:30px auto 0}
+.tuicard .live{display:inline-flex;align-items:center;gap:7px}
+.tuicard .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px color-mix(in srgb,var(--grn) 22%,transparent)}
+.tuishot{display:block;width:100%;height:auto;padding:10px 12px}
+/* theme-matched TUI capture: light-system shows the light render, dark-system the dark one; explicit toggle overrides */
+.tui-dark{display:none}.tui-light{display:block}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .tui-dark{display:block}:root:not([data-theme="light"]) .tui-light{display:none}}
+:root[data-theme="dark"] .tui-dark{display:block}:root[data-theme="dark"] .tui-light{display:none}
+:root[data-theme="light"] .tui-dark{display:none}:root[data-theme="light"] .tui-light{display:block}
+.tuifeat{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:22px auto 0;max-width:780px}
+.tuifeat span{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--soft);border:1px solid var(--rule);border-radius:999px;padding:6px 13px}
+@media(max-width:680px){.tuiblock{max-width:100%}}
 .qcard{max-width:660px;margin:var(--intra) auto 0;border:1px solid var(--rule);border-radius:18px;overflow:hidden;text-align:left}
 .qcard .top{display:flex;justify-content:space-between;align-items:center;padding:13px 20px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;color:var(--faint)}
 .qcard pre{margin:0;padding:24px;font-family:var(--mono);font-size:13px;line-height:2.1;overflow-x:auto}
@@ -279,15 +316,15 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
       <a class="btn" href="https://github.com/plumbkit/plumb">Star on GitHub</a>
     </div>
     <div class="stats rv">
-      <div class="stat"><span class="sig" aria-hidden="true"><svg viewBox="0 0 96 72"><path class="r" d="M16 36h64" fill="none" stroke-width="1.2"/><path class="a" d="M24 36h48" fill="none" stroke-width="2.2" stroke-linecap="round"/><circle class="fill-a" cx="48" cy="36" r="5.5"/><path class="a" d="M38 25 58 47M58 25 38 47" fill="none" stroke-width="1.4" stroke-linecap="round" opacity=".55"/></svg></span><div class="n"><em>0</em></div><div class="l">partial writes</div></div>
-      <div class="stat"><span class="sig" aria-hidden="true"><svg viewBox="0 0 96 72"><g class="fill-f" opacity=".34"><circle cx="28" cy="20" r="3"/><circle cx="48" cy="20" r="3"/><circle cx="68" cy="20" r="3"/><circle cx="28" cy="40" r="3"/><circle cx="48" cy="40" r="3"/><circle cx="68" cy="40" r="3"/></g><circle class="fill-a" cx="48" cy="20" r="5"/><circle class="fill-a" cx="68" cy="40" r="5" opacity=".75"/><path class="a" d="M24 54h48" fill="none" stroke-width="1.6" stroke-linecap="round"/></svg></span><div class="n" data-count="50">0</div><div class="l">structured tools</div></div>
-      <div class="stat"><span class="sig" aria-hidden="true"><svg viewBox="0 0 96 72"><ellipse class="r" cx="48" cy="36" rx="31" ry="13" fill="none" stroke-width="1.2"/><ellipse class="r" cx="48" cy="36" rx="17" ry="30" fill="none" stroke-width="1.2" transform="rotate(64 48 36)"/><circle class="fill-a" cx="26" cy="35" r="4.5"/><circle class="fill-g" cx="70" cy="32" r="4.5"/><circle class="fill-f" cx="49" cy="49" r="3.5"/></svg></span><div class="n" data-count="17">0</div><div class="l">languages &amp; formats</div></div>
-      <div class="stat"><span class="sig" aria-hidden="true"><svg viewBox="0 0 96 72"><path class="r" d="M48 20 24 42M48 20v28M48 20l24 22" fill="none" stroke-width="1.25"/><circle class="fill-a" cx="48" cy="20" r="5.5"/><circle class="fill-c" cx="24" cy="44" r="6"/><circle class="fill-c" cx="48" cy="50" r="6"/><circle class="fill-c" cx="72" cy="44" r="6"/><circle class="g" cx="24" cy="44" r="6" fill="none" stroke-width="1.5"/><circle class="g" cx="48" cy="50" r="6" fill="none" stroke-width="1.5"/><circle class="g" cx="72" cy="44" r="6" fill="none" stroke-width="1.5"/></svg></span><div class="n" data-count="11">0</div><div class="l">AI clients</div></div>
+      <div class="stat"><div class="n"><em>0</em></div><div class="l">partial writes</div></div>
+      <div class="stat"><div class="n" data-count="50">0</div><div class="l">structured tools</div></div>
+      <div class="stat"><div class="n" data-count="17">0</div><div class="l">languages &amp; formats</div></div>
+      <div class="stat"><div class="n" data-count="11">0</div><div class="l">AI clients</div></div>
     </div>
   </section>
   <section class="blk wrap center" id="collision">
     <span class="k rv">The problem plumb was built around</span>
-    <h2 class="rv">Two agents. One file. Watch.</h2>
+    <h2 class="rv">Two agents. One file. <span class="grad">Watch.</span></h2>
     <p class="intro rv">With native tools, the last write silently wins; and the first agent keeps reasoning about code that no longer exists. Through plumb, the same race resolves itself:</p>
     <div class="tline rv" id="tline">
       <div class="tev l ok"><div class="side"><div class="tm">14:02:11</div><div class="tt"><b>agent A</b>; <code>read_file</code> internal/auth/token.go · mtime captured in the response header</div></div></div>
@@ -301,7 +338,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
 
   <section class="blk wrap center" id="guardrails">
     <span class="k rv">Guardrails for unattended work</span>
-    <h2 class="rv">Kill the daemon.<br>Watch again.</h2>
+    <h2 class="rv">Kill the daemon.<br><span class="grad">Watch again.</span></h2>
     <p class="intro rv">One warm daemon serves every conversation, so plumb assumes it can die. <code style="font-family:var(--mono);font-size:.9em">plumb serve</code> is a reconnecting proxy that sits between your agent and the daemon:</p>
     <div class="tline rv">
       <div class="tev l no"><div class="side"><div class="tm">14:07:02</div><div class="tt"><b>daemon</b>; killed mid-session · <code>kill -9</code>, no warning<span class="tag no">down</span></div></div></div>
@@ -333,7 +370,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
 
   <section class="blk wrap center">
     <span class="k rv">Two engines</span>
-    <h2 class="rv">A map for speed.<br>A GPS for precision.</h2>
+    <h2 class="rv">A <span class="grad">map</span> for speed.<br>A <span class="grad">GPS</span> for precision.</h2>
     <div class="duo rv">
       <div class="col m">
         <div class="ck">The map · topology</div>
@@ -348,6 +385,33 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
         <p>The same language servers your editor trusts: real go-to-definition, every reference, scope- and type-aware rename. Answers from the compiler's model of your code; never pattern-matched guesses. Warm in one shared daemon, across every conversation.</p>
         <div class="cov">Go · Python first-class <span>· Java/Rust/Swift validated; more adapters experimental</span></div>
       </div>
+    </div>
+  </section>
+
+  <section class="blk wrap center" id="lsps">
+    <span class="k rv">Supported LSPs</span>
+    <h2 class="rv">Your editor's brain,<br>shared with <span class="grad">every agent.</span></h2>
+    <p class="intro rv">Plumb speaks to real language-server binaries. If the server is installed, the daemon can keep it warm and route files to it; topology stays available while heavier servers wake up.</p>
+    <div class="qcard lspcfg rv">
+      <div class="top"><span>bash &middot; plumb config show</span><span>9 adapters</span></div>
+      <div class="body">
+        <div class="cmd"><span class="p">$</span> plumb config show <span class="ok">--adapters</span></div>
+        <table>
+          <thead><tr><th>language</th><th>server</th><th>tier</th><th>active</th></tr></thead>
+          <tbody>
+            <tr><td class="lng">Go</td><td>gopls</td><td class="t1">first-class</td><td class="rdy">ready</td></tr>
+            <tr><td class="lng">Python</td><td>pyright</td><td class="t1">first-class</td><td class="rdy">ready</td></tr>
+            <tr><td class="lng">Java</td><td>jdtls</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
+            <tr><td class="lng">Rust</td><td>rust-analyzer</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
+            <tr><td class="lng">Swift</td><td>sourcekit-lsp</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
+            <tr><td class="lng">TS/JS</td><td>typescript-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
+            <tr><td class="lng">Zig</td><td>zls</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
+            <tr><td class="lng">Kotlin</td><td>kotlin-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
+            <tr><td class="lng">HTML</td><td>vscode-html-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="foot"><span class="ok">&check;</span> <b>9 adapters</b> &middot; on <code>PATH</code> = active &middot; <code>[lsp.&lt;lang&gt;] enabled = false</code> to exclude</div>
     </div>
   </section>
 
@@ -430,11 +494,11 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
           <p>The topology index traces what a change touches; callers, dependents, and the precise test files to run; in milliseconds, even while the code won't compile.</p>
         </div>
         <div class="gdiag">
-          <svg viewBox="0 24 720 252" role="img" aria-label="A changed symbol fans out through callers to dependent tests with highlighted paths">
+          <svg viewBox="0 24 720 276" role="img" aria-label="A changed symbol fans out through callers to dependent tests with highlighted paths">
             <g transform="translate(16 0)" style="font-family:var(--mono)">
               <circle cx="112" cy="150" r="40" style="fill:color-mix(in srgb,var(--acc) 22%,transparent);stroke:var(--acc);stroke-width:2.2"/>
               <text x="112" y="156" text-anchor="middle" style="fill:var(--acc);font-size:18px">fn</text>
-              <text x="112" y="209" text-anchor="middle" style="fill:var(--acc);font-size:13px">changed</text>
+              <text x="112" y="215" text-anchor="middle" style="fill:var(--acc);font-size:13px">changed</text>
               <path d="M152 150C226 66 286 70 342 82" style="fill:none;stroke:var(--faint);stroke-width:1.6"/>
               <path d="M152 150H342" style="fill:none;stroke:var(--faint);stroke-width:1.6"/>
               <path d="M152 150C226 234 286 230 342 218" style="fill:none;stroke:var(--faint);stroke-width:1.6"/>
@@ -449,7 +513,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
               <path d="M382 218C464 218 494 239 568 239" style="fill:none;stroke:var(--grn);stroke-width:1.8;stroke-dasharray:7 8"/>
               <circle cx="592" cy="61" r="24" style="fill:color-mix(in srgb,var(--grn) 14%,transparent);stroke:var(--grn);stroke-width:2.2"/>
               <circle cx="592" cy="239" r="24" style="fill:color-mix(in srgb,var(--grn) 14%,transparent);stroke:var(--grn);stroke-width:2.2"/>
-              <text x="592" y="187" text-anchor="middle" style="fill:var(--grn);font-size:13px">tests</text>
+              <text x="592" y="288" text-anchor="middle" style="fill:var(--grn);font-size:13px">tests</text>
             </g>
           </svg>
         </div>
@@ -459,7 +523,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
 
   <section class="blk wrap center" id="architecture">
     <span class="k rv">Under the hood</span>
-    <h2 class="rv">One warm daemon.</h2>
+    <h2 class="rv">One <span class="grad">warm</span> daemon.</h2>
     <p class="intro rv">Every conversation runs its own lightweight <code style="font-family:var(--mono);font-size:.9em">plumb serve</code>; they all share one daemon that keeps the language servers, locks, index and memory warm across every chat; and across every crash.</p>
     <figure class="arch rv">
       <svg viewBox="0 0 940 320" role="img" aria-label="Agents connect through serve proxies to one socket and one warm daemon, which fans out to shared language servers" xmlns="http://www.w3.org/2000/svg">
@@ -566,7 +630,6 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
   <section class="blk wrap center" id="quickstart">
     <span class="k rv">Quick start</span>
     <h2 class="rv">Three commands.</h2>
-    <p class="qnote rv">Want the live dashboard too? Run <code>plumb tui</code> to watch active sessions, recent writes, diagnostics and daemon health while agents work.</p>
     <div class="qcard rv">
       <div class="top"><span>bash · install</span><button class="cp" data-copy="brew install plumbkit/plumb/plumb
 plumb setup claude-code
@@ -579,6 +642,25 @@ cd my-project && plumb init">copy all</button></div>
 <span class="c"># 3 · optional; pin the root &amp; enable project config</span>
 <span class="p">$</span> cd my-project &amp;&amp; plumb init
 <span class="ok">✓ ready; your agents now share one safe workspace</span></pre>
+    </div>
+    <div class="tuiblock rv">
+      <span class="k">The dashboard</span>
+      <h3>One keystroke. The whole fleet, live.</h3>
+      <p class="tdesc">Run <code>plumb tui</code> for an operations view of everything plumb is doing at once: <b>every active session</b> and the file it is touching, <b>per-tool latency, error rates and token efficiency</b>, and the daemon's own <b>CPU, memory, GC and goroutines</b>; the one warm process behind every conversation.</p>
+      <div class="qcard tuicard">
+        <div class="top"><span>bash · plumb tui</span><span class="live">live</span></div>
+        <video class="tuishot tui-dark" autoplay loop muted playsinline preload="metadata" aria-label="plumb tui — live daemon and session dashboard">
+          <source src="plumb_tui.webm" type="video/webm">
+          <source src="plumb_tui.mp4" type="video/mp4">
+        </video>
+        <video class="tuishot tui-light" autoplay loop muted playsinline preload="metadata" aria-hidden="true">
+          <source src="plumb_tui_light.webm" type="video/webm">
+          <source src="plumb_tui_light.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="tuifeat">
+        <span>live sessions</span><span>per-tool p95 &amp; errors</span><span>token efficiency</span><span>daemon CPU · memory · GC</span><span>health alerts</span><span>per-session drill-down</span>
+      </div>
     </div>
   </section>
 

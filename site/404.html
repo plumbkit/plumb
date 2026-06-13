@@ -5,36 +5,68 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>plumb — off the true line (404)</title>
 <meta name="robots" content="noindex">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f3efe6'/%3E%3Cline x1='16' y1='5' x2='16' y2='15' stroke='%231c1a16' stroke-width='2'/%3E%3Cpath d='M16 15 L23 21 L16 30 L9 21 Z' fill='%232f5141'/%3E%3C/svg%3E">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f5">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121310">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
+:root{
+  --bg:#faf9f5;--card:#ffffff;--rule:#e5e2d8;--tx:#191813;--soft:#56524a;--faint:#8d887c;--acc:#b35a2e;
+}
+@media(prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){--bg:#121310;--card:#1b1c17;--rule:#2e2f27;--tx:#ece8dc;--soft:#aaa595;--faint:#787465;--acc:#e08a55}
+}
+:root[data-theme="dark"]{--bg:#121310;--card:#1b1c17;--rule:#2e2f27;--tx:#ece8dc;--soft:#aaa595;--faint:#787465;--acc:#e08a55}
 *{margin:0;box-sizing:border-box}
+::selection{background:var(--acc);color:#fff}
 body{
-  min-height:100vh;background:#f3efe6;color:#1c1a16;
+  min-height:100vh;background:var(--bg);color:var(--tx);
   font-family:'Fraunces',Georgia,serif;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   text-align:center;padding:40px;-webkit-font-smoothing:antialiased;
+  transition:background .3s ease,color .3s ease;
 }
+.thm{position:fixed;top:22px;right:22px;background:none;border:1px solid var(--rule);border-radius:999px;width:38px;height:38px;display:grid;place-items:center;cursor:pointer;color:var(--soft);transition:.18s;padding:0}
+.thm:hover{color:var(--tx);border-color:var(--tx)}
+.thm svg{width:15px;height:15px}
 .bob{margin-bottom:34px;animation:sway 6s ease-in-out infinite;transform-origin:top center}
+@media(prefers-reduced-motion:reduce){.bob{animation:none}}
 @keyframes sway{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
-.code{font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.26em;text-transform:uppercase;color:#a4502b;margin-bottom:18px}
+.bob .ln{stroke:var(--faint)}
+.bob .bb{fill:var(--acc)}
+.code{font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.26em;text-transform:uppercase;color:var(--acc);margin-bottom:18px}
 h1{font-weight:300;font-size:clamp(36px,7vw,68px);letter-spacing:-.02em;line-height:1}
 h1 em{font-style:italic}
-p{color:#4a463d;font-size:18px;margin:20px 0 34px;max-width:42ch}
-a{font-family:'Inter',sans-serif;font-size:15px;font-weight:500;color:#f3efe6;background:#1c1a16;border:1.5px solid #1c1a16;border-radius:999px;padding:13px 26px;text-decoration:none;transition:.18s}
-a:hover{background:#2f5141;border-color:#2f5141}
+p{color:var(--soft);font-size:18px;margin:20px 0 34px;max-width:42ch}
+a.back{font-family:'Inter',sans-serif;font-size:15px;font-weight:500;color:var(--bg);background:var(--tx);border:1.5px solid var(--tx);border-radius:999px;padding:13px 26px;text-decoration:none;transition:.18s}
+a.back:hover{background:var(--acc);border-color:var(--acc);color:#fff}
 </style>
+<script>(function(){try{var t=localStorage.getItem('plumb-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
+<button class="thm" id="themeToggle" type="button" aria-label="Toggle colour theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5 A8.5 8.5 0 0 0 12 20.5 Z" fill="currentColor" stroke="none"/></svg></button>
 <svg class="bob" width="38" height="104" viewBox="0 0 38 104" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <line x1="19" y1="0" x2="19" y2="70" stroke="#1c1a16" stroke-width="1.4"/>
-  <path d="M19 70 L31 86 L19 104 L7 86 Z" fill="#2f5141" stroke="#1c1a16" stroke-width="1.2"/>
+  <line class="ln" x1="19" y1="0" x2="19" y2="70" stroke-width="1.4"/>
+  <path class="bb" d="M19 70 L31 86 L19 104 L7 86 Z"/>
 </svg>
 <div class="code">Error 404</div>
 <h1>Off the <em>true line.</em></h1>
 <p>That page isn't on the plumb line. Let's drop you back to something solid.</p>
-<a href="/">← Back to plumb</a>
+<a class="back" href="/">← Back to plumb</a>
+<script>
+(function(){
+  var root=document.documentElement;
+  function current(){return root.getAttribute('data-theme')||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');}
+  document.getElementById('themeToggle').addEventListener('click',function(){
+    var next=current()==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('plumb-theme',next);}catch(e){}
+  });
+})();
+</script>
 </body>
 </html>
