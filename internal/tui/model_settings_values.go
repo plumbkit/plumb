@@ -215,7 +215,8 @@ func (m Model) toggleBool(key settingKey, cur bool) Model {
 	return m
 }
 
-// boolField returns a pointer to the bool config field a toggle row edits.
+// boolField returns a pointer to the bool config field a toggle row edits. Split
+// across two functions to stay within the gocyclo-15 contract.
 func boolField(c *config.Config, key settingKey) *bool {
 	switch key {
 	case skStrict:
@@ -232,10 +233,19 @@ func boolField(c *config.Config, key settingKey) *bool {
 		return &c.Quality.Enabled
 	case skRefuseHomeRoots:
 		return &c.Walk.RefuseHomeRoots
+	default:
+		return boolFieldMore(c, key)
+	}
+}
+
+func boolFieldMore(c *config.Config, key settingKey) *bool {
+	switch key {
 	case skAutoAttachPersist:
 		return &c.Workspace.AutoAttachPersist
 	case skAllowDependencyReads:
 		return &c.Workspace.AllowDependencyReads
+	case skAgentConfigWrites:
+		return &c.AgentConfigWrites
 	case skGitWrites:
 		return &c.Git.AllowWrites
 	case skGitDestructive:

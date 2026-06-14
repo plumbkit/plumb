@@ -236,6 +236,7 @@ var settingTOMLPaths = map[settingKey][]string{
 	skProtectedBranches:     {"git", "protected_branches"},
 	skExcludePatterns:       {"topology", "exclude_patterns"},
 	skAnalysers:             {"quality", "analysers"},
+	skAgentConfigWrites:     {"agent_config_writes"},
 }
 
 // tomlPath returns the TOML key path for a project-overridable setting and
@@ -299,4 +300,5 @@ var settingDottedKeys = map[settingKey]string{
 	skSemAPIKey:             "semantics.api_key",
 	skSemRerankCandidates:   "semantics.rerank_candidates",
 	skSemTimeout:            "semantics.timeout",
+	skAgentConfigWrites:     "agent_config_writes",
 }

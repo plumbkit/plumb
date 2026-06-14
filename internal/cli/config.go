@@ -269,6 +269,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 
+	printAgentProvenance(ws)
 	return nil
 }
 

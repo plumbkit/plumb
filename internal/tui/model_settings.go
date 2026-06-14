@@ -73,6 +73,7 @@ const (
 	skIdleThresholdMin
 	skEvictionTTLMin
 	skPathStyle
+	skAgentConfigWrites
 	// Per-language [lsp.<lang>] rows carry the language in settingItem.lspLang.
 	skLSPEnabled
 	skLSPCommand
@@ -253,6 +254,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Others", label: "Cache TTL", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions},
 		{group: "Others", label: "Cache max size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize)},
 		{group: "Others", label: "LSP query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions},
+		{group: "Others", label: "Agent config writes", kind: settingToggle, key: skAgentConfigWrites, value: onOff(cfg.AgentConfigWrites)},
 	}, lspSettingItems(cfg)...), semanticsSettingItems(cfg)...))
 }
 

@@ -101,6 +101,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewGit(wd, s.gitPolicy))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
+	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(boundary))
 	srv.Register(tools.NewFindReplace(wd))
 	srv.Register(tools.NewVersion())
