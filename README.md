@@ -120,12 +120,18 @@ Real-binary validation has been exercised on **macOS**; Linux integration runs i
 
 ```mermaid
 flowchart TD
-    A["Agent — Claude, Codex, Gemini …"] --> B["plumb serve<br/><i>reconnecting proxy, one per conversation</i>"]
-    B --> S["plumb.sock<br/><i>~/Library/Caches/plumb · ~/.cache/plumb on Linux</i>"]
-    S --> D["plumb daemon<br/><i>one shared process</i>"]
+    A1["Claude"] --> S1["plumb serve"]
+    A2["Codex"] --> S2["plumb serve"]
+    A3["Gemini"] --> S3["plumb serve"]
+    S1 --> K["plumb.sock *"]
+    S2 --> K
+    S3 --> K
+    K --> D["plumb daemon **"]
     D --> G["gopls → /projects/foo"]
     D --> P["pyright → /projects/bar"]
 ```
+
+`*` `~/Library/Caches/plumb/plumb.sock` (`~/.cache/plumb` on Linux) · `**` one shared process — language servers stay warm across chats
 
 Warm servers (no re-indexing each chat), shared per-path locks across all connections, and full `workspace/didChangeWatchedFiles` support so symbol indexes stay live after every write.
 
