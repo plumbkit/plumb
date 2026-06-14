@@ -8,7 +8,7 @@ import (
 
 func TestAvailableCommandNameWidthUsesLongestAvailableCommand(t *testing.T) {
 	got := availableCommandNameWidth(setupCmd)
-	want := len("claude-desktop") + 1
+	want := len("antigravity-desktop") + 1
 	if got != want {
 		t.Fatalf("availableCommandNameWidth(setupCmd) = %d, want %d", got, want)
 	}

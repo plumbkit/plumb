@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +33,8 @@ var extraSetupTargets = []setupTarget{
 	{"cursor", "Cursor", CursorConfigPath, setupClaudeDesktopInto},
 	{"augment", "Augment Code", AugmentConfigPath, setupClaudeDesktopInto},
 	{"qwen", "Qwen Code", QwenConfigPath, setupClaudeDesktopInto},
-	{"antigravity", "Antigravity CLI", AntigravityConfigPath, setupClaudeDesktopInto},
+	{"antigravity", "Antigravity CLI", AntigravityConfigPath, setupAntigravityInto},
+	{"antigravity-desktop", "Antigravity Desktop", AntigravityDesktopConfigPath, setupAntigravityInto},
 	{"opencode", "OpenCode", OpenCodeConfigPath, setupOpenCodeInto},
 	{"crush", "Crush", CrushConfigPath, setupCrushInto},
 	{"goose", "Goose", GooseConfigPath, setupGooseInto},
@@ -141,4 +145,70 @@ func setupHermesInto(cfgPath, plumbBin string) (added bool, preserved []string, 
 		map[string]any{"command": plumbBin, "args": []string{"serve"}},
 		func(existing map[string]any) bool { return existing["command"] == plumbBin },
 	)
+}
+
+// setupAntigravityInto registers plumb as a standalone JSON config file in Antigravity's mcp/ directory.
+func setupAntigravityInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
+	dir := filepath.Dir(cfgPath)
+	files, err := os.ReadDir(dir)
+	if err == nil {
+		for _, f := range files {
+			if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
+				name := filepath.Base(f.Name())
+				name = name[:len(name)-5] // strip .json
+				if name != "plumb" {
+					preserved = append(preserved, name)
+				}
+			}
+		}
+		sort.Strings(preserved)
+	}
+
+	var existing map[string]any
+	data, err := os.ReadFile(cfgPath)
+	if err == nil {
+		if err := json.Unmarshal(data, &existing); err == nil {
+			if existing["command"] == plumbBin && stringSliceEqual(existing["args"], []string{"serve"}) {
+				// If writing to antigravity-desktop, also sync ide directory if it exists
+				if filepath.Base(filepath.Dir(dir)) == "antigravity" {
+					idePath := filepath.Join(filepath.Dir(filepath.Dir(dir)), "antigravity-ide", "mcp", "plumb.json")
+					if _, err := os.Stat(filepath.Dir(idePath)); err == nil {
+						_ = writeAntigravityConfig(idePath, plumbBin)
+					}
+				}
+				return false, preserved, nil
+			}
+		}
+		if err := backupFile(cfgPath); err != nil {
+			return false, nil, fmt.Errorf("backing up %s: %w", cfgPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return false, nil, err
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, nil, err
+	}
+
+	if err := writeAntigravityConfig(cfgPath, plumbBin); err != nil {
+		return false, nil, err
+	}
+
+	// If writing to antigravity-desktop, also sync ide directory if it exists
+	if filepath.Base(filepath.Dir(dir)) == "antigravity" {
+		idePath := filepath.Join(filepath.Dir(filepath.Dir(dir)), "antigravity-ide", "mcp", "plumb.json")
+		if _, err := os.Stat(filepath.Dir(idePath)); err == nil {
+			_ = writeAntigravityConfig(idePath, plumbBin)
+		}
+	}
+
+	return true, preserved, nil
+}
+
+func writeAntigravityConfig(path string, plumbBin string) error {
+	entry := map[string]any{
+		"command": plumbBin,
+		"args":    []string{"serve"},
+	}
+	return writeJSON(path, entry)
 }

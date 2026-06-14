@@ -72,10 +72,15 @@ func HermesConfigPath() (string, error) {
 }
 
 // AntigravityConfigPath returns the global Antigravity CLI MCP config
-// (~/.gemini/antigravity-cli/mcp_config.json). Antigravity is Google's
-// replacement for Gemini CLI and shares its mcpServers JSON shape.
+// (~/.gemini/antigravity-cli/mcp/plumb.json).
 func AntigravityConfigPath() (string, error) {
-	return homeRelConfigPath(".gemini", "antigravity-cli", "mcp_config.json")
+	return homeRelConfigPath(".gemini", "antigravity-cli", "mcp", "plumb.json")
+}
+
+// AntigravityDesktopConfigPath returns the global Antigravity Desktop MCP config
+// (~/.gemini/antigravity/mcp/plumb.json).
+func AntigravityDesktopConfigPath() (string, error) {
+	return homeRelConfigPath(".gemini", "antigravity", "mcp", "plumb.json")
 }
 
 // GeminiConfigPath returns the platform-specific path for Gemini CLI's
