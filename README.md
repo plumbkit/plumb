@@ -47,40 +47,55 @@ See the measured, reproducible numbers behind this: [**docs/use-cases.md**](docs
 
 ---
 
-## Install
+## Get started
 
-Plumb is a single binary. Pick whichever you like:
+Plumb is a single binary — from zero to your first answer:
+
+**1. Install**
 
 ```sh
 # Homebrew (macOS + Linux) — recommended
 brew install plumbkit/plumb/plumb
 
-# Go
+# or with Go
 go install github.com/plumbkit/plumb/cmd/plumb@latest
 
-# Or download a prebuilt binary from the Releases page:
-# https://github.com/plumbkit/plumb/releases
+# or grab a prebuilt binary: https://github.com/plumbkit/plumb/releases
 ```
 
-> **macOS note:** prebuilt binaries are not yet notarised — on first run you may need
-> `xattr -d com.apple.quarantine ./plumb`, or right-click → Open. Homebrew installs
-> avoid this.
+> **macOS note:** prebuilt binaries are not yet notarised — on first run you may
+> need `xattr -d com.apple.quarantine ./plumb`, or right-click → Open. Homebrew
+> installs avoid this.
 
-### Connect your agent and go
+**2. Connect your agent**
 
 ```sh
-plumb setup claude-desktop   # also: claude-code, codex, gemini, cursor, …
-cd your/project && plumb init
+plumb setup claude-code      # also: claude-desktop, codex, gemini, cursor, …
 ```
 
-`plumb setup` writes the MCP config for you — no hand-editing JSON. Then make sure the language servers you need are on your `$PATH`:
+`plumb setup` writes the MCP config for you — no hand-editing JSON.
+
+**3. Open your project and try it**
+
+Make sure the language server you need is on your `$PATH` (`gopls` for Go,
+`pyright` for Python, …), then point your agent at a real question. In Claude
+Code:
 
 ```sh
-go install golang.org/x/tools/gopls@latest   # Go
-npm install -g pyright                        # Python
+cd your/project
+claude "Use plumb to orient in this repo (session_start), then show me
+everywhere <Handler> is called and what would break if I changed its signature."
 ```
 
-Full walkthrough: [**docs/getting-started.md**](docs/getting-started.md).
+Plumb resolves the workspace and runs `session_start` for orientation, then
+answers with real LSP and topology data — actual call sites and blast radius —
+instead of guessing from file dumps. It's read-only; nothing is modified. (Any
+connected agent works — just paste the prompt.)
+
+> No `go.mod`/`pyproject.toml` and not a git repo? Run `plumb init` once to pin
+> the workspace root (it also seeds `.plumb/context.md` and project config).
+
+Full walkthrough → [**docs/getting-started.md**](docs/getting-started.md).
 
 ---
 
