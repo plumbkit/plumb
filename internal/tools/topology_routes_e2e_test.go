@@ -48,12 +48,21 @@ struct Greet: ParsableCommand {
 	t.Cleanup(func() { _ = store.Close() })
 
 	uri := "file://" + path
-	deadline := time.Now().Add(5 * time.Second)
+	// Wait for the WASM Swift extractor to index the file. The deadline is
+	// generous: under -race on a loaded CI runner, wazero's cold start can take
+	// several seconds, and a too-short wait makes route detection run against an
+	// empty index — surfacing as a misleading "no route patterns matched".
+	indexed := false
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if nodes, _ := store.SymbolsInFile(context.Background(), uri); len(nodes) > 0 {
+			indexed = true
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	if !indexed {
+		t.Fatal("timed out waiting for the Swift extractor to index Greet.swift")
 	}
 
 	tool := tools.NewTopologyRoutes(func() *topology.Store { return store })

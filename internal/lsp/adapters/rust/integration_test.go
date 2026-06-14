@@ -16,12 +16,23 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
-// requireRustAnalyzer skips if rust-analyzer is not on PATH and returns its path.
+// requireRustAnalyzer skips if rust-analyzer is not usable and returns its path.
+//
+// LookPath alone is not enough: GitHub runner images ship a rustup shim named
+// rust-analyzer that is on PATH even when the component is not installed. The
+// shim exits non-zero and closes its pipes the moment it is spawned, which would
+// surface as a confusing "connection closed" failure rather than a skip. Probing
+// `--version` distinguishes a real binary from the shim.
 func requireRustAnalyzer(t *testing.T) string {
 	t.Helper()
 	p, err := exec.LookPath("rust-analyzer")
 	if err != nil {
 		t.Skip("rust-analyzer not found on PATH — install with: rustup component add rust-analyzer")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, p, "--version").CombinedOutput(); err != nil {
+		t.Skipf("rust-analyzer on PATH is not usable (likely a rustup shim): %v: %s", err, out)
 	}
 	return p
 }
