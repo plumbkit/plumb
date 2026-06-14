@@ -12,7 +12,7 @@
 
 **IDE intelligence for agents — with guardrails for unattended work.**
 
-Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a tree-sitter code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. A single binary; nothing else to install.
+Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a [tree-sitter](https://tree-sitter.github.io/tree-sitter/) code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. A single binary; nothing else to install.
 
 ---
 
@@ -150,9 +150,9 @@ Full settings reference: [**docs/configuration.md**](docs/configuration.md).
 
 ---
 
-## The bet
+## The hard part
 
-Agents can already *read* code well enough. What's missing is the ability to *write* — concurrently, transactionally, and recoverably — without supervision. Plumb prioritises exactly that, and keeps the language support claims honest along the way.
+Agents can already *read* code well enough; writing it unsupervised — concurrently, transactionally, recoverably — is what's still unsolved. Plumb is the bet that this is the half worth getting right first. It's early, and the language coverage says so: a small validated core, the rest clearly marked experimental.
 
 ---
 
