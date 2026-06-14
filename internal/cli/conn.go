@@ -66,6 +66,11 @@ type sessionView struct {
 	ws        config.WorkspaceConfig
 	semantics config.SemanticsConfig
 	memory    config.MemoryConfig
+	// tasks holds the resolved [tasks.<lang>] command templates; agentConfigWrites
+	// is the resolved enable knob for the agent-writable-config tool. Both are
+	// swapped per project on every attach / re-pin / reload, like the blocks above.
+	tasks             map[string]config.TasksConfig
+	agentConfigWrites bool
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.
