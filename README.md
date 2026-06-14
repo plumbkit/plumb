@@ -1,4 +1,7 @@
-# plumb
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/logo-dark.svg">
+  <img alt="plumb" src="site/logo-light.svg" width="220">
+</picture>
 
 [![CI](https://github.com/plumbkit/plumb/actions/workflows/ci.yml/badge.svg)](https://github.com/plumbkit/plumb/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/plumbkit/plumb.svg)](https://pkg.go.dev/github.com/plumbkit/plumb)
