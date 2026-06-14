@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -71,7 +72,32 @@ func RecordAgentWrite(workspace, key string, entry ProvenanceEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating .plumb dir: %w", err)
 	}
+	ensureProvenanceGitignore(workspace)
 	return writeJSONAtomic(path, m)
+}
+
+// ensureProvenanceGitignore makes sure <ws>/.plumb/.gitignore excludes the
+// provenance sidecar — local audit metadata (session ids, timestamps) that must
+// never be committed, even in a workspace that deliberately tracks .plumb/.
+// Mirrors topology's ensureGitignore. Best-effort; failure is non-fatal.
+func ensureProvenanceGitignore(workspace string) {
+	const entry = "config.provenance.json"
+	const header = "# plumb agent-config provenance (local audit metadata; do not commit)"
+	path := filepath.Join(workspace, ".plumb", ".gitignore")
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if bytes.Contains(existing, []byte(entry)) {
+		return
+	}
+	var b bytes.Buffer
+	b.Write(existing)
+	if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
+		b.WriteByte('\n')
+	}
+	b.WriteString(header + "\n" + entry + "\n")
+	_ = os.WriteFile(path, b.Bytes(), 0o644) //nolint:gosec // G306: .gitignore is a normal repo file
 }
 
 // DropProvenance removes key from the sidecar (the revert path), removing the

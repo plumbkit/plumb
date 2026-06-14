@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,6 +19,20 @@ func TestProvenance_RoundTrip(t *testing.T) {
 	}
 	if prov["log_level"].Source != "agent" || prov["log_level"].SessionID != "s1" {
 		t.Errorf("round-trip mismatch: %+v", prov["log_level"])
+	}
+}
+
+func TestProvenance_GitignoresSidecar(t *testing.T) {
+	ws := t.TempDir()
+	if err := RecordAgentWrite(ws, "log_level", ProvenanceEntry{Source: "agent"}); err != nil {
+		t.Fatalf("RecordAgentWrite: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(ws, ".plumb", ".gitignore"))
+	if err != nil {
+		t.Fatalf("expected .plumb/.gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), "config.provenance.json") {
+		t.Errorf(".gitignore should exclude the provenance sidecar:\n%s", data)
 	}
 }
 
