@@ -118,13 +118,13 @@ Real-binary validation has been exercised on **macOS**; Linux integration runs i
 
 `plumb serve` is a thin, reconnecting stdio proxy. The real work happens in one shared background daemon, so language servers stay warm across chats.
 
-```
-Agent (Claude, Codex, Gemini, …)
-  └── plumb serve   (reconnecting proxy, one per conversation)
-        └── ~/Library/Caches/plumb/plumb.sock   (~/.cache/plumb on Linux)
-              └── plumb daemon   (one shared process)
-                    ├── gopls for /projects/foo
-                    └── pyright for /projects/bar
+```mermaid
+flowchart TD
+    A["Agent — Claude, Codex, Gemini …"] --> B["plumb serve<br/><i>reconnecting proxy, one per conversation</i>"]
+    B --> S["plumb.sock<br/><i>~/Library/Caches/plumb · ~/.cache/plumb on Linux</i>"]
+    S --> D["plumb daemon<br/><i>one shared process</i>"]
+    D --> G["gopls → /projects/foo"]
+    D --> P["pyright → /projects/bar"]
 ```
 
 Warm servers (no re-indexing each chat), shared per-path locks across all connections, and full `workspace/didChangeWatchedFiles` support so symbol indexes stay live after every write.
