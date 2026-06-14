@@ -8,6 +8,8 @@
   <img alt="plumb" src="site/logo-light.svg" width="220">
 </picture>
 
+<br>
+
 **IDE intelligence for agents — with guardrails for unattended work.**
 
 Plumb is an [MCP](https://modelcontextprotocol.io) server that gives a coding agent the intelligence layer of an IDE — [LSP](https://microsoft.github.io/language-server-protocol/)-backed semantics, a tree-sitter code index, and project memory — inside guardrails: atomic, lock-serialised writes with transactional rollback, scoped filesystem and git access, and a daemon that survives its own crashes. A single binary; nothing else to install.
