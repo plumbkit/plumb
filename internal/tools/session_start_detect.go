@@ -209,6 +209,37 @@ func gitWorkingTreeSummary(ws string, maxLines int) string {
 	return strings.Join(lines, "\n")
 }
 
+// gitSubmodules returns the workspace-relative paths of the repo's git
+// submodules, sorted, or nil when there are none / not a git repo / git is
+// unavailable. Read straight from .gitmodules via `git config`, so it reports
+// configured submodules even before they are initialised. Best-effort. A
+// submodule is a separate repository, so a git command in the superproject
+// cannot stage its file contents — session_start surfaces them and the
+// repo-targeting rule up front.
+func gitSubmodules(ws string) []string {
+	gitmodules := filepath.Join(ws, ".gitmodules")
+	if _, err := os.Stat(gitmodules); err != nil {
+		return nil
+	}
+	cmd := exec.Command("git", "-C", ws, "config", "--file", gitmodules, "--get-regexp", `^submodule\..*\.path$`)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// Each line is "submodule.<name>.path <path>"; the path is everything
+		// after the first space.
+		if i := strings.IndexByte(line, ' '); i >= 0 {
+			if p := strings.TrimSpace(line[i+1:]); p != "" {
+				paths = append(paths, p)
+			}
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // recentlyModifiedFiles returns up to n workspace-relative file paths sorted
 // by mtime (newest first). Skips hidden directories, .git, node_modules,
 // vendor — the usual noise.

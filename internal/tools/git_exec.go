@@ -101,23 +101,75 @@ func isExitCode(err error, code int) bool {
 }
 
 // enhanceGitError rewrites a few cryptic git failures into actionable guidance.
-// Currently: a stale `.git/index.lock` (left by a crashed git process) blocks
-// add/commit with "Unable to create '.../index.lock': File exists" and no
-// in-plumb remedy. We surface the exact remedy rather than auto-removing the
-// lock — in a shared worktree another live git/plumb process may legitimately
-// hold it, so silent removal is unsafe.
+// Each case is a self-contained hint helper returning "" when it does not apply,
+// so adding a rewrite never disturbs the others.
 func enhanceGitError(repoRoot, msg string) string {
+	if hint := submodulePathspecHint(repoRoot, msg); hint != "" {
+		return msg + hint
+	}
+	if hint := indexLockHint(repoRoot, msg); hint != "" {
+		return msg + hint
+	}
+	return msg
+}
+
+// indexLockHint addresses a stale `.git/index.lock` (left by a crashed git
+// process) that blocks add/commit with "Unable to create '.../index.lock': File
+// exists". We surface the exact remedy rather than auto-removing the lock — in a
+// shared worktree another live git/plumb process may legitimately hold it, so
+// silent removal is unsafe. Returns "" when msg is not this failure.
+func indexLockHint(repoRoot, msg string) string {
 	if !strings.Contains(msg, "index.lock") || !strings.Contains(msg, "File exists") {
-		return msg
+		return ""
 	}
 	lock := filepath.Join(repoRoot, ".git", "index.lock")
-	hint := fmt.Sprintf(
+	return fmt.Sprintf(
 		"\n  This is a leftover lock from a git process that did not exit cleanly. "+
 			"First confirm no git is running (e.g. `pgrep -fl git`); if none is, remove the stale lock with `rm -f %s`, then retry. "+
 			"plumb does not remove it automatically because another session may hold it in a shared worktree.",
 		lock,
 	)
-	return msg + hint
+}
+
+// submodulePathspecHint addresses git's "Pathspec '<path>' is in submodule
+// '<name>'" failure — emitted when a write (e.g. add, or commit -- <path>) names
+// a path that lives inside a nested submodule while git runs in the
+// superproject. A submodule is a separate repository, so the superproject can
+// only record its commit pointer, never stage its file contents; the operation
+// must target the submodule directly. Returns "" when msg is not this failure.
+func submodulePathspecHint(repoRoot, msg string) string {
+	const marker = "is in submodule"
+	idx := strings.Index(msg, marker)
+	if idx < 0 {
+		return ""
+	}
+	name := firstQuoted(msg[idx:])
+	if name == "" {
+		return ""
+	}
+	sub := filepath.Join(repoRoot, name)
+	return fmt.Sprintf(
+		"\n  %q is a git submodule — a separate repository nested in this one. "+
+			"A git command run in the superproject cannot stage or commit files inside it (the superproject tracks only the submodule's commit pointer). "+
+			"Re-run the git tool with repo=%q (a path inside the submodule) and give files relative to that root. "+
+			"After committing inside the submodule, record the moved pointer with a separate add+commit in the superproject.",
+		name, sub,
+	)
+}
+
+// firstQuoted returns the text inside the first pair of single quotes in s, or
+// "" when there is no such pair. git quotes pathspec and submodule names this way.
+func firstQuoted(s string) string {
+	i := strings.IndexByte(s, '\'')
+	if i < 0 {
+		return ""
+	}
+	rest := s[i+1:]
+	j := strings.IndexByte(rest, '\'')
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
 }
 
 func formatGitOutput(sub, result string) string {

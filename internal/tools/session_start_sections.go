@@ -134,6 +134,28 @@ func writeSessionWorkingTree(sb *strings.Builder, ws string) {
 	sb.WriteString("\n```\n\n")
 }
 
+// writeSessionSubmodules surfaces any git submodules in the workspace. A
+// submodule is a separate repository nested in the superproject, so an agent
+// that edits a file inside one must run the git tool against the submodule
+// (repo=<path>) — a commit run against the superproject records only the moved
+// pointer, not the file change. That is the single most common submodule
+// footgun, so it is stated at orientation. Skipped when the repo has none.
+func writeSessionSubmodules(sb *strings.Builder, ws string) {
+	subs := gitSubmodules(ws)
+	if len(subs) == 0 {
+		return
+	}
+	sb.WriteString("## Submodules (nested git repositories)\n\n")
+	fmt.Fprintf(sb, "Each path below is a separate git repository. To stage or commit a file inside one, "+
+		"call the `git` tool with `repo` pointing inside that submodule (e.g. `repo: %q`) and give `files` relative to it. "+
+		"A commit run against the superproject records only the submodule's pointer, not the file change.\n\n",
+		filepath.Join(ws, subs[0]))
+	for _, s := range subs {
+		fmt.Fprintf(sb, "- %s/\n", s)
+	}
+	sb.WriteString("\n")
+}
+
 // writeSessionGitPolicy reports the connection's live, resolved git tool policy
 // so an agent learns up front whether it can commit through the git tool —
 // rather than discovering it via a rejected call or, worse, trusting a stale

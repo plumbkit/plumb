@@ -31,7 +31,7 @@ var gitSchema = json.RawMessage(`{
     },
     "repo": {
       "type": "string",
-      "description": "Path to any file or directory inside the repository. Omit to use the attached workspace; if no workspace is attached the call is refused (git never falls back to the daemon's working directory)."
+      "description": "Path to any file or directory inside the repository. Omit to use the attached workspace; if no workspace is attached the call is refused (git never falls back to the daemon's working directory). To operate on a nested git submodule, set this to a path inside the submodule — git resolves to the submodule's own root, so add/commit land there; a command run against the superproject only records the submodule's commit pointer, never its file contents."
     },
     "confirm": {
       "type": "boolean",
