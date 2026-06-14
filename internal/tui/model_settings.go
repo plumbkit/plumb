@@ -64,6 +64,7 @@ const (
 	skAutoAttach
 	skAutoAttachPersist
 	skAllowDependencyReads
+	skChildScanDepth
 	skExtraRoots
 	skReadRoots
 	skProtectedBranches
@@ -88,36 +89,55 @@ const (
 	skSemTimeout
 )
 
-// reloadTier classifies when a change to a setting takes effect. It mirrors
-// config.RestartSensitiveEqual — the daemon's single source of truth — under
-// which only log format and cache need a restart; edits/git/topology hot-reload
-// into running sessions (the TUI pushes reload-config on every change), and
-// quality/auto_attach/lsp_query apply on the next workspace attach.
-type reloadTier int
-
-const (
-	reloadLive        reloadTier = iota // applies to running sessions immediately
-	reloadNextSession                   // applies on next attach / new session
-	reloadRestart                       // needs a daemon restart
-)
-
-// reloadTierFor maps a settings row to when its change takes effect. Single
-// source of truth shared by the row marker and the status line, so the two can
-// never disagree. The reloadRestart set must stay in lock-step with the fields
-// config.RestartSensitiveEqual compares (log format + cache).
-func reloadTierFor(key settingKey) reloadTier {
-	switch key {
-	case skLogFormat, skLogFile, skCacheTTL, skCacheMaxSize:
-		return reloadRestart
-	case skQuality, skQualityMode, skQualityTimeoutMs, skQualityMaxFindings, skAnalysers,
-		skAutoAttach, skAutoAttachPersist, skAllowDependencyReads, skExtraRoots, skReadRoots, skLSPTimeout,
-		skTopoResyncOnAttach, skTopoWatch, skTopoMaxFileSize,
-		skTopoResyncBatch, skTopoResyncPauseMs, skTopoResyncIntervalMin, skExcludePatterns,
-		skLSPEnabled, skLSPCommand, skLSPArgs, skLSPRootMarkers:
-		return reloadNextSession
-	default: // theme, path style, log level, edits, walk, topology enable, git, session
-		return reloadLive
+// dottedKeyFor maps a settings row key to its config-field-registry dotted key.
+// For a per-language [lsp.<lang>] row it builds the concrete key from lspLang,
+// or the "<lang>" template form when lspLang is empty (a tier-only lookup).
+func dottedKeyFor(key settingKey, lspLang string) string {
+	if field, ok := lspFieldName(key); ok {
+		lang := lspLang
+		if lang == "" {
+			lang = "<lang>"
+		}
+		return "lsp." + lang + "." + field
 	}
+	return settingDottedKeys[key]
+}
+
+// helpFor returns the registry description for a row, substituting the concrete
+// language into a per-language template. Empty when the key is not registered.
+func helpFor(key settingKey, lspLang string) string {
+	f, ok := config.Lookup(dottedKeyFor(key, lspLang))
+	if !ok {
+		return ""
+	}
+	if lspLang != "" {
+		return strings.ReplaceAll(f.Description, "<lang>", lspLang)
+	}
+	return f.Description
+}
+
+// stampHelp fills each row's help from the registry, leaving any help already
+// set (a dynamic per-language message) untouched — so the description lives in
+// one place, the config field registry, never duplicated in this file.
+func stampHelp(items []settingItem) []settingItem {
+	for i := range items {
+		if items[i].help == "" {
+			items[i].help = helpFor(items[i].key, items[i].lspLang)
+		}
+	}
+	return items
+}
+
+// reloadTierFor reports when a change to a setting takes effect, read from the
+// config field registry — the single source of truth shared with the row
+// marker, the status line, config show, and the agent-writable-config tool. The
+// restart set stays in lock-step with config.RestartSensitiveEqual (log
+// format/file + cache).
+func reloadTierFor(key settingKey) config.ReloadTier {
+	if f, ok := config.Lookup(dottedKeyFor(key, "")); ok {
+		return f.ReloadTier
+	}
+	return config.ReloadLive
 }
 
 // settingItem is one selectable row on the Settings screen. Group headers are
@@ -185,168 +205,55 @@ func pathStyleValue(s string) string {
 // one-line help string shown on the status bar's second line when focused.
 func buildSettingItems(cfg config.Config) []settingItem {
 	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
-	return append(append([]settingItem{
-		{
-			group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName,
-			help: "Colour theme for the TUI and `plumb config show` syntax highlighting.",
-		},
-		{
-			group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions,
-			help: "How workspace folder paths are abbreviated in the Sessions sidebar.",
-		},
+	return stampHelp(append(append([]settingItem{
+		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName},
+		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions},
 
-		{
-			group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions,
-			help: "Daemon log verbosity. Applies live via the control socket.",
-		},
-		{
-			group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions,
-			help: "Daemon log encoding: human-readable text or structured JSON.",
-		},
-		{
-			group: "Logging", label: "Log file", kind: settingPopup, key: skLogFile, value: pathOrDefault(cfg.LogFile),
-			help: "Path the daemon writes logs to. Enter to edit; blank uses the default cache dir.",
-		},
+		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions},
+		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions},
+		{group: "Logging", label: "Log file", kind: settingPopup, key: skLogFile, value: pathOrDefault(cfg.LogFile)},
 
-		{
-			group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict),
-			help: "Require a prior read_file (matching mtime) before edit_file.",
-		},
-		{
-			group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff),
-			help: "Append a unified diff to edit_file/write_file responses.",
-		},
-		{
-			group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute),
-			help: "Max write ops per session per minute. 0 disables limiting.",
-		},
-		{
-			group: "Editing", label: "Post-write diag (ms)", kind: settingNumber, key: skPostWriteDiagMs, value: itoa(cfg.Edits.PostWriteDiagnosticsMs),
-			help: "How long write tools wait for the LSP to re-publish diagnostics. 0 disables.",
-		},
-		{
-			group: "Editing", label: "Concurrent skew (ms)", kind: settingNumber, key: skConcurrentSkewMs, value: itoa(cfg.Edits.ConcurrentWriteSkewMs),
-			help: "Clock-skew allowance for edit_file's concurrent-write detector. Raise on network mounts.",
-		},
-		{
-			group: "Editing", label: "Refuse home roots", kind: settingToggle, key: skRefuseHomeRoots, value: onOff(cfg.Walk.RefuseHomeRoots),
-			help: "Refuse walks rooted at $HOME or a protected dir (macOS TCC prompt guard).",
-		},
+		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict)},
+		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
+		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute)},
+		{group: "Editing", label: "Post-write diag (ms)", kind: settingNumber, key: skPostWriteDiagMs, value: itoa(cfg.Edits.PostWriteDiagnosticsMs)},
+		{group: "Editing", label: "Concurrent skew (ms)", kind: settingNumber, key: skConcurrentSkewMs, value: itoa(cfg.Edits.ConcurrentWriteSkewMs)},
+		{group: "Editing", label: "Refuse home roots", kind: settingToggle, key: skRefuseHomeRoots, value: onOff(cfg.Walk.RefuseHomeRoots)},
 
-		{
-			group: "Indexing", label: "Topology", kind: settingToggle, key: skTopology, value: onOff(cfg.Topology.Enabled),
-			help: "Enable the SQLite/FTS5 semantic index at <ws>/.plumb/topology.db.",
-		},
-		{
-			group: "Indexing", label: "Resync on attach", kind: settingToggle, key: skTopoResyncOnAttach, value: onOff(cfg.Topology.ResyncOnAttach),
-			help: "Trigger a full topology resync each time the workspace attaches.",
-		},
-		{
-			group: "Indexing", label: "Watch files", kind: settingToggle, key: skTopoWatch, value: onOff(cfg.Topology.Watch),
-			help: "OS-level file watching: re-index a file the moment it changes on disk.",
-		},
-		{
-			group: "Indexing", label: "Max file size (B)", kind: settingNumber, key: skTopoMaxFileSize, value: itoa(int(cfg.Topology.MaxFileSizeBytes)),
-			help: "Cap on file size considered for extraction (bytes). 0 uses the 512 KiB default.",
-		},
-		{
-			group: "Indexing", label: "Resync batch", kind: settingNumber, key: skTopoResyncBatch, value: itoa(cfg.Topology.ResyncBatch),
-			help: "Files a full resync extracts before pausing. 0 disables pacing.",
-		},
-		{
-			group: "Indexing", label: "Resync pause (ms)", kind: settingNumber, key: skTopoResyncPauseMs, value: itoa(cfg.Topology.ResyncPauseMs),
-			help: "Pause inserted after each resync batch (ms). 0 disables pacing.",
-		},
-		{
-			group: "Indexing", label: "Resync interval (min)", kind: settingNumber, key: skTopoResyncIntervalMin, value: itoa(cfg.Topology.ResyncIntervalMinutes),
-			help: "Periodic full-resync fallback interval. Suppressed while watching; 0 disables.",
-		},
-		{
-			group: "Indexing", label: "Exclude patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns), list: cfg.Topology.ExcludePatterns,
-			help: "Path globs to skip during indexing. Enter to edit the list.",
-		},
+		{group: "Indexing", label: "Topology", kind: settingToggle, key: skTopology, value: onOff(cfg.Topology.Enabled)},
+		{group: "Indexing", label: "Resync on attach", kind: settingToggle, key: skTopoResyncOnAttach, value: onOff(cfg.Topology.ResyncOnAttach)},
+		{group: "Indexing", label: "Watch files", kind: settingToggle, key: skTopoWatch, value: onOff(cfg.Topology.Watch)},
+		{group: "Indexing", label: "Max file size (B)", kind: settingNumber, key: skTopoMaxFileSize, value: itoa(int(cfg.Topology.MaxFileSizeBytes))},
+		{group: "Indexing", label: "Resync batch", kind: settingNumber, key: skTopoResyncBatch, value: itoa(cfg.Topology.ResyncBatch)},
+		{group: "Indexing", label: "Resync pause (ms)", kind: settingNumber, key: skTopoResyncPauseMs, value: itoa(cfg.Topology.ResyncPauseMs)},
+		{group: "Indexing", label: "Resync interval (min)", kind: settingNumber, key: skTopoResyncIntervalMin, value: itoa(cfg.Topology.ResyncIntervalMinutes)},
+		{group: "Indexing", label: "Exclude patterns", kind: settingList, key: skExcludePatterns, value: listSummary(cfg.Topology.ExcludePatterns), list: cfg.Topology.ExcludePatterns},
 
-		{
-			group: "Quality", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled),
-			help: "Run offline post-write analysers (golangci-lint, …) on changed files.",
-		},
-		{
-			group: "Quality", label: "Mode", kind: settingCycle, key: skQualityMode, value: qualityModeValue(cfg.Quality.Mode), options: qualityModeOptions,
-			help: "background: findings on next request. sync: block and append inline.",
-		},
-		{
-			group: "Quality", label: "Timeout (ms)", kind: settingNumber, key: skQualityTimeoutMs, value: itoa(cfg.Quality.TimeoutMs),
-			help: "Per-analyser run timeout in milliseconds.",
-		},
-		{
-			group: "Quality", label: "Max findings/file", kind: settingNumber, key: skQualityMaxFindings, value: itoa(cfg.Quality.MaxFindingsPerFile),
-			help: "Cap on findings appended per file to keep responses bounded.",
-		},
-		{
-			group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers), list: cfg.Quality.Analysers,
-			help: "Which analysers to run (e.g. golangci-lint). Enter to edit the list.",
-		},
+		{group: "Quality", label: "Quality analysis", kind: settingToggle, key: skQuality, value: onOff(cfg.Quality.Enabled)},
+		{group: "Quality", label: "Mode", kind: settingCycle, key: skQualityMode, value: qualityModeValue(cfg.Quality.Mode), options: qualityModeOptions},
+		{group: "Quality", label: "Timeout (ms)", kind: settingNumber, key: skQualityTimeoutMs, value: itoa(cfg.Quality.TimeoutMs)},
+		{group: "Quality", label: "Max findings/file", kind: settingNumber, key: skQualityMaxFindings, value: itoa(cfg.Quality.MaxFindingsPerFile)},
+		{group: "Quality", label: "Analysers", kind: settingList, key: skAnalysers, value: listSummary(cfg.Quality.Analysers), list: cfg.Quality.Analysers},
 
-		{
-			group: "Git", label: "Git allow writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites),
-			help: "Gate the safe-write tier (add, commit, switch, branch/tag create, stash).",
-		},
-		{
-			group: "Git", label: "Git allow destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive),
-			help: "Gate reset/clean/checkout/restore/rebase/revert (each call also needs confirm).",
-		},
-		{
-			group: "Git", label: "Git allow push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush),
-			help: "Gate push/fetch/pull (each call also needs confirm). Protected branches stay safe.",
-		},
-		{
-			group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches), list: cfg.Git.ProtectedBranches,
-			help: "Branches that may never be force-pushed, even with allow_push. Enter to edit.",
-		},
+		{group: "Git", label: "Git allow writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites)},
+		{group: "Git", label: "Git allow destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive)},
+		{group: "Git", label: "Git allow push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush)},
+		{group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches), list: cfg.Git.ProtectedBranches},
 
-		{
-			group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes),
-			help: "Minutes with no tool call before a session shows the idle marker (cosmetic).",
-		},
-		{
-			group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes),
-			help: "Minutes idle before the daemon force-closes a connection. 0 disables eviction.",
-		},
+		{group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes)},
+		{group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes)},
 
-		{
-			group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach),
-			help: "Fall back to the nearest .git/ or seed dir when no marker is found (LSP unavailable).",
-		},
-		{
-			group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist),
-			help: "Create .plumb/ at the synthetic root on first auto-attach (implies auto_attach).",
-		},
-		{
-			group: "Workspace", label: "Allow dependency reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads),
-			help: "Let read/search tools reach the Go module cache + GOROOT read-only.",
-		},
-		{
-			group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots), list: cfg.Workspace.ExtraRoots,
-			help: "Extra dirs read+write tools may reach beyond the workspace. Enter to edit.",
-		},
-		{
-			group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots), list: cfg.Workspace.ReadRoots,
-			help: "Extra read-only dirs (compare another project). Enter to edit the list.",
-		},
+		{group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
+		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},
+		{group: "Workspace", label: "Allow dependency reads", kind: settingToggle, key: skAllowDependencyReads, value: onOff(cfg.Workspace.AllowDependencyReads)},
+		{group: "Workspace", label: "Child scan depth", kind: settingNumber, key: skChildScanDepth, value: itoa(cfg.Workspace.ChildScanDepth)},
+		{group: "Workspace", label: "Extra roots", kind: settingList, key: skExtraRoots, value: listSummary(cfg.Workspace.ExtraRoots), list: cfg.Workspace.ExtraRoots},
+		{group: "Workspace", label: "Read roots", kind: settingList, key: skReadRoots, value: listSummary(cfg.Workspace.ReadRoots), list: cfg.Workspace.ReadRoots},
 
-		{
-			group: "Others", label: "Cache TTL", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions,
-			help: "Session symbol-cache time-to-live. Needs a daemon restart.",
-		},
-		{
-			group: "Others", label: "Cache max size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize),
-			help: "Max entries in the session symbol cache. Needs a daemon restart.",
-		},
-		{
-			group: "Others", label: "LSP query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
-			help: "Cap on a single LSP tool call when the caller carries no deadline. 0 disables.",
-		},
-	}, lspSettingItems(cfg)...), semanticsSettingItems(cfg)...)
+		{group: "Others", label: "Cache TTL", kind: settingCycle, key: skCacheTTL, value: durValue(cfg.Cache.TTL, cacheTTLOptions), options: cacheTTLOptions},
+		{group: "Others", label: "Cache max size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize)},
+		{group: "Others", label: "LSP query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions},
+	}, lspSettingItems(cfg)...), semanticsSettingItems(cfg)...))
 }
 
 // lspSettingItems builds the per-language [lsp.<lang>] rows (enable + command +
@@ -367,13 +274,13 @@ func lspSettingItems(cfg config.Config) []settingItem {
 		// "dormant" — normal, not an error; we flag it only so the user knows why
 		// it is inactive.
 		dormant := e.Enabled && e.Command != "" && !lspOnPath(e.Command)
-		enabledHelp := "Enabled languages activate automatically once their server is installed. Set off to exclude " + lang + " even when installed."
-		if dormant {
-			enabledHelp = lang + " is enabled but its server is not installed, so it is dormant. Install " + e.Command + " to activate it, or set off to exclude it."
-		}
+		// Non-dormant help comes from the registry (stampHelp); only the dynamic
+		// dormant message is set here, so it survives the stamp.
+		enabledHelp := ""
 		enabledValue := onOff(e.Enabled)
 		if dormant {
 			enabledValue = "on (dormant)"
+			enabledHelp = lang + " is enabled but its server is not installed, so it is dormant. Install " + e.Command + " to activate it, or set off to exclude it."
 		}
 		out = append(out,
 			settingItem{
@@ -382,15 +289,15 @@ func lspSettingItems(cfg config.Config) []settingItem {
 			},
 			settingItem{
 				group: g, label: "command", kind: settingText, key: skLSPCommand, lspLang: lang, lspMissing: dormant,
-				value: pathOrDefault(e.Command), help: "Executable for the " + lang + " language server. Enter to edit.",
+				value: pathOrDefault(e.Command),
 			},
 			settingItem{
 				group: g, label: "args", kind: settingList, key: skLSPArgs, lspLang: lang, lspMissing: dormant,
-				value: listSummary(e.Args), list: e.Args, help: "Command-line args passed to the " + lang + " server. Enter to edit.",
+				value: listSummary(e.Args), list: e.Args,
 			},
 			settingItem{
 				group: g, label: "root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang, lspMissing: dormant,
-				value: listSummary(e.RootMarkers), list: e.RootMarkers, help: "Files that mark a " + lang + " project root. Enter to edit.",
+				value: listSummary(e.RootMarkers), list: e.RootMarkers,
 			},
 		)
 	}
@@ -406,39 +313,16 @@ func semanticsSettingItems(cfg config.Config) []settingItem {
 	sem := cfg.Semantics
 	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
 	out := []settingItem{
-		{
-			group: "Semantics", label: "enabled", kind: settingToggle, key: skSemEnabled, value: onOff(sem.Enabled),
-			help: "Re-rank topology_search results by meaning, via your chosen embedding API. Off by default.",
-		},
-		{
-			group: "Semantics", label: "provider", kind: settingCycle, key: skSemProvider, value: semProviderValue(sem.Provider), options: config.SemanticsProviders,
-			help: "openai | voyage (code) | jina | mistral | cohere | custom (your own OpenAI-compatible endpoint).",
-		},
-		{
-			group: "Semantics", label: "model", kind: settingText, key: skSemModel, value: pathOrDefault(sem.Model),
-			help: "Embedding model id. Blank uses the provider's default (e.g. voyage-code-3).",
-		},
-		{
-			group: "Semantics", label: "base url", kind: settingText, key: skSemBaseURL, value: pathOrDefault(sem.BaseURL),
-			help: "API base URL. Blank uses the provider preset; required for custom (e.g. http://localhost:11434/v1).",
-		},
-		{
-			group: "Semantics", label: "api key env", kind: settingText, key: skSemAPIKeyEnv, value: semKeyEnvValue(sem),
-			help: "Name of the env var holding the API key (used when 'api key' is blank). ✓ = the var is set.",
-		},
-		{
-			group: "Semantics", label: "api key", kind: settingText, key: skSemAPIKey, value: maskedKey(sem.APIKey),
-			help: "Key stored in config; takes precedence over the env var. Prefer the env var to keep secrets out of files.",
-		},
-		{
-			group: "Semantics", label: "rerank candidates", kind: settingNumber, key: skSemRerankCandidates, value: itoa(sem.RerankCandidates),
-			help: "How many FTS5 hits to re-rank semantically. Default 50.",
-		},
-		{
-			group: "Semantics", label: "timeout", kind: settingCycle, key: skSemTimeout, value: durValue(sem.Timeout, lspTimeoutOptions), options: lspTimeoutOptions,
-			help: "Cap on a single embedding API call. Default 10s.",
-		},
+		{group: "Semantics", label: "enabled", kind: settingToggle, key: skSemEnabled, value: onOff(sem.Enabled)},
+		{group: "Semantics", label: "provider", kind: settingCycle, key: skSemProvider, value: semProviderValue(sem.Provider), options: config.SemanticsProviders},
+		{group: "Semantics", label: "model", kind: settingText, key: skSemModel, value: pathOrDefault(sem.Model)},
+		{group: "Semantics", label: "base url", kind: settingText, key: skSemBaseURL, value: pathOrDefault(sem.BaseURL)},
+		{group: "Semantics", label: "api key env", kind: settingText, key: skSemAPIKeyEnv, value: semKeyEnvValue(sem)},
+		{group: "Semantics", label: "api key", kind: settingText, key: skSemAPIKey, value: maskedKey(sem.APIKey)},
+		{group: "Semantics", label: "rerank candidates", kind: settingNumber, key: skSemRerankCandidates, value: itoa(sem.RerankCandidates)},
+		{group: "Semantics", label: "timeout", kind: settingCycle, key: skSemTimeout, value: durValue(sem.Timeout, lspTimeoutOptions), options: lspTimeoutOptions},
 	}
+	out = stampHelp(out)
 	for i := range out {
 		out[i].tab = settingsTabSemantics
 	}

@@ -60,21 +60,21 @@ func TestReloadTierFor(t *testing.T) {
 	for _, it := range buildSettingItems(config.Defaults()) {
 		tier := reloadTierFor(it.key)
 		if restart[it.key] {
-			if tier != reloadRestart {
-				t.Errorf("reloadTierFor(%v) = %d, want reloadRestart", it.key, tier)
+			if tier != config.ReloadRestart {
+				t.Errorf("reloadTierFor(%v) = %v, want ReloadRestart", it.key, tier)
 			}
 			continue
 		}
-		if tier == reloadRestart {
-			t.Errorf("reloadTierFor(%v) = reloadRestart, but only log format/file + cache may be restart-needed", it.key)
+		if tier == config.ReloadRestart {
+			t.Errorf("reloadTierFor(%v) = ReloadRestart, but only log format/file + cache may be restart-needed", it.key)
 		}
 	}
 	// Spot-check representative live and next-session keys.
-	if reloadTierFor(skStrict) != reloadLive {
-		t.Error("strict edits should be reloadLive")
+	if reloadTierFor(skStrict) != config.ReloadLive {
+		t.Error("strict edits should be ReloadLive")
 	}
-	if reloadTierFor(skQuality) != reloadNextSession {
-		t.Error("quality should be reloadNextSession")
+	if reloadTierFor(skQuality) != config.ReloadNextSession {
+		t.Error("quality should be ReloadNextSession")
 	}
 }
 

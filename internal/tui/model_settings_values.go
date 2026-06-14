@@ -133,6 +133,8 @@ func numberMeta(key settingKey) (int, string) {
 		return 5, "idle threshold (min)"
 	case skEvictionTTLMin:
 		return 5, "eviction ttl (min)"
+	case skChildScanDepth:
+		return 1, "child scan depth"
 	case skSemRerankCandidates:
 		return 10, "rerank candidates"
 	default:
@@ -166,6 +168,8 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Session.IdleThresholdMinutes
 	case skEvictionTTLMin:
 		return &c.Session.EvictionTTLMinutes
+	case skChildScanDepth:
+		return &c.Workspace.ChildScanDepth
 	case skSemRerankCandidates:
 		return &c.Semantics.RerankCandidates
 	default:
@@ -322,9 +326,9 @@ func (m Model) setPathStyle(style string) Model {
 // wording always matches the row's reload-tier marker.
 func settingStatus(key settingKey, change string) string {
 	switch reloadTierFor(key) {
-	case reloadNextSession:
+	case config.ReloadNextSession:
 		return change + " · applies to new sessions"
-	case reloadRestart:
+	case config.ReloadRestart:
 		return change + " · applies on next daemon start"
 	default:
 		return change + " · applied live"

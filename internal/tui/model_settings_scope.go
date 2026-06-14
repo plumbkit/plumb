@@ -230,6 +230,7 @@ var settingTOMLPaths = map[settingKey][]string{
 	skAutoAttach:            {"workspace", "auto_attach"},
 	skAutoAttachPersist:     {"workspace", "auto_attach_persist"},
 	skAllowDependencyReads:  {"workspace", "allow_dependency_reads"},
+	skChildScanDepth:        {"workspace", "child_scan_depth"},
 	skExtraRoots:            {"workspace", "extra_roots"},
 	skReadRoots:             {"workspace", "read_roots"},
 	skProtectedBranches:     {"git", "protected_branches"},
@@ -242,4 +243,60 @@ var settingTOMLPaths = map[settingKey][]string{
 func tomlPath(key settingKey) ([]string, bool) {
 	p, ok := settingTOMLPaths[key]
 	return p, ok
+}
+
+// settingDottedKeys maps every settings row key to its config-field-registry
+// dotted key. It is a superset of settingTOMLPaths: the global-only rows (theme,
+// logging, cache, lsp_query, session, semantics) that LoadProject does not
+// override per-project still need a registry identity for help text and reload
+// tier. The per-language [lsp.<lang>] rows are resolved by dottedKeyFor, not
+// here. TestSettingsRegistryDrift keeps this in step with settingTOMLPaths.
+var settingDottedKeys = map[settingKey]string{
+	skTheme:                 "ui.theme",
+	skPathStyle:             "ui.path_style",
+	skLogLevel:              "log_level",
+	skLogFormat:             "log_format",
+	skLogFile:               "log_file",
+	skStrict:                "edits.strict",
+	skShowWriteDiff:         "edits.show_write_diff",
+	skRateLimit:             "edits.rate_limit_per_minute",
+	skPostWriteDiagMs:       "edits.post_write_diagnostics_ms",
+	skConcurrentSkewMs:      "edits.concurrent_write_skew_ms",
+	skRefuseHomeRoots:       "walk.refuse_home_roots",
+	skTopology:              "topology.enabled",
+	skTopoResyncOnAttach:    "topology.resync_on_attach",
+	skTopoWatch:             "topology.watch",
+	skTopoMaxFileSize:       "topology.max_file_size_bytes",
+	skTopoResyncBatch:       "topology.resync_batch",
+	skTopoResyncPauseMs:     "topology.resync_pause_ms",
+	skTopoResyncIntervalMin: "topology.resync_interval_minutes",
+	skExcludePatterns:       "topology.exclude_patterns",
+	skQuality:               "quality.enabled",
+	skQualityMode:           "quality.mode",
+	skQualityTimeoutMs:      "quality.timeout_ms",
+	skQualityMaxFindings:    "quality.max_findings_per_file",
+	skAnalysers:             "quality.analysers",
+	skGitWrites:             "git.allow_writes",
+	skGitDestructive:        "git.allow_destructive",
+	skGitPush:               "git.allow_push",
+	skProtectedBranches:     "git.protected_branches",
+	skIdleThresholdMin:      "session.idle_threshold_minutes",
+	skEvictionTTLMin:        "session.eviction_ttl_minutes",
+	skAutoAttach:            "workspace.auto_attach",
+	skAutoAttachPersist:     "workspace.auto_attach_persist",
+	skAllowDependencyReads:  "workspace.allow_dependency_reads",
+	skChildScanDepth:        "workspace.child_scan_depth",
+	skExtraRoots:            "workspace.extra_roots",
+	skReadRoots:             "workspace.read_roots",
+	skCacheTTL:              "cache.ttl",
+	skCacheMaxSize:          "cache.max_size",
+	skLSPTimeout:            "lsp_query.timeout",
+	skSemEnabled:            "semantics.enabled",
+	skSemProvider:           "semantics.provider",
+	skSemModel:              "semantics.model",
+	skSemBaseURL:            "semantics.base_url",
+	skSemAPIKeyEnv:          "semantics.api_key_env",
+	skSemAPIKey:             "semantics.api_key",
+	skSemRerankCandidates:   "semantics.rerank_candidates",
+	skSemTimeout:            "semantics.timeout",
 }

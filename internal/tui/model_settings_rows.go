@@ -10,6 +10,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/plumbkit/plumb/internal/config"
 )
 
 // settingsDisplayLines renders the scrollable logical lines to display strings
@@ -147,9 +149,9 @@ func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW in
 // plain form is used in the focused row's single SelectedStyle render).
 func reloadNumeral(key settingKey) (coloured, plain string) {
 	switch reloadTierFor(key) {
-	case reloadNextSession:
+	case config.ReloadNextSession:
 		return WarnStyle.Render("²"), "²"
-	case reloadRestart:
+	case config.ReloadRestart:
 		return RestartStyle.Render("³"), "³"
 	default:
 		return OkStyle.Render("¹"), "¹"
