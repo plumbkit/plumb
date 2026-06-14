@@ -8,7 +8,7 @@
 
 This file is the canonical brief for AI agents working in the plumb codebase. Keep it accurate; it ages fast.
 
-> **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (e.g. running tests, compiling, interacting with external services).
+> **CRITICAL — tool priority:** Always use plumb MCP tools for all tasks when plumb is present and the required capability is available through plumb. Do not fall back to native tools (Read, Edit, Bash, shell commands, etc.) for file reads, writes, edits, searches, symbol lookups, or git queries when the equivalent plumb tool exists. Plumb tools are LSP-aware, concurrency-safe, and session-tracked; native tools bypass all of that. The only exceptions are tasks plumb explicitly does not cover (interacting with external services, ad-hoc shell). Build/test/lint now have a plumb path: `run_task` (and the `plumb build/test/lint/e2e/verify` CLI) run the user's stored `[tasks.<lang>]` commands — prefer it over a raw shell `go test`/`npm test` when a task is configured.
 
 > **Per-tool detail lives in the tool's own MCP description.** Each tool registers its full description and input schema (`tools/list`), and `session_start` emits client-specific tool guidance at runtime. This file is orientation, not the authoritative tool reference — when a tool's behaviour matters, read its description.
 
@@ -231,6 +231,29 @@ timeout           = "10s"                      # per embedding HTTP call
 
 Project-overridable, hot-reloaded. When `enabled`, `topology_search` re-ranks its FTS5 candidates by embedding similarity (annotated `mode=fts+semantic`); FTS5 stays the authoritative spine and any error falls back to plain ranking (`mode=ranked`). **API / bring-your-own-endpoint only — plumb never bundles, downloads, or supervises a model** (a local-model spike found it does not beat FTS5). One OpenAI-compatible client (`internal/semantics`) covers `openai`, `voyage` (`voyage-code-3`), `jina`, `mistral`, and any self-run OpenAI-compatible server (Ollama / llama.cpp / LM Studio / TEI / vLLM) via `provider = custom` + `base_url`; `cohere` uses a small adapter. **Key precedence:** a literal `api_key` wins, else the key is read from `api_key_env` (or the preset default, e.g. `OPENAI_API_KEY`) — prefer the env var. Embeddings are cached lazily in `topology.db` (`topology_embeddings`, keyed by content hash).
 
+### `[tasks.<lang>]` — per-language build/test commands (run by `run_task`)
+
+```toml
+[tasks.go]
+build = "go build ./..."
+lint  = "golangci-lint run"
+test  = "go test ./..."        # may contain a {target} placeholder
+e2e   = "go test -tags=integration ./..."
+# verify is a COMPOSITE (build then test) — it stores no command of its own
+```
+
+Five optional command slots per language, keyed by the `[lsp.<lang>]` id, with shipped defaults (Go fully populated; a slot left empty over guessing an uninstalled tool). A command is a **single argv executed without a shell** (`config.ParseTaskCommand` rejects `&&`/`;`/`|`/`$(`/backtick/redirs); `verify` runs the build slot then the test slot in sequence. Surfaced through the `run_task` MCP tool and the `plumb build|lint|test|e2e|verify` CLI; output and runtime are bounded (100 KiB/200 lines, timeout). The only agent-supplied input that reaches the argv is a shell-safe `{target}` (`^[A-Za-z0-9._/:@-]+$`).
+
+**Trust gate.** A task command the *project's* `.plumb/config.toml` supplies is **not run until trusted** — `plumb trust` records trust per workspace **root** in plumb's data dir (`config.DataDir()/trust.json`, never in the project, so a cloned repo cannot self-trust). Default- and global-config commands always run.
+
+### `agent_config_writes` — agent-writable config (opt-in)
+
+```toml
+agent_config_writes = false   # top-level; user-settable only, default off
+```
+
+When `true`, the `agent_config` tool may write a **small allowlist** of project-config keys on the user's behalf: the `[tasks.<lang>]` slots plus `log_level`, `ui.theme`, `ui.path_style`, `topology.exclude_patterns`, `quality.analysers`. The allowlist (`internal/config/fields_agent.go`) is the entire security model — every other key, **including `agent_config_writes` itself**, is never agent-writable (git tiers, workspace roots, `edits.strict`/`rate_limit`, `semantics.api_key`, session eviction, `log_file`, `lsp.*`). Writes go through the tool (never a raw `config.toml` edit): the whole batch is validated and applied atomically to project config, tagged `provenance=agent` in a `.plumb/config.provenance.json` sidecar (auto-gitignored), shown by `plumb config show`, and revertible with `plumb config unset <key>`. The enable knob is editable only by the user (TUI Settings); the agent cannot flip it.
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server:
@@ -319,7 +342,7 @@ Pyright is the worked example; full guide in `docs/adding-an-lsp.md`.
 4. Register the tool in `handleConn` (`internal/cli/daemon.go`); write tools use the shared `writeDeps`.
 5. Unit-test in `internal/tools/<name>_test.go` (`WriteDeps{}` is the nil-safe setup); document in `docs/tools.md` and update the tool table below.
 
-## Available tools (51)
+## Available tools (53)
 
 Concise index only. Full behaviour, schemas, and per-tool steering live in each tool's MCP description (`tools/list`); sources are `internal/tools/<name>.go`.
 
@@ -330,6 +353,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - **Filesystem writes:** `write_file`, `edit_file`, `delete_file`, `rename_file`, `copy_file`, `transaction_apply`. Writes take `WriteDeps`, hold per-path locks, respect dirty-file checks, notify LSP, invalidate caches, and consume the write-rate budget.
 - **Search/replace and git:** `find_replace` is dry-run by default; prefer `rename_symbol` for identifiers. `git` is tiered by policy (read/write/destructive/network), with typed `add`/`commit` and confirmation for dangerous tiers.
 - **Other utilities:** `git_init`, `file_diff`, `version`, `daemon_info`, `rename_session`, `workspace_sessions`.
+- **Tasks & config:** `run_task` runs a stored `[tasks.<lang>]` command (build/lint/test/e2e/verify; verify = build then test) — no shell, bounded, with a per-workspace trust gate (`plumb trust`) for project-supplied commands. `agent_config` reads (`describe`) and, only when the user enabled `[agent_config_writes]`, writes (`set`) a small allowlist of config keys — validated atomically, `provenance=agent`, revertible via `plumb config unset`. Guardrails (git tiers, roots, strict mode, API keys, the enable knob) are never agent-writable. See the `[tasks.<lang>]` and `agent_config_writes` config sections above.
 - **Topology:** `topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`, `structural_query` use the SQLite/FTS5 index at `<workspace>/.plumb/topology.db`.
 - **Ranked discovery:** `workspace_search` is the broker over the indexed corpora — code and docs via topology FTS, memories via the memory FTS index — interleaved by per-corpus rank and labelled with `corpus`/`source`/`field`/`score`/`why` plus per-corpus index freshness; `exact_match=false` always (it is discovery, never proof of absence — the exact lane stays `search_in_files`). Discovery ladder: `workspace_search` → topology/LSP → `search_in_files` → bounded `read_file`.
 - **Memory:** `list_memories`, `read_memory`, `write_memory`, `delete_memory`, `search_memories`, `relevant_memories` operate on per-workspace markdown memories under `<workspace>/.plumb/memories/`. `search_memories` is FTS5-ranked when the index is fresh (grep fallback otherwise; `mode` = auto/fts/grep); `read_memory` shows a provenance footer for generated memories; writes/deletes keep the index current. See `[memory]` config.

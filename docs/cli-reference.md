@@ -230,7 +230,8 @@ Inspect plumb's resolved configuration. See the
 |---|---|
 | `plumb config print` | Print the resolved configuration as TOML. |
 | `plumb config reload` | Tell the running daemon to re-read global config now (same as the fsnotify watch). |
-| `plumb config show [--workspace <dir>]` | Show the resolved configuration with **source provenance** — which layer (default, global, project, env) set each value. Includes a **Directories** section listing plumb's config, data, state, log, and runtime directories. |
+| `plumb config show [--workspace <dir>]` | Show the resolved configuration with **source provenance** — which layer (default, global, project, env) set each value. Includes a **Directories** section listing plumb's config, data, state, log, and runtime directories, and an **Agent-written keys** footer (`provenance=agent`). |
+| `plumb config unset <key> [--workspace <dir>]` | Remove a project-config key (the one-step revert for an agent-written value): drops it from `.plumb/config.toml` and the provenance sidecar, then reloads. |
 
 | Flag | Applies to | Default | Effect |
 |---|---|---|---|
@@ -342,3 +343,34 @@ plumb version
 
 Print the plumb build version and the Go runtime version. The build version is
 stamped at compile time (see [Versioning in AGENTS.md](../AGENTS.md)).
+
+---
+
+## `plumb build` / `test` / `lint` / `e2e` / `verify`
+
+```
+plumb build [target]
+plumb test  [target]
+plumb lint  [target]
+plumb e2e   [target]
+plumb verify
+```
+
+Run the configured [`[tasks.<lang>]`](configuration.md) command for the current
+workspace's primary language, streaming its output. `verify` runs the build slot
+then the test slot. `[target]` fills a `{target}` placeholder (a single shell-safe
+argument) in the stored command. A project-supplied command must be trusted first
+(`plumb trust`); the shipped defaults and global-config commands always run.
+
+---
+
+## `plumb trust`
+
+```
+plumb trust [directory]
+```
+
+Trust this workspace's project-supplied task commands (those set in its
+`.plumb/config.toml`), so `plumb build`/`test`/… and the `run_task` tool will run
+them. Trust is recorded per workspace **root** in plumb's data directory (never
+in the project itself), so a cloned repository can never mark itself trusted.

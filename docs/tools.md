@@ -462,3 +462,21 @@ Unified diff between two files (system `diff -U`). **Inputs:** two file paths.
 
 ### `version`
 Plumb version, Go runtime, OS/arch. **Inputs:** none.
+
+### `run_task`
+Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
+(100 KiB/200 lines) and timeout. **Inputs:** `slot` (`build`/`lint`/`test`/`e2e`/`verify`;
+`verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
+one shell-safe argument). A project-supplied command must be trusted first
+(`plumb trust`); defaults and global-config commands always run. Pairs with
+`topology_affected` (which says *which* tests to run).
+
+### `agent_config`
+Read and (when the user enabled `[agent_config_writes]`) write a small allowlist
+of config keys on the user's behalf. **Inputs:** `op` (`describe`/`set`), `set`
+(map of dotted key → value for `op=set`), `scope` (`project` only). Writable:
+the `[tasks.<lang>]` slots + `log_level`, `ui.theme`, `ui.path_style`,
+`topology.exclude_patterns`, `quality.analysers`. Guardrails (git tiers, roots,
+strict mode, API keys, the enable knob itself) are never agent-writable. A batch
+is validated and applied atomically, tagged `provenance=agent`, and revertible
+with `plumb config unset`.

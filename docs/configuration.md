@@ -262,6 +262,47 @@ language only; `diagnostics` aggregates across every server bound to the root.
 
 ---
 
+## `[tasks.<language>]` — per-language build/test commands
+
+Five optional command slots per language, keyed by the `[lsp.<lang>]` id, run by
+the `run_task` tool and the `plumb build|lint|test|e2e|verify` CLI.
+
+```toml
+[tasks.go]
+build = "go build ./..."
+lint  = "golangci-lint run"
+test  = "go test ./..."        # may contain a {target} placeholder
+e2e   = "go test -tags=integration ./..."
+# verify is a COMPOSITE (build then test); it stores no command of its own
+```
+
+A command is a **single argv executed without a shell** — shell metacharacters
+(`&&`, `;`, `|`, `$(`, backtick, redirects) are rejected. Shipped defaults exist
+for common languages (Go fully populated; a slot is left empty rather than guess
+an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
+
+**Trust gate.** A task command supplied by a *project* `.plumb/config.toml` is
+not run until the workspace is trusted with `plumb trust` (recorded per workspace
+root in `DataDir/trust.json`, never in the project — a cloned repo cannot
+self-trust). Default- and global-config commands always run.
+
+## `agent_config_writes` — agent-writable config (top level)
+
+```toml
+agent_config_writes = false   # default off; user-settable only
+```
+
+When `true`, the `agent_config` tool may write a small allowlist of project
+config keys: the `[tasks.<lang>]` slots plus `log_level`, `ui.theme`,
+`ui.path_style`, `topology.exclude_patterns`, `quality.analysers`. Every other
+key — including this knob itself and all safety guardrails — is never
+agent-writable. Agent writes are validated and applied atomically, tagged
+`provenance=agent` in a (gitignored) `.plumb/config.provenance.json` sidecar,
+shown by `plumb config show`, and revertible with `plumb config unset <key>`.
+The knob is editable only by the user (e.g. the TUI Settings screen).
+
+---
+
 ## Environment variables
 
 Environment variables are the highest-precedence layer. Booleans accept
