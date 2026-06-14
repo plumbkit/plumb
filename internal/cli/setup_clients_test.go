@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -255,5 +256,142 @@ func TestSetupHermesInto_MergesNonDestructively(t *testing.T) {
 	}
 	if backups == 0 {
 		t.Error("expected a .bak backup before modifying existing config")
+	}
+}
+
+// readAntigravityEntry reads a standalone Antigravity config file back as a
+// generic map for assertions.
+func readAntigravityEntry(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshalling %s: %v", path, err)
+	}
+	return m
+}
+
+func TestSetupAntigravityInto_FreshConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp", "plumb.json")
+
+	added, preserved, err := setupAntigravityInto(path, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatalf("setupAntigravityInto: %v", err)
+	}
+	if !added {
+		t.Error("expected added=true for fresh config")
+	}
+	if len(preserved) != 0 {
+		t.Errorf("expected no preserved servers, got %v", preserved)
+	}
+
+	// Antigravity uses a standalone {command, args} entry — NOT an mcpServers wrapper.
+	m := readAntigravityEntry(t, path)
+	if m["command"] != "/usr/local/bin/plumb" {
+		t.Errorf("command: got %v, want /usr/local/bin/plumb", m["command"])
+	}
+	if !reflect.DeepEqual(m["args"], []any{"serve"}) {
+		t.Errorf("args: got %v, want [serve]", m["args"])
+	}
+	if _, hasWrapper := m["mcpServers"]; hasWrapper {
+		t.Error("entry must be a standalone {command,args} object, not an mcpServers wrapper")
+	}
+}
+
+func TestSetupAntigravityInto_PreservesSiblingsAndBacksUp(t *testing.T) {
+	dir := t.TempDir()
+	mcpDir := filepath.Join(dir, "mcp")
+	if err := os.MkdirAll(mcpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling server file and an existing (stale) plumb.json.
+	if err := os.WriteFile(filepath.Join(mcpDir, "other.json"), []byte(`{"command":"other"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(mcpDir, "plumb.json")
+	if err := os.WriteFile(path, []byte(`{"command":"/old/plumb","args":["serve"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	added, preserved, err := setupAntigravityInto(path, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatalf("setupAntigravityInto: %v", err)
+	}
+	if !added {
+		t.Error("expected added=true when overwriting a stale plumb.json")
+	}
+	if len(preserved) != 1 || preserved[0] != "other" {
+		t.Errorf("expected preserved=[other], got %v", preserved)
+	}
+
+	if m := readAntigravityEntry(t, path); m["command"] != "/usr/local/bin/plumb" {
+		t.Errorf("command not updated: got %v", m["command"])
+	}
+	if _, err := os.Stat(filepath.Join(mcpDir, "other.json")); err != nil {
+		t.Errorf("sibling other.json was removed: %v", err)
+	}
+
+	entries, _ := os.ReadDir(mcpDir)
+	var backups int
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".bak" {
+			backups++
+		}
+	}
+	if backups == 0 {
+		t.Error("expected a .bak backup before overwriting an existing config")
+	}
+}
+
+func TestSetupAntigravityInto_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp", "plumb.json")
+
+	if _, _, err := setupAntigravityInto(path, "/usr/local/bin/plumb"); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	added, _, err := setupAntigravityInto(path, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if added {
+		t.Error("expected added=false on second run (already registered)")
+	}
+}
+
+func TestSetupAntigravityInto_MirrorsDesktopToIde(t *testing.T) {
+	dir := t.TempDir()
+	// Desktop layout: <root>/antigravity/mcp/plumb.json mirrors to
+	// <root>/antigravity-ide/mcp/plumb.json, but only when the ide mcp dir exists.
+	desktopPath := filepath.Join(dir, "antigravity", "mcp", "plumb.json")
+	ideDir := filepath.Join(dir, "antigravity-ide", "mcp")
+	if err := os.MkdirAll(ideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := setupAntigravityInto(desktopPath, "/usr/local/bin/plumb"); err != nil {
+		t.Fatalf("setupAntigravityInto: %v", err)
+	}
+
+	idePath := filepath.Join(ideDir, "plumb.json")
+	if m := readAntigravityEntry(t, idePath); m["command"] != "/usr/local/bin/plumb" {
+		t.Errorf("ide mirror not written correctly: got %v", m["command"])
+	}
+}
+
+func TestSetupAntigravityInto_NoMirrorWhenIdeDirAbsent(t *testing.T) {
+	dir := t.TempDir()
+	desktopPath := filepath.Join(dir, "antigravity", "mcp", "plumb.json")
+
+	if _, _, err := setupAntigravityInto(desktopPath, "/usr/local/bin/plumb"); err != nil {
+		t.Fatalf("setupAntigravityInto: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "antigravity-ide", "mcp", "plumb.json")); !os.IsNotExist(err) {
+		t.Errorf("ide mirror should not be created when the ide mcp dir is absent (err=%v)", err)
 	}
 }
