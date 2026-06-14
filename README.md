@@ -101,7 +101,7 @@ Full walkthrough → [**docs/getting-started.md**](docs/getting-started.md).
 
 ## Language support (honest version)
 
-Plumb negotiates LSP capabilities per language and also ships a pure-Go tree-sitter index for language-server-free search and navigation. Support comes in tiers — we'd rather be precise than claim a big number.
+Plumb negotiates LSP capabilities per language and also ships a built-in tree-sitter index for search and navigation with no language server. Support comes in tiers — we'd rather be precise than claim a big number.
 
 | Tier | Languages | What you get |
 |---|---|---|
@@ -133,13 +133,13 @@ flowchart TD
 
 `*` `~/Library/Caches/plumb/plumb.sock` (`~/.cache/plumb` on Linux) · `**` one shared process — language servers stay warm across chats
 
-Warm servers (no re-indexing each chat), shared per-path locks across all connections, and full `workspace/didChangeWatchedFiles` support so symbol indexes stay live after every write.
+Servers stay warm across chats, per-path locks are shared across every connection, and symbol indexes update live after each write. Full architecture → [**docs/architecture.md**](docs/architecture.md).
 
 ---
 
 ## Monitoring (TUI)
 
-Run `plumb` with no arguments to launch a live [Bubble Tea](https://github.com/charmbracelet/bubbletea) dashboard: daemon health and token-efficiency stats, a session inspector for every tool call, and streaming logs with follow + filtering.
+Run `plumb` with no arguments for a live dashboard — see what your agent is doing in real time: every tool call as it happens, daemon health, per-tool stats, and streaming logs you can follow and filter. The fastest way to catch a runaway loop or confirm an edit landed.
 
 ---
 
@@ -149,7 +149,7 @@ Plumb exposes **51 tools**. The ones you'll use constantly:
 
 `session_start` · `find_symbol` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
 
-The rest cover filesystem reads/writes, LSP hierarchies, tiered git, an optional SQLite/FTS5 **Topology** index (ranked search + blast-radius/route analysis with no language server), and durable per-project memory. Full API reference: [**docs/tools.md**](docs/tools.md).
+The rest cover filesystem reads/writes, LSP hierarchies, tiered git, an optional local **Topology** index (ranked search + blast-radius/route analysis, no language server needed), and durable per-project memory. Full API reference: [**docs/tools.md**](docs/tools.md).
 
 ---
 
