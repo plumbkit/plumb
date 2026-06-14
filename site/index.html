@@ -192,16 +192,16 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .lspcfg .foot code{font-family:var(--mono);font-size:.92em;color:var(--acc)}
 @media(max-width:680px){.lspcfg .body,.lspcfg table{font-size:11px}.lspcfg th,.lspcfg td{padding-right:16px}}
 /* tools; open columns, hairline rules */
-.toolcols{display:grid;grid-template-columns:repeat(3,1fr);gap:46px 44px;margin-top:var(--intra);text-align:left}
-@media(max-width:860px){.toolcols{grid-template-columns:1fr 1fr}}
-@media(max-width:560px){.toolcols{grid-template-columns:1fr}}
-.tc{border-top:1px solid var(--rule);padding-top:14px}
+.toolcols{display:flex;flex-wrap:wrap;justify-content:center;gap:46px 44px;margin:var(--intra) auto 0;max-width:960px;text-align:left}
+.tc{border-top:1px solid var(--rule);padding-top:14px;flex:1 1 calc((100% - 44px)/2);max-width:calc((100% - 44px)/2)}
+.tc:last-child{margin-right:auto}
+@media(max-width:560px){.tc{flex-basis:100%;max-width:100%}}
 .tc h4{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600}
 .tc h4 .tmark{margin-left:4px;color:var(--acc);font-weight:600;font-size:14px}
 .tc h4 .d{width:9px;height:9px;border-radius:3px;flex:0 0 auto}
 .tc h4 .c{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint);font-weight:400}
 .tc .dd{font-size:13px;color:var(--soft);line-height:1.6;margin:9px 0 0}
-.tc ul{list-style:none;font-family:var(--mono);font-size:12px;line-height:2;color:var(--soft)}
+.tc ul{list-style:circle;font-family:var(--mono);font-size:12px;line-height:2;color:var(--soft);margin-left:1em}
 .tc li .st{color:var(--acc);margin-left:3px}
 .starnote{margin:42px auto 0;font-size:13.5px;color:var(--soft);max-width:80ch;text-align:center}
 .starnote .st{color:var(--acc)}
@@ -213,7 +213,7 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .arch figcaption code{color:var(--acc)}
 @media(max-width:640px){.arch{overflow-x:auto;-webkit-overflow-scrolling:touch}.arch svg{min-width:760px}}
 /* additions; editorial rows */
-.gfx{display:grid;gap:34px;margin:var(--intra) auto 0;text-align:left}
+.gfx{display:grid;gap:34px;margin:var(--intra) auto 0;text-align:left;max-width:960px}
 .gp{display:grid;grid-template-columns:minmax(230px,300px) minmax(0,1fr);gap:46px;align-items:center;border-top:1px solid color-mix(in srgb,var(--rule) 72%,transparent);padding-top:28px}
 .gp h3{font-size:24px;font-weight:700;letter-spacing:-.035em;line-height:1.08}
 .gp .tool{margin-top:7px;font-family:var(--mono);font-size:10.5px;font-weight:400;color:var(--acc)}
@@ -317,9 +317,9 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
     </div>
     <div class="stats rv">
       <div class="stat"><div class="n"><em>0</em></div><div class="l">partial writes</div></div>
-      <div class="stat"><div class="n" data-count="50">0</div><div class="l">structured tools</div></div>
+      <div class="stat"><div class="n" data-count="53">0</div><div class="l">structured tools</div></div>
       <div class="stat"><div class="n" data-count="17">0</div><div class="l">languages &amp; formats</div></div>
-      <div class="stat"><div class="n" data-count="11">0</div><div class="l">AI clients</div></div>
+      <div class="stat"><div class="n" data-count="12">0</div><div class="l">AI clients</div></div>
     </div>
   </section>
   <section class="blk wrap center" id="collision">
@@ -417,15 +417,16 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
 
   <section class="blk wrap center" id="tools">
     <span class="k rv">The toolset</span>
-    <h2 class="rv">Six capabilities.</h2>
-    <p class="intro rv">Fifty structured tools, grouped by what they let an agent actually do; and the agent rarely has to name one, because the right tool surfaces when it's needed.</p>
+    <h2 class="rv">Seven capabilities.</h2>
+    <p class="intro rv">Fifty-three structured tools, grouped by what they let an agent actually do; and the agent rarely has to name one, because the right tool surfaces when it's needed.</p>
     <div class="toolcols">
       <div class="tc rv"><h4><span class="d" style="background:#b35a2e"></span>Orient<span class="tmark">*</span><span class="c">×5</span></h4><div class="dd">Drop into any repo and get the whole picture in one call; branch, diagnostics, recent work, and the project’s own memory.</div><ul><li>session_start</li><li>workspace_sessions<span class="st">*</span></li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#2f6e4f"></span>Understand<span class="c">×10</span></h4><div class="dd">Jump to any definition, list every caller, walk the type tree; answers from the compiler itself, never a text-search guess.</div><ul><li>find_references</li><li>call_hierarchy</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#a14a26"></span>Edit<span class="tmark">*</span><span class="c">×12</span></h4><div class="dd">Rename across the whole codebase, apply multi-file changes in one atomic step, delete safely. It all lands, or nothing does.</div><ul><li>rename_symbol</li><li>transaction_apply<span class="st">*</span></li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#6b6535"></span>Read<span class="c">×7</span></h4><div class="dd">Pull exactly what you need: a single symbol, a line range, a glob, instead of dragging a whole file into context.</div><ul><li>read_symbol</li><li>file_outline</li></ul></div>
-      <div class="tc rv"><h4><span class="d" style="background:#46606c"></span>Map<span class="tmark">*</span><span class="c">×7</span></h4><div class="dd">Search the repo, trace what a change touches, and get the precise tests to run; in milliseconds, even while the code won’t compile.</div><ul><li>topology_impact<span class="st">*</span></li><li>topology_affected</li></ul></div>
+      <div class="tc rv"><h4><span class="d" style="background:#46606c"></span>Map<span class="tmark">*</span><span class="c">×8</span></h4><div class="dd">Search the repo, trace what a change touches, and get the precise tests to run; in milliseconds, even while the code won’t compile.</div><ul><li>topology_impact<span class="st">*</span></li><li>topology_affected</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#8a5e2c"></span>Recall<span class="c">×9</span></h4><div class="dd">Durable per-repo memory the agent can write to, plus a typed, shell-free git that keeps every commit clean.</div><ul><li>write_memory</li><li>git</li></ul></div>
+      <div class="tc rv"><h4><span class="d" style="background:#6e5a7a"></span>Tasks &amp; config<span class="c">×2</span></h4><div class="dd">Run the repo’s own build, test and lint commands; no shell, bounded; and let the agent set task and config keys within a user-controlled allowlist.</div><ul><li>run_task</li><li>agent_config</li></ul></div>
     </div>
     <p class="starnote rv"><span class="tmark">*</span> Plumb’s own additions; session awareness, atomic transactions, blast-radius mapping; drawn out below.</p>
     <div class="gfx" id="additions">
@@ -436,7 +437,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
           <p>Every connection is a named session the daemon can see. When a file changes underneath an agent, one call names who wrote it, what they touched and when. A baffling failure becomes an obvious write race.</p>
         </div>
         <div class="gdiag">
-          <svg viewBox="0 24 720 252" role="img" aria-label="Three named sessions share a workspace; the active writer is traced to a changed file and timestamp">
+          <svg viewBox="-59 24 720 252" role="img" aria-label="Three named sessions share a workspace; the active writer is traced to a changed file and timestamp">
             <defs>
               <marker id="arSess" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 0L8 4L0 8z" style="fill:var(--acc)"/></marker>
             </defs>
@@ -463,7 +464,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
           <p>Edits across many files apply as one unit, under per-path locks. Any rejection rolls the whole batch back and names the failing edit. The repo never holds a half-applied change.</p>
         </div>
         <div class="gdiag">
-          <svg viewBox="0 32 720 236" role="img" aria-label="A multi-file edit batch hits one failed file and rolls every staged edit back to zero landed changes">
+          <svg viewBox="-53 32 720 236" role="img" aria-label="A multi-file edit batch hits one failed file and rolls every staged edit back to zero landed changes">
             <defs>
               <marker id="arTx2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 0L8 4L0 8z" style="fill:var(--acc)"/></marker>
             </defs>
@@ -494,7 +495,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
           <p>The topology index traces what a change touches; callers, dependents, and the precise test files to run; in milliseconds, even while the code won't compile.</p>
         </div>
         <div class="gdiag">
-          <svg viewBox="0 24 720 276" role="img" aria-label="A changed symbol fans out through callers to dependent tests with highlighted paths">
+          <svg viewBox="-77 24 720 276" role="img" aria-label="A changed symbol fans out through callers to dependent tests with highlighted paths">
             <g transform="translate(16 0)" style="font-family:var(--mono)">
               <circle cx="112" cy="150" r="40" style="fill:color-mix(in srgb,var(--acc) 22%,transparent);stroke:var(--acc);stroke-width:2.2"/>
               <text x="112" y="156" text-anchor="middle" style="fill:var(--acc);font-size:18px">fn</text>

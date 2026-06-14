@@ -147,7 +147,7 @@ Run `plumb` with no arguments for a live dashboard — see what your agent is do
 
 ## Core capabilities
 
-Plumb exposes **51 tools**. The ones you'll use constantly:
+Plumb exposes **53 tools**. The ones you'll use constantly:
 
 `session_start` · `find_symbol` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
 
