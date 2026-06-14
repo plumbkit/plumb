@@ -45,7 +45,11 @@ func (m Model) activateSetting() Model {
 // toggleLSP flips a per-language [lsp.<lang>] enabled row and persists it in the
 // current scope.
 func (m Model) toggleLSP(it settingItem) Model {
-	v := it.value != "on"
+	// An enabled language whose server is not installed displays as
+	// "on (dormant)", so test the "on" prefix rather than equality — otherwise
+	// toggling a dormant-but-enabled language would set enabled=true (a no-op)
+	// instead of turning it off.
+	v := !strings.HasPrefix(it.value, "on")
 	if m.applyScopedLSP(it, v) {
 		m.settingsStatus = m.scopedStatus(it.key, it.lspLang+" enabled "+onOff(v))
 	}

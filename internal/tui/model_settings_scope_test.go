@@ -259,6 +259,39 @@ func TestLSPRows_WorkspaceEditsWriteNestedKeys(t *testing.T) {
 	}
 }
 
+// TestToggleLSP_DormantEnabledTurnsOff guards a regression in the per-language
+// enable toggle: a language that is enabled but whose server is not installed
+// displays as "on (dormant)", and toggling it must turn it OFF (enabled=false).
+// The previous `it.value != "on"` test read "on (dormant)" as "not on" and set
+// enabled back to true — a silent no-op. This is environment-independent because
+// it pins the dormant display value directly rather than relying on whether the
+// go server happens to be installed.
+func TestToggleLSP_DormantEnabledTurnsOff(t *testing.T) {
+	ws := t.TempDir()
+	m := Model{
+		settingsCfg:         config.Defaults(),
+		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
+		settingsScopeCursor: 1,
+	}
+	it := settingItem{kind: settingToggle, key: skLSPEnabled, lspLang: "go", value: "on (dormant)"}
+	m.toggleLSP(it) // persists via a sparse project-config write; return value unused
+
+	present, err := config.ProjectValuePresent(ws, []string{"lsp", "go", "enabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present {
+		t.Fatal("toggling a dormant enable row should write lsp.go.enabled")
+	}
+	merged, err := config.LoadProject(config.Defaults(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.LSP["go"].Enabled {
+		t.Error("toggling a dormant (enabled) language must set enabled=false; got true")
+	}
+}
+
 // TestCollectSettingsScopes_GlobalFirst verifies Global leads the scope list and
 // active workspaces follow.
 func TestCollectSettingsScopes_GlobalFirst(t *testing.T) {
