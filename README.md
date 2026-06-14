@@ -1,12 +1,12 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="site/logo-dark.svg">
-  <img alt="plumb" src="site/logo-light.svg" width="220">
-</picture>
-
 [![CI](https://github.com/plumbkit/plumb/actions/workflows/ci.yml/badge.svg)](https://github.com/plumbkit/plumb/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/plumbkit/plumb.svg)](https://pkg.go.dev/github.com/plumbkit/plumb)
 [![Go Report Card](https://goreportcard.com/badge/github.com/plumbkit/plumb)](https://goreportcard.com/report/github.com/plumbkit/plumb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/logo-dark.svg">
+  <img alt="plumb" src="site/logo-light.svg" width="220">
+</picture>
 
 **IDE intelligence for agents — with guardrails for unattended work.**
 
