@@ -120,10 +120,10 @@ Real-binary validation has been exercised on **macOS**; Linux integration runs i
 
 ```mermaid
 flowchart TD
-    A1["Claude"] --> S1["plumb serve"]
-    A2["Codex"] --> S2["plumb serve"]
-    A3["Gemini"] --> S3["plumb serve"]
-    S1 --> K["plumb.sock *"]
+    A1["Claude"] --> S1["plumb serve *"]
+    A2["Codex"] --> S2["plumb serve *"]
+    A3["Gemini"] --> S3["plumb serve *"]
+    S1 --> K["plumb.sock"]
     S2 --> K
     S3 --> K
     K --> D["plumb daemon **"]
@@ -131,7 +131,9 @@ flowchart TD
     D --> P["pyright → /projects/bar"]
 ```
 
-`*` `~/Library/Caches/plumb/plumb.sock` (`~/.cache/plumb` on Linux) · `**` one shared process — language servers stay warm across chats
+`*` `plumb serve` is a reconnecting proxy — if the daemon crashes or hangs it respawns one and replays the handshake, so your session survives without the agent noticing.
+
+`**` one shared process, reused across every conversation.
 
 Servers stay warm across chats, per-path locks are shared across every connection, and symbol indexes update live after each write. Full architecture → [**docs/architecture.md**](docs/architecture.md).
 
