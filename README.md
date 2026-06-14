@@ -158,7 +158,27 @@ Agents can already *read* code well enough; writing it unsupervised — concurre
 
 ## Roadmap
 
-Near-term, roughly in order: green Linux CI + Homebrew distribution, more validated LSP adapters promoted out of experimental, opt-in semantic re-rank for Topology search (GA), and Windows support. Issues and ideas welcome.
+Plumb is pre-1.0. The core — write-safety, the resilient daemon, the topology index, and project memory — is in daily use. The road to 1.0 is mostly about *proving* it beyond the validated core and smoothing distribution. Issues and ideas welcome.
+
+**Shipped**
+
+- [x] Concurrency-safe, atomic, transactional writes with rollback
+- [x] Crash-resilient reconnecting daemon
+- [x] Tree-sitter topology index + per-project memory
+- [x] Go and Python LSP adapters validated (real-binary)
+
+**Road to 1.0**
+
+- [ ] Green Linux CI with real-binary LSP integration (today: validated on macOS; Linux hardening in progress)
+- [ ] Homebrew distribution (`brew install plumb`)
+- [ ] Promote experimental adapters to validated — pull-diagnostics support so Zig / TypeScript / Kotlin pass end-to-end
+- [ ] Swift on Xcode projects: build-server (BSP) guidance so semantic tools work without a SwiftPM manifest
+- [ ] Semantic re-rank for topology search → GA (today: opt-in, off by default)
+
+**Exploratory / post-1.0**
+
+- [ ] Native Windows support
+- [ ] Retire the WASM tree-sitter path once the pure-Go parser handles Swift IUO and TS typed-arrow
 
 ## Contributing
 
