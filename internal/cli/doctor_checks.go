@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,53 +62,92 @@ func checkDaemon() []checkResult {
 	return results
 }
 
-// checkMCPClients checks whether plumb is registered with each known MCP client.
+// checkMCPClients checks whether plumb is registered with each known MCP client
+// and that the binary each one launches still exists and matches the running
+// executable.
 func checkMCPClients() []checkResult {
-	var results []checkResult
+	selfPath, _ := os.Executable()
+	results := make([]checkResult, 0, len(allSetupClients()))
 	for _, c := range allSetupClients() {
-		path, err := c.pathFn()
-		if err != nil {
-			results = append(results, checkResult{
-				name:   c.name,
-				ok:     false,
-				detail: "cannot locate config: " + err.Error(),
-			})
-			continue
-		}
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			results = append(results, checkResult{
-				name:   c.name,
-				ok:     false,
-				detail: "not installed or config not found",
-				fix:    fmt.Sprintf("install %s, then run `plumb setup %s`", c.name, c.use),
-			})
-			continue
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			results = append(results, checkResult{
-				name:   c.name,
-				ok:     false,
-				detail: "cannot read config: " + err.Error(),
-			})
-			continue
-		}
-		if strings.Contains(string(data), "plumb") {
-			results = append(results, checkResult{
-				name:   c.name,
-				ok:     true,
-				detail: contractConfigPath(path),
-			})
-		} else {
-			results = append(results, checkResult{
-				name:   c.name,
-				ok:     false,
-				detail: "config exists but plumb is not registered",
-				fix:    fmt.Sprintf("run `plumb setup %s`", c.use),
-			})
-		}
+		results = append(results, checkOneClient(c, selfPath))
 	}
 	return results
+}
+
+// checkOneClient resolves one client's config and validates that the plumb server
+// it registers points at an existing binary matching the running executable.
+func checkOneClient(c setupTarget, selfPath string) checkResult {
+	path, err := c.pathFn()
+	if err != nil {
+		return checkResult{name: c.name, ok: false, detail: "cannot locate config: " + err.Error()}
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return checkResult{
+			name:   c.name,
+			ok:     false,
+			detail: "not installed or config not found",
+			fix:    fmt.Sprintf("install %s, then run `plumb setup %s`", c.name, c.use),
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return checkResult{name: c.name, ok: false, detail: "cannot read config: " + err.Error()}
+	}
+	if !strings.Contains(string(data), "plumb") {
+		return checkResult{
+			name:   c.name,
+			ok:     false,
+			detail: "config exists but plumb is not registered",
+			fix:    fmt.Sprintf("run `plumb setup %s`", c.use),
+		}
+	}
+	res := classifyClientBinary(c, path, selfPath)
+	res.name = c.name
+	return res
+}
+
+// classifyClientBinary compares the binary a client launches for plumb against the
+// running executable: a missing registered binary is a failure, a mismatch with an
+// existing binary a non-fatal warning, an exact match a clean pass. When the launch
+// command can't be extracted it falls back to a plain "registered" pass.
+func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
+	detail := contractConfigPath(cfgPath)
+	if c.extractFn == nil {
+		return checkResult{ok: true, detail: detail}
+	}
+	regPath, registered, err := c.extractFn(cfgPath)
+	if err != nil || !registered {
+		return checkResult{ok: true, detail: detail}
+	}
+	if _, err := os.Stat(regPath); err != nil {
+		return checkResult{
+			ok:     false,
+			detail: detail + "\nregistered binary missing: " + render.ContractPath(regPath),
+			fix:    fmt.Sprintf("run `plumb setup %s` to repoint at the current binary", c.use),
+		}
+	}
+	if selfPath != "" && !sameBinary(regPath, selfPath) {
+		return checkResult{
+			ok:     true,
+			warn:   true,
+			detail: detail + "\nregistered: " + render.ContractPath(regPath) + "\ncurrent:    " + render.ContractPath(selfPath),
+			fix:    fmt.Sprintf("run `plumb setup %s` to repoint at the current binary", c.use),
+		}
+	}
+	return checkResult{ok: true, detail: detail}
+}
+
+// sameBinary reports whether two paths resolve to the same executable, comparing
+// after symlink resolution so a symlinked install matches its target.
+func sameBinary(a, b string) bool {
+	return resolvePath(a) == resolvePath(b)
+}
+
+func resolvePath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // checkConfigs verifies global and project config files are parseable.

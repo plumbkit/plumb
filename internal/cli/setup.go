@@ -14,7 +14,16 @@ import (
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Configure plumb with external tools",
+	Long: `Register plumb as an MCP server in an external client's config.
+
+Run a subcommand (e.g. ` + "`plumb setup claude-code`" + `) to register a single
+client, or ` + "`plumb setup --all`" + ` to repoint every already-registered client
+at the current plumb binary — the repair after the binary moves or is rebuilt
+elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).`,
+	RunE: runSetupAll,
 }
+
+var setupAllFlag bool
 
 var setupClaudeDesktopCmd = &cobra.Command{
 	Use:   "claude-desktop",
@@ -51,6 +60,8 @@ var setupCodexCmd = &cobra.Command{
 }
 
 func init() {
+	setupCmd.Flags().BoolVar(&setupAllFlag, "all", false,
+		"Repoint every already-registered client at the current plumb binary")
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeNoSkillFlag, "no-skill", false, "Skip installing Claude Code skill files")

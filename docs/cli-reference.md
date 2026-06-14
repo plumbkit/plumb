@@ -163,8 +163,9 @@ plumb setup <client>
 ```
 
 Register the current `plumb` binary as a stdio MCP server in a client's config.
-Setup helpers preserve any existing MCP servers and back up the config before
-modifying it.
+Setup helpers preserve any existing MCP servers (and any extra keys on an existing
+plumb entry, such as Codex's per-tool approval tables) and back up the config
+before modifying it.
 
 | Subcommand | Config target |
 |---|---|
@@ -186,6 +187,7 @@ modifying it.
 | Flag | Applies to | Effect |
 |---|---|---|
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
+| `--all` | `plumb setup` | Repoint **every** already-registered client at the current `plumb` binary, skipping clients that aren't installed or don't use plumb. The bulk repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check. Re-points only; never adds plumb to a client that didn't have it. |
 
 ---
 
@@ -202,8 +204,13 @@ non-zero if any check fails. Sections:
 - **Language Servers** — each configured LSP binary is on `PATH` (enabled
   servers that are missing fail; disabled ones are informational), plus a
   Java 21+ runtime check when `java` is configured.
-- **MCP Clients** — whether plumb is registered with Claude Desktop, Claude
-  Code, Gemini CLI, and Codex.
+- **MCP Clients** — for each supported client, whether plumb is registered
+  **and** that the binary the config launches still exists and matches the
+  running executable. A registered binary that no longer exists is a failure; a
+  binary that exists but differs from the current one (e.g. after moving or
+  rebuilding plumb elsewhere) is a non-fatal **warning** (`!`). Both carry a
+  `plumb setup <client>` fix hint — or run `plumb setup --all` to repoint every
+  client at once.
 - **Configuration** — global and project `config.toml` parse cleanly.
 - **Data** — the global stats database is readable.
 - **Indexing** — when `[topology]` is enabled for the workspace, the topology index is present and healthy (passes when topology is disabled — the opt-in default). A *missing* or *corrupt* index fails; an index that exists but is still building (empty, all files skipped, or no symbols extracted yet) is reported as a non-fatal **warning** (`!`) so a freshly enabled workspace does not false-negative. Inspected strictly read-only (`mode=ro`) without starting an indexer or creating sidecar files; warnings and failures carry a fix hint.

@@ -328,7 +328,8 @@ func mergeServerEntry(
 	}
 	sort.Strings(preserved)
 
-	if existing, exists := servers["plumb"].(map[string]any); exists && same(existing) {
+	existing, _ := servers["plumb"].(map[string]any)
+	if existing != nil && same(existing) {
 		return false, preserved, nil
 	}
 
@@ -338,7 +339,17 @@ func mergeServerEntry(
 		}
 	}
 
-	servers["plumb"] = entry
+	// Merge the canonical fields onto any existing plumb entry rather than
+	// replacing it wholesale, so user-added keys survive a re-register or a
+	// `plumb setup --all` repoint — most importantly Codex's per-tool
+	// [mcp_servers.plumb.tools.*] approval tables, which a replace would drop.
+	if existing == nil {
+		existing = map[string]any{}
+	}
+	for k, v := range entry {
+		existing[k] = v
+	}
+	servers["plumb"] = existing
 
 	if err := write(cfgPath, cfg); err != nil {
 		return false, nil, fmt.Errorf("writing %s: %w", cfgPath, err)

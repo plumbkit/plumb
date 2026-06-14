@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -15,14 +16,17 @@ import (
 
 // setupTarget describes one `plumb setup <client>` command in a data-driven way:
 // the lowercase subcommand (use), the human name shown in messages, the config
-// path resolver, and the format-specific merge helper. The merge helpers all
+// path resolver, the format-specific merge helper, and an extractor that reads
+// back the binary the config currently launches plumb with. The merge helpers all
 // funnel through mergeServerEntry, so each client differs only in path, key,
-// entry shape, and serialisation.
+// entry shape, and serialisation. extractFn powers `plumb doctor`'s mismatched-
+// binary detection and `plumb setup --all`'s "is plumb already registered?" gate.
 type setupTarget struct {
-	use    string
-	name   string
-	pathFn func() (string, error)
-	intoFn func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
+	use       string
+	name      string
+	pathFn    func() (string, error)
+	intoFn    func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
+	extractFn func(cfgPath string) (binPath string, registered bool, err error)
 }
 
 // extraSetupTargets are the command-line MCP-client agents that consume external
@@ -30,29 +34,91 @@ type setupTarget struct {
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
-	{"cursor", "Cursor", CursorConfigPath, setupClaudeDesktopInto},
-	{"augment", "Augment Code", AugmentConfigPath, setupClaudeDesktopInto},
-	{"qwen", "Qwen Code", QwenConfigPath, setupClaudeDesktopInto},
-	{"antigravity", "Antigravity CLI", AntigravityConfigPath, setupAntigravityInto},
-	{"antigravity-desktop", "Antigravity Desktop", AntigravityDesktopConfigPath, setupAntigravityInto},
-	{"opencode", "OpenCode", OpenCodeConfigPath, setupOpenCodeInto},
-	{"crush", "Crush", CrushConfigPath, setupCrushInto},
-	{"goose", "Goose", GooseConfigPath, setupGooseInto},
-	{"hermes", "Hermes", HermesConfigPath, setupHermesInto},
+	{"cursor", "Cursor", CursorConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
+	{"augment", "Augment Code", AugmentConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
+	{"qwen", "Qwen Code", QwenConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
+	{"antigravity", "Antigravity CLI", AntigravityConfigPath, setupAntigravityInto, antigravityCommandExtractor},
+	{"antigravity-desktop", "Antigravity Desktop", AntigravityDesktopConfigPath, setupAntigravityInto, antigravityCommandExtractor},
+	{"opencode", "OpenCode", OpenCodeConfigPath, setupOpenCodeInto, mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
+	{"crush", "Crush", CrushConfigPath, setupCrushInto, mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
+	{"goose", "Goose", GooseConfigPath, setupGooseInto, mapCommandExtractor(readOrInitYAMLConfig, "extensions", "cmd")},
+	{"hermes", "Hermes", HermesConfigPath, setupHermesInto, mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command")},
 }
 
 // allSetupClients lists every client `plumb setup` supports, for the `config show`
-// MCP table and `plumb doctor`. The first four are the originals (with bespoke
-// setup commands, so their intoFn is nil); the rest come from extraSetupTargets.
+// MCP table, `plumb doctor`, and `plumb setup --all`. The first four are the
+// originals; their intoFn/extractFn are wired here (the bespoke setup commands
+// call the same intoFns directly) so the bulk repair and doctor checks can drive
+// every client uniformly. The rest come from extraSetupTargets.
 func allSetupClients() []setupTarget {
 	clients := make([]setupTarget, 0, 4+len(extraSetupTargets))
 	clients = append(clients,
-		setupTarget{"claude-code", "Claude Code", claudeCodeConfigPath, nil},
-		setupTarget{"claude-desktop", "Claude Desktop", claudeDesktopConfigPath, nil},
-		setupTarget{"gemini", "Gemini CLI", GeminiConfigPath, nil},
-		setupTarget{"codex", "Codex", CodexConfigPath, nil},
+		setupTarget{"claude-code", "Claude Code", claudeCodeConfigPath, setupClaudeCodeInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
+		setupTarget{"claude-desktop", "Claude Desktop", claudeDesktopConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
+		setupTarget{"gemini", "Gemini CLI", GeminiConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
+		setupTarget{"codex", "Codex", CodexConfigPath, setupCodexInto, mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")},
 	)
 	return append(clients, extraSetupTargets...)
+}
+
+// registeredCommand extracts the launch binary plumb is registered with from a
+// parsed client config: servers[serversKey]["plumb"][cmdField]. ok is false when
+// no plumb entry is present or the command field is missing or empty.
+func registeredCommand(cfg map[string]any, serversKey, cmdField string) (string, bool) {
+	servers, ok := cfg[serversKey].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	entry, ok := servers["plumb"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	return commandString(entry[cmdField])
+}
+
+// commandString reads a launch command stored as either a bare string or an argv
+// array (the binary is element 0). ok is false for any other shape or an empty
+// value.
+func commandString(v any) (string, bool) {
+	switch c := v.(type) {
+	case string:
+		return c, c != ""
+	case []any:
+		if len(c) > 0 {
+			if s, ok := c[0].(string); ok {
+				return s, s != ""
+			}
+		}
+	}
+	return "", false
+}
+
+// mapCommandExtractor builds an extractFn for a client whose config is a single
+// read-parseable map holding the plumb server under servers[serversKey].
+func mapCommandExtractor(read func(string) (map[string]any, bool, error), serversKey, cmdField string) func(string) (string, bool, error) {
+	return func(cfgPath string) (string, bool, error) {
+		cfg, _, err := read(cfgPath)
+		if err != nil {
+			return "", false, err
+		}
+		bin, ok := registeredCommand(cfg, serversKey, cmdField)
+		return bin, ok, nil
+	}
+}
+
+// antigravityCommandExtractor reads the standalone Antigravity plumb.json, whose
+// top-level object is the plumb entry itself (command + args).
+func antigravityCommandExtractor(cfgPath string) (string, bool, error) {
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", false, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return "", false, err
+	}
+	bin, ok := commandString(m["command"])
+	return bin, ok, nil
 }
 
 func init() {
@@ -98,6 +164,83 @@ func runSetupTarget(t setupTarget) error {
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
 	return nil
+}
+
+// runSetupAll repoints every client that already registers plumb at the current
+// binary, leaving clients that aren't installed or don't use plumb untouched. It
+// is the bulk repair for a moved or rebuilt binary — the fix `plumb doctor`
+// points at when a client's registered binary no longer matches the running one.
+// Without --all the bare `plumb setup` command just prints help.
+func runSetupAll(cmd *cobra.Command, _ []string) error {
+	if !setupAllFlag {
+		return cmd.Help()
+	}
+	PrintLogo()
+
+	plumbBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolving plumb binary path: %w", err)
+	}
+
+	tui.RebuildStyles()
+	lines := make([]string, 0, len(allSetupClients()))
+	changed := 0
+	for _, c := range allSetupClients() {
+		status, didChange := refreshClient(c, plumbBin)
+		if didChange {
+			changed++
+		}
+		lines = append(lines, fmt.Sprintf("%-22s %s", c.name, status))
+	}
+
+	body := fmt.Sprintf("Current binary: %s\n\n%s", plumbBin, strings.Join(lines, "\n"))
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render(body), tui.SepStyle))
+	if changed == 0 {
+		fmt.Println("\nNo changes — every registered client already points at this binary.")
+	} else {
+		fmt.Printf("\nRepointed %d client(s). Restart them to apply.\n", changed)
+	}
+	return nil
+}
+
+// refreshClient repoints one client's plumb registration at plumbBin, but only
+// when the client is installed and already references plumb — it never adds plumb
+// to a client that doesn't use it. Returns a human status line and whether it
+// changed anything.
+func refreshClient(c setupTarget, plumbBin string) (status string, changed bool) {
+	if c.intoFn == nil {
+		return "skipped (no updater)", false
+	}
+	cfgPath, err := c.pathFn()
+	if err != nil {
+		return "error: " + err.Error(), false
+	}
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		return "not installed — skipped", false
+	}
+	if !clientHasPlumb(c, cfgPath) {
+		return "plumb not registered — skipped", false
+	}
+	added, _, err := c.intoFn(cfgPath, plumbBin)
+	if err != nil {
+		return "error: " + err.Error(), false
+	}
+	if !added {
+		return "already current", false
+	}
+	return "updated → " + render.ContractPath(plumbBin), true
+}
+
+// clientHasPlumb reports whether cfgPath already registers a plumb server, using
+// the structured extractor when available and falling back to a substring scan.
+func clientHasPlumb(c setupTarget, cfgPath string) bool {
+	if c.extractFn != nil {
+		if _, registered, err := c.extractFn(cfgPath); err == nil {
+			return registered
+		}
+	}
+	data, err := os.ReadFile(cfgPath)
+	return err == nil && strings.Contains(string(data), "plumb")
 }
 
 // setupOpenCodeInto registers plumb under OpenCode's top-level "mcp" key. A local
