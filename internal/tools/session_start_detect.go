@@ -158,6 +158,17 @@ func labelForLSPKey(key string) string {
 	}
 }
 
+// joinLanguageLabels maps a set of [lsp.<key>] language keys to their display
+// labels and joins them, e.g. ["swift","zig"] → "Swift, Zig". Used for the
+// multi-language identity line of a monorepo workspace root.
+func joinLanguageLabels(keys []string) string {
+	labels := make([]string, 0, len(keys))
+	for _, k := range keys {
+		labels = append(labels, labelForLSPKey(k))
+	}
+	return strings.Join(labels, ", ")
+}
+
 // gitBranch returns the current branch name, or "" if not a git repo / git
 // is unavailable. Best-effort with a short timeout.
 func gitBranch(ws string) string {

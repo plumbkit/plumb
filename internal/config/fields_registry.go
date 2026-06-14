@@ -162,6 +162,10 @@ var registryData = []Field{
 		Description: "Let read/search tools reach the Go module cache + GOROOT read-only.",
 	},
 	{
+		Key: "workspace.child_scan_depth", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Levels below the root to scan for language markers in subdirs (monorepo). 0 disables.",
+	},
+	{
 		Key: "workspace.extra_roots", Type: FieldList, ReloadTier: ReloadNextSession,
 		Description: "Extra dirs read+write tools may reach beyond the workspace. Enter to edit.",
 	},

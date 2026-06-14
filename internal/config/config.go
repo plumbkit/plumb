@@ -137,6 +137,15 @@ type WorkspaceConfig struct {
 	// dependency's source without falling back to the shell. Read-only by
 	// construction — writes there are always refused. Default true.
 	AllowDependencyReads bool `toml:"allow_dependency_reads"`
+	// ChildScanDepth bounds how many directory levels below the workspace root
+	// the daemon descends to discover language root markers in subdirectories —
+	// the monorepo case where the root itself carries only a .plumb/ marker
+	// (e.g. core/build.zig + app/Package.swift under one root). Each discovered
+	// child language attaches its own server (rooted at the subdirectory) and is
+	// listed at session_start; the first is elected the connection's primary.
+	// 0 disables the descent. Strong markers only; .git/.plumb/node_modules/build
+	// dirs are pruned. Default 2.
+	ChildScanDepth int `toml:"child_scan_depth"`
 }
 
 // EditsConfig controls safety behaviour for write/edit tools. Both fields
@@ -351,4 +360,10 @@ type Config struct {
 	LSPQuery  LSPQueryConfig       `toml:"lsp_query"`
 	Semantics SemanticsConfig      `toml:"semantics"`
 	Memory    MemoryConfig         `toml:"memory"`
+	// Tasks holds per-language build/lint/test/e2e/verify command templates,
+	// keyed by the [lsp.<lang>] language id. Executed by the task runner.
+	Tasks map[string]TasksConfig `toml:"tasks"`
+	// AgentConfigWrites gates whether the agent-writable-config tool may write
+	// project config on the user's behalf. Off by default; user-settable only.
+	AgentConfigWrites bool `toml:"agent_config_writes"`
 }

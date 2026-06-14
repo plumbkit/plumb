@@ -117,6 +117,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithTopology(topoFn).
 		WithEpisodic(s.latestEpisodic).
 		WithLSPLanguage(s.acquiredLanguageName).
+		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithRepin(s.repinWorkspace).
 		WithPinConflict(func(requested string) {
 			ws := s.workspace()

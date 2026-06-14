@@ -33,6 +33,7 @@ func validate(cfg Config) error {
 		func() error { return validateTopology(cfg.Topology) },
 		func() error { return validateSemantics(cfg.Semantics) },
 		func() error { return validateMemory(cfg.Memory) },
+		func() error { return validateTasks(cfg.Tasks) },
 	} {
 		if err := check(); err != nil {
 			return err
@@ -99,6 +100,20 @@ func validateMemory(m MemoryConfig) error {
 	}
 	if m.GeneratedMemoryKeep < 0 {
 		return fmt.Errorf("memory.generated_memory_keep must be non-negative (0 disables pruning)")
+	}
+	return nil
+}
+
+// validateTasks rejects a task command that would not run as a bare argv (a
+// shell metacharacter). An empty slot is always valid; the verify slot is a
+// composite and carries no command.
+func validateTasks(tasks map[string]TasksConfig) error {
+	for lang, t := range tasks {
+		for _, slot := range []string{"build", "lint", "test", "e2e"} {
+			if _, err := ParseTaskCommand(t.Get(slot)); err != nil {
+				return fmt.Errorf("tasks.%s.%s: %w", lang, slot, err)
+			}
+		}
 	}
 	return nil
 }

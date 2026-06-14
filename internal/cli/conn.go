@@ -77,6 +77,12 @@ type sessionView struct {
 	// GOROOT). They are workspace-independent (global), computed off the mutation
 	// lane by warmDepRoots and folded into policy once known.
 	depRoots []tools.AllowedRoot
+
+	// discoveredLangs is the distinct set of child languages found at attach for a
+	// monorepo root (the elected primary plus its lazily-attached siblings), or nil
+	// for a single-language root. Surfaced as the multi-language session_start
+	// identity line (e.g. "Swift, Zig").
+	discoveredLangs []string
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,
@@ -270,6 +276,15 @@ func (s *connSession) acquiredLanguageName() string {
 		return ""
 	}
 	return lang
+}
+
+// acquiredLanguageLabels returns the distinct child languages discovered for a
+// monorepo root (the elected primary plus its siblings), as [lsp.<lang>] keys,
+// or nil for a single-language root. session_start renders these as the
+// "Language: Swift, Zig" identity line; the single primary still drives the
+// recommended-step guidance via acquiredLanguageName.
+func (s *connSession) acquiredLanguageLabels() []string {
+	return s.view().discoveredLangs
 }
 
 // sessionName returns the current human-readable session name.

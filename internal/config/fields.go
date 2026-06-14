@@ -142,6 +142,13 @@ func normaliseFamilyKey(key string) string {
 	return key
 }
 
+// keyPath splits a concrete dotted key into the path SetProjectValue expects.
+// Unlike Lookup, it does NOT normalise the language segment — the write targets
+// the concrete language.
+func keyPath(key string) []string {
+	return strings.Split(key, ".")
+}
+
 // --- dynamic enum members (the tui → config seam for theme names) -----------
 
 var (

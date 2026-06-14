@@ -38,6 +38,13 @@ type routingProxy struct {
 	// server under the primary root serves a request, so the session can list
 	// every active LSP. Guarded by mu; nil-safe.
 	onActivate func(language string)
+	// wsRoot is the connection's workspace root and discovered the child language
+	// roots found beneath it at attach (the monorepo case: core/build.zig +
+	// app/Package.swift under one .plumb/ root). They drive WorkspaceSymbols
+	// fan-out so a no-file symbol query spans every detected language, not just
+	// the elected primary. Both guarded by mu; nil/empty for a single-language root.
+	wsRoot     string
+	discovered []discoveredRoot
 }
 
 func newRoutingProxy(pool *workspacePool) *routingProxy {
@@ -60,6 +67,17 @@ func (r *routingProxy) setActivateHook(fn func(language string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onActivate = fn
+}
+
+// setDiscovered records the connection's workspace root and the child language
+// roots discovered beneath it, for WorkspaceSymbols fan-out. Always called at
+// attach/re-pin (with nil for a single-language root) so a deliberate switch
+// clears any stale set. Guarded by mu.
+func (r *routingProxy) setDiscovered(wsRoot string, ds []discoveredRoot) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wsRoot = wsRoot
+	r.discovered = ds
 }
 
 // setPrimary records the connection's primary workspace. Idempotent — only
@@ -225,11 +243,116 @@ func (r *routingProxy) Exit(ctx context.Context) error {
 }
 
 func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
-	c, err := r.primaryClient()
-	if err != nil {
-		return nil, err
+	r.mu.RLock()
+	discovered := r.discovered
+	wsRoot := r.wsRoot
+	r.mu.RUnlock()
+	// Single-language root: keep the primary-only behaviour.
+	if len(discovered) == 0 {
+		c, err := r.primaryClient()
+		if err != nil {
+			return nil, err
+		}
+		return c.WorkspaceSymbols(ctx, params)
 	}
-	return c.WorkspaceSymbols(ctx, params)
+	return r.fanOutWorkspaceSymbols(ctx, params, wsRoot, discovered)
+}
+
+// lsTarget is a (root, language) pair to query during workspace-symbol fan-out.
+type lsTarget struct {
+	root     string
+	language string
+}
+
+// fanOutWorkspaceSymbols queries every language server in a monorepo root — the
+// discovered child roots plus any already-attached entry under the workspace —
+// and merges the results, deduplicating by symbol identity. Lazily-attached
+// children are warmed on the first such query (then cached), so a no-file symbol
+// search spans every detected language. A server that errors or is not yet ready
+// is skipped; the merged result wins over a single failure, and only an
+// all-error fan-out surfaces an error.
+func (r *routingProxy) fanOutWorkspaceSymbols(ctx context.Context, params protocol.WorkspaceSymbolParams, wsRoot string, discovered []discoveredRoot) ([]protocol.SymbolInformation, error) {
+	var (
+		merged   []protocol.SymbolInformation
+		seen     = map[string]bool{}
+		firstErr error
+		gotAny   bool
+	)
+	for _, t := range r.symbolTargets(wsRoot, discovered) {
+		syms, ready, err := r.symbolsFrom(ctx, t, params)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !ready {
+			continue
+		}
+		gotAny = true
+		for _, sym := range syms {
+			k := symbolKey(sym)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			merged = append(merged, sym)
+		}
+	}
+	if !gotAny && firstErr != nil {
+		return nil, firstErr
+	}
+	return merged, nil
+}
+
+// symbolTargets is the deduplicated (root, language) set to query for a
+// workspace-wide symbol search: the discovered child roots first, then any other
+// language server already attached under the workspace root (a lazily-routed
+// secondary, or the elected primary itself).
+func (r *routingProxy) symbolTargets(wsRoot string, discovered []discoveredRoot) []lsTarget {
+	seen := map[lsTarget]bool{}
+	var targets []lsTarget
+	add := func(root, language string) {
+		t := lsTarget{root: root, language: language}
+		if !seen[t] {
+			seen[t] = true
+			targets = append(targets, t)
+		}
+	}
+	for _, d := range discovered {
+		add(d.root, d.language)
+	}
+	for _, e := range r.pool.entriesUnderRoot(wsRoot) {
+		add(e.root, e.language)
+	}
+	return targets
+}
+
+// symbolsFrom acquires (without pinning) the server for one target and queries
+// it. ready is false when the server is not yet warm (treat as no results, not
+// an error); err is the query/acquire failure.
+func (r *routingProxy) symbolsFrom(ctx context.Context, t lsTarget, params protocol.WorkspaceSymbolParams) (syms []protocol.SymbolInformation, ready bool, err error) {
+	e, err := r.pool.acquireLang(ctx, t.root, t.language, false)
+	if err != nil {
+		return nil, false, err
+	}
+	c := e.proxy.get()
+	if c == nil {
+		return nil, false, nil
+	}
+	syms, err = c.WorkspaceSymbols(ctx, params)
+	if err != nil {
+		return nil, false, err
+	}
+	return syms, true, nil
+}
+
+// symbolKey identifies a symbol for fan-out deduplication: name, kind, and
+// source location. Distinct servers cover disjoint subtrees so collisions are
+// rare, but a file on a root boundary could surface twice.
+func symbolKey(s protocol.SymbolInformation) string {
+	loc := s.Location
+	return fmt.Sprintf("%s\x00%d\x00%s\x00%d\x00%d", s.Name, s.Kind, loc.URI, loc.Range.Start.Line, loc.Range.Start.Character)
 }
 
 func (r *routingProxy) Capabilities() *protocol.ServerCapabilities {

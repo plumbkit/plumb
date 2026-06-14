@@ -74,6 +74,7 @@ type SessionStart struct {
 	topo         topologyStoreFn                                                       // may be nil; returns the live topology store, or nil when disabled
 	gitPolicyFn  func() GitPolicy                                                      // may be nil; git policy section skipped when nil
 	lspLangFn    func() string                                                         // may be nil; the LSP language attached to this session ("" when none)
+	lspLangsFn   func() []string                                                       // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	externalIDFn func(id string) string                                                // may be nil; links session to external ID, returns inherited name
 	pinConflict  func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
 	repin        func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
@@ -123,6 +124,16 @@ func (t *SessionStart) writeSessionEpisodic(sb *strings.Builder, ws string) {
 // source is wired (which it always is). Nil-safe. Returns the receiver.
 func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
 	t.lspLangFn = fn
+	return t
+}
+
+// WithLSPLanguages wires an accessor for the distinct child languages attached
+// to a monorepo workspace root (e.g. zig + swift discovered under one .plumb/
+// root). When it returns more than one, session_start renders them as a combined
+// "Language: Swift, Zig" identity line; the single primary (WithLSPLanguage)
+// still drives the recommended-step guidance. Nil-safe. Returns the receiver.
+func (t *SessionStart) WithLSPLanguages(fn func() []string) *SessionStart {
+	t.lspLangsFn = fn
 	return t
 }
 
@@ -207,6 +218,14 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if t.lspLangFn != nil {
 		if attached := t.lspLangFn(); attached != "" && attached != lspKey {
 			lang, lspKey = labelForLSPKey(attached), attached
+		}
+	}
+	// Multi-language monorepo root: show every detected language in the identity
+	// line (e.g. "Swift, Zig"), while lspKey stays the elected primary so the
+	// recommended-step guidance and lspAttached() logic are unchanged.
+	if t.lspLangsFn != nil {
+		if keys := t.lspLangsFn(); len(keys) > 1 {
+			lang = joinLanguageLabels(keys)
 		}
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()

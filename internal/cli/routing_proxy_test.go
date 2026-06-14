@@ -18,7 +18,8 @@ import (
 type stubClient struct {
 	mu          sync.Mutex
 	id          string
-	definitions []string // captured URIs from Definition calls
+	definitions []string                     // captured URIs from Definition calls
+	symbols     []protocol.SymbolInformation // returned from WorkspaceSymbols
 }
 
 func (s *stubClient) Initialize(context.Context, protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -48,7 +49,7 @@ func (s *stubClient) DocumentSymbols(context.Context, protocol.DocumentSymbolPar
 }
 
 func (s *stubClient) WorkspaceSymbols(context.Context, protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
-	return nil, nil
+	return s.symbols, nil
 }
 
 func (s *stubClient) Definition(_ context.Context, p protocol.DefinitionParams) ([]protocol.Location, error) {

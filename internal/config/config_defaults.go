@@ -25,6 +25,7 @@ var defaults = Config{
 	},
 	Workspace: WorkspaceConfig{
 		AllowDependencyReads: true,
+		ChildScanDepth:       2,
 	},
 	Git: GitConfig{
 		AllowWrites:       true,
@@ -137,6 +138,7 @@ var defaults = Config{
 			Enabled:         true,
 		},
 	},
+	Tasks: defaultTasks(),
 }
 
 // Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
@@ -171,6 +173,7 @@ func cloneConfig(cfg Config) Config {
 			out.LSP[name] = cloneLSPConfig(lspCfg)
 		}
 	}
+	out.Tasks = cloneTasks(cfg.Tasks)
 	return out
 }
 

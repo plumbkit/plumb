@@ -39,28 +39,10 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		if v.acquiredRoot != "" {
 			return
 		}
-		detectedLanguage := language
-		if detectedLanguage == LanguageNone {
-			detectedLanguage = detectAnyLanguageAt(folder, s.store.Current())
-		}
-		adapter := ""
-		if language != LanguageNone {
-			e, err := s.pool.acquireLang(ctx, folder, language, true)
-			if err != nil {
-				// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
-				// rather than aborting. The workspace is still attached for filesystem
-				// tools and stat tracking; LSP tools will surface their own errors.
-				s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
-				language = LanguageNone
-			} else {
-				s.sessionProxy.setPrimary(folder, language, e.proxy)
-				s.sessionInv.setPrimary(folder, language, e.inv)
-				s.sessionProxy.setActivateHook(s.appendActiveAdapter)
-				v.lsRefRoot = folder
-				v.lsRefLang = language
-				adapter = adapterForLanguage(language)
-			}
-		}
+		lang, adapter, discovered, adapters := s.resolvePrimaryLSP(ctx, v, folder, language, false)
+		language = lang
+		detectedLanguage := detectedLabel(folder, language, discovered, s.store.Current())
+		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = folder
 		v.acquiredLanguage = language
 		s.startQualityRunner(v, folder)
@@ -74,7 +56,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
 			info.Adapter = adapter
-			info.Adapters = adaptersFor(adapter)
+			info.Adapters = adapters
 			if cn != "" {
 				info.ClientName = cn
 				info.ClientVersion = cv
@@ -211,29 +193,15 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.writeTracker.Reset()
 		s.clearHintSeen()
 
-		adapter := ""
-		if language != LanguageNone {
-			if e, aerr := s.pool.acquireLang(ctx, root, language, true); aerr != nil {
-				s.log().Error("daemon: re-pin acquire LS — attaching without LSP", "root", root, "language", language, "err", aerr)
-				language = LanguageNone
-			} else {
-				s.sessionProxy.resetPrimary(root, language, e.proxy)
-				s.sessionInv.resetPrimary(root, language, e.inv)
-				s.sessionProxy.setActivateHook(s.appendActiveAdapter)
-				v.lsRefRoot = root
-				v.lsRefLang = language
-				adapter = adapterForLanguage(language)
-			}
-		}
+		lang, adapter, discovered, adapters := s.resolvePrimaryLSP(ctx, v, root, language, true)
+		language = lang
 		// Acquire-before-release: the new root is pinned above before we drop the
 		// old one, so even a re-pin back to a recently-left root never races teardown.
 		if prevRef != "" {
 			s.pool.release(prevRef, prevRefLang)
 		}
-		detectedLanguage := language
-		if detectedLanguage == LanguageNone {
-			detectedLanguage = detectAnyLanguageAt(root, s.store.Current())
-		}
+		detectedLanguage := detectedLabel(root, language, discovered, s.store.Current())
+		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = root
 		v.acquiredLanguage = language
 		v.lastCfgMtime = time.Time{}
@@ -248,7 +216,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			info.Language = language
 			info.DetectedLanguage = detectedLanguage
 			info.Adapter = adapter
-			info.Adapters = adaptersFor(adapter)
+			info.Adapters = adapters
 			info.Synthetic = false
 			info.Health = ""
 			info.HealthMessage = ""
@@ -341,6 +309,123 @@ func (s *connSession) appendActiveAdapter(language string) {
 			in.Adapters = append(in.Adapters, adp)
 		}
 	})
+}
+
+// resolvePrimaryLSP acquires the language server for an attaching workspace and
+// wires the session's routing proxy. For a root with its own detected language
+// it acquires that as the primary. For a LanguageNone root it discovers child
+// language roots (the monorepo case — core/build.zig + app/Package.swift under a
+// bare .plumb/ root) and elects one as the connection primary; the rest attach
+// lazily via routing and are surfaced for display + workspace_symbols fan-out.
+//
+// Returns the effective primary language (LanguageNone when nothing attached),
+// the primary adapter name, the full discovered child set (nil for a normal
+// single-language root), and the adapter list to seed the session record. repin
+// selects resetPrimary (a deliberate workspace switch) over setPrimary (first
+// attach). Must run inside the s.mutate lane: it writes v.lsRefRoot/lsRefLang.
+func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, folder, language string, repin bool) (lang, adapter string, discovered []discoveredRoot, adapters []string) {
+	if language != LanguageNone {
+		e, err := s.pool.acquireLang(ctx, folder, language, true)
+		if err != nil {
+			// LSP unavailable (binary not on PATH, crash, etc.) — degrade gracefully
+			// rather than aborting. The workspace is still attached for filesystem
+			// tools and stat tracking; LSP tools will surface their own errors.
+			s.log().Error("daemon: acquire LS — attaching without LSP", "root", folder, "language", language, "err", err)
+			s.sessionProxy.setDiscovered(folder, nil)
+			return LanguageNone, "", nil, nil
+		}
+		s.bindPrimary(v, folder, language, e, repin)
+		s.sessionProxy.setDiscovered(folder, nil)
+		adp := adapterForLanguage(language)
+		return language, adp, nil, adaptersFor(adp)
+	}
+	// LanguageNone: look for language roots in child subdirectories. Never scan
+	// $HOME (a stray ~/.plumb must not trigger a full-home descent).
+	if sameDirAs(folder, homeFileInfo()) {
+		s.sessionProxy.setDiscovered(folder, nil)
+		return LanguageNone, "", nil, nil
+	}
+	discovered = s.pool.discoverChildLanguages(folder, s.store.Current().Workspace.ChildScanDepth)
+	if len(discovered) == 0 {
+		s.sessionProxy.setDiscovered(folder, nil)
+		return LanguageNone, "", nil, nil
+	}
+	primary := electPrimary(discovered)
+	e, err := s.pool.acquireLang(ctx, primary.root, primary.language, true)
+	if err != nil {
+		// Surface the discovered languages for display even though the primary
+		// server failed to start; the lazy routing path retries on first file.
+		s.log().Error("daemon: acquire discovered primary — listing without LSP", "root", primary.root, "language", primary.language, "err", err)
+		s.sessionProxy.setDiscovered(folder, discovered)
+		return LanguageNone, "", discovered, adaptersForDiscovered(discovered)
+	}
+	s.bindPrimary(v, primary.root, primary.language, e, repin)
+	s.sessionProxy.setDiscovered(folder, discovered)
+	return primary.language, adapterForLanguage(primary.language), discovered, adaptersForDiscovered(discovered)
+}
+
+// bindPrimary wires an acquired primary entry into the session: routing proxy,
+// invalidator, the secondary-activation hook, and the pinned LS reference (kept
+// at the entry's OWN root — a discovered child root may sit below the workspace
+// — for release symmetry on detach). repin uses resetPrimary (switch) instead
+// of setPrimary (first-wins).
+func (s *connSession) bindPrimary(v *sessionView, root, language string, e *poolEntry, repin bool) {
+	if repin {
+		s.sessionProxy.resetPrimary(root, language, e.proxy)
+		s.sessionInv.resetPrimary(root, language, e.inv)
+	} else {
+		s.sessionProxy.setPrimary(root, language, e.proxy)
+		s.sessionInv.setPrimary(root, language, e.inv)
+	}
+	s.sessionProxy.setActivateHook(s.appendActiveAdapter)
+	v.lsRefRoot = root
+	v.lsRefLang = language
+}
+
+// detectedLabel computes the session's DetectedLanguage display string: the
+// comma-joined discovered languages for a monorepo root, else the primary
+// language, else a best-effort marker scan when nothing attached.
+func detectedLabel(folder, language string, discovered []discoveredRoot, cfg config.Config) string {
+	switch {
+	case len(discovered) > 0:
+		return discoveredLabel(discovered)
+	case language == LanguageNone:
+		return detectAnyLanguageAt(folder, cfg)
+	default:
+		return language
+	}
+}
+
+// adaptersForDiscovered maps the discovered child languages to their adapter
+// names, deduplicated and order-preserving, for the session's Adapters list.
+func adaptersForDiscovered(ds []discoveredRoot) []string {
+	var out []string
+	for _, d := range ds {
+		if adp := adapterForLanguage(d.language); adp != "" && !slices.Contains(out, adp) {
+			out = append(out, adp)
+		}
+	}
+	return out
+}
+
+// distinctLanguages returns the sorted, deduplicated set of languages across
+// the discovered child roots (two subdirs naming the same language collapse to
+// one). nil-safe — returns nil for an empty/nil slice (a single-language root).
+func distinctLanguages(ds []discoveredRoot) []string {
+	var langs []string
+	for _, d := range ds {
+		if !slices.Contains(langs, d.language) {
+			langs = append(langs, d.language)
+		}
+	}
+	sort.Strings(langs)
+	return langs
+}
+
+// discoveredLabel joins the distinct discovered language names for the
+// DetectedLanguage display string, e.g. "swift, zig".
+func discoveredLabel(ds []discoveredRoot) string {
+	return strings.Join(distinctLanguages(ds), ", ")
 }
 
 // adaptersFor seeds the active-adapter list with the primary adapter, or nil

@@ -123,6 +123,104 @@ func (p *workspacePool) strongLangAt(dir string) string {
 	return ""
 }
 
+// discoveredRoot pairs a subdirectory carrying a strong language root marker
+// with the language that marker names. See discoverChildLanguages.
+type discoveredRoot struct {
+	root     string
+	language string
+}
+
+// discoverChildLanguages descends up to maxDepth levels below root looking for
+// strong language root markers in SUBdirectories — the monorepo case where the
+// root itself carries no marker of its own (a .plumb/ root over core/build.zig +
+// app/Package.swift). Detect handles the root and its ancestors; this is the
+// only place plumb looks DOWNWARD, and only for an already-resolved root.
+//
+// A directory that matches is a language project root, so the walk records it
+// and does NOT descend into it (nearest-wins, mirroring Detect). Strong markers
+// only — weak markers (package.json) are promiscuous and would mis-capture
+// tooling dirs. Noise dirs (.git, .plumb, dotdirs, node_modules, build outputs)
+// are pruned so depth does not explode. Symlinked dirs are skipped (DirEntry.
+// IsDir is false for them), avoiding cycles. maxDepth <= 0 disables discovery.
+// The caller is responsible for not invoking this on $HOME.
+func (p *workspacePool) discoverChildLanguages(root string, maxDepth int) []discoveredRoot {
+	if maxDepth <= 0 {
+		return nil
+	}
+	type item struct {
+		dir   string
+		depth int
+	}
+	var out []discoveredRoot
+	stack := []item{{dir: root, depth: 0}}
+	for len(stack) > 0 {
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if it.depth >= maxDepth {
+			continue
+		}
+		entries, err := os.ReadDir(it.dir)
+		if err != nil {
+			continue
+		}
+		for _, de := range entries {
+			if !de.IsDir() || skipChildDir(de.Name()) {
+				continue
+			}
+			child := filepath.Join(it.dir, de.Name())
+			if lang := p.strongLangAt(child); lang != "" {
+				out = append(out, discoveredRoot{root: child, language: lang})
+				continue // a language root is a project boundary — do not descend
+			}
+			stack = append(stack, item{dir: child, depth: it.depth + 1})
+		}
+	}
+	return out
+}
+
+// skipChildDir reports whether a directory name should be pruned from the child
+// language scan: any dotdir (.git, .plumb, .build, .zig-cache, …) plus common
+// dependency and build-output dirs that never hold a project's own root marker.
+func skipChildDir(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	switch name {
+	case "node_modules", "vendor", "dist", "build", "zig-cache", "zig-out", "target":
+		return true
+	}
+	return false
+}
+
+// electPrimary picks the connection's primary from discovered child roots, with
+// the same deterministic order newWorkspacePool sorts languages by: "go" first,
+// then alphabetical by language, tie-broken by the shorter/lexicographic root
+// path. A stable choice means workspace_symbols and the hierarchies resolve the
+// same primary across reconnects; the others attach lazily and fan-out covers
+// them. Panics on an empty slice — callers guard len(discovered) > 0.
+func electPrimary(ds []discoveredRoot) discoveredRoot {
+	best := ds[0]
+	for _, d := range ds[1:] {
+		if lessDiscovered(d, best) {
+			best = d
+		}
+	}
+	return best
+}
+
+func lessDiscovered(a, b discoveredRoot) bool {
+	if a.language != b.language {
+		if a.language == "go" {
+			return true
+		}
+		if b.language == "go" {
+			return false
+		}
+		return a.language < b.language
+	}
+	return a.root < b.root
+}
+
 // hasActiveLanguage reports whether name is an active (enabled + installed)
 // language in this pool — the set workspace detection and routing consult. Used
 // to validate a caller-supplied language override before pinning it.
