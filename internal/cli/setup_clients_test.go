@@ -17,6 +17,7 @@ func TestNewClientConfigPaths(t *testing.T) {
 		{"cursor", CursorConfigPath, "mcp.json", ".cursor"},
 		{"augment", AugmentConfigPath, "settings.json", ".augment"},
 		{"qwen", QwenConfigPath, "settings.json", ".qwen"},
+		{"antigravity", AntigravityConfigPath, "mcp_config.json", "antigravity-cli"},
 		{"opencode", OpenCodeConfigPath, "opencode.json", "opencode"},
 		{"crush", CrushConfigPath, "crush.json", "crush"},
 		{"goose", GooseConfigPath, "config.yaml", "goose"},

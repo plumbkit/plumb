@@ -30,6 +30,7 @@ var extraSetupTargets = []setupTarget{
 	{"cursor", "Cursor", CursorConfigPath, setupClaudeDesktopInto},
 	{"augment", "Augment Code", AugmentConfigPath, setupClaudeDesktopInto},
 	{"qwen", "Qwen Code", QwenConfigPath, setupClaudeDesktopInto},
+	{"antigravity", "Antigravity CLI", AntigravityConfigPath, setupClaudeDesktopInto},
 	{"opencode", "OpenCode", OpenCodeConfigPath, setupOpenCodeInto},
 	{"crush", "Crush", CrushConfigPath, setupCrushInto},
 	{"goose", "Goose", GooseConfigPath, setupGooseInto},

@@ -245,6 +245,7 @@ Project-overridable, hot-reloaded. When `enabled`, `topology_search` re-ranks it
 | Cursor | `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
 | Augment Code | `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
 | Qwen Code | `plumb setup qwen` | `~/.qwen/settings.json` |
+| Antigravity CLI | `plumb setup antigravity` | `~/.gemini/antigravity-cli/mcp_config.json` (`mcpServers` key; JSON) |
 | OpenCode | `plumb setup opencode` | `~/.config/opencode/opencode.json` (`mcp` key; `type:"local"`, command array) |
 | Crush | `plumb setup crush` | `~/.config/crush/crush.json` (`mcp` key; `type:"stdio"`) |
 | Goose | `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |

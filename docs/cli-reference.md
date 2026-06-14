@@ -176,6 +176,7 @@ modifying it.
 | `plumb setup cursor` | `~/.cursor/mcp.json` |
 | `plumb setup augment` | `~/.augment/settings.json` |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
+| `plumb setup antigravity` | `~/.gemini/antigravity-cli/mcp_config.json` |
 | `plumb setup opencode` | `~/.config/opencode/opencode.json` |
 | `plumb setup crush` | `~/.config/crush/crush.json` |
 | `plumb setup goose` | `~/.config/goose/config.yaml` |
