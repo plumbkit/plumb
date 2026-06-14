@@ -187,6 +187,10 @@ var registryData = []Field{
 		Key: "lsp_query.timeout", Type: FieldDuration, ReloadTier: ReloadNextSession,
 		Description: "Cap on a single LSP tool call when the caller carries no deadline. 0 disables.",
 	},
+	{
+		Key: "agent_config_writes", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Allow the agent-writable-config tool to write project config (a small allowlist). Off by default; user-settable only.",
+	},
 
 	// --- LSP per-language template ([lsp.<lang>]) ---
 	{

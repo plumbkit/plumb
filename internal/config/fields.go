@@ -73,17 +73,9 @@ func (t FieldType) String() string {
 	}
 }
 
-// SafetyClass governs whether the agent-writable-config tool may write a field.
-// The zero value is SafetyDenied — a field is never agent-writable unless it is
-// explicitly opted in, so a newly-added field fails closed.
-type SafetyClass int
-
-const (
-	SafetyDenied  SafetyClass = iota // never agent-writable (default — fail closed)
-	SafetyAllowed                    // on the agent allowlist
-)
-
-// Field describes one configuration field.
+// Field describes one configuration field. Whether the agent-writable-config
+// tool may write a field is NOT a property here — it is the allowlist in
+// fields_agent.go, the single security chokepoint (fail closed by omission).
 type Field struct {
 	// Key is the dotted TOML path. For per-language families it is the TEMPLATE
 	// form with a literal "<lang>" segment, e.g. "tasks.<lang>.build".
@@ -91,7 +83,6 @@ type Field struct {
 	Type          FieldType
 	Description   string
 	ReloadTier    ReloadTier
-	Safety        SafetyClass
 	AllowedValues []string // for FieldEnum; may be augmented at runtime via RegisterEnumValues
 	Min, Max      *int64   // optional inclusive bounds for FieldInt; nil = unbounded
 	// PerLanguage marks a keyed sub-table family ([lsp.<lang>].*, [tasks.<lang>].*).
