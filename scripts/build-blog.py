@@ -223,10 +223,8 @@ def page(title: str, description: str, content: str, *, depth_to_root: str) -> s
 <header id="hdr"><div class="wrap"><div class="nav">
   <a class="logo" href="{depth_to_root}index.html" aria-label="plumb home">{LOGO_SVG}</a>
   <nav class="nav-l">
-    <a href="{depth_to_root}index.html#collision">Fleet-safe</a>
-    <a href="{depth_to_root}index.html#measured">Efficient</a>
-    <a href="{depth_to_root}index.html#tools">Tools</a>
-    <a href="{depth_to_root}index.html#quickstart">Install</a>
+    <a href="{depth_to_root}index.html">Home</a>
+    <a href="index.html">Blog</a>
     {THEME_BTN}
     {GH_LINK}
   </nav>
