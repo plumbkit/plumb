@@ -9,6 +9,14 @@
 // sourcekit-lsp to publish diagnostics — the same proof the other adapters
 // carry.
 //
+// Per-document queries (documentSymbol, definition, references, hover, the
+// rename/call/type-hierarchy prepares) open the file via textDocument/didOpen
+// before querying: sourcekit-lsp serves these only for opened documents and
+// otherwise replies -32001 "No language service for <uri> found". plumb's
+// external-edit model uses didChangeWatchedFiles rather than the open-document
+// lifecycle, so the adapter opens lazily and keeps the file open, closing it on
+// a watched-file change. Mirrors the html adapter.
+//
 // sourcekit-lsp ships with the Swift toolchain (Xcode or a standalone
 // toolchain); on macOS it lives at /usr/bin/sourcekit-lsp.
 //

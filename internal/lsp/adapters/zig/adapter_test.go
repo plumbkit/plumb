@@ -3,6 +3,8 @@ package zig_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/lsp/adapters/zig"
@@ -33,7 +35,20 @@ func newAdapter(t *testing.T) (*zig.Adapter, *jsonrpc.MockCaller) {
 	mock.Handle(protocol.MethodInitialized, func(_ json.RawMessage) (any, error) { return nil, nil })
 	mock.Handle(protocol.MethodShutdown, func(_ json.RawMessage) (any, error) { return nil, nil })
 	mock.Handle(protocol.MethodExit, func(_ json.RawMessage) (any, error) { return nil, nil })
+	mock.Handle(protocol.MethodDidOpen, func(_ json.RawMessage) (any, error) { return nil, nil })
+	mock.Handle(protocol.MethodDidClose, func(_ json.RawMessage) (any, error) { return nil, nil })
 	return zig.New(mock), mock
+}
+
+// writeTempZig writes content to a temp .zig file and returns its file:// URI,
+// so ensureOpen can read the document from disk before a query.
+func writeTempZig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "main.zig")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp zig: %v", err)
+	}
+	return "file://" + path
 }
 
 func TestAdapter_Initialize(t *testing.T) {
@@ -163,8 +178,9 @@ func TestAdapter_DocumentSymbols(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
 	syms, err := ad.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
 		t.Fatalf("DocumentSymbols: %v", err)
@@ -212,8 +228,9 @@ func TestAdapter_Definition(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
 	locs, err := ad.Definition(ctx, protocol.DefinitionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: 12, Character: 4},
 	})
 	if err != nil {
@@ -238,8 +255,9 @@ func TestAdapter_References(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
 	refs, err := ad.References(ctx, protocol.ReferenceParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: 3, Character: 6},
 		Context:      protocol.ReferenceContext{IncludeDeclaration: true},
 	})
@@ -264,8 +282,9 @@ func TestAdapter_Hover(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
 	hover, err := ad.Hover(ctx, protocol.HoverParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: 3, Character: 6},
 	})
 	if err != nil {
@@ -300,8 +319,9 @@ func TestAdapter_Rename(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
 	prep, err := ad.PrepareRename(ctx, protocol.PrepareRenameParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: 3, Character: 6},
 	})
 	if err != nil {
@@ -312,7 +332,7 @@ func TestAdapter_Rename(t *testing.T) {
 	}
 
 	edit, err := ad.Rename(ctx, protocol.RenameParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: 3, Character: 6},
 		NewName:      "Welcomer",
 	})
@@ -324,6 +344,82 @@ func TestAdapter_Rename(t *testing.T) {
 	}
 	if len(edit.Changes["file:///p/src/main.zig"]) != 1 {
 		t.Fatalf("unexpected edit: %v", edit)
+	}
+}
+
+// TestAdapter_EnsureOpenBeforeQuery verifies the adapter sends textDocument/
+// didOpen before its first per-document query and caches it (one open across
+// repeated queries) — zls resolves nothing on an unopened file.
+func TestAdapter_EnsureOpenBeforeQuery(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodDocumentSymbols, []protocol.DocumentSymbol{{Name: "Greeter"}})
+	if _, err := ad.Initialize(ctx, zig.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
+	q := protocol.DocumentSymbolParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
+	for range 2 {
+		if _, err := ad.DocumentSymbols(ctx, q); err != nil {
+			t.Fatalf("DocumentSymbols: %v", err)
+		}
+	}
+	var firstOpen, firstSym, opens int
+	for i, c := range mock.Calls() {
+		switch c.Method {
+		case protocol.MethodDidOpen:
+			opens++
+			if firstOpen == 0 {
+				firstOpen = i + 1
+			}
+		case protocol.MethodDocumentSymbols:
+			if firstSym == 0 {
+				firstSym = i + 1
+			}
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("expected exactly 1 didOpen (cached), got %d", opens)
+	}
+	if firstOpen == 0 || firstSym == 0 || firstOpen > firstSym {
+		t.Fatalf("didOpen (idx %d) must precede documentSymbol (idx %d)", firstOpen, firstSym)
+	}
+}
+
+// TestAdapter_RefreshOpenReopensAfterWatchedChange verifies a watched-file change
+// to an open document closes it so the next query reopens it with fresh content.
+func TestAdapter_RefreshOpenReopensAfterWatchedChange(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodDocumentSymbols, []protocol.DocumentSymbol{{Name: "Greeter"}})
+	mock.Handle(protocol.MethodDidChangeWatchedFiles, func(_ json.RawMessage) (any, error) { return nil, nil })
+	if _, err := ad.Initialize(ctx, zig.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempZig(t, "const Greeter = struct {};\n")
+	q := protocol.DocumentSymbolParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
+	if _, err := ad.DocumentSymbols(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	if err := ad.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{{URI: uri, Type: protocol.FileChanged}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ad.DocumentSymbols(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	var opens, closes int
+	for _, c := range mock.Calls() {
+		switch c.Method {
+		case protocol.MethodDidOpen:
+			opens++
+		case protocol.MethodDidClose:
+			closes++
+		}
+	}
+	if opens != 2 || closes != 1 {
+		t.Fatalf("expected 2 didOpen + 1 didClose after watched change, got %d open / %d close", opens, closes)
 	}
 }
 

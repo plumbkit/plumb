@@ -8,6 +8,13 @@
 // so that test skips until the binary is on PATH. Promote to "validated" once
 // it has run green against a real zls.
 //
+// Per-document queries (documentSymbol, definition, references, hover, the
+// rename/call/type-hierarchy prepares) open the file via textDocument/didOpen
+// before querying: zls resolves nothing for an unopened document. plumb's
+// external-edit model uses didChangeWatchedFiles rather than the open-document
+// lifecycle, so the adapter opens lazily and keeps the file open, closing it on
+// a watched-file change. Mirrors the html adapter.
+//
 // Install zls from https://github.com/zigtools/zls (or `brew install zls`).
 // Note: zls and tree-sitter-zig track the Zig language version — a real ongoing
 // maintenance surface, as Zig is pre-1.0.

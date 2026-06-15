@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -30,6 +32,16 @@ type Adapter struct {
 	subMu sync.RWMutex
 	subID atomic.Int64
 	subs  map[int64]func(string, json.RawMessage)
+
+	// openMu guards open, the set of documents the adapter has sent didOpen for.
+	// zls serves per-document requests (symbols, definition, references, hover,
+	// hierarchies) only for documents opened via textDocument/didOpen — an unopened
+	// file resolves to nothing. plumb's external-edit model uses
+	// didChangeWatchedFiles, not the open-document lifecycle, so the adapter opens
+	// a file lazily before the first query and keeps it open; DidChangeWatchedFiles
+	// drops a stale copy so the next query reopens it. Mirrors the html adapter.
+	openMu sync.Mutex
+	open   map[string]bool
 }
 
 // New creates an Adapter wired to conn. The caller must call Initialize before
@@ -38,6 +50,7 @@ func New(conn jsonrpc.Caller) *Adapter {
 	a := &Adapter{
 		conn: conn,
 		subs: make(map[int64]func(string, json.RawMessage)),
+		open: make(map[string]bool),
 	}
 	conn.SetNotificationHandler(a.dispatch)
 	conn.SetRequestHandler(a.handleServerRequest)
@@ -121,6 +134,46 @@ func (a *Adapter) DidOpen(ctx context.Context, params protocol.DidOpenTextDocume
 	return nil
 }
 
+// ensureOpen makes sure uri's current on-disk content is open on the server.
+// zls serves per-document requests only for documents opened via
+// textDocument/didOpen — an unopened file resolves to nothing. plumb opens the
+// file lazily before the first query and keeps it open. Already-open documents
+// are left untouched. Safe for concurrent use.
+func (a *Adapter) ensureOpen(ctx context.Context, uri string) error {
+	a.openMu.Lock()
+	defer a.openMu.Unlock()
+	if a.open[uri] {
+		return nil
+	}
+	content, err := os.ReadFile(strings.TrimPrefix(uri, "file://"))
+	if err != nil {
+		return fmt.Errorf("zls open %s: %w", uri, err)
+	}
+	if err := a.conn.Notify(ctx, protocol.MethodDidOpen, protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: uri, LanguageID: "zig", Version: 1, Text: string(content)},
+	}); err != nil {
+		return fmt.Errorf("zls didOpen: %w", err)
+	}
+	a.open[uri] = true
+	return nil
+}
+
+// refreshOpen closes any open document that changed on disk so the next query
+// reopens it with fresh content — didChangeWatchedFiles does not update the
+// server's open-document copy.
+func (a *Adapter) refreshOpen(ctx context.Context, changes []protocol.FileEvent) {
+	a.openMu.Lock()
+	defer a.openMu.Unlock()
+	for _, c := range changes {
+		if a.open[c.URI] {
+			_ = a.conn.Notify(ctx, protocol.MethodDidClose, protocol.DidCloseTextDocumentParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: c.URI},
+			})
+			delete(a.open, c.URI)
+		}
+	}
+}
+
 // DidChange notifies zls of document changes.
 func (a *Adapter) DidChange(ctx context.Context, params protocol.DidChangeTextDocumentParams) error {
 	if err := a.conn.Notify(ctx, protocol.MethodDidChange, params); err != nil {
@@ -140,6 +193,7 @@ func (a *Adapter) DidClose(ctx context.Context, params protocol.DidCloseTextDocu
 // DidChangeWatchedFiles notifies zls that one or more files changed on disk.
 // Events are filtered to only those matching its registered glob patterns.
 func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.DidChangeWatchedFilesParams) error {
+	a.refreshOpen(ctx, params.Changes)
 	params.Changes = a.watcher.FilterEvents(params.Changes)
 	if len(params.Changes) == 0 {
 		return nil
@@ -154,6 +208,9 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 
 // DocumentSymbols returns all symbols in the document.
 func (a *Adapter) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result []protocol.DocumentSymbol
 	if err := a.conn.Call(ctx, protocol.MethodDocumentSymbols, params, &result); err != nil {
 		return nil, fmt.Errorf("zls documentSymbol: %w", err)
@@ -172,6 +229,9 @@ func (a *Adapter) WorkspaceSymbols(ctx context.Context, params protocol.Workspac
 
 // Definition returns the definition location(s) for the symbol at pos.
 func (a *Adapter) Definition(ctx context.Context, params protocol.DefinitionParams) ([]protocol.Location, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result []protocol.Location
 	if err := a.conn.Call(ctx, protocol.MethodDefinition, params, &result); err != nil {
 		return nil, fmt.Errorf("zls definition: %w", err)
@@ -181,6 +241,9 @@ func (a *Adapter) Definition(ctx context.Context, params protocol.DefinitionPara
 
 // References returns all references to the symbol at pos.
 func (a *Adapter) References(ctx context.Context, params protocol.ReferenceParams) ([]protocol.Location, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result []protocol.Location
 	if err := a.conn.Call(ctx, protocol.MethodReferences, params, &result); err != nil {
 		return nil, fmt.Errorf("zls references: %w", err)
@@ -190,6 +253,9 @@ func (a *Adapter) References(ctx context.Context, params protocol.ReferenceParam
 
 // Hover returns hover information at pos.
 func (a *Adapter) Hover(ctx context.Context, params protocol.HoverParams) (*protocol.Hover, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result protocol.Hover
 	if err := a.conn.Call(ctx, protocol.MethodHover, params, &result); err != nil {
 		return nil, fmt.Errorf("zls hover: %w", err)
@@ -201,6 +267,9 @@ func (a *Adapter) Hover(ctx context.Context, params protocol.HoverParams) (*prot
 
 // PrepareRename checks whether rename is valid at pos.
 func (a *Adapter) PrepareRename(ctx context.Context, params protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result protocol.PrepareRenameResult
 	if err := a.conn.Call(ctx, protocol.MethodPrepareRename, params, &result); err != nil {
 		return nil, fmt.Errorf("zls prepareRename: %w", err)
@@ -220,6 +289,9 @@ func (a *Adapter) Rename(ctx context.Context, params protocol.RenameParams) (*pr
 // ── Call hierarchy ────────────────────────────────────────────────────────────
 
 func (a *Adapter) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result []protocol.CallHierarchyItem
 	if err := a.conn.Call(ctx, protocol.MethodPrepareCallHierarchy, params, &result); err != nil {
 		return nil, fmt.Errorf("zls prepareCallHierarchy: %w", err)
@@ -246,6 +318,9 @@ func (a *Adapter) OutgoingCalls(ctx context.Context, params protocol.CallHierarc
 // ── Type hierarchy ────────────────────────────────────────────────────────────
 
 func (a *Adapter) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result []protocol.TypeHierarchyItem
 	if err := a.conn.Call(ctx, protocol.MethodPrepareTypeHierarchy, params, &result); err != nil {
 		return nil, fmt.Errorf("zls prepareTypeHierarchy: %w", err)
