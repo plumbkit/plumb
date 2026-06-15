@@ -267,7 +267,7 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .tuicard.qcard{max-width:none;margin:30px auto 0}
 .tuicard .live{display:inline-flex;align-items:center;gap:7px}
 .tuicard .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px color-mix(in srgb,var(--grn) 22%,transparent)}
-.tuishot{display:block;width:100%;padding:14px 16px}
+.tuishot{display:block;width:100%;padding:14px 0 10px 22px}
 /* Fully transparent terminal so the page shows through in BOTH themes. Drop EVERY cell
    background: the theme default (--term-color-background) AND every explicit bg the TUI
    emits — panels and especially the footer status bar, which otherwise reads as a dark
@@ -283,7 +283,6 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
    overflow:visible (with the small bottom padding below) keeps the last row from being
    clipped by the terminal box the way overflow:hidden clips it. */
 .tuishot .ap-terminal{font-family:'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important;overflow:visible!important}
-.tuishot{padding-bottom:24px}
 .tuishot .ap-control-bar{display:none!important}
 .tuifeat{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:22px auto 0;max-width:780px}
 .tuifeat span{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--soft);border:1px solid var(--rule);border-radius:999px;padding:6px 13px}
