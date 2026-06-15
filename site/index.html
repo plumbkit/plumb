@@ -26,7 +26,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="asciinema/asciinema-player.css">
 <style>
+@font-face{font-family:'FiraCodeNerd';src:url('fonts/firacode-nerd-mono.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
 :root{
   --bg:#faf9f5;--card:#ffffff;--card2:#f1efe8;--rule:#e5e2d8;--tx:#191813;--soft:#56524a;--faint:#8d887c;
   --acc:#b35a2e;--acc2:#e08a55;--grn:#2f6e4f;
@@ -265,12 +267,11 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .tuicard.qcard{max-width:none;margin:30px auto 0}
 .tuicard .live{display:inline-flex;align-items:center;gap:7px}
 .tuicard .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px color-mix(in srgb,var(--grn) 22%,transparent)}
-.tuishot{display:block;width:100%;height:auto;padding:10px 12px}
-/* theme-matched TUI capture: light-system shows the light render, dark-system the dark one; explicit toggle overrides */
-.tui-dark{display:none}.tui-light{display:block}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]) .tui-dark{display:block}:root:not([data-theme="light"]) .tui-light{display:none}}
-:root[data-theme="dark"] .tui-dark{display:block}:root[data-theme="dark"] .tui-light{display:none}
-:root[data-theme="light"] .tui-dark{display:none}:root[data-theme="light"] .tui-light{display:block}
+.tuishot{display:block;width:100%;padding:14px 16px}
+/* asciinema-player: transparent terminal so the card surface shows through in either theme; the cast keeps its recorded (dark) palette */
+.tuishot .ap-player,.tuishot .ap-terminal,.tuishot .ap-wrapper{background-color:transparent!important}
+.tuishot .ap-terminal{font-family:'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace}
+.tuishot .ap-control-bar{display:none!important}
 .tuifeat{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:22px auto 0;max-width:780px}
 .tuifeat span{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--soft);border:1px solid var(--rule);border-radius:999px;padding:6px 13px}
 @media(max-width:680px){.tuiblock{max-width:100%}}
@@ -300,6 +301,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
     <a href="#measured">Efficient</a>
     <a href="#tools">Tools</a>
     <a href="#quickstart">Install</a>
+    <a href="blog/index.html">Blog</a>
     <button class="thm" id="themeToggle" type="button" aria-label="Toggle colour theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5 A8.5 8.5 0 0 0 12 20.5 Z" fill="currentColor" stroke="none"/></svg></button>
     <a class="gh" href="https://github.com/plumbkit/plumb">GitHub <svg class="ext" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.25 3.75h7v7"/><path d="M12.25 3.75 4 12"/></svg></a>
   </nav>
@@ -650,14 +652,7 @@ cd my-project && plumb init">copy all</button></div>
       <p class="tdesc">Run <code>plumb tui</code> for an operations view of everything plumb is doing at once: <b>every active session</b> and the file it is touching, <b>per-tool latency, error rates and token efficiency</b>, and the daemon's own <b>CPU, memory, GC and goroutines</b>; the one warm process behind every conversation.</p>
       <div class="qcard tuicard">
         <div class="top"><span>bash · plumb tui</span><span class="live">live</span></div>
-        <video class="tuishot tui-dark" autoplay loop muted playsinline preload="metadata" aria-label="plumb tui — live daemon and session dashboard">
-          <source src="plumb_tui.webm" type="video/webm">
-          <source src="plumb_tui.mp4" type="video/mp4">
-        </video>
-        <video class="tuishot tui-light" autoplay loop muted playsinline preload="metadata" aria-hidden="true">
-          <source src="plumb_tui_light.webm" type="video/webm">
-          <source src="plumb_tui_light.mp4" type="video/mp4">
-        </video>
+        <div class="tuishot" id="tuiPlayer" role="img" aria-label="plumb tui — live daemon and session dashboard"></div>
       </div>
       <div class="tuifeat">
         <span>live sessions</span><span>per-tool p95 &amp; errors</span><span>token efficiency</span><span>daemon CPU · memory · GC</span><span>health alerts</span><span>per-session drill-down</span>
@@ -680,6 +675,7 @@ cd my-project && plumb init">copy all</button></div>
     <!-- version stamped at deploy; do not hand-edit -->
     <span>© 2026 plumb · MIT · set in Australian English · v0.9.19</span>
     <div class="lk">
+      <a href="blog/index.html">blog</a>
       <a href="https://github.com/plumbkit/plumb">github</a>
       <a href="https://github.com/plumbkit/plumb/blob/main/docs/index.md">docs</a>
       <a href="https://github.com/plumbkit/plumb/blob/main/docs/tools.md">tools</a>
@@ -687,6 +683,7 @@ cd my-project && plumb init">copy all</button></div>
   </div>
 </footer>
 
+<script src="asciinema/asciinema-player.min.js"></script>
 <script>
 const reduced=matchMedia('(prefers-reduced-motion:reduce)').matches;
 const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12,rootMargin:'0px 0px -8% 0px'});
@@ -741,6 +738,15 @@ document.querySelectorAll('.cp').forEach(b=>b.addEventListener('click',()=>{
   stage.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;},{passive:true});
   stage.addEventListener('touchend',e=>{if(sx==null)return;const dx=e.changedTouches[0].clientX-sx;sx=null;if(Math.abs(dx)>40){go(cur+(dx<0?1:-1));restart();}},{passive:true});
   new IntersectionObserver(es=>es.forEach(e=>{e.isIntersecting?start():stop();}),{threshold:.3}).observe(stage);
+})();
+
+(function(){
+  const mount=document.getElementById('tuiPlayer');if(!mount||!window.AsciinemaPlayer)return;
+  AsciinemaPlayer.create('plumb_tui.cast',mount,{
+    autoPlay:!reduced,loop:true,controls:false,fit:'width',
+    terminalFontFamily:"'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace",
+    poster:'npt:0:04'
+  });
 })();
 
 </script>
