@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"slices"
 	"time"
 )
 
@@ -152,21 +153,15 @@ func Defaults() Config {
 // two loads could alias the same LSP map / default slices.
 func cloneConfig(cfg Config) Config {
 	out := cfg
-	if cfg.Topology.ExcludePatterns != nil {
-		out.Topology.ExcludePatterns = append([]string(nil), cfg.Topology.ExcludePatterns...)
-	}
-	if cfg.Quality.Analysers != nil {
-		out.Quality.Analysers = append([]string(nil), cfg.Quality.Analysers...)
-	}
-	if cfg.Workspace.ExtraRoots != nil {
-		out.Workspace.ExtraRoots = append([]string(nil), cfg.Workspace.ExtraRoots...)
-	}
-	if cfg.Workspace.ReadRoots != nil {
-		out.Workspace.ReadRoots = append([]string(nil), cfg.Workspace.ReadRoots...)
-	}
-	if cfg.Git.ProtectedBranches != nil {
-		out.Git.ProtectedBranches = append([]string(nil), cfg.Git.ProtectedBranches...)
-	}
+	// slices.Clone preserves both nil and empty-but-non-nil slices, where
+	// append([]T(nil), empty...) would collapse an empty slice to nil — that
+	// asymmetry made cloneConfig(defaults) != defaults and latched
+	// RestartNeeded on every fresh daemon (the defaults use Args: []string{}).
+	out.Topology.ExcludePatterns = slices.Clone(cfg.Topology.ExcludePatterns)
+	out.Quality.Analysers = slices.Clone(cfg.Quality.Analysers)
+	out.Workspace.ExtraRoots = slices.Clone(cfg.Workspace.ExtraRoots)
+	out.Workspace.ReadRoots = slices.Clone(cfg.Workspace.ReadRoots)
+	out.Git.ProtectedBranches = slices.Clone(cfg.Git.ProtectedBranches)
 	if cfg.LSP != nil {
 		out.LSP = make(map[string]LSPConfig, len(cfg.LSP))
 		for name, lspCfg := range cfg.LSP {
@@ -179,18 +174,11 @@ func cloneConfig(cfg Config) Config {
 
 func cloneLSPConfig(cfg LSPConfig) LSPConfig {
 	out := cfg
-	if cfg.Args != nil {
-		out.Args = append([]string(nil), cfg.Args...)
-	}
-	if cfg.RootMarkers != nil {
-		out.RootMarkers = append([]string(nil), cfg.RootMarkers...)
-	}
-	if cfg.WeakRootMarkers != nil {
-		out.WeakRootMarkers = append([]string(nil), cfg.WeakRootMarkers...)
-	}
-	if cfg.Env != nil {
-		out.Env = make(map[string]string, len(cfg.Env))
-		maps.Copy(out.Env, cfg.Env)
-	}
+	// slices.Clone / maps.Clone preserve nil vs empty-non-nil, so a cloned
+	// config stays reflect.DeepEqual to its source (see cloneConfig).
+	out.Args = slices.Clone(cfg.Args)
+	out.RootMarkers = slices.Clone(cfg.RootMarkers)
+	out.WeakRootMarkers = slices.Clone(cfg.WeakRootMarkers)
+	out.Env = maps.Clone(cfg.Env)
 	return out
 }

@@ -154,6 +154,23 @@ func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string,
 	return sb.String(), nil
 }
 
+// baseSymbolName strips a trailing argument list from a documentSymbol name so a
+// plain query ("show") matches a server that names members with their signature
+// — sourcekit-lsp reports Swift methods as "show()" / "show(animated:)". Returns
+// the name unchanged when there is no "(".
+func baseSymbolName(name string) string {
+	if i := strings.IndexByte(name, '('); i >= 0 {
+		return strings.TrimSpace(name[:i])
+	}
+	return name
+}
+
+// symbolNameMatches reports whether a documentSymbol name matches a query,
+// either exactly or after stripping a trailing argument list (Swift members).
+func symbolNameMatches(symName, query string) bool {
+	return symName == query || baseSymbolName(symName) == query
+}
+
 // resolveSymbolsByName returns all symbols in the tree matching name.
 //
 // For a dotted "ReceiverType.MethodName" it matches two shapes: the nested
@@ -167,9 +184,9 @@ func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protoco
 		parentType := goReceiverType(parent)
 		var out []protocol.DocumentSymbol
 		for _, s := range syms {
-			if s.Name == parent {
+			if symbolNameMatches(s.Name, parent) {
 				for _, c := range s.Children {
-					if c.Name == child {
+					if symbolNameMatches(c.Name, child) {
 						out = append(out, c)
 					}
 				}
@@ -184,7 +201,7 @@ func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protoco
 	var walk func([]protocol.DocumentSymbol)
 	walk = func(ss []protocol.DocumentSymbol) {
 		for _, s := range ss {
-			if s.Name == name {
+			if symbolNameMatches(s.Name, name) {
 				out = append(out, s)
 			}
 			walk(s.Children)

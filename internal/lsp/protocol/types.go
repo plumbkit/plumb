@@ -505,6 +505,11 @@ type CallHierarchyItem struct {
 	Range          Range      `json:"range"`
 	SelectionRange Range      `json:"selectionRange"`
 	Detail         string     `json:"detail,omitempty"`
+	// Data is opaque server state the LSP spec requires the client to preserve
+	// between prepareCallHierarchy and the incoming/outgoing requests. Dropping
+	// it makes servers like sourcekit-lsp return no calls, so it must round-trip
+	// verbatim.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // PrepareCallHierarchyParams is the payload for textDocument/prepareCallHierarchy.
@@ -545,6 +550,11 @@ type TypeHierarchyItem struct {
 	Range          Range      `json:"range"`
 	SelectionRange Range      `json:"selectionRange"`
 	Detail         string     `json:"detail,omitempty"`
+	// Data is opaque server state the LSP spec requires the client to preserve
+	// between prepareTypeHierarchy and the supertypes/subtypes requests. Dropping
+	// it makes servers like sourcekit-lsp return no types, so it must round-trip
+	// verbatim.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // PrepareTypeHierarchyParams is the payload for textDocument/prepareTypeHierarchy.

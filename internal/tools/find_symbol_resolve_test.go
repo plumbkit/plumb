@@ -64,3 +64,37 @@ func TestResolveSymbolsByName_NestedMethodsStillResolve(t *testing.T) {
 		t.Fatalf("nested dotted lookup broke: got %v", docSymNames(got))
 	}
 }
+
+// TestResolveSymbolsByName_StripsArgList covers the sourcekit-lsp shape: Swift
+// members are named with their argument list ("show()", "load(from:)"), so a
+// plain or dotted query without parens must still resolve them.
+func TestResolveSymbolsByName_StripsArgList(t *testing.T) {
+	syms := []protocol.DocumentSymbol{
+		{Name: "PanelController", Kind: protocol.SKClass, Children: []protocol.DocumentSymbol{
+			{Name: "show()", Kind: protocol.SKMethod},
+			{Name: "load(from:)", Kind: protocol.SKMethod},
+		}},
+	}
+	cases := []struct {
+		query string
+		want  string // expected single match Name; "" = expect no match
+	}{
+		{"show", "show()"},                      // plain name, nested, parens stripped
+		{"PanelController.show", "show()"},      // dotted, child parens stripped
+		{"load", "load(from:)"},                 // argument label form
+		{"PanelController.load", "load(from:)"}, // dotted with argument label
+		{"sho", ""},                             // not a prefix match — exact base only
+	}
+	for _, c := range cases {
+		got := resolveSymbolsByName(syms, c.query)
+		if c.want == "" {
+			if len(got) != 0 {
+				t.Errorf("%q: expected no match, got %v", c.query, docSymNames(got))
+			}
+			continue
+		}
+		if len(got) != 1 || got[0].Name != c.want {
+			t.Errorf("%q: got %v, want [%s]", c.query, docSymNames(got), c.want)
+		}
+	}
+}
