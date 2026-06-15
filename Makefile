@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site
+.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -149,8 +149,15 @@ swift-wasm:
 # from the asciicast at site/plumb_tui.cast into site/. Re-record with `asciinema
 # rec site/plumb_tui.cast` (use ~100x26; see docs in the script), then run `make site`.
 # Dev-only — requires `agg` (brew install agg), `ffmpeg`, and the Nerd font.
-site:
+site: blog
 	python3 scripts/build-tui-video.py
+
+# blog renders the Markdown posts under site/blog/posts/ into styled HTML + the
+# blog index (see scripts/build-blog.py). This is the same step CI runs before the
+# Pages deploy. Needs Python 3.11+ and the deps in scripts/requirements.txt
+# (pip install -r scripts/requirements.txt). Light — no agg/ffmpeg, unlike `site`.
+blog:
+	python3 scripts/build-blog.py
 
 # verify is the definition of "ready to commit": build + test + lint + an
 # integration-tag compile pass (build-integration) + the file-size guard.

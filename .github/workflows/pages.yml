@@ -32,7 +32,19 @@ jobs:
 
       - uses: actions/configure-pages@v5
 
-      # Static site — no build step; publish the site/ folder verbatim.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Render the Markdown blog posts into styled HTML before publishing.
+      # Markdown under site/blog/posts/ is the source of truth; the generated
+      # *.html + pygments.css are git-ignored and built here. See scripts/build-blog.py.
+      - name: Build blog
+        run: |
+          pip install -r scripts/requirements.txt
+          python3 scripts/build-blog.py
+
+      # The rest of the site is static — published verbatim alongside the built blog.
       - uses: actions/upload-pages-artifact@v4
         with:
           path: ./site

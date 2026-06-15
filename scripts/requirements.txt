@@ -1,0 +1,5 @@
+# Python deps for scripts/build-blog.py (the blog renderer).
+# Installed in CI before the Pages deploy; install locally with:
+#   pip install -r scripts/requirements.txt
+markdown>=3.6
+pygments>=2.17
