@@ -295,9 +295,13 @@ func setupAntigravityInto(cfgPath, plumbBin string) (added bool, preserved []str
 	dir := filepath.Dir(cfgPath)
 	preserved = listPreservedAntigravityServers(dir)
 
+	// Repoint any stale plumb entry in the legacy flat mcp_config.json files
+	// Antigravity also reads — the standalone files below cover only the new layout.
+	legacyFixed := reconcileLegacyAntigravityConfigs(geminiBaseFromStandalone(cfgPath), plumbBin)
+
 	if isSameAntigravityConfig(cfgPath, plumbBin) {
 		syncAntigravityIdeConfig(dir, plumbBin)
-		return false, preserved, nil
+		return len(legacyFixed) > 0, preserved, nil
 	}
 
 	if _, err := os.Stat(cfgPath); err == nil {
