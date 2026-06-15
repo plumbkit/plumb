@@ -270,7 +270,8 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .tuishot{display:block;width:100%;padding:14px 16px}
 /* asciinema-player: transparent terminal so the card surface shows through in either theme; the cast keeps its recorded (dark) palette */
 .tuishot .ap-player,.tuishot .ap-terminal,.tuishot .ap-wrapper{background-color:transparent!important}
-.tuishot .ap-terminal{font-family:'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace}
+/* drop asciinema's 10px bg-coloured terminal border so the recording fills the panel */
+.tuishot .ap-terminal{font-family:'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important}
 .tuishot .ap-control-bar{display:none!important}
 .tuifeat{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:22px auto 0;max-width:780px}
 .tuifeat span{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--soft);border:1px solid var(--rule);border-radius:999px;padding:6px 13px}
@@ -743,7 +744,7 @@ document.querySelectorAll('.cp').forEach(b=>b.addEventListener('click',()=>{
 (function(){
   const mount=document.getElementById('tuiPlayer');if(!mount||!window.AsciinemaPlayer)return;
   AsciinemaPlayer.create('plumb_tui.cast',mount,{
-    autoPlay:!reduced,loop:true,controls:false,fit:'width',
+    autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.0,
     terminalFontFamily:"'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace",
     poster:'npt:0:04'
   });
