@@ -35,6 +35,9 @@ func TestSessionLanguagesAndBadges(t *testing.T) {
 		{"no adapters falls back to primary", session.Info{Language: "go", DetectedLanguage: "go"}, []string{"go"}, []string{"GO"}},
 		{"go + html", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "vscode-html-language-server"}}, []string{"go", "html"}, []string{"GO", "HTML"}},
 		{"unknown secondary adapter skipped", session.Info{Language: "go", DetectedLanguage: "go", Adapters: []string{"gopls", "mystery-ls"}}, []string{"go"}, []string{"GO"}},
+		// Monorepo root: DetectedLanguage is already the joined "swift, zig" label,
+		// and zls is also a listed adapter — must not double-count zig (the pauta bug).
+		{"monorepo joined label not double-counted", session.Info{Language: "none", DetectedLanguage: "swift, zig", Adapters: []string{"sourcekit-lsp", "zls"}}, []string{"swift", "zig"}, []string{"SWIFT", "ZIG"}},
 		{"unknown project language", session.Info{Language: "", DetectedLanguage: ""}, nil, []string{}},
 	}
 	for _, tc := range tests {

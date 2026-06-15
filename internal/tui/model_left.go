@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -177,11 +178,21 @@ func sessionLanguages(s session.Info) []string {
 	if primary == "" {
 		return nil
 	}
-	out := []string{primary}
-	for _, a := range secondaryAdapters(s.Adapters) {
-		if lang := adapterToLang[a]; lang != "" {
+	var out []string
+	add := func(lang string) {
+		if lang != "" && !slices.Contains(out, lang) {
 			out = append(out, lang)
 		}
+	}
+	// DetectedLanguage may already be a comma-joined multi-language label for a
+	// monorepo root (e.g. "swift, zig"); split it so each language is one entry
+	// and dedup against the secondary-adapter languages — otherwise a child whose
+	// adapter is also listed (zls → zig) appears twice ("swift, zig, zig").
+	for _, lang := range strings.Split(primary, ", ") {
+		add(lang)
+	}
+	for _, a := range secondaryAdapters(s.Adapters) {
+		add(adapterToLang[a])
 	}
 	return out
 }
