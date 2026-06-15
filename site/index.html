@@ -268,9 +268,12 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .tuicard .live{display:inline-flex;align-items:center;gap:7px}
 .tuicard .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px color-mix(in srgb,var(--grn) 22%,transparent)}
 .tuishot{display:block;width:100%;padding:14px 16px}
-/* asciinema-player: transparent terminal so the card surface shows through in either theme; the cast keeps its recorded (dark) palette */
-/* drop the recording's uniform default background (theme bg) so the page shows through; real cell highlights keep their own bg */
+/* Fully transparent terminal so the page shows through in BOTH themes. Drop EVERY cell
+   background: the theme default (--term-color-background) AND every explicit bg the TUI
+   emits — panels and especially the footer status bar, which otherwise reads as a dark
+   bar in light mode. Only foreground glyphs remain. */
 .tuishot .ap-player{--term-color-background:transparent!important}
+.tuishot .ap-player .ap-line span{background-color:transparent!important}
 /* and asciinema's 10px bg-coloured terminal border, so the recording fills the panel */
 .tuishot .ap-terminal{font-family:'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important}
 .tuishot .ap-control-bar{display:none!important}
@@ -744,11 +747,13 @@ document.querySelectorAll('.cp').forEach(b=>b.addEventListener('click',()=>{
 
 (function(){
   const mount=document.getElementById('tuiPlayer');if(!mount||!window.AsciinemaPlayer)return;
-  AsciinemaPlayer.create('plumb_tui.cast',mount,{
+  const make=()=>AsciinemaPlayer.create('plumb_tui.cast',mount,{
     autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.0,
     terminalFontFamily:"'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace",
     poster:'npt:0:04'
   });
+  // measure the terminal grid with the real font, not a fallback (otherwise rows clip)
+  if(document.fonts&&document.fonts.load){document.fonts.load("16px 'SarasaTermNerd'").then(make,make);}else{make();}
 })();
 
 </script>
