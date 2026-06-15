@@ -241,6 +241,32 @@ func TestAdapter_Definition(t *testing.T) {
 	}
 }
 
+// TestAdapter_Definition_SingleObject verifies a bare single Location object
+// (not an array) decodes to one location — a server may return this shape, which
+// a plain []Location decode rejected with "cannot unmarshal object into []Location".
+func TestAdapter_Definition_SingleObject(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodDefinition, protocol.Location{
+		URI:   "file:///p/x.swift",
+		Range: protocol.Range{Start: protocol.Position{Line: 7}},
+	})
+	if _, err := ad.Initialize(ctx, swift.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempSwift(t, "struct Greeter {}\n")
+	locs, err := ad.Definition(ctx, protocol.DefinitionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 0, Character: 7},
+	})
+	if err != nil {
+		t.Fatalf("Definition: %v", err)
+	}
+	if len(locs) != 1 || locs[0].URI != "file:///p/x.swift" {
+		t.Fatalf("got %v, want one location at file:///p/x.swift", locs)
+	}
+}
+
 func TestAdapter_References(t *testing.T) {
 	ad, mock := newAdapter(t)
 	ctx := context.Background()

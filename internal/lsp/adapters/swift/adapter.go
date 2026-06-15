@@ -236,11 +236,17 @@ func (a *Adapter) Definition(ctx context.Context, params protocol.DefinitionPara
 	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
 		return nil, err
 	}
-	var result []protocol.Location
-	if err := a.conn.Call(ctx, protocol.MethodDefinition, params, &result); err != nil {
+	// definition returns Location | Location[] | LocationLink[] | null (and some
+	// servers a bare single Location), so decode the union, not just []Location.
+	var raw json.RawMessage
+	if err := a.conn.Call(ctx, protocol.MethodDefinition, params, &raw); err != nil {
 		return nil, fmt.Errorf("sourcekit-lsp definition: %w", err)
 	}
-	return result, nil
+	locs, err := protocol.DecodeLocations(raw)
+	if err != nil {
+		return nil, fmt.Errorf("sourcekit-lsp definition: %w", err)
+	}
+	return locs, nil
 }
 
 // References returns all references to the symbol at pos.
