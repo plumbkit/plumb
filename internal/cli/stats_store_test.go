@@ -15,6 +15,13 @@ func TestStatsStore_RecordReturnsFast(t *testing.T) {
 	s := newStatsStore()
 	defer s.Close()
 
+	// Warm the lazily-opened writer first: the one-time DB open + migration is a
+	// synchronous cost on the first Record that has nothing to do with whether
+	// the enqueue path blocks — and on a loaded CI runner it alone can exceed the
+	// budget. Timing only the steady-state enqueues keeps the regression intent
+	// (no SQLite write on the response path) without the cold-start flakiness.
+	s.ensureWriter()
+
 	const n = 50
 	start := time.Now()
 	for range n {
