@@ -274,6 +274,11 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
    bar in light mode. Only foreground glyphs remain. */
 .tuishot .ap-player{--term-color-background:transparent!important}
 .tuishot .ap-player .ap-line span{background-color:transparent!important}
+/* Box-drawing chars (U+2500-257F: │ ─ ┌ ┤ …) are plain font glyphs that only connect
+   vertically when the line box equals their 1em height — so we keep terminalLineHeight 1.0.
+   asciinema clips each .ap-line to that height (overflow:hidden), which slices taller text
+   glyphs; allow overflow so the borders connect AND the text is never clipped. */
+.tuishot .ap-player .ap-line{overflow:visible!important}
 /* and asciinema's 10px bg-coloured terminal border, so the recording fills the panel */
 .tuishot .ap-terminal{font-family:'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important}
 .tuishot .ap-control-bar{display:none!important}
@@ -748,7 +753,7 @@ document.querySelectorAll('.cp').forEach(b=>b.addEventListener('click',()=>{
 (function(){
   const mount=document.getElementById('tuiPlayer');if(!mount||!window.AsciinemaPlayer)return;
   const make=()=>AsciinemaPlayer.create('plumb_tui.cast',mount,{
-    autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.2,
+    autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.0,
     terminalFontFamily:"'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace",
     poster:'npt:0:04'
   });
