@@ -748,7 +748,7 @@ document.querySelectorAll('.cp').forEach(b=>b.addEventListener('click',()=>{
 (function(){
   const mount=document.getElementById('tuiPlayer');if(!mount||!window.AsciinemaPlayer)return;
   const make=()=>AsciinemaPlayer.create('plumb_tui.cast',mount,{
-    autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.0,
+    autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.2,
     terminalFontFamily:"'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace",
     poster:'npt:0:04'
   });
