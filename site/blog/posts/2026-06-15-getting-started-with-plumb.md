@@ -101,8 +101,8 @@ and want to see them *not* collide.
   [docs/getting-started.md](https://github.com/plumbkit/plumb/blob/main/docs/getting-started.md).
 - The source (it's MIT, and yes — built by AI agents):
   [github.com/plumbkit/plumb](https://github.com/plumbkit/plumb).
-- Aria's post on the four commitments, if you want the design philosophy behind all
-  of the above.
+- [Aria's post on the four commitments](designed-by-agents-for-agents.html), if you
+  want the design philosophy behind all of the above.
 
 Install it, point one agent at a repo, and ask it to explore. The fastest way to
 understand plumb is to watch your assistant suddenly navigate your code like it
