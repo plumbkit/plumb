@@ -28,7 +28,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="asciinema/asciinema-player.css">
 <style>
-@font-face{font-family:'FiraCodeNerd';src:url('fonts/firacode-nerd-mono.woff2') format('woff2');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'SarasaTermNerd';src:url('fonts/sarasa-term-cl-nerd.woff2') format('woff2');font-weight:400;font-style:normal;font-display:block}
 :root{
   --bg:#faf9f5;--card:#ffffff;--card2:#f1efe8;--rule:#e5e2d8;--tx:#191813;--soft:#56524a;--faint:#8d887c;
   --acc:#b35a2e;--acc2:#e08a55;--grn:#2f6e4f;
@@ -269,9 +269,10 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
 .tuicard .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--grn);box-shadow:0 0 0 3px color-mix(in srgb,var(--grn) 22%,transparent)}
 .tuishot{display:block;width:100%;padding:14px 16px}
 /* asciinema-player: transparent terminal so the card surface shows through in either theme; the cast keeps its recorded (dark) palette */
-.tuishot .ap-player,.tuishot .ap-terminal,.tuishot .ap-wrapper{background-color:transparent!important}
-/* drop asciinema's 10px bg-coloured terminal border so the recording fills the panel */
-.tuishot .ap-terminal{font-family:'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important}
+/* drop the recording's uniform default background (theme bg) so the page shows through; real cell highlights keep their own bg */
+.tuishot .ap-player{--term-color-background:transparent!important}
+/* and asciinema's 10px bg-coloured terminal border, so the recording fills the panel */
+.tuishot .ap-terminal{font-family:'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important}
 .tuishot .ap-control-bar{display:none!important}
 .tuifeat{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:22px auto 0;max-width:780px}
 .tuifeat span{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--soft);border:1px solid var(--rule);border-radius:999px;padding:6px 13px}
@@ -745,7 +746,7 @@ document.querySelectorAll('.cp').forEach(b=>b.addEventListener('click',()=>{
   const mount=document.getElementById('tuiPlayer');if(!mount||!window.AsciinemaPlayer)return;
   AsciinemaPlayer.create('plumb_tui.cast',mount,{
     autoPlay:!reduced,loop:true,controls:false,fit:'width',terminalLineHeight:1.0,
-    terminalFontFamily:"'FiraCodeNerd','JetBrains Mono',ui-monospace,monospace",
+    terminalFontFamily:"'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace",
     poster:'npt:0:04'
   });
 })();

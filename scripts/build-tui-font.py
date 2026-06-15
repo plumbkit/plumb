@@ -12,11 +12,14 @@ Ligatures are dropped (--layout-features='') — a terminal never ligates.
 
 Requirements on PATH: pyftsubset (pip install fonttools brotli).
 
+The cast is recorded in Sarasa Term CL Nerd Font, so the page must render in the same
+face for cell metrics and box-drawing to line up.
+
 Usage:
     python3 scripts/build-tui-font.py \
         --cast site/plumb_tui.cast \
-        --font ~/Library/Fonts/FiraCodeNerdFontMono-Regular.ttf \
-        --out site/fonts/firacode-nerd-mono.woff2
+        --font ~/Library/Fonts/sarasa-term-cl-regular-nerd-font.ttf \
+        --out site/fonts/sarasa-term-cl-nerd.woff2
 """
 
 from __future__ import annotations
@@ -79,8 +82,8 @@ def safety_ranges() -> set[int]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--cast", default="site/plumb_tui.cast")
-    ap.add_argument("--font", default=os.path.expanduser("~/Library/Fonts/FiraCodeNerdFontMono-Regular.ttf"))
-    ap.add_argument("--out", default="site/fonts/firacode-nerd-mono.woff2")
+    ap.add_argument("--font", default=os.path.expanduser("~/Library/Fonts/sarasa-term-cl-regular-nerd-font.ttf"))
+    ap.add_argument("--out", default="site/fonts/sarasa-term-cl-nerd.woff2")
     args = ap.parse_args()
 
     for p in (args.cast, args.font):
