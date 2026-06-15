@@ -30,6 +30,7 @@ type RenameSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
 	guard   BoundaryGuard
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative input uri to the pinned root
 }
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
@@ -38,6 +39,15 @@ func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
 
 func (t *RenameSymbol) WithBoundary(guard BoundaryGuard) *RenameSymbol {
 	t.guard = guard
+	return t
+}
+
+// WithWorkspace wires the pinned-workspace accessor so a relative input uri is
+// resolved against the workspace root rather than the daemon's working
+// directory. Nil-safe. Only the input uri is anchored; the server-emitted
+// WorkspaceEdit URIs are already absolute and are left untouched.
+func (t *RenameSymbol) WithWorkspace(ws WorkspaceFn) *RenameSymbol {
+	t.ws = ws
 	return t
 }
 
@@ -55,7 +65,7 @@ func (*RenameSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"uri":{"type":"string","description":"Absolute path or file:// URI."},
+			"uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
 			"line":{"type":"integer","minimum":0,"description":"Zero-based line of the identifier."},
 			"character":{"type":"integer","minimum":0,"description":"Zero-based character offset within the line."},
 			"new_name":{"type":"string","description":"Replacement identifier name."},
@@ -88,7 +98,6 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 	if input.URI == "" || input.NewName == "" {
 		return renameSymbolArgs{}, fmt.Errorf("`uri` and `new_name` are required")
 	}
-	input.URI = toFileURI(input.URI)
 	dryRun := true
 	if input.DryRun != nil {
 		dryRun = *input.DryRun
@@ -130,6 +139,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	if err := t.guard.check(strings.TrimPrefix(a.URI, "file://")); err != nil {
 		return "", fmt.Errorf("rename_symbol: %w", err)
 	}

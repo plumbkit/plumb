@@ -21,7 +21,7 @@ var findSymbolSchema = json.RawMessage(`{
     },
     "uri": {
       "type": "string",
-      "description": "Document to search within (absolute path or file:// URI). Required."
+      "description": "Document to search within (absolute path, file:// URI, or workspace-relative path). Required."
     }
   },
   "required": ["query", "uri"],
@@ -36,6 +36,7 @@ type FindSymbol struct {
 	ttl     time.Duration
 	timeout time.Duration
 	topo    topologyStoreFn
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // WithTopologyFallback wires the topology index as a fallback for when the
@@ -48,6 +49,12 @@ func (t *FindSymbol) WithTopologyFallback(fn topologyStoreFn) *FindSymbol {
 // NewFindSymbol creates a FindSymbol tool. Pass a nil cache to disable caching.
 func NewFindSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FindSymbol {
 	return &FindSymbol{client: client, cache: c, ttl: ttl, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *FindSymbol) WithWorkspace(ws WorkspaceFn) *FindSymbol {
+	t.ws = ws
+	return t
 }
 
 func (t *FindSymbol) Name() string                 { return "find_symbol" }
@@ -72,7 +79,7 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 	if a.URI == "" {
 		return "", fmt.Errorf("find_symbol: uri is required (use workspace_symbols for workspace-wide search)")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
 	out, err := t.inDocument(lspCtx, a.URI, a.Query)

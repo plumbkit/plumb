@@ -56,7 +56,7 @@ func (*findReplaceTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"path":{"type":"string","description":"Directory to walk, or a single file."},
+			"path":{"type":"string","description":"Directory to walk, or a single file. Absolute path, file:// URI, or workspace-relative path; defaults relative to the workspace root."},
 			"pattern":{"type":"string","description":"Search pattern. Plain text by default; regex if use_regex=true."},
 			"replacement":{"type":"string","description":"Replacement text. With regex, supports $1, $2 backreferences."},
 			"use_regex":{"type":"boolean","default":false},
@@ -98,6 +98,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 	applyFindReplaceDefaults(&a)
+	a.Path = t.deps.resolvePath(a.Path)
 	if err := t.deps.checkBoundary(a.Path); err != nil {
 		return "", fmt.Errorf("find_replace: %w", err)
 	}

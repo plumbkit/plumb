@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -184,6 +186,30 @@ func (d WriteDeps) notifyTopology(path string) {
 
 func (d WriteDeps) checkBoundary(path string) error {
 	return d.Boundary.check(path)
+}
+
+// resolvePath resolves a path argument against the connection's pinned
+// workspace. It strips a leading file:// scheme and, when the remainder is
+// relative and WorkspaceFn resolves a root, anchors it there
+// (filepath.Join(root, path)). An absolute path is returned unchanged; a
+// relative path with no resolvable workspace is returned cleaned but still
+// relative, so the boundary check rejects it rather than the tool silently
+// touching a daemon-CWD-relative file. nil/empty WorkspaceFn is a no-op,
+// preserving WriteDeps{} test setups. The resolved path must feed BOTH the
+// boundary check and the filesystem operation.
+func (d WriteDeps) resolvePath(path string) string {
+	p := strings.TrimPrefix(path, "file://")
+	if filepath.IsAbs(p) {
+		return p
+	}
+	var base string
+	if d.WorkspaceFn != nil {
+		base = d.WorkspaceFn()
+	}
+	if base == "" {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(base, p)
 }
 
 // recordWritten marks path as written by plumb this session in BOTH per-session

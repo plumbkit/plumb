@@ -41,8 +41,8 @@ func TestURITools_NormalisePlainPaths(t *testing.T) {
 		if !uriSchemaProp.Match(src) {
 			continue
 		}
-		if !strings.Contains(string(src), "toFileURI(") {
-			t.Errorf("%s declares a \"uri\" schema property but never calls toFileURI — "+
+		if !strings.Contains(string(src), "toFileURI(") && !strings.Contains(string(src), "toFileURIAnchored(") {
+			t.Errorf("%s declares a \"uri\" schema property but never calls toFileURI/toFileURIAnchored — "+
 				"a plain absolute path would reach the LSP unnormalised. Normalise it at parse time.", name)
 		}
 		checked = append(checked, name)

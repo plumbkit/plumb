@@ -13,7 +13,7 @@ var readMultipleFilesSchema = json.RawMessage(`{
   "properties": {
     "paths": {
       "type": "array",
-      "description": "Absolute paths or file:// URIs of files to read.",
+      "description": "Absolute paths, file:// URIs, or workspace-relative paths of files to read.",
       "items": { "type": "string" },
       "minItems": 1,
       "maxItems": 20
@@ -31,6 +31,7 @@ var readMultipleFilesSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type ReadMultipleFiles struct {
 	guard BoundaryGuard
+	ws    WorkspaceFn // may be nil; anchors workspace-relative entries in paths
 }
 
 func NewReadMultipleFiles() *ReadMultipleFiles { return &ReadMultipleFiles{} }
@@ -40,13 +41,20 @@ func (t *ReadMultipleFiles) WithBoundary(guard BoundaryGuard) *ReadMultipleFiles
 	return t
 }
 
+// WithWorkspace wires the pinned-workspace accessor so relative entries in
+// paths resolve against the workspace root, matching read_file. Nil-safe.
+func (t *ReadMultipleFiles) WithWorkspace(ws WorkspaceFn) *ReadMultipleFiles {
+	t.ws = ws
+	return t
+}
+
 func (*ReadMultipleFiles) Name() string                 { return "read_multiple_files" }
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
 func (*ReadMultipleFiles) Description() string {
 	return "Read up to 20 files in a single call. Each file's content is returned " +
 		"with a clear header showing the path and byte count. Errors for individual " +
 		"files are reported inline — one unreadable file doesn't block the others. " +
-		"Accepts absolute paths or file:// URIs. Binary files are detected and skipped. " +
+		"Accepts absolute paths, file:// URIs, or workspace-relative paths. Binary files are detected and skipped. " +
 		"Each file is subject to the same 200 KiB cap as read_file."
 }
 
@@ -76,7 +84,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		err     error
 	}
 	results := make([]result, len(a.Paths))
-	reader := (&ReadFile{}).WithBoundary(t.guard)
+	reader := (&ReadFile{}).WithBoundary(t.guard).WithWorkspace(t.ws)
 
 	sem := make(chan struct{}, readMultipleFilesParallelism)
 	var wg sync.WaitGroup

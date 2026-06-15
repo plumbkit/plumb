@@ -14,7 +14,7 @@ var listFilesSchema = json.RawMessage(`{
   "properties": {
     "root": {
       "type": "string",
-      "description": "Directory to list. Defaults to the current working directory."
+      "description": "Directory to list. Absolute path, file:// URI, or workspace-relative path; defaults to the workspace root."
     },
     "pattern": {
       "type": "string",

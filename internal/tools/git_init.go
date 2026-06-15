@@ -15,7 +15,7 @@ var gitInitSchema = json.RawMessage(`{
   "properties": {
     "path": {
       "type": "string",
-      "description": "Absolute path of the directory to initialise as a git repository. Created if it does not exist."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the directory to initialise as a git repository. Created if it does not exist."
     },
     "init_plumb": {
       "type": "boolean",
@@ -89,6 +89,7 @@ func (t *GitInit) Execute(ctx context.Context, raw json.RawMessage) (string, err
 	if err := a.validate(); err != nil {
 		return "", err
 	}
+	a.Path = t.deps.resolvePath(a.Path)
 	if err := t.deps.checkBoundary(a.Path); err != nil {
 		return "", fmt.Errorf("git_init: %w", err)
 	}

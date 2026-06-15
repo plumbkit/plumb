@@ -16,7 +16,7 @@ var explainSymbolSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the document"
+      "description": "Absolute path, file:// URI, or workspace-relative path of the document"
     },
     "line": {
       "type": "integer",
@@ -40,11 +40,18 @@ type ExplainSymbol struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // NewExplainSymbol creates an ExplainSymbol tool. Pass a nil cache to disable caching.
 func NewExplainSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *ExplainSymbol {
 	return &ExplainSymbol{client: client, cache: c, ttl: ttl, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *ExplainSymbol) WithWorkspace(ws WorkspaceFn) *ExplainSymbol {
+	t.ws = ws
+	return t
 }
 
 func (t *ExplainSymbol) Name() string                 { return "explain_symbol" }
@@ -69,7 +76,7 @@ func (t *ExplainSymbol) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", fmt.Errorf("explain_symbol: uri must not be empty")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 
 	key := fmt.Sprintf("%s:hover:%d:%d", a.URI, a.Line, a.Character)
 	if t.cache != nil {

@@ -17,11 +17,11 @@ var renameFileSchema = json.RawMessage(`{
   "properties": {
     "from": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the source file."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the source file."
     },
     "to": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the destination file. Parent directories are created automatically."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the destination file. Parent directories are created automatically."
     },
     "overwrite": {
       "type": "boolean",
@@ -76,8 +76,11 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	from := strings.TrimPrefix(a.From, "file://")
-	to := strings.TrimPrefix(a.To, "file://")
+	from := t.deps.resolvePath(a.From)
+	to := t.deps.resolvePath(a.To)
+	if from == to {
+		return "", fmt.Errorf("rename_file: from and to are the same path")
+	}
 	if err := t.deps.checkBoundary(from); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}

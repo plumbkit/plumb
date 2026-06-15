@@ -45,7 +45,7 @@ var diagnosticsSchema = json.RawMessage(`{
     "uris": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Absolute paths or file:// URIs to fetch diagnostics for. Omit or pass [] to return diagnostics for all files that have issues. Pass one for a single-file query. Pass multiple to check a specific set of files in one call."
+      "description": "Absolute paths, file:// URIs, or workspace-relative paths to fetch diagnostics for. Omit or pass [] to return diagnostics for all files that have issues. Pass one for a single-file query. Pass multiple to check a specific set of files in one call."
     },
     "uri": {
       "type": "string",
@@ -68,6 +68,7 @@ type Diagnostics struct {
 	inv    waitableDiagnosticsSource
 	opener fileOpener // nil when no LSP client is available
 	guard  BoundaryGuard
+	ws     WorkspaceFn // may be nil; anchors workspace-relative uris to the pinned root
 }
 
 func NewDiagnostics(inv waitableDiagnosticsSource) *Diagnostics {
@@ -80,6 +81,14 @@ func NewDiagnosticsWithOpener(inv waitableDiagnosticsSource, opener fileOpener) 
 
 func (t *Diagnostics) WithBoundary(guard BoundaryGuard) *Diagnostics {
 	t.guard = guard
+	return t
+}
+
+// WithWorkspace wires the pinned-workspace accessor so relative uri/uris
+// resolve against the workspace root rather than the daemon's working
+// directory. Nil-safe.
+func (t *Diagnostics) WithWorkspace(ws WorkspaceFn) *Diagnostics {
+	t.ws = ws
 	return t
 }
 
@@ -101,9 +110,9 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("diagnostics: invalid arguments: %w", err)
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	for i := range a.URIs {
-		a.URIs[i] = toFileURI(a.URIs[i])
+		a.URIs[i] = toFileURIAnchored(a.URIs[i], t.ws)
 	}
 
 	// Backward-compat: scalar uri field is treated as uris:[uri].

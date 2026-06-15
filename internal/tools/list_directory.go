@@ -16,7 +16,7 @@ var listDirectorySchema = json.RawMessage(`{
   "properties": {
     "path": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the directory to list."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the directory to list."
     },
     "pattern": {
       "type": "string",
@@ -235,8 +235,14 @@ func plural(n int, singular, pluralSuffix string) string {
 }
 
 // resolvePath resolves a path argument for filesystem tools. Strips a leading
-// file:// scheme, then anchors relative (or empty) paths to the workspace root
-// returned by ws. Falls back to os.Getwd() when ws is nil or unresolved.
+// file:// scheme, then anchors a relative (or empty) path to the workspace root
+// returned by ws. An absolute path is returned unchanged.
+//
+// When ws is nil or resolves to "" (an unattached session) a relative path is
+// returned cleaned but still relative — deliberately NOT anchored to
+// os.Getwd(). The daemon is a singleton whose working directory is unrelated to
+// any workspace, so resolving against it would silently touch the wrong file;
+// leaving the path relative lets the boundary check reject it honestly instead.
 func resolvePath(path string, ws WorkspaceFn) string {
 	p := strings.TrimPrefix(path, "file://")
 	if filepath.IsAbs(p) {
@@ -247,10 +253,7 @@ func resolvePath(path string, ws WorkspaceFn) string {
 		base = ws()
 	}
 	if base == "" {
-		base, _ = os.Getwd()
-	}
-	if p == "" {
-		return base
+		return filepath.Clean(p)
 	}
 	return filepath.Join(base, p)
 }

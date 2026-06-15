@@ -17,7 +17,7 @@ var listSymbolsSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the document to outline"
+      "description": "Absolute path, file:// URI, or workspace-relative path of the document to outline"
     },
     "include_signatures": {
       "type": "boolean",
@@ -39,6 +39,7 @@ type ListSymbols struct {
 	ttl     time.Duration
 	timeout time.Duration
 	topo    topologyStoreFn
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // WithTopologyFallback wires the topology index as a fallback for when the
@@ -50,6 +51,12 @@ func (t *ListSymbols) WithTopologyFallback(fn topologyStoreFn) *ListSymbols {
 
 func NewListSymbols(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *ListSymbols {
 	return &ListSymbols{client: client, cache: c, ttl: ttl, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *ListSymbols) WithWorkspace(ws WorkspaceFn) *ListSymbols {
+	t.ws = ws
+	return t
 }
 
 func (t *ListSymbols) Name() string                 { return "list_symbols" }
@@ -88,7 +95,7 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if a.URI == "" {
 		return "", fmt.Errorf("list_symbols: uri is required")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 
 	// Markup languages (HTML/Markdown) have unusably noisy LSP outlines; consult
 	// the structural Map first and only fall through to the LSP if it has nothing.

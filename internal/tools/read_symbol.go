@@ -19,11 +19,11 @@ var readSymbolSchema = json.RawMessage(`{
   "properties": {
     "path": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the file containing the symbol"
+      "description": "Absolute path, file:// URI, or workspace-relative path of the file containing the symbol"
     },
     "uri": {
       "type": "string",
-      "description": "Alias for path (file:// URI or absolute path). Used only when path is omitted."
+      "description": "Alias for path (absolute path, file:// URI, or workspace-relative path). Used only when path is omitted."
     },
     "name": {
       "type": "string",
@@ -50,6 +50,7 @@ type ReadSymbol struct {
 	guard        BoundaryGuard
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
+	ws           WorkspaceFn         // may be nil; anchors a workspace-relative path/uri to the pinned root
 }
 
 func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration, tracker *ReadTracker) *ReadSymbol {
@@ -66,6 +67,14 @@ func (t *ReadSymbol) WithTopologyFallback(fn topologyStoreFn) *ReadSymbol {
 
 func (t *ReadSymbol) WithBoundary(guard BoundaryGuard) *ReadSymbol {
 	t.guard = guard
+	return t
+}
+
+// WithWorkspace wires the pinned-workspace accessor so a relative path/uri is
+// resolved against the workspace root rather than the daemon's working
+// directory. Nil-safe.
+func (t *ReadSymbol) WithWorkspace(ws WorkspaceFn) *ReadSymbol {
+	t.ws = ws
 	return t
 }
 
@@ -118,7 +127,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err != nil {
 		return "", err
 	}
-	fpath, uri := resolveReadSymbolPaths(a.Path)
+	fpath, uri := resolveReadSymbolPaths(a.Path, t.ws)
 	if err := t.guard.check(fpath); err != nil {
 		return "", fmt.Errorf("read_symbol: %w", err)
 	}
@@ -198,8 +207,9 @@ func (t *ReadSymbol) noSymbolMessage(name, fpath string) string {
 	return msg
 }
 
-func resolveReadSymbolPaths(path string) (fpath, uri string) {
-	return strings.TrimPrefix(path, "file://"), toFileURI(path)
+func resolveReadSymbolPaths(path string, ws WorkspaceFn) (fpath, uri string) {
+	fpath = resolvePath(path, ws)
+	return fpath, toFileURI(fpath)
 }
 
 func (t *ReadSymbol) fetchReadSymbolSymbols(ctx context.Context, uri string) ([]protocol.DocumentSymbol, error) {

@@ -17,7 +17,7 @@ var getDefinitionSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the document"
+      "description": "Absolute path, file:// URI, or workspace-relative path of the document"
     },
     "line": {
       "type": "integer",
@@ -45,11 +45,18 @@ type GetDefinition struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // NewGetDefinition creates a GetDefinition tool. Pass a nil cache to disable caching.
 func NewGetDefinition(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *GetDefinition {
 	return &GetDefinition{client: client, cache: c, ttl: ttl, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *GetDefinition) WithWorkspace(ws WorkspaceFn) *GetDefinition {
+	t.ws = ws
+	return t
 }
 
 func (t *GetDefinition) Name() string                 { return "get_definition" }
@@ -77,7 +84,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.URI == "" {
 		return "", fmt.Errorf("get_definition: uri must not be empty")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()

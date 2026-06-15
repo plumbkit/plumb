@@ -20,7 +20,7 @@ var findReferencesSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the document containing the symbol"
+      "description": "Absolute path, file:// URI, or workspace-relative path of the document containing the symbol"
     },
     "line": {
       "type": "integer",
@@ -54,10 +54,17 @@ type FindReferences struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 func NewFindReferences(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FindReferences {
 	return &FindReferences{client: client, cache: c, ttl: ttl, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *FindReferences) WithWorkspace(ws WorkspaceFn) *FindReferences {
+	t.ws = ws
+	return t
 }
 
 func (t *FindReferences) Name() string                 { return "find_references" }
@@ -85,7 +92,7 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if a.URI == "" {
 		return "", fmt.Errorf("find_references: uri is required")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 
 	includeDecl := true
 	if a.IncludeDeclaration != nil {

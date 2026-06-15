@@ -21,7 +21,7 @@ var fileOutlineSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the file to outline."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the file to outline."
     },
     "include_docs": {
       "type": "boolean",
@@ -55,6 +55,7 @@ type FileOutline struct {
 	timeout time.Duration
 	topo    topologyStoreFn
 	guard   BoundaryGuard
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // NewFileOutline constructs the tool. It shares the documentSymbol cache key
@@ -72,6 +73,14 @@ func (t *FileOutline) WithTopologyFallback(fn topologyStoreFn) *FileOutline {
 
 func (t *FileOutline) WithBoundary(guard BoundaryGuard) *FileOutline {
 	t.guard = guard
+	return t
+}
+
+// WithWorkspace wires the pinned-workspace accessor so a relative uri is
+// resolved against the workspace root rather than the daemon's working
+// directory. Nil-safe.
+func (t *FileOutline) WithWorkspace(ws WorkspaceFn) *FileOutline {
+	t.ws = ws
 	return t
 }
 
@@ -130,11 +139,11 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 	if a.URI == "" {
 		return a, fmt.Errorf("file_outline: uri is required")
 	}
-	a.URI = toFileURI(a.URI)
 	return a, nil
 }
 
 func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResult, error) {
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	path := strings.TrimPrefix(a.URI, "file://")
 	if err := t.guard.check(path); err != nil {
 		return nil, fmt.Errorf("file_outline: %w", err)

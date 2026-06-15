@@ -52,7 +52,7 @@ var searchInFilesSchema = json.RawMessage(`{
     },
     "path": {
       "type": "string",
-      "description": "Directory to search in (file:// URI or absolute path). Defaults to the workspace root."
+      "description": "Directory to search in (absolute path, file:// URI, or workspace-relative path). Defaults to the workspace root."
     },
     "glob": {
       "type": "string",

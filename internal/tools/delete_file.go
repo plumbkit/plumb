@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
@@ -16,7 +15,7 @@ var deleteFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the file or empty directory to delete."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the file or empty directory to delete."
     },
     "dirty_ok": {
       "type": "boolean",
@@ -68,7 +67,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if a.Path == "" {
 		return "", fmt.Errorf("delete_file: file_path is required")
 	}
-	path := strings.TrimPrefix(a.Path, "file://")
+	path := t.deps.resolvePath(a.Path)
 	if err := t.deps.checkBoundary(path); err != nil {
 		return "", fmt.Errorf("delete_file: %w", err)
 	}

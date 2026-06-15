@@ -17,11 +17,11 @@ var copyFileSchema = json.RawMessage(`{
   "properties": {
     "from": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the source file."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the source file."
     },
     "to": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the destination. Parent directories are created automatically."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the destination. Parent directories are created automatically."
     },
     "overwrite": {
       "type": "boolean",
@@ -76,8 +76,11 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
-	from := strings.TrimPrefix(a.From, "file://")
-	to := strings.TrimPrefix(a.To, "file://")
+	from := t.deps.resolvePath(a.From)
+	to := t.deps.resolvePath(a.To)
+	if from == to {
+		return "", fmt.Errorf("copy_file: from and to are the same path")
+	}
 	if err := t.deps.checkBoundary(from); err != nil {
 		return "", fmt.Errorf("copy_file: %w", err)
 	}

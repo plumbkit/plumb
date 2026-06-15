@@ -20,7 +20,7 @@ var readFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the file to read."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the file to read."
     },
     "start_line": {
       "type": "integer",
@@ -77,6 +77,7 @@ type ReadFile struct {
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
 	outlineFn    func(string) bool   // may be nil; reports whether the path has a structural engine (file_outline is worthwhile)
+	ws           WorkspaceFn         // may be nil; anchors a workspace-relative file_path to the pinned root
 }
 
 func NewReadFile(tracker *ReadTracker) *ReadFile { return &ReadFile{tracker: tracker} }
@@ -102,6 +103,15 @@ func (t *ReadFile) concurrentEditNote(fpath string, mtime time.Time) string {
 
 func (t *ReadFile) WithBoundary(guard BoundaryGuard) *ReadFile {
 	t.guard = guard
+	return t
+}
+
+// WithWorkspace wires the pinned-workspace accessor so a relative file_path is
+// resolved against the workspace root rather than the daemon's working
+// directory. Nil-safe (a relative path then stays relative and the boundary
+// check rejects it).
+func (t *ReadFile) WithWorkspace(ws WorkspaceFn) *ReadFile {
+	t.ws = ws
 	return t
 }
 
@@ -147,7 +157,7 @@ func (t *ReadFile) outlineSupported(path string) bool {
 func (t *ReadFile) Name() string                 { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
 func (t *ReadFile) Description() string {
-	return "Read the text contents of a file. Accepts an absolute path or a file:// URI. " +
+	return "Read the text contents of a file. Accepts an absolute path, a file:// URI, or a workspace-relative path. " +
 		"Use start_line and end_line to read a slice of a large file without loading it entirely " +
 		"(only the requested lines are streamed into memory). " +
 		"Each content line is prefixed with a 1-based file line number and a tab (cat -n style) so range " +
@@ -177,8 +187,8 @@ func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, erro
 		return "", fmt.Errorf("read_file: file_path is required")
 	}
 
-	// Accept both file:// URIs and plain paths.
-	fpath := strings.TrimPrefix(a.Path, "file://")
+	// Accept absolute paths, file:// URIs, and workspace-relative paths.
+	fpath := resolvePath(a.Path, t.ws)
 	if err := t.guard.check(fpath); err != nil {
 		return "", fmt.Errorf("read_file: %w", err)
 	}

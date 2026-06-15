@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -20,7 +19,7 @@ var editFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path or file:// URI of the file to edit."
+      "description": "Absolute path, file:// URI, or workspace-relative path of the file to edit."
     },
     "edits": {
       "type": "array",
@@ -177,7 +176,7 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", err
 	}
 
-	path := strings.TrimPrefix(a.Path, "file://")
+	path := t.deps.resolvePath(a.Path)
 	if err := t.deps.checkBoundary(path); err != nil {
 		return "", fmt.Errorf("edit_file: %w", err)
 	}

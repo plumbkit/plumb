@@ -16,7 +16,7 @@ var callHierarchySchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI containing the symbol"
+      "description": "Absolute path, file:// URI, or workspace-relative path containing the symbol"
     },
     "line": {
       "type": "integer",
@@ -40,11 +40,18 @@ var callHierarchySchema = json.RawMessage(`{
 type CallHierarchy struct {
 	client  lsp.Client
 	timeout time.Duration
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // NewCallHierarchy creates a CallHierarchy tool.
 func NewCallHierarchy(client lsp.Client, timeout time.Duration) *CallHierarchy {
 	return &CallHierarchy{client: client, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *CallHierarchy) WithWorkspace(ws WorkspaceFn) *CallHierarchy {
+	t.ws = ws
+	return t
 }
 
 func (t *CallHierarchy) Name() string                 { return "call_hierarchy" }
@@ -70,7 +77,6 @@ func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
 	if a.URI == "" {
 		return a, fmt.Errorf("call_hierarchy: uri must not be empty")
 	}
-	a.URI = toFileURI(a.URI)
 	if a.Direction == "" {
 		a.Direction = "both"
 	}
@@ -82,6 +88,7 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()

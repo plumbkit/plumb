@@ -21,7 +21,7 @@ import (
 //   3. Apply the edit (atomic write) unless dry_run.
 
 const symbolEditCommonSchema = `
-"uri":{"type":"string","description":"Absolute path or file:// URI."},
+"uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
 "name_path":{"type":"string","description":"Slash-separated symbol path within the file (e.g. \"ClassName/methodName\", or just \"funcName\" for top-level)."},
 "dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write."}
 `
@@ -166,6 +166,7 @@ type InsertBeforeSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
 	topo    topologyStoreFn
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
@@ -177,6 +178,12 @@ func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBefo
 // unavailable. Nil-safe; returns the tool for chaining.
 func (t *InsertBeforeSymbol) WithTopologyFallback(fn topologyStoreFn) *InsertBeforeSymbol {
 	t.topo = fn
+	return t
+}
+
+// WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
+func (t *InsertBeforeSymbol) WithWorkspace(ws WorkspaceFn) *InsertBeforeSymbol {
+	t.ws = ws
 	return t
 }
 
@@ -209,7 +216,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -235,6 +242,7 @@ type InsertAfterSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
 	topo    topologyStoreFn
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
@@ -245,6 +253,12 @@ func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfter
 // language server is unavailable. Nil-safe; returns the tool for chaining.
 func (t *InsertAfterSymbol) WithTopologyFallback(fn topologyStoreFn) *InsertAfterSymbol {
 	t.topo = fn
+	return t
+}
+
+// WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
+func (t *InsertAfterSymbol) WithWorkspace(ws WorkspaceFn) *InsertAfterSymbol {
+	t.ws = ws
 	return t
 }
 
@@ -274,7 +288,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -296,6 +310,7 @@ type ReplaceSymbolBody struct {
 	client  lsp.Client
 	timeout time.Duration
 	topo    topologyStoreFn
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
@@ -306,6 +321,12 @@ func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymb
 // language server is unavailable. Nil-safe; returns the tool for chaining.
 func (t *ReplaceSymbolBody) WithTopologyFallback(fn topologyStoreFn) *ReplaceSymbolBody {
 	t.topo = fn
+	return t
+}
+
+// WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
+func (t *ReplaceSymbolBody) WithWorkspace(ws WorkspaceFn) *ReplaceSymbolBody {
+	t.ws = ws
 	return t
 }
 
@@ -342,7 +363,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
@@ -367,10 +388,17 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 type SafeDeleteSymbol struct {
 	client  lsp.Client
 	timeout time.Duration
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
 	return &SafeDeleteSymbol{client: client, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
+func (t *SafeDeleteSymbol) WithWorkspace(ws WorkspaceFn) *SafeDeleteSymbol {
+	t.ws = ws
+	return t
 }
 
 func (*SafeDeleteSymbol) Name() string { return "safe_delete_symbol" }
@@ -399,7 +427,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 	if a.URI == "" || a.NamePath == "" {
 		return "", fmt.Errorf("`uri` and `name_path` are required")
 	}
-	a.URI = toFileURI(a.URI)
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true
 	if a.DryRun != nil {
 		dryRun = *a.DryRun

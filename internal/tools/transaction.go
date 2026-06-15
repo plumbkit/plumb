@@ -30,7 +30,7 @@ var transactionApplySchema = json.RawMessage(`{
         "properties": {
           "file_path": {
             "type": "string",
-            "description": "Absolute path or file:// URI of the file to edit."
+            "description": "Absolute path, file:// URI, or workspace-relative path of the file to edit."
           },
           "edits": {
             "type": "array",
@@ -130,6 +130,14 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 	if err := t.txCheckRateLimits(a); err != nil {
 		return "", err
+	}
+
+	// Resolve every operation path against the pinned workspace once, up front,
+	// so the boundary check, locking, validation, and write all see the same
+	// absolute path (a relative path would otherwise resolve against the daemon
+	// CWD downstream).
+	for i := range a.Operations {
+		a.Operations[i].Path = t.deps.resolvePath(a.Operations[i].Path)
 	}
 
 	paths, err := t.txCanonicalPaths(a.Operations)

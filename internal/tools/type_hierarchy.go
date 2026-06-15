@@ -16,7 +16,7 @@ var typeHierarchySchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path or file:// URI containing the type"
+      "description": "Absolute path, file:// URI, or workspace-relative path containing the type"
     },
     "line": {
       "type": "integer",
@@ -40,11 +40,18 @@ var typeHierarchySchema = json.RawMessage(`{
 type TypeHierarchy struct {
 	client  lsp.Client
 	timeout time.Duration
+	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // NewTypeHierarchy creates a TypeHierarchy tool.
 func NewTypeHierarchy(client lsp.Client, timeout time.Duration) *TypeHierarchy {
 	return &TypeHierarchy{client: client, timeout: timeout}
+}
+
+// WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
+func (t *TypeHierarchy) WithWorkspace(ws WorkspaceFn) *TypeHierarchy {
+	t.ws = ws
+	return t
 }
 
 func (t *TypeHierarchy) Name() string                 { return "type_hierarchy" }
@@ -70,7 +77,6 @@ func parseTypeHierarchyArgs(raw json.RawMessage) (typeHierarchyArgs, error) {
 	if a.URI == "" {
 		return a, fmt.Errorf("type_hierarchy: uri must not be empty")
 	}
-	a.URI = toFileURI(a.URI)
 	if a.Direction == "" {
 		a.Direction = "both"
 	}
@@ -82,6 +88,7 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
+	a.URI = toFileURIAnchored(a.URI, t.ws)
 
 	ctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
