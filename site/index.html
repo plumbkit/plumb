@@ -279,8 +279,11 @@ section.blk{padding-top:110px;scroll-margin-top:96px}
    asciinema clips each .ap-line to that height (overflow:hidden), which slices taller text
    glyphs; allow overflow so the borders connect AND the text is never clipped. */
 .tuishot .ap-player .ap-line{overflow:visible!important}
-/* and asciinema's 10px bg-coloured terminal border, so the recording fills the panel */
-.tuishot .ap-terminal{font-family:'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important}
+/* and asciinema's 10px bg-coloured terminal border, so the recording fills the panel.
+   overflow:visible (with the small bottom padding below) keeps the last row from being
+   clipped by the terminal box the way overflow:hidden clips it. */
+.tuishot .ap-terminal{font-family:'SarasaTermNerd','JetBrains Mono',ui-monospace,monospace;border:0!important;padding:0!important;overflow:visible!important}
+.tuishot{padding-bottom:24px}
 .tuishot .ap-control-bar{display:none!important}
 .tuifeat{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 10px;margin:22px auto 0;max-width:780px}
 .tuifeat span{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--soft);border:1px solid var(--rule);border-radius:999px;padding:6px 13px}
