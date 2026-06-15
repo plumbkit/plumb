@@ -39,6 +39,12 @@ cd "$ROOT"
 CAST="${1:-site/plumb_tui.cast}"
 OUT="site/fonts/sarasa-term-cl-nerd.woff2"
 
+# The site card framing (card aspect, asciinema fit:'width') is tuned for this grid.
+# A cast recorded at a different size still renders but may not frame the same way.
+# Override deliberately with: EXPECTED_COLS=… EXPECTED_ROWS=… ./scripts/build-tui-demo.sh
+EXPECTED_COLS="${EXPECTED_COLS:-120}"
+EXPECTED_ROWS="${EXPECTED_ROWS:-27}"
+
 # ── locate the Sarasa Term CL Nerd Font file ─────────────────────────────────────
 find_font() {
   # 1) the exact regular face we expect
@@ -60,6 +66,25 @@ find_font() {
 }
 
 [ -f "$CAST" ] || { echo "build-tui-demo: cast not found: $CAST" >&2; exit 1; }
+
+# ── validate the cast grid size (asciinema v3 header: .term.cols/.term.rows; v2: width/height)
+read -r CAST_COLS CAST_ROWS < <(python3 - "$CAST" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    h = json.loads(f.readline())
+term = h.get("term") or {}
+cols = term.get("cols", h.get("width"))
+rows = term.get("rows", h.get("height"))
+print(cols if cols is not None else "?", rows if rows is not None else "?")
+PY
+)
+echo "build-tui-demo: cast grid = ${CAST_COLS}x${CAST_ROWS} (expected ${EXPECTED_COLS}x${EXPECTED_ROWS})"
+if [ "$CAST_COLS" != "$EXPECTED_COLS" ] || [ "$CAST_ROWS" != "$EXPECTED_ROWS" ]; then
+  echo "build-tui-demo: WARNING — cast is ${CAST_COLS}x${CAST_ROWS}, not the expected ${EXPECTED_COLS}x${EXPECTED_ROWS}." >&2
+  echo "  The site card is tuned for ${EXPECTED_COLS}x${EXPECTED_ROWS}; a different grid will still render" >&2
+  echo "  but may not frame the same. Re-record at ${EXPECTED_COLS}x${EXPECTED_ROWS}, or set EXPECTED_COLS/" >&2
+  echo "  EXPECTED_ROWS if you intend the new size." >&2
+fi
 
 FONT="$(find_font)" || {
   echo "build-tui-demo: 'Sarasa Term CL Nerd Font' (Regular) not found." >&2
