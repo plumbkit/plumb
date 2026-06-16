@@ -53,6 +53,10 @@ Public website launch refresh: the modern landing page is now the published site
 - **Website and docs now reflect the `run_task`/`agent_config` tools and the true 53-tool count.** The site's toolset section gains a seventh **“Tasks & config”** capability group (`run_task`, `agent_config`) and the structured-tool stat now reads 53 (was 50); the tools grid centres the trailing card so seven groups tile cleanly. The stale “51 tools” count is corrected to 53 across `docs/tools.md`, `README.md`, `docs/architecture.md`, `docs/index.md`, and `docs/token-efficiency.md` (the agent briefs already said 53).
 - **Client-count and Antigravity setup paths corrected across the site and docs.** The website's "AI clients" stat now reads 12 (was 11), matching the page's own "Twelve agents" heading and chips. `docs/cli-reference.md` gains the `plumb setup antigravity-desktop` row and its `plumb setup antigravity` path is corrected to `~/.gemini/antigravity-cli/mcp/plumb.json` (was the stale `mcp_config.json`), so the reference matches `AntigravityConfigPath`/`AntigravityDesktopConfigPath`.
 
+### Docs
+
+- **`CONTRIBUTING.md` now walks an outside contributor through the fork + pull-request flow.** The guide assumed a maintainer cloning `plumbkit/plumb` directly; it now opens with the fork-first path (fork → clone your fork → add an `upstream` remote), shows the branch → `make verify` → push-to-fork → open-PR loop, and cross-links the existing `CODE_OF_CONDUCT.md`, `SECURITY.md` (report privately, not via a public issue), and the structured issue forms. It also documents the `main` branch-protection expectations — required CI matrix (`verify`/`race`/`integration` on Linux + macOS), one maintainer approval, up-to-date branch — and refreshes the `make verify` target list (`build test lint build-integration build-clients check-size`).
+
 ## 0.9.18 (unreleased)
 
 Swift's structural extraction moved off the pure-Go gotreesitter port onto the canonical grammar compiled to WASM, fixing the implicitly-unwrapped-optional collapse at the root, plus a dependency refresh.
