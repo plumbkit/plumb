@@ -131,21 +131,15 @@ func (t *EditFile) isStrict() bool {
 func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
-	return "Apply one or more edits to an existing file. " +
-		"Use this tool — not Claude Code's native Edit/Write — for every in-workspace file change: " +
-		"plumb and the Claude Code harness track read-state separately, so a native Edit after a plumb " +
-		"read_file fails with \"File has not been read yet\". Pair read_file with edit_file and stay in one lane. " +
-		"Two edit modes per item: " +
-		"(1) str_replace mode (default): set old_string to the text that must appear EXACTLY ONCE — " +
-		"rejected if absent or ambiguous. " +
-		"(2) range mode: set start_line (1-based) to replace lines start_line..end_line with new_string; " +
-		"use start_line: -1 to append at end of file; end_line: -1 to delete or replace through the last line. " +
-		"Range mode is the clean solution for deleting a block of lines (no unique anchor needed) and for " +
-		"appending to a file. " +
-		"CRLF differences between old_string and the file are tolerated automatically. " +
-		"All edits are applied sequentially in memory then written atomically (temp file + rename). " +
-		"A per-path lock serialises concurrent edits. Optionally pass expected_mtime (from a prior " +
-		"read_file header) to guarantee the file hasn't changed since you read it."
+	return "Apply one or more edits to an existing file (use this over a native edit tool — see the " +
+		"Edit lane note in session_start). Each edit is one of two modes: " +
+		"(1) str_replace (default): old_string must appear EXACTLY ONCE — rejected if absent or ambiguous. " +
+		"(2) range: start_line/end_line (1-based) replace that line span with new_string; start_line: -1 " +
+		"appends at end of file, end_line: -1 runs through the last line (the clean way to delete a block " +
+		"or append, no anchor needed). " +
+		"CRLF is tolerated; edits apply sequentially in memory then write atomically (temp + rename) under " +
+		"a per-path lock. Pass expected_mtime (from a read_file header) to guarantee the file is unchanged " +
+		"since you read it."
 }
 
 type strEdit struct {

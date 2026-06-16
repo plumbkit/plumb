@@ -65,14 +65,16 @@ func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
 func (t *Git) Name() string                 { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
-	return "Run git through one tiered tool. Read subcommands (status, log, diff, show, blame, shortlog, branch/tag/stash listing) always run. " +
-		"diff --cached (equivalently diff --staged) shows staged changes ready to be committed — use args: [\"--cached\"] or args: [\"--staged\"] to verify staged content after a selective git add. " +
-		"check-ignore (paths in args) reports which of the listed paths are git-ignored. " +
-		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) run when [git] allow_writes is enabled (default on). " +
-		"commit accepts an optional files list for a path-limited commit (commits only those tracked paths, leaving unrelated staged changes in the index) — the safe way to commit just your change in a shared worktree. " +
-		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) require [git] allow_destructive AND confirm:true. " +
-		"Network subcommands (push, fetch, pull) require [git] allow_push AND confirm:true; force-pushing a protected branch is always refused, as is pushing to an ad-hoc URL. " +
-		"Typed-parameter contract: add uses files (staged with -A semantics — new, modified, and deleted entries all staged); commit uses message; all other subcommands use args. " +
+	return "Run git through one tiered, policy-gated tool (no shell). Read subcommands (status, log, diff, " +
+		"show, blame, shortlog, branch/tag/stash listing) always run. " +
+		"Write subcommands (add, commit, switch, mv, branch/tag create, stash push/pop) need [git] allow_writes (default on). " +
+		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) " +
+		"need allow_destructive AND confirm:true. " +
+		"Network subcommands (push, fetch, pull) need allow_push AND confirm:true; force-pushing a protected branch " +
+		"and pushing to an ad-hoc URL are always refused. " +
+		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
+		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
+		"worktree); every other subcommand uses args. " +
 		"Essential for clients without shell access (Claude Desktop, Cursor MCP)."
 }
 

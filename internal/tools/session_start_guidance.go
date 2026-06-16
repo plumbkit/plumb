@@ -3,12 +3,22 @@ package tools
 import "strings"
 
 func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
+	if profile, hidden := t.resolvedToolProfile(); profile == "lean" {
+		sb.WriteString(LeanProfileNote(hidden))
+	}
 	switch {
 	case isClaudeCode(t.clientNameFn):
 		t.writeClaudeCodeGuidance(sb)
 	case isClaudeDesktop(t.clientNameFn):
 		t.writeClaudeDesktopGuidance(sb)
 	}
+}
+
+// leanProfile reports whether the connection resolved to the lean tool profile,
+// under which guidance must not steer the agent to a tool hidden from tools/list.
+func (t *SessionStart) leanProfile() bool {
+	profile, _ := t.resolvedToolProfile()
+	return profile == "lean"
 }
 
 // writeClaudeCodeGuidance leads with topology (the Map) for discovery / structure
@@ -27,13 +37,22 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 		sb.WriteString("- **topology_affected** — THE post-change tool: which tests to run after an edit " +
 			"(dependency edges + co-location, recall-biased, confidence-labelled). No language server gives this.\n")
 		sb.WriteString("- **topology_search** — ranked symbol/file search across the index. Use over grep for discovery.\n")
-		sb.WriteString("- **topology_explore** / **topology_impact** — neighbourhood and blast radius around a symbol.\n")
+		if t.leanProfile() {
+			sb.WriteString("- **topology_explore** — the neighbourhood around a symbol.\n")
+		} else {
+			sb.WriteString("- **topology_explore** / **topology_impact** — neighbourhood and blast radius around a symbol.\n")
+		}
 		sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) in ~200 tokens.\n")
-		sb.WriteString("- **topology_routes** — framework entry points (HTTP handlers, Cobra, Flask).\n\n")
+		if !t.leanProfile() {
+			sb.WriteString("- **topology_routes** — framework entry points (HTTP handlers, Cobra, Flask).\n")
+		}
+		sb.WriteString("\n")
 		sb.WriteString("LSP-semantic — precise navigation (Claude Code lacks these natively):\n\n")
 		sb.WriteString("- **get_definition** / **find_references** — exact definition and all call sites (scope-aware, not text search).\n")
 		sb.WriteString("- **rename_symbol** — workspace-wide semantic rename.\n")
-		sb.WriteString("- **call_hierarchy** / **type_hierarchy** — callers/callees, super/subtypes.\n")
+		if !t.leanProfile() {
+			sb.WriteString("- **call_hierarchy** / **type_hierarchy** — callers/callees, super/subtypes.\n")
+		}
 		sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
 		return
 	}
@@ -41,10 +60,14 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
 	sb.WriteString("- **find_references** — all call sites for a symbol (LSP-semantic, not text search). Accepts name or position.\n")
 	sb.WriteString("- **get_definition** — jump to definition by name or position without reading files first.\n")
-	sb.WriteString("- **call_hierarchy** — callers and callees of a function.\n")
-	sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
+	if !t.leanProfile() {
+		sb.WriteString("- **call_hierarchy** — callers and callees of a function.\n")
+		sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
+	}
 	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
-	sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
+	if !t.leanProfile() {
+		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
+	}
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +
 		"ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
