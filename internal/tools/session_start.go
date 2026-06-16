@@ -79,6 +79,25 @@ type SessionStart struct {
 	pinConflict  func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
 	repin        func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
 	episodicFn   func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
+	toolProfile  func() (profile string, hidden int)                                   // may be nil; the resolved tool profile + count of tools hidden from tools/list
+}
+
+// WithToolProfile wires an accessor returning the connection's resolved tool
+// profile ("lean"/"full") and the number of tools hidden from tools/list under
+// it. When the profile is "lean", session_start prepends a terse note that the
+// hidden tools stay callable by name. Nil-safe (treated as "full", no note).
+func (t *SessionStart) WithToolProfile(fn func() (profile string, hidden int)) *SessionStart {
+	t.toolProfile = fn
+	return t
+}
+
+// resolvedToolProfile returns the profile + hidden count, defaulting to "full"
+// (no tools hidden) when no accessor is wired.
+func (t *SessionStart) resolvedToolProfile() (string, int) {
+	if t.toolProfile == nil {
+		return "full", 0
+	}
+	return t.toolProfile()
 }
 
 // WithEpisodic wires an accessor for the most recent episodic summary, surfaced

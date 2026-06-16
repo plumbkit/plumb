@@ -818,3 +818,50 @@ func TestSessionStart_GitPolicySection(t *testing.T) {
 		}
 	})
 }
+
+// TestSessionStart_LeanProfileNote checks the lean note is emitted (with the
+// hidden count, no tool enumeration) and that lean guidance never steers the
+// agent to a tool hidden from tools/list.
+func TestSessionStart_LeanProfileNote(t *testing.T) {
+	s := &SessionStart{
+		clientNameFn: func() string { return "claude-code" },
+		toolProfile:  func() (string, int) { return "lean", 34 },
+	}
+	var sb strings.Builder
+	s.writeSessionGuidance(&sb)
+	out := sb.String()
+
+	if !strings.Contains(out, "Tool profile: lean") {
+		t.Errorf("lean note missing:\n%s", out)
+	}
+	if !strings.Contains(out, "34 commodity tools hidden") {
+		t.Errorf("lean note should state the hidden count:\n%s", out)
+	}
+	// The note must not enumerate hidden tool names.
+	for _, hidden := range []string{"call_hierarchy", "type_hierarchy", "topology_routes", "topology_impact", "list_symbols"} {
+		if strings.Contains(out, hidden) {
+			t.Errorf("lean guidance recommends hidden tool %q:\n%s", hidden, out)
+		}
+	}
+}
+
+// TestSessionStart_FullProfileNoNote verifies the lean note is absent under the
+// full profile (and when no profile accessor is wired).
+func TestSessionStart_FullProfileNoNote(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   func() (string, int)
+	}{
+		{"explicit full", func() (string, int) { return "full", 0 }},
+		{"nil accessor", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &SessionStart{clientNameFn: func() string { return "claude-code" }, toolProfile: tc.fn}
+			var sb strings.Builder
+			s.writeSessionGuidance(&sb)
+			if strings.Contains(sb.String(), "Tool profile: lean") {
+				t.Error("full profile should not emit the lean note")
+			}
+		})
+	}
+}

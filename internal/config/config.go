@@ -341,6 +341,23 @@ type SemanticsConfig struct {
 	Timeout Duration `toml:"timeout"`
 }
 
+// ToolsConfig governs which tools are advertised in tools/list. A hidden tool
+// stays callable by name via tools/call (hidden ≠ unregistered) — this only
+// trims the advertised set so a client with its own native filesystem tools is
+// not billed for commodity duplicates. Project-overridable.
+//
+// Concurrency: read-only after Load returns.
+type ToolsConfig struct {
+	// Profile is the default tool profile: "auto" (resolve from the client's
+	// native capabilities), "lean" (commodity tools hidden), or "full" (every
+	// tool advertised). Default "auto".
+	Profile string `toml:"profile"`
+	// ClientProfiles overrides Profile per MCP client, keyed by a
+	// case-insensitive clientInfo.name prefix (e.g. "claude-code"); each value is
+	// auto|lean|full. An empty or absent entry falls through to Profile.
+	ClientProfiles map[string]string `toml:"client_profiles"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
@@ -360,6 +377,8 @@ type Config struct {
 	LSPQuery  LSPQueryConfig       `toml:"lsp_query"`
 	Semantics SemanticsConfig      `toml:"semantics"`
 	Memory    MemoryConfig         `toml:"memory"`
+	// Tools governs which tools appear in tools/list (lean/full/auto profiles).
+	Tools ToolsConfig `toml:"tools"`
 	// Tasks holds per-language build/lint/test/e2e/verify command templates,
 	// keyed by the [lsp.<lang>] language id. Executed by the task runner.
 	Tasks map[string]TasksConfig `toml:"tasks"`

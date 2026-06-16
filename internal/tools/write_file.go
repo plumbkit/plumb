@@ -73,15 +73,12 @@ func NewWriteFile(deps WriteDeps) *WriteFile { return &WriteFile{deps: deps} }
 func (*WriteFile) Name() string                 { return "write_file" }
 func (*WriteFile) InputSchema() json.RawMessage { return writeFileSchema }
 func (*WriteFile) Description() string {
-	return "Create or overwrite a file with the given content. The write is atomic: " +
-		"content is staged in a system temp file then renamed into place — the " +
-		"target is never partially written. Parent directories are created automatically. " +
-		"After writing, the LSP server is notified (didOpen/didChange/didClose) so " +
-		"diagnostics and symbol lookups reflect the new content immediately. " +
-		"Optionally pass expected_mtime or expected_sha (from a prior read_file header) to " +
-		"reject the write if the file changed since you read it — the same optimistic-concurrency " +
-		"guard edit_file has, so a full-content overwrite never silently clobbers a concurrent change. " +
-		"Use edit_file for targeted str_replace edits to an existing file."
+	return "Create or overwrite a file with the given content. The write is atomic (staged in a temp file " +
+		"then renamed — never partially written); parent directories are created automatically and the LSP " +
+		"server is notified so diagnostics and symbols update immediately. " +
+		"Pass expected_mtime or expected_sha (from a read_file header) to reject the write if the file changed " +
+		"since you read it, so a full-content overwrite never silently clobbers a concurrent change. " +
+		"Use edit_file for targeted edits to an existing file."
 }
 
 type writeFileArgs struct {

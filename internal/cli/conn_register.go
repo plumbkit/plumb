@@ -117,6 +117,13 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
+		WithToolProfile(func() (string, int) {
+			p := s.resolveToolProfile()
+			if p != "lean" {
+				return p, 0
+			}
+			return p, hiddenToolCount(srv)
+		}).
 		WithEpisodic(s.latestEpisodic).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPLanguages(s.acquiredLanguageLabels).
@@ -184,4 +191,8 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		s.onBeforeTool(toolCtx, name, args)
 	}
 	srv.EnrichToolOutput = s.enrichToolOutput
+	// Filters tools/list to the resolved profile (lean hides commodity tools;
+	// they stay callable by name). Resolved per list call, so it sees the client
+	// identity set synchronously during initialize.
+	srv.ToolFilter = s.toolVisible
 }

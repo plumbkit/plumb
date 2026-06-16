@@ -254,6 +254,20 @@ agent_config_writes = false   # top-level; user-settable only, default off
 
 When `true`, the `agent_config` tool may write a **small allowlist** of project-config keys on the user's behalf: the `[tasks.<lang>]` slots plus `log_level`, `ui.theme`, `ui.path_style`, `topology.exclude_patterns`, `quality.analysers`. The allowlist (`internal/config/fields_agent.go`) is the entire security model — every other key, **including `agent_config_writes` itself**, is never agent-writable (git tiers, workspace roots, `edits.strict`/`rate_limit`, `semantics.api_key`, session eviction, `log_file`, `lsp.*`). Writes go through the tool (never a raw `config.toml` edit): the whole batch is validated and applied atomically to project config, tagged `provenance=agent` in a `.plumb/config.provenance.json` sidecar (auto-gitignored), shown by `plumb config show`, and revertible with `plumb config unset <key>`. The enable knob is editable only by the user (TUI Settings); the agent cannot flip it.
 
+### `[tools]` — client-aware tool profiles
+
+```toml
+[tools]
+profile = "auto"            # auto | lean | full; PLUMB_TOOLS_PROFILE overrides
+
+[tools.client_profiles]     # optional per-client override, keyed by clientInfo.name prefix
+# claude-code = "full"
+```
+
+Controls **which tools appear in `tools/list`**, to spare clients that already have native filesystem tools from paying for ~34 commodity duplicates. `auto` (default) resolves to **lean** for a recognised CLI agent that reads and searches files natively (Claude Code, Codex, Gemini CLI) and **full** for Claude Desktop and any unrecognised client; `lean`/`full` force it. Project-overridable and `PLUMB_TOOLS_PROFILE`-overridable; resolution precedence is per-client override → `profile` → auto.
+
+**Hidden ≠ unregistered.** A tool the lean profile hides is absent from `tools/list` but **stays callable by name** via `tools/call` — no capability is removed, and the resilient proxy never re-lists (it replays `initialize`). The **lean set** (`internal/tools/profile.go` `LeanTools`, the single source of truth) keeps `session_start`, the read/edit/write/transaction file tools, `git`, `diagnostics`, the core LSP-semantic tools, the headline topology tools, and `search_memories`. The **mutation-lane rule** governs it: a read-only commodity tool may be hidden freely, but a mutation tool whose native fallback is unsafe (`mv`/`rm`/`sed` bypass plumb's per-path locks, the LSP notify, and the transaction WAL) stays lean; `read_file`/`read_symbol` stay lean too because the edit lane needs their mtime/sha headers. Under the lean profile `session_start` prints a one-line note with the hidden count and how to restore `full`. *Limitation:* a per-project `[tools]` override is applied after the connection's first `tools/list`, so it takes effect on the next listing (most clients list once); the client identity that drives `auto` is known from the first list.
+
 ## Client setup commands
 
 `plumb setup` registers the current `plumb` binary as a stdio MCP server:

@@ -124,6 +124,9 @@ func applyEnv(cfg *Config) {
 	if d, ok := envDuration("PLUMB_LSP_QUERY_TIMEOUT"); ok {
 		cfg.LSPQuery.Timeout = Duration{d}
 	}
+	if v := os.Getenv("PLUMB_TOOLS_PROFILE"); v != "" {
+		cfg.Tools.Profile = v
+	}
 	normaliseConfig(cfg)
 }
 

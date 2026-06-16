@@ -70,6 +70,11 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	s.mu.RLock()
 	defs := make([]toolDef, 0, len(s.order))
 	for _, name := range s.order {
+		// A filtered-out tool is hidden from the advertised list but stays
+		// callable by name — handleToolsCall does not consult ToolFilter.
+		if s.ToolFilter != nil && !s.ToolFilter(name) {
+			continue
+		}
 		t := s.tools[name]
 		defs = append(defs, toolDef{
 			Name:        t.Name(),

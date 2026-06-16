@@ -34,6 +34,7 @@ func validate(cfg Config) error {
 		func() error { return validateSemantics(cfg.Semantics) },
 		func() error { return validateMemory(cfg.Memory) },
 		func() error { return validateTasks(cfg.Tasks) },
+		func() error { return validateTools(cfg.Tools) },
 	} {
 		if err := check(); err != nil {
 			return err
@@ -122,6 +123,30 @@ func validateTasks(tasks map[string]TasksConfig) error {
 		}
 	}
 	return nil
+}
+
+// validateTools rejects an unknown tool profile, in both the global Profile and
+// any per-client override. An empty value is allowed so an absent per-client
+// entry falls through to Profile.
+func validateTools(t ToolsConfig) error {
+	if err := validateToolProfile("tools.profile", t.Profile); err != nil {
+		return err
+	}
+	for client, p := range t.ClientProfiles {
+		if err := validateToolProfile("tools.client_profiles."+client, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateToolProfile(key, v string) error {
+	switch v {
+	case "", "auto", "lean", "full":
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of auto, lean, full; got %q", key, v)
+	}
 }
 
 func validateTopology(tp TopologyConfig) error {

@@ -66,6 +66,7 @@ type sessionView struct {
 	ws        config.WorkspaceConfig
 	semantics config.SemanticsConfig
 	memory    config.MemoryConfig
+	tools     config.ToolsConfig
 	// tasks holds the resolved [tasks.<lang>] command templates; agentConfigWrites
 	// is the resolved enable knob for the agent-writable-config tool. Both are
 	// swapped per project on every attach / re-pin / reload, like the blocks above.
@@ -209,6 +210,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		ws:        cfg.Workspace,
 		semantics: cfg.Semantics,
 		memory:    cfg.Memory,
+		tools:     cfg.Tools,
 	})
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
@@ -344,6 +346,13 @@ func (s *connSession) editsConfig() config.EditsConfig {
 // config without re-reading and re-parsing .plumb/config.toml per call.
 func (s *connSession) memoryConfig() config.MemoryConfig {
 	return s.view().memory
+}
+
+// toolsConfig returns the current resolved [tools] config off the lock-free
+// snapshot. Read on the tools/list filter path so the profile resolves without
+// a per-call disk read; swapped per project like the blocks above.
+func (s *connSession) toolsConfig() config.ToolsConfig {
+	return s.view().tools
 }
 
 // gitConfig returns the current resolved git tool config.

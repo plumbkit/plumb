@@ -673,3 +673,57 @@ func TestCloneConfig_SliceMapIndependence(t *testing.T) {
 		t.Error("LSP[go].Env: source mutated (EXTRA key added)")
 	}
 }
+
+func TestDefaults_ToolsProfile(t *testing.T) {
+	if defaults.Tools.Profile != "auto" {
+		t.Errorf("default Tools.Profile = %q, want \"auto\"", defaults.Tools.Profile)
+	}
+	if defaults.Tools.ClientProfiles != nil {
+		t.Error("default Tools.ClientProfiles should be nil")
+	}
+}
+
+func TestValidate_ToolsProfile_InvalidRejected(t *testing.T) {
+	cfg := defaults
+	cfg.Tools.Profile = "verbose"
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for invalid tools.profile")
+	}
+}
+
+func TestValidate_ToolsProfile_ValuesAllowed(t *testing.T) {
+	for _, p := range []string{"", "auto", "lean", "full"} {
+		cfg := defaults
+		cfg.Tools.Profile = p
+		if err := validate(cfg); err != nil {
+			t.Errorf("tools.profile=%q should be valid: %v", p, err)
+		}
+	}
+}
+
+func TestValidate_ToolsClientProfile_InvalidRejected(t *testing.T) {
+	cfg := defaults
+	cfg.Tools.ClientProfiles = map[string]string{"claude-code": "slim"}
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for invalid per-client tools profile")
+	}
+}
+
+func TestApplyEnv_ToolsProfile(t *testing.T) {
+	t.Setenv("PLUMB_TOOLS_PROFILE", "full")
+	cfg := defaults
+	applyEnv(&cfg)
+	if cfg.Tools.Profile != "full" {
+		t.Errorf("PLUMB_TOOLS_PROFILE=full not applied, got %q", cfg.Tools.Profile)
+	}
+}
+
+func TestCloneConfig_ToolsClientProfilesIsolated(t *testing.T) {
+	src := defaults
+	src.Tools.ClientProfiles = map[string]string{"claude-code": "lean"}
+	clone := cloneConfig(src)
+	clone.Tools.ClientProfiles["codex"] = "full"
+	if _, ok := src.Tools.ClientProfiles["codex"]; ok {
+		t.Error("Tools.ClientProfiles: source mutated (codex key leaked from clone)")
+	}
+}

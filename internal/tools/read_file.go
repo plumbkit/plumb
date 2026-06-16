@@ -157,17 +157,14 @@ func (t *ReadFile) outlineSupported(path string) bool {
 func (t *ReadFile) Name() string                 { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
 func (t *ReadFile) Description() string {
-	return "Read the text contents of a file. Accepts an absolute path, a file:// URI, or a workspace-relative path. " +
-		"Use start_line and end_line to read a slice of a large file without loading it entirely " +
-		"(only the requested lines are streamed into memory). " +
-		"Each content line is prefixed with a 1-based file line number and a tab (cat -n style) so range " +
-		"math is exact; this gutter is display-only — strip the leading '<n>\\t' before using a line as an " +
-		"edit_file or find_replace old_string. " +
-		"Binary files are detected and rejected. Output is capped at 200 KiB — use line ranges on large files. " +
-		"The output begins with a header carrying the file's mtime (RFC3339Nano) and SHA-256 hash. " +
-		"Pass mtime back as expected_mtime to edit_file for fast optimistic-concurrency checks; " +
-		"pass the hash as expected_sha for content-based checks that survive mtime aliasing. " +
-		"Essential for clients without filesystem access of their own (Claude Desktop, Cursor MCP, etc.)."
+	return "Read the text contents of a file (absolute path, file:// URI, or workspace-relative path). " +
+		"Use start_line/end_line to stream a slice of a large file. " +
+		"Each line is prefixed with a 1-based line number + tab (cat -n style) for exact range math; this gutter " +
+		"is display-only — strip the leading '<n>\\t' before reusing a line as an edit_file/find_replace old_string. " +
+		"Binary files are rejected; output is capped at 200 KiB (use line ranges on large files). " +
+		"The header carries the file's mtime (RFC3339Nano) and SHA-256 — pass them back as expected_mtime/" +
+		"expected_sha on edit_file for optimistic-concurrency checks. " +
+		"Essential for clients without filesystem access (Claude Desktop, Cursor MCP, etc.)."
 }
 
 type readFileArgs struct {

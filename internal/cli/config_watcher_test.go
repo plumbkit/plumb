@@ -236,6 +236,28 @@ func TestApplyProjectConfig_SnapshotsMemory(t *testing.T) {
 	}
 }
 
+func TestApplyProjectConfig_SnapshotsTools(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[tools]\nprofile = \"full\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := config.NewStore(config.Defaults()) // global default profile = "auto"
+	s := &connSession{store: store}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
+
+	s.applyProjectConfig(ws)
+
+	if got := s.toolsConfig().Profile; got != "full" {
+		t.Errorf("project [tools] profile not snapshotted into the view: got %q, want \"full\"", got)
+	}
+}
+
 // writeGlobalConfig writes body to the global config path resolved from the
 // test's XDG_CONFIG_HOME, creating the parent directory.
 func writeGlobalConfig(t *testing.T, body string) {

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,6 +129,13 @@ type Server struct {
 	// client's self-reported name and version.
 	OnClientInfo func(ctx context.Context, name, version string)
 
+	// ToolFilter, if set, decides which tools appear in tools/list: a tool whose
+	// name it rejects is hidden from the advertised set but STAYS CALLABLE via
+	// tools/call (hidden ≠ unregistered). It is consulted per tools/list, so it
+	// may resolve a profile that depends on the (by then known) client identity.
+	// Must be set before Serve.
+	ToolFilter func(name string) bool
+
 	// Resources, if set, is consulted by resources/list and resources/read.
 	// Leaving it nil disables the resources capability entirely.
 	Resources ResourceProvider
@@ -176,6 +184,15 @@ func (s *Server) Register(t Tool) {
 		delete(s.argShapes, t.Name())
 		slog.Warn("mcp: tool schema not guardable; arguments left unchecked", "tool", t.Name())
 	}
+}
+
+// ToolNames returns the registered tool names in insertion order. Safe for
+// concurrent use; the returned slice is a copy. Independent of ToolFilter — it
+// reports every registered tool, not just the advertised set.
+func (s *Server) ToolNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.order)
 }
 
 // resolveToolArgs rewrites recognised parameter aliases to their canonical

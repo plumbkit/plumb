@@ -191,6 +191,41 @@ func TestServer_ToolsList(t *testing.T) {
 	}
 }
 
+// TestToolFilter_HidesFromListNotCall is the hidden≠unregistered contract: a
+// tool the ToolFilter rejects is absent from tools/list but still executes via
+// tools/call.
+func TestToolFilter_HidesFromListNotCall(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(&echoTool{})
+	s.Register(&editLikeTool{})
+	s.ToolFilter = func(name string) bool { return name != "edit_like" } // hide edit_like
+
+	resps := serveOn(t, s,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"edit_like","arguments":{"file_path":"/x","edits":[{"old_string":"a","new_string":"b"}]}}}`,
+	)
+
+	listed := resultByID(t, resps, 1)
+	names := map[string]bool{}
+	for _, tl := range listed["tools"].([]any) {
+		names[tl.(map[string]any)["name"].(string)] = true
+	}
+	if names["edit_like"] {
+		t.Error("edit_like should be hidden from tools/list by the filter")
+	}
+	if !names["echo"] {
+		t.Error("echo should remain advertised")
+	}
+
+	called := resultByID(t, resps, 2)
+	if called == nil {
+		t.Fatal("hidden tool edit_like was not callable via tools/call")
+	}
+	if isErr, _ := called["isError"].(bool); isErr {
+		t.Errorf("hidden tool edit_like returned an error result: %v", called)
+	}
+}
+
 func TestServer_ToolsCall(t *testing.T) {
 	resps := serve(t, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`)
 	if len(resps) != 1 {
