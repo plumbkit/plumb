@@ -190,18 +190,21 @@ Plumb is pre-1.0. The core — write-safety, the resilient daemon, the topology 
 - [x] Tree-sitter topology index + per-project memory
 - [x] Go and Python LSP adapters validated (real-binary)
 
-**Road to 1.0**
+**Getting to 1.0.** Rather than jump from 0.9 straight to 1.0, Plumb ships a series of focused minor releases — **0.10 through 0.19** — each with one coherent theme. **0.19.x is the last 0.x release;** 1.0 follows it as a deliberate stability commitment. Native Windows support is intentionally a post-1.0 (1.1) item, not a 1.0 gate. The themed plan:
 
-- [ ] Green Linux CI with real-binary LSP integration (today: validated on macOS; Linux hardening in progress)
-- [ ] Homebrew distribution (`brew install plumb`)
-- [ ] Promote experimental adapters to validated — pull-diagnostics support so Zig / TypeScript / Kotlin pass end-to-end
-- [ ] Swift on Xcode projects: build-server (BSP) guidance so semantic tools work without a SwiftPM manifest
-- [ ] Semantic re-rank for topology search → GA (today: opt-in, off by default)
+- **0.10** — distribution + honest claims (Homebrew, semantic re-rank → GA)
+- **0.11** — validate the experimental LSP adapters (zls, Kotlin) on real binaries
+- **0.12** — Swift on Xcode via Build Server Protocol guidance
+- **0.13** — daemon robustness (git-write crash safety, liveness probe)
+- **0.14** — agent ergonomics + tool surface
+- **0.15** — honesty + full config surface
+- **0.16** — stabilisation + cross-platform proving
+- **0.17** — distribution + discoverability (registries)
+- **0.18** — proof + docs
+- **0.19** — release candidate, the last 0.x (freeze + soak)
+- **1.0** — general availability: the stability + validated-core promise
 
-**Exploratory / post-1.0**
-
-- [ ] Native Windows support
-- [ ] Retire the WASM tree-sitter path once the pure-Go parser handles Swift IUO and TS typed-arrow
+Full detail, rationale, and the post-1.0 items (Windows, tree-sitter cleanup) are in [docs/roadmap.md](docs/roadmap.md).
 
 ## Contributing
 
