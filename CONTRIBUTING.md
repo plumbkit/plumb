@@ -8,9 +8,13 @@ make a change land cleanly.
 - **Read `AGENTS.md`** (the canonical project brief — `CLAUDE.md` and `GEMINI.md` are
   symlinks to it, and Codex/ChatGPT read it directly). It explains the architecture,
   the layering rules, and the invariants that matter.
-- **Discuss large changes first.** For anything beyond a bug fix or small improvement,
-  [open an issue](https://github.com/plumbkit/plumb/issues/new/choose) (pick the bug or
-  feature form) so we can agree the approach before you invest the effort.
+- **Discuss large changes first.** For a feature, a design idea, an open question, or
+  “would you accept a PR that…?”, start a thread in
+  [Discussions](https://github.com/plumbkit/plumb/discussions) so we can agree the
+  approach before you invest the effort. Reserve
+  [issues](https://github.com/plumbkit/plumb/issues/new/choose) (the bug or feature form)
+  for a confirmed bug or an agreed, actionable piece of work — it keeps the tracker a real
+  to-do list rather than a discussion forum.
 - **Be a good citizen.** Participation is governed by our
   [Code of Conduct](CODE_OF_CONDUCT.md). Found a security issue? **Do not open a public
   issue** — report it privately per [SECURITY.md](SECURITY.md).
