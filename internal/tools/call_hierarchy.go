@@ -203,11 +203,13 @@ func writeCallHierarchySection(sb *strings.Builder, heading string, refs []callR
 	sb.WriteString("\n")
 }
 
-// topologyCallHierarchy answers a call-hierarchy query from the topology call
-// graph when the language server provides none. It maps the position to the
-// enclosing indexed symbol and follows "calls" edges: inward for callers,
-// outward for callees. ok is false when topology is unavailable or the position
-// resolves to no indexed symbol, so the caller keeps the original LSP behaviour.
+// topologyCallHierarchy reconstructs a call hierarchy when the language server
+// provides none (e.g. zls has no prepareCallHierarchy). Callers come from the
+// language server's own find_references, mapped to the enclosing symbol at each
+// call site — this catches callers the topology call graph misses (e.g. calls
+// inside Zig `test "…" {}` blocks). Callees come from the topology call graph,
+// since references cannot answer "what does this call". ok is false when neither
+// source can resolve the symbol, so the caller keeps the original LSP behaviour.
 func (t *CallHierarchy) topologyCallHierarchy(ctx context.Context, a callHierarchyArgs) (string, bool) {
 	store := activeTopology(t.topo)
 	if store == nil {
@@ -219,17 +221,60 @@ func (t *CallHierarchy) topologyCallHierarchy(ctx context.Context, a callHierarc
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Call hierarchy for %s (%s) at %s:%d "+
-		"(source=topology — approximate; this language server provides no call hierarchy)\n\n",
+		"(reconstructed — this language server provides no call hierarchy; "+
+		"callers via LSP references, callees via topology; approximate)\n\n",
 		centre.Name, string(centre.Kind), centre.Path, centre.StartLine)
 	if a.Direction == "incoming" || a.Direction == "both" {
-		writeCallHierarchySection(&sb, "Callers (incoming)",
-			topologyCallRefs(ctx, store, centre, topology.DirectionInward))
+		callers := t.lspCallers(ctx, a)
+		if callers == nil {
+			callers = topologyCallRefs(ctx, store, centre, topology.DirectionInward)
+		}
+		writeCallHierarchySection(&sb, "Callers (incoming)", callers)
 	}
 	if a.Direction == "outgoing" || a.Direction == "both" {
 		writeCallHierarchySection(&sb, "Callees (outgoing)",
 			topologyCallRefs(ctx, store, centre, topology.DirectionOutward))
 	}
 	return strings.TrimRight(sb.String(), "\n") + "\n", true
+}
+
+// lspCallers reconstructs the callers of the symbol at the query position from
+// the language server's find_references: each reference (excluding the
+// declaration) is mapped to the enclosing symbol in its file, so the result is
+// named callers rather than bare call sites. Returns nil when the server has no
+// references for the position (the caller then falls back to topology).
+func (t *CallHierarchy) lspCallers(ctx context.Context, a callHierarchyArgs) []callRef {
+	locs, err := t.client.References(ctx, protocol.ReferenceParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
+		Position:     protocol.Position{Line: a.Line, Character: a.Character},
+		Context:      protocol.ReferenceContext{IncludeDeclaration: false},
+	})
+	if err != nil || len(locs) == 0 {
+		return nil
+	}
+	symsByURI := make(map[string][]protocol.DocumentSymbol)
+	refs := make([]callRef, 0, len(locs))
+	for _, l := range locs {
+		syms, ok := symsByURI[l.URI]
+		if !ok {
+			syms, _ = t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: l.URI},
+			})
+			symsByURI[l.URI] = syms
+		}
+		if enc := deepestEnclosingDocSymbol(syms, l.Range.Start.Line); enc != nil {
+			refs = append(refs, callRef{
+				name: enc.Name, kind: symbolKindName(enc.Kind),
+				uri: l.URI, line: int(enc.SelectionRange.Start.Line) + 1,
+			})
+			continue
+		}
+		refs = append(refs, callRef{
+			name: "(call site)", kind: "reference",
+			uri: l.URI, line: int(l.Range.Start.Line) + 1,
+		})
+	}
+	return refs
 }
 
 // topologyCentre maps a file position to the smallest enclosing indexed symbol,

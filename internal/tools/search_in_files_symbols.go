@@ -99,17 +99,30 @@ func (t *SearchInFiles) docSymbolsCached(ctx context.Context, uri string) []prot
 // deepestEnclosingSymbol returns "Name (kind)" for the innermost symbol whose
 // range contains the given 0-based line number, or "" when none matches.
 func deepestEnclosingSymbol(syms []protocol.DocumentSymbol, line uint32) string {
-	best := ""
+	s := deepestEnclosingDocSymbol(syms, line)
+	if s == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s)", s.Name, symbolKindName(s.Kind))
+}
+
+// deepestEnclosingDocSymbol returns a pointer to the innermost symbol whose
+// range contains the given 0-based line number, or nil when none matches. The
+// pointer aliases an element of syms (or its Children), which the caller must
+// keep alive while using it.
+func deepestEnclosingDocSymbol(syms []protocol.DocumentSymbol, line uint32) *protocol.DocumentSymbol {
+	var best *protocol.DocumentSymbol
 	bestSize := uint32(0)
 	var walk func([]protocol.DocumentSymbol, uint32)
 	walk = func(ss []protocol.DocumentSymbol, depth uint32) {
-		for _, s := range ss {
+		for i := range ss {
+			s := &ss[i]
 			if s.Range.Start.Line > line || s.Range.End.Line < line {
 				continue
 			}
 			size := s.Range.End.Line - s.Range.Start.Line
-			if best == "" || size < bestSize || (size == bestSize && depth > 0) {
-				best = fmt.Sprintf("%s (%s)", s.Name, symbolKindName(s.Kind))
+			if best == nil || size < bestSize || (size == bestSize && depth > 0) {
+				best = s
 				bestSize = size
 			}
 			walk(s.Children, depth+1)

@@ -51,27 +51,66 @@ func newCallGraphStore(t *testing.T) (store *topology.Store, uri string) {
 
 // TestCallHierarchy_TopologyFallback covers Bug C: when the language server
 // returns no call-hierarchy item (zls has no prepareCallHierarchy), the tool
-// answers from the topology call graph, labelled source=topology, in both
-// directions. Mid is called by Top (incoming) and calls Bottom (outgoing).
+// reconstructs the hierarchy. With no LSP references available the callers fall
+// back to the topology call graph. Mid is called by Top (incoming) and calls
+// Bottom (outgoing).
 func TestCallHierarchy_TopologyFallback(t *testing.T) {
 	store, uri := newCallGraphStore(t)
-	// emptyLSP: PrepareCallHierarchy returns (nil, nil) — no item, no error.
+	// emptyLSP: PrepareCallHierarchy and References return (nil, nil).
 	tool := tools.NewCallHierarchy(&mockLSP{}, 0).
 		WithTopologyFallback(func() *topology.Store { return store })
 
 	args, _ := json.Marshal(map[string]any{"uri": uri, "line": 4, "character": 5, "direction": "both"})
 	out, err := tool.Execute(context.Background(), args)
 	if err != nil {
-		t.Fatalf("topology fallback should succeed, got error: %v", err)
+		t.Fatalf("fallback should succeed, got error: %v", err)
 	}
-	if !strings.Contains(out, "source=topology") {
-		t.Errorf("expected source=topology annotation, got:\n%s", out)
+	if !strings.Contains(out, "reconstructed") {
+		t.Errorf("expected reconstructed annotation, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Top") {
-		t.Errorf("expected caller Top in incoming section, got:\n%s", out)
+		t.Errorf("expected caller Top (topology) in incoming section, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Bottom") {
 		t.Errorf("expected callee Bottom in outgoing section, got:\n%s", out)
+	}
+}
+
+// TestCallHierarchy_FallbackCallersFromReferences covers the hybrid fallback:
+// when the server has no call hierarchy but DOES answer find_references (zls),
+// callers are reconstructed from the references mapped to their enclosing
+// symbol — catching callers (e.g. a Zig test block) the topology graph misses.
+func TestCallHierarchy_FallbackCallersFromReferences(t *testing.T) {
+	store, uri := newCallGraphStore(t)
+	// References returns one call site at line 10; the enclosing document symbol
+	// is the test block "TestBlock" (lines 5–20). No prepareCallHierarchy.
+	m := &mockLSP{
+		locations: []protocol.Location{{
+			URI:   uri,
+			Range: protocol.Range{Start: protocol.Position{Line: 10}},
+		}},
+		docSymbols: []protocol.DocumentSymbol{{
+			Name: "TestBlock", Kind: protocol.SKMethod,
+			Range:          protocol.Range{Start: protocol.Position{Line: 5}, End: protocol.Position{Line: 20}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 5}},
+		}},
+	}
+	tool := tools.NewCallHierarchy(m, 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+
+	args, _ := json.Marshal(map[string]any{"uri": uri, "line": 4, "character": 5, "direction": "both"})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("fallback should succeed, got error: %v", err)
+	}
+	if !strings.Contains(out, "TestBlock") {
+		t.Errorf("expected caller TestBlock from LSP references, got:\n%s", out)
+	}
+	if strings.Contains(out, "Top") {
+		t.Errorf("callers should come from LSP references, not topology (Top), got:\n%s", out)
+	}
+	if !strings.Contains(out, "Bottom") {
+		t.Errorf("expected callee Bottom from topology, got:\n%s", out)
 	}
 }
 
