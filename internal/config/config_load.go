@@ -272,6 +272,14 @@ func LoadProject(base Config, workspace string) (Config, error) {
 		}
 	}
 	applyEnv(&merged)
+	// agent_config_writes is a user-only, global-scope safety knob. A project's
+	// .plumb/config.toml is an untrusted surface (a cloned repo ships it), so it
+	// must never be able to ENABLE the agent-writable-config tool — otherwise the
+	// "the agent can never widen its own permission" invariant breaks the moment a
+	// user opens a hostile repo. Force the global value to win regardless of what
+	// the project file sets. This single chokepoint keeps the guarantee true for
+	// every consumer (the daemon gate, `config show`, the TUI display).
+	merged.AgentConfigWrites = base.AgentConfigWrites
 	normaliseConfig(&merged)
 	if err := validate(merged); err != nil {
 		return base, fmt.Errorf("invalid project config: %w", err)

@@ -59,3 +59,14 @@ func TestValidateTasks_RejectsShellMeta(t *testing.T) {
 		t.Errorf("validateTasks rejected the shipped defaults: %v", err)
 	}
 }
+
+// TestValidateTasks_ChecksVerifySlot guards the verify slot: it is agent-writable
+// yet was previously skipped by validateTasks (Get("verify") returns ""), so a
+// metacharacter command could be staged unchecked. Reading the field directly
+// must now reject it.
+func TestValidateTasks_ChecksVerifySlot(t *testing.T) {
+	tasks := map[string]TasksConfig{"go": {Verify: "go test ./... ; rm -rf /"}}
+	if err := validateTasks(tasks); err == nil {
+		t.Error("validateTasks accepted a verify command with a shell metacharacter")
+	}
+}

@@ -115,13 +115,49 @@ func runTrust(_ *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		start = args[0]
 	}
-	root, _, _, err := resolveTaskWorkspace(start)
+	root, lang, cfg, err := resolveTaskWorkspace(start)
 	if err != nil {
 		return err
 	}
+	// Informed consent: show the exact project-supplied commands being trusted
+	// before recording trust. Trust is enforced against the command at run time,
+	// so surfacing it here is the user's chance to spot a hostile argv (e.g. an
+	// interpreter invocation) a project shipped — and re-running `plumb trust`
+	// after a command changes re-confirms the current set.
+	printTrustedTaskCommands(root, lang, cfg)
 	if err := config.NewTrustStore().SetTrusted(root, true); err != nil {
 		return err
 	}
 	fmt.Printf("trusted project task commands for %s\n", root)
 	return nil
+}
+
+// printTrustedTaskCommands lists the task slots this project's .plumb/config.toml
+// overrides (the commands trust will permit), so `plumb trust` is an informed
+// decision rather than a blind grant. Default/global commands are not shown:
+// they run without trust.
+func printTrustedTaskCommands(root, lang string, cfg config.Config) {
+	if lang == "" || lang == "none" {
+		return
+	}
+	projectCfg, err := config.LoadProject(cfg, root)
+	if err != nil {
+		return
+	}
+	tc := projectCfg.Tasks[lang]
+	var shown bool
+	for _, slot := range config.TaskSlots {
+		if present, _ := config.ProjectValuePresent(root, []string{"tasks", lang, slot}); !present {
+			continue
+		}
+		if !shown {
+			fmt.Printf("about to trust these project-supplied %s task commands in %s:\n", lang, root)
+			shown = true
+		}
+		cmd := tc.Get(slot)
+		if slot == "verify" {
+			cmd = "(composite: build then test)"
+		}
+		fmt.Printf("  %-7s %s\n", slot, cmd)
+	}
 }

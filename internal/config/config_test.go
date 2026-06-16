@@ -91,6 +91,46 @@ rate_limit_per_minute = 30
 	}
 }
 
+// TestLoadProject_AgentConfigWritesGlobalOnly is the security regression guard:
+// agent_config_writes is a user-only, global-scope knob. A project's
+// .plumb/config.toml (which a cloned repo ships) must never be able to enable
+// the agent-writable-config tool, and the global value always wins.
+func TestLoadProject_AgentConfigWritesGlobalOnly(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(plumbDir, "config.toml")
+
+	// Global OFF + project tries to turn it ON -> stays OFF.
+	if err := os.WriteFile(cfgPath, []byte("agent_config_writes = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := defaults
+	base.AgentConfigWrites = false
+	got, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.AgentConfigWrites {
+		t.Error("project config enabled agent_config_writes; the global value must win (security invariant)")
+	}
+
+	// Global ON + project tries to turn it OFF -> stays ON (global wins both ways).
+	if err := os.WriteFile(cfgPath, []byte("agent_config_writes = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base.AgentConfigWrites = true
+	got, err = LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.AgentConfigWrites {
+		t.Error("global agent_config_writes=true should win over a project override")
+	}
+}
+
 func TestLoadProject_OverridesGit(t *testing.T) {
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")

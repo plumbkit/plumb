@@ -236,7 +236,9 @@ var settingTOMLPaths = map[settingKey][]string{
 	skProtectedBranches:     {"git", "protected_branches"},
 	skExcludePatterns:       {"topology", "exclude_patterns"},
 	skAnalysers:             {"quality", "analysers"},
-	skAgentConfigWrites:     {"agent_config_writes"},
+	// agent_config_writes is deliberately ABSENT: it is a global-only safety knob
+	// (LoadProject forces the global value to win), so it never appears in a
+	// workspace scope — a project config cannot enable agent writes.
 }
 
 // tomlPath returns the TOML key path for a project-overridable setting and

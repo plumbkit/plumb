@@ -38,12 +38,19 @@ func agentDescribe() []tools.AgentConfigField {
 	return out
 }
 
-// applyAgentConfig validates + writes a batch atomically (config.AgentApplyBatch
-// re-enforces the allowlist), then makes the change live for this connection.
+// applyAgentConfig validates + writes a batch atomically, then makes the change
+// live for this connection. The allowlist is enforced here at the cli seam AND
+// again inside config.AgentApplyBatch (defence in depth): a non-allowlisted key
+// is refused before any disk is touched, by two independent checks.
 func (s *connSession) applyAgentConfig(_ context.Context, pairs map[string]any) (string, error) {
 	ws := s.workspace()
 	if ws == "" {
 		return "", fmt.Errorf("no workspace attached")
+	}
+	for k := range pairs {
+		if !config.IsAgentWritable(k) {
+			return "", fmt.Errorf("agent_config: %q is not an agent-writable key", k)
+		}
 	}
 	prov := config.ProvenanceEntry{
 		Source:    "agent",

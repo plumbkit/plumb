@@ -172,6 +172,26 @@ func TestSameBinary(t *testing.T) {
 	}
 }
 
+func TestExpandRegisteredPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	t.Setenv("PLUMB_TEST_BIN", "/opt/plumb/plumb")
+	cases := map[string]string{
+		"/usr/local/bin/plumb": "/usr/local/bin/plumb", // absolute unchanged
+		"~/bin/plumb":          filepath.Join(home, "bin", "plumb"),
+		"~":                    home,
+		"$PLUMB_TEST_BIN":      "/opt/plumb/plumb",
+		"${PLUMB_TEST_BIN}":    "/opt/plumb/plumb",
+	}
+	for in, want := range cases {
+		if got := expandRegisteredPath(in); got != want {
+			t.Errorf("expandRegisteredPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRefreshClient(t *testing.T) {
 	newCodexTarget := func(cfgPath string) setupTarget {
 		return setupTarget{

@@ -96,6 +96,7 @@ func checkLegacyAntigravityConfigs(selfPath string) (checkResult, bool) {
 		if !ok {
 			continue
 		}
+		bin = expandRegisteredPath(bin)
 		present++
 		switch {
 		case !binaryExists(bin):
@@ -177,6 +178,7 @@ func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
 	if err != nil || !registered {
 		return checkResult{ok: true, detail: detail}
 	}
+	regPath = expandRegisteredPath(regPath)
 	if _, err := os.Stat(regPath); err != nil {
 		return checkResult{
 			ok:     false,
@@ -193,6 +195,23 @@ func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
 		}
 	}
 	return checkResult{ok: true, detail: detail}
+}
+
+// expandRegisteredPath expands a leading ~ and any $VAR in a registered launch
+// path so the doctor doesn't misreport a valid-but-unexpanded path as a missing
+// binary. plumb always writes an absolute path (os.Executable), so this only
+// matters for a config edited by hand to use ~ or an environment variable.
+func expandRegisteredPath(p string) string {
+	p = os.ExpandEnv(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				return home
+			}
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
 }
 
 // sameBinary reports whether two paths resolve to the same executable, comparing

@@ -105,13 +105,19 @@ func validateMemory(m MemoryConfig) error {
 }
 
 // validateTasks rejects a task command that would not run as a bare argv (a
-// shell metacharacter). An empty slot is always valid; the verify slot is a
-// composite and carries no command.
+// shell metacharacter). An empty slot is always valid. Every slot — including
+// verify — is checked: although verify is a composite that the runner ignores,
+// the field is agent-writable, so an un-validated string there would let a
+// metacharacter command be staged unchecked. Reading the struct fields directly
+// (not Get, which returns "" for verify) ensures verify is covered too.
 func validateTasks(tasks map[string]TasksConfig) error {
 	for lang, t := range tasks {
-		for _, slot := range []string{"build", "lint", "test", "e2e"} {
-			if _, err := ParseTaskCommand(t.Get(slot)); err != nil {
-				return fmt.Errorf("tasks.%s.%s: %w", lang, slot, err)
+		slots := []struct{ name, cmd string }{
+			{"build", t.Build}, {"lint", t.Lint}, {"test", t.Test}, {"e2e", t.E2E}, {"verify", t.Verify},
+		}
+		for _, sl := range slots {
+			if _, err := ParseTaskCommand(sl.cmd); err != nil {
+				return fmt.Errorf("tasks.%s.%s: %w", lang, sl.name, err)
 			}
 		}
 	}
