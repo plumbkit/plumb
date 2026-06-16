@@ -1,22 +1,20 @@
 // Package typescript is the plumb adapter for typescript-language-server, the
 // TypeScript/JavaScript language server (tsserver wrapper).
 //
-// Validation status: experimental — unit-tested with a mocked JSON-RPC
-// transport. An integration test (gated with the "integration" build tag)
-// spawns a real typescript-language-server binary against
-// testdata/typescript-fixture/ and confirms document-symbol extraction plus a
-// DidChangeWatchedFiles + DidOpen → diagnostics round-trip, but the binary is
-// not installed on the validation machine, so that test skips until it is on
-// PATH. Promote to "validated" once it has run green against a real server.
+// Validation status: validated — unit-tested with a mocked JSON-RPC transport
+// and exercised against a real typescript-language-server 5.3.0 binary via the
+// integration tests (gated with the "integration" build tag) against
+// testdata/typescript-fixture/: document-symbol extraction and the
+// DidChangeWatchedFiles + DidOpen → diagnostics round-trip both pass.
 //
-// Diagnostics: typescript-language-server ≥ 5.3 does not push
-// textDocument/publishDiagnostics for files outside its open-document set; it
-// exposes diagnostics only through the LSP 3.17 pull model. The adapter declares
-// the diagnostic client capability, records whether the server advertises
-// diagnosticProvider (SupportsPullDiagnostics), and can request a report via
-// Diagnostic (textDocument/diagnostic). Wiring the diagnostics tool to fall
-// back to a pull when the push cache is empty is the remaining step before this
-// adapter can be promoted to "validated".
+// Diagnostics gotcha: typescript-language-server publishes NOTHING unless the
+// client advertises the textDocument.publishDiagnostics capability — it does not
+// implement pull diagnostics (textDocument/diagnostic returns -32601 and it
+// advertises no diagnosticProvider). plumb's DefaultClientCapabilities now
+// declares publishDiagnostics, so the existing push pipeline carries TypeScript
+// diagnostics. (The earlier "uses pull diagnostics" hypothesis was wrong; the
+// pull protocol types and the adapter's Diagnostic method remain as dormant,
+// unadvertised infrastructure for servers that genuinely require pull.)
 //
 // Install with: npm install -g typescript-language-server typescript
 //
