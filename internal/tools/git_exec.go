@@ -41,10 +41,21 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 	}
 }
 
-func runGit(ctx context.Context, repo, sub string, argv []string) (string, error) {
+// runGit runs a git subcommand in the repository containing repo. When
+// serialise is true (index/ref-mutating tiers) it first takes the per-repo lock
+// so concurrent plumb-initiated writes to one repository queue rather than
+// collide on .git/index.lock; read-tier ops pass serialise=false and never lock.
+func runGit(ctx context.Context, repo, sub string, argv []string, serialise bool) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
+	}
+	if serialise {
+		release, err := lockRepo(ctx, repoRoot)
+		if err != nil {
+			return "", fmt.Errorf("git %s: %w", sub, err)
+		}
+		defer release()
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", argv...)

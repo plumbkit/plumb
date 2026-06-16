@@ -133,7 +133,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	return runGit(ctx, a.Repo, a.Subcommand, argv)
+	// Serialise only index/ref-mutating tiers; a read (status/log/diff) must
+	// never queue behind a slow commit.
+	return runGit(ctx, a.Repo, a.Subcommand, argv, tier != tierRead)
 }
 
 // defaultRepo returns repo, or the session workspace when repo is empty.
