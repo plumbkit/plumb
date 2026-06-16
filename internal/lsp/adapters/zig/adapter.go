@@ -204,6 +204,29 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 	return nil
 }
 
+// ── Diagnostics (pull) ─────────────────────────────────────────────────────────
+
+// SupportsPullDiagnostics reports whether zls advertised the
+// textDocument/diagnostic pull model at initialize. zls 0.14+ is pull-first (it
+// does not push publishDiagnostics for externally-changed files in a bare
+// workspace), so the diagnostics tool must pull. Returns false before Initialize.
+func (a *Adapter) SupportsPullDiagnostics() bool {
+	a.capsMu.RLock()
+	defer a.capsMu.RUnlock()
+	return a.caps != nil && a.caps.PullDiagnosticsEnabled()
+}
+
+// Diagnostic requests diagnostics for a single document via the LSP 3.17 pull
+// model (textDocument/diagnostic). Callers should gate this on
+// SupportsPullDiagnostics; a server that only pushes returns an error here.
+func (a *Adapter) Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
+	var result protocol.DocumentDiagnosticReport
+	if err := a.conn.Call(ctx, protocol.MethodDiagnostic, params, &result); err != nil {
+		return nil, fmt.Errorf("zls diagnostic: %w", err)
+	}
+	return &result, nil
+}
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 // DocumentSymbols returns all symbols in the document.

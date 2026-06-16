@@ -39,6 +39,24 @@ type fileOpener interface {
 	DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error
 }
 
+// pullDiagnoser is the optional LSP 3.17 pull-diagnostics capability
+// (textDocument/diagnostic). The diagnostics tool type-asserts its opener to it
+// and, when the server advertised pull support, requests diagnostics directly
+// for a file the push stream never reported on — the model zls and
+// typescript-language-server use instead of pushing publishDiagnostics. Adapters
+// that only push (gopls, pyright) do not implement it, so the pull path stays
+// dormant for them.
+//
+// NOTE: this consumption path is wired and unit-tested, but is not yet routed
+// through the live session proxy and the pull client capability is not yet
+// advertised — both are deferred pending real-binary validation (advertising
+// pull risks a dual-mode server going pull-only). See the diagnostics design
+// notes.
+type pullDiagnoser interface {
+	SupportsPullDiagnostics() bool
+	Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error)
+}
+
 var diagnosticsSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -143,6 +161,11 @@ func (t *Diagnostics) singleURI(ctx context.Context, uri string) string {
 	if len(diags) == 0 {
 		// Distinguish "analysed and clean" from "never reported on".
 		if !t.inv.Tracked(uri) {
+			// A pull-only server (zls / typescript-language-server) never pushes,
+			// so the push cache is empty: ask it directly before opening + waiting.
+			if pulled, ok := t.tryPull(ctx, uri); ok {
+				return pulled
+			}
 			if t.opener != nil {
 				return t.openAndWait(ctx, uri)
 			}
@@ -153,6 +176,40 @@ func (t *Diagnostics) singleURI(ctx context.Context, uri string) string {
 		return "No issues found — file is tracked and clean."
 	}
 	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: diags})
+}
+
+// tryPull requests diagnostics for uri via the LSP 3.17 pull model when the
+// opener implements pullDiagnoser and the server advertised pull support. It
+// folds in any related-document diagnostics the server returns. Returns
+// ok=false when pull is unavailable or errors, so the caller falls back to the
+// push (open-and-wait) path.
+func (t *Diagnostics) tryPull(ctx context.Context, uri string) (string, bool) {
+	if t.opener == nil {
+		return "", false
+	}
+	pd, ok := t.opener.(pullDiagnoser)
+	if !ok || !pd.SupportsPullDiagnostics() {
+		return "", false
+	}
+	rep, err := pd.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	})
+	if err != nil || rep == nil {
+		return "", false
+	}
+	byURI := map[string][]protocol.Diagnostic{}
+	if len(rep.Items) > 0 {
+		byURI[uri] = rep.Items
+	}
+	for relURI, relRep := range rep.RelatedDocuments {
+		if len(relRep.Items) > 0 {
+			byURI[relURI] = relRep.Items
+		}
+	}
+	if len(byURI) == 0 {
+		return "No issues found — pulled from the language server, file is clean.", true
+	}
+	return formatDiagnostics(byURI) + "\n(source=lsp-pull)", true
 }
 
 // openAndWait sends textDocument/didOpen for uri, waits up to 10 s for gopls
