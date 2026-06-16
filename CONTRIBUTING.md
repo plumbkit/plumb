@@ -179,4 +179,10 @@ CI runs automatically on PRs from forks — no action needed on your part beyond
 green. Pushing new commits dismisses a prior approval, so request a re-review after
 changes.
 
+## Getting help
+
+Stuck on a build, unsure how something works, or want to float an idea? Start a thread in
+[Discussions](https://github.com/plumbkit/plumb/discussions) — it's the right place for
+questions and proposals (issues are for confirmed bugs and agreed work).
+
 Thank you for contributing.
