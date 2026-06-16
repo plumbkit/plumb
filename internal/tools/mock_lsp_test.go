@@ -19,6 +19,11 @@ type mockLSP struct {
 	renameResult *protocol.WorkspaceEdit // returned by Rename when non-nil
 	block        bool                    // when true, query methods wait for ctx cancellation
 
+	// Call-hierarchy responses (nil by default → same as an empty server).
+	chItems    []protocol.CallHierarchyItem
+	chIncoming []protocol.CallHierarchyIncomingCall
+	chOutgoing []protocol.CallHierarchyOutgoingCall
+
 	// lastDefPos / lastRefPos record the Position of the most recent
 	// Definition / References call, so a test can assert the tool queried the
 	// identifier (DocumentSymbol SelectionRange) rather than the declaration
@@ -90,15 +95,15 @@ func (m *mockLSP) Rename(_ context.Context, _ protocol.RenameParams) (*protocol.
 }
 
 func (m *mockLSP) PrepareCallHierarchy(_ context.Context, _ protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
-	return nil, m.err
+	return m.chItems, m.err
 }
 
 func (m *mockLSP) IncomingCalls(_ context.Context, _ protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
-	return nil, m.err
+	return m.chIncoming, m.err
 }
 
 func (m *mockLSP) OutgoingCalls(_ context.Context, _ protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
-	return nil, m.err
+	return m.chOutgoing, m.err
 }
 
 func (m *mockLSP) PrepareTypeHierarchy(_ context.Context, _ protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {

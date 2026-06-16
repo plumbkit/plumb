@@ -81,7 +81,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewListSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithBoundary(boundary).WithWorkspace(s.workspace))
 	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithWorkspace(s.workspace))
-	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithWorkspace(s.workspace))
+	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithWorkspace(s.workspace))
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary).WithWorkspace(s.workspace))
 	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
