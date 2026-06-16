@@ -57,7 +57,7 @@ Public website launch refresh: the modern landing page is now the published site
 ### Docs
 
 - **`CONTRIBUTING.md` now walks an outside contributor through the fork + pull-request flow.** The guide assumed a maintainer cloning `plumbkit/plumb` directly; it now opens with the fork-first path (fork → clone your fork → add an `upstream` remote), shows the branch → `make verify` → push-to-fork → open-PR loop, and cross-links the existing `CODE_OF_CONDUCT.md`, `SECURITY.md` (report privately, not via a public issue), and the structured issue forms. It also documents the `main` branch-protection expectations — required CI matrix (`verify`/`race`/`integration` on Linux + macOS), one maintainer approval, up-to-date branch — and refreshes the `make verify` target list (`build test lint build-integration build-clients check-size`).
-- **GitHub Discussions is enabled, and `CONTRIBUTING.md` now routes proposals there.** The “discuss large changes first” step points features, design ideas, open questions, and “would you accept a PR that…?” to [Discussions](https://github.com/plumbkit/plumb/discussions); issues are reserved for confirmed bugs and agreed, actionable work, keeping the tracker a to-do list rather than a forum.
+- **GitHub Discussions is enabled, and `CONTRIBUTING.md` now routes proposals there.** The “discuss large changes first” step points features, design ideas, open questions, and “would you accept a PR that…?” to [Discussions](https://github.com/plumbkit/plumb/discussions); issues are reserved for confirmed bugs and agreed, actionable work, keeping the tracker a to-do list rather than a forum. A short “Getting help” section points the same way.
 
 ## 0.9.18 (unreleased)
 
