@@ -8,17 +8,33 @@ make a change land cleanly.
 - **Read `AGENTS.md`** (the canonical project brief — `CLAUDE.md` and `GEMINI.md` are
   symlinks to it, and Codex/ChatGPT read it directly). It explains the architecture,
   the layering rules, and the invariants that matter.
-- **Discuss large changes first.** For anything beyond a bug fix or small improvement,
-  open an issue so we can agree the approach before you invest the effort.
+- **Discuss large changes first.** For a feature, a design idea, an open question, or
+  “would you accept a PR that…?”, start a thread in
+  [Discussions](https://github.com/plumbkit/plumb/discussions) so we can agree the
+  approach before you invest the effort. Reserve
+  [issues](https://github.com/plumbkit/plumb/issues/new/choose) (the bug or feature form)
+  for a confirmed bug or an agreed, actionable piece of work — it keeps the tracker a real
+  to-do list rather than a discussion forum.
+- **Be a good citizen.** Participation is governed by our
+  [Code of Conduct](CODE_OF_CONDUCT.md). Found a security issue? **Do not open a public
+  issue** — report it privately per [SECURITY.md](SECURITY.md).
 
 ## Development setup
 
+Outside contributors work via the standard fork + pull-request flow — you do **not** need
+any special access to contribute. **Fork** `plumbkit/plumb` to your own account first
+(the *Fork* button on GitHub), then clone your fork and wire an `upstream` remote so you
+can keep your branch current:
+
 ```sh
-git clone https://github.com/plumbkit/plumb
+git clone https://github.com/<your-username>/plumb
 cd plumb
+git remote add upstream https://github.com/plumbkit/plumb
 make install-hooks   # REQUIRED — installs the pre-commit hook (golangci-lint --fix)
 make build           # compile to ./plumb, version stamped from git/VERSION
 ```
+
+(Maintainers with write access can clone `plumbkit/plumb` directly and skip the fork.)
 
 `make install-hooks` is mandatory after every fresh clone. The hook runs
 `golangci-lint run --fix ./...`; skipping it means CI will reject formatting the hook
@@ -30,8 +46,10 @@ would have fixed.
 make verify          # build + test + lint — run this before every push
 ```
 
-Other useful targets: `make test`, `make test-race`, `make lint`, `make integration-test`
-(needs gopls/pyright on `PATH`), `make tidy`.
+`make verify` is the full gate — `build test lint build-integration build-clients
+check-size` — and it is what CI runs on every pull request. Other useful targets:
+`make test`, `make test-race`, `make lint`, `make integration-test` (needs gopls/pyright
+on `PATH`), `make tidy`.
 
 **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the
 standalone `gofumpt -w` binary — the two can pin different versions and produce phantom
@@ -138,8 +156,27 @@ remove the root `LICENSE`.
 
 ## Pull requests
 
+From a fork, the flow is:
+
+```sh
+git checkout -b my-change            # branch off an up-to-date main
+# … make your change, then:
+make verify                          # must be green
+git push origin my-change            # push to YOUR fork
+```
+
+Then open a pull request from your fork's branch against `plumbkit/plumb`'s `main`. To
+refresh a long-running branch, `git fetch upstream && git rebase upstream/main`.
+
 - Keep PRs focused and reviewable.
 - Ensure `make verify` is green and a `CHANGELOG.md` entry is included.
 - Fill out the PR template — it asks the questions that speed up review.
+
+**What to expect on `main`.** `main` is a protected branch: every PR must pass the full
+CI matrix (`verify`, `race`, and `integration` on Linux and macOS) and carry one
+maintainer approval before it can merge, and your branch must be up to date with `main`.
+CI runs automatically on PRs from forks — no action needed on your part beyond keeping it
+green. Pushing new commits dismisses a prior approval, so request a re-review after
+changes.
 
 Thank you for contributing.
