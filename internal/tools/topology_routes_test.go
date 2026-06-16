@@ -108,6 +108,59 @@ func TestTopologyRoutes_SwiftRoutesCandidateBySignature(t *testing.T) {
 	t.Error("boot(routes: RoutesBuilder) not matched by vapor.RouteCollection pattern")
 }
 
+func TestTopologyRoutes_VaporConfigureCandidate(t *testing.T) {
+	var pat routePattern
+	for _, p := range routePatterns("vapor") {
+		if p.name == "vapor.configure" {
+			pat = p
+			break
+		}
+	}
+	if pat.name == "" {
+		t.Fatal("vapor.configure pattern not found")
+	}
+	if pat.query != ": Application" {
+		t.Fatalf("vapor.configure query = %q, want %q", pat.query, ": Application")
+	}
+
+	configure := topology.Node{
+		Kind:      topology.KindMethod,
+		Name:      "configure",
+		Path:      "Sources/App.swift",
+		StartLine: 3,
+		Signature: "func configure(_ app: Application) throws",
+		Language:  "swift",
+	}
+	if !isRouteCandidate(configure, pat, "") {
+		t.Error("configure(_ app: Application) not matched by vapor.configure pattern")
+	}
+
+	for _, tc := range []topology.Node{
+		{
+			Kind:      topology.KindMethod,
+			Name:      "UIApplication",
+			Signature: "func UIApplication()",
+			Language:  "swift",
+		},
+		{
+			Kind:      topology.KindMethod,
+			Name:      "ApplicationDelegate",
+			Signature: "func ApplicationDelegate()",
+			Language:  "swift",
+		},
+		{
+			Kind:      topology.KindMethod,
+			Name:      "applicationDidFinishLaunching",
+			Signature: "func applicationDidFinishLaunching(_ notification: Notification)",
+			Language:  "swift",
+		},
+	} {
+		if isRouteCandidate(tc, pat, "") {
+			t.Errorf("%s must not match vapor.configure pattern", tc.Name)
+		}
+	}
+}
+
 func TestTopologyRoutes_ArgumentParserRunCandidate(t *testing.T) {
 	// The Swift extractor propagates the enclosing type's ParsableCommand
 	// conformance onto its methods' signatures. The argument-parser.run pattern
