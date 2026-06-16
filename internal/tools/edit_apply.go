@@ -119,7 +119,10 @@ func offsetForPosition(data []byte, pos protocol.Position) (int, bool) {
 
 // findSymbolByPath walks a hierarchical DocumentSymbol tree following a
 // slash-separated name path (e.g. "ClassName/methodName"). Returns the
-// matching symbol, or nil if not found.
+// matching symbol, or nil if not found. Each segment matches via
+// symbolNameMatches, so a plain "show" addresses a member a server reports
+// with its signature ("show()", sourcekit-lsp) — keeping the semantic-edit
+// tools' by-name addressing in step with the read/query tools.
 func findSymbolByPath(syms []protocol.DocumentSymbol, namePath string) *protocol.DocumentSymbol {
 	parts := strings.Split(namePath, "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -133,7 +136,7 @@ func findSymbolRecursive(syms []protocol.DocumentSymbol, parts []string) *protoc
 		return nil
 	}
 	for i := range syms {
-		if syms[i].Name == parts[0] {
+		if symbolNameMatches(syms[i].Name, parts[0]) {
 			if len(parts) == 1 {
 				return &syms[i]
 			}

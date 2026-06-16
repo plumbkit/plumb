@@ -116,3 +116,29 @@ func TestFindSymbolByPath(t *testing.T) {
 		t.Error("empty path should not match")
 	}
 }
+
+// TestFindSymbolByPath_StripsArgList guards that the semantic-edit tools'
+// by-name addressing resolves a member a server reports with its signature
+// (sourcekit-lsp names Swift methods "show()" / "load(from:)") from a plain
+// name path — the same base-name match the read/query tools use, so editing a
+// Swift member by name no longer silently degrades to the topology fallback.
+func TestFindSymbolByPath_StripsArgList(t *testing.T) {
+	syms := []protocol.DocumentSymbol{
+		{Name: "PanelController", Children: []protocol.DocumentSymbol{
+			{Name: "show()"},
+			{Name: "load(from:)"},
+		}},
+	}
+	if got := findSymbolByPath(syms, "PanelController/show"); got == nil || got.Name != "show()" {
+		t.Errorf("plain name should resolve the signatured member, got %v", got)
+	}
+	if got := findSymbolByPath(syms, "PanelController/load"); got == nil || got.Name != "load(from:)" {
+		t.Errorf("argument-label member should resolve by base name, got %v", got)
+	}
+	if findSymbolByPath(syms, "PanelController/show()") == nil {
+		t.Error("the exact signatured name should still resolve")
+	}
+	if findSymbolByPath(syms, "PanelController/sho") != nil {
+		t.Error("a non-matching prefix must not resolve")
+	}
+}
