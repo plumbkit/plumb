@@ -286,6 +286,8 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// Start the background LRU sweep for per-path write locks. Runs for the
 	// daemon's lifetime; ctx cancellation stops the sweep goroutine cleanly.
 	tools.StartPathLockSweep(ctx)
+	// Same for the per-repository git serialisation locks.
+	tools.StartRepoLockSweep(ctx)
 	monitor.StartSnapshotWriter(ctx, monitor.SnapshotPath(), 2*time.Second, daemonStartedAt)
 
 	// budgets holds one shared, reference-counted RateLimiter per (MCP client
