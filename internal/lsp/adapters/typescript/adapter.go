@@ -152,6 +152,29 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 	return nil
 }
 
+// ── Diagnostics (pull) ─────────────────────────────────────────────────────────
+
+// SupportsPullDiagnostics reports whether the server advertised the
+// textDocument/diagnostic pull model during initialize. typescript-language-server
+// ≥ 5.3 does not push publishDiagnostics for files outside its open-document set,
+// so the diagnostics tool must pull instead. Returns false before Initialize.
+func (a *Adapter) SupportsPullDiagnostics() bool {
+	a.capsMu.RLock()
+	defer a.capsMu.RUnlock()
+	return a.caps != nil && a.caps.PullDiagnosticsEnabled()
+}
+
+// Diagnostic requests diagnostics for a single document via the LSP 3.17 pull
+// model (textDocument/diagnostic). Callers should gate this on
+// SupportsPullDiagnostics; a server that only pushes will return an error here.
+func (a *Adapter) Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
+	var result protocol.DocumentDiagnosticReport
+	if err := a.conn.Call(ctx, protocol.MethodDiagnostic, params, &result); err != nil {
+		return nil, fmt.Errorf("typescript-language-server diagnostic: %w", err)
+	}
+	return &result, nil
+}
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 // DocumentSymbols returns all symbols in the document.

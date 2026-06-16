@@ -182,6 +182,48 @@ type PublishDiagnosticsParams struct {
 	Diagnostics []Diagnostic `json:"diagnostics"`
 }
 
+// ─── Pull diagnostics (textDocument/diagnostic) ──────────────────────────────
+//
+// Some servers (typescript-language-server ≥ 5.3, zls) do not push
+// textDocument/publishDiagnostics for files outside their open-document set;
+// they expose diagnostics only through the LSP 3.17 pull model, where the
+// client requests textDocument/diagnostic and the server replies with a report.
+
+// DocumentDiagnosticParams is the request payload for textDocument/diagnostic.
+// Identifier and PreviousResultID are optional and used by servers that support
+// result-id based caching; plumb leaves them empty for a full, uncached pull.
+type DocumentDiagnosticParams struct {
+	TextDocument     TextDocumentIdentifier `json:"textDocument"`
+	Identifier       string                 `json:"identifier,omitempty"`
+	PreviousResultID string                 `json:"previousResultId,omitempty"`
+}
+
+// Report kinds for a DocumentDiagnosticReport.
+const (
+	DiagnosticReportFull      = "full"
+	DiagnosticReportUnchanged = "unchanged"
+)
+
+// DocumentDiagnosticReport is the result of textDocument/diagnostic. It models
+// the union of the "full" and "unchanged" report variants: a full report
+// carries Items, while an unchanged report carries only ResultID and signals
+// that the previously-reported diagnostics still hold. RelatedDocuments carries
+// diagnostics for other files the server analysed as a side effect (e.g. a
+// changed import surfacing errors elsewhere).
+type DocumentDiagnosticReport struct {
+	Kind             string                              `json:"kind"`
+	ResultID         string                              `json:"resultId,omitempty"`
+	Items            []Diagnostic                        `json:"items,omitempty"`
+	RelatedDocuments map[string]DocumentDiagnosticReport `json:"relatedDocuments,omitempty"`
+}
+
+// DiagnosticOptions is the server-capability detail for pull diagnostics.
+type DiagnosticOptions struct {
+	Identifier            string `json:"identifier,omitempty"`
+	InterFileDependencies bool   `json:"interFileDependencies,omitempty"`
+	WorkspaceDiagnostics  bool   `json:"workspaceDiagnostics,omitempty"`
+}
+
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 // BoolOrOptions represents an LSP capability field that may be a boolean true
@@ -267,6 +309,14 @@ type ServerCapabilities struct {
 	DocumentSymbolProvider  *BoolOrOptions           `json:"documentSymbolProvider,omitempty"`
 	WorkspaceSymbolProvider *BoolOrOptions           `json:"workspaceSymbolProvider,omitempty"`
 	RenameProvider          json.RawMessage          `json:"renameProvider,omitempty"`
+	DiagnosticProvider      *BoolOrOptions           `json:"diagnosticProvider,omitempty"`
+}
+
+// PullDiagnosticsEnabled reports whether the server advertises pull diagnostics
+// (textDocument/diagnostic). When false, the server is expected to push
+// diagnostics via textDocument/publishDiagnostics instead.
+func (c *ServerCapabilities) PullDiagnosticsEnabled() bool {
+	return c.DiagnosticProvider != nil && c.DiagnosticProvider.Enabled
 }
 
 // RenameEnabled reports whether the server supports rename.
@@ -306,6 +356,7 @@ func DefaultClientCapabilities() ClientCapabilities {
 		TextDocument: TextDocumentClientCapabilities{
 			Synchronization: &TextDocumentSyncClientCapabilities{DynamicRegistration: false},
 			DocumentSymbol:  &DocumentSymbolClientCapabilities{HierarchicalDocumentSymbolSupport: true},
+			Diagnostic:      &DiagnosticClientCapabilities{RelatedDocumentSupport: true},
 		},
 		Workspace: WorkspaceClientCapabilities{
 			Symbol:                &WorkspaceSymbolClientCapabilities{},
@@ -324,6 +375,15 @@ type ClientCapabilities struct {
 type TextDocumentClientCapabilities struct {
 	Synchronization *TextDocumentSyncClientCapabilities `json:"synchronization,omitempty"`
 	DocumentSymbol  *DocumentSymbolClientCapabilities   `json:"documentSymbol,omitempty"`
+	Diagnostic      *DiagnosticClientCapabilities       `json:"diagnostic,omitempty"`
+}
+
+// DiagnosticClientCapabilities declares the client supports the pull-diagnostics
+// model (textDocument/diagnostic). Declaring it lets servers that only pull
+// (typescript-language-server ≥ 5.3, zls) advertise diagnosticProvider.
+type DiagnosticClientCapabilities struct {
+	DynamicRegistration    bool `json:"dynamicRegistration,omitempty"`
+	RelatedDocumentSupport bool `json:"relatedDocumentSupport,omitempty"`
 }
 
 // TextDocumentSyncClientCapabilities describes sync client capabilities.

@@ -367,6 +367,88 @@ func TestAdapter_Subscribe(t *testing.T) {
 	}
 }
 
+func TestAdapter_Diagnostic_Pull(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+
+	report := protocol.DocumentDiagnosticReport{
+		Kind:     protocol.DiagnosticReportFull,
+		ResultID: "r1",
+		Items: []protocol.Diagnostic{
+			{
+				Range:    protocol.Range{Start: protocol.Position{Line: 2, Character: 6}},
+				Severity: protocol.SevError,
+				Message:  "Type 'string' is not assignable to type 'number'.",
+			},
+		},
+	}
+	mock.HandleOK(protocol.MethodDiagnostic, report)
+
+	if _, err := ad.Initialize(ctx, ts.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ad.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/broken.ts"},
+	})
+	if err != nil {
+		t.Fatalf("Diagnostic: %v", err)
+	}
+	if got.Kind != protocol.DiagnosticReportFull {
+		t.Fatalf("kind = %q, want full", got.Kind)
+	}
+	if len(got.Items) != 1 || got.Items[0].Severity != protocol.SevError {
+		t.Fatalf("unexpected items: %#v", got.Items)
+	}
+
+	// The request must carry the document identifier on the wire.
+	var found bool
+	for _, c := range mock.Calls() {
+		if c.Method == protocol.MethodDiagnostic {
+			found = true
+			var p protocol.DocumentDiagnosticParams
+			if err := json.Unmarshal(c.Params, &p); err != nil {
+				t.Fatalf("unmarshal params: %v", err)
+			}
+			if p.TextDocument.URI != "file:///p/src/broken.ts" {
+				t.Fatalf("uri = %q, want file:///p/src/broken.ts", p.TextDocument.URI)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("textDocument/diagnostic request not sent")
+	}
+}
+
+func TestAdapter_SupportsPullDiagnostics(t *testing.T) {
+	ctx := context.Background()
+
+	// Server that advertises diagnosticProvider → pull supported.
+	pullCaps := initResult
+	pullCaps.Capabilities.DiagnosticProvider = &protocol.BoolOrOptions{Enabled: true}
+	mock := jsonrpc.NewMockCaller()
+	mock.HandleOK(protocol.MethodInitialize, pullCaps)
+	ad := ts.New(mock)
+	if ad.SupportsPullDiagnostics() {
+		t.Fatal("expected false before Initialize")
+	}
+	if _, err := ad.Initialize(ctx, ts.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	if !ad.SupportsPullDiagnostics() {
+		t.Fatal("expected pull diagnostics support when server advertises diagnosticProvider")
+	}
+
+	// Push-only server (the default initResult) → pull not supported.
+	adPush, _ := newAdapter(t)
+	if _, err := adPush.Initialize(ctx, ts.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	if adPush.SupportsPullDiagnostics() {
+		t.Fatal("expected pull diagnostics unsupported when server omits diagnosticProvider")
+	}
+}
+
 func TestAdapter_Capabilities_NilBeforeInitialize(t *testing.T) {
 	mock := jsonrpc.NewMockCaller()
 	ad := ts.New(mock)
