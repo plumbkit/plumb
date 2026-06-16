@@ -496,3 +496,74 @@ func TestAdapter_Capabilities_NilBeforeInitialize(t *testing.T) {
 		t.Fatal("expected nil capabilities before Initialize")
 	}
 }
+
+func TestAdapter_Diagnostic_Pull(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+
+	report := protocol.DocumentDiagnosticReport{
+		Kind: protocol.DiagnosticReportFull,
+		Items: []protocol.Diagnostic{
+			{
+				Range:    protocol.Range{Start: protocol.Position{Line: 4, Character: 8}},
+				Severity: protocol.SevError,
+				Message:  "expected type 'u32', found 'bool'",
+			},
+		},
+	}
+	mock.HandleOK(protocol.MethodDiagnostic, report)
+
+	got, err := ad.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///p/src/main.zig"},
+	})
+	if err != nil {
+		t.Fatalf("Diagnostic: %v", err)
+	}
+	if got.Kind != protocol.DiagnosticReportFull || len(got.Items) != 1 {
+		t.Fatalf("unexpected report: %#v", got)
+	}
+
+	var found bool
+	for _, c := range mock.Calls() {
+		if c.Method == protocol.MethodDiagnostic {
+			found = true
+			var p protocol.DocumentDiagnosticParams
+			if err := json.Unmarshal(c.Params, &p); err != nil {
+				t.Fatalf("unmarshal params: %v", err)
+			}
+			if p.TextDocument.URI != "file:///p/src/main.zig" {
+				t.Fatalf("uri = %q", p.TextDocument.URI)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("textDocument/diagnostic request not sent")
+	}
+}
+
+func TestAdapter_SupportsPullDiagnostics(t *testing.T) {
+	ctx := context.Background()
+
+	pullCaps := initResult
+	pullCaps.Capabilities.DiagnosticProvider = &protocol.BoolOrOptions{Enabled: true}
+	mock := jsonrpc.NewMockCaller()
+	mock.HandleOK(protocol.MethodInitialize, pullCaps)
+	ad := zig.New(mock)
+	if ad.SupportsPullDiagnostics() {
+		t.Fatal("expected false before Initialize")
+	}
+	if _, err := ad.Initialize(ctx, protocol.InitializeParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if !ad.SupportsPullDiagnostics() {
+		t.Fatal("expected pull support when server advertises diagnosticProvider")
+	}
+
+	adPush, _ := newAdapter(t)
+	if _, err := adPush.Initialize(ctx, protocol.InitializeParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if adPush.SupportsPullDiagnostics() {
+		t.Fatal("expected pull unsupported when server omits diagnosticProvider")
+	}
+}
