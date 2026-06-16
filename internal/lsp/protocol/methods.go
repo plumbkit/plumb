@@ -21,6 +21,7 @@ const (
 	MethodPrepareRename         = "textDocument/prepareRename"
 	MethodRename                = "textDocument/rename"
 	MethodPublishDiagnostics    = "textDocument/publishDiagnostics"
+	MethodDiagnostic            = "textDocument/diagnostic"
 
 	// Call hierarchy
 	MethodPrepareCallHierarchy  = "textDocument/prepareCallHierarchy"

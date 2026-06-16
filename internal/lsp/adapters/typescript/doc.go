@@ -9,6 +9,15 @@
 // not installed on the validation machine, so that test skips until it is on
 // PATH. Promote to "validated" once it has run green against a real server.
 //
+// Diagnostics: typescript-language-server ≥ 5.3 does not push
+// textDocument/publishDiagnostics for files outside its open-document set; it
+// exposes diagnostics only through the LSP 3.17 pull model. The adapter declares
+// the diagnostic client capability, records whether the server advertises
+// diagnosticProvider (SupportsPullDiagnostics), and can request a report via
+// Diagnostic (textDocument/diagnostic). Wiring the diagnostics tool to fall
+// back to a pull when the push cache is empty is the remaining step before this
+// adapter can be promoted to "validated".
+//
 // Install with: npm install -g typescript-language-server typescript
 //
 // This adapter provides the semantic GPS for TypeScript and JavaScript; the
