@@ -157,7 +157,7 @@ func routePatterns(framework string) []routePattern {
 		// Swift/Vapor patterns — match against function signatures stored by the
 		// Swift tree-sitter extractor (e.g. "RoutesBuilder" in boot(routes:)).
 		{query: "RoutesBuilder", name: "vapor.RouteCollection", confidence: 0.75},
-		{query: "Application", name: "vapor.configure", confidence: 0.65},
+		{query: ": Application", name: "vapor.configure", confidence: 0.65},
 		// Swift ArgumentParser — ParsableCommand conformance is propagated onto the
 		// type's methods by the Swift extractor; the entry point is the run() method.
 		{query: "ParsableCommand", name: "argument-parser.run", confidence: 0.70, nameEquals: "run"},
