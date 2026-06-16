@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,34 @@ func TestServerCapabilities_TextDocumentSync(t *testing.T) {
 				t.Errorf("OpenClose = %v, want %v", caps.TextDocumentSync.OpenClose, tt.wantOpen)
 			}
 		})
+	}
+}
+
+// plumb must advertise textDocument.publishDiagnostics (typescript-language-server
+// stays silent without it) but must NOT advertise the pull-diagnostics client
+// capability (nothing consumes pull; advertising it risks a dual-mode server
+// going pull-only and never pushing).
+func TestDefaultClientCapabilities_Diagnostics(t *testing.T) {
+	caps := DefaultClientCapabilities()
+	if caps.TextDocument.PublishDiagnostics == nil {
+		t.Error("publishDiagnostics capability must be advertised so servers push diagnostics")
+	}
+	if caps.TextDocument.Diagnostic != nil {
+		t.Error("pull-diagnostics client capability must NOT be advertised while the tool consumes only push")
+	}
+
+	// It must also serialise with the publishDiagnostics key present and no
+	// diagnostic key.
+	raw, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, `"publishDiagnostics"`) {
+		t.Errorf("serialised capabilities missing publishDiagnostics: %s", s)
+	}
+	if strings.Contains(s, `"diagnostic"`) {
+		t.Errorf("serialised capabilities unexpectedly advertise pull diagnostic: %s", s)
 	}
 }
 

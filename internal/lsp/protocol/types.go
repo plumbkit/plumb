@@ -354,9 +354,15 @@ func (c *ServerCapabilities) PrepareRenameEnabled() bool {
 func DefaultClientCapabilities() ClientCapabilities {
 	return ClientCapabilities{
 		TextDocument: TextDocumentClientCapabilities{
-			Synchronization: &TextDocumentSyncClientCapabilities{DynamicRegistration: false},
-			DocumentSymbol:  &DocumentSymbolClientCapabilities{HierarchicalDocumentSymbolSupport: true},
-			Diagnostic:      &DiagnosticClientCapabilities{RelatedDocumentSupport: true},
+			Synchronization:    &TextDocumentSyncClientCapabilities{DynamicRegistration: false},
+			DocumentSymbol:     &DocumentSymbolClientCapabilities{HierarchicalDocumentSymbolSupport: true},
+			PublishDiagnostics: &PublishDiagnosticsClientCapabilities{RelatedInformation: true},
+			// NB: the pull-diagnostics (textDocument/diagnostic) client capability
+			// is deliberately NOT advertised. plumb's diagnostics tool consumes
+			// only pushed publishDiagnostics; advertising pull support could make a
+			// dual-mode server (e.g. gopls) switch to pull-only and stop pushing.
+			// The pull protocol types and adapter Diagnostic() method exist as
+			// dormant infrastructure for if/when the tool consumes pull directly.
 		},
 		Workspace: WorkspaceClientCapabilities{
 			Symbol:                &WorkspaceSymbolClientCapabilities{},
@@ -373,9 +379,18 @@ type ClientCapabilities struct {
 
 // TextDocumentClientCapabilities describes client text-document capabilities.
 type TextDocumentClientCapabilities struct {
-	Synchronization *TextDocumentSyncClientCapabilities `json:"synchronization,omitempty"`
-	DocumentSymbol  *DocumentSymbolClientCapabilities   `json:"documentSymbol,omitempty"`
-	Diagnostic      *DiagnosticClientCapabilities       `json:"diagnostic,omitempty"`
+	Synchronization    *TextDocumentSyncClientCapabilities   `json:"synchronization,omitempty"`
+	DocumentSymbol     *DocumentSymbolClientCapabilities     `json:"documentSymbol,omitempty"`
+	PublishDiagnostics *PublishDiagnosticsClientCapabilities `json:"publishDiagnostics,omitempty"`
+	Diagnostic         *DiagnosticClientCapabilities         `json:"diagnostic,omitempty"`
+}
+
+// PublishDiagnosticsClientCapabilities declares the client accepts pushed
+// textDocument/publishDiagnostics notifications. typescript-language-server
+// stays silent (publishes nothing) unless the client advertises this.
+type PublishDiagnosticsClientCapabilities struct {
+	RelatedInformation bool `json:"relatedInformation,omitempty"`
+	VersionSupport     bool `json:"versionSupport,omitempty"`
 }
 
 // DiagnosticClientCapabilities declares the client supports the pull-diagnostics
