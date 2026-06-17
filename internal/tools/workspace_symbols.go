@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/topology"
@@ -80,6 +81,35 @@ func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, query string) (
 	return formatTopologyMatches(fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
 }
 
+// topologyFillTreeSitter supplements an empty-but-no-error LSP result with index
+// hits for tree-sitter-backed languages. Lazy servers (zls and the other
+// on-demand indexers) only return workspace/symbol hits for files they have
+// already analysed, so a freshly-attached session legitimately returns [] for a
+// symbol that exists — short-circuiting "No symbols found" when the Map knows it.
+// Native-AST languages (Go via gopls, which indexes the whole workspace eagerly)
+// are excluded: an empty authoritative answer there must not be supplanted by
+// approximate index matches.
+func (t *WorkspaceSymbols) topologyFillTreeSitter(ctx context.Context, query string) (string, bool) {
+	store := activeTopology(t.topo)
+	if store == nil {
+		return "", false
+	}
+	results, err := store.Search(ctx, query, topology.SearchOpts{Limit: 100})
+	if err != nil || len(results) == 0 {
+		return "", false
+	}
+	nodes := make([]topology.Node, 0, len(results))
+	for _, r := range results {
+		if lang, ok := langsupport.ByName(r.Node.Language); ok && lang.Structural == langsupport.EngineTreeSitter {
+			nodes = append(nodes, r.Node)
+		}
+	}
+	if len(nodes) == 0 {
+		return "", false
+	}
+	return formatTopologyFill(fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
+}
+
 func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a workspaceSymbolsArgs
 	if err := json.Unmarshal(args, &a); err != nil {
@@ -121,6 +151,9 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 
 	var result string
 	if len(syms) == 0 {
+		if out, ok := t.topologyFillTreeSitter(ctx, a.Query); ok {
+			return out, nil
+		}
 		result = fmt.Sprintf("No symbols found matching %q.", a.Query)
 	} else {
 		var sb strings.Builder
