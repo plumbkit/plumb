@@ -282,8 +282,8 @@ Controls **which tools appear in `tools/list`**, to spare clients that already h
 | Cursor | `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
 | Augment Code | `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
 | Qwen Code | `plumb setup qwen` | `~/.qwen/settings.json` |
-| Antigravity CLI | `plumb setup antigravity` | `~/.gemini/antigravity-cli/mcp/plumb.json` (standalone `{command, args}` JSON, one file per server) |
-| Antigravity Desktop | `plumb setup antigravity-desktop` | `~/.gemini/antigravity/mcp/plumb.json` (same shape; also mirrored to `~/.gemini/antigravity-ide/mcp/plumb.json` when that dir exists) |
+| Antigravity CLI | `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (the shared `{"mcpServers": {...}}` config Antigravity reads for both CLI and IDE; also repoints existing per-surface `~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/mcp_config.json`) |
+| Antigravity Desktop | `plumb setup antigravity-desktop` | same shared `~/.gemini/config/mcp_config.json` (Antigravity regenerates the per-server `mcp/` dirs from it) |
 | OpenCode | `plumb setup opencode` | `~/.config/opencode/opencode.json` (`mcp` key; `type:"local"`, command array) |
 | Crush | `plumb setup crush` | `~/.config/crush/crush.json` (`mcp` key; `type:"stdio"`) |
 | Goose | `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |

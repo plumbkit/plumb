@@ -27,7 +27,7 @@ func writeLegacyAntigravity(t *testing.T, base, dir, bin string) string {
 	return p
 }
 
-func TestUpdateLegacyAntigravityConfig_RepointsStaleAndPreservesSiblings(t *testing.T) {
+func TestEnsureFlatAntigravityConfig_RepointsStaleAndPreservesSiblings(t *testing.T) {
 	base := t.TempDir()
 	p := filepath.Join(base, "mcp_config.json")
 	cfg := map[string]any{"mcpServers": map[string]any{
@@ -39,8 +39,12 @@ func TestUpdateLegacyAntigravityConfig_RepointsStaleAndPreservesSiblings(t *test
 		t.Fatal(err)
 	}
 
-	if !updateLegacyAntigravityConfig(p, "/new/plumb") {
-		t.Fatal("expected updateLegacyAntigravityConfig to report a change")
+	changed, err := ensureFlatAntigravityConfig(p, "/new/plumb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected ensureFlatAntigravityConfig to report a change")
 	}
 
 	var got map[string]any
@@ -60,66 +64,81 @@ func TestUpdateLegacyAntigravityConfig_RepointsStaleAndPreservesSiblings(t *test
 	}
 }
 
-func TestUpdateLegacyAntigravityConfig_NoOpCases(t *testing.T) {
-	base := t.TempDir()
+// TestEnsureFlatAntigravityConfig_CreatesWhenAbsent is the core regression:
+// setup must CREATE the flat mcp_config.json Antigravity reads, not only repoint
+// a pre-existing one. The earlier standalone-only setup left a fresh install
+// with no plumb entry in any file Antigravity loads.
+func TestEnsureFlatAntigravityConfig_CreatesWhenAbsent(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config", "mcp_config.json")
 
-	// Already current: no change.
-	cur := writeLegacyAntigravity(t, base, "current", "/usr/local/bin/plumb")
-	if updateLegacyAntigravityConfig(cur, "/usr/local/bin/plumb") {
-		t.Error("expected no change when already pointing at the target binary")
-	}
-
-	// Absent file: no change, no error.
-	if updateLegacyAntigravityConfig(filepath.Join(base, "nope.json"), "/usr/local/bin/plumb") {
-		t.Error("expected no change for an absent file")
-	}
-
-	// File without a plumb entry: untouched.
-	noPlumb := filepath.Join(base, "noplumb.json")
-	if err := os.WriteFile(noPlumb, []byte(`{"mcpServers":{"other":{"command":"x"}}}`), 0o600); err != nil {
+	changed, err := ensureFlatAntigravityConfig(p, "/usr/local/bin/plumb")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if updateLegacyAntigravityConfig(noPlumb, "/usr/local/bin/plumb") {
-		t.Error("expected no change for a config without a plumb entry")
+	if !changed {
+		t.Fatal("expected a fresh flat config to be created")
 	}
-}
-
-func TestUpdateLegacyAntigravityConfig_AddsMissingArgs(t *testing.T) {
-	base := t.TempDir()
-	p := filepath.Join(base, "mcp_config.json")
-	if err := os.WriteFile(p, []byte(`{"mcpServers":{"plumb":{"command":"/old/plumb"}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !updateLegacyAntigravityConfig(p, "/new/plumb") {
-		t.Fatal("expected a change")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("flat config not created: %v", err)
 	}
 	var got map[string]any
-	raw, _ := os.ReadFile(p)
-	_ = json.Unmarshal(raw, &got)
-	args := got["mcpServers"].(map[string]any)["plumb"].(map[string]any)["args"]
-	if !reflect.DeepEqual(args, []any{"serve"}) {
-		t.Errorf("missing args not defaulted to [serve]: %v", args)
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	plumb := got["mcpServers"].(map[string]any)["plumb"].(map[string]any)
+	if plumb["command"] != "/usr/local/bin/plumb" {
+		t.Errorf("command: got %v, want /usr/local/bin/plumb", plumb["command"])
+	}
+	if !reflect.DeepEqual(plumb["args"], []any{"serve"}) {
+		t.Errorf("args: got %v, want [serve]", plumb["args"])
 	}
 }
 
-func TestReconcileLegacyAntigravityConfigs_AcrossDirs(t *testing.T) {
+func TestEnsureFlatAntigravityConfig_Idempotent(t *testing.T) {
 	base := t.TempDir()
-	writeLegacyAntigravity(t, base, "config", "/old/plumb")
-	writeLegacyAntigravity(t, base, "antigravity-ide", "/old/plumb")
-	writeLegacyAntigravity(t, base, "antigravity-cli", "/new/plumb") // already current
-
-	changed := reconcileLegacyAntigravityConfigs(base, "/new/plumb")
-	if len(changed) != 2 {
-		t.Fatalf("expected 2 repointed configs, got %d: %v", len(changed), changed)
+	cur := writeLegacyAntigravity(t, base, "config", "/usr/local/bin/plumb")
+	changed, err := ensureFlatAntigravityConfig(cur, "/usr/local/bin/plumb")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, d := range []string{"config", "antigravity-ide", "antigravity-cli"} {
-		raw, _ := os.ReadFile(filepath.Join(base, d, "mcp_config.json"))
+	if changed {
+		t.Error("expected no change when already pointing at the target binary")
+	}
+}
+
+// TestEnsureAntigravityFlatConfigs_CreatesCanonicalAndExistingSurfaces verifies
+// the canonical config/ file is always created, an already-present per-surface
+// dir is also written, and a surface dir that doesn't exist is left untouched
+// (plumb never materialises an uninstalled Antigravity product's directory).
+func TestEnsureAntigravityFlatConfigs_CreatesCanonicalAndExistingSurfaces(t *testing.T) {
+	base := t.TempDir()
+	// antigravity-cli/ exists (installed); config/ and antigravity-ide/ do not yet.
+	if err := os.MkdirAll(filepath.Join(base, "antigravity-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := ensureAntigravityFlatConfigs(base, "/usr/local/bin/plumb")
+
+	// config/ (canonical, created) + antigravity-cli/ (existing) written.
+	for _, d := range []string{"config", "antigravity-cli"} {
+		raw, err := os.ReadFile(filepath.Join(base, d, "mcp_config.json"))
+		if err != nil {
+			t.Fatalf("%s: expected a flat config: %v", d, err)
+		}
 		var got map[string]any
 		_ = json.Unmarshal(raw, &got)
 		cmd := got["mcpServers"].(map[string]any)["plumb"].(map[string]any)["command"]
-		if cmd != "/new/plumb" {
-			t.Errorf("%s: command not current: %v", d, cmd)
+		if cmd != "/usr/local/bin/plumb" {
+			t.Errorf("%s: command not set: %v", d, cmd)
 		}
+	}
+	// antigravity-ide/ did not exist, so plumb must not have created it.
+	if _, err := os.Stat(filepath.Join(base, "antigravity-ide")); !os.IsNotExist(err) {
+		t.Errorf("antigravity-ide/ should not have been created (uninstalled surface)")
+	}
+	if len(changed) != 2 {
+		t.Errorf("expected 2 changed paths (config + antigravity-cli), got %d: %v", len(changed), changed)
 	}
 }
 
