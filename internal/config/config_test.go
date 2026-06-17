@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -571,6 +572,31 @@ func TestSaveTheme_PreservesOtherFields(t *testing.T) {
 	}
 	if got.Edits.RateLimitPerMinute != 42 {
 		t.Errorf("RateLimitPerMinute = %d after SaveTheme, want 42", got.Edits.RateLimitPerMinute)
+	}
+}
+
+// TestSaveTheme_DoesNotBakeEnvOverride is the regression for the bug where the
+// theme picker re-encoded the whole resolved config, capturing any active
+// PLUMB_* env override into the file as if it were a user setting. SaveTheme is
+// a sparse write, so an env-only override must never reach disk.
+func TestSaveTheme_DoesNotBakeEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("PLUMB_WRITE_RATE_LIMIT", "5")
+
+	if err := SaveTheme("dracula"); err != nil {
+		t.Fatalf("SaveTheme: %v", err)
+	}
+
+	raw, err := os.ReadFile(GlobalConfigPath())
+	if err != nil {
+		t.Fatalf("reading saved config: %v", err)
+	}
+	if strings.Contains(string(raw), "rate_limit_per_minute") {
+		t.Errorf("SaveTheme baked the PLUMB_WRITE_RATE_LIMIT env override into the file:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "dracula") {
+		t.Errorf("SaveTheme did not persist the theme:\n%s", raw)
 	}
 }
 

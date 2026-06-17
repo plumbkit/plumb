@@ -88,8 +88,68 @@ func writeTOMLAtomic(path string, v any) error {
 	return nil
 }
 
-// SaveTheme persists themeName into the [ui] section of the global config
-// file, preserving all other settings.
+// loadGlobalRaw reads the global config file into a nested map of only the keys
+// it explicitly contains — no compiled defaults, no env overlay. Returns an
+// empty (non-nil) map when the file is absent, and an error when it exists but
+// is unparseable (so a sparse write refuses rather than clobbering recoverable
+// settings). Mirrors LoadProjectRaw for the global scope; it is the basis for
+// sparse global writes that must not bake defaults or active PLUMB_* env
+// overrides into the file as if they were user settings.
+func loadGlobalRaw() (map[string]any, error) {
+	m := map[string]any{}
+	path := GlobalConfigPath()
+	if path == "" {
+		return m, nil
+	}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := toml.Unmarshal(data, &m); err != nil {
+			return nil, fmt.Errorf("refusing to save config: existing config is unreadable (fix it first): %w", err)
+		}
+	case os.IsNotExist(err):
+		// absent → empty map (first save creates the file)
+	default:
+		return nil, fmt.Errorf("reading config %s: %w", path, err)
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, nil
+}
+
+// SetGlobalValue writes value at the dotted TOML key path in the global config
+// file, preserving every other key already present and WITHOUT materialising
+// compiled defaults or active PLUMB_* env overrides. Use it for single-setting
+// persistence (the TUI theme picker) where Save's full-struct re-encode would
+// otherwise write an env override or a default into the file as if the user had
+// set it. The write is atomic (temp + rename), like Save.
+func SetGlobalValue(path []string, value any) error {
+	if len(path) == 0 {
+		return fmt.Errorf("global config: empty key path")
+	}
+	cfgPath := GlobalConfigPath()
+	if cfgPath == "" {
+		return fmt.Errorf("writing config: no config path could be resolved")
+	}
+	m, err := loadGlobalRaw()
+	if err != nil {
+		return err
+	}
+	setNested(m, path, value)
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	return writeTOMLAtomic(cfgPath, m)
+}
+
+// SaveTheme persists themeName into the [ui] section of the global config file.
+// It writes ONLY the ui.theme key (a sparse write), preserving every other
+// setting already in the file and — crucially — never materialising defaults or
+// active PLUMB_* env overrides into it. A full-struct Save would re-encode the
+// resolved config (env included), so picking a theme with, say,
+// PLUMB_WRITE_RATE_LIMIT set would silently persist that override; the sparse
+// write avoids that.
 func SaveTheme(themeName string) error {
-	return Save(func(c *Config) { c.UI.Theme = themeName })
+	return SetGlobalValue([]string{"ui", "theme"}, themeName)
 }
