@@ -160,6 +160,34 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 	return nil
 }
 
+// ── Diagnostics (pull) ─────────────────────────────────────────────────────────
+
+// SupportsPullDiagnostics reports whether gopls advertised the
+// textDocument/diagnostic pull model at initialize. gopls is push-first — it
+// reports diagnostics through textDocument/publishDiagnostics and does not
+// advertise diagnosticProvider under plumb's negotiated capabilities — so this
+// returns false in practice and the diagnostics tool stays on the push path for
+// Go. The method exists so the session proxy can route pull uniformly across
+// adapters; it is gated on the advertised capability, never on a guess. Returns
+// false before Initialize. Mirrors the zls adapter.
+func (a *Adapter) SupportsPullDiagnostics() bool {
+	a.capsMu.RLock()
+	defer a.capsMu.RUnlock()
+	return a.caps != nil && a.caps.PullDiagnosticsEnabled()
+}
+
+// Diagnostic requests diagnostics for a single document via the LSP 3.17 pull
+// model (textDocument/diagnostic). Callers should gate this on
+// SupportsPullDiagnostics; gopls is push-first, so the diagnostics tool never
+// reaches this path for Go in practice. Mirrors the zls adapter.
+func (a *Adapter) Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
+	var result protocol.DocumentDiagnosticReport
+	if err := a.conn.Call(ctx, protocol.MethodDiagnostic, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls diagnostic: %w", err)
+	}
+	return &result, nil
+}
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 // DocumentSymbols returns all symbols in the document.
