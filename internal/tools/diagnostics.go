@@ -47,11 +47,16 @@ type fileOpener interface {
 // that only push (gopls, pyright) do not implement it, so the pull path stays
 // dormant for them.
 //
-// NOTE: this consumption path is wired and unit-tested, but is not yet routed
-// through the live session proxy and the pull client capability is not yet
-// advertised — both are deferred pending real-binary validation (advertising
-// pull risks a dual-mode server going pull-only). See the diagnostics design
-// notes.
+// NOTE: this consumption path is routed live through the session proxy
+// (routingProxy implements this interface by delegating to the per-file
+// adapter), so it fires for any installed server that advertises pull support.
+// The pull *client* capability is still deliberately NOT advertised in
+// DefaultClientCapabilities: advertising it risks a dual-mode server (gopls)
+// switching to pull-only and ceasing to push publishDiagnostics, which would
+// regress the validated push path. With it un-advertised, no currently-installed
+// server (gopls, zls) advertises diagnosticProvider, so the live path is dormant
+// in practice until a pull-only server is in use — but it is no longer dormant by
+// construction. See the diagnostics design notes.
 type pullDiagnoser interface {
 	SupportsPullDiagnostics() bool
 	Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error)
