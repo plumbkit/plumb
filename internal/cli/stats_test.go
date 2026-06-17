@@ -128,6 +128,54 @@ func TestResolveCLIWorkspace_NonProjectDirectoryPreserved(t *testing.T) {
 	}
 }
 
+// TestResolveCLIWorkspaceDetailed_Attachability is the regression for #31: the
+// CLI optimistically echoes a markerless directory while the daemon refuses to
+// attach there, so config show must be able to tell the two apart. The root is
+// still returned (inspection use-case preserved); only attachable diverges.
+func TestResolveCLIWorkspaceDetailed_Attachability(t *testing.T) {
+	// A markerless, non-git dir: echoed back but NOT attachable by default.
+	markerless, err := os.MkdirTemp(os.TempDir(), "plumb-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(markerless) })
+
+	root, attachable, err := resolveCLIWorkspaceDetailed(markerless, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != markerless {
+		t.Fatalf("root = %s, want %s (input echoed unchanged)", root, markerless)
+	}
+	if attachable {
+		t.Fatal("markerless non-git dir reported attachable; want false (daemon would refuse)")
+	}
+
+	// The same dir IS attachable when auto_attach is enabled (daemon synthesises a root).
+	autoCfg := config.Defaults()
+	autoCfg.Workspace.AutoAttach = true
+	if _, attachable, err := resolveCLIWorkspaceDetailed(markerless, autoCfg); err != nil {
+		t.Fatal(err)
+	} else if !attachable {
+		t.Fatal("markerless dir with auto_attach reported non-attachable; want true")
+	}
+
+	// A .git/ directory is an unambiguous project boundary: attachable.
+	gitDir, err := os.MkdirTemp(os.TempDir(), "plumb-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(gitDir) })
+	if err := os.MkdirAll(filepath.Join(gitDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, attachable, err := resolveCLIWorkspaceDetailed(gitDir, config.Defaults()); err != nil {
+		t.Fatal(err)
+	} else if !attachable {
+		t.Fatal("git repo reported non-attachable; want true")
+	}
+}
+
 func TestRunStats_ExplicitNestedWorkspaceUsesRootWorkspaceFilter(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
