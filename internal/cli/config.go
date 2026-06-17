@@ -115,7 +115,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading global config: %w", gerr)
 	}
 	requestedWorkspace, _ := filepath.Abs(ws)
-	resolvedWorkspace, rerr := resolveCLIWorkspace(ws, globalCfg)
+	resolvedWorkspace, workspaceAttachable, rerr := resolveCLIWorkspaceDetailed(ws, globalCfg)
 	if rerr != nil {
 		return rerr
 	}
@@ -148,8 +148,17 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	if requestedWorkspace != "" && requestedWorkspace != ws {
 		ctxTable.Row("requested workspace", tui.OkStyle.Render("✓"), contractConfigPath(requestedWorkspace))
 	}
-	ctxTable.Row("workspace", tui.OkStyle.Render("✓"), contractConfigPath(ws))
+	workspaceIcon := tui.OkStyle.Render("✓")
+	if !workspaceAttachable {
+		workspaceIcon = tui.WarnStyle.Render("!")
+	}
+	ctxTable.Row("workspace", workspaceIcon, contractConfigPath(ws))
 	fmt.Println(renderConfigShowTable(ctxTable))
+	if !workspaceAttachable {
+		fmt.Println(tui.WarnStyle.Render(
+			"! not an attachable workspace — no .plumb/ marker, language root marker, or .git/ above it; " +
+				"the daemon would refuse to attach here (run `plumb init`, or enable [workspace].auto_attach)"))
+	}
 
 	// 1b. Directories — where plumb keeps its runtime, data, and log files.
 	printDirectoriesSection()

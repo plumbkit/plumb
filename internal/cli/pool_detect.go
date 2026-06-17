@@ -374,27 +374,43 @@ func normaliseLangName(name string) string {
 // marker exists, it returns start unchanged so explicit non-project inspection
 // paths keep their current behaviour.
 func resolveCLIWorkspace(start string, cfg config.Config) (string, error) {
+	root, _, err := resolveCLIWorkspaceDetailed(start, cfg)
+	return root, err
+}
+
+// resolveCLIWorkspaceDetailed resolves start like resolveCLIWorkspace and
+// additionally reports whether the daemon would actually ATTACH there.
+// attachable is false for a path that resolved only because Detect found no
+// marker and start was echoed back unchanged (no .plumb/, no language root
+// marker, no .git/ above) — the daemon refuses such a path with "cannot
+// determine workspace root" unless [workspace].auto_attach is enabled (then it
+// synthesises a root). `config show` uses this to flag a path the daemon would
+// reject instead of printing a misleading ✓; the optimistic root is still
+// returned so the inspection use-case keeps working.
+func resolveCLIWorkspaceDetailed(start string, cfg config.Config) (root string, attachable bool, err error) {
 	if start == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("getwd: %w", err)
+		cwd, gerr := os.Getwd()
+		if gerr != nil {
+			return "", false, fmt.Errorf("getwd: %w", gerr)
 		}
 		start = cwd
 	}
 	abs, err := filepath.Abs(start)
 	if err != nil {
-		return "", fmt.Errorf("resolving workspace path %s: %w", start, err)
+		return "", false, fmt.Errorf("resolving workspace path %s: %w", start, err)
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return "", fmt.Errorf("stat workspace path %s: %w", abs, err)
+		return "", false, fmt.Errorf("stat workspace path %s: %w", abs, err)
 	}
 	if !info.IsDir() {
 		abs = filepath.Dir(abs)
 	}
-	root, _, err := newWorkspacePool(context.Background(), cfg).Detect(abs)
-	if err != nil {
-		return abs, nil
+	resolved, _, derr := newWorkspacePool(context.Background(), cfg).Detect(abs)
+	if derr != nil {
+		// No marker found. The daemon would refuse to attach here unless
+		// auto_attach is on, where it synthesises a root from abs instead.
+		return abs, cfg.Workspace.AutoAttach, nil
 	}
-	return root, nil
+	return resolved, true, nil
 }
