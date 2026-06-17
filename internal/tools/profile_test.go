@@ -28,6 +28,7 @@ func leanToolSet() []describable {
 		NewRenameFile(WriteDeps{}),
 		NewDeleteFile(WriteDeps{}),
 		NewTransactionApply(WriteDeps{}),
+		NewUndoEdit(WriteDeps{}),
 		NewGit(WriteDeps{}, nil),
 		NewDiagnosticsWithOpener(nil, nil),
 		NewGetDefinition(nil, nil, 0, 0),
@@ -43,7 +44,7 @@ func leanToolSet() []describable {
 
 // nonLeanToolSet instantiates every registered tool NOT in the lean set, again
 // with nil/zero dependencies (only the metadata methods are called). Together
-// with leanToolSet it is the full 53-tool registration, so the budget test can
+// with leanToolSet it is the full 54-tool registration, so the budget test can
 // measure the real lean-vs-full payload reduction.
 func nonLeanToolSet() []describable {
 	return []describable{
@@ -123,7 +124,7 @@ func TestLeanToolSet_MatchesLeanTools(t *testing.T) {
 // The cli source-guard (TestToolProfileClassification) ties LeanTools to the
 // actual registerAllTools; this ties the two test sets to the documented count.
 func TestFullToolSet_Count(t *testing.T) {
-	const registered = 53
+	const registered = 54
 	full := len(leanToolSet()) + len(nonLeanToolSet())
 	if full != registered {
 		t.Errorf("lean(%d) + non-lean(%d) = %d tools, want %d (AGENTS.md tool count) — update the sets",

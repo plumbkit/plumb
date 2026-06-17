@@ -357,7 +357,7 @@ Pyright is the worked example; full guide in `docs/adding-an-lsp.md`.
 4. Register the tool in `handleConn` (`internal/cli/daemon.go`); write tools use the shared `writeDeps`.
 5. Unit-test in `internal/tools/<name>_test.go` (`WriteDeps{}` is the nil-safe setup); document in `docs/tools.md` and update the tool table below.
 
-## Available tools (53)
+## Available tools (54)
 
 Concise index only. Full behaviour, schemas, and per-tool steering live in each tool's MCP description (`tools/list`); sources are `internal/tools/<name>.go`.
 
@@ -365,7 +365,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - **LSP queries:** `find_symbol`, `workspace_symbols`, `get_definition`, `explain_symbol`, `list_symbols`, `file_outline`, `find_references`, `call_hierarchy`, `type_hierarchy`, `diagnostics`.
 - **LSP edits:** `rename_symbol`, `replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol`, `safe_delete_symbol`; these are semantic operations, distinct from file moves/copies, and support `include_doc_comment` where relevant.
 - **Filesystem reads:** `read_file`, `read_symbol`, `read_multiple_files`, `list_directory`, `list_files`, `find_files`, `search_in_files`. Reads are bounded, binary-safe, `.gitignore`-aware where applicable, and return mtime/sha headers for optimistic edits.
-- **Filesystem writes:** `write_file`, `edit_file`, `delete_file`, `rename_file`, `copy_file`, `transaction_apply`. Writes take `WriteDeps`, hold per-path locks, respect dirty-file checks, notify LSP, invalidate caches, and consume the write-rate budget.
+- **Filesystem writes:** `write_file`, `edit_file`, `delete_file`, `rename_file`, `copy_file`, `transaction_apply`, `undo_edit`. Writes take `WriteDeps`, hold per-path locks, respect dirty-file checks, notify LSP, invalidate caches, and consume the write-rate budget. `undo_edit` safely reverts plumb's most recent write to a file (its own change only, refusing if the file changed since), the safe alternative to a whole-file `git checkout`.
 - **Search/replace and git:** `find_replace` is dry-run by default; prefer `rename_symbol` for identifiers. `git` is tiered by policy (read/write/destructive/network), with typed `add`/`commit` and confirmation for dangerous tiers.
 - **Other utilities:** `git_init`, `file_diff`, `version`, `daemon_info`, `rename_session`, `workspace_sessions`.
 - **Tasks & config:** `run_task` runs a stored `[tasks.<lang>]` command (build/lint/test/e2e/verify; verify = build then test) — no shell, bounded, with a per-workspace trust gate (`plumb trust`) for project-supplied commands. `agent_config` reads (`describe`) and, only when the user enabled `[agent_config_writes]`, writes (`set`) a small allowlist of config keys — validated atomically, `provenance=agent`, revertible via `plumb config unset`. Guardrails (git tiers, roots, strict mode, API keys, the enable knob) are never agent-writable. See the `[tasks.<lang>]` and `agent_config_writes` config sections above.

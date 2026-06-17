@@ -50,6 +50,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Strict:                s.isStrict,
 		Reads:                 s.readTracker,
 		Writes:                s.writeTracker,
+		Undo:                  s.undoStore,
 		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(s.editsConfig()) },
 		DiagWait:              tools.NewDiagWaitEstimator(),
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
@@ -96,6 +97,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewRenameFile(wd))
 	srv.Register(tools.NewCopyFile(wd))
 	srv.Register(tools.NewTransactionApply(wd))
+	srv.Register(tools.NewUndoEdit(wd))
 	srv.Register(tools.NewSearchInFiles(s.workspace, s.sessionProxy, s.sessionCache, s.ttl).WithBoundary(boundary))
 	srv.Register(tools.NewFindFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewGit(wd, s.gitPolicy))
