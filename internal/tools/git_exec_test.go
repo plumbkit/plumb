@@ -41,6 +41,31 @@ func TestEnhanceGitError_IndexLockUnaffected(t *testing.T) {
 	}
 }
 
+// TestEnhanceGitError_UntrackedPathspec covers the freshly-created-file case: a
+// path-limited commit naming an untracked path must be redirected to staging it
+// first, with the original message preserved.
+func TestEnhanceGitError_UntrackedPathspec(t *testing.T) {
+	msg := "error: pathspec 'docs/PLAN-00041.md' did not match any file(s) known to git"
+	got := enhanceGitError("/r", msg)
+	if !strings.Contains(got, msg) {
+		t.Fatalf("hint must preserve the original message, got %q", got)
+	}
+	for _, want := range []string{"not yet tracked", "docs/PLAN-00041.md", "add"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want hint to contain %q, got %q", want, got)
+		}
+	}
+}
+
+// TestEnhanceGitError_UntrackedNotSubmodule proves the untracked hint does not
+// hijack the submodule failure (both are pathspec errors, distinct markers).
+func TestEnhanceGitError_UntrackedNotSubmodule(t *testing.T) {
+	msg := "fatal: Pathspec 'plumb/site/index.html' is in submodule 'plumb'"
+	if got := enhanceGitError("/work/ops", msg); strings.Contains(got, "not yet tracked") {
+		t.Errorf("submodule error must not get the untracked hint, got %q", got)
+	}
+}
+
 // TestEnhanceGitError_Passthrough proves an unrelated error is returned verbatim.
 func TestEnhanceGitError_Passthrough(t *testing.T) {
 	msg := "fatal: not a git repository"
