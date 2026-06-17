@@ -167,7 +167,7 @@ timeout = "30s"   # PLUMB_LSP_QUERY_TIMEOUT — cap on a single LSP tool call; "
 
 Top-level section (distinct from per-language `[lsp.<lang>]` tables). Applied at the tool layer (`withLSPDeadline`) and a no-op when the context already carries a deadline, so the cold-start handshake is never shortened.
 
-**LSP → topology fallback:** on LSP error/timeout, `find_symbol`, `workspace_symbols`, and `list_symbols` fall back to the topology index (when enabled), annotated `source=topology, mode=indexed-approximate`; a no-op when topology is disabled or has no match. Position/semantic tools (`get_definition`, `find_references`, hierarchies, `rename_symbol`) have no equivalent and surface the error unchanged.
+**LSP → topology fallback:** on LSP error/timeout, `find_symbol`, `workspace_symbols`, and `list_symbols` fall back to the topology index (when enabled), annotated `source=topology, mode=indexed-approximate`; a no-op when topology is disabled or has no match. Position/semantic tools (`get_definition`, `find_references`, hierarchies, `rename_symbol`) have no equivalent and surface the error unchanged. **Empty-result fill:** `workspace_symbols` additionally supplements an *empty-but-no-error* LSP answer from the index for **tree-sitter** languages (annotated `topology fill … source=topology, mode=indexed-approximate`) — lazy servers like zls only answer for files they have already analysed, so a freshly-attached session would otherwise report "No symbols found" for a symbol the Map knows. Native-AST languages (Go via gopls, which indexes eagerly) are excluded so an authoritative empty answer is never supplanted.
 
 ### `[topology]` — semantic index
 

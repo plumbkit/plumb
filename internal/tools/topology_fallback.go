@@ -63,6 +63,23 @@ func formatTopologyMatches(header string, nodes []topology.Node) string {
 	return sb.String()
 }
 
+// topologyFillNote prefixes a result that SUPPLEMENTS an available-but-empty LSP
+// answer with index hits — distinct from topologyFallbackNote, which is for when
+// the language server errored or timed out. The server is up here; a lazy server
+// (zls and the other on-demand indexers) simply had not analysed the matching
+// files yet, so the Map fills the gap rather than reporting a false "not found".
+const topologyFillNote = "[topology fill — the language server returned no matches; supplementing from the index. source=topology, mode=indexed-approximate]"
+
+// formatTopologyFill renders index hits that supplement an empty LSP result.
+func formatTopologyFill(header string, nodes []topology.Node) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s\n%s:\n\n", topologyFillNote, header)
+	for _, n := range nodes {
+		fmt.Fprintf(&sb, "- %s (%s) at %s:%d\n", n.Name, string(n.Kind), n.Path, n.StartLine)
+	}
+	return sb.String()
+}
+
 // formatTopologyOutline renders a single-file outline fallback result.
 func formatTopologyOutline(uri string, nodes []topology.Node) string {
 	var sb strings.Builder
