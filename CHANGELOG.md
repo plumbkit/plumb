@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.20 (unreleased)
+## 0.9.21 (unreleased)
 
 Public website launch refresh: the modern landing page is now the published site, with refreshed logo-derived favicons and social preview assets. Plus review-pass fixes to the 0.9.17/0.9.18 write-tool, detection, proxy, and Linux-testing work.
 
