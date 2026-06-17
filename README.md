@@ -106,8 +106,8 @@ Plumb negotiates LSP capabilities per language and also ships a built-in tree-si
 | Tier | Languages | What you get |
 |---|---|---|
 | **First-class** (CI-tested, real-binary integration) | **Go** (gopls), **Python** (pyright) | Full LSP: definitions, references, rename, diagnostics, hierarchies + all write tools |
-| **Validated** | **Java** (jdtls), **Rust** (rust-analyzer), **Swift** (sourcekit-lsp) | Full LSP; just put the server on `$PATH` and it activates automatically |
-| **Experimental** | **TypeScript/JS**, **Kotlin**, **Zig**, **HTML** | Navigation works against the real servers; diagnostics validation is still in progress. Put the server on `$PATH` to activate (exclude any language with `[lsp.<lang>] enabled = false`) |
+| **Validated** | **Java** (jdtls), **Rust** (rust-analyzer), **Swift** (sourcekit-lsp), **TypeScript/JS** (typescript-language-server), **Zig** (zls) | Full LSP; just put the server on `$PATH` and it activates automatically |
+| **Experimental** | **Kotlin**, **HTML** | Navigation works against the real servers; diagnostics validation is still in progress. Put the server on `$PATH` to activate (exclude any language with `[lsp.<lang>] enabled = false`) |
 | **Search & navigation** (tree-sitter, no LSP needed) | 15+ incl. JS/TS/TSX, Bash, SQL, HCL, Dockerfile, TOML, YAML, Markdown | Ranked symbol search, outlines, graph exploration via the Topology index |
 
 Real-binary validation has been exercised on **macOS**; Linux integration runs in CI and is being hardened pre-v1. Windows is [tracked but not yet supported](https://github.com/plumbkit/plumb/issues) — the daemon's Unix-socket architecture needs a port.
@@ -193,7 +193,7 @@ Plumb is pre-1.0. The core — write-safety, the resilient daemon, the topology 
 **Getting to 1.0.** Rather than jump from 0.9 straight to 1.0, Plumb ships a series of focused minor releases — **0.10 through 0.19** — each with one coherent theme. **0.19.x is the last 0.x release;** 1.0 follows it as a deliberate stability commitment. Native Windows support is intentionally a post-1.0 (1.1) item, not a 1.0 gate. The themed plan:
 
 - **0.10** — distribution + honest claims (Homebrew, semantic re-rank → GA)
-- **0.11** — validate the experimental LSP adapters (zls, Kotlin) on real binaries
+- **0.11** — validate the experimental LSP adapters on real binaries (zls ✓ validated; Kotlin needs a real Gradle/Maven project)
 - **0.12** — Swift on Xcode via Build Server Protocol guidance
 - **0.13** — daemon robustness (git-write crash safety, liveness probe)
 - **0.14** — agent ergonomics + tool surface
