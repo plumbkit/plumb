@@ -114,7 +114,7 @@ func (w *sqlWalk) addNamed(n *tsg.Node, name string, kind topology.NodeKind, qua
 	if qualified == "" {
 		qualified = name
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: qualified,
@@ -122,5 +122,7 @@ func (w *sqlWalk) addNamed(n *tsg.Node, name string, kind topology.NodeKind, qua
 		EndLine:   line(n.EndPoint()),
 		Language:  "sql",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }

@@ -98,9 +98,11 @@ func insertNodes(tx *sql.Tx, fileID int64, relPath string, nodes []Node) ([]int6
 		n := &nodes[i]
 		n.FileID = fileID
 		res, err := tx.Exec(
-			`INSERT INTO topology_nodes(file_id, kind, name, qualified, signature, start_line, end_line, docstring, language)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			fileID, string(n.Kind), n.Name, n.Qualified, n.Signature, n.StartLine, n.EndLine, n.Docstring, n.Language)
+			`INSERT INTO topology_nodes(file_id, kind, name, qualified, signature, start_line, end_line, docstring, language,
+                has_bytes, start_byte, end_byte, start_col, end_col, doc_start_byte, doc_end_byte)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fileID, string(n.Kind), n.Name, n.Qualified, n.Signature, n.StartLine, n.EndLine, n.Docstring, n.Language,
+			boolToInt(n.HasBytes), n.StartByte, n.EndByte, n.StartCol, n.EndCol, n.DocStartByte, n.DocEndByte)
 		if err != nil {
 			return nil, fmt.Errorf("topology: insert node: %w", err)
 		}
@@ -148,4 +150,11 @@ func remapNodeID(idx int64, nodeIDs []int64) int64 {
 		return 0
 	}
 	return nodeIDs[idx]
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

@@ -256,20 +256,22 @@ func (w *walk) appendImport(target string, rng node) {
 	if target == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	n := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      target,
 		Qualified: target,
 		StartLine: w.lines.at(rng.startByte()),
 		Language:  w.lang,
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&n, rng)
+	w.nodes = append(w.nodes, n)
 }
 
 // appendNode records a node spanning rng and returns its index.
 func (w *walk) appendNode(kind topology.NodeKind, name string, rng node) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	n := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -277,8 +279,25 @@ func (w *walk) appendNode(kind topology.NodeKind, name string, rng node) int64 {
 		EndLine:   w.lines.at(rng.endByte()),
 		Language:  w.lang,
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&n, rng)
+	w.nodes = append(w.nodes, n)
 	return idx
+}
+
+// setSpan stamps rng's byte-precise declaration span onto n. Byte offsets come
+// straight from the grammar; columns are derived from the line map because the
+// wasm bundle exports no point functions. Doc spans are left absent: the walk
+// has no reliable comment node (tree-sitter-typescript attaches comments as
+// loose siblings the dispatch loop does not visit).
+func (w *walk) setSpan(n *topology.Node, rng node) {
+	s, e := rng.startByte(), rng.endByte()
+	if s < 0 || e < s {
+		return
+	}
+	n.HasBytes = true
+	n.StartByte, n.EndByte = s, e
+	n.StartCol, n.EndCol = w.lines.col(s), w.lines.col(e)
 }
 
 func (w *walk) containment(from, to int64) {
@@ -374,7 +393,7 @@ func (w *walk) maybeTest(call node) {
 	if name == "" {
 		name = fn.text(w.src)
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	n := topology.Node{
 		Kind:      topology.KindTest,
 		Name:      name,
 		Qualified: name,
@@ -382,7 +401,9 @@ func (w *walk) maybeTest(call node) {
 		EndLine:   w.lines.at(call.endByte()),
 		Language:  w.lang,
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&n, call)
+	w.nodes = append(w.nodes, n)
 }
 
 // callEdges emits EdgeCalls between functions defined in the file (0.8/heuristic).

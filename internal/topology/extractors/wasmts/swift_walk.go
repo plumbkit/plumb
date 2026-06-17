@@ -24,6 +24,21 @@ type swiftWalk struct {
 
 func (w *swiftWalk) line(byteOff int) int { return w.lines.at(byteOff) }
 
+// setSpan stamps decl's byte-precise declaration span onto n (HasBytes + byte
+// offsets + line-map-derived columns). The grammar exports no point functions,
+// so columns come from the line map. Doc spans are left absent — the swift.wasm
+// bundle exports no prev-sibling accessor, so a leading comment cannot be
+// reached without a wasm rebuild.
+func (w *swiftWalk) setSpan(n *topology.Node, decl node) {
+	s, e := decl.startByte(), decl.endByte()
+	if s < 0 || e < s {
+		return
+	}
+	n.HasBytes = true
+	n.StartByte, n.EndByte = s, e
+	n.StartCol, n.EndCol = w.lines.col(s), w.lines.col(e)
+}
+
 // walk descends the tree. enclosing is the node index of the lexically enclosing
 // type (-1 at file scope); inFunc is true once inside a function body
 // (suppresses local declarations); testCtx is true inside an XCTestCase subclass.
@@ -98,7 +113,7 @@ func (w *swiftWalk) handleProtocol(n node, enclosing int64) {
 
 func (w *swiftWalk) addType(n node, name string, kind topology.NodeKind, enclosing int64) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -106,7 +121,9 @@ func (w *swiftWalk) addType(n node, name string, kind topology.NodeKind, enclosi
 		EndLine:   w.line(n.endByte()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	if c := w.typeConformance(n); c != "" {
 		w.conf[idx] = c
 	}
@@ -127,7 +144,7 @@ func (w *swiftWalk) addFunc(n node, enclosing int64, testCtx bool) {
 		kind = topology.KindTest
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -136,7 +153,9 @@ func (w *swiftWalk) addFunc(n node, enclosing int64, testCtx bool) {
 		EndLine:   w.line(n.endByte()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
 }
@@ -150,7 +169,7 @@ func (w *swiftWalk) addNamedMember(n node, enclosing int64, name string) {
 		kind = topology.KindMethod
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -159,7 +178,9 @@ func (w *swiftWalk) addNamedMember(n node, enclosing int64, name string) {
 		EndLine:   w.line(n.endByte()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
 }
@@ -204,7 +225,7 @@ func (w *swiftWalk) addProperty(n node, enclosing int64) {
 		kind = topology.KindVariable
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -212,7 +233,9 @@ func (w *swiftWalk) addProperty(n node, enclosing int64) {
 		EndLine:   w.line(n.endByte()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 }
 
@@ -223,7 +246,7 @@ func (w *swiftWalk) addEnumEntry(n node, enclosing int64) {
 			continue
 		}
 		idx := int64(len(w.nodes))
-		w.nodes = append(w.nodes, topology.Node{
+		node := topology.Node{
 			Kind:      topology.KindConstant,
 			Name:      c.text(w.src),
 			Qualified: c.text(w.src),
@@ -231,7 +254,9 @@ func (w *swiftWalk) addEnumEntry(n node, enclosing int64) {
 			EndLine:   w.line(n.endByte()),
 			Language:  "swift",
 			Path:      w.path,
-		})
+		}
+		w.setSpan(&node, n)
+		w.nodes = append(w.nodes, node)
 		w.containedBy(enclosing, idx)
 	}
 }
@@ -243,7 +268,7 @@ func (w *swiftWalk) addTypealias(n node, enclosing int64) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindType,
 		Name:      nm.text(w.src),
 		Qualified: nm.text(w.src),
@@ -251,7 +276,9 @@ func (w *swiftWalk) addTypealias(n node, enclosing int64) {
 		EndLine:   w.line(n.endByte()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 }
 
@@ -264,13 +291,15 @@ func (w *swiftWalk) addImport(n node) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: w.line(n.startByte()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	w.setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 func (w *swiftWalk) containedBy(enclosing, child int64) {

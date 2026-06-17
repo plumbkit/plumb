@@ -73,7 +73,7 @@ func (w *mdWalk) addHeading(section *tsg.Node, parent int64) int64 {
 		return -1
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindSection,
 		Name:      text,
 		Qualified: text,
@@ -81,7 +81,9 @@ func (w *mdWalk) addHeading(section *tsg.Node, parent int64) int64 {
 		EndLine:   line(section.EndPoint()),
 		Language:  "markdown",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, section)
+	w.nodes = append(w.nodes, node)
 	if parent >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     parent,

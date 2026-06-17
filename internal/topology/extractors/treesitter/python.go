@@ -111,7 +111,7 @@ func (w *pyWalk) maybeAssignment(asn *tsg.Node, enclosingClass int64) {
 		kind = topology.KindConstant
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -119,7 +119,9 @@ func (w *pyWalk) maybeAssignment(asn *tsg.Node, enclosingClass int64) {
 		EndLine:   line(asn.EndPoint()),
 		Language:  "python",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, asn)
+	w.nodes = append(w.nodes, node)
 	if enclosingClass >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     enclosingClass,
@@ -149,7 +151,7 @@ func isConstName(name string) bool {
 func (w *pyWalk) addClass(n *tsg.Node) int64 {
 	name := w.fieldName(n)
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindClass,
 		Name:      name,
 		Qualified: name,
@@ -157,9 +159,15 @@ func (w *pyWalk) addClass(n *tsg.Node) int64 {
 		EndLine:   line(n.EndPoint()),
 		Language:  "python",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, pyIsComment)
+	w.nodes = append(w.nodes, node)
 	return idx
 }
+
+// pyIsComment reports whether a Python grammar node type is a comment.
+func pyIsComment(typ string) bool { return typ == "comment" }
 
 func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 	name := w.fieldName(n)
@@ -174,7 +182,7 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 		kind = topology.KindTest
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -182,7 +190,10 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "python",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, pyIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingClass >= 0 {
 		w.edges = append(w.edges, topology.Edge{
@@ -220,13 +231,15 @@ func (w *pyWalk) addImport(name string, n *tsg.Node) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
 		Language:  "python",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in

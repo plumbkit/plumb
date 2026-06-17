@@ -169,8 +169,8 @@ func importNode(imp *ast.ImportSpec, relPath string) topology.Node {
 }
 
 func extractFunc(fset *token.FileSet, d *ast.FuncDecl, relPath string, nodeCount, pkgIdx int) ([]topology.Node, []topology.Edge) {
-	start := fset.Position(d.Pos()).Line
-	end := fset.Position(d.End()).Line
+	startPos := fset.Position(d.Pos())
+	endPos := fset.Position(d.End())
 	kind := topology.KindFunction
 	if d.Recv != nil && len(d.Recv.List) > 0 {
 		kind = topology.KindMethod
@@ -189,12 +189,13 @@ func extractFunc(fset *token.FileSet, d *ast.FuncDecl, relPath string, nodeCount
 		Name:      d.Name.Name,
 		Qualified: qualified,
 		Signature: sig,
-		StartLine: start,
-		EndLine:   end,
+		StartLine: startPos.Line,
+		EndLine:   endPos.Line,
 		Docstring: docComment(d.Doc),
 		Language:  "go",
 		Path:      relPath,
 	}
+	setSpan(&n, fset, startPos, endPos, d.Doc)
 	nodeIdx := nodeCount
 	e := topology.Edge{
 		FromID:     int64(pkgIdx),
@@ -224,18 +225,27 @@ func extractGenDecl(fset *token.FileSet, d *ast.GenDecl, relPath string, nodeCou
 }
 
 func extractTypeSpec(fset *token.FileSet, s *ast.TypeSpec, d *ast.GenDecl, relPath string, nodeCount, pkgIdx int) ([]topology.Node, []topology.Edge) {
-	start := fset.Position(s.Pos()).Line
-	end := fset.Position(s.End()).Line
+	startPos := fset.Position(s.Pos())
+	endPos := fset.Position(s.End())
 	n := topology.Node{
 		Kind:      topology.KindType,
 		Name:      s.Name.Name,
 		Qualified: s.Name.Name,
-		StartLine: start,
-		EndLine:   end,
+		StartLine: startPos.Line,
+		EndLine:   endPos.Line,
 		Docstring: docComment(d.Doc),
 		Language:  "go",
 		Path:      relPath,
 	}
+	// The doc comment belongs to the enclosing GenDecl, but for a single-spec
+	// declaration (`// Doc\ntype T struct{…}`) it documents this type; attach it
+	// only when the GenDecl wraps exactly one spec, so a grouped `type (…)` block
+	// does not mis-assign the block comment to its first member.
+	var doc *ast.CommentGroup
+	if len(d.Specs) == 1 {
+		doc = d.Doc
+	}
+	setSpan(&n, fset, startPos, endPos, doc)
 	e := topology.Edge{
 		FromID:     int64(pkgIdx),
 		ToID:       int64(nodeCount),
@@ -254,7 +264,8 @@ func extractValueSpec(fset *token.FileSet, s *ast.ValueSpec, d *ast.GenDecl, rel
 	nodes := make([]topology.Node, 0, len(s.Names))
 	for _, name := range s.Names {
 		pos := fset.Position(name.Pos())
-		nodes = append(nodes, topology.Node{
+		end := fset.Position(name.End())
+		n := topology.Node{
 			Kind:      kind,
 			Name:      name.Name,
 			Qualified: name.Name,
@@ -262,9 +273,35 @@ func extractValueSpec(fset *token.FileSet, s *ast.ValueSpec, d *ast.GenDecl, rel
 			EndLine:   pos.Line,
 			Language:  "go",
 			Path:      relPath,
-		})
+		}
+		setSpan(&n, fset, pos, end, nil)
+		nodes = append(nodes, n)
 	}
 	return nodes
+}
+
+// setSpan records the byte-precise declaration span (and optional doc-comment
+// span) on n from the already-computed start/end positions. doc may be nil.
+// token.Position offsets are 0-based byte offsets and columns are 1-based, so the
+// column is converted to the 0-based convention topology.Node documents.
+func setSpan(n *topology.Node, fset *token.FileSet, start, end token.Position, doc *ast.CommentGroup) {
+	n.HasBytes = true
+	n.StartByte = start.Offset
+	n.EndByte = end.Offset
+	n.StartCol = col0(start.Column)
+	n.EndCol = col0(end.Column)
+	if doc != nil {
+		n.DocStartByte = fset.Position(doc.Pos()).Offset
+		n.DocEndByte = fset.Position(doc.End()).Offset
+	}
+}
+
+// col0 converts a 1-based token.Position column to the 0-based column convention.
+func col0(c int) int {
+	if c > 0 {
+		return c - 1
+	}
+	return 0
 }
 
 func funcSignature(d *ast.FuncDecl) string {

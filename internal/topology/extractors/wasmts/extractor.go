@@ -146,3 +146,15 @@ func (m *lineMap) at(byteOff int) int {
 	// line = (newlines strictly before byteOff) + 1
 	return sort.Search(len(m.nl), func(i int) bool { return m.nl[i] >= byteOff }) + 1
 }
+
+// col returns the 0-based byte column of byteOff: its distance from the start of
+// its line. The grammar lacks point exports, so columns are derived here from the
+// same newline table that backs line lookup — cheap and pure-Go (byte columns,
+// not rune columns, matching the byte-offset span).
+func (m *lineMap) col(byteOff int) int {
+	i := sort.Search(len(m.nl), func(i int) bool { return m.nl[i] >= byteOff })
+	if i == 0 {
+		return byteOff
+	}
+	return byteOff - m.nl[i-1] - 1
+}
