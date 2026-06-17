@@ -32,8 +32,10 @@ func (p *pullStubClient) Diagnostic(_ context.Context, params protocol.DocumentD
 	return p.report, p.err
 }
 
-var _ lsp.Client = (*pullStubClient)(nil)
-var _ pullCapableClient = (*pullStubClient)(nil)
+var (
+	_ lsp.Client        = (*pullStubClient)(nil)
+	_ pullCapableClient = (*pullStubClient)(nil)
+)
 
 // TestRoutingProxy_SupportsPullDiagnostics_Delegates proves the dormancy fix:
 // the proxy resolves the pull capability from its primary adapter (the URI-less

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/lsp/adapters/gopls"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
