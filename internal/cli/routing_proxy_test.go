@@ -226,7 +226,7 @@ func TestRoutingProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
 	if rp.primaryRoot != rootB {
 		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", rp.primaryRoot, rootB)
 	}
-	c, err := rp.primaryClient()
+	c, err := rp.primaryClient(context.Background())
 	if err != nil {
 		t.Fatalf("primaryClient after reset: %v", err)
 	}
@@ -249,5 +249,30 @@ func TestRoutingInvProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
 	ri.resetPrimary(rootB, "go", nil)
 	if ri.primaryRoot != rootB {
 		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", ri.primaryRoot, rootB)
+	}
+}
+
+// TestRoutingProxy_PrimaryClientWakesHibernated proves the #3 fix: when the
+// routingProxy's cached primary handle returns nil (the pinned entry was
+// hibernated by the idle janitor / LRU eviction), primaryClient falls through to
+// acquireLang to wake it, mirroring route(), instead of returning the misleading
+// "LSP server not yet ready". Here the pinned (root, "go") pool entry is
+// reusable while the primary proxy handle is empty — acquireLang's reuse path
+// returns it. (The real process-restart path is covered by
+// TestPool_HibernateAndWakeRestartsServer.)
+func TestRoutingProxy_PrimaryClientWakesHibernated(t *testing.T) {
+	rootA, _ := setupTwoProjects(t)
+
+	pool := newTestPool()
+	clientA := &stubClient{id: "A"}
+	installEntry(pool, rootA, clientA) // pool entry is reusable (state poolActive)
+
+	rp := newRoutingProxy(pool)
+	// An empty primary proxy stands in for the hibernated entry whose process
+	// was stopped (get() == nil) while its pinned (root, language) slot survives.
+	rp.setPrimary(rootA, "go", &clientProxy{})
+
+	if _, err := rp.WorkspaceSymbols(context.Background(), protocol.WorkspaceSymbolParams{Query: "Foo"}); err != nil {
+		t.Fatalf("primaryClient should wake/reacquire the hibernated primary, got: %v", err)
 	}
 }
