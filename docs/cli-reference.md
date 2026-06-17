@@ -177,8 +177,8 @@ before modifying it.
 | `plumb setup cursor` | `~/.cursor/mcp.json` |
 | `plumb setup augment` | `~/.augment/settings.json` |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
-| `plumb setup antigravity` | `~/.gemini/antigravity-cli/mcp/plumb.json` |
-| `plumb setup antigravity-desktop` | `~/.gemini/antigravity/mcp/plumb.json` |
+| `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads) |
+| `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config) |
 | `plumb setup opencode` | `~/.config/opencode/opencode.json` |
 | `plumb setup crush` | `~/.config/crush/crush.json` |
 | `plumb setup goose` | `~/.config/goose/config.yaml` |
