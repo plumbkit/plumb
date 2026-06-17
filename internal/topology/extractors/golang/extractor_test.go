@@ -289,3 +289,69 @@ func TestExtract_LineRanges(t *testing.T) {
 		}
 	}
 }
+
+// nodeByName finds the first node with the given name, or fails the test.
+func nodeByName(t *testing.T, nodes []topology.Node, name string) topology.Node {
+	t.Helper()
+	for _, n := range nodes {
+		if n.Name == name {
+			return n
+		}
+	}
+	t.Fatalf("node %q not found", name)
+	return topology.Node{}
+}
+
+func TestExtract_ByteSpanReconstructsDeclaration(t *testing.T) {
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "foo.go", goSrc)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	// Greet's declaration span must exactly reconstruct the func declaration text.
+	g := nodeByName(t, nodes, "Greet")
+	if !g.HasBytes {
+		t.Fatal("Greet should carry byte spans")
+	}
+	got := string(goSrc[g.StartByte:g.EndByte])
+	const want = "func Greet(name string) string {\n\treturn fmt.Sprintf(\"hello, %s\", name)\n}"
+	if got != want {
+		t.Errorf("Greet decl span = %q, want %q", got, want)
+	}
+	// The doc-comment span must cover the // Greet line and be a strict prefix
+	// (lower byte offset) of the declaration.
+	if !g.HasDocSpan() {
+		t.Fatal("Greet should carry a doc span")
+	}
+	if g.DocStartByte >= g.StartByte {
+		t.Errorf("doc span start %d should precede decl start %d", g.DocStartByte, g.StartByte)
+	}
+	if doc := string(goSrc[g.DocStartByte:g.DocEndByte]); doc != "// Greet says hello." {
+		t.Errorf("doc span = %q, want %q", doc, "// Greet says hello.")
+	}
+}
+
+func TestExtract_ByteSpanMultibyte(t *testing.T) {
+	// A multibyte identifier before the target proves byte offsets (not rune
+	// indices) and that columns are byte columns.
+	src := []byte("package p\n\n// café returns a drink.\nfunc café() string { return \"☕\" }\n")
+	ext := New()
+	nodes, _, err := ext.Extract(context.Background(), "m.go", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	n := nodeByName(t, nodes, "café")
+	if !n.HasBytes {
+		t.Fatal("café should carry byte spans")
+	}
+	if got := string(src[n.StartByte:n.EndByte]); got != "func café() string { return \"☕\" }" {
+		t.Errorf("decl span = %q", got)
+	}
+	// The declaration starts at column 0 of its line.
+	if n.StartCol != 0 {
+		t.Errorf("StartCol = %d, want 0", n.StartCol)
+	}
+	if doc := string(src[n.DocStartByte:n.DocEndByte]); doc != "// café returns a drink." {
+		t.Errorf("doc span = %q", doc)
+	}
+}
