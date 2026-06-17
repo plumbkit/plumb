@@ -41,7 +41,17 @@ CREATE TABLE IF NOT EXISTS topology_nodes (
     start_line INTEGER NOT NULL DEFAULT 0,
     end_line   INTEGER NOT NULL DEFAULT 0,
     docstring  TEXT    NOT NULL DEFAULT '',
-    language   TEXT    NOT NULL DEFAULT ''
+    language   TEXT    NOT NULL DEFAULT '',
+    -- Byte-precise declaration span (see topology.Node). has_bytes=0 ⇒ the
+    -- byte/column columns are absent and consumers fall back to the line range.
+    has_bytes      INTEGER NOT NULL DEFAULT 0,
+    start_byte     INTEGER NOT NULL DEFAULT 0,
+    end_byte       INTEGER NOT NULL DEFAULT 0,
+    start_col      INTEGER NOT NULL DEFAULT 0,
+    end_col        INTEGER NOT NULL DEFAULT 0,
+    -- Optional doc-comment byte span; present only when doc_end_byte > doc_start_byte.
+    doc_start_byte INTEGER NOT NULL DEFAULT 0,
+    doc_end_byte   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tn_file ON topology_nodes(file_id);
 CREATE INDEX IF NOT EXISTS idx_tn_name ON topology_nodes(name);
@@ -81,6 +91,30 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
     PRIMARY KEY (model, content_hash)
 );
 `
+
+// SchemaVersion is the current on-disk topology schema version, persisted in
+// PRAGMA user_version. topology.db is a REBUILDABLE index, so there is no
+// data-preserving migration path: when the on-disk version is older, the
+// topology tables are DROPped and recreated, and the indexer repopulates them
+// on the resync that runs at every attach.
+//
+// History:
+//
+//	0 — pre-versioned (every release up to 0.9.21)
+//	1 — added byte/column declaration spans + doc-comment spans to topology_nodes
+const SchemaVersion = 1
+
+// topologyTables are the topology tables/virtual tables, listed so the version
+// gate can DROP them in dependency order (children before parents). The
+// embeddings cache is rebuildable too but is keyed by content hash, not node id,
+// so it is intentionally preserved across a schema recreate.
+var topologyTables = []string{
+	"topology_edges",
+	"topology_fts",
+	"topology_nodes",
+	"topology_files",
+	"topology_meta",
+}
 
 // DBPath returns the canonical path to the topology database for the given workspace.
 func DBPath(workspace string) string {
@@ -163,8 +197,49 @@ func initDB(db *sql.DB) error {
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		return fmt.Errorf("topology: foreign_keys: %w", err)
 	}
+	if err := ensureSchemaVersion(db); err != nil {
+		return err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("topology: apply schema: %w", err)
 	}
 	return nil
+}
+
+// ensureSchemaVersion gates the rebuildable topology schema on PRAGMA
+// user_version. A fresh database (version 0 with no node table) is simply
+// stamped at the current version; an existing database stamped below the current
+// version has its topology tables dropped and recreated (the indexer repopulates
+// them on the next resync). The DROP must precede the CREATE-IF-NOT-EXISTS
+// schema, because CREATE TABLE IF NOT EXISTS never alters a table that already
+// has the old column set — an INSERT naming the new columns would then fail.
+func ensureSchemaVersion(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return fmt.Errorf("topology: reading user_version: %w", err)
+	}
+	if version >= SchemaVersion {
+		return nil
+	}
+	if version > 0 || hasNodesTable(db) {
+		for _, t := range topologyTables {
+			if _, err := db.Exec(`DROP TABLE IF EXISTS ` + t); err != nil { //nolint:gosec // G202: t is a fixed package constant, never user data
+				return fmt.Errorf("topology: dropping %s for schema upgrade: %w", t, err)
+			}
+		}
+	}
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, SchemaVersion)); err != nil {
+		return fmt.Errorf("topology: stamping user_version: %w", err)
+	}
+	return nil
+}
+
+// hasNodesTable reports whether a topology_nodes table already exists, used to
+// distinguish a brand-new database (no tables, version 0) from a pre-versioned
+// one carrying the old column set.
+func hasNodesTable(db *sql.DB) bool {
+	var name string
+	err := db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='topology_nodes'`).Scan(&name)
+	return err == nil
 }
