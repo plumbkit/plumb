@@ -68,7 +68,7 @@ func (w *tomlWalk) addTable(n *tsg.Node) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindType,
 		Name:      name,
 		Qualified: name,
@@ -76,7 +76,9 @@ func (w *tomlWalk) addTable(n *tsg.Node) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "toml",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	for _, c := range n.Children() {
 		if c.Type(w.lang) == "pair" {
 			w.addField(c, idx, name)
@@ -96,7 +98,7 @@ func (w *tomlWalk) addField(pair *tsg.Node, parent int64, parentName string) {
 		qualified = parentName + "." + key
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindField,
 		Name:      key,
 		Qualified: qualified,
@@ -104,7 +106,9 @@ func (w *tomlWalk) addField(pair *tsg.Node, parent int64, parentName string) {
 		EndLine:   line(pair.EndPoint()),
 		Language:  "toml",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, pair)
+	w.nodes = append(w.nodes, node)
 	if parent >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     parent,

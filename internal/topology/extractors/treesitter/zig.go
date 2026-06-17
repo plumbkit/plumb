@@ -153,7 +153,7 @@ func (w *zigWalk) isImport(bf *tsg.Node) bool {
 
 func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindType,
 		Name:      name,
 		Qualified: name,
@@ -161,9 +161,16 @@ func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 		EndLine:   line(n.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, zigIsComment)
+	w.nodes = append(w.nodes, node)
 	return idx
 }
+
+// zigIsComment reports whether a Zig grammar node type is a comment. Zig has
+// only line comments; doc comments (`///`) parse as line_comment or doc_comment.
+func zigIsComment(typ string) bool { return typ == "line_comment" || typ == "doc_comment" }
 
 // addContainerFields records the members of a container literal: struct/union
 // fields become variables, enum members become constants — each contained in
@@ -193,7 +200,7 @@ func (w *zigWalk) addContainerFields(container *tsg.Node, typeIdx int64, isEnum 
 // edge to its enclosing type.
 func (w *zigWalk) addMember(n *tsg.Node, kind topology.NodeKind, name string, typeIdx int64) {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -201,7 +208,9 @@ func (w *zigWalk) addMember(n *tsg.Node, kind topology.NodeKind, name string, ty
 		EndLine:   line(n.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.edges = append(w.edges, topology.Edge{
 		FromID:     typeIdx,
 		ToID:       idx,
@@ -224,7 +233,7 @@ func (w *zigWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		kind = topology.KindMethod
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -232,7 +241,10 @@ func (w *zigWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, zigIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
 		w.edges = append(w.edges, topology.Edge{
@@ -246,7 +258,7 @@ func (w *zigWalk) addFunc(n *tsg.Node, enclosingType int64) {
 }
 
 func (w *zigWalk) addBinding(n *tsg.Node, name string, kind topology.NodeKind) {
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -254,7 +266,9 @@ func (w *zigWalk) addBinding(n *tsg.Node, name string, kind topology.NodeKind) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 func (w *zigWalk) addImport(bf *tsg.Node, decl *tsg.Node) {
@@ -262,13 +276,15 @@ func (w *zigWalk) addImport(bf *tsg.Node, decl *tsg.Node) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(decl.StartPoint()),
 		Language:  "zig",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, decl)
+	w.nodes = append(w.nodes, node)
 }
 
 func (w *zigWalk) importTarget(bf *tsg.Node) string {
@@ -288,7 +304,7 @@ func (w *zigWalk) addTest(n *tsg.Node) {
 	if str := childByType(n, "string", w.lang); str != nil {
 		name = strings.Trim(str.Text(w.src), `"`)
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindTest,
 		Name:      name,
 		Qualified: name,
@@ -296,7 +312,9 @@ func (w *zigWalk) addTest(n *tsg.Node) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in

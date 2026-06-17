@@ -73,6 +73,39 @@ func docCommentStart(path string, symStart protocol.Position) protocol.Position 
 	return protocol.Position{Line: uint32(first), Character: 0}
 }
 
+// docCommentStartPreferTopology resolves the start position of namePath's
+// leading doc comment. It first asks the topology index for a node carrying a
+// byte-precise doc span (which the structural extractors record exactly), and
+// falls back to the docCommentStart line-scan heuristic when topology is
+// unavailable, has no matching node, or that node has no doc span. The line-scan
+// remains the fallback for the LSP-only path, so this never regresses callers.
+func docCommentStartPreferTopology(ctx context.Context, topo topologyStoreFn, uri, namePath string, symStart protocol.Position) protocol.Position {
+	path := strings.TrimPrefix(uri, "file://")
+	if pos, ok := topologyDocCommentStart(ctx, topo, uri, namePath); ok {
+		return pos
+	}
+	return docCommentStart(path, symStart)
+}
+
+// topologyDocCommentStart returns the precise start position of namePath's doc
+// comment from a fresh topology parse, or ok=false when no node with a doc span
+// resolves.
+func topologyDocCommentStart(ctx context.Context, topo topologyStoreFn, uri, namePath string) (protocol.Position, bool) {
+	nodes, ok := freshTopologyNodes(ctx, topo, uri)
+	if !ok {
+		return protocol.Position{}, false
+	}
+	node := topologyNodeByPath(nodes, namePath)
+	if node == nil || !node.HasDocSpan() {
+		return protocol.Position{}, false
+	}
+	content, err := os.ReadFile(strings.TrimPrefix(uri, "file://"))
+	if err != nil {
+		return protocol.Position{}, false
+	}
+	return byteOffsetToPosition(content, node.DocStartByte)
+}
+
 func isCommentLine(trimmed string) bool {
 	switch {
 	case strings.HasPrefix(trimmed, "//"),
@@ -227,7 +260,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	}
 	start := sym.Range.Start
 	if a.IncludeDocComment {
-		start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
+		start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
 	}
 	edit := protocol.TextEdit{
 		Range:   protocol.Range{Start: start, End: start},
@@ -374,7 +407,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	}
 	rng := sym.Range
 	if a.IncludeDocComment {
-		rng.Start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
+		rng.Start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
 	}
 	edit := protocol.TextEdit{
 		Range:   rng,

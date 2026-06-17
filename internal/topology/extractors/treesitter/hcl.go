@@ -127,7 +127,7 @@ func (w *hclWalk) addNamed(n *tsg.Node, name string, kind topology.NodeKind) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -135,5 +135,7 @@ func (w *hclWalk) addNamed(n *tsg.Node, name string, kind topology.NodeKind) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "hcl",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }

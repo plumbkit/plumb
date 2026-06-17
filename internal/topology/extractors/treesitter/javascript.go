@@ -109,7 +109,7 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 		kind = topology.KindMethod
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -117,7 +117,10 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 		EndLine:   line(rng.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
 		w.edges = append(w.edges, topology.Edge{
@@ -136,7 +139,7 @@ func (w *jsWalk) addClass(n *tsg.Node) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindClass,
 		Name:      name,
 		Qualified: name,
@@ -144,7 +147,10 @@ func (w *jsWalk) addClass(n *tsg.Node) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, jsIsComment)
+	w.nodes = append(w.nodes, node)
 	if body := childByType(n, "class_body", w.lang); body != nil {
 		w.addClassMembers(body, idx)
 	}
@@ -185,7 +191,7 @@ func (w *jsWalk) fieldDefName(m *tsg.Node) string {
 // containment edge to its class.
 func (w *jsWalk) addMember(rng *tsg.Node, classIdx int64, name string) {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindVariable,
 		Name:      name,
 		Qualified: name,
@@ -193,7 +199,9 @@ func (w *jsWalk) addMember(rng *tsg.Node, classIdx int64, name string) {
 		EndLine:   line(rng.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	w.nodes = append(w.nodes, node)
 	w.edges = append(w.edges, topology.Edge{
 		FromID:     classIdx,
 		ToID:       idx,
@@ -263,7 +271,7 @@ func (w *jsWalk) declaratorName(d *tsg.Node) string {
 }
 
 func (w *jsWalk) addBinding(name string, rng *tsg.Node, kind topology.NodeKind) {
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -271,7 +279,9 @@ func (w *jsWalk) addBinding(name string, rng *tsg.Node, kind topology.NodeKind) 
 		EndLine:   line(rng.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	w.nodes = append(w.nodes, node)
 }
 
 // isRequire reports whether a call expression is a CommonJS `require(...)` call.
@@ -299,14 +309,16 @@ func (w *jsWalk) appendImport(target string, rng *tsg.Node) {
 	if target == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
 		Language:  "javascript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	w.nodes = append(w.nodes, node)
 }
 
 // callStringArg returns the first string argument of a call expression, stripped
@@ -367,7 +379,7 @@ func (w *jsWalk) maybeTest(call *tsg.Node) {
 	if name == "" {
 		name = fn.Text(w.src)
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindTest,
 		Name:      name,
 		Qualified: name,
@@ -375,8 +387,13 @@ func (w *jsWalk) maybeTest(call *tsg.Node) {
 		EndLine:   line(call.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, call)
+	w.nodes = append(w.nodes, node)
 }
+
+// jsIsComment reports whether a JavaScript grammar node type is a comment.
+func jsIsComment(typ string) bool { return typ == "comment" }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in
 // the file. The call site is syntactically certain but the callee is resolved

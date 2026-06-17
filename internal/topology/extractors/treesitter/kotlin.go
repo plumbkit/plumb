@@ -130,7 +130,7 @@ func (w *kotlinWalk) handleObject(n *tsg.Node, enclosing int64) {
 
 func (w *kotlinWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, enclosing int64) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -138,9 +138,17 @@ func (w *kotlinWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, e
 		EndLine:   line(n.EndPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, kotlinIsComment)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 	return idx
+}
+
+// kotlinIsComment reports whether a Kotlin grammar node type is a comment.
+func kotlinIsComment(typ string) bool {
+	return typ == "line_comment" || typ == "multiline_comment"
 }
 
 func (w *kotlinWalk) addFunc(n *tsg.Node, enclosing int64) {
@@ -156,7 +164,7 @@ func (w *kotlinWalk) addFunc(n *tsg.Node, enclosing int64) {
 		kind = topology.KindTest
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -164,7 +172,10 @@ func (w *kotlinWalk) addFunc(n *tsg.Node, enclosing int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, kotlinIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
 }
@@ -185,7 +196,7 @@ func (w *kotlinWalk) addProperty(n *tsg.Node, enclosing int64) {
 		kind = topology.KindVariable
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      stripBackticks(id.Text(w.src)),
 		Qualified: stripBackticks(id.Text(w.src)),
@@ -193,7 +204,9 @@ func (w *kotlinWalk) addProperty(n *tsg.Node, enclosing int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 }
 
@@ -203,7 +216,7 @@ func (w *kotlinWalk) addEnumEntry(n *tsg.Node, enclosing int64) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindConstant,
 		Name:      id.Text(w.src),
 		Qualified: id.Text(w.src),
@@ -211,7 +224,9 @@ func (w *kotlinWalk) addEnumEntry(n *tsg.Node, enclosing int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 }
 
@@ -224,13 +239,15 @@ func (w *kotlinWalk) addImport(n *tsg.Node) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 // containedBy emits a certain (1.0/extractor) containment edge when child has a

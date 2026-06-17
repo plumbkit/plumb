@@ -100,7 +100,7 @@ func (w *javaWalk) handleType(n *tsg.Node, kind topology.NodeKind, enclosing int
 		w.walkChildren(n, enclosing, false)
 		return
 	}
-	idx := w.addNode(n, kind, name, enclosing)
+	idx := w.addNode(n, kind, name, enclosing, true)
 	if body := w.typeBody(n); body != nil {
 		w.walkChildren(body, idx, false)
 	}
@@ -118,7 +118,7 @@ func (w *javaWalk) addMethod(n *tsg.Node, enclosing int64) {
 	if w.isTest(n) {
 		kind = topology.KindTest
 	}
-	idx := w.addNode(n, kind, name, enclosing)
+	idx := w.addNode(n, kind, name, enclosing, true)
 	w.funcIdx[name] = idx
 }
 
@@ -137,7 +137,7 @@ func (w *javaWalk) addFields(n *tsg.Node, enclosing int64) {
 		if name == "" {
 			continue
 		}
-		w.addNode(n, kind, name, enclosing)
+		w.addNode(n, kind, name, enclosing, false)
 	}
 }
 
@@ -151,7 +151,7 @@ func (w *javaWalk) addEnumConstant(n *tsg.Node, enclosing int64) {
 	if name == "" {
 		return
 	}
-	w.addNode(n, topology.KindConstant, name, enclosing)
+	w.addNode(n, topology.KindConstant, name, enclosing, false)
 }
 
 func (w *javaWalk) addImport(n *tsg.Node) {
@@ -165,20 +165,28 @@ func (w *javaWalk) addImport(n *tsg.Node) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      strings.TrimSpace(name),
 		StartLine: line(n.StartPoint()),
 		Language:  "java",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
+// javaIsComment reports whether a Java grammar node type is a comment (Javadoc
+// is a block_comment).
+func javaIsComment(typ string) bool { return typ == "line_comment" || typ == "block_comment" }
+
 // addNode appends a node and, when it has a lexical enclosing type, a certain
-// (1.0/extractor) containment edge.
-func (w *javaWalk) addNode(n *tsg.Node, kind topology.NodeKind, name string, enclosing int64) int64 {
+// (1.0/extractor) containment edge. withDoc stamps a leading-comment doc span,
+// set only for declaration kinds (types, methods) — never fields or enum
+// constants.
+func (w *javaWalk) addNode(n *tsg.Node, kind topology.NodeKind, name string, enclosing int64, withDoc bool) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -186,7 +194,12 @@ func (w *javaWalk) addNode(n *tsg.Node, kind topology.NodeKind, name string, enc
 		EndLine:   line(n.EndPoint()),
 		Language:  "java",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	if withDoc {
+		node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, javaIsComment)
+	}
+	w.nodes = append(w.nodes, node)
 	if enclosing >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     enclosing,
