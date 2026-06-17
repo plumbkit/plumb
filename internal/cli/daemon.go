@@ -62,6 +62,13 @@ var daemonCmd = &cobra.Command{
 // connections to finish once shutdown begins; the watchdog backstops the rest.
 const acceptDrainGrace = 2 * time.Second
 
+// gitWriteDrainGrace bounds the extra wait, after the connection drain, for an
+// in-flight git write to finish and release index.lock before the process
+// exits. Kept short because a slower write still completes under its
+// cancellation-decoupled context past exit (tools.runGit) — this only avoids
+// orphaning a quick commit.
+const gitWriteDrainGrace = 2 * time.Second
+
 // shutdownHardDeadline bounds total graceful shutdown. Once a signal cancels
 // the daemon context, armShutdownWatchdog forces process exit after this
 // deadline if the orderly teardown has not already returned — so a wedged
@@ -77,7 +84,7 @@ const acceptDrainGrace = 2 * time.Second
 // headroom covers the normal unbounded teardown while still bounding a
 // genuinely wedged step. Bounding the topology/supervisor stops outright (so
 // the orderly path is provably under this deadline) is tracked internally.
-const shutdownHardDeadline = acceptDrainGrace + poolCloseGrace + 4*time.Second
+const shutdownHardDeadline = acceptDrainGrace + gitWriteDrainGrace + poolCloseGrace + 4*time.Second
 
 // armShutdownWatchdog forces process exit shutdownHardDeadline after ctx is
 // cancelled — a last-resort backstop behind the bounded graceful teardown. exit
@@ -316,6 +323,11 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 
 	go func() {
 		<-ctx.Done()
+		// Stop admitting new git writes the instant shutdown begins, so the
+		// shutdown window cannot spawn a git child that a forced exit would
+		// strand mid-commit. In-flight writes finish under their decoupled
+		// context (see tools.runGit).
+		tools.BeginGitWriteDrain()
 		ln.Close()
 	}()
 
@@ -326,6 +338,13 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 			case <-ctx.Done():
 				if !drainConnections(&wg, acceptDrainGrace) {
 					slog.Warn("daemon: in-flight requests did not drain before the shutdown deadline; proceeding")
+				}
+				// Give an in-flight git write a brief, bounded chance to finish
+				// (and release index.lock) before the process exits, so a quick
+				// commit is not orphaned. A slower one still completes under its
+				// decoupled context past exit.
+				if !tools.WaitGitWritesDrained(gitWriteDrainGrace) {
+					slog.Warn("daemon: a git write was still in flight at shutdown; it continues under its decoupled context")
 				}
 				return
 			default:

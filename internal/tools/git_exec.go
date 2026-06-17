@@ -41,28 +41,34 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 	}
 }
 
-// runGit runs a git subcommand in the repository containing repo. When
-// serialise is true (index/ref-mutating tiers) it first takes the per-repo lock
-// so concurrent plumb-initiated writes to one repository queue rather than
-// collide on .git/index.lock; read-tier ops pass serialise=false and never lock.
-func runGit(ctx context.Context, repo, sub string, argv []string, serialise bool) (string, error) {
+// runGit runs a git subcommand in the repository containing repo. Non-read tiers
+// (index/ref-mutating + network) are serialised per repo so concurrent
+// plumb-initiated writes queue rather than collide on .git/index.lock; read-tier
+// ops never lock. For the index/ref-mutating tiers the git child also runs under
+// a cancellation-decoupled, bounded context (see beginSerialisedGit) so a daemon
+// shutdown or connection eviction mid-commit lets git finish and release the
+// lock rather than SIGKILLing it and stranding the lock.
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
 	}
-	if serialise {
-		release, err := lockRepo(ctx, repoRoot)
+	execCtx := ctx
+	if tier != tierRead {
+		var cleanup func()
+		execCtx, cleanup, err = beginSerialisedGit(ctx, repoRoot, sub, tier)
 		if err != nil {
-			return "", fmt.Errorf("git %s: %w", sub, err)
+			return "", err
 		}
-		defer release()
+		defer cleanup()
 	}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "git", argv...)
+	cmd := exec.CommandContext(execCtx, "git", argv...)
 	cmd.Dir = repoRoot
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	mutating := tier == tierWrite || tier == tierDestructive
+	if err := execGitCmd(cmd, mutating, repoRoot); err != nil {
 		// git check-ignore exits 1 when NONE of the listed paths are ignored —
 		// a normal "no match" result, not a failure.
 		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
@@ -82,6 +88,54 @@ func runGit(ctx context.Context, repo, sub string, argv []string, serialise bool
 		out = stderr.String() // switch/push and friends report on stderr
 	}
 	return postProcessGit(ctx, repoRoot, sub, out)
+}
+
+// beginSerialisedGit prepares a non-read git op: it refuses new work while the
+// daemon is draining for shutdown, registers the op as in-flight, takes the
+// per-repo lock, and — for index/ref-mutating tiers — reaps any attributable
+// stale lock left by a dead daemon and returns a cancellation-decoupled, bounded
+// exec context so a shutdown mid-commit lets git finish. (The owner sidecar is
+// stamped by execGitCmd once the child pid is known.) The returned cleanup
+// closure (which the caller defers) reverses all of it. Network tiers serialise
+// and drain-gate but keep request-context cancellation (a push can hang on auth
+// — it must stay interruptible) and write no owner sidecar (they do not create
+// index.lock).
+func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier) (context.Context, func(), error) {
+	if gitWriteDrainActive() {
+		return nil, nil, fmt.Errorf("git %s: %w", sub, errGitDraining)
+	}
+	gitWriteInflight.Add(1)
+	release, err := lockRepo(ctx, repoRoot)
+	if err != nil {
+		gitWriteInflight.Done()
+		return nil, nil, fmt.Errorf("git %s: %w", sub, err)
+	}
+	execCtx := ctx
+	cancel := func() {}
+	if tier == tierWrite || tier == tierDestructive {
+		reapStaleGitLock(repoRoot)
+		execCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), gitWriteGrace)
+	}
+	cleanup := func() {
+		cancel()
+		release()
+		gitWriteInflight.Done()
+	}
+	return execCtx, cleanup, nil
+}
+
+// execGitCmd starts cmd, stamps the owner sidecar with the git child's pid for a
+// mutating op (so a stranded index.lock is attributable to the actual lock
+// holder, not the daemon), and waits. Returns the child's run error.
+func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if mutating {
+		recordGitLockOwner(repoRoot, cmd.Process.Pid)
+		defer clearGitLockOwner(repoRoot)
+	}
+	return cmd.Wait()
 }
 
 // postProcessGit replaces the raw output of add/commit with the concise
