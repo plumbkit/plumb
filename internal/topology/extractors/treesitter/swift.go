@@ -129,13 +129,14 @@ func collectErrorBangs(n *tsg.Node, src []byte, out *[][2]uint32) {
 }
 
 type swiftWalk struct {
-	lang    *tsg.Language
-	src     []byte
-	path    string
-	nodes   []topology.Node
-	edges   []topology.Edge
-	funcIdx map[string]int64 // function/method/test name → node index, for call edges
-	conf    map[int64]string // type node index → its conformance list text, for method signatures
+	lang       *tsg.Language
+	src        []byte
+	path       string
+	nodes      []topology.Node
+	edges      []topology.Edge
+	funcIdx    map[string]int64 // function/method/test name → node index, for call edges
+	nameCounts map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
+	conf       map[int64]string // type node index → its conformance list text, for method signatures
 }
 
 // walk descends the tree. enclosing is the node index of the lexically enclosing
@@ -455,6 +456,7 @@ func (w *swiftWalk) typeConformance(n *tsg.Node) string {
 // name within the file, so confidence is 0.8 (heuristic).
 func (w *swiftWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
+	w.nameCounts = callableNameCounts(w.nodes)
 	var rec func(n *tsg.Node, curFunc int64)
 	rec = func(n *tsg.Node, curFunc int64) {
 		switch n.Type(w.lang) {
@@ -485,13 +487,7 @@ func (w *swiftWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int
 		return
 	}
 	seen[key] = true
-	w.edges = append(w.edges, topology.Edge{
-		FromID:     curFunc,
-		ToID:       to,
-		Kind:       topology.EdgeCalls,
-		Confidence: 0.8,
-		Source:     "heuristic",
-	})
+	w.edges = append(w.edges, heuristicCallEdge(curFunc, to, w.nodes, w.nameCounts))
 }
 
 func (w *swiftWalk) calleeName(call *tsg.Node) string {

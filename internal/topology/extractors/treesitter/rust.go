@@ -53,14 +53,15 @@ func (e *RustExtractor) Extract(_ context.Context, relPath string, src []byte) (
 }
 
 type rustWalk struct {
-	lang    *tsg.Language
-	src     []byte
-	path    string
-	nodes   []topology.Node
-	edges   []topology.Edge
-	funcIdx map[string]int64   // function/method/test name → node index, for call edges
-	typeIdx map[string]int64   // type name → node index, for impl-method linking
-	pending []rustImplContains // impl-method → type name, resolved after the walk
+	lang       *tsg.Language
+	src        []byte
+	path       string
+	nodes      []topology.Node
+	edges      []topology.Edge
+	funcIdx    map[string]int64   // function/method/test name → node index, for call edges
+	nameCounts map[string]int     // callable Name → count, for ambiguous-call down-weight (#30)
+	typeIdx    map[string]int64   // type name → node index, for impl-method linking
+	pending    []rustImplContains // impl-method → type name, resolved after the walk
 }
 
 type rustImplContains struct {
@@ -425,6 +426,7 @@ func (w *rustWalk) attrIsTest(item *tsg.Node) bool {
 // by name within the file, so confidence is 0.8 (heuristic).
 func (w *rustWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
+	w.nameCounts = callableNameCounts(w.nodes)
 	var rec func(n *tsg.Node, curFunc int64)
 	rec = func(n *tsg.Node, curFunc int64) {
 		switch n.Type(w.lang) {
@@ -459,13 +461,7 @@ func (w *rustWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int6
 		return
 	}
 	seen[key] = true
-	w.edges = append(w.edges, topology.Edge{
-		FromID:     curFunc,
-		ToID:       to,
-		Kind:       topology.EdgeCalls,
-		Confidence: 0.8,
-		Source:     "heuristic",
-	})
+	w.edges = append(w.edges, heuristicCallEdge(curFunc, to, w.nodes, w.nameCounts))
 }
 
 func (w *rustWalk) calleeName(fn *tsg.Node) string {

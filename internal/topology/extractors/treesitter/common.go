@@ -83,3 +83,47 @@ func lastSegment(path string) string {
 	}
 	return path
 }
+
+// callableNameCounts counts how many function / method nodes in nodes share
+// each Name. The tree-sitter extractors resolve call edges by callee name alone
+// — they carry no type information — and funcIdx keeps only one index per name,
+// so this is the only way to tell that a name is shared. Built once per file,
+// after every node has been collected.
+//
+// KindTest is deliberately excluded: in describe/it/test-style suites a test
+// node's Name is its description string (e.g. describe('greet', …)), not a
+// callable identifier, so counting it would falsely mark a real same-named
+// function as ambiguous.
+func callableNameCounts(nodes []topology.Node) map[string]int {
+	counts := make(map[string]int)
+	for i := range nodes {
+		switch nodes[i].Kind {
+		case topology.KindFunction, topology.KindMethod:
+			counts[nodes[i].Name]++
+		}
+	}
+	return counts
+}
+
+// heuristicCallEdge builds a name-resolved EdgeCalls from → to. The call site is
+// syntactically certain but the callee is resolved by name alone (no type
+// information), so it is a 0.8 heuristic. When more than one callable shares the
+// target's name in the same file the match is ambiguous — a receiver-blind
+// `recv.name()` could mean any of them — so the edge is down-weighted to 0.5 and
+// flagged source="heuristic-ambiguous" rather than asserting a confident edge to
+// an arbitrary same-named target. See issue #30. nameCounts comes from
+// callableNameCounts; nodes lets the target name be recovered from its index.
+func heuristicCallEdge(from, to int64, nodes []topology.Node, nameCounts map[string]int) topology.Edge {
+	e := topology.Edge{
+		FromID:     from,
+		ToID:       to,
+		Kind:       topology.EdgeCalls,
+		Confidence: 0.8,
+		Source:     "heuristic",
+	}
+	if to >= 0 && int(to) < len(nodes) && nameCounts[nodes[to].Name] > 1 {
+		e.Confidence = 0.5
+		e.Source = "heuristic-ambiguous"
+	}
+	return e
+}
