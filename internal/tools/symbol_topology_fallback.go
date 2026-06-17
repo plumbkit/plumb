@@ -66,10 +66,33 @@ func freshTopologyNodes(ctx context.Context, fn topologyStoreFn, uri string) (no
 	return nodes, true
 }
 
-// nodeToDocSymbol converts a topology node to a flat DocumentSymbol with a
-// line-granular range computed from the file's lines: start of the first line
-// to the end of the last line's content.
+// nodeToDocSymbol converts a topology node to a flat DocumentSymbol. When the
+// node carries a byte-precise span (HasBytes), the range is char-precise: the
+// real start/end columns the extractor recorded. Otherwise it falls back to a
+// line-granular range — start of the first line to the end of the last line's
+// content — which matches how an LSP reports a whole declaration closely enough.
 func nodeToDocSymbol(n topology.Node, lines []string) protocol.DocumentSymbol {
+	var rng protocol.Range
+	if n.HasBytes {
+		rng = protocol.Range{
+			Start: protocol.Position{Line: lineToUint32(n.StartLine - 1), Character: lineToUint32(n.StartCol)},
+			End:   protocol.Position{Line: lineToUint32(n.EndLine - 1), Character: lineToUint32(n.EndCol)},
+		}
+	} else {
+		rng = lineGranularRange(n, lines)
+	}
+	return protocol.DocumentSymbol{
+		Name:           n.Name,
+		Kind:           topoKindToSymbolKind(n.Kind),
+		Range:          rng,
+		SelectionRange: rng,
+	}
+}
+
+// lineGranularRange is the fallback whole-declaration range used when a node has
+// no byte-precise span: column 0 of the first line to the end-of-content of the
+// last line.
+func lineGranularRange(n topology.Node, lines []string) protocol.Range {
 	start := lineToUint32(n.StartLine - 1)
 	endIdx := n.EndLine - 1
 	if endIdx < int(start) {
@@ -79,16 +102,28 @@ func nodeToDocSymbol(n topology.Node, lines []string) protocol.DocumentSymbol {
 	if endIdx >= 0 && endIdx < len(lines) {
 		endChar = len(lines[endIdx])
 	}
-	rng := protocol.Range{
+	return protocol.Range{
 		Start: protocol.Position{Line: start, Character: 0},
 		End:   protocol.Position{Line: lineToUint32(endIdx), Character: lineToUint32(endChar)},
 	}
-	return protocol.DocumentSymbol{
-		Name:           n.Name,
-		Kind:           topoKindToSymbolKind(n.Kind),
-		Range:          rng,
-		SelectionRange: rng,
+}
+
+// byteOffsetToPosition converts a 0-based byte offset into the file content into
+// an LSP Position (0-based line, 0-based byte-column). Returns ok=false when the
+// offset is out of range. Columns are byte columns, matching the byte-precise
+// spans the extractors record.
+func byteOffsetToPosition(content []byte, off int) (pos protocol.Position, ok bool) {
+	if off < 0 || off > len(content) {
+		return protocol.Position{}, false
 	}
+	line, lineStart := 0, 0
+	for i := 0; i < off; i++ {
+		if content[i] == '\n' {
+			line++
+			lineStart = i + 1
+		}
+	}
+	return protocol.Position{Line: lineToUint32(line), Character: lineToUint32(off - lineStart)}, true
 }
 
 // lineToUint32 clamps a line/column number into the uint32 range LSP positions

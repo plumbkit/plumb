@@ -42,6 +42,20 @@ const (
 )
 
 // Node is a semantic entity in the topology graph.
+//
+// Span fields and the absent-span convention: StartLine/EndLine are the 1-based
+// line range (as they have always been). StartByte/EndByte and StartCol/EndCol
+// are the byte-precise (0-based offset) and column (0-based) span of the same
+// declaration. Because byte 0 is a legitimate offset, presence is signalled by
+// HasBytes — NOT by a zero sentinel: when HasBytes is false the byte/column
+// fields are meaningless and consumers must fall back to the line range. An
+// extractor that knows the byte span sets HasBytes=true and the four offset
+// fields together.
+//
+// DocStartByte/DocEndByte are the optional byte span of the declaration's doc
+// comment. Their convention is self-describing: a doc span is present only when
+// DocEndByte > DocStartByte; DocStartByte==DocEndByte (the 0/0 zero value
+// included) means "no doc span". This holds regardless of HasBytes.
 type Node struct {
 	ID        int64
 	FileID    int64
@@ -54,7 +68,21 @@ type Node struct {
 	Docstring string
 	Language  string
 	Path      string // workspace-relative
+
+	// Byte-precise declaration span. Valid only when HasBytes is true.
+	HasBytes  bool
+	StartByte int
+	EndByte   int
+	StartCol  int // 0-based column of StartByte
+	EndCol    int // 0-based column of EndByte
+
+	// Optional doc-comment byte span. Present only when DocEndByte > DocStartByte.
+	DocStartByte int
+	DocEndByte   int
 }
+
+// HasDocSpan reports whether the node carries a byte-precise doc-comment span.
+func (n Node) HasDocSpan() bool { return n.DocEndByte > n.DocStartByte }
 
 // Edge is a directed relationship between two nodes.
 type Edge struct {

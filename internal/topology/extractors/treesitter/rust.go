@@ -140,7 +140,7 @@ func (w *rustWalk) addType(n *tsg.Node) int64 {
 		return -1
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindType,
 		Name:      name,
 		Qualified: name,
@@ -148,7 +148,10 @@ func (w *rustWalk) addType(n *tsg.Node) int64 {
 		EndLine:   line(n.EndPoint()),
 		Language:  "rust",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, rustIsComment)
+	w.nodes = append(w.nodes, node)
 	w.typeIdx[name] = idx
 	return idx
 }
@@ -166,7 +169,7 @@ func (w *rustWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		kind = topology.KindTest
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -174,7 +177,10 @@ func (w *rustWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "rust",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, rustIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
 		// Lexically contained (trait default/signature method): certain.
@@ -270,7 +276,7 @@ func (w *rustWalk) addEnumVariants(n *tsg.Node, typeIdx int64) {
 // path defers the heuristic 0.8 edge to resolveImplContains).
 func (w *rustWalk) addContained(n *tsg.Node, kind topology.NodeKind, name string, parent int64) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -278,7 +284,9 @@ func (w *rustWalk) addContained(n *tsg.Node, kind topology.NodeKind, name string
 		EndLine:   line(n.EndPoint()),
 		Language:  "rust",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	if parent >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     parent,
@@ -301,7 +309,7 @@ func (w *rustWalk) addMethod(n *tsg.Node) int64 {
 		kind = topology.KindTest
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -309,7 +317,10 @@ func (w *rustWalk) addMethod(n *tsg.Node) int64 {
 		EndLine:   line(n.EndPoint()),
 		Language:  "rust",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, rustIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	return idx
 }
@@ -320,7 +331,7 @@ func (w *rustWalk) addBinding(n *tsg.Node, kind topology.NodeKind) int64 {
 		return -1
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -328,22 +339,29 @@ func (w *rustWalk) addBinding(n *tsg.Node, kind topology.NodeKind) int64 {
 		EndLine:   line(n.EndPoint()),
 		Language:  "rust",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	return idx
 }
+
+// rustIsComment reports whether a Rust grammar node type is a comment.
+func rustIsComment(typ string) bool { return typ == "line_comment" || typ == "block_comment" }
 
 func (w *rustWalk) addImport(n *tsg.Node) {
 	name := strings.TrimSpace(w.fieldText(n, "argument"))
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
 		Language:  "rust",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 func (w *rustWalk) resolveImplContains() {

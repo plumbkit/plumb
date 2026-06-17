@@ -209,3 +209,37 @@ class Service:
 		t.Errorf("class attr LIMIT should be contained at 1.0; got conf=%v ok=%v", conf, ok)
 	}
 }
+
+func TestPython_ByteSpanReconstructsDeclaration(t *testing.T) {
+	src := []byte("# a leading comment\ndef café(x):\n    return x\n")
+	nodes, _, err := NewPython().Extract(context.Background(), "m.py", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	var fn *topology.Node
+	for i := range nodes {
+		if nodes[i].Name == "café" {
+			fn = &nodes[i]
+		}
+	}
+	if fn == nil {
+		t.Fatal("café function not found")
+	}
+	if !fn.HasBytes {
+		t.Fatal("café should carry byte spans")
+	}
+	// Byte span reconstructs the def exactly (multibyte name proves byte offsets).
+	if got := string(src[fn.StartByte:fn.EndByte]); got != "def café(x):\n    return x" {
+		t.Errorf("decl span = %q", got)
+	}
+	// Doc span covers the preceding comment and is a strict prefix of the decl.
+	if !fn.HasDocSpan() {
+		t.Fatal("café should carry a doc span from the leading comment")
+	}
+	if fn.DocStartByte >= fn.StartByte {
+		t.Errorf("doc span start %d should precede decl start %d", fn.DocStartByte, fn.StartByte)
+	}
+	if doc := string(src[fn.DocStartByte:fn.DocEndByte]); doc != "# a leading comment" {
+		t.Errorf("doc span = %q", doc)
+	}
+}

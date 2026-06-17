@@ -191,3 +191,35 @@ func TestTSX_PrivateStaticFields(t *testing.T) {
 		t.Errorf("static readonly KIND should be KindConstant; consts=%v", names(nodes, topology.KindConstant))
 	}
 }
+
+func TestTS_ByteSpanReconstructsDeclaration(t *testing.T) {
+	// A multibyte string literal before the target proves byte offsets and that
+	// columns (derived from the line map) are byte columns.
+	src := []byte("const greeting = \"☕ café\";\nfunction add(a: number, b: number): number { return a + b; }\n")
+	nodes, _, err := NewTypeScript().Extract(context.Background(), "m.ts", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	var fn *topology.Node
+	for i := range nodes {
+		if nodes[i].Name == "add" {
+			fn = &nodes[i]
+		}
+	}
+	if fn == nil {
+		t.Fatal("add function not found")
+	}
+	if !fn.HasBytes {
+		t.Fatal("add should carry byte spans")
+	}
+	if got := string(src[fn.StartByte:fn.EndByte]); got != "function add(a: number, b: number): number { return a + b; }" {
+		t.Errorf("decl span = %q", got)
+	}
+	// add sits at column 0 of line 2 (line index 1).
+	if fn.StartCol != 0 {
+		t.Errorf("StartCol = %d, want 0", fn.StartCol)
+	}
+	if fn.StartLine != 2 {
+		t.Errorf("StartLine = %d, want 2", fn.StartLine)
+	}
+}

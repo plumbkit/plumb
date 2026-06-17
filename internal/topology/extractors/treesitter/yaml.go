@@ -80,7 +80,7 @@ func (w *yamlWalk) handlePair(n *tsg.Node, parent int64, prefix string) {
 		qualified = prefix + "." + key
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindField,
 		Name:      key,
 		Qualified: qualified,
@@ -88,7 +88,9 @@ func (w *yamlWalk) handlePair(n *tsg.Node, parent int64, prefix string) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "yaml",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	if parent >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     parent,

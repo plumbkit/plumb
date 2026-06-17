@@ -200,7 +200,7 @@ func (w *swiftWalk) handleProtocol(n *tsg.Node, enclosing int64) {
 
 func (w *swiftWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, enclosing int64) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -208,13 +208,19 @@ func (w *swiftWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, en
 		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, swiftIsComment)
+	w.nodes = append(w.nodes, node)
 	if c := w.typeConformance(n); c != "" {
 		w.conf[idx] = c
 	}
 	w.containedBy(enclosing, idx)
 	return idx
 }
+
+// swiftIsComment reports whether a Swift grammar node type is a comment.
+func swiftIsComment(typ string) bool { return typ == "comment" || typ == "multiline_comment" }
 
 func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 	name := w.funcName(n)
@@ -229,7 +235,7 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 		kind = topology.KindTest
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -238,7 +244,10 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, swiftIsComment)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
 }
@@ -286,7 +295,7 @@ func (w *swiftWalk) addProperty(n *tsg.Node, enclosing int64) {
 		kind = topology.KindVariable
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -294,7 +303,9 @@ func (w *swiftWalk) addProperty(n *tsg.Node, enclosing int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 }
 
@@ -304,7 +315,7 @@ func (w *swiftWalk) addEnumEntry(n *tsg.Node, enclosing int64) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindConstant,
 		Name:      id.Text(w.src),
 		Qualified: id.Text(w.src),
@@ -312,7 +323,9 @@ func (w *swiftWalk) addEnumEntry(n *tsg.Node, enclosing int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 }
 
@@ -325,13 +338,15 @@ func (w *swiftWalk) addImport(n *tsg.Node) {
 	if name == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
 		Language:  "swift",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 func (w *swiftWalk) containedBy(enclosing, child int64) {

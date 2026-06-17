@@ -75,7 +75,7 @@ func (w *dockerWalk) addStage(n *tsg.Node) int64 {
 		return -1
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindType,
 		Name:      name,
 		Qualified: name,
@@ -83,7 +83,9 @@ func (w *dockerWalk) addStage(n *tsg.Node) int64 {
 		EndLine:   line(n.EndPoint()),
 		Language:  "dockerfile",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	return idx
 }
 
@@ -125,7 +127,7 @@ func (w *dockerWalk) addVar(n *tsg.Node, raw string, stage int64) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindVariable,
 		Name:      name,
 		Qualified: name,
@@ -133,7 +135,9 @@ func (w *dockerWalk) addVar(n *tsg.Node, raw string, stage int64) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "dockerfile",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	if stage >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     stage,

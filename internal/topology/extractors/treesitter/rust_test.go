@@ -3,6 +3,7 @@ package treesitter
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/topology"
@@ -252,5 +253,39 @@ impl Point {
 	}
 	if !slices.Contains(names(nodes, topology.KindType), "Unit") {
 		t.Errorf("impl associated type Unit missing; types=%v", names(nodes, topology.KindType))
+	}
+}
+
+func TestRust_ByteSpanAndDocSpan(t *testing.T) {
+	src := []byte("/// Adds two numbers.\nfn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
+	nodes, _, err := NewRust().Extract(context.Background(), "m.rs", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	var fn *topology.Node
+	for i := range nodes {
+		if nodes[i].Name == "add" {
+			fn = &nodes[i]
+		}
+	}
+	if fn == nil {
+		t.Fatal("add function not found")
+	}
+	if !fn.HasBytes {
+		t.Fatal("add should carry byte spans")
+	}
+	if got := string(src[fn.StartByte:fn.EndByte]); got != "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}" {
+		t.Errorf("decl span = %q", got)
+	}
+	if !fn.HasDocSpan() {
+		t.Fatal("add should carry a doc span from the /// comment")
+	}
+	// The Rust grammar's line_comment node may include its trailing newline, so
+	// assert the span covers exactly the comment text (trimmed of trailing space).
+	if doc := strings.TrimSpace(string(src[fn.DocStartByte:fn.DocEndByte])); doc != "/// Adds two numbers." {
+		t.Errorf("doc span = %q, want %q", doc, "/// Adds two numbers.")
+	}
+	if fn.DocStartByte >= fn.StartByte {
+		t.Errorf("doc span %d should precede decl %d", fn.DocStartByte, fn.StartByte)
 	}
 }

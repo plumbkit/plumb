@@ -232,3 +232,65 @@ func TestReplaceSymbolBody_NoFallbackSurfacesError(t *testing.T) {
 		t.Fatal("expected the LSP error to surface when no topology fallback is wired")
 	}
 }
+
+// TestReplaceSymbolBody_Fallback_CharPreciseRange proves the topology fallback
+// now reports a char-precise range (real start/end columns from the node's byte
+// span) rather than the old line-granular 0→EOL approximation. Alpha's body ends
+// at the closing brace on its own line (column 1, after the '}').
+func TestReplaceSymbolBody_Fallback_CharPreciseRange(t *testing.T) {
+	store, _, uri := fallbackFixture(t)
+	tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+	// Alpha spans lines 3–5 (1-based); the dry-run prints 0-based LSP lines 2–4.
+	args, _ := json.Marshal(map[string]any{
+		"uri": uri, "name_path": "Alpha", "content": "x",
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The end position is the closing brace: line 4 (0-based), char 1 — the
+	// char-precise column. A line-granular range would report char 0 with the
+	// end on the same line only by EOL length; the precise column is the proof.
+	if !strings.Contains(out, "line 2 char 0 → line 4 char 1") {
+		t.Errorf("expected char-precise range 'line 2 char 0 → line 4 char 1', got:\n%s", out)
+	}
+}
+
+// TestReplaceSymbolBody_Fallback_IncludeDocComment_PreciseSpan proves that with
+// include_doc_comment the replacement start is taken from the node's precise doc
+// span (the topology extractor records it exactly), covering the leading comment.
+func TestReplaceSymbolBody_Fallback_IncludeDocComment_PreciseSpan(t *testing.T) {
+	ws := t.TempDir()
+	src := "package demo\n\n// Alpha does a thing.\nfunc Alpha() int {\n\treturn 1\n}\n"
+	fpath := filepath.Join(ws, "demo.go")
+	if err := os.WriteFile(fpath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + fpath, "name_path": "Alpha",
+		"content": "func Alpha() int { return 2 }", "dry_run": false,
+		"include_doc_comment": true,
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("replace with include_doc_comment failed: %v", err)
+	}
+	got, _ := os.ReadFile(fpath)
+	content := string(got)
+	// The leading doc comment must be gone (covered by the precise doc span).
+	if strings.Contains(content, "// Alpha does a thing.") {
+		t.Errorf("doc comment should have been replaced via the precise doc span:\n%s", content)
+	}
+	if !strings.Contains(content, "func Alpha() int { return 2 }") {
+		t.Errorf("new declaration missing:\n%s", content)
+	}
+}

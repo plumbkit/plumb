@@ -77,7 +77,7 @@ func (w *bashWalk) addFunc(n *tsg.Node) {
 		return
 	}
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindFunction,
 		Name:      name,
 		Qualified: name,
@@ -85,7 +85,9 @@ func (w *bashWalk) addFunc(n *tsg.Node) {
 		EndLine:   line(n.EndPoint()),
 		Language:  "bash",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 }
 
@@ -126,7 +128,7 @@ func (w *bashWalk) addBinding(lineNode, nameNode *tsg.Node, kind topology.NodeKi
 		return
 	}
 	name := vn.Text(w.src)
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -134,7 +136,9 @@ func (w *bashWalk) addBinding(lineNode, nameNode *tsg.Node, kind topology.NodeKi
 		EndLine:   line(lineNode.EndPoint()),
 		Language:  "bash",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, lineNode)
+	w.nodes = append(w.nodes, node)
 }
 
 func (w *bashWalk) maybeImport(n *tsg.Node) {
@@ -149,13 +153,15 @@ func (w *bashWalk) maybeImport(n *tsg.Node) {
 	if target == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      target,
 		StartLine: line(n.StartPoint()),
 		Language:  "bash",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, n)
+	w.nodes = append(w.nodes, node)
 }
 
 // importTarget returns the first argument of a `source`/`.` command — the
