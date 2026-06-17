@@ -1,12 +1,13 @@
 // Package zig is the plumb adapter for zls, the Zig language server.
 //
-// Validation status: experimental — unit-tested with a mocked JSON-RPC
-// transport. An integration test (gated with the "integration" build tag)
-// spawns a real zls binary against testdata/zig-fixture/ and confirms
-// document-symbol extraction plus a DidChangeWatchedFiles + DidOpen →
-// diagnostics round-trip, but zls is not installed on the validation machine,
-// so that test skips until the binary is on PATH. Promote to "validated" once
-// it has run green against a real zls.
+// Validation status: validated — unit-tested with a mocked JSON-RPC transport,
+// and the integration test (gated with the "integration" build tag) runs green
+// against a real zls: it spawns the binary against testdata/zig-fixture/ and
+// confirms document-symbol extraction AND the DidChangeWatchedFiles + DidOpen →
+// publishDiagnostics round-trip. The round-trip began passing once plumb
+// advertised the textDocument.publishDiagnostics client capability (the same
+// fix that validated typescript-language-server) — the earlier "zls is pull-only
+// so it never pushes" hypothesis was wrong. Last green: 2026-06-17 on zls 0.16.
 //
 // Per-document queries (documentSymbol, definition, references, hover, the
 // rename/call/type-hierarchy prepares) open the file via textDocument/didOpen
