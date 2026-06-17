@@ -46,12 +46,13 @@ func (e *ZigExtractor) Extract(_ context.Context, relPath string, src []byte) ([
 }
 
 type zigWalk struct {
-	lang    *tsg.Language
-	src     []byte
-	path    string
-	nodes   []topology.Node
-	edges   []topology.Edge
-	funcIdx map[string]int64 // function/method name → node index, for call edges
+	lang       *tsg.Language
+	src        []byte
+	path       string
+	nodes      []topology.Node
+	edges      []topology.Edge
+	funcIdx    map[string]int64 // function/method name → node index, for call edges
+	nameCounts map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
 }
 
 // containerTypes are the value node types that make a `const X = <value>`
@@ -322,6 +323,7 @@ func (w *zigWalk) addTest(n *tsg.Node) {
 // by name within the file, so confidence is 0.8 (heuristic).
 func (w *zigWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
+	w.nameCounts = callableNameCounts(w.nodes)
 	var rec func(n *tsg.Node, curFunc int64)
 	rec = func(n *tsg.Node, curFunc int64) {
 		switch n.Type(w.lang) {
@@ -358,13 +360,7 @@ func (w *zigWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64
 		return
 	}
 	seen[key] = true
-	w.edges = append(w.edges, topology.Edge{
-		FromID:     curFunc,
-		ToID:       to,
-		Kind:       topology.EdgeCalls,
-		Confidence: 0.8,
-		Source:     "heuristic",
-	})
+	w.edges = append(w.edges, heuristicCallEdge(curFunc, to, w.nodes, w.nameCounts))
 }
 
 func (w *zigWalk) calleeName(callee *tsg.Node) string {

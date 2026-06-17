@@ -49,12 +49,13 @@ func (e *JavaExtractor) Extract(_ context.Context, relPath string, src []byte) (
 }
 
 type javaWalk struct {
-	lang    *tsg.Language
-	src     []byte
-	path    string
-	nodes   []topology.Node
-	edges   []topology.Edge
-	funcIdx map[string]int64 // method/constructor name → node index, for call edges
+	lang       *tsg.Language
+	src        []byte
+	path       string
+	nodes      []topology.Node
+	edges      []topology.Edge
+	funcIdx    map[string]int64 // method/constructor name → node index, for call edges
+	nameCounts map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
 }
 
 // walk descends the tree. enclosing is the node index of the lexically enclosing
@@ -264,6 +265,7 @@ func (w *javaWalk) isTest(n *tsg.Node) bool {
 // name within the file, so confidence is 0.8 (heuristic).
 func (w *javaWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
+	w.nameCounts = callableNameCounts(w.nodes)
 	var rec func(n *tsg.Node, curFunc int64)
 	rec = func(n *tsg.Node, curFunc int64) {
 		switch n.Type(w.lang) {
@@ -298,13 +300,7 @@ func (w *javaWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int6
 		return
 	}
 	seen[key] = true
-	w.edges = append(w.edges, topology.Edge{
-		FromID:     curFunc,
-		ToID:       to,
-		Kind:       topology.EdgeCalls,
-		Confidence: 0.8,
-		Source:     "heuristic",
-	})
+	w.edges = append(w.edges, heuristicCallEdge(curFunc, to, w.nodes, w.nameCounts))
 }
 
 // lastJavaIdentifier returns the deepest-rightmost identifier under n, so a

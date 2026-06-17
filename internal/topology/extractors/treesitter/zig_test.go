@@ -117,6 +117,55 @@ func TestZig_CallEdgeIntraFile(t *testing.T) {
 	t.Errorf("no call edge add→helper; edges=%v", edges)
 }
 
+// TestZig_AmbiguousCallEdgeDownWeighted is the regression for #30: when more
+// than one callable in the file shares the callee's name,
+// a name-only (receiver-blind) call resolution is ambiguous, so the edge is
+// down-weighted to 0.5/heuristic-ambiguous rather than asserting a confident
+// 0.8 edge to an arbitrary same-named target. A uniquely-named call in the same
+// file is unaffected.
+func TestZig_AmbiguousCallEdgeDownWeighted(t *testing.T) {
+	src := []byte(`const A = struct {
+    fn deinit(self: *A) void {}
+};
+const B = struct {
+    fn deinit(self: *B) void {}
+    fn release(self: *B) void {
+        self.deinit();
+        cleanup();
+    }
+};
+fn cleanup() void {}
+`)
+	nodes, edges, err := NewZig().Extract(context.Background(), "res.zig", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotAmbiguous, gotUnique bool
+	for _, e := range edges {
+		if e.Kind != topology.EdgeCalls {
+			continue
+		}
+		switch nodes[e.ToID].Name {
+		case "deinit": // two deinit methods in the file → ambiguous
+			gotAmbiguous = true
+			if e.Confidence != 0.5 || e.Source != "heuristic-ambiguous" {
+				t.Errorf("ambiguous call edge →deinit conf=%v src=%q, want 0.5/heuristic-ambiguous", e.Confidence, e.Source)
+			}
+		case "cleanup": // unique name → confident
+			gotUnique = true
+			if e.Confidence != 0.8 || e.Source != "heuristic" {
+				t.Errorf("unique call edge →cleanup conf=%v src=%q, want 0.8/heuristic", e.Confidence, e.Source)
+			}
+		}
+	}
+	if !gotAmbiguous {
+		t.Errorf("no call edge to an ambiguous deinit; edges=%v", edges)
+	}
+	if !gotUnique {
+		t.Errorf("no call edge to the unique cleanup; edges=%v", edges)
+	}
+}
+
 func TestZig_ConstVsVar(t *testing.T) {
 	nodes, _, err := NewZig().Extract(context.Background(), "geo.zig", zigSrc)
 	if err != nil {
