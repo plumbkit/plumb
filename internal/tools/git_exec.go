@@ -172,6 +172,9 @@ func enhanceGitError(repoRoot, msg string) string {
 	if hint := submodulePathspecHint(repoRoot, msg); hint != "" {
 		return msg + hint
 	}
+	if hint := untrackedPathspecHint(msg); hint != "" {
+		return msg + hint
+	}
 	if hint := indexLockHint(repoRoot, msg); hint != "" {
 		return msg + hint
 	}
@@ -219,6 +222,28 @@ func submodulePathspecHint(repoRoot, msg string) string {
 			"Re-run the git tool with repo=%q (a path inside the submodule) and give files relative to that root. "+
 			"After committing inside the submodule, record the moved pointer with a separate add+commit in the superproject.",
 		name, sub,
+	)
+}
+
+// untrackedPathspecHint addresses git's "pathspec '<path>' did not match any
+// file(s) known to git" failure on a path-limited commit (`commit -- <path>`).
+// The usual cause is a freshly-created, still-untracked file: a path-limited
+// commit only commits already-tracked paths, so git cannot match one git has
+// never seen. The remedy is to stage it first. Returns "" when msg is not this
+// failure — the submodule variant ("is in submodule") is handled separately.
+func untrackedPathspecHint(msg string) string {
+	if !strings.Contains(msg, "did not match any file") {
+		return ""
+	}
+	path := firstQuoted(msg)
+	if path == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\n  %q is not yet tracked by git, so a path-limited commit cannot match it "+
+			"(commit -- <path> only commits already-tracked paths). "+
+			"Stage it first with the git tool — subcommand \"add\", files [%q] — then commit.",
+		path, path,
 	)
 }
 
