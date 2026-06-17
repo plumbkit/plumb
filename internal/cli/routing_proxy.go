@@ -106,13 +106,32 @@ func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
 	r.primary = p
 }
 
-// primaryClient returns the primary workspace's adapter or an error.
-func (r *routingProxy) primaryClient() (lsp.Client, error) {
+// primaryClient returns the primary workspace's adapter or an error. If the
+// pinned primary entry is hibernated (the idle janitor / LRU eviction stopped
+// its server — only Java hibernates today), it is woken via acquireLang,
+// mirroring route()'s on-demand acquire — so a URI-less call (WorkspaceSymbols,
+// the lifecycle methods) wakes the server instead of failing with the
+// misleading "not yet ready". A genuinely cold first start (no primary pinned
+// yet) still returns that error.
+func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 	r.mu.RLock()
 	p := r.primary
+	root := r.primaryRoot
+	lang := r.primaryLang
 	r.mu.RUnlock()
 	if c := p.get(); c != nil {
 		p.touch()
+		return c, nil
+	}
+	if root == "" || lang == "" {
+		return nil, fmt.Errorf("LSP server not yet ready")
+	}
+	e, err := r.pool.acquireLang(ctx, root, lang, false)
+	if err != nil {
+		return nil, fmt.Errorf("waking primary %s for %s: %w", lang, root, err)
+	}
+	if c := e.proxy.get(); c != nil {
+		e.proxy.touch()
 		return c, nil
 	}
 	return nil, fmt.Errorf("LSP server not yet ready")
@@ -122,7 +141,7 @@ func (r *routingProxy) primaryClient() (lsp.Client, error) {
 // Falls back to the primary if uri is empty or workspace resolution fails.
 func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error) {
 	if uri == "" {
-		return r.primaryClient()
+		return r.primaryClient(ctx)
 	}
 	path := strings.TrimPrefix(uri, "file://")
 	r.mu.RLock()
@@ -135,7 +154,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 	}
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil {
-		return r.primaryClient()
+		return r.primaryClient(ctx)
 	}
 
 	// Pick the language by file extension first (so a .html file in a Go root
@@ -148,7 +167,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 		targetLang = fileLang
 	}
 	if targetLang == "" || targetLang == LanguageNone {
-		return r.primaryClient()
+		return r.primaryClient(ctx)
 	}
 
 	r.mu.RLock()
@@ -211,7 +230,7 @@ func withinRoot(path, root string) bool {
 
 // Workspace-wide / lifecycle methods stick to the primary.
 func (r *routingProxy) Initialize(ctx context.Context, params protocol.InitializeParams) (*protocol.InitializeResult, error) {
-	c, err := r.primaryClient()
+	c, err := r.primaryClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +238,7 @@ func (r *routingProxy) Initialize(ctx context.Context, params protocol.Initializ
 }
 
 func (r *routingProxy) Initialized(ctx context.Context) error {
-	c, err := r.primaryClient()
+	c, err := r.primaryClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -227,7 +246,7 @@ func (r *routingProxy) Initialized(ctx context.Context) error {
 }
 
 func (r *routingProxy) Shutdown(ctx context.Context) error {
-	c, err := r.primaryClient()
+	c, err := r.primaryClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -235,7 +254,7 @@ func (r *routingProxy) Shutdown(ctx context.Context) error {
 }
 
 func (r *routingProxy) Exit(ctx context.Context) error {
-	c, err := r.primaryClient()
+	c, err := r.primaryClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -249,7 +268,7 @@ func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.Wor
 	r.mu.RUnlock()
 	// Single-language root: keep the primary-only behaviour.
 	if len(discovered) == 0 {
-		c, err := r.primaryClient()
+		c, err := r.primaryClient(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -356,7 +375,7 @@ func symbolKey(s protocol.SymbolInformation) string {
 }
 
 func (r *routingProxy) Capabilities() *protocol.ServerCapabilities {
-	c, err := r.primaryClient()
+	c, err := r.primaryClient(context.Background())
 	if err != nil {
 		return nil
 	}
@@ -364,7 +383,7 @@ func (r *routingProxy) Capabilities() *protocol.ServerCapabilities {
 }
 
 func (r *routingProxy) Subscribe(handler func(string, json.RawMessage)) func() {
-	c, err := r.primaryClient()
+	c, err := r.primaryClient(context.Background())
 	if err != nil {
 		return func() {}
 	}
