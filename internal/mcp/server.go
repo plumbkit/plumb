@@ -99,8 +99,9 @@ type Server struct {
 	info      ServerInfo
 	mu        sync.RWMutex
 	tools     map[string]Tool
-	argShapes map[string]*shape // parsed argument contract per tool; nil when unguardable
-	order     []string          // insertion order for tools/list
+	argShapes map[string]*shape          // parsed argument contract per tool; nil when unguardable
+	pubSchema map[string]json.RawMessage // alias-tolerant schema advertised in tools/list
+	order     []string                   // insertion order for tools/list
 
 	// OnInit is called once after a successful MCP initialize exchange.
 	OnInit func(ctx context.Context, request RequestFn)
@@ -163,6 +164,7 @@ func New(info ServerInfo) *Server {
 		info:         info,
 		tools:        make(map[string]Tool),
 		argShapes:    make(map[string]*shape),
+		pubSchema:    make(map[string]json.RawMessage),
 		pending:      make(map[string]chan json.RawMessage),
 		prompts:      make(map[string]Prompt),
 		WriteTimeout: DefaultWriteTimeout,
@@ -178,6 +180,11 @@ func (s *Server) Register(t Tool) {
 		s.order = append(s.order, t.Name())
 	}
 	s.tools[t.Name()] = t
+	// The advertised schema is alias-tolerant (relaxed required + additionalProperties)
+	// so a pre-validating host forwards alias-bearing calls; the daemon still validates
+	// against the original strict shape below. publishSchema is fail-open, so it is
+	// always safe to cache — even for an unguardable schema (returned unchanged).
+	s.pubSchema[t.Name()] = publishSchema(t.InputSchema())
 	if sh, ok := parseShape(t.InputSchema()); ok {
 		s.argShapes[t.Name()] = sh
 	} else {

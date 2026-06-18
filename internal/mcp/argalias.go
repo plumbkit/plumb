@@ -13,20 +13,44 @@ import "strings"
 // old_string, new_string for file-content tools; path/pattern for search/dir
 // tools); this table lets other agents — and plumb's earlier conventions —
 // reach the same parameters without a failed call.
+//
+// Candidate order is most-preferred-first; the first one that is a real,
+// unset parameter of the called tool wins, so a single alias serves tools with
+// different shapes (e.g. "path" → uri on get_definition, → root on list_files,
+// and stays canonical on search_in_files where "path" is the real parameter).
+// New entries are empirically driven (the parameter names agents actually send,
+// mined from the stats DB) and must be unambiguous — never a semantic flip
+// (include≠exclude) or a safety-critical guess (no git subcommand/confirm).
 var paramAliases = map[string][]string{
-	"path":      {"file_path", "uri"},
+	// File / directory location.
+	"path":      {"file_path", "uri", "root"},
 	"filepath":  {"file_path", "path", "uri"},
 	"filename":  {"file_path", "uri"},
 	"file":      {"file_path", "path", "uri"},
-	"oldstr":    {"old_string"},
-	"newstr":    {"new_string"},
-	"dir":       {"path"},
-	"directory": {"path"},
-	"folder":    {"path"},
-	"regex":     {"pattern"},
-	"query":     {"pattern"},
-	"newname":   {"name"},
-	"symbol":    {"name"},
+	"filepaths": {"paths", "file_path"},
+	"dir":       {"path", "root"},
+	"directory": {"path", "root"},
+	"folder":    {"path", "root"},
+	"root":      {"path"},
+	// Edit content.
+	"oldstr":  {"old_string"},
+	"newstr":  {"new_string"},
+	"find":    {"pattern"},
+	"replace": {"replacement"},
+	// Search / symbol query.
+	"regex":       {"pattern"},
+	"query":       {"pattern", "name"},
+	"pattern":     {"query"},
+	"name":        {"query", "symbol_name"},
+	"newname":     {"name"},
+	"symbol":      {"name", "symbol_name", "query"},
+	"isregex":     {"use_regex"},
+	"filepattern": {"glob"},
+	// Move / copy.
+	"source":      {"from"},
+	"destination": {"to"},
+	// Workspace pin.
+	"workspacepath": {"workspace"},
 }
 
 // aliasNotice formats the leading note prepended to a tool result when one or
