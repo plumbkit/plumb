@@ -84,7 +84,8 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		         SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) AS errors,
 		         MAX(called_at) AS last_called,
 		         COALESCE(SUM(capability_tokens), 0) AS cap_tokens,
-		         COALESCE(SUM(efficiency_tokens), 0) AS eff_tokens
+		         COALESCE(SUM(efficiency_tokens), 0) AS eff_tokens,
+		         COALESCE(SUM(tokens_saved), 0) AS tokens_saved
 		  FROM tool_calls`
 	q := summaryBase + where + " GROUP BY tool ORDER BY calls DESC" //nolint:gosec // G202: see comment above
 
@@ -99,7 +100,7 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		var s ToolStat
 		var lastMs int64
 		var totalIn, totalOut int64
-		if err := rows.Scan(&s.Tool, &s.Calls, &s.AvgMs, &totalIn, &totalOut, &s.Errors, &lastMs, &s.CapabilityTokens, &s.EfficiencyTokens); err != nil {
+		if err := rows.Scan(&s.Tool, &s.Calls, &s.AvgMs, &totalIn, &totalOut, &s.Errors, &lastMs, &s.CapabilityTokens, &s.EfficiencyTokens, &s.TokensSaved); err != nil {
 			continue
 		}
 		s.TotalInputKB = float64(totalIn) / 1024
@@ -111,11 +112,11 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		return nil, err
 	}
 
-	// Compute p95 per tool in one query, then join in Go.
+	// Compute p95 per tool in one query, then join in Go. TokensSaved is summed
+	// inline in the GROUP BY above, so no per-tool round-trip is needed.
 	p95map := d.p95All(filter)
 	for i := range out {
 		out[i].P95Ms = p95map[out[i].Tool]
-		out[i].TokensSaved = d.tokensSavedFor(filter, out[i].Tool)
 	}
 	return out, nil
 }
@@ -186,25 +187,6 @@ func (d *DB) FirstCallAt() time.Time {
 		return time.Time{}
 	}
 	return time.UnixMilli(ms.Int64)
-}
-
-// tokensSavedFor totals stored savings for one tool under filter. Legacy rows
-// (savings_model_version 0) carry tokens_saved = 0 and contribute nothing — they
-// are excluded by construction, never recomputed, so a stale profile table can no
-// longer rewrite history.
-func (d *DB) tokensSavedFor(filter Filter, tool string) int64 {
-	where, args := filter.where()
-	var q string
-	if where == "" {
-		q = `SELECT COALESCE(SUM(tokens_saved), 0) FROM tool_calls WHERE tool=?`
-		args = []any{tool}
-	} else {
-		q = `SELECT COALESCE(SUM(tokens_saved), 0) FROM tool_calls` + where + ` AND tool=?` //nolint:gosec // G202: where built from filter.where() using ? placeholders only
-		args = append(args, tool)
-	}
-	var total int64
-	_ = d.db.QueryRow(q, args...).Scan(&total)
-	return total
 }
 
 // p95All fetches duration_ms for all rows matching filter in a single query

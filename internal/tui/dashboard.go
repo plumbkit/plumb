@@ -62,20 +62,28 @@ func (m *Model) refreshDashboard() {
 	if m.globalDB == nil {
 		return
 	}
-	globalFilter := stats.Filter{}
-	m.dashLifetimeCalls = m.globalDB.TotalCalls(globalFilter)
-	m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
-	m.dashLifetimeAxes = m.globalDB.SavingsAxes(globalFilter)
-	m.dashLifetimeTokens = m.dashLifetimeAxes.Total()
-	m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
 	now := time.Now()
+	globalFilter := stats.Filter{}
+	// The lifetime-, uptime- and project-scoped widgets are whole-table
+	// aggregates: SavingsAxes scans every row and Summary sorts every duration
+	// for its p95. They barely move between 2 s polls, so recompute them only on
+	// the same 30 s cadence as the chart buckets (and on the first poll), keeping
+	// the hot poll path off the full table. See dashBucketRefreshInterval.
+	lifetimeDue := m.dashLastBucketRefresh.IsZero() || now.Sub(m.dashLastBucketRefresh) >= dashBucketRefreshInterval
+	if lifetimeDue {
+		m.dashLifetimeCalls = m.globalDB.TotalCalls(globalFilter)
+		m.dashLifetimeSessions = m.globalDB.TotalSessions(globalFilter)
+		m.dashLifetimeAxes = m.globalDB.SavingsAxes(globalFilter)
+		m.dashLifetimeTokens = m.dashLifetimeAxes.Total()
+		m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
+		m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
+		m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(now)})
+		m.refreshDashboardProject()
+	}
 	chartBuckets := max(m.dashChartWidth, activityBuckets)
 	if m.refreshDashboardBuckets(now, chartBuckets, globalFilter) {
 		m.dashLastBucketRefresh = now
 	}
-	m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
-	m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(now)})
-	m.refreshDashboardProject()
 }
 
 func (m *Model) refreshDashboardBuckets(now time.Time, chartBuckets int, gf stats.Filter) bool {

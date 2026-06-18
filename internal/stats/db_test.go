@@ -367,7 +367,7 @@ func TestTotalTokensSavedSinceScopesByTime(t *testing.T) {
 // TestSavingsCountsStoredExcludesLegacy proves the P5 read path: only rows scored
 // at write time (tokens_saved stored, version > 0) count; an unscored legacy row
 // (version 0) carries 0 and is never recomputed. Both read paths
-// (TotalTokensSavedSince and Summary's per-tool tokensSavedFor) are exercised.
+// (TotalTokensSavedSince and Summary's inline tokens_saved sum) are exercised.
 func TestSavingsCountsStoredExcludesLegacy(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
@@ -431,6 +431,12 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 		}
 		if !has {
 			t.Fatalf("tool_calls missing column %s", col)
+		}
+	}
+	for _, idx := range []string{"idx_tc_tool", "idx_tc_called_at", "idx_tc_session", "idx_tc_workspace", "idx_tc_ws_session", "idx_tc_tool_dur"} {
+		var name string
+		if err := db.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&name); err != nil {
+			t.Fatalf("index %s missing: %v", idx, err)
 		}
 	}
 }

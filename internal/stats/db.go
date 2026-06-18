@@ -68,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
 CREATE INDEX IF NOT EXISTS idx_tc_session   ON tool_calls(session_id);
 CREATE INDEX IF NOT EXISTS idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX IF NOT EXISTS idx_tc_ws_session ON tool_calls(workspace, session_id);
+CREATE INDEX IF NOT EXISTS idx_tc_tool_dur ON tool_calls(tool, duration_ms);
 
 ` + episodicMemoriesDDL + `;
 CREATE INDEX IF NOT EXISTS idx_em_ws ON episodic_memories(workspace, generated_at);
