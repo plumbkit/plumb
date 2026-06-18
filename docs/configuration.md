@@ -62,6 +62,17 @@ project view. `[edits]`, `[walk]`, `[git]`, `[topology]`, `[session]`,
 |---|---|---|---|
 | `theme` | string | `"plumb"` | Active colour theme. Set interactively via the TUI **Settings** picker, which persists it here. |
 
+## `[web]` — web UI (global only)
+
+The opt-in, loopback-only web UI launched with `plumb web`. See [Web UI](web.md).
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `port` | int | `8870` | Loopback TCP port for the web UI. The listener is always bound to `127.0.0.1` only. Applied on the next `plumb web`. |
+
+Like `[ui]`, `[web]` is read from the global config only and ignored in project
+config. `plumb web --port` overrides it for a single launch.
+
 ## `[cache]` — session symbol cache
 
 | Field | Type | Default | Effect |

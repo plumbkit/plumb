@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,10 +92,13 @@ func validLogLevelCommand(level string) bool {
 // treats a nil callback as "feature unavailable". Collapsing these into a struct
 // (rather than positional params) keeps adding a new admin command cheap.
 type ctrlHandlers struct {
-	diags         func(string) string // diagnostics <workspace>
-	reload        func() error        // reload-config
-	reloadProject func(string)        // reload-project <workspace>
-	lspStatus     func() string       // lsp-status
+	diags         func(string) string       // diagnostics <workspace>
+	reload        func() error              // reload-config
+	reloadProject func(string)              // reload-project <workspace>
+	lspStatus     func() string             // lsp-status
+	webStart      func(int) (string, error) // web-start [port] → URL
+	webStatus     func() string             // web-status
+	webStop       func() error              // web-stop
 }
 
 // serveControlSocket accepts admin connections on ln and handles each in its
@@ -120,37 +124,11 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 	}
 	line := strings.TrimSpace(scanner.Text())
 
-	if workspace, ok := strings.CutPrefix(line, "diagnostics "); ok {
-		if h.diags != nil {
-			fmt.Fprint(conn, h.diags(workspace))
-		}
+	if handleDebugCommand(conn, line, h) {
 		return
 	}
 
-	if line == "reload-config" {
-		handleReloadConfig(conn, h.reload)
-		return
-	}
-
-	if line == "heap-profile" {
-		handleHeapProfile(conn)
-		return
-	}
-
-	if line == "mem-stats" {
-		handleMemStats(conn)
-		return
-	}
-
-	if line == "lsp-status" {
-		if h.lspStatus != nil {
-			fmt.Fprint(conn, h.lspStatus())
-		}
-		return
-	}
-
-	if line == "goroutine-stacks" {
-		handleStacksProfile(conn)
+	if handleWebCommand(conn, line, h) {
 		return
 	}
 
@@ -185,6 +163,91 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 
 	slog.Info("daemon: log level changed via control socket", "level", level)
 	fmt.Fprintf(conn, "ok\n")
+}
+
+// handleDebugCommand dispatches the introspection/diagnostics control commands
+// (diagnostics, reload-config, heap-profile, mem-stats, lsp-status,
+// goroutine-stacks). It reports whether line matched, so handleCtrlConn can stop
+// processing — splitting these out keeps handleCtrlConn under the complexity cap.
+func handleDebugCommand(conn net.Conn, line string, h ctrlHandlers) bool {
+	if workspace, ok := strings.CutPrefix(line, "diagnostics "); ok {
+		if h.diags != nil {
+			fmt.Fprint(conn, h.diags(workspace))
+		}
+		return true
+	}
+	switch line {
+	case "reload-config":
+		handleReloadConfig(conn, h.reload)
+	case "heap-profile":
+		handleHeapProfile(conn)
+	case "mem-stats":
+		handleMemStats(conn)
+	case "lsp-status":
+		if h.lspStatus != nil {
+			fmt.Fprint(conn, h.lspStatus())
+		}
+	case "goroutine-stacks":
+		handleStacksProfile(conn)
+	default:
+		return false
+	}
+	return true
+}
+
+// handleWebCommand dispatches the web-server control commands (web-start
+// [port], web-status, web-stop). It reports whether line matched a web command
+// so handleCtrlConn can stop processing. A nil handler replies that the feature
+// is unavailable.
+func handleWebCommand(conn net.Conn, line string, h ctrlHandlers) bool {
+	switch {
+	case line == "web-status":
+		if h.webStatus == nil {
+			fmt.Fprint(conn, "error: web server unavailable\n")
+			return true
+		}
+		fmt.Fprintf(conn, "%s\n", h.webStatus())
+		return true
+	case line == "web-stop":
+		if h.webStop == nil {
+			fmt.Fprint(conn, "error: web server unavailable\n")
+			return true
+		}
+		if err := h.webStop(); err != nil {
+			fmt.Fprintf(conn, "error: %s\n", err.Error())
+			return true
+		}
+		fmt.Fprint(conn, "ok\n")
+		return true
+	case line == "web-start" || strings.HasPrefix(line, "web-start "):
+		handleWebStart(conn, line, h.webStart)
+		return true
+	default:
+		return false
+	}
+}
+
+// handleWebStart parses the optional port argument and binds the web server.
+func handleWebStart(conn net.Conn, line string, start func(int) (string, error)) {
+	if start == nil {
+		fmt.Fprint(conn, "error: web server unavailable\n")
+		return
+	}
+	port := 0
+	if arg := strings.TrimSpace(strings.TrimPrefix(line, "web-start")); arg != "" {
+		p, err := strconv.Atoi(arg)
+		if err != nil {
+			fmt.Fprintf(conn, "error: invalid port %q\n", arg)
+			return
+		}
+		port = p
+	}
+	url, err := start(port)
+	if err != nil {
+		fmt.Fprintf(conn, "error: %s\n", err.Error())
+		return
+	}
+	fmt.Fprintf(conn, "%s\n", url)
 }
 
 // handleHeapProfile writes a heap pprof snapshot to the cache dir and replies

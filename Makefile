@@ -22,7 +22,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog
+.PHONY: build web-ui test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -32,6 +32,13 @@ build:
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) --no-print-directory codesign
 endif
+
+# web-ui builds the embedded Svelte SPA into internal/web/ui/dist, which the
+# Go binary //go:embed's via internal/web/assets.go. A committed placeholder
+# index.html keeps a bare `go build` compiling, so this is only needed to pick
+# up frontend changes; run it before `make build` after editing the SPA.
+web-ui:
+	cd internal/web/ui && npm ci && npm run build
 
 # codesign signs the built binary on macOS. Stable identifier (CODESIGN_BUNDLE)
 # means TCC associates consent with "this thing called plumb" instead of with

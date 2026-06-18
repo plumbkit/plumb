@@ -156,7 +156,16 @@ Layered and hot-reloaded (`gitPolicyFn`). Classification is *safe-biased* (`clas
 theme = "plumb"   # built-in theme name; must match a key in tui.AvailableThemes
 ```
 
-Built-ins: `nordico`, `darcula`, `dracula`, `gruvbox`, `plumb` (dark); `github-light`, `solarized-light`, `plumb-light` (light). The `plumb`/`plumb-light` pair is derived from the project website's own terracotta/sage palette (`site/index.html`). Written live by the theme picker, read at startup; `config.Save` rewrites the whole file, so user TOML comments are lost on first save. Project config ignores `[ui]`.
+Built-ins: `nordico`, `darcula`, `dracula`, `gruvbox`, `plumb` (dark); `github-light`, `solarized-light`, `plumb-light` (light). The `plumb`/`plumb-light` pair is derived from the project website's own terracotta/sage palette (`site/index.html`). Written live by the theme picker, read at startup; `config.Save` rewrites the whole file, so user TOML comments are lost on first save. Project config ignores `[ui]`. The palette catalogue lives in the UI-agnostic `internal/theme` package (hex strings, no bubbletea import) and is consumed by both the TUI and the web UI; `internal/tui/theme.go` holds the TUI `Theme` (lipgloss colours, some terminal-palette indices).
+
+### `[web]` — web UI (global config only)
+
+```toml
+[web]
+port = 8870   # loopback TCP port for `plumb web`; bound to 127.0.0.1 only
+```
+
+The opt-in, loopback-only web UI launched with `plumb web` (full TUI parity: Dashboard, Sessions, Memory, Logs, scope-aware Settings + theme picker). The HTTP server is hosted **inside** the daemon (`internal/web`), bound only when `plumb web` sends `web-start` over the control socket, on `127.0.0.1` only, behind a per-start 256-bit token (query param on first load → `HttpOnly`/`SameSite=Strict` cookie; `Origin`/`Host` CSRF check on the two write paths). Read-only JSON snapshots + SSE streams reuse the existing stats/monitor/session/topology/memory read paths; the only writes are config + theme (via `config.Save`/`SetProjectValue` + reload). The Svelte 5 + Vite + Tailwind SPA (ECharts + uPlot) is `go:embed`'d from `internal/web/ui/dist` — a committed placeholder keeps a bare `go build` compiling; run `make web-ui` then `make build` to pick up SPA changes. Like `[ui]`, `[web]` is global-only (ignored in project config). No env override. The web UI is a daemon surface, not an MCP tool, so the tool count is unchanged. Full guide: [`docs/web.md`](docs/web.md).
 
 ### `[lsp_query]` — LSP tool-call timeout
 

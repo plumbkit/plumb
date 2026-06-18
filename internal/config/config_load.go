@@ -283,6 +283,12 @@ func LoadProject(base Config, workspace string) (Config, error) {
 	// the project file sets. This single chokepoint keeps the guarantee true for
 	// every consumer (the daemon gate, `config show`, the TUI display).
 	merged.AgentConfigWrites = base.AgentConfigWrites
+	// [web] and [ui] are daemon-global presentation settings, not per-project
+	// concerns — the web server is one process-wide listener and the theme is a
+	// single global preference. Force the global values to win so a project's
+	// (untrusted) .plumb/config.toml cannot rebind the web port or flip the theme.
+	merged.Web = base.Web
+	merged.UI = base.UI
 	normaliseConfig(&merged)
 	if err := validate(merged); err != nil {
 		return base, fmt.Errorf("invalid project config: %w", err)

@@ -106,40 +106,35 @@ func (m Model) setCycle(it settingItem, dir int) Model {
 	return m
 }
 
+// numberMetaTable holds the adjust step and status label for each numeric
+// setting. A table (rather than a switch) keeps numberMeta trivial as rows grow.
+var numberMetaTable = map[settingKey]struct {
+	step  int
+	label string
+}{
+	skRateLimit:             {10, "rate limit"},
+	skCacheMaxSize:          {100, "cache max_size"},
+	skWebPort:               {1, "web port"},
+	skPostWriteDiagMs:       {50, "post-write diag (ms)"},
+	skConcurrentSkewMs:      {25, "concurrent skew (ms)"},
+	skTopoMaxFileSize:       {65536, "max file size (B)"},
+	skTopoResyncBatch:       {25, "resync batch"},
+	skTopoResyncPauseMs:     {5, "resync pause (ms)"},
+	skTopoResyncIntervalMin: {5, "resync interval (min)"},
+	skQualityTimeoutMs:      {500, "quality timeout (ms)"},
+	skQualityMaxFindings:    {1, "max findings/file"},
+	skIdleThresholdMin:      {5, "idle threshold (min)"},
+	skEvictionTTLMin:        {5, "eviction ttl (min)"},
+	skChildScanDepth:        {1, "child scan depth"},
+	skSemRerankCandidates:   {10, "rerank candidates"},
+}
+
 // numberMeta returns the adjust step and status label for a numeric setting.
 func numberMeta(key settingKey) (int, string) {
-	switch key {
-	case skRateLimit:
-		return 10, "rate limit"
-	case skCacheMaxSize:
-		return 100, "cache max_size"
-	case skPostWriteDiagMs:
-		return 50, "post-write diag (ms)"
-	case skConcurrentSkewMs:
-		return 25, "concurrent skew (ms)"
-	case skTopoMaxFileSize:
-		return 65536, "max file size (B)"
-	case skTopoResyncBatch:
-		return 25, "resync batch"
-	case skTopoResyncPauseMs:
-		return 5, "resync pause (ms)"
-	case skTopoResyncIntervalMin:
-		return 5, "resync interval (min)"
-	case skQualityTimeoutMs:
-		return 500, "quality timeout (ms)"
-	case skQualityMaxFindings:
-		return 1, "max findings/file"
-	case skIdleThresholdMin:
-		return 5, "idle threshold (min)"
-	case skEvictionTTLMin:
-		return 5, "eviction ttl (min)"
-	case skChildScanDepth:
-		return 1, "child scan depth"
-	case skSemRerankCandidates:
-		return 10, "rerank candidates"
-	default:
-		return 1, ""
+	if m, ok := numberMetaTable[key]; ok {
+		return m.step, m.label
 	}
+	return 1, ""
 }
 
 // intField returns a pointer to the int config field a numeric row edits
@@ -150,6 +145,8 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Edits.RateLimitPerMinute
 	case skCacheMaxSize:
 		return &c.Cache.MaxSize
+	case skWebPort:
+		return &c.Web.Port
 	case skPostWriteDiagMs:
 		return &c.Edits.PostWriteDiagnosticsMs
 	case skConcurrentSkewMs:

@@ -1,0 +1,22 @@
+{
+  "name": "plumb-web-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tailwindcss/vite": "^4.1.4",
+    "svelte": "^5.20.0",
+    "tailwindcss": "^4.1.4",
+    "vite": "^6.2.0"
+  },
+  "dependencies": {
+    "echarts": "^5.5.1",
+    "uplot": "^1.6.31"
+  }
+}

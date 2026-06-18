@@ -21,6 +21,7 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/tools"
+	"github.com/plumbkit/plumb/internal/web"
 )
 
 // The daemon is split across files by concern: the connection registry + idle
@@ -264,6 +265,20 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// the per-workspace config reload at the sessions on that workspace.
 	registry := newConnRegistry()
 
+	daemonStartedAt := time.Now()
+
+	// The web UI server is constructed unbound: it does not listen until a
+	// `plumb web` invocation sends "web-start" over the control socket. It reuses
+	// the daemon's live config store and read-path snapshot files, so it never
+	// reimplements domain logic. Closed on daemon shutdown.
+	webServer := web.New(web.Deps{
+		Store:       store,
+		MetricsPath: monitor.SnapshotPath(),
+		LogPath:     daemonLogPath(),
+		StartedAt:   daemonStartedAt,
+	})
+	defer webServer.Close()
+
 	ctrlPath := daemonCtrlSocketPath()
 	_ = os.Remove(ctrlPath)
 	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
@@ -282,10 +297,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			reload:        store.Reload,
 			reloadProject: registry.reloadProject,
 			lspStatus:     pool.lspStatusReport,
+			webStart:      webServer.Start,
+			webStatus:     webServer.Status,
+			webStop:       webServer.Stop,
 		})
 	}
 
-	daemonStartedAt := time.Now()
 	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid(), "log", daemonLogPath())
 
 	tools.Version = Version
