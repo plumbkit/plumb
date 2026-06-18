@@ -99,7 +99,7 @@ func (t *EditFile) applyStrEdit(content string, edit strEdit, i int, path string
 		note = fmt.Sprintf("note: edit[%d] %s", i, gutterStrippedNote)
 	}
 	if count == 0 {
-		return "", "", &editLogicErr{t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime)}
+		return "", "", &editLogicErr{t.notFoundError(i, path, edit.OldStr, oldStr, content, preReadMtime)}
 	}
 	if edit.ReplaceAll {
 		return strings.ReplaceAll(content, oldStr, newStr), note, nil

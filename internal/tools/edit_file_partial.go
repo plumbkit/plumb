@@ -128,7 +128,7 @@ func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path st
 	}
 	oldStr, newStr, count, stripped := resolveStrMatch(content, edit)
 	if count == 0 {
-		return content, partialEditResult{index: i, err: t.notFoundError(i, path, edit.OldStr, oldStr, preReadMtime)}
+		return content, partialEditResult{index: i, err: t.notFoundError(i, path, edit.OldStr, oldStr, content, preReadMtime)}
 	}
 	if !edit.ReplaceAll && count > 1 {
 		return content, partialEditResult{index: i, err: ambiguousError(i, count, path, edit.OldStr, oldStr)}
