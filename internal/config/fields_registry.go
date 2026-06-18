@@ -36,6 +36,10 @@ var registryData = []Field{
 		Key: "log_file", Type: FieldString, ReloadTier: ReloadRestart,
 		Description: "Path the daemon writes logs to. Enter to edit; blank uses the default cache dir.",
 	},
+	{
+		Key: "web.port", Type: FieldInt, ReloadTier: ReloadRestart, Min: &minZero,
+		Description: "Loopback TCP port for the opt-in web UI (`plumb web`). Bound to 127.0.0.1 only. Default 8870.",
+	},
 
 	// --- Editing / Walk ---
 	{

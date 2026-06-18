@@ -250,6 +250,19 @@ type UIConfig struct {
 	PathStyle string `toml:"path_style"`
 }
 
+// WebConfig controls the opt-in loopback web UI served by the daemon. It is a
+// daemon-global setting stored in the global config only (like UIConfig);
+// project-local overrides are not supported — the web server is one process-wide
+// listener, not a per-workspace concern.
+//
+// Concurrency: read-only after Load returns.
+type WebConfig struct {
+	// Port is the loopback TCP port the web UI binds when `plumb web` starts it.
+	// Default 8870. The listener is always bound to 127.0.0.1 — never a routable
+	// address — so this only selects which loopback port to use.
+	Port int `toml:"port"`
+}
+
 // QualityConfig controls post-write offline code-quality analysis.
 // All fields can be overridden per-project via <workspace>/.plumb/config.toml.
 type QualityConfig struct {
@@ -365,6 +378,7 @@ type Config struct {
 	LogFormat string               `toml:"log_format"`
 	LogFile   string               `toml:"log_file"`
 	UI        UIConfig             `toml:"ui"`
+	Web       WebConfig            `toml:"web"`
 	Cache     CacheConfig          `toml:"cache"`
 	Edits     EditsConfig          `toml:"edits"`
 	Walk      WalkConfig           `toml:"walk"`

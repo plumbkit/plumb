@@ -10,6 +10,7 @@ var defaults = Config{
 	LogLevel:  "info",
 	LogFormat: "text",
 	UI:        UIConfig{Theme: "plumb", PathStyle: "compact"},
+	Web:       WebConfig{Port: 8870},
 	Cache: CacheConfig{
 		TTL:     Duration{5 * time.Minute},
 		MaxSize: 1000,
