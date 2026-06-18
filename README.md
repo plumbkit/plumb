@@ -127,13 +127,18 @@ flowchart TD
     S2 --> K
     S3 --> K
     K --> D["plumb daemon **"]
+    D --> SDB[("stats.db ***<br/>global — all projects")]
     D --> G["gopls → /projects/foo"]
     D --> P["pyright → /projects/bar"]
+    G --> F1[("/projects/foo/.plumb/ ***<br/>topology.db · memory.db")]
+    P --> F2[("/projects/bar/.plumb/ ***<br/>topology.db · memory.db")]
 ```
 
 `*` `plumb serve` is a reconnecting proxy — if the daemon crashes or hangs it respawns one and replays the handshake, so your session survives without the agent noticing.
 
 `**` one shared process, reused across every conversation.
+
+`***` SQLite. One **global** `stats.db` (tool stats + episodic summaries); two **per-project** indexes under each workspace's `.plumb/` — `topology.db` (the code graph) and `memory.db` (memory search). Schema details → [**docs/architecture.md**](docs/architecture.md#databases-at-a-glance).
 
 Servers stay warm across chats, per-path locks are shared across every connection, and symbol indexes update live after each write. Full architecture → [**docs/architecture.md**](docs/architecture.md).
 

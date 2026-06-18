@@ -192,7 +192,8 @@ Key design properties:
 | `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS log dir; `~/Library/Logs/plumb/` on macOS) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
-| `<workspace>/.plumb/topology.db` | daemon (when `[topology] enabled`) | Per-workspace SQLite/FTS5 semantic index |
+| `<workspace>/.plumb/topology.db` | daemon (when `[topology] enabled`) | Per-workspace SQLite/FTS5 semantic code index (rebuildable) |
+| `<workspace>/.plumb/memory.db` | daemon (when `[memory] enabled`) | Per-workspace SQLite/FTS5 index over `.plumb/memories/*.md` (rebuildable) |
 
 XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
 respected when set. Cache paths use `os.UserCacheDir()` directly because they
@@ -207,9 +208,46 @@ Linux layout. On macOS config and data (sessions, `stats.db`) live under
 and cache files (socket, pid, locks) under `~/Library/Caches/plumb/`. A pre-0.9.8 config at
 `~/.config/plumb/config.toml` is still read as a fallback.
 
+### Databases at a glance
+
+plumb persists to **three** SQLite databases — one **global**, two **per
+project** — alongside plain files (config, sessions, markdown memories). The
+split follows ownership: the daemon is a singleton shared across every
+conversation, so global state lives in one file keyed by `workspace` and
+`session_id`, while each project's semantic indexes live inside that project's
+`.plumb/` directory.
+
+| Database | Scope | Location (Linux / macOS) | Tables | Lifecycle |
+|---|---|---|---|---|
+| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 12) |
+| `topology.db` | **Per project** | `<workspace>/.plumb/` | `topology_files`, `topology_nodes`, `topology_edges`, `topology_fts`, `topology_embeddings` | Rebuildable index; dropped & recreated on a version bump |
+| `memory.db` | **Per project** | `<workspace>/.plumb/` | `memory_files`, `memory_records`, `memory_fts` | Rebuildable index over the markdown memories |
+
+Only `stats.db` holds primary data, so it is the only one with data-preserving
+migrations. The two per-project databases are *rebuildable* indexes — their
+source of truth lives elsewhere (the working tree for `topology.db`, the
+markdown files under `.plumb/memories/` for `memory.db`) — so `.plumb/.gitignore`
+excludes them and a schema bump simply drops and rebuilds rather than migrating.
+All three open in WAL mode.
+
+```mermaid
+flowchart TD
+    D["plumb daemon (singleton)"]
+    D --> SDB[("stats.db — GLOBAL<br/>~/…/share/plumb/")]
+    D --> W1["workspace /projects/foo"]
+    D --> W2["workspace /projects/bar"]
+    W1 --> T1[(".plumb/topology.db")]
+    W1 --> M1[(".plumb/memory.db")]
+    W2 --> T2[(".plumb/topology.db")]
+    W2 --> M2[(".plumb/memory.db")]
+```
+
+The per-database schemas, indexes, and relationships follow.
+
 ### Statistics database (`stats.db`)
 
-Single SQLite file containing one table:
+Single global SQLite file with two tables. The primary `tool_calls` table
+records every MCP tool invocation:
 
 ```sql
 CREATE TABLE tool_calls (
@@ -238,7 +276,31 @@ CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
 CREATE INDEX idx_tc_session   ON tool_calls(session_id);
 CREATE INDEX idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX idx_tc_ws_session ON tool_calls(workspace, session_id);
+CREATE INDEX idx_tc_tool_dur  ON tool_calls(tool, duration_ms);
 ```
+
+The second table, `episodic_memories` (added in schema v8), stores the
+rule-based summaries written when a session goes idle — the "last session"
+recap surfaced at `session_start`:
+
+```sql
+CREATE TABLE episodic_memories (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace     TEXT    NOT NULL DEFAULT '',
+    session_id    TEXT    NOT NULL DEFAULT '',
+    session_name  TEXT    NOT NULL DEFAULT '',
+    generated_at  INTEGER NOT NULL,              -- Unix milliseconds
+    summary       TEXT    NOT NULL DEFAULT '',
+    touched_files TEXT    NOT NULL DEFAULT '',
+    read_count    INTEGER NOT NULL DEFAULT 0,
+    write_count   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_em_ws ON episodic_memories(workspace, generated_at);
+```
+
+Neither table is FK-linked: both carry `workspace` + `session_id` as plain
+columns so the single global store can be filtered down to one project or one
+session at query time.
 
 Concurrency model:
 
@@ -267,6 +329,172 @@ COLUMN`) when the on-disk version is older, then stamps the current version, so
 existing history is preserved across upgrades. `OpenReadOnly()` (TUI, `plumb
 stats`) does not migrate; it reports a schema-upgrade-required notice until the
 daemon migrates the file.
+
+### Topology database (`topology.db`)
+
+Per-workspace semantic index of the code graph — **nodes** (symbols) and
+**edges** (relationships between them) — plus an FTS5 search index and an
+optional embedding cache. Built and kept live by the background indexer; it
+backs the six `topology_*` tools and the LSP→topology fallback. Lives at
+`<workspace>/.plumb/topology.db` (WAL, `PRAGMA foreign_keys = ON`). Defined in
+`internal/topology/db.go`.
+
+```sql
+CREATE TABLE topology_meta (            -- key/value: schema version, last sync
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE topology_files (           -- one row per indexed file
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    path          TEXT    NOT NULL UNIQUE,       -- workspace-relative path
+    language      TEXT    NOT NULL DEFAULT '',
+    mtime_ns      INTEGER NOT NULL DEFAULT 0,    -- freshness anchor
+    content_hash  TEXT    NOT NULL DEFAULT '',    -- SHA-256; reindex trigger
+    extractor_ver TEXT    NOT NULL DEFAULT '',
+    indexed_at    INTEGER NOT NULL DEFAULT 0,
+    error_msg     TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_tf_path ON topology_files(path);
+
+CREATE TABLE topology_nodes (           -- one row per symbol
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id    INTEGER NOT NULL REFERENCES topology_files(id) ON DELETE CASCADE,
+    kind       TEXT    NOT NULL,                 -- function, type, method, …
+    name       TEXT    NOT NULL DEFAULT '',      -- unqualified name
+    qualified  TEXT    NOT NULL DEFAULT '',      -- fully-qualified name
+    signature  TEXT    NOT NULL DEFAULT '',
+    start_line INTEGER NOT NULL DEFAULT 0,
+    end_line   INTEGER NOT NULL DEFAULT 0,
+    docstring  TEXT    NOT NULL DEFAULT '',
+    language   TEXT    NOT NULL DEFAULT '',
+    has_bytes      INTEGER NOT NULL DEFAULT 0,   -- 1 ⇒ byte/col spans valid
+    start_byte     INTEGER NOT NULL DEFAULT 0,
+    end_byte       INTEGER NOT NULL DEFAULT 0,
+    start_col      INTEGER NOT NULL DEFAULT 0,
+    end_col        INTEGER NOT NULL DEFAULT 0,
+    doc_start_byte INTEGER NOT NULL DEFAULT 0,   -- 0 ⇒ no doc comment
+    doc_end_byte   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_tn_file ON topology_nodes(file_id);
+CREATE INDEX idx_tn_name ON topology_nodes(name);
+CREATE INDEX idx_tn_kind ON topology_nodes(kind);
+
+CREATE TABLE topology_edges (           -- directed relationship between two nodes
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id    INTEGER NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    to_id      INTEGER NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    kind       TEXT    NOT NULL,                 -- call, reference, contains, …
+    confidence REAL    NOT NULL DEFAULT 1.0,
+    source     TEXT    NOT NULL DEFAULT 'extractor'  -- 'extractor' | 'inferred'
+);
+CREATE INDEX idx_te_from ON topology_edges(from_id);
+CREATE INDEX idx_te_to   ON topology_edges(to_id);
+
+-- FTS5 search index; rowid mirrors topology_nodes.id
+CREATE VIRTUAL TABLE topology_fts USING fts5(
+    name, name_tokens, qualified, signature, docstring, path, kind,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+-- opt-in embedding cache for semantic re-rank; keyed by content hash (not node
+-- id) so a vector survives a resync and is shared across identical symbol text
+CREATE TABLE topology_embeddings (
+    model        TEXT    NOT NULL,
+    content_hash TEXT    NOT NULL,
+    dim          INTEGER NOT NULL,
+    vector       BLOB    NOT NULL,               -- little-endian float32
+    PRIMARY KEY (model, content_hash)
+);
+```
+
+Relationships (every FK is `ON DELETE CASCADE`, so deleting a file removes its
+nodes, and deleting a node removes its edges):
+
+```mermaid
+erDiagram
+    topology_files ||--o{ topology_nodes : "file_id"
+    topology_nodes ||--o{ topology_edges : "from_id"
+    topology_nodes ||--o{ topology_edges : "to_id"
+    topology_nodes ||--|| topology_fts   : "rowid = node id"
+```
+
+`topology_fts` is an FTS5 virtual table whose `rowid` equals the indexed
+`topology_nodes.id`. `topology_embeddings` is deliberately **not** FK-linked to
+a node — keying it on `(model, content_hash)` lets one vector serve every symbol
+with identical text and outlive a reindex.
+
+**Lifecycle.** `topology.db` is a *rebuildable* index, versioned by `PRAGMA
+user_version` (currently 1). When the on-disk version is older the indexer DROPs
+and recreates every table rather than migrating — the working tree is the source
+of truth, so the resync that runs at each attach repopulates it. `topology.db`
+(and its `-wal`/`-shm` siblings) is auto-added to `<workspace>/.plumb/.gitignore`.
+
+### Memory index database (`memory.db`)
+
+Per-workspace FTS5 index over the markdown memory files in
+`<workspace>/.plumb/memories/`. The markdown files stay the source of truth;
+`memory.db` is a rebuildable, ranked search index (plain `grep` is the fallback
+when it is stale or absent). Lives at `<workspace>/.plumb/memory.db` (WAL,
+`PRAGMA foreign_keys = ON`, a single serialised connection). Defined in
+`internal/memory/index.go`.
+
+```sql
+CREATE TABLE memory_meta (              -- key/value metadata
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE memory_files (             -- one row per .plumb/memories/<name>.md
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    content_sha TEXT    NOT NULL DEFAULT '',     -- freshness anchor
+    mtime_ns    INTEGER NOT NULL DEFAULT 0,
+    size_bytes  INTEGER NOT NULL DEFAULT 0,
+    indexed_at  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE memory_records (           -- parsed frontmatter + body, one per file
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id        INTEGER NOT NULL REFERENCES memory_files(id) ON DELETE CASCADE,
+    name           TEXT    NOT NULL UNIQUE,
+    description    TEXT    NOT NULL DEFAULT '',
+    paths_json     TEXT    NOT NULL DEFAULT '',  -- path globs for hint injection
+    source_paths   TEXT    NOT NULL DEFAULT '',  -- provenance …
+    source_symbols TEXT    NOT NULL DEFAULT '',
+    source_session TEXT    NOT NULL DEFAULT '',
+    source_calls   TEXT    NOT NULL DEFAULT '',
+    confidence     TEXT    NOT NULL DEFAULT 'user', -- user|generated|imported|inferred
+    content_sha    TEXT    NOT NULL DEFAULT '',
+    created_at     INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER NOT NULL DEFAULT 0,
+    last_used_at   INTEGER NOT NULL DEFAULT 0,
+    supersedes     TEXT    NOT NULL DEFAULT '',  -- lineage, by name
+    superseded_by  TEXT    NOT NULL DEFAULT '',
+    stale_after    INTEGER NOT NULL DEFAULT 0    -- 0 ⇒ never expires
+);
+CREATE INDEX idx_mr_conf ON memory_records(confidence);
+CREATE INDEX idx_mr_used ON memory_records(last_used_at);
+
+-- FTS5 search index; rowid mirrors memory_records.id
+CREATE VIRTUAL TABLE memory_fts USING fts5(
+    name, name_tokens, description, body, path_globs,
+    source_paths, source_symbols, provenance,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+```
+
+```mermaid
+erDiagram
+    memory_files   ||--o{ memory_records : "file_id"
+    memory_records ||--|| memory_fts     : "rowid = record id"
+```
+
+`memory_records.supersedes` / `superseded_by` track memory lineage by `name`
+(logical, not a FK). Like `topology.db`, `memory.db` is a rebuildable index
+(`PRAGMA user_version` 1): on any markdown add/change/delete the index is
+reconciled against the files (content-SHA + size freshness check), and a version
+bump drops and rebuilds it. It is gitignored alongside `topology.db`.
 
 ### Session registry (`sessions/<id>.json`)
 
