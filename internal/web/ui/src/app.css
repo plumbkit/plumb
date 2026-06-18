@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+/* The palette is driven entirely by CSS custom properties set at runtime from
+   /api/theme, so the whole UI tracks the selected plumb theme. These are the
+   dark-plumb defaults; theme.js overwrites them on load and on theme change. */
+:root {
+  --bg: #121310;
+  --card: #1b1c17;
+  --card2: #22231d;
+  --rule: #2e2f27;
+  --text: #ece8dc;
+  --soft: #aaa595;
+  --faint: #787465;
+  --acc: #e08a55;
+  --acc2: #b35a2e;
+  --grn: #5cb88a;
+  --warn: #d9694a;
+  --forest: #2f6e4f;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, color-mix(in srgb, var(--acc) 7%, transparent), transparent 60%),
+    radial-gradient(1000px 500px at -10% 110%, color-mix(in srgb, var(--grn) 6%, transparent), transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font:
+    14px/1.5 ui-sans-serif,
+    -apple-system,
+    "Inter",
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* uPlot legend/axis text inherits theme colours. */
+.u-legend {
+  font-size: 11px;
+  color: var(--soft);
+}
+
+/* Thin scrollbars, themed. */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--rule);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--grn);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--grn) 55%, transparent);
+  animation: pulse 1.8s infinite;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--grn) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 9px color-mix(in srgb, var(--grn) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--grn) 0%, transparent);
+  }
+}
