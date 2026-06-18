@@ -12,7 +12,8 @@ import "fmt"
 // tool whose native fallback is UNSAFE must stay lean — a client that falls back
 // to shell mv/rm/sed bypasses plumb's per-path locks, the LSP
 // didChangeWatchedFiles notify, and the transaction WAL. So write_file,
-// edit_file, rename_file, delete_file, and transaction_apply are all lean.
+// edit_file, rename_file, delete_file, transaction_apply, and undo_edit are all
+// lean.
 // read_file and read_symbol also stay lean: the edit lane needs their mtime/sha
 // headers and the ReadTracker hand-off, so hiding them would recreate the
 // "has not been read" lane-mixing failure. rename_symbol stays lean because its
@@ -27,6 +28,7 @@ var LeanTools = map[string]bool{
 	"rename_file":       true,
 	"delete_file":       true,
 	"transaction_apply": true,
+	"undo_edit":         true,
 	"git":               true,
 	"diagnostics":       true,
 	"get_definition":    true,

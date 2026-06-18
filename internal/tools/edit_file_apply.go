@@ -44,6 +44,7 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 		}
 		invalidateCache(t.deps.Cache, uri)
 		t.deps.recordWritten(path)
+		t.deps.recordUndo(path, before, content, true, "edit_file")
 		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, a.AwaitDiagnostics, notes), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)

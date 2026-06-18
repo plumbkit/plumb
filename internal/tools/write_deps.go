@@ -113,6 +113,9 @@ type WriteDeps struct {
 	// enqueue the written path for topology re-indexing. path is the absolute
 	// path to the written file. nil is a no-op.
 	TopologyNotify TopologyNotifyFn
+	// Undo, when non-nil, records the single most recent revertible write per
+	// path so undo_edit can safely revert it. nil disables undo capture.
+	Undo *UndoStore
 }
 
 func (d WriteDeps) postWriteDiagWindow() time.Duration {
@@ -182,6 +185,26 @@ func (d WriteDeps) notifyTopology(path string) {
 	if d.TopologyNotify != nil {
 		d.TopologyNotify(path)
 	}
+}
+
+// recordUndo snapshots a successful write so undo_edit can revert it. before is
+// the file content prior to the write ("" with existedBefore=false for a
+// creation); after is the content plumb wrote. A before larger than the
+// snapshot cap is skipped, so undo is simply unavailable for very large files.
+// nil-safe (no-op when Undo is unwired).
+func (d WriteDeps) recordUndo(path, before, after string, existedBefore bool, tool string) {
+	if d.Undo == nil {
+		return
+	}
+	if len(before) > maxUndoSnapshotBytes {
+		return
+	}
+	d.Undo.Record(path, undoSnapshot{
+		before:        before,
+		existedBefore: existedBefore,
+		afterSHA:      sha256OfString(after),
+		tool:          tool,
+	})
 }
 
 func (d WriteDeps) checkBoundary(path string) error {

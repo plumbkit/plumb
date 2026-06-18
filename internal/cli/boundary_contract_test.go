@@ -44,6 +44,7 @@ var knownToolGuarding = map[string]string{
 	"NewRenameFile":       "writedeps",
 	"NewCopyFile":         "writedeps",
 	"NewTransactionApply": "writedeps",
+	"NewUndoEdit":         "writedeps",
 	"NewGit":              "writedeps",
 	"NewGitInit":          "writedeps",
 	"NewTasks":            "writedeps",

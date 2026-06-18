@@ -117,13 +117,16 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	isNew := os.IsNotExist(statErr)
 	uri := "file://" + path
 
-	oldContent := t.writeFilePreState(uri, path, isNew)
+	oldContent, undoBefore, undoOK := t.writeFileCapture(path, isNew)
 
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
 	}
 
 	t.writeFilePostWrite(ctx, path, uri, isNew)
+	if undoOK {
+		t.deps.recordUndo(path, undoBefore, a.Content, !isNew, "write_file")
+	}
 	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, a.AwaitDiagnostics)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
@@ -171,16 +174,33 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	return nil
 }
 
-// writeFilePreState captures the pre-write content needed for diff output.
-// Returns an empty string when the deps are not wired or the file is new.
-func (t *WriteFile) writeFilePreState(uri, path string, isNew bool) string {
-	_ = uri
-	if !isNew && t.deps.showWriteDiff() {
-		if b, err := os.ReadFile(path); err == nil && len(b) <= 200*1024 {
-			return string(b)
-		}
+// writeFileCapture reads the pre-write content once and derives both the diff
+// baseline (oldContent, gated on show_write_diff and the 200 KiB diff cap) and
+// the undo snapshot (undoBefore + undoOK, gated on the undo store being wired
+// and the 1 MiB snapshot cap). A new file needs no read: oldContent is empty
+// and the write is undoable by deletion. A read failure or an over-cap file
+// disables undo for this write rather than erroring.
+func (t *WriteFile) writeFileCapture(path string, isNew bool) (oldContent, undoBefore string, undoOK bool) {
+	wantDiff := t.deps.showWriteDiff()
+	wantUndo := t.deps.Undo != nil
+	if isNew {
+		return "", "", wantUndo
 	}
-	return ""
+	if !wantDiff && !wantUndo {
+		return "", "", false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", false
+	}
+	s := string(b)
+	if wantDiff && len(b) <= 200*1024 {
+		oldContent = s
+	}
+	if wantUndo && len(b) <= maxUndoSnapshotBytes {
+		undoBefore, undoOK = s, true
+	}
+	return oldContent, undoBefore, undoOK
 }
 
 func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, isNew bool) {

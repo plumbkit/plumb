@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **53** structured tools to AI assistants. Every write tool is
+Plumb exposes **54** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -297,6 +297,17 @@ Duplicate a file, preserving permissions; cross-device safe. **Inputs:**
 Multi-file atomic edits with rollback (up to 50 ops). Validates everything in
 memory, then writes under locks, rolling back on partial failure. **Inputs:**
 `operations` (array of `{file_path, edits, expected_mtime?}`), `dirty_ok`.
+
+### `undo_edit`
+Revert plumb's most recent write to a file — the safe alternative to a whole-file
+`git checkout`/`git restore`, which discards every uncommitted change in the file.
+Restores only what the last `edit_file`/`write_file` changed (deleting the file if
+that write created it), and **refuses by default** when the file has changed since
+plumb wrote it (an external or peer edit), so it never silently clobbers someone
+else's work. Single-level per file (a fresh write re-arms it); undo history is
+per session and cleared on a workspace switch. Pre-write content over 1 MiB is
+not snapshotted, so undo is unavailable for very large files. **Inputs:**
+`file_path`, `force` (override the changed-since-write guard).
 
 ---
 
