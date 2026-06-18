@@ -31,7 +31,7 @@ var getDefinitionSchema = json.RawMessage(`{
     },
     "symbol_name": {
       "type": "string",
-      "description": "Symbol name to look up instead of a position. Accepts plain name or ReceiverType.MethodName form. When provided, line and character are not needed."
+      "description": "Symbol name to look up instead of a position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. plumb resolves it against the file's symbols, avoiding the off-by-one and 'no identifier found' errors of a hand-computed position. When provided, line and character are not needed."
     }
   },
   "required": ["uri"],
