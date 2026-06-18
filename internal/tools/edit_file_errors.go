@@ -17,7 +17,11 @@ import (
 //
 // If matchLineEndings transformed old_string, both the sent and the searched
 // forms are surfaced so the agent can see what plumb actually looked for.
-func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtime time.Time) error {
+//
+// content is the current file content; when a sufficiently similar region
+// exists, a labelled closest-match diff is appended so the agent can see the
+// exact whitespace or token drift without a re-read (see closestMatchDiff).
+func (t *EditFile) notFoundError(i int, path, sent, searched, content string, preReadMtime time.Time) error {
 	recorded := t.deps.Reads.Mtime(path)
 
 	sentSnippet := truncateSnippet(sent)
@@ -55,6 +59,10 @@ func (t *EditFile) notFoundError(i int, path, sent, searched string, preReadMtim
 	// single guttered line, or a stripped form that still didn't match.
 	if looksGuttered(searched) {
 		b.WriteString("\n  Hint: old_string appears to include the display-only line-number gutter from read_file/read_symbol (\"<n>\\t\" at line start) — strip the gutter and retry.")
+	}
+	if diff := closestMatchDiff(content, searched, path); diff != "" {
+		b.WriteString("\n")
+		b.WriteString(diff)
 	}
 	return errors.New(b.String())
 }

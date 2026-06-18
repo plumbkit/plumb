@@ -285,6 +285,31 @@ func TestEditFile_NotFound_BlamesSnippetWhenFileUnchanged(t *testing.T) {
 	}
 }
 
+// When the snippet differs only in whitespace from real file content, the
+// not-found error appends a closest-match diff so the agent sees the exact
+// drift without a re-read.
+func TestEditFile_NotFound_AppendsClosestMatchDiff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("func f() {\n\treturn 42\n}\n"), 0o644)
+
+	_, err := callEditFile(t, map[string]any{
+		"file_path": path,
+		// Same lines, but spaces where the file uses a tab — the dominant cause
+		// of a failed match.
+		"edits": []map[string]string{{"old_string": "func f() {\n    return 42\n}", "new_string": "changed"}},
+	})
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "closest match in the file") {
+		t.Errorf("expected closest-match diff in error, got: %s", msg)
+	}
+	if !strings.Contains(msg, "+\treturn 42") {
+		t.Errorf("expected the file's actual tab-indented line in the diff, got: %s", msg)
+	}
+}
+
 // When matchLineEndings transforms old_str (here: file is CRLF, agent sent
 // LF), the error should include both the as-sent and the as-searched forms
 // so the agent can see the normalisation that happened.
