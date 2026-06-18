@@ -178,7 +178,13 @@ All default to `dry_run: true`.
 ### `rename_symbol`
 Workspace-wide rename via LSP — scope- and type-aware, updates every reference.
 **Inputs:** `uri`, `line`, `character`, `new_name` (all required), `dry_run`
-(default true). Provide the position of the identifier to rename.
+(default true), `structural_fallback` (default false). Provide the position of
+the identifier to rename. When the language server cannot compute the rename (an
+error, or an empty edit set — common with sourcekit-lsp before the build graph
+resolves), the tool returns actionable guidance. Pass `structural_fallback=true`
+to fall through to a best-effort, identifier-boundary text rename via
+`find_replace` (word-boundary match across same-extension files, honouring
+`dry_run`) — **not scope-aware**, so review the preview before applying.
 
 ### `replace_symbol_body`
 Replace a symbol's entire declaration. **Inputs:** `uri`, `name_path`,
