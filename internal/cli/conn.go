@@ -119,6 +119,7 @@ type connSession struct {
 	sessionCache *cache.Cache
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker
+	undoStore    *tools.UndoStore
 	ttl          time.Duration
 
 	topologyPool *topologyPool
@@ -199,6 +200,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		sessionCache: cache.New(ttl),
 		readTracker:  tools.NewReadTracker(),
 		writeTracker: tools.NewWriteTracker(),
+		undoStore:    tools.NewUndoStore(),
 		writeLimiter: tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
 		logger:       slog.Default().With("session_id", sessID),
 	}

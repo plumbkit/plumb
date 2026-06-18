@@ -42,7 +42,7 @@ var (
 
 	selftestFSWrite = []string{
 		"write_file", "edit_file", "copy_file", "rename_file", "delete_file",
-		"transaction_apply", "find_replace", "file_diff",
+		"transaction_apply", "undo_edit", "find_replace", "file_diff",
 	}
 
 	selftestMemoryWrite = []string{"write_memory", "delete_memory"}

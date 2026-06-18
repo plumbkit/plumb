@@ -38,6 +38,7 @@ func (t *EditFile) executePartial(
 	if writeErr == nil && applied > 0 {
 		_ = res
 		t.executePartialPostWrite(ctx, path, uri, content, awaitFresh, &sb)
+		t.deps.recordUndo(path, original, content, true, "edit_file")
 	}
 	return sb.String()
 }

@@ -88,6 +88,7 @@ var leanConstructors = map[string]string{
 	"NewRenameFile":            "rename_file",
 	"NewDeleteFile":            "delete_file",
 	"NewTransactionApply":      "transaction_apply",
+	"NewUndoEdit":              "undo_edit",
 	"NewGit":                   "git",
 	"NewDiagnosticsWithOpener": "diagnostics",
 	"NewGetDefinition":         "get_definition",
