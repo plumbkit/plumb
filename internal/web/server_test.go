@@ -92,8 +92,8 @@ func TestSettingsEndpoint_HasGlobalScopeAndWebPort(t *testing.T) {
 	if found.Key == "" {
 		t.Fatal("web.port row missing from global settings")
 	}
-	if found.ReloadTier != "restart" {
-		t.Errorf("web.port reloadTier = %q, want restart", found.ReloadTier)
+	if found.ReloadTier != "next-session" {
+		t.Errorf("web.port reloadTier = %q, want next-session", found.ReloadTier)
 	}
 	// web.port is global-only — it must not be project-overridable.
 	if projectOverridable("web.port") {

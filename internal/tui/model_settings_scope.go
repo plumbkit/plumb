@@ -257,6 +257,7 @@ func tomlPath(key settingKey) ([]string, bool) {
 var settingDottedKeys = map[settingKey]string{
 	skTheme:                 "ui.theme",
 	skPathStyle:             "ui.path_style",
+	skWebPort:               "web.port",
 	skLogLevel:              "log_level",
 	skLogFormat:             "log_format",
 	skLogFile:               "log_file",

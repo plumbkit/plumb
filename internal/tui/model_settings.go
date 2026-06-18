@@ -73,6 +73,7 @@ const (
 	skIdleThresholdMin
 	skEvictionTTLMin
 	skPathStyle
+	skWebPort
 	skAgentConfigWrites
 	// Per-language [lsp.<lang>] rows carry the language in settingItem.lspLang.
 	skLSPEnabled
@@ -209,6 +210,8 @@ func buildSettingItems(cfg config.Config) []settingItem {
 	return stampHelp(append(append([]settingItem{
 		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName},
 		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions},
+
+		{group: "Web", label: "Web UI port", kind: settingNumber, key: skWebPort, value: itoa(cfg.Web.Port)},
 
 		{group: "Logging", label: "Log level", kind: settingCycle, key: skLogLevel, value: cfg.LogLevel, options: logLevelOptions},
 		{group: "Logging", label: "Log format", kind: settingCycle, key: skLogFormat, value: cfg.LogFormat, options: logFormatOptions},
