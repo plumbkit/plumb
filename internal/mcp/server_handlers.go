@@ -76,10 +76,14 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 			continue
 		}
 		t := s.tools[name]
+		schema := s.pubSchema[name]
+		if schema == nil {
+			schema = t.InputSchema()
+		}
 		defs = append(defs, toolDef{
 			Name:        t.Name(),
 			Description: t.Description(),
-			InputSchema: t.InputSchema(),
+			InputSchema: schema,
 		})
 	}
 	s.mu.RUnlock()
