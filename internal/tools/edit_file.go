@@ -139,7 +139,12 @@ func (*EditFile) Description() string {
 		"or append, no anchor needed). " +
 		"CRLF is tolerated; edits apply sequentially in memory then write atomically (temp + rename) under " +
 		"a per-path lock. Pass expected_mtime (from a read_file header) to guarantee the file is unchanged " +
-		"since you read it."
+		"since you read it. For a SOLE agent doing a burst of sequential edits to one file, OMITTING " +
+		"expected_mtime is the blessed fast path: the EXACTLY-ONCE old_string match is itself the safety " +
+		"check, so you need not thread the fresh mtime each edit returns through the next one (reach for " +
+		"expected_mtime/expected_sha only when a concurrent writer may touch the file). If the call fails " +
+		"with a transport/connection error, the atomic temp+rename guarantees the file is either fully " +
+		"updated or untouched — never partially written; re-read to see which."
 }
 
 type strEdit struct {

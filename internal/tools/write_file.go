@@ -78,6 +78,9 @@ func (*WriteFile) Description() string {
 		"server is notified so diagnostics and symbols update immediately. " +
 		"Pass expected_mtime or expected_sha (from a read_file header) to reject the write if the file changed " +
 		"since you read it, so a full-content overwrite never silently clobbers a concurrent change. " +
+		"If the call fails with a transport/connection error, the atomic temp+rename guarantees the file " +
+		"is either fully written or untouched — never partially written; re-read to confirm which side of " +
+		"the rename it landed on. " +
 		"Use edit_file for targeted edits to an existing file."
 }
 
