@@ -18,6 +18,15 @@ import "fmt"
 // headers and the ReadTracker hand-off, so hiding them would recreate the
 // "has not been read" lane-mixing failure. rename_symbol stays lean because its
 // only safe equivalent is itself.
+//
+// run_task is kept lean DELIBERATELY even though it is not a file/edit tool: it
+// is the trust-gated, no-shell, bounded build/test/lint runner, and its only
+// "native equivalent" is a raw shell `go test`/`zig build` — precisely the shell
+// fallback plumb exists to replace. Hidden from tools/list, a recognised CLI
+// client never SEES it and silently shells out to build, the exact anti-pattern
+// the profile is meant to avoid. The read-only commodity search/list/find tools
+// (search_in_files, find_files, list_directory, …) stay hidden under lean — a
+// client that wants them sets [tools] profile = "full".
 var LeanTools = map[string]bool{
 	"session_start":     true,
 	"read_file":         true,
@@ -39,6 +48,7 @@ var LeanTools = map[string]bool{
 	"topology_explore":  true,
 	"topology_affected": true,
 	"search_memories":   true,
+	"run_task":          true,
 }
 
 // IsLean reports whether name is advertised under the lean profile.
