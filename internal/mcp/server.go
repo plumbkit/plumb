@@ -45,6 +45,10 @@ const (
 // returns the decoded result payload, or an error if the call fails or times out.
 type RequestFn func(ctx context.Context, method string, params any) (json.RawMessage, error)
 
+// NotifyFn sends a server-initiated JSON-RPC notification (no id, no response)
+// to the MCP client. Returns an error if the connection write fails.
+type NotifyFn func(method string, params any) error
+
 // ─── wire types ──────────────────────────────────────────────────────────────
 
 type mcpRequest struct {
@@ -88,7 +92,8 @@ type ServerInfo struct {
 //
 // OnInit, if set, is called once in a goroutine after a successful
 // initialize exchange. It receives a RequestFn the callback can use to make
-// requests back to the MCP client (e.g. roots/list).
+// requests back to the MCP client (e.g. roots/list) and a NotifyFn it can use
+// to send server-initiated notifications (e.g. notifications/tools/list_changed).
 //
 // OnRootsChanged, if set, is called in a goroutine each time the client sends
 // a notifications/roots/listChanged notification.
@@ -103,8 +108,9 @@ type Server struct {
 	pubSchema map[string]json.RawMessage // alias-tolerant schema advertised in tools/list
 	order     []string                   // insertion order for tools/list
 
-	// OnInit is called once after a successful MCP initialize exchange.
-	OnInit func(ctx context.Context, request RequestFn)
+	// OnInit is called once after a successful MCP initialize exchange. notify
+	// lets the callback send server-initiated notifications to the client.
+	OnInit func(ctx context.Context, request RequestFn, notify NotifyFn)
 
 	// OnRootsChanged is called each time the client notifies that its roots changed.
 	OnRootsChanged func(ctx context.Context, request RequestFn)
@@ -332,6 +338,25 @@ func (ss *serveState) makeRequest(ctx context.Context, method string, params any
 	}
 }
 
+// notify sends a server-initiated JSON-RPC notification (no id), satisfying the
+// NotifyFn signature. Guarded by wrMu like every other socket write.
+func (ss *serveState) notify(method string, params any) error {
+	msg := map[string]any{"jsonrpc": "2.0", "method": method}
+	if params != nil {
+		msg["params"] = params
+	}
+	ss.wrMu.Lock()
+	defer ss.wrMu.Unlock()
+	if ss.broken {
+		return errors.New("connection closed")
+	}
+	if err := ss.encode(msg); err != nil {
+		ss.fail(err)
+		return err
+	}
+	return nil
+}
+
 func (ss *serveState) parseResponse(method string, raw json.RawMessage) (json.RawMessage, error) {
 	var r struct {
 		Result json.RawMessage `json:"result"`
@@ -379,7 +404,7 @@ func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce
 
 	if peek.Method == "initialize" && resp.Error == nil && ss.s.OnInit != nil {
 		initOnce.Do(func() {
-			go safeRun("OnInit", func() { ss.s.OnInit(ctx, ss.makeRequest) })
+			go safeRun("OnInit", func() { ss.s.OnInit(ctx, ss.makeRequest, ss.notify) })
 		})
 	}
 }

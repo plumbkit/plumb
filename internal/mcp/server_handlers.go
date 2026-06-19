@@ -35,7 +35,7 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		ServerInfo      serverInfoWire `json:"serverInfo"`
 		Instructions    string         `json:"instructions,omitempty"`
 	}
-	caps := map[string]any{"tools": map[string]any{}}
+	caps := map[string]any{"tools": map[string]any{"listChanged": true}}
 	if s.Resources != nil {
 		caps["resources"] = map[string]any{}
 	}

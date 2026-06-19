@@ -177,7 +177,13 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError)
 	}
-	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn) {
+	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn, notify mcp.NotifyFn) {
+		// Capture the notifier and seed the last-advertised profile so a later
+		// profile-changing reload is detected against the seed (no spurious fire).
+		s.mutate(func(v *sessionView) {
+			v.notify = notify
+			v.lastToolProfile = s.resolveToolProfile()
+		})
 		s.setClientRequest(request)
 		s.attachWorkspace(initCtx, rootFromRoots(initCtx, request))
 		s.applyProjectConfig(s.workspace())

@@ -21,6 +21,57 @@ func newProfileSession(t *testing.T, tc config.ToolsConfig, client string) *conn
 	return s
 }
 
+func TestMaybeNotifyToolProfileChange_FiresOnChange(t *testing.T) {
+	s := newProfileSession(t, config.ToolsConfig{Profile: "lean"}, "claude-code")
+	var calls []string
+	s.mutate(func(v *sessionView) {
+		v.lastToolProfile = "lean"
+		v.notify = func(method string, _ any) error {
+			calls = append(calls, method)
+			return nil
+		}
+		// Flip the resolved profile so the next call sees a change.
+		v.tools = config.ToolsConfig{Profile: "full"}
+	})
+
+	s.maybeNotifyToolProfileChange()
+
+	if len(calls) != 1 || calls[0] != "notifications/tools/list_changed" {
+		t.Fatalf("want one tools/list_changed notification, got %v", calls)
+	}
+	if got := s.view().lastToolProfile; got != "full" {
+		t.Errorf("lastToolProfile = %q, want %q after firing", got, "full")
+	}
+}
+
+func TestMaybeNotifyToolProfileChange_NoFireWhenUnchanged(t *testing.T) {
+	s := newProfileSession(t, config.ToolsConfig{Profile: "full"}, "claude-code")
+	fired := false
+	s.mutate(func(v *sessionView) {
+		v.lastToolProfile = "full" // matches the resolved profile — no change
+		v.notify = func(string, any) error {
+			fired = true
+			return nil
+		}
+	})
+
+	s.maybeNotifyToolProfileChange()
+
+	if fired {
+		t.Error("no notification should fire when the resolved profile is unchanged")
+	}
+}
+
+func TestMaybeNotifyToolProfileChange_NoNotifierIsNoOp(t *testing.T) {
+	s := newProfileSession(t, config.ToolsConfig{Profile: "full"}, "claude-code")
+	s.mutate(func(v *sessionView) { v.lastToolProfile = "lean" }) // a change, but notify is nil
+	// Must not panic and must leave the seed untouched (nothing was advertised).
+	s.maybeNotifyToolProfileChange()
+	if got := s.view().lastToolProfile; got != "lean" {
+		t.Errorf("lastToolProfile = %q, want %q (no-op when notifier is nil)", got, "lean")
+	}
+}
+
 func TestResolveToolProfile(t *testing.T) {
 	cases := []struct {
 		name   string
