@@ -490,23 +490,54 @@ func TestTrackOutstanding_LateTrackAfterReconnect(t *testing.T) {
 	}
 }
 
-func TestProxyGivesUpAfterMaxReconnects(t *testing.T) {
+// TestProxySurvivesProlongedOutageThenRecovers is the headline reliability
+// contract: when the daemon stays unreachable past the fast retry budget (a
+// restart/upgrade window), the proxy must NOT exit — exiting would close the
+// client's stdio and make the host de-register every plumb tool for the rest of
+// the session. Instead it fails the in-flight request with a retryable error
+// (so the client is not left hanging), keeps the client connection alive, and
+// retries in the background; the next tool call succeeds once a daemon returns.
+func TestProxySurvivesProlongedOutageThenRecovers(t *testing.T) {
 	t.Parallel()
 
 	_, initialProxySide := newPipeDaemon(func(m *mockDaemon) { m.crashOnTool = true })
 	h := startProxy(t, initialProxySide, 0, 0)
-	// dialQueue stays empty → every reconnect attempt fails.
+	// dialQueue starts empty → reconnects fail through the fast phase.
 	done := h.start()
 	h.handshake()
 	h.write(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}`) // triggers the crash
 
+	// The in-flight request gets the retryable error once the fast phase is
+	// exhausted — not a hang for the whole outage.
+	frame := h.read(10 * time.Second)
+	if !strings.Contains(frame, `"id":5`) || !strings.Contains(frame, "daemon restarted") {
+		t.Fatalf("in-flight request must get the synthesised retryable error, got %q", frame)
+	}
+	// run() must NOT have returned — the client connection stays alive.
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "unreachable") {
-			t.Fatalf("expected give-up error, got %v", err)
+		t.Fatalf("proxy exited during a daemon outage (it must stay alive): %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// A daemon returns; the next tool call must succeed against it.
+	_, replProxySide := newPipeDaemon(nil)
+	h.dialQueue <- replProxySide
+	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
+	frame = h.read(10 * time.Second)
+	if !strings.Contains(frame, `"id":6`) || !strings.Contains(frame, `"result"`) {
+		t.Fatalf("expected result for id 6 after recovery, got %q", frame)
+	}
+
+	// Clean shutdown: closing client stdin ends run() with nil.
+	_ = h.clientIn.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("clean shutdown should return nil, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("proxy did not give up within the deadline")
+		t.Fatal("proxy did not shut down after the client closed stdin")
 	}
 }
 
@@ -597,8 +628,12 @@ func TestProxyKillTargetsCapturedPID(t *testing.T) {
 		maxReconnects: 1,
 		baseBackoff:   time.Millisecond,
 	})
-	p.daemonPID.Store(4242)                                     // override the construction-time PID-file read
-	_ = p.reconnect(context.Background(), p.generation(), true) // kill=true → hang path
+	p.daemonPID.Store(4242) // override the construction-time PID-file read
+	// The kill fires before the (now-unbounded) retry loop, so a pre-cancelled
+	// context lets reconnect terminate deterministically once the kill has run.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = p.reconnect(ctx, p.generation(), true) // kill=true → hang path
 	if killed != 4242 {
 		t.Errorf("kill targeted pid %d; want the captured 4242", killed)
 	}

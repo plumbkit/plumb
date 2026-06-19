@@ -139,9 +139,11 @@ func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
 }
 
 // run drives both pumps (and the optional heartbeat) until the client closes
-// stdin (clean shutdown, nil), the context is cancelled, or the daemon becomes
-// unreachable after the bounded retries (returns the give-up error, so the
-// process exits exactly as the legacy proxy would).
+// stdin (clean shutdown, nil) or the context is cancelled. It no longer exits
+// when the daemon is unreachable: a prolonged daemon outage (e.g. a
+// restart/upgrade window) is ridden out by background reconnect attempts that
+// keep the client connection alive, so the host never de-registers the plumb
+// tools mid-session.
 func (p *reconnectingProxy) run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -434,7 +436,8 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 	p.closeCurrent()
 
 	backoff := p.deps.baseBackoff
-	for attempt := 1; attempt <= p.deps.maxReconnects; attempt++ {
+	failedFast := false
+	for attempt := 1; ; attempt++ {
 		conn, err := p.deps.dial(ctx)
 		if err == nil {
 			fr, herr := p.replayHandshake(conn)
@@ -458,6 +461,22 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 			err = herr
 		}
 		slog.Warn("serve: daemon reconnect attempt failed", "attempt", attempt, "error", err)
+		// Once the bounded fast phase is exhausted the daemon is still gone (a
+		// restart/upgrade window that outlasts the quick retries). Exiting here
+		// would close the client's stdio and make the host de-register every
+		// plumb tool for the rest of the session — the worst possible outcome and
+		// the exact opposite of the proxy's purpose. Instead fail the in-flight
+		// requests ONCE (so the client gets a retryable error instead of hanging
+		// for the whole outage) and keep retrying in the background at the capped
+		// backoff. A prolonged daemon outage becomes a pause, not a session-ending
+		// outage: the next tool call succeeds once a daemon is back. Only ctx
+		// cancellation (clean shutdown / the client closing stdin) ends the loop.
+		if attempt >= p.deps.maxReconnects && !failedFast {
+			failedFast = true
+			p.failAllOutstanding()
+			slog.Warn("serve: daemon unreachable after fast retries — keeping the client connection alive and retrying in the background",
+				"attempts", attempt)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -467,7 +486,6 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 			backoff = defaultMaxBackoff
 		}
 	}
-	return fmt.Errorf("plumb serve: daemon unreachable after %d reconnect attempts", p.deps.maxReconnects)
 }
 
 // replayHandshake re-establishes the MCP session on a fresh connection by
@@ -557,10 +575,18 @@ func (p *reconnectingProxy) failOutstandingBelow(gen uint64) {
 
 	for _, raw := range ids {
 		resp := fmt.Sprintf(
-			`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"plumb daemon restarted; please retry"}}`,
+			`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"plumb daemon restarted mid-request; this request's outcome is unconfirmed — for a write, re-read the file to check whether it landed before retrying"}}`,
 			raw)
 		p.writeClient([]byte(resp))
 	}
+}
+
+// failAllOutstanding synthesises the retryable error for EVERY in-flight
+// request, whatever its connection generation. Used when the fast reconnect
+// phase is exhausted and the proxy drops to slow background retry: the client
+// must not stay blocked on an in-flight call for the whole outage.
+func (p *reconnectingProxy) failAllOutstanding() {
+	p.failOutstandingBelow(p.generation() + 1)
 }
 
 func (p *reconnectingProxy) handshakeComplete() bool {

@@ -123,8 +123,9 @@ func serverInfoVersion(frame []byte) string {
 // after a daemon upgrade, and the agent/user otherwise has no in-band signal
 // of that lag. An unknown daemon version falls back to the proxy's.
 func reconnectNoteText(daemonVersion, proxyVersion string) string {
-	const tail = " — your session state (read-tracking, caches) was rebuilt " +
-		"and tool-output behaviour may have changed since your previous call."
+	const tail = " — your session state (read-tracking, caches) was rebuilt, so " +
+		"re-read a file before editing it (or pass dirty_ok:true for a file you " +
+		"wrote earlier this session) if a write is unexpectedly refused."
 	if daemonVersion == "" || daemonVersion == proxyVersion {
 		v := daemonVersion
 		if v == "" {
