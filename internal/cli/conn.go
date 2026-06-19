@@ -79,10 +79,15 @@ type sessionView struct {
 	topologyStore *topology.Store
 	policy        *tools.PathPolicy // built eagerly on the mutation path; see boundary_policy.go
 
-	// depRoots holds the Go toolchain's read-only dependency roots (GOMODCACHE,
-	// GOROOT). They are workspace-independent (global), computed off the mutation
-	// lane by warmDepRoots and folded into policy once known.
-	depRoots []tools.AllowedRoot
+	// depRoots holds the session language's read-only toolchain dependency roots
+	// (e.g. Go's GOMODCACHE/GOROOT, Zig's stdlib + cache, Python's stdlib +
+	// site-packages). They are toolchain-global (workspace-independent), computed
+	// off the mutation lane by warmDepRoots and folded into policy once known.
+	// depRootsLang records the language they were resolved for, so buildPathPolicy
+	// only admits them while the session stays on that language — a cross-language
+	// re-pin re-warms before the new language's roots become readable.
+	depRoots     []tools.AllowedRoot
+	depRootsLang string
 
 	// discoveredLangs is the distinct set of child languages found at attach for a
 	// monorepo root (the elected primary plus its lazily-attached siblings), or nil
