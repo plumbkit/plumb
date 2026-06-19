@@ -39,6 +39,7 @@ func leanToolSet() []describable {
 		NewTopologyExplore(nil),
 		NewTopologyAffected(nil),
 		NewSearchMemories(nil),
+		NewTasks(WriteDeps{}, nil),
 	}
 }
 
@@ -60,7 +61,6 @@ func nonLeanToolSet() []describable {
 		NewFindFiles(nil),
 		NewCopyFile(WriteDeps{}),
 		NewGitInit(WriteDeps{}),
-		NewTasks(WriteDeps{}, nil),
 		NewAgentConfig(AgentConfigDeps{}),
 		NewFileDiff(),
 		NewFindReplace(),
