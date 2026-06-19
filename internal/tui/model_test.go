@@ -1050,6 +1050,7 @@ func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 		},
 		dashLifetimeFirstAt: time.Now().Add(-9 * 24 * time.Hour),
 		dashLifetimeTokens:  518000,
+		dashLifetimeAxes:    stats.AxisTotals{Efficiency: 518000},
 	}
 
 	lines := m.dashTokensWidget(dashTokensMinInner)
@@ -1064,9 +1065,12 @@ func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 			t.Fatalf("tokens block row %d = %q, want %q", idx, plain[idx], wantBlock)
 		}
 	}
-	wantLabels := "│   uptime 0 (12m+)           total 518k (9d+)"
+	wantLabels := "│   uptime 0 (12m+)           cap ~0 · eff ~518k (9d+)"
 	if !strings.HasPrefix(plain[7], wantLabels) {
 		t.Fatalf("tokens label row = %q, want prefix %q", plain[7], wantLabels)
+	}
+	if len(plain) > 8 && strings.Contains(plain[8], "eff ~") {
+		t.Fatalf("caption should be one line, got a second axis line: %q", plain[8])
 	}
 }
 

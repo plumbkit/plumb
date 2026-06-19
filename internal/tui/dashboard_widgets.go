@@ -140,28 +140,30 @@ func (m Model) dashTokensWidget(inner int) []string {
 	if m.activity.Window > 0 {
 		uptimeLabel += " (" + formatUptime(m.activity.Window) + ")"
 	}
-	totalLabel := "total " + stats.FormatSavings(int(m.dashLifetimeTokens))
+	// The lifetime total is just capability + efficiency, so showing it next to the
+	// axes reads as a duplicate whenever one axis dominates. Show the honest split.
+	rightLabel := "cap ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Capability)) +
+		" · eff ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Efficiency))
 	if !m.dashLifetimeFirstAt.IsZero() {
-		totalLabel += " (" + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt)) + ")"
+		rightLabel += " (" + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt)) + ")"
 	}
 
 	leftBlocks := tokenSavingsBlockRow(m.tokenSavings, groups)
 	rightBlocks := tokenSavingsBlockRow(m.dashLifetimeTokens, groups)
 	blockLine := strings.Repeat(" ", margin) + leftBlocks + strings.Repeat(" ", gap) + rightBlocks + strings.Repeat(" ", margin)
 	labelGap := max(blockW+gap-lipgloss.Width(uptimeLabel), 1)
-	labelLine := strings.Repeat(" ", margin) + DetailStyle.Render(uptimeLabel) + strings.Repeat(" ", labelGap) + DetailStyle.Render(totalLabel)
+	// dashBox does not widen for an over-long line; clamp the gap so the caption
+	// stays within inner at narrow widths instead of overflowing the right border.
+	if over := margin + lipgloss.Width(uptimeLabel) + labelGap + lipgloss.Width(rightLabel) - inner; over > 0 {
+		labelGap = max(labelGap-over, 1)
+	}
+	labelLine := strings.Repeat(" ", margin) + DetailStyle.Render(uptimeLabel) + strings.Repeat(" ", labelGap) + DetailStyle.Render(rightLabel)
 
-	// The two honest axes behind the lifetime total: capability (work the client
-	// could not do natively) and efficiency (fewer tokens for the same result).
-	axisLine := strings.Repeat(" ", margin) + DetailStyle.Render(
-		"capability ~"+stats.FormatSavings(int(m.dashLifetimeAxes.Capability))+
-			" · efficiency ~"+stats.FormatSavings(int(m.dashLifetimeAxes.Efficiency)))
-
-	content := make([]string, 0, blockH+3)
+	content := make([]string, 0, blockH+2)
 	for range blockH {
 		content = append(content, blockLine)
 	}
-	content = append(content, "", labelLine, axisLine)
+	content = append(content, "", labelLine)
 
 	return dashBox(" Token Efficiency ", inner, content)
 }
