@@ -150,6 +150,7 @@ var leanConstructors = map[string]string{
 	"NewTopologyExplore":       "topology_explore",
 	"NewTopologyAffected":      "topology_affected",
 	"NewSearchMemories":        "search_memories",
+	"NewTasks":                 "run_task",
 }
 
 // TestToolProfileClassification keeps the lean classification honest: the

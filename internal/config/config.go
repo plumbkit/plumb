@@ -131,11 +131,14 @@ type WorkspaceConfig struct {
 	// dependency tree or a shared library checkout. Additive; $VAR expansion as
 	// for ExtraRoots. Default empty.
 	ReadRoots []string `toml:"read_roots"`
-	// AllowDependencyReads, when true, lets read/search tools reach the language
-	// toolchain's standard dependency locations read-only (for Go: the module
-	// cache `go env GOMODCACHE` and `GOROOT`), so an agent can inspect a
-	// dependency's source without falling back to the shell. Read-only by
-	// construction — writes there are always refused. Default true.
+	// AllowDependencyReads, when true, lets read/search tools reach the session
+	// language's toolchain stdlib + dependency cache read-only, so an agent can
+	// inspect a dependency's source without falling back to the shell. Resolved
+	// per language by a registry: Go (`go env GOMODCACHE` + `GOROOT`), Zig (stdlib
+	// + global cache), Rust (rust-src + cargo registry), Python (stdlib +
+	// site-packages), Swift (active SDK), and JVM (Gradle/Maven caches + JAVA_HOME)
+	// — TypeScript is intentionally excluded (node_modules is in-workspace).
+	// Read-only by construction — writes there are always refused. Default true.
 	AllowDependencyReads bool `toml:"allow_dependency_reads"`
 	// ChildScanDepth bounds how many directory levels below the workspace root
 	// the daemon descends to discover language root markers in subdirectories —
