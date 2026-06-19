@@ -256,23 +256,19 @@ func computeSwiftDependencyRoots(ctx context.Context) []tools.AllowedRoot {
 // layout inspection.
 func computeJVMDependencyRoots(_ context.Context) []tools.AllowedRoot {
 	var roots []tools.AllowedRoot
+	var home string
+	if h, err := os.UserHomeDir(); err == nil {
+		home = h
+	}
 	gradleHome := os.Getenv("GRADLE_USER_HOME")
-	maven := os.Getenv("HOME")
-	if gradleHome == "" || maven == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			if gradleHome == "" {
-				gradleHome = filepath.Join(home, ".gradle")
-			}
-			if maven == "" {
-				maven = home
-			}
-		}
+	if gradleHome == "" && home != "" {
+		gradleHome = filepath.Join(home, ".gradle")
 	}
 	if gradleHome != "" {
 		roots = addDirRoot(roots, filepath.Join(gradleHome, "caches", "modules-2"), "GRADLE_CACHE")
 	}
-	if maven != "" {
-		roots = addDirRoot(roots, filepath.Join(maven, ".m2", "repository"), "MAVEN_REPO")
+	if home != "" {
+		roots = addDirRoot(roots, filepath.Join(home, ".m2", "repository"), "MAVEN_REPO")
 	}
 	roots = addDirRoot(roots, os.Getenv("JAVA_HOME"), "JAVA_HOME")
 	return roots

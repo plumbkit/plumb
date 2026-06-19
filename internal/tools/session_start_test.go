@@ -825,7 +825,7 @@ func TestSessionStart_GitPolicySection(t *testing.T) {
 func TestSessionStart_LeanProfileNote(t *testing.T) {
 	s := &SessionStart{
 		clientNameFn: func() string { return "claude-code" },
-		toolProfile:  func() (string, int) { return "lean", 34 },
+		toolProfile:  func() (string, int) { return "lean", 33 },
 	}
 	var sb strings.Builder
 	s.writeSessionGuidance(&sb)
@@ -834,7 +834,7 @@ func TestSessionStart_LeanProfileNote(t *testing.T) {
 	if !strings.Contains(out, "Tool profile: lean") {
 		t.Errorf("lean note missing:\n%s", out)
 	}
-	if !strings.Contains(out, "34 commodity tools hidden") {
+	if !strings.Contains(out, "33 commodity tools hidden") {
 		t.Errorf("lean note should state the hidden count:\n%s", out)
 	}
 	// The note must not enumerate hidden tool names.

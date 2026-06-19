@@ -134,7 +134,7 @@ func TestFullToolSet_Count(t *testing.T) {
 
 // TestLeanProfileBudget asserts the lean profile's payload is a substantial
 // reduction over the full list — that IS the feature. The lean set still
-// contains the heavyweight write tools, so the win is hiding the ~34 commodity
+// contains the heavyweight write tools, so the win is hiding the ~33 commodity
 // tools (plus the description diet), not an absolute floor. The ratio cap guards
 // the reduction without pinning brittle absolute byte counts.
 func TestLeanProfileBudget(t *testing.T) {
