@@ -42,7 +42,18 @@ These apply across many tools:
   header line — `# plumb-read mtime=<RFC3339Nano> sha256=<hash> indent=<…>` —
   whose `mtime`/`sha256` you can pass back to **`edit_file` *or* `write_file`**
   for optimistic concurrency checks (the write is refused if the file changed
-  since you read it).
+  since you read it). **Sole-agent fast path:** for a burst of sequential
+  `edit_file`s to one file you can *omit* `expected_mtime` and rely on the
+  exactly-once `old_string` match as the safety check — each successful edit
+  returns a fresh `mtime`, so threading it forward is needless friction (and a
+  stale value you carry over would be rejected). Reach for
+  `expected_mtime`/`expected_sha` only when a concurrent writer may touch the
+  file between your read and your write.
+- **Atomicity on transport failure.** Every write stages to a temp file then
+  `rename`s it into place (atomic on POSIX), so if a call dies with a
+  transport/connection error (`Connection closed`) the file on disk is either
+  fully written or untouched — **never partially written**. Re-read to see
+  which side of the rename it landed on rather than assuming corruption.
 - **Automatic staleness guard.** Even without `expected_mtime`, if this session
   read a file and it then changed on disk before your write, `write_file`
   **refuses** (pass `overwrite_changed: true` to override) and `edit_file`
