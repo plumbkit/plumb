@@ -217,6 +217,10 @@ otherwise). **Inputs:** `uri`, `name_path` (required), `include_doc_comment`
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol. This is
 > distinct from `rename_symbol`, which takes a cursor position.
+>
+> All four append a unified diff of the change to their response — a preview in
+> `dry_run`, the applied change otherwise — gated by `[edits].show_write_diff`
+> (default on; same toggle as `edit_file`/`write_file`).
 
 ---
 
@@ -294,7 +298,9 @@ appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
 check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
 
 ### `delete_file`
-Delete a file (refuses directories). **Inputs:** `file_path` (required), `dirty_ok`.
+Delete a file (refuses directories unless `allow_dir` and the directory is empty).
+The response reports the line and byte count removed (bytes only for a binary or
+oversized file). **Inputs:** `file_path` (required), `dirty_ok`, `allow_dir`.
 
 ### `rename_file`
 **Primary move tool.** Atomic move/rename. **Inputs:** `from`, `to` (required),
@@ -306,8 +312,9 @@ Duplicate a file, preserving permissions; cross-device safe. **Inputs:**
 
 ### `transaction_apply`
 Multi-file atomic edits with rollback (up to 50 ops). Validates everything in
-memory, then writes under locks, rolling back on partial failure. **Inputs:**
-`operations` (array of `{file_path, edits, expected_mtime?}`), `dirty_ok`.
+memory, then writes under locks, rolling back on partial failure. The response
+lists each file with a per-file unified diff, gated by `[edits].show_write_diff`.
+**Inputs:** `operations` (array of `{file_path, edits, expected_mtime?}`), `dirty_ok`.
 
 ### `undo_edit`
 Revert plumb's most recent write to a file — the safe alternative to a whole-file

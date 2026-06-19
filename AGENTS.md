@@ -117,7 +117,7 @@ Built in four layers, each overriding the prior; `plumb config show` prints the 
 [edits]
 strict = false                # require read_file (matching mtime) before edit_file; per-session
 rate_limit_per_minute = 120   # sliding-window cap per session; 0 disables. A shared parent budget (keyed by (client, workspace)) caps combined rate across connections from the same client to one project
-show_write_diff = true        # append a unified diff to edit_file/write_file responses
+show_write_diff = true        # append a unified diff to the content-modifying tools' responses: edit_file/write_file/undo_edit, the semantic symbol edits (replace_symbol_body, insert_before/after_symbol, safe_delete_symbol — preview + applied), and transaction_apply
 post_write_diagnostics_ms = 300 # ceiling on the wait for the LSP to re-publish diagnostics after a write; adapts down to observed latency; 0 disables
 ```
 

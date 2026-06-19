@@ -161,45 +161,14 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 	return sym, nil
 }
 
-// applySingleEdit runs the standard apply-or-preview flow used by every
-// symbol-edit tool. summary is the human-readable verb ("inserted before",
-// "replaced", etc.) used in the dry-run / applied output.
-func applySingleEdit(uri string, edit protocol.TextEdit, dryRun bool, summary string, sym *protocol.DocumentSymbol, viaFallback bool) (string, error) {
-	path := strings.TrimPrefix(uri, "file://")
-	var sb strings.Builder
-	if viaFallback {
-		sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
-	}
-	if dryRun {
-		sb.WriteString("DRY RUN — file not modified.\n\n")
-		fmt.Fprintf(&sb, "Would %s symbol %q in %s\n", summary, sym.Name, path)
-		fmt.Fprintf(&sb, "  Range: line %d char %d → line %d char %d\n",
-			edit.Range.Start.Line, edit.Range.Start.Character,
-			edit.Range.End.Line, edit.Range.End.Character)
-		sb.WriteString("\nTo apply, re-run with dry_run=false.")
-		return sb.String(), nil
-	}
-	if err := applyTextEditsToFile(path, []protocol.TextEdit{edit}); err != nil {
-		return "", fmt.Errorf("applying edit: %w", err)
-	}
-	fmt.Fprintf(&sb, "%s symbol %q in %s\n", capitalise(summary), sym.Name, path)
-	return sb.String(), nil
-}
-
-func capitalise(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
 // ─── insert_before_symbol ──────────────────────────────────────────────────
 
 type InsertBeforeSymbol struct {
-	client  lsp.Client
-	timeout time.Duration
-	topo    topologyStoreFn
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client   lsp.Client
+	timeout  time.Duration
+	topo     topologyStoreFn
+	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
@@ -220,6 +189,12 @@ func (t *InsertBeforeSymbol) WithWorkspace(ws WorkspaceFn) *InsertBeforeSymbol {
 	return t
 }
 
+// WithShowWriteDiff wires the per-session show_write_diff resolver. Nil-safe.
+func (t *InsertBeforeSymbol) WithShowWriteDiff(fn func() bool) *InsertBeforeSymbol {
+	t.showDiff = fn
+	return t
+}
+
 func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
 
 func (*InsertBeforeSymbol) Description() string {
@@ -228,6 +203,8 @@ func (*InsertBeforeSymbol) Description() string {
 Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.
 
 Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.
+
+The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
 
 Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
 }
@@ -266,16 +243,17 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 		Range:   protocol.Range{Start: start, End: start},
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, "insert before", sym, viaFallback)
+	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert before", sym, viaFallback)
 }
 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
 
 type InsertAfterSymbol struct {
-	client  lsp.Client
-	timeout time.Duration
-	topo    topologyStoreFn
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client   lsp.Client
+	timeout  time.Duration
+	topo     topologyStoreFn
+	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
@@ -295,12 +273,20 @@ func (t *InsertAfterSymbol) WithWorkspace(ws WorkspaceFn) *InsertAfterSymbol {
 	return t
 }
 
+// WithShowWriteDiff wires the per-session show_write_diff resolver. Nil-safe.
+func (t *InsertAfterSymbol) WithShowWriteDiff(fn func() bool) *InsertAfterSymbol {
+	t.showDiff = fn
+	return t
+}
+
 func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
 
 func (*InsertAfterSymbol) Description() string {
 	return `Insert text immediately after a symbol's declaration.
 
 Useful for adding a new method to a struct (insert after an existing one), or appending a related helper. Provide the full text to insert in 'content' — include leading newline if appropriate.
+
+The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
 
 Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
 }
@@ -334,16 +320,17 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 		Range:   protocol.Range{Start: sym.Range.End, End: sym.Range.End},
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, "insert after", sym, viaFallback)
+	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert after", sym, viaFallback)
 }
 
 // ─── replace_symbol_body ───────────────────────────────────────────────────
 
 type ReplaceSymbolBody struct {
-	client  lsp.Client
-	timeout time.Duration
-	topo    topologyStoreFn
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client   lsp.Client
+	timeout  time.Duration
+	topo     topologyStoreFn
+	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
@@ -363,6 +350,12 @@ func (t *ReplaceSymbolBody) WithWorkspace(ws WorkspaceFn) *ReplaceSymbolBody {
 	return t
 }
 
+// WithShowWriteDiff wires the per-session show_write_diff resolver. Nil-safe.
+func (t *ReplaceSymbolBody) WithShowWriteDiff(fn func() bool) *ReplaceSymbolBody {
+	t.showDiff = fn
+	return t
+}
+
 func (*ReplaceSymbolBody) Name() string { return "replace_symbol_body" }
 
 func (*ReplaceSymbolBody) Description() string {
@@ -375,6 +368,8 @@ The replacement spans the symbol's full Range as reported by the LSP — for a f
 Set include_doc_comment=true to also cover any contiguous doc comment above the symbol — gopls and most LSP servers report the symbol range starting at the declaration keyword, so without this flag the old doc comment is left orphaned. With it on, your 'content' must include the new doc comment too (or the symbol will have none).
 
 Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both.
+
+The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
 
 Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
 }
@@ -413,15 +408,16 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 		Range:   rng,
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, "replace", sym, viaFallback)
+	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "replace", sym, viaFallback)
 }
 
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
 
 type SafeDeleteSymbol struct {
-	client  lsp.Client
-	timeout time.Duration
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	client   lsp.Client
+	timeout  time.Duration
+	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
@@ -434,6 +430,12 @@ func (t *SafeDeleteSymbol) WithWorkspace(ws WorkspaceFn) *SafeDeleteSymbol {
 	return t
 }
 
+// WithShowWriteDiff wires the per-session show_write_diff resolver. Nil-safe.
+func (t *SafeDeleteSymbol) WithShowWriteDiff(fn func() bool) *SafeDeleteSymbol {
+	t.showDiff = fn
+	return t
+}
+
 func (*SafeDeleteSymbol) Name() string { return "safe_delete_symbol" }
 
 func (*SafeDeleteSymbol) Description() string {
@@ -441,7 +443,9 @@ func (*SafeDeleteSymbol) Description() string {
 
 Calls LSP textDocument/references first. If any reference outside the declaration itself is found, the deletion is rejected with the list of referencing locations so the caller can decide what to do. This prevents accidental deletion of code that's still in use.
 
-Set include_doc_comment=true to also delete any contiguous doc comment above the symbol — otherwise the comment is left orphaned, pointing at whatever ends up next in the file.`
+Set include_doc_comment=true to also delete any contiguous doc comment above the symbol — otherwise the comment is left orphaned, pointing at whatever ends up next in the file.
+
+The response includes a unified diff of the deletion — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.`
 }
 
 func (*SafeDeleteSymbol) InputSchema() json.RawMessage {
@@ -505,7 +509,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		rng.Start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
 	}
 	edit := protocol.TextEdit{Range: rng, NewText: ""}
-	return applySingleEdit(a.URI, edit, dryRun, "delete", sym, false)
+	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "delete", sym, false)
 }
 
 // rangeContains returns true if outer fully contains inner.

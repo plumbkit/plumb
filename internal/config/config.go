@@ -173,11 +173,14 @@ type EditsConfig struct {
 	// file's mtime must be newer than tempWrittenAt+skew to trigger a retry.
 	// Increase on slow filesystems (network mounts, FUSE). Defaults to 100.
 	ConcurrentWriteSkewMs int `toml:"concurrent_write_skew_ms"`
-	// ShowWriteDiff controls whether edit_file and write_file append a unified
-	// diff of the change to their response. Defaults to true. Set to false
-	// (or PLUMB_SHOW_WRITE_DIFF=0) for implicit-verification mode where only
-	// path, size, and mtime metadata are returned — useful when tokens matter
-	// more than inline confirmation.
+	// ShowWriteDiff controls whether the content-modifying tools append a
+	// unified diff of the change to their response: edit_file, write_file,
+	// undo_edit, the semantic symbol edits (replace_symbol_body,
+	// insert_before_symbol, insert_after_symbol, safe_delete_symbol — in both
+	// dry-run preview and applied modes), and transaction_apply. Defaults to
+	// true. Set to false (or PLUMB_SHOW_WRITE_DIFF=0) for implicit-verification
+	// mode where only path, size, and mtime metadata are returned — useful when
+	// tokens matter more than inline confirmation.
 	ShowWriteDiff bool `toml:"show_write_diff"`
 }
 

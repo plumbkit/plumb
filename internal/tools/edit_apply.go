@@ -51,9 +51,27 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	if err != nil {
 		return err
 	}
+	out, err := applyTextEdits(data, edits)
+	if err != nil {
+		return err
+	}
 
-	// Sort edits by start position descending so we can apply in order without
-	// later edits invalidating earlier offsets.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil { //nolint:gosec // G306: user source files are world-readable by convention; 0644 is intentional
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// applyTextEdits applies edits to data and returns the resulting content. Pure;
+// performs no I/O. Edits are applied start-position descending so an earlier
+// edit never shifts the offsets of a later one. The input slice is sorted in
+// place (callers pass a freshly-built slice, as the file-writing path does).
+func applyTextEdits(data []byte, edits []protocol.TextEdit) ([]byte, error) {
 	sort.Slice(edits, func(i, j int) bool {
 		a, b := edits[i].Range.Start, edits[j].Range.Start
 		if a.Line != b.Line {
@@ -65,14 +83,14 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	for _, e := range edits {
 		startOff, ok := offsetForPosition(data, e.Range.Start)
 		if !ok {
-			return fmt.Errorf("edit start position out of range: line %d char %d", e.Range.Start.Line, e.Range.Start.Character)
+			return nil, fmt.Errorf("edit start position out of range: line %d char %d", e.Range.Start.Line, e.Range.Start.Character)
 		}
 		endOff, ok := offsetForPosition(data, e.Range.End)
 		if !ok {
-			return fmt.Errorf("edit end position out of range: line %d char %d", e.Range.End.Line, e.Range.End.Character)
+			return nil, fmt.Errorf("edit end position out of range: line %d char %d", e.Range.End.Line, e.Range.End.Character)
 		}
 		if startOff > endOff {
-			return fmt.Errorf("edit start after end")
+			return nil, fmt.Errorf("edit start after end")
 		}
 		buf := make([]byte, 0, startOff+len(e.NewText)+(len(data)-endOff))
 		buf = append(buf, data[:startOff]...)
@@ -80,16 +98,7 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 		buf = append(buf, data[endOff:]...)
 		data = buf
 	}
-
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil { //nolint:gosec // G306: user source files are world-readable by convention; 0644 is intentional
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return data, nil
 }
 
 // offsetForPosition returns the byte offset of pos in data, or false if pos is

@@ -97,7 +97,8 @@ func (*TransactionApply) Description() string {
 		"the already-written files are rolled back to their pre-transaction content. " +
 		"Per-path locks prevent interleaving with other write tools. Use for refactors " +
 		"that must land as one unit (cross-file rename of a string, coordinated config + " +
-		"caller updates, etc.). Up to 50 operations per call."
+		"caller updates, etc.). Up to 50 operations per call. The response lists each " +
+		"file with a per-file unified diff (unless show_write_diff is disabled)."
 }
 
 type txOperation struct {
@@ -172,7 +173,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 
 	t.txPhase3Notify(ctx, written)
 	var result strings.Builder
-	result.WriteString(formatTransactionResult(written))
+	result.WriteString(formatTransactionResult(written, t.deps.showWriteDiff()))
 	for _, w := range written {
 		t.deps.notifyTopology(w.path)
 		result.WriteString(t.deps.reportQuality(ctx, w.path))
@@ -405,7 +406,7 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 	}
 }
 
-func formatTransactionResult(written []txPrepared) string {
+func formatTransactionResult(written []txPrepared, showDiff bool) string {
 	var sb strings.Builder
 	totalBytes := 0
 	for _, p := range written {
@@ -419,6 +420,12 @@ func formatTransactionResult(written []txPrepared) string {
 			fmt.Fprintf(&sb, " — %s", summary)
 		}
 		sb.WriteByte('\n')
+		if showDiff {
+			if d := unifiedDiff(p.path, p.before, p.after); d != "" {
+				sb.WriteString(d)
+				sb.WriteByte('\n')
+			}
+		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
