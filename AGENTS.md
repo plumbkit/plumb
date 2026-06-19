@@ -129,13 +129,13 @@ Env: `PLUMB_STRICT_EDITS`, `PLUMB_WRITE_RATE_LIMIT`, `PLUMB_SHOW_WRITE_DIFF`, `P
 [workspace]
 auto_attach = false           # fall back to SynthesiseRoot (nearest .git/ or seed) when no marker found; LSP unavailable
 auto_attach_persist = false   # create .plumb/ at the synthetic root on first attach (implies auto_attach)
-allow_dependency_reads = true # read/search may reach the Go module cache + GOROOT read-only; writes there refused
+allow_dependency_reads = true # read/search may reach the session language's toolchain stdlib + dependency cache read-only (Go: GOMODCACHE/GOROOT; Zig: stdlib + cache; Rust: rust-src + cargo registry; Python: stdlib + site-packages; Swift: SDK; JVM: Gradle/Maven caches). TypeScript excluded (node_modules is in-workspace). Writes there refused
 extra_roots = []              # additional read-WRITE dirs, additive ($VAR-expanded)
 read_roots = []               # additional read-ONLY dirs, additive ($VAR-expanded)
 child_scan_depth = 2          # levels below a markerless .plumb/ root to scan for language markers in subdirs (monorepo); 0 disables
 ```
 
-The workspace boundary is enforced per-connection by a **`PathPolicy`** (`internal/tools/pathpolicy.go`): an allowlist of roots tagged read-only or read-write. The detected workspace is always read-write; `extra_roots` add read-write roots; `read_roots` (and, for a Go session with `allow_dependency_reads`, the module cache + `GOROOT`) add read-only roots. Read/search tools admit any allowed root; write tools demand read-write, so a write outside the workspace is refused by construction.
+The workspace boundary is enforced per-connection by a **`PathPolicy`** (`internal/tools/pathpolicy.go`): an allowlist of roots tagged read-only or read-write. The detected workspace is always read-write; `extra_roots` add read-write roots; `read_roots` (and, with `allow_dependency_reads`, the session language's toolchain stdlib + dependency cache, resolved per language — Go's GOMODCACHE/GOROOT, Zig's stdlib + cache, Rust's rust-src + cargo registry, Python's stdlib + site-packages, Swift's SDK, JVM's Gradle/Maven caches; TypeScript is intentionally excluded as its node_modules is in-workspace) add read-only roots. Read/search tools admit any allowed root; write tools demand read-write, so a write outside the workspace is refused by construction.
 
 ### `[git]` — tiered git tool gating
 

@@ -55,6 +55,7 @@ func TestBuildPathPolicy_GoDependencyReads(t *testing.T) {
 		acquiredLanguage: "go",
 		ws:               config.WorkspaceConfig{AllowDependencyReads: true},
 		depRoots:         computeGoDependencyRoots(context.Background()),
+		depRootsLang:     "go",
 	}
 
 	pol := s.buildPathPolicy(v)
@@ -71,23 +72,36 @@ func TestBuildPathPolicy_GoDependencyReads(t *testing.T) {
 	}
 }
 
-func TestBuildPathPolicy_NonGoSkipsDependencyReads(t *testing.T) {
-	goroot := build.Default.GOROOT
-	stdlib := filepath.Join(goroot, "src", "fmt", "print.go")
-	if _, err := os.Stat(stdlib); err != nil {
-		t.Skipf("GOROOT stdlib not present: %v", err)
-	}
+// TestBuildPathPolicy_DepRootsGatedByLanguage proves the cross-language guard:
+// dep roots resolved for one language are admitted only while the session stays
+// on that language. A re-pin to another language must not leak the prior
+// language's roots until warmDepRoots recomputes them.
+func TestBuildPathPolicy_DepRootsGatedByLanguage(t *testing.T) {
 	ws := t.TempDir()
+	dep := t.TempDir()
+	depFile := filepath.Join(dep, "lib.go")
 	s := &connSession{ctx: context.Background()}
+
+	// dep roots resolved for "go" but the session is currently on "python".
 	v := &sessionView{
 		acquiredRoot:     ws,
 		acquiredLanguage: "python",
 		ws:               config.WorkspaceConfig{AllowDependencyReads: true},
-		depRoots:         computeGoDependencyRoots(context.Background()),
+		depRoots:         []tools.AllowedRoot{{Path: dep, Access: tools.AccessRead, Label: "GOROOT"}},
+		depRootsLang:     "go",
+	}
+	pol := s.buildPathPolicy(v)
+	if _, err := pol.Check(depFile, tools.AccessRead); err == nil {
+		t.Error("dep roots resolved for another language must not be readable (depRootsLang mismatch)")
 	}
 
-	pol := s.buildPathPolicy(v)
-	if _, err := pol.Check(stdlib, tools.AccessRead); err == nil {
-		t.Error("non-Go session must not gain Go dependency read roots")
+	// Once the recorded language matches the session language, the roots apply.
+	v.depRootsLang = "python"
+	pol = s.buildPathPolicy(v)
+	if _, err := pol.Check(depFile, tools.AccessRead); err != nil {
+		t.Errorf("dep roots resolved for the session language should be readable: %v", err)
+	}
+	if _, err := pol.Check(depFile, tools.AccessReadWrite); err == nil {
+		t.Error("dependency roots must never be writable")
 	}
 }
