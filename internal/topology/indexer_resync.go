@@ -8,10 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"time"
-
-	tsg "github.com/odvcencio/gotreesitter"
 )
 
 // This file holds the indexer's whole-tree operations: deleting a single file's
@@ -88,8 +85,7 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 	// trees, node/edge slices). Release the pooled parse arena to the GC, then
 	// hand the freed pages back to the OS so RSS and HeapSys settle to steady
 	// state instead of lingering at the walk's peak.
-	tsg.DrainArenaPools()
-	debug.FreeOSMemory()
+	idx.reclaimFn()
 	return nil
 }
 

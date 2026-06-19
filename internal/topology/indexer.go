@@ -34,11 +34,36 @@ type Indexer struct {
 	done  chan struct{}
 	wg    sync.WaitGroup
 
+	// idleReclaim is the debounce delay before draining the parse-arena pool once
+	// the queue goes quiet. A steady trickle of single-file edits never trips the
+	// per-cycle burst gate (shouldReclaimAfterBurst), so without this the pooled
+	// high-water-mark arenas would sit resident on an otherwise idle daemon. 0
+	// disables idle reclamation.
+	idleReclaim time.Duration
+	// reclaimFn releases pooled parse arenas to the GC and returns freed pages to
+	// the OS. A struct field so tests can observe it; production uses drainArenas.
+	reclaimFn func()
+
 	mu            sync.RWMutex
 	state         string
 	lastSync      time.Time
 	lastErr       string
 	resyncPending bool // set when Enqueue overflows; triggers a recovery resync
+}
+
+// defaultIdleReclaim is the debounce window after the indexer goes quiet before
+// it drains the pooled parse arenas. Long enough that an active edit loop's
+// brief pauses do not each pay a stop-the-world GC, short enough that a daemon
+// left idle settles back to its lean resident set promptly.
+const defaultIdleReclaim = 30 * time.Second
+
+// drainArenas releases gotreesitter's pooled parse arenas to the GC and hands the
+// freed pages back to the OS. The arena pools are package-global strong-reference
+// free-lists, so without an explicit drain a single large parse leaves a
+// high-water-mark arena (tens of MB) resident until the process exits.
+func drainArenas() {
+	tsg.DrainArenaPools()
+	debug.FreeOSMemory()
 }
 
 // newIndexer creates an Indexer. Call Start() before enqueuing operations.
@@ -48,14 +73,16 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64, r
 		maxSize = 512 * 1024
 	}
 	return &Indexer{
-		workspace:  workspace,
-		db:         db,
-		extractors: exts,
-		maxSize:    maxSize,
-		resyncMins: resyncMins,
-		queue:      make(chan indexOp, 256),
-		done:       make(chan struct{}),
-		state:      "idle",
+		workspace:   workspace,
+		db:          db,
+		extractors:  exts,
+		maxSize:     maxSize,
+		resyncMins:  resyncMins,
+		idleReclaim: defaultIdleReclaim,
+		reclaimFn:   drainArenas,
+		queue:       make(chan indexOp, 256),
+		done:        make(chan struct{}),
+		state:       "idle",
 	}
 }
 
@@ -138,6 +165,16 @@ func (idx *Indexer) backgroundWorker() {
 		tickC = ticker.C
 	}
 
+	// Idle-reclaim timer: once the queue goes quiet for idleReclaim, drain the
+	// pooled parse arenas so a steady trickle of single-file edits — which never
+	// trips the per-cycle burst gate — cannot leave high-water-mark arenas
+	// resident on an otherwise idle daemon. Created stopped; armed only after a
+	// queue cycle that did not already reclaim.
+	idleTimer := time.NewTimer(time.Hour)
+	idleTimer.Stop()
+	defer idleTimer.Stop()
+	reclaimPending := false
+
 	for {
 		select {
 		case <-idx.done:
@@ -149,7 +186,19 @@ func (idx *Indexer) backgroundWorker() {
 				idx.Enqueue("", opResync)
 			}
 		case op := <-idx.queue:
-			idx.runQueueCycle(op)
+			if idx.runQueueCycle(op) {
+				// The burst gate already reclaimed; cancel any pending idle drain.
+				reclaimPending = false
+				idleTimer.Stop()
+			} else if idx.idleReclaim > 0 {
+				reclaimPending = true
+				idleTimer.Reset(idx.idleReclaim)
+			}
+		case <-idleTimer.C:
+			if reclaimPending {
+				idx.reclaimFn()
+				reclaimPending = false
+			}
 		}
 	}
 }
@@ -157,21 +206,35 @@ func (idx *Indexer) backgroundWorker() {
 // runQueueCycle drains and processes all buffered ops, then runs a full resync
 // when one was flagged by Enqueue after a queue overflow, so dropped per-file
 // updates cannot leave the index permanently stale. The indexer state is set to
-// error or idle based on the combined outcome.
-func (idx *Indexer) runQueueCycle(initial indexOp) {
+// error or idle based on the combined outcome. It reports whether it reclaimed
+// the parse-arena pool — true after a large enough burst or a successful resync
+// (both drain the pool) — so the caller can cancel a pending idle drain.
+func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 	ops := idx.drain(initial)
 	idx.setState("running", "")
+	reclaimed := false
 	var lastErr error
 	for _, o := range ops {
-		if err := idx.dispatch(context.Background(), o); err != nil {
+		err := idx.dispatch(context.Background(), o)
+		if err != nil {
 			slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
 			lastErr = err
+			continue
+		}
+		if o.kind == opResync {
+			// Credit the reclaim only when the resync SUCCEEDED — processResync
+			// drains the pool as its final step, so a walk/prune failure means no
+			// drain ran. Crediting on intent would still cancel the idle-reclaim
+			// backstop, narrowly re-opening the retention this guards against.
+			reclaimed = true
 		}
 	}
 	if idx.takeResyncPending() {
 		if err := idx.processResync(context.Background()); err != nil {
 			slog.Warn("topology: recovery resync error", "err", err)
 			lastErr = err
+		} else {
+			reclaimed = true
 		}
 	}
 	if lastErr != nil {
@@ -182,10 +245,12 @@ func (idx *Indexer) runQueueCycle(initial indexOp) {
 	if shouldReclaimAfterBurst(len(ops)) {
 		// A coalesced burst (git checkout, a formatter) left a large transient
 		// parse working set. A single small edit must NOT pay a stop-the-world GC,
-		// so this is gated on the burst size.
-		tsg.DrainArenaPools()
-		debug.FreeOSMemory()
+		// so this is gated on the burst size; the trickle case is covered by the
+		// idle-reclaim timer in backgroundWorker instead.
+		idx.reclaimFn()
+		reclaimed = true
 	}
+	return reclaimed
 }
 
 // reclaimAfterOps is the burst size at which runQueueCycle reclaims transient
