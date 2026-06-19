@@ -59,6 +59,14 @@ type sessionView struct {
 	// none is held. Released and re-acquired on re-pin, released on close, so a
 	// budget entry is reclaimed once its last session leaves.
 	boundBudgetKey string
+	// notify sends a server-initiated notification to this connection's client.
+	// Captured at OnInit; nil-safe (it is nil in tests and before initialize).
+	notify mcp.NotifyFn
+	// lastToolProfile is the resolved tool profile ("lean"/"full") last advertised
+	// to the client, seeded at OnInit. A config reload that changes the resolved
+	// profile fires a notifications/tools/list_changed against this seed, so the
+	// first real change is detected and no spurious notification fires at startup.
+	lastToolProfile string
 
 	edits     config.EditsConfig
 	walk      config.WalkConfig

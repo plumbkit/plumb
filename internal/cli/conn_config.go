@@ -67,6 +67,31 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// The workspace is now known (attach / re-pin / reload all funnel here), so
 	// link the per-(client, workspace) shared write budget. Idempotent.
 	s.bindWriteLimiterParent()
+	// A project config may set [tools] profile = "full" (or per-client) — tell the
+	// client to re-list when the resolved profile changed. Runs after the mutate
+	// above has returned, so it holds no lock when it calls view()/mutate().
+	s.maybeNotifyToolProfileChange()
+}
+
+// maybeNotifyToolProfileChange emits notifications/tools/list_changed when the
+// resolved tool profile differs from what was last advertised, so a client that
+// honours the notification re-lists and picks up a mid-session [tools] profile
+// change (e.g. a project config setting profile = "full"). A client that lists
+// only once simply ignores it. No-op when the profile is unchanged or no
+// notifier is wired (tests, pre-init).
+func (s *connSession) maybeNotifyToolProfileChange() {
+	v := s.view()
+	if v.notify == nil {
+		return
+	}
+	cur := s.resolveToolProfile()
+	if cur == v.lastToolProfile {
+		return
+	}
+	s.mutate(func(v *sessionView) { v.lastToolProfile = cur })
+	if err := v.notify("notifications/tools/list_changed", nil); err != nil {
+		s.log().Debug("daemon: tools/list_changed notify failed", "err", err)
+	}
 }
 
 // startConfigWatcher launches a background goroutine that polls for config file

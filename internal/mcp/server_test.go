@@ -533,6 +533,59 @@ func TestServer_WriteDeadline_TearsDownOnStuckSocket(t *testing.T) {
 	}
 }
 
+func TestServer_Initialize_AdvertisesToolsListChanged(t *testing.T) {
+	resps := serve(t, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+	result := resultByID(t, resps, 1)
+	caps, _ := result["capabilities"].(map[string]any)
+	tools, _ := caps["tools"].(map[string]any)
+	if listChanged, _ := tools["listChanged"].(bool); !listChanged {
+		t.Fatalf("initialize must advertise tools.listChanged=true, got capabilities=%v", caps)
+	}
+}
+
+// TestServer_NotifyFromOnInit drives a full initialize over a net.Pipe and has
+// the OnInit callback send a server-initiated notification via the NotifyFn. The
+// notification frame must carry a method and NO id (it is a notification, not a
+// request) — exercising serveState.notify on the real write path.
+func TestServer_NotifyFromOnInit(t *testing.T) {
+	s := newServer()
+	s.OnInit = func(_ context.Context, _ mcp.RequestFn, notify mcp.NotifyFn) {
+		_ = notify("notifications/tools/list_changed", nil)
+	}
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close(); _ = serverConn.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = s.Serve(ctx, serverConn, serverConn) }()
+
+	go func() {
+		_, _ = clientConn.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n"))
+	}()
+
+	dec := json.NewDecoder(clientConn)
+	deadline := time.AfterFunc(5*time.Second, func() { _ = clientConn.Close() })
+	defer deadline.Stop()
+
+	var sawNotify bool
+	for !sawNotify {
+		var frame map[string]any
+		if err := dec.Decode(&frame); err != nil {
+			t.Fatalf("decode frame before notification arrived: %v", err)
+		}
+		if frame["method"] != "notifications/tools/list_changed" {
+			continue // the initialize response
+		}
+		sawNotify = true
+		if _, hasID := frame["id"]; hasID {
+			t.Errorf("a notification must not carry an id, got %v", frame["id"])
+		}
+		if frame["jsonrpc"] != "2.0" {
+			t.Errorf("notification jsonrpc must be 2.0, got %v", frame["jsonrpc"])
+		}
+	}
+}
+
 // A transport without SetWriteDeadline (a plain pipe/buffer, as in tests) is
 // unaffected by WriteTimeout — the deadline branch is simply skipped.
 func TestServer_WriteDeadline_NoDeadlineWriterUnaffected(t *testing.T) {
