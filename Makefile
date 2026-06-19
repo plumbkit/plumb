@@ -1,6 +1,13 @@
 BINARY    := plumb
 CMD       := ./cmd/plumb
 TESTCACHE := .testcache
+
+# install destination. PREFIX defaults to ~/.local (needs no sudo, is not
+# Homebrew-managed, and aligns with the XDG dirs plumb already uses); override
+# for a system location, e.g. `make install PREFIX=/usr/local` (needs sudo).
+# DESTDIR is honoured for staged/packaged installs.
+PREFIX    ?= $(HOME)/.local
+BINDIR    := $(DESTDIR)$(PREFIX)/bin
 # Try an exact git tag first (release builds), then fall back to VERSION file,
 # then fall back to the short commit hash.
 VERSION   := $(shell git describe --tags --exact-match 2>/dev/null || cat VERSION 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)
@@ -22,7 +29,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint check-size verify run clean tidy install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog
+.PHONY: build web-ui test test-race integration-test build-integration lint check-size verify run clean tidy install install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -139,6 +146,21 @@ clean:
 
 tidy:
 	go mod tidy
+
+# install builds plumb and copies the freshly-codesigned binary onto PATH, so the
+# daemon no longer runs out of the build tree (where a rebuild or a stray git
+# checkout could swap the live binary). It copies the signed artifact rather than
+# using `go install`, so macOS TCC consent stays stable across rebuilds. After
+# installing, restart the daemon (`plumb restart --force`) and re-run
+# `plumb setup <client>` so client configs point at the installed path.
+install: build
+	@install -d "$(BINDIR)"
+	@install -m 0755 $(BINARY) "$(BINDIR)/$(BINARY)"
+	@echo "installed $$("$(BINDIR)/$(BINARY)" version 2>/dev/null | tail -1) -> $(BINDIR)/$(BINARY)"
+	@case ":$$PATH:" in \
+		*":$(PREFIX)/bin:"*) ;; \
+		*) printf 'note: %s is not on your PATH — add it (e.g. fish_add_path %s, or export PATH=\"%s:$$PATH\")\n' "$(PREFIX)/bin" "$(PREFIX)/bin" "$(PREFIX)/bin" ;; \
+	esac
 
 # ts-wasm regenerates the embedded TypeScript/TSX tree-sitter wasm from the
 # vendored C sources. Dev-only — requires `zig`; building/running plumb needs
