@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/quality"
 )
@@ -29,8 +31,8 @@ func (*Analyser) Supports(path string) bool {
 }
 
 // Analyse runs golangci-lint on files and returns parsed findings.
-// Returns (nil, nil) if golangci-lint is not on PATH or exits with a
-// "no issues" status.
+// Returns (nil, nil) if golangci-lint is not on PATH, the linter fails to
+// run, or it reports no issues.
 func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Finding, error) {
 	if len(files) == 0 {
 		return nil, nil
@@ -40,23 +42,42 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 		return nil, nil // binary absent — silent skip
 	}
 
-	args := append([]string{"run", "--out-format=json"}, files...)
+	// --output.json.path=stdout is the golangci-lint v2 spelling; the v1
+	// --out-format=json flag was removed and errors with "unknown flag".
+	args := append([]string{"run", "--output.json.path=stdout"}, files...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	// golangci-lint exits non-zero when it finds issues; that is not an error
-	// for us — we parse the JSON output regardless.
-	_ = cmd.Run()
+	// for us — we parse the JSON output regardless of exit code.
+	runErr := cmd.Run()
 
+	// A successful run always writes a JSON document to stdout (even with zero
+	// issues), so empty stdout means the linter failed to run rather than a
+	// clean file. Surface that instead of silently reporting "no findings".
 	if stdout.Len() == 0 {
+		if runErr != nil {
+			slog.WarnContext(ctx, "golangci-lint failed to run",
+				"error", runErr, "stderr", stderrTail(stderr.String()))
+		}
 		return nil, nil
 	}
 	return parseOutput(stdout.Bytes(), a.Name())
 }
 
-// lintOutput is the top-level JSON structure emitted by golangci-lint --out-format=json.
+// stderrTail returns the trailing portion of stderr, bounded, for diagnostics.
+func stderrTail(s string) string {
+	const max = 512
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		s = "…" + s[len(s)-max:]
+	}
+	return s
+}
+
+// lintOutput is the top-level JSON structure emitted by golangci-lint's JSON output.
 type lintOutput struct {
 	Issues []lintIssue `json:"Issues"`
 }
@@ -75,7 +96,10 @@ type lintIssue struct {
 
 func parseOutput(data []byte, source string) ([]quality.Finding, error) {
 	var out lintOutput
-	if err := json.Unmarshal(data, &out); err != nil {
+	// golangci-lint appends a human-readable summary after the JSON document on
+	// stdout when issues are present, so decode only the leading JSON value and
+	// ignore any trailing text (json.Unmarshal would reject it).
+	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&out); err != nil {
 		return nil, nil // malformed output — treat as no findings
 	}
 	findings := make([]quality.Finding, 0, len(out.Issues))
