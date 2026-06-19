@@ -207,27 +207,34 @@ func (idx *Indexer) backgroundWorker() {
 // when one was flagged by Enqueue after a queue overflow, so dropped per-file
 // updates cannot leave the index permanently stale. The indexer state is set to
 // error or idle based on the combined outcome. It reports whether it reclaimed
-// the parse-arena pool (true after a large enough burst), so the caller can
-// cancel a pending idle drain.
+// the parse-arena pool — true after a large enough burst or a successful resync
+// (both drain the pool) — so the caller can cancel a pending idle drain.
 func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 	ops := idx.drain(initial)
 	idx.setState("running", "")
 	reclaimed := false
 	var lastErr error
 	for _, o := range ops {
-		if o.kind == opResync {
-			reclaimed = true // processResync drains the arena pool itself
-		}
-		if err := idx.dispatch(context.Background(), o); err != nil {
+		err := idx.dispatch(context.Background(), o)
+		if err != nil {
 			slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)
 			lastErr = err
+			continue
+		}
+		if o.kind == opResync {
+			// Credit the reclaim only when the resync SUCCEEDED — processResync
+			// drains the pool as its final step, so a walk/prune failure means no
+			// drain ran. Crediting on intent would still cancel the idle-reclaim
+			// backstop, narrowly re-opening the retention this guards against.
+			reclaimed = true
 		}
 	}
 	if idx.takeResyncPending() {
-		reclaimed = true
 		if err := idx.processResync(context.Background()); err != nil {
 			slog.Warn("topology: recovery resync error", "err", err)
 			lastErr = err
+		} else {
+			reclaimed = true
 		}
 	}
 	if lastErr != nil {
