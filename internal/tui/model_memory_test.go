@@ -120,11 +120,67 @@ func TestMemoryWorkspaceSwitchReloadsAndInvalidates(t *testing.T) {
 	if m.memoryCursor != 0 {
 		t.Fatalf("switching workspace must reset memoryCursor, got %d", m.memoryCursor)
 	}
-	if m.memoryBodyCache != "" || m.memoryBodyCacheName != "" {
-		t.Fatalf("switching workspace must clear the body cache, got %q/%q", m.memoryBodyCache, m.memoryBodyCacheName)
+	// The stale wsB entry (gamma) must be gone, and the cache re-primed off the
+	// render path for the new selection (alpha) so the body shows without a
+	// disk read on the next frame.
+	if m.memoryBodyCacheName != "alpha" || m.memoryBodyCache != "alpha body" {
+		t.Fatalf("switching workspace must re-prime the body cache for the new selection, got %q/%q", m.memoryBodyCacheName, m.memoryBodyCache)
 	}
 	if len(m.memories) != 1 || m.memories[0].Name != "alpha" {
 		t.Fatalf("wsA memories = %+v, want [alpha]", m.memories)
+	}
+}
+
+// TestPopulateMemoryBodyOffRenderPath guards the #59 fix: the selected
+// memory's body must be filled into the cache by the pointer-receiver
+// populate step (off the render path), cleared on navigation, and re-filled
+// for the new selection — never read from disk inside the value-copy render
+// chain.
+func TestPopulateMemoryBodyOffRenderPath(t *testing.T) {
+	ws := t.TempDir()
+	if err := memory.Write(ws, "alpha", "alpha body", "alpha desc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.Write(ws, "beta", "beta body", "beta desc"); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Model{
+		currentSection: 2,
+		sessions:       []session.Info{{ID: "1", Folder: ws}},
+	}
+	m.refreshMemories() // primes the cache for the first selection
+
+	// Memories sort by name: alpha at cursor 0.
+	if m.memoryBodyCacheName != "alpha" || m.memoryBodyCache != "alpha body" {
+		t.Fatalf("refresh should prime the cache for the selection, got %q/%q", m.memoryBodyCacheName, m.memoryBodyCache)
+	}
+	// The render-path reader serves the populated cache without a disk read.
+	if got := m.currentMemoryBody(); got != "alpha body" {
+		t.Fatalf("currentMemoryBody = %q, want %q", got, "alpha body")
+	}
+
+	// Navigate: clear the cache (as the key handlers do), then the off-render
+	// populate step refills it for the new selection.
+	m.memoryCursor = 1
+	m.memoryBodyCache = ""
+	m.memoryBodyCacheName = ""
+	if got := m.currentMemoryBody(); got != "" {
+		t.Fatalf("an invalidated cache must read empty on the render path, got %q", got)
+	}
+	m.populateMemoryBody()
+	if m.memoryBodyCacheName != "beta" || m.memoryBodyCache != "beta body" {
+		t.Fatalf("populate should refill for the new selection, got %q/%q", m.memoryBodyCacheName, m.memoryBodyCache)
+	}
+
+	// Outside the Memory section, populate is a no-op (no disk read for a
+	// hidden panel).
+	m.currentSection = 0
+	m.memoryBodyCache = ""
+	m.memoryBodyCacheName = ""
+	m.populateMemoryBody()
+	if m.memoryBodyCacheName != "" {
+		t.Fatalf("populate must do nothing outside the Memory section, got %q", m.memoryBodyCacheName)
 	}
 }
 
