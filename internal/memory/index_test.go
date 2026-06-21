@@ -316,6 +316,75 @@ func TestIndex_FreshReindexAndRemove(t *testing.T) {
 	}
 }
 
+// TestIndex_ReindexSkipsUnchangedReads is the regression guard for issue #61:
+// a steady-state Reindex over files that have not changed on disk must not pay a
+// second full file read per memory. List already hashed each file's bytes, so
+// Reindex compares that SHA against the stored anchor and only re-reads memories
+// whose content actually drifted (or that are absent from the index).
+func TestIndex_ReindexSkipsUnchangedReads(t *testing.T) {
+	ix, ws := openTestIndex(t)
+
+	// Count how often Reindex performs the full file re-read via the readRecord
+	// seam, then restore the original so other tests are unaffected.
+	var reads int
+	orig := readRecord
+	readRecord = func(workspace, name string) (Record, error) {
+		reads++
+		return orig(workspace, name)
+	}
+	t.Cleanup(func() { readRecord = orig })
+
+	if err := Write(ws, "alpha", "# Alpha\n\nfirst memory", "a"); err != nil {
+		t.Fatalf("Write alpha: %v", err)
+	}
+	if err := Write(ws, "beta", "# Beta\n\nsecond memory", "b"); err != nil {
+		t.Fatalf("Write beta: %v", err)
+	}
+
+	// First reindex indexes both — two reads expected (they are new to the index).
+	reads = 0
+	n, err := ix.Reindex(ws)
+	if err != nil {
+		t.Fatalf("Reindex 1: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("first reindex: indexed %d, want 2", n)
+	}
+	if reads != 2 {
+		t.Fatalf("first reindex: %d reads, want 2 (both files are new)", reads)
+	}
+
+	// Steady state: nothing changed on disk, so Reindex must re-read nothing and
+	// index nothing — the SHA from List() short-circuits the second read.
+	reads = 0
+	n, err = ix.Reindex(ws)
+	if err != nil {
+		t.Fatalf("Reindex 2: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("steady-state reindex: indexed %d, want 0", n)
+	}
+	if reads != 0 {
+		t.Errorf("steady-state reindex re-read %d unchanged files, want 0", reads)
+	}
+
+	// Change only beta on disk: exactly the changed file is re-read and reindexed.
+	if err := Write(ws, "beta", "# Beta\n\nrewritten content about caching", "b2"); err != nil {
+		t.Fatalf("rewrite beta: %v", err)
+	}
+	reads = 0
+	n, err = ix.Reindex(ws)
+	if err != nil {
+		t.Fatalf("Reindex 3: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("changed-file reindex: indexed %d, want 1", n)
+	}
+	if reads != 1 {
+		t.Errorf("changed-file reindex re-read %d files, want 1 (only beta drifted)", reads)
+	}
+}
+
 func TestIndex_RemoveDropsFromSearch(t *testing.T) {
 	ix, _ := openTestIndex(t)
 	ctx := context.Background()
