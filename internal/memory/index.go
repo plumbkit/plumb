@@ -234,8 +234,18 @@ func (ix *Index) Fresh(workspace string) (bool, error) {
 // Reindex brings the index into line with the markdown files: it upserts new or
 // changed memories and removes index rows for memories deleted on disk. Returns
 // the number of files (re)indexed.
+//
+// List already read every file's bytes and computed Memory.ContentSHA, so the
+// unchanged-file path compares that SHA against the stored anchor (one cheap
+// pre-loaded map lookup) and only calls recordFromFile — the full re-read — for
+// memories whose content drifted or that are absent from the index. An unchanged
+// memory therefore costs the single List read, not a second read plus a re-hash.
 func (ix *Index) Reindex(workspace string) (int, error) {
 	mems, err := List(workspace)
+	if err != nil {
+		return 0, err
+	}
+	anchors, err := ix.fileAnchors()
 	if err != nil {
 		return 0, err
 	}
@@ -243,11 +253,11 @@ func (ix *Index) Reindex(workspace string) (int, error) {
 	changed := 0
 	for _, m := range mems {
 		live[m.Name] = true
-		rec, err := recordFromFile(workspace, m.Name)
-		if err != nil {
-			continue
+		if stored, ok := anchors[m.Name]; ok && m.ContentSHA != "" && m.ContentSHA == stored {
+			continue // unchanged on disk — skip the second read
 		}
-		if ix.isCurrent(m.Name, rec.ContentSHA) {
+		rec, err := readRecord(workspace, m.Name)
+		if err != nil {
 			continue
 		}
 		if err := ix.Upsert(rec); err != nil {
@@ -259,6 +269,31 @@ func (ix *Index) Reindex(workspace string) (int, error) {
 		return changed, err
 	}
 	return changed, nil
+}
+
+// fileAnchors loads the stored name → content_sha map in one query, so Reindex
+// can decide whether each on-disk memory has drifted without a per-memory DB
+// round-trip.
+func (ix *Index) fileAnchors() (map[string]string, error) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	rows, err := ix.db.Query(`SELECT name, content_sha FROM memory_files`)
+	if err != nil {
+		return nil, fmt.Errorf("memory: read file anchors: %w", err)
+	}
+	defer rows.Close()
+	anchors := make(map[string]string)
+	for rows.Next() {
+		var name, sha string
+		if err := rows.Scan(&name, &sha); err != nil {
+			continue
+		}
+		anchors[name] = sha
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("memory: read file anchors: %w", err)
+	}
+	return anchors, nil
 }
 
 // ReindexAsync runs Reindex in the background, at most one in flight per index
@@ -275,14 +310,6 @@ func (ix *Index) ReindexAsync(workspace string) {
 			slog.Debug("memory: async reindex failed", "workspace", workspace, "err", err)
 		}
 	}()
-}
-
-func (ix *Index) isCurrent(name, sha string) bool {
-	ix.mu.Lock()
-	defer ix.mu.Unlock()
-	var stored string
-	err := ix.db.QueryRow(`SELECT content_sha FROM memory_files WHERE name = ?`, name).Scan(&stored)
-	return err == nil && stored == sha
 }
 
 func (ix *Index) removeMissing(live map[string]bool) error {
@@ -308,6 +335,11 @@ func (ix *Index) removeMissing(live map[string]bool) error {
 	}
 	return nil
 }
+
+// readRecord is the indirection Reindex calls to do the full file read; it is a
+// var so a test can count how often Reindex actually re-reads a file (the
+// unchanged-file path must not).
+var readRecord = recordFromFile
 
 // recordFromFile reads a memory file and builds its Record. Provenance fields
 // are populated from frontmatter where present (generated memories carry them);
