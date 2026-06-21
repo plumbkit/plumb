@@ -208,6 +208,88 @@ func TestReplaceSymbolBody_IncludeDocComment_NoCommentAbove(t *testing.T) {
 	}
 }
 
+// hasUnifiedDiff reports whether s carries a unified-diff block (the ---/+++
+// headers plus at least one +/- line), the shape unifiedDiff() emits.
+func hasUnifiedDiff(s string) bool {
+	return strings.Contains(s, "--- a/") && strings.Contains(s, "+++ b/") &&
+		(strings.Contains(s, "\n+") || strings.Contains(s, "\n-"))
+}
+
+func TestReplaceSymbolBody_DiffInPreviewAndApplied(t *testing.T) {
+	src := "package main\n\nfunc Foo() {}\n"
+	mkArgs := func(dry bool) json.RawMessage {
+		_, uri := writeFixture(t, "main.go", src)
+		args, _ := json.Marshal(map[string]any{
+			"uri": uri, "name_path": "Foo",
+			"content": "func Foo() { return }", "dry_run": &dry,
+		})
+		return args
+	}
+
+	// dry_run preview carries a diff and leaves the file untouched.
+	dryPath, dryURI := writeFixture(t, "dry.go", src)
+	dryArgs, _ := json.Marshal(map[string]any{
+		"uri": dryURI, "name_path": "Foo",
+		"content": "func Foo() { return }", "dry_run": true,
+	})
+	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
+	out, err := tools.NewReplaceSymbolBody(mock, 0).Execute(context.Background(), dryArgs)
+	if err != nil {
+		t.Fatalf("dry-run Execute: %v", err)
+	}
+	if !hasUnifiedDiff(out) {
+		t.Errorf("dry-run output missing diff:\n%s", out)
+	}
+	if got, _ := os.ReadFile(dryPath); string(got) != src {
+		t.Errorf("dry-run modified the file: %q", got)
+	}
+
+	// applied edit also carries a diff.
+	mock = &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
+	out, err = tools.NewReplaceSymbolBody(mock, 0).Execute(context.Background(), mkArgs(false))
+	if err != nil {
+		t.Fatalf("applied Execute: %v", err)
+	}
+	if !hasUnifiedDiff(out) {
+		t.Errorf("applied output missing diff:\n%s", out)
+	}
+}
+
+func TestReplaceSymbolBody_ShowWriteDiffOffSuppressesDiff(t *testing.T) {
+	src := "package main\n\nfunc Foo() {}\n"
+	for _, dry := range []bool{true, false} {
+		_, uri := writeFixture(t, "main.go", src)
+		args, _ := json.Marshal(map[string]any{
+			"uri": uri, "name_path": "Foo",
+			"content": "func Foo() { return }", "dry_run": &dry,
+		})
+		mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
+		tool := tools.NewReplaceSymbolBody(mock, 0).WithShowWriteDiff(func() bool { return false })
+		out, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatalf("Execute (dry=%v): %v", dry, err)
+		}
+		if hasUnifiedDiff(out) {
+			t.Errorf("dry=%v: diff present despite show_write_diff=false:\n%s", dry, out)
+		}
+	}
+}
+
+func TestSafeDeleteSymbol_DiffOnApply(t *testing.T) {
+	src := "package main\n\nfunc Foo() {}\n"
+	_, uri := writeFixture(t, "main.go", src)
+	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}, locations: nil}
+	dry := false
+	args, _ := json.Marshal(map[string]any{"uri": uri, "name_path": "Foo", "dry_run": &dry})
+	out, err := tools.NewSafeDeleteSymbol(mock, 0).Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !hasUnifiedDiff(out) {
+		t.Errorf("safe_delete output missing diff:\n%s", out)
+	}
+}
+
 func TestInputSchema_IncludesDocCommentFlag(t *testing.T) {
 	// Sanity: the three relevant tools must advertise include_doc_comment;
 	// insert_after must not.

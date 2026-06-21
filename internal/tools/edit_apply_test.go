@@ -142,3 +142,41 @@ func TestFindSymbolByPath_StripsArgList(t *testing.T) {
 		t.Error("a non-matching prefix must not resolve")
 	}
 }
+
+func TestApplyTextEdits_PureMatchesFileWrite(t *testing.T) {
+	const src = "line0\nline1\nline2\nline3\n"
+	edits := []protocol.TextEdit{
+		{Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 1, Character: 5},
+		}, NewText: "LINE1"},
+		{Range: protocol.Range{
+			Start: protocol.Position{Line: 3, Character: 0},
+			End:   protocol.Position{Line: 3, Character: 0},
+		}, NewText: "X"},
+	}
+
+	// Pure result.
+	pure, err := applyTextEdits([]byte(src), append([]protocol.TextEdit(nil), edits...))
+	if err != nil {
+		t.Fatalf("applyTextEdits: %v", err)
+	}
+
+	// File-write result must agree byte-for-byte.
+	path := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := applyTextEditsToFile(path, append([]protocol.TextEdit(nil), edits...)); err != nil {
+		t.Fatalf("applyTextEditsToFile: %v", err)
+	}
+	onDisk, _ := os.ReadFile(path)
+
+	want := "line0\nLINE1\nline2\nXline3\n"
+	if string(pure) != want {
+		t.Errorf("pure result\n got: %q\nwant: %q", pure, want)
+	}
+	if string(onDisk) != string(pure) {
+		t.Errorf("file write diverged from pure result\n file: %q\n pure: %q", onDisk, pure)
+	}
+}

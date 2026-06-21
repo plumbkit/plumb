@@ -70,3 +70,36 @@ func TestDeleteFile_AllowDir_WithoutFlag(t *testing.T) {
 		t.Fatalf("expected directory error without allow_dir, got: %v", err)
 	}
 }
+
+func TestDeleteFile_SummaryReportsLinesAndBytes(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "code.txt")
+	content := "one\ntwo\nthree\n" // 3 lines, 14 bytes
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"file_path": f})
+	out, err := NewDeleteFile(WriteDeps{}).Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "3 lines") || !strings.Contains(out, "14 bytes removed") {
+		t.Errorf("expected line+byte summary, got: %q", out)
+	}
+}
+
+func TestDeleteFile_SummaryBinaryFallsBackToBytes(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "blob.bin")
+	if err := os.WriteFile(f, []byte{0x00, 0x01, 0x02, 0x00}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"file_path": f})
+	out, err := NewDeleteFile(WriteDeps{}).Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "binary") || strings.Contains(out, "lines") {
+		t.Errorf("expected binary byte-only summary, got: %q", out)
+	}
+}

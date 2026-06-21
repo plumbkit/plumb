@@ -220,3 +220,34 @@ func TestTransaction_TxlogRolledBackOnValidationFailure(t *testing.T) {
 		t.Errorf("no txlog dir expected when phase 1 fails, found: %v", entries)
 	}
 }
+
+func TestTransaction_DiffGatedByShowWriteDiff(t *testing.T) {
+	run := func(showDiff bool) string {
+		dir := t.TempDir()
+		a := filepath.Join(dir, "a.txt")
+		_ = os.WriteFile(a, []byte("hello A\n"), 0o644)
+		raw, _ := json.Marshal(map[string]any{
+			"operations": []map[string]any{
+				{"file_path": a, "edits": []map[string]string{{"old_string": "hello", "new_string": "hi"}}},
+			},
+		})
+		deps := WriteDeps{
+			WorkspaceFn:     func() string { return dir },
+			ShowWriteDiffFn: func() bool { return showDiff },
+		}
+		out, err := NewTransactionApply(deps).Execute(context.Background(), raw)
+		if err != nil {
+			t.Fatalf("Execute (showDiff=%v): %v", showDiff, err)
+		}
+		return out
+	}
+
+	on := run(true)
+	if !strings.Contains(on, "--- a/") || !strings.Contains(on, "+++ b/") {
+		t.Errorf("show_write_diff on: expected a diff, got:\n%s", on)
+	}
+	off := run(false)
+	if strings.Contains(off, "--- a/") {
+		t.Errorf("show_write_diff off: unexpected diff, got:\n%s", off)
+	}
+}

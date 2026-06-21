@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,7 +48,8 @@ func (*DeleteFile) Description() string {
 		"For a directory tree, delete files individually with repeated delete_file calls, then remove each " +
 		"now-empty directory with allow_dir: true. The LSP server is notified with FileDeleted so symbol " +
 		"indexes and diagnostics update immediately. Per-path locking serialises against any concurrent " +
-		"write_file/edit_file targeting the same path."
+		"write_file/edit_file targeting the same path. The response reports the line and byte count " +
+		"removed (bytes only for a binary or oversized file)."
 }
 
 type deleteFileArgs struct {
@@ -95,6 +97,11 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 			"review and commit first, or pass dirty_ok: true to proceed", path)
 	}
 
+	// Summarise what is about to be removed (line + byte count) before deleting,
+	// so the agent can report the scope of the change. Best-effort: a read error
+	// degrades to the byte count from Stat.
+	summary := deleteSummary(path, info.Size())
+
 	if err := os.Remove(path); err != nil {
 		return "", fmt.Errorf("delete_file: %w", err)
 	}
@@ -106,5 +113,40 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	// processUpsert detects the missing file and routes to processDelete automatically.
 	t.deps.notifyTopology(path)
 
-	return fmt.Sprintf("deleted %s", path), nil
+	return fmt.Sprintf("deleted %s — %s", path, summary), nil
+}
+
+// deleteSummary describes the content removed by a delete: a line + byte count
+// for a readable text file, falling back to bytes only for a binary file, one
+// over maxReadFileBytes, or any that can't be read. size is the Stat size, used
+// for the byte count and to skip reading oversized files.
+func deleteSummary(path string, size int64) string {
+	if size > maxReadFileBytes {
+		return fmt.Sprintf("%d bytes removed", size)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("%d bytes removed", size)
+	}
+	sniff := data
+	if len(sniff) > binarySniffBytes {
+		sniff = sniff[:binarySniffBytes]
+	}
+	if bytes.IndexByte(sniff, 0) >= 0 {
+		return fmt.Sprintf("%d bytes removed (binary)", len(data))
+	}
+	return fmt.Sprintf("%d lines, %d bytes removed", countTextLines(data), len(data))
+}
+
+// countTextLines counts lines the way an editor would: the number of newlines,
+// plus one for a final line with no trailing newline. Empty content is 0 lines.
+func countTextLines(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	n := bytes.Count(data, []byte{'\n'})
+	if data[len(data)-1] != '\n' {
+		n++
+	}
+	return n
 }
