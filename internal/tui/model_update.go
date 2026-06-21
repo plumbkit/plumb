@@ -16,6 +16,11 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	newM, cmd := m.updateInner(msg)
 	newM.enforceScrollBounds()
+	// Fill the memory-body cache off the render path: the render chain runs on a
+	// throwaway value copy, so a disk read there would never persist and would
+	// repeat every frame. newM is the model actually returned, so the cache set
+	// here survives to the next render.
+	newM.populateMemoryBody()
 	return newM, cmd
 }
 

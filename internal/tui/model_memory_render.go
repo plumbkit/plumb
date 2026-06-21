@@ -78,7 +78,7 @@ type memRowCells struct {
 func (m Model) renderMemoryBody(wsW, memW, detW, bodyHeight int, isOverlay bool) string {
 	allWs := m.memoryWorkspaceLines(wsW)
 	allMem := m.memoryLeftLines()
-	allDet := (&m).memoryRightLines(detW)
+	allDet := m.memoryRightLines(detW)
 
 	maxWsScroll := max(len(allWs)-bodyHeight, 0)
 	maxMemScroll := max(len(allMem)-bodyHeight, 0)

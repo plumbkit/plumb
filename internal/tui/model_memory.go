@@ -196,7 +196,7 @@ func leftMemoryRowLines(firstLine, secondLine, thirdLine string, selected, lf bo
 	}
 }
 
-func (m *Model) memoryRightLines(rw int) []string {
+func (m Model) memoryRightLines(rw int) []string {
 	rf := m.focusPanel == focusDetails
 	var headerStyle lipgloss.Style
 	if rf {
@@ -263,18 +263,44 @@ func (m *Model) memoryRightLines(rw int) []string {
 	return lines
 }
 
-func (m *Model) currentMemoryBody() string {
+// currentMemoryBody returns the body of the selected memory READ-ONLY from the
+// cache. It performs no disk read — that would run on every render frame, since
+// the whole render chain operates on a throwaway value copy whose cache writes
+// are discarded. populateMemoryBody (a pointer-receiver method on the persisted
+// Update flow) is what fills the cache; this only serves it.
+func (m Model) currentMemoryBody() string {
 	mems := m.filteredMemories()
 	if len(mems) == 0 {
 		return ""
 	}
 	name := mems[min(m.memoryCursor, len(mems)-1)].Name
-	if m.memoryBodyCacheName == name && m.memoryBodyCache != "" {
+	if m.memoryBodyCacheName == name {
 		return m.memoryBodyCache
+	}
+	return ""
+}
+
+// populateMemoryBody reads the selected memory's body from disk into the cache
+// when it is stale, off the render path. It runs once per Update on the model
+// that is actually returned (see Model.Update), so the disk read happens only
+// when the selection or memory list changed and the cache was invalidated —
+// never on every render frame. Navigation handlers clear the cache; this fills
+// it again for the new selection before the next render reads it.
+func (m *Model) populateMemoryBody() {
+	if m.currentSection != 2 {
+		return
+	}
+	mems := m.filteredMemories()
+	if len(mems) == 0 {
+		return
+	}
+	name := mems[min(m.memoryCursor, len(mems)-1)].Name
+	if m.memoryBodyCacheName == name {
+		return
 	}
 	ws := m.memoryFolder
 	if ws == "" {
-		return ""
+		return
 	}
 	// Body only — the frontmatter metadata is already shown structured above.
 	body, err := memory.ReadBody(ws, name)
@@ -283,7 +309,6 @@ func (m *Model) currentMemoryBody() string {
 	}
 	m.memoryBodyCache = body
 	m.memoryBodyCacheName = name
-	return body
 }
 
 func (m *Model) refreshMemories() {
@@ -329,6 +354,10 @@ func (m *Model) refreshMemories() {
 			m.memoryBodyCacheName = ""
 		}
 	}
+	// Prime the cache for the now-current selection so the render path (a value
+	// copy) can serve the body without a disk read. refreshMemories runs on the
+	// persisted model, off the render path.
+	m.populateMemoryBody()
 }
 
 func (m *Model) selectMemoryAtBodyRow(row int) {
