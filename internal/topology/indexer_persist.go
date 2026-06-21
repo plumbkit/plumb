@@ -68,23 +68,17 @@ func upsertFileRecord(tx *sql.Tx, fileID int64, relPath string, info os.FileInfo
 	return fileID, nil
 }
 
+// deleteFileNodes clears a file's existing rows ahead of a re-index.
+// topology_fts is an external-content-free FTS5 table whose rowid is the
+// topology_nodes.id assigned in insertNodes, so its rows are removed with a
+// single set-based DELETE keyed on that subquery rather than one statement per
+// node — this runs on the hot write path (every upsert) and per stale file in
+// prune/delete, where a per-node loop costs M FTS5 round-trips for M symbols.
 func deleteFileNodes(tx *sql.Tx, fileID int64) error {
-	rows, err := tx.Query(`SELECT id FROM topology_nodes WHERE file_id = ?`, fileID)
-	if err != nil {
-		return fmt.Errorf("topology: list nodes: %w", err)
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
-	for _, id := range ids {
-		if _, err := tx.Exec(`DELETE FROM topology_fts WHERE rowid = ?`, id); err != nil {
-			return fmt.Errorf("topology: delete fts: %w", err)
-		}
+	if _, err := tx.Exec(
+		`DELETE FROM topology_fts WHERE rowid IN (SELECT id FROM topology_nodes WHERE file_id = ?)`,
+		fileID); err != nil {
+		return fmt.Errorf("topology: delete fts: %w", err)
 	}
 	if _, err := tx.Exec(`DELETE FROM topology_nodes WHERE file_id = ?`, fileID); err != nil {
 		return fmt.Errorf("topology: delete nodes: %w", err)
