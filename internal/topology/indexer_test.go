@@ -223,6 +223,76 @@ func TestIndexer_ProcessDelete_MissingFileIsNoop(t *testing.T) {
 	}
 }
 
+// TestIndexer_ReindexDropsStaleFTS is the regression test for the set-based FTS
+// delete in deleteFileNodes (#65): re-indexing a changed file must clear the FTS
+// rows of every symbol the previous version contributed, not just its node rows.
+// A symbol that is renamed away (Alpha → Gamma) must no longer match an FTS
+// search after the re-index.
+func TestIndexer_ReindexDropsStaleFTS(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	goFile := filepath.Join(dir, "r.go")
+	if err := os.WriteFile(goFile, []byte("package p\n\nfunc AlphaStale() {}\n\nfunc Shared() {}\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	if err := idx.processUpsert(context.Background(), "r.go"); err != nil {
+		t.Fatalf("first processUpsert: %v", err)
+	}
+
+	// The stale symbol is searchable before the re-index.
+	before, err := Search(context.Background(), db, "AlphaStale", SearchOpts{Limit: 5})
+	if err != nil {
+		t.Fatalf("search before: %v", err)
+	}
+	if len(before) == 0 {
+		t.Fatal("expected AlphaStale to be searchable before re-index")
+	}
+
+	// Replace AlphaStale with GammaFresh and re-index (mtime must change).
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(goFile, []byte("package p\n\nfunc GammaFresh() {}\n\nfunc Shared() {}\n"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(goFile, now, now.Add(time.Second)); err != nil {
+		t.Logf("chtimes: %v (continuing)", err)
+	}
+	if err := idx.processUpsert(context.Background(), "r.go"); err != nil {
+		t.Fatalf("second processUpsert: %v", err)
+	}
+
+	// The stale symbol's FTS row must be gone; the fresh one must be present.
+	after, err := Search(context.Background(), db, "AlphaStale", SearchOpts{Limit: 5})
+	if err != nil {
+		t.Fatalf("search after: %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("stale FTS rows for AlphaStale survived re-index: got %d results", len(after))
+	}
+	fresh, err := Search(context.Background(), db, "GammaFresh", SearchOpts{Limit: 5})
+	if err != nil {
+		t.Fatalf("search fresh: %v", err)
+	}
+	if len(fresh) == 0 {
+		t.Error("expected GammaFresh to be searchable after re-index")
+	}
+
+	// No FTS row may outlive its node row: counts must agree exactly.
+	var nodes, ftsRows int
+	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes WHERE file_id = (SELECT id FROM topology_files WHERE path = 'r.go')`).Scan(&nodes) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_fts`).Scan(&ftsRows)                                                                     //nolint:errcheck
+	if nodes != ftsRows {
+		t.Errorf("FTS/node row mismatch after re-index: %d nodes, %d FTS rows", nodes, ftsRows)
+	}
+}
+
 // --- isStale ---
 
 func TestIndexer_IsStale_NewFile(t *testing.T) {
