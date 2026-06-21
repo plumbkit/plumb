@@ -31,8 +31,10 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 		return nil
 	}
 	// Read and hash before the staleness check so a backup-restore that
-	// resets mtime but changes content is still re-indexed.
-	nodes, edges, hash, lang, err := idx.extractPath(ctx, absPath, relPath)
+	// resets mtime but changes content is still re-indexed; the content hash
+	// genuinely needs the file read, but the expensive parse does not — so the
+	// parse is deferred to extractFile and runs only once the file is stale.
+	src, ex, lang, hash, err := idx.readAndHash(absPath, relPath)
 	if err != nil {
 		return idx.recordFileError(relPath, info, err)
 	}
@@ -42,6 +44,10 @@ func (idx *Indexer) processUpsert(ctx context.Context, relPath string) error {
 	}
 	if !stale {
 		return nil
+	}
+	nodes, edges, err := idx.extractFile(ctx, ex, relPath, src)
+	if err != nil {
+		return idx.recordFileError(relPath, info, err)
 	}
 	return idx.persistFile(fileID, relPath, info, hash, lang, nodes, edges)
 }
@@ -61,23 +67,36 @@ func (idx *Indexer) isStale(relPath string, info os.FileInfo, hash string) (stal
 	return dbMtime != info.ModTime().UnixNano() || dbHash != hash, fileID, nil
 }
 
-func (idx *Indexer) extractPath(ctx context.Context, absPath, relPath string) (nodes []Node, edges []Edge, hash, lang string, err error) {
-	ex := findExtractor(relPath, idx.extractors)
+// readAndHash resolves the extractor for relPath, reads the file, and hashes its
+// content. The parse is deliberately not run here so processUpsert can discard an
+// unchanged file (the common case on a full resync) without paying the parse. When
+// no extractor matches it returns a nil extractor, empty language and empty hash —
+// preserving the prior behaviour where such a file is recorded with zero symbols so
+// the staleness check never re-attempts it.
+func (idx *Indexer) readAndHash(absPath, relPath string) (src []byte, ex Extractor, lang, hash string, err error) {
+	ex = findExtractor(relPath, idx.extractors)
 	if ex == nil {
 		return nil, nil, "", "", nil
 	}
-	src, readErr := os.ReadFile(absPath) //nolint:gosec // G304: path derived from workspace root + relative path validated by caller
-	if readErr != nil {
-		return nil, nil, "", "", readErr
+	src, err = os.ReadFile(absPath) //nolint:gosec // G304: path derived from workspace root + relative path validated by caller
+	if err != nil {
+		return nil, nil, "", "", err
 	}
 	h := sha256.Sum256(src)
-	hash = fmt.Sprintf("%x", h)
-	if skipOversizedGrammar(relPath, ex.Language(), len(src)) {
-		// Recorded with this hash and zero symbols, so isStale won't re-attempt it.
-		return nil, nil, hash, ex.Language(), nil
+	return src, ex, ex.Language(), fmt.Sprintf("%x", h), nil
+}
+
+// extractFile runs the extractor for a file that isStale has confirmed needs
+// re-indexing. A nil extractor (no language match) or an oversized GLR grammar
+// yields zero nodes, matching the records persisted by the pre-reorder path.
+func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
+	if ex == nil {
+		return nil, nil, nil
 	}
-	nodes, edges, err = safeExtract(ctx, ex, relPath, src)
-	return nodes, edges, hash, ex.Language(), err
+	if skipOversizedGrammar(relPath, ex.Language(), len(src)) {
+		return nil, nil, nil
+	}
+	return safeExtract(ctx, ex, relPath, src)
 }
 
 // skipOversizedGrammar reports whether a file should be recorded without parsing
