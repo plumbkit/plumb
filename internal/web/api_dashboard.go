@@ -76,9 +76,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	db, err := stats.SharedReadOnly()
 	if err == nil && db != nil {
-		out.TopTools, out.TotalCalls = topTools(db, 10)
+		// One full-table aggregation feeds both the top-tools list and the
+		// savings breakdown; running Summary twice per request (and per SSE
+		// refresh) doubled the stats-DB scan for no benefit (#64).
+		rows, sumErr := db.Summary(stats.Filter{})
+		if sumErr == nil {
+			out.TopTools, out.TotalCalls = topTools(rows, 10)
+			out.Savings = savingsBreakdown(db, rows)
+		}
 		out.Activity = activityWindow(db, 24*time.Hour, 48)
-		out.Savings = savingsBreakdown(db)
 	}
 
 	writeJSON(w, out)
@@ -98,12 +104,9 @@ func readMetricsDTO(path string) metricsDTO {
 	}
 }
 
-// topTools returns the n busiest tools and the total call count across all.
-func topTools(db *stats.DB, n int) ([]toolStatDTO, int64) {
-	rows, err := db.Summary(stats.Filter{})
-	if err != nil {
-		return nil, 0
-	}
+// topTools returns the n busiest tools and the total call count across all,
+// from a precomputed Summary slice.
+func topTools(rows []stats.ToolStat, n int) ([]toolStatDTO, int64) {
 	var total int64
 	out := make([]toolStatDTO, 0, n)
 	for i, t := range rows {
@@ -126,13 +129,11 @@ func activityWindow(db *stats.DB, window time.Duration, buckets int) activityDTO
 	return activityDTO{WindowHours: window.Hours(), Calls: a.Calls, Buckets: a.Buckets}
 }
 
-func savingsBreakdown(db *stats.DB) savingsDTO {
+// savingsBreakdown splits token savings by axis (a cheap aggregate) and lists
+// per-tool savings from the precomputed Summary slice.
+func savingsBreakdown(db *stats.DB, rows []stats.ToolStat) savingsDTO {
 	axes := db.SavingsAxes(stats.Filter{})
 	out := savingsDTO{Capability: axes.Capability, Efficiency: axes.Efficiency}
-	rows, err := db.Summary(stats.Filter{})
-	if err != nil {
-		return out
-	}
 	for _, t := range rows {
 		if t.CapabilityTokens == 0 && t.EfficiencyTokens == 0 {
 			continue

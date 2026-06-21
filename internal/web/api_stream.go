@@ -81,16 +81,20 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	reader := bufio.NewReader(f)
 	if info, statErr := f.Stat(); statErr == nil {
 		// Start a little before EOF so the client sees recent lines immediately.
 		const tailBytes = 8 * 1024
 		if info.Size() > tailBytes {
 			_, _ = f.Seek(-tailBytes, 2)
-			_, _ = bufio.NewReader(f).ReadString('\n') // discard the partial first line
+			// Drop the partial leading line on the SAME reader we then follow
+			// with — a throwaway reader's buffer fill would advance the fd past
+			// the first newline and skip the very lines the seek surfaces (#64).
+			reader.Reset(f)
+			_, _ = reader.ReadString('\n')
 		}
 	}
 
-	reader := bufio.NewReader(f)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
