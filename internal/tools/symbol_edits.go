@@ -498,7 +498,8 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "REFUSED — symbol %q has %d external reference(s):\n\n", sym.Name, external)
 		for _, l := range refLines {
-			sb.WriteString(l + "\n")
+			sb.WriteString(l)
+			sb.WriteByte('\n')
 		}
 		sb.WriteString("\nDelete each reference first, or use replace_symbol_body to keep the symbol but change its content.")
 		return sb.String(), nil
