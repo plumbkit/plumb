@@ -21,13 +21,16 @@ func readProcessMetrics(pid int) (processMetrics, error) {
 		if err := unix.Getrusage(unix.RUSAGE_SELF, &usage); err == nil {
 			out.CPUTime = time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 			out.CPUTimeAvailable = true
-			// Maxrss on macOS is peak RSS in bytes since process start.
-			// kern.proc.pid Xrssize is unreliable on modern macOS (always 0).
-			if usage.Maxrss > 0 {
-				out.RSSBytes = uint64(usage.Maxrss)
-				out.RSSAvailable = true
-			}
 		}
+	}
+
+	// Maxrss from Getrusage is *peak* RSS since process start (monotonic, never
+	// reclaimed after a GC), so it overstates live memory. Source current RSS
+	// from the same `ps -o rss=` path used for child processes — for our own pid
+	// too — so idle-reclaim is reflected and the reported value is a true sample.
+	if rss, ok := processChildRSS(pid); ok {
+		out.RSSBytes = rss
+		out.RSSAvailable = true
 	}
 
 	return out, nil
