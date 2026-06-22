@@ -1,9 +1,61 @@
 package stats
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
+
+// TestEpisodic_ConcurrentReadDuringWrite pins that the now-unlocked episodic
+// reads run safely against the d.mu-guarded writer. Most valuable under -race:
+// it must report no data race and no error (database/sql + SetMaxOpenConns(1)
+// serialises the connection; the dropped read lock was pure overhead).
+func TestEpisodic_ConcurrentReadDuringWrite(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	if err := db.recordEpisodic(Episodic{Workspace: "/ws", SessionID: "s1", GeneratedAt: now, Summary: "seed"}); err != nil {
+		t.Fatalf("seed episodic: %v", err)
+	}
+	if err := db.Record(Call{Workspace: "/ws", SessionID: "s1", Tool: "read_file", CalledAt: now, Success: true}); err != nil {
+		t.Fatalf("seed call: %v", err)
+	}
+
+	const iters = 100
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() { // writer — takes d.mu
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			_ = db.recordEpisodic(Episodic{Workspace: "/ws", SessionID: "s1", GeneratedAt: now.Add(time.Duration(i) * time.Millisecond), Summary: "w"})
+		}
+	}()
+	go func() { // reader — LatestEpisodic, no mutex
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			if _, _, err := db.LatestEpisodic("/ws"); err != nil {
+				t.Errorf("LatestEpisodic: %v", err)
+				return
+			}
+		}
+	}()
+	go func() { // reader — ToolCallsForSession, no mutex
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			if _, err := db.ToolCallsForSession("/ws", "s1", now.Add(-time.Hour)); err != nil {
+				t.Errorf("ToolCallsForSession: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+}
 
 func TestEpisodic_RecordAndLatest(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())

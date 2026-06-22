@@ -41,13 +41,14 @@ func (d *DB) recordEpisodic(e Episodic) error {
 }
 
 // LatestEpisodic returns the most recent episodic summary for workspace, or
-// ok=false when none exists. Read path — safe on a read-only handle.
+// ok=false when none exists. Read path — like the db_query.go readers it takes
+// no mutex: database/sql + SetMaxOpenConns(1) already serialises the single
+// connection, and in practice this runs on the SharedReadOnly handle. d.mu
+// guards only the writer's critical sections.
 func (d *DB) LatestEpisodic(workspace string) (Episodic, bool, error) {
 	if d == nil || workspace == "" {
 		return Episodic{}, false, nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	var (
 		e       Episodic
 		genMS   int64
@@ -71,13 +72,12 @@ func (d *DB) LatestEpisodic(workspace string) (Episodic, bool, error) {
 
 // ToolCallsForSession returns the calls a session made in workspace since the
 // given time, oldest first. Used by the episodic generator to derive a summary.
-// Only the fields the generator needs are populated.
+// Only the fields the generator needs are populated. Read path — no mutex, for
+// the same reason as LatestEpisodic.
 func (d *DB) ToolCallsForSession(workspace, sessionID string, since time.Time) ([]Call, error) {
 	if d == nil || workspace == "" || sessionID == "" {
 		return nil, nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	rows, err := d.db.Query(`
 		SELECT tool, called_at, success, input_json
 		FROM tool_calls
