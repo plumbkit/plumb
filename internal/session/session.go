@@ -12,7 +12,10 @@
 // refresh both call List). Mutating operations take a session-directory flock
 // before writing; every JSON write then goes through writeSessionFileAtomic
 // (temp file + rename), so concurrent writers do not lose read-modify-write
-// updates and concurrent readers never observe a torn file.
+// updates and concurrent readers never observe a torn file. Touch and FindEnded
+// are intentionally lock-free: Touch sets only an mtime (no read-modify-write)
+// and FindEnded tolerates torn reads, so neither needs the writer flock and
+// both stay off the per-tool-call hot path's contention.
 package session
 
 import (
@@ -225,15 +228,24 @@ func SetClient(id, clientName, clientVersion string) {
 // Touch updates the last-activity timestamp for a session by setting the
 // mtime of its session file to now. List derives LastSeenAt from this mtime,
 // so callers do not need to read the JSON to check session freshness.
+//
+// Touch is deliberately lock-free. It runs on the response path of every
+// completed tool call, so taking the directory-wide writer flock here would
+// serialise every tool call across every session and process — and queue them
+// behind List's long read-parse-stat scan, which shares that lock. It is safe
+// without the lock because it does no read-modify-write: it only sets the mtime
+// of one file by absolute path. writeSessionFileAtomic's temp+rename means
+// Chtimes can only ever observe a whole inode, never a torn file, so the worst
+// case is a lost mtime bump (re-applied by the next tool call) or a transient
+// ENOENT against an inode mid-rename — both harmless, and the error is already
+// discarded. FindEnded likewise reads lock-free against the same writers.
 func Touch(id string) {
 	dir, err := Dir()
 	if err != nil {
 		return
 	}
 	now := time.Now()
-	_ = withSessionDirLock(dir, func() error {
-		return os.Chtimes(filepath.Join(dir, id+".json"), now, now)
-	})
+	_ = os.Chtimes(filepath.Join(dir, id+".json"), now, now)
 }
 
 // SetExternalID persists an opaque external identifier (e.g. an agent

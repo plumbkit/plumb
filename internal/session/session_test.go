@@ -356,6 +356,59 @@ func TestTouch_UpdatesLastSeenAt(t *testing.T) {
 	}
 }
 
+// TestTouch_ConcurrentWithWriters_NoCorruption pins the lock-free Touch
+// contract: hammering Touch (mtime-only) against concurrent atomic temp+rename
+// writers and a List reader must never corrupt the session file nor make List
+// observe a torn file. Most valuable under -race; guards against a regression
+// that makes Touch write content (which would need the writer flock back).
+func TestTouch_ConcurrentWithWriters_NoCorruption(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	id, err := session.Register(session.Info{Language: "go", Folder: "/tmp", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	const iters = 200
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			session.Touch(id)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			if _, err := session.Rename(id, fmt.Sprintf("name-%d", i)); err != nil {
+				t.Errorf("Rename during concurrent Touch: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			if _, err := session.List(); err != nil {
+				t.Errorf("List during concurrent Touch/Rename: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	sessions, err := session.List()
+	if err != nil {
+		t.Fatalf("List after concurrency: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 surviving session after concurrent Touch/Rename, got %d", len(sessions))
+	}
+}
+
 func TestFindEnded_MatchesExternalID(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
