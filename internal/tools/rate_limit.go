@@ -53,25 +53,82 @@ func (r *RateLimiter) SetParent(parent *RateLimiter) {
 // Allow reports whether one operation is permitted right now. If true, the
 // operation is recorded against both the local window and the parent budget
 // (when one is set). If false, the caller should refuse the operation;
-// nothing is recorded.
+// nothing is recorded — including the parent: a slot the parent took during
+// the check is handed back when the local window then refuses the operation,
+// so the shared budget is never over-counted for an op that was refused.
 //
 // Checking order: the local window is evaluated first (no side-effects until
 // both checks pass). The parent is then checked without holding the local
 // lock (to avoid a lock-chain between sibling limiters). The local lock is
-// re-acquired and the window is re-verified before recording the stamp.
+// re-acquired and the window is re-verified before recording the stamp; if the
+// re-verify fails after the parent already recorded, the parent slot is
+// released (see release).
 func (r *RateLimiter) Allow() bool {
 	if r == nil {
 		return true
 	}
-	r.mu.Lock()
 
-	if r.limit <= 0 {
-		r.mu.Unlock()
-		return true
+	parent, proceed := r.checkLocalAndParent()
+	if !proceed {
+		return false
 	}
 
-	// Evaluate the local window.
+	if r.recordLocal() {
+		return true
+	}
+	// The local window filled between the parent check and the re-verify.
+	// Give the parent slot back so siblings aren't throttled by a phantom write.
+	parent.release()
+	return false
+}
+
+// checkLocalAndParent evaluates the local window and then, with the local lock
+// released, the parent budget. It returns the parent that recorded a slot —
+// which the caller must release if it cannot then record locally — and whether
+// the operation may proceed. A nil first return means there is nothing to give
+// back (the parent refused, there is no parent, or local limiting is disabled).
+func (r *RateLimiter) checkLocalAndParent() (parentRecorded *RateLimiter, proceed bool) {
+	r.mu.Lock()
+	if r.limit <= 0 {
+		r.mu.Unlock()
+		return nil, true
+	}
+	r.pruneLocked(time.Now())
+	if len(r.stamps) >= r.limit {
+		r.mu.Unlock()
+		return nil, false
+	}
+	// Check parent without holding our lock (prevents lock ordering issues).
+	p := r.parent.Load()
+	r.mu.Unlock()
+
+	if p != nil && !p.Allow() {
+		return nil, false
+	}
+	return p, true
+}
+
+// recordLocal re-verifies the local window and records a stamp. It returns
+// false only when the window filled since the initial check (limiting enabled
+// and now at capacity). A disabled limiter records nothing and succeeds.
+func (r *RateLimiter) recordLocal() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.limit <= 0 {
+		return true
+	}
 	now := time.Now()
+	r.pruneLocked(now)
+	if len(r.stamps) >= r.limit {
+		return false
+	}
+	r.stamps = append(r.stamps, now)
+	return true
+}
+
+// pruneLocked drops stamps that fell outside the window ending at now. The
+// caller must hold r.mu.
+func (r *RateLimiter) pruneLocked(now time.Time) {
 	cutoff := now.Add(-r.window)
 	i := 0
 	for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
@@ -80,38 +137,22 @@ func (r *RateLimiter) Allow() bool {
 	if i > 0 {
 		r.stamps = r.stamps[i:]
 	}
-	if len(r.stamps) >= r.limit {
-		r.mu.Unlock()
-		return false
-	}
+}
 
-	// Check parent without holding our lock (prevents lock ordering issues).
-	p := r.parent.Load()
-	r.mu.Unlock()
-	if p != nil && !p.Allow() {
-		return false
+// release returns one previously recorded slot to the window. It compensates
+// for a slot this limiter recorded (as a shared parent) whose operation was
+// then refused downstream. The limiter tracks only the number of stamps in the
+// window, so dropping the most recent stamp restores the count by one; a nil or
+// empty limiter is a no-op.
+func (r *RateLimiter) release() {
+	if r == nil {
+		return
 	}
-
-	// Re-acquire and re-verify the local window, then record the slot.
-	// The window may have advanced while we were checking the parent.
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.limit > 0 {
-		now := time.Now()
-		cutoff := now.Add(-r.window)
-		i := 0
-		for i < len(r.stamps) && r.stamps[i].Before(cutoff) {
-			i++
-		}
-		if i > 0 {
-			r.stamps = r.stamps[i:]
-		}
-		if len(r.stamps) >= r.limit {
-			return false
-		}
-		r.stamps = append(r.stamps, now)
+	if n := len(r.stamps); n > 0 {
+		r.stamps = r.stamps[:n-1]
 	}
-	return true
+	r.mu.Unlock()
 }
 
 // SetLimit updates the limit (operations per current window). Setting limit
