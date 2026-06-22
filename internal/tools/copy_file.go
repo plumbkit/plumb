@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var copyFileSchema = json.RawMessage(`{
@@ -117,7 +117,7 @@ func parseCopyFileArgs(raw json.RawMessage) (copyFileArgs, error) {
 	if a.From == "" || a.To == "" {
 		return a, fmt.Errorf("copy_file: both `from` and `to` are required")
 	}
-	if strings.TrimPrefix(a.From, "file://") == strings.TrimPrefix(a.To, "file://") {
+	if paths.URIToPath(a.From) == paths.URIToPath(a.To) {
 		return a, fmt.Errorf("copy_file: from and to are the same path")
 	}
 	return a, nil

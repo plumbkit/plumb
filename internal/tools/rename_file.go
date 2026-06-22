@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var renameFileSchema = json.RawMessage(`{
@@ -116,7 +116,7 @@ func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {
 	if a.From == "" || a.To == "" {
 		return a, fmt.Errorf("rename_file: both `from` and `to` are required")
 	}
-	if strings.TrimPrefix(a.From, "file://") == strings.TrimPrefix(a.To, "file://") {
+	if paths.URIToPath(a.From) == paths.URIToPath(a.To) {
 		return a, fmt.Errorf("rename_file: from and to are the same path")
 	}
 	return a, nil

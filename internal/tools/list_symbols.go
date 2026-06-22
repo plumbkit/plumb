@@ -10,6 +10,7 @@ import (
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var listSymbolsSchema = json.RawMessage(`{
@@ -148,7 +149,7 @@ func formatSymbolTree(uri string, syms []protocol.DocumentSymbol, includeSignatu
 	fmt.Fprintf(&sb, "Symbols in %s (%d total)\n\n", uri, total)
 	var lineTexts map[uint32]string
 	if includeSignatures {
-		fpath := strings.TrimPrefix(uri, "file://")
+		fpath := paths.URIToPath(uri)
 		lineTexts = readFileLines(fpath, collectStartLines(syms))
 	}
 	writeSymbols(&sb, syms, 0, lineTexts)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // Symbol-edit tools share three steps:
@@ -80,7 +81,7 @@ func docCommentStart(path string, symStart protocol.Position) protocol.Position 
 // unavailable, has no matching node, or that node has no doc span. The line-scan
 // remains the fallback for the LSP-only path, so this never regresses callers.
 func docCommentStartPreferTopology(ctx context.Context, topo topologyStoreFn, uri, namePath string, symStart protocol.Position) protocol.Position {
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	if pos, ok := topologyDocCommentStart(ctx, topo, uri, namePath); ok {
 		return pos
 	}
@@ -99,7 +100,7 @@ func topologyDocCommentStart(ctx context.Context, topo topologyStoreFn, uri, nam
 	if node == nil || !node.HasDocSpan() {
 		return protocol.Position{}, false
 	}
-	content, err := os.ReadFile(strings.TrimPrefix(uri, "file://"))
+	content, err := os.ReadFile(paths.URIToPath(uri))
 	if err != nil {
 		return protocol.Position{}, false
 	}
@@ -139,7 +140,7 @@ func resolveSymbolOrFallback(ctx context.Context, client lsp.Client, topo topolo
 	if node == nil {
 		return nil, false, lspErr
 	}
-	ds := nodeToDocSymbol(*node, fileLines(strings.TrimPrefix(uri, "file://")))
+	ds := nodeToDocSymbol(*node, fileLines(paths.URIToPath(uri)))
 	return &ds, true, nil
 }
 
@@ -156,7 +157,7 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 	}
 	sym := findSymbolByPath(syms, namePath)
 	if sym == nil {
-		return nil, fmt.Errorf("symbol %q not found in %s", namePath, strings.TrimPrefix(uri, "file://"))
+		return nil, fmt.Errorf("symbol %q not found in %s", namePath, paths.URIToPath(uri))
 	}
 	return sym, nil
 }
@@ -491,7 +492,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 			continue
 		}
 		external++
-		path := strings.TrimPrefix(r.URI, "file://")
+		path := paths.URIToPath(r.URI)
 		refLines = append(refLines, fmt.Sprintf("  %s:%d", path, r.Range.Start.Line+1))
 	}
 	if external > 0 {
@@ -507,7 +508,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 
 	rng := sym.Range
 	if a.IncludeDocComment {
-		rng.Start = docCommentStart(strings.TrimPrefix(a.URI, "file://"), sym.Range.Start)
+		rng.Start = docCommentStart(paths.URIToPath(a.URI), sym.Range.Start)
 	}
 	edit := protocol.TextEdit{Range: rng, NewText: ""}
 	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "delete", sym, false)

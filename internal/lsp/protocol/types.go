@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"math"
 	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
@@ -468,15 +468,11 @@ func ProcessID() *int32 {
 	return &p
 }
 
-// FileURI converts an absolute path to a file:// URI.
-// Safe on Windows: backslashes are converted to forward slashes and a drive
-// letter (e.g. C:\path) is prefixed with an extra slash → file:///C:/path.
+// FileURI converts an absolute path to a file:// URI. It delegates to the
+// shared, Windows-safe paths.PathToURI — retained as the protocol-package name
+// its existing callers use.
 func FileURI(path string) string {
-	path = filepath.ToSlash(path)
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return "file://" + path
+	return paths.PathToURI(path)
 }
 
 // ─── Request / notification params ───────────────────────────────────────────

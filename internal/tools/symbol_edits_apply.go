@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // resolveShowDiff resolves a per-session show_write_diff toggle. A nil resolver
@@ -24,7 +25,7 @@ func resolveShowDiff(fn func() bool) bool {
 // the response carries a unified diff of the change — a preview in dry-run, the
 // applied change otherwise.
 func applySingleEdit(uri string, edit protocol.TextEdit, dryRun, showDiff bool, summary string, sym *protocol.DocumentSymbol, viaFallback bool) (string, error) {
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	diff := ""
 	if showDiff {
 		diff = symbolEditDiff(path, edit)

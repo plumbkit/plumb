@@ -3,6 +3,8 @@ package tools
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // toFileURI normalises a filesystem path or file:// URI to a file:// URI, so
@@ -15,11 +17,18 @@ import (
 // file:// URI the server will reject, so relative paths remain unsupported on
 // uri-taking tools. This generalises the long-standing normalisation in
 // read_symbol's resolveReadSymbolPaths.
+//
+// Windows-safe conversion (paths.PathToURI) applies only to an absolute path; a
+// relative s keeps the bare "file://" + s form so it stays the server-rejected
+// value callers rely on rather than gaining a spurious leading slash.
 func toFileURI(s string) string {
 	if s == "" || strings.HasPrefix(s, "file://") {
 		return s
 	}
-	return "file://" + s
+	if !filepath.IsAbs(s) {
+		return "file://" + s
+	}
+	return paths.PathToURI(s)
 }
 
 // toFileURIAnchored is toFileURI for uri-taking tools that should accept a
@@ -40,5 +49,8 @@ func toFileURIAnchored(s string, ws WorkspaceFn) string {
 			}
 		}
 	}
-	return "file://" + s
+	if !filepath.IsAbs(s) {
+		return "file://" + s
+	}
+	return paths.PathToURI(s)
 }

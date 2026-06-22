@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // Store is the public API for topology. It owns a database connection and
@@ -90,7 +91,7 @@ func (s *Store) Resync() {
 // line. path may be absolute, a file:// URI, or workspace-relative. Returns an
 // empty slice (no error) when the file is not in the index.
 func (s *Store) SymbolsInFile(ctx context.Context, path string) ([]Node, error) {
-	rel := s.toRelative(strings.TrimPrefix(path, "file://"))
+	rel := s.toRelative(paths.URIToPath(path))
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path,
 		       n.has_bytes, n.start_byte, n.end_byte, n.start_col, n.end_col, n.doc_start_byte, n.doc_end_byte
@@ -224,7 +225,7 @@ func (s *Store) NodesByKind(ctx context.Context, kinds ...NodeKind) ([]Node, err
 // symbol-edit fallback needs when the language server cannot parse the file.
 // Returns (nil, nil) when no extractor handles the path.
 func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
-	rel := s.toRelative(strings.TrimPrefix(path, "file://"))
+	rel := s.toRelative(paths.URIToPath(path))
 	abs := rel
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(s.workspace, rel)

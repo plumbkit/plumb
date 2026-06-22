@@ -13,6 +13,7 @@ import (
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var findReferencesSchema = json.RawMessage(`{
@@ -184,7 +185,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 
 	lineTexts := make(map[string]map[uint32]string)
 	for fileURI, fileLocs := range byFile {
-		path := strings.TrimPrefix(fileURI, "file://")
+		path := paths.URIToPath(fileURI)
 		needed := make(map[uint32]bool)
 		for _, l := range fileLocs {
 			needed[l.Range.Start.Line] = true
@@ -198,7 +199,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 	for _, loc := range locs {
 		l := loc.Range.Start.Line
 		col := loc.Range.Start.Character
-		path := strings.TrimPrefix(loc.URI, "file://")
+		path := paths.URIToPath(loc.URI)
 		lineText := ""
 		if m, ok := lineTexts[loc.URI]; ok {
 			lineText = "\t" + strings.TrimLeft(m[l], " \t")
@@ -213,7 +214,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 // any I/O or LSP error is ignored — the subsequent references call will just
 // see whatever the server already had cached.
 func openFileForRefs(ctx context.Context, client lsp.Client, uri string) {
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // applyWorkspaceEdit applies a LSP WorkspaceEdit to disk. Handles both the
@@ -35,7 +36,7 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 
 	var modified []string
 	for uri, edits := range editsByURI {
-		path := strings.TrimPrefix(uri, "file://")
+		path := paths.URIToPath(uri)
 		if err := applyTextEditsToFile(path, edits); err != nil {
 			return modified, fmt.Errorf("applying edits to %s: %w", path, err)
 		}

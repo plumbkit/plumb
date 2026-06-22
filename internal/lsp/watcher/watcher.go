@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // Filter is a thread-safe store of file-watcher glob patterns registered by
@@ -98,7 +99,7 @@ func (f *Filter) FilterEvents(events []protocol.FileEvent) []protocol.FileEvent 
 	}
 	out := make([]protocol.FileEvent, 0, len(events))
 	for _, ev := range events {
-		path := strings.TrimPrefix(ev.URI, "file://")
+		path := paths.URIToPath(ev.URI)
 		if matchesAny(patterns, path) {
 			out = append(out, ev)
 		}

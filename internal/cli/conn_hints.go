@@ -12,6 +12,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // hintAllowedTools is the small set of path-bearing tools whose responses are
@@ -196,7 +197,7 @@ func hintRelPath(ws string, args json.RawMessage) string {
 	if raw == "" {
 		return ""
 	}
-	abs := strings.TrimPrefix(raw, "file://")
+	abs := paths.URIToPath(raw)
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(ws, abs)
 	}

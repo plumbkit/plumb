@@ -4,11 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // QualityReportFn is a function that runs post-write quality analysis on path
@@ -221,7 +221,7 @@ func (d WriteDeps) checkBoundary(path string) error {
 // preserving WriteDeps{} test setups. The resolved path must feed BOTH the
 // boundary check and the filesystem operation.
 func (d WriteDeps) resolvePath(path string) string {
-	p := strings.TrimPrefix(path, "file://")
+	p := paths.URIToPath(path)
 	if filepath.IsAbs(p) {
 		return p
 	}

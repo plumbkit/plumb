@@ -10,6 +10,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // routingProxy implements lsp.Client by dispatching each call to the gopls
@@ -143,7 +144,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 	if uri == "" {
 		return r.primaryClient(ctx)
 	}
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	r.mu.RLock()
 	guard := r.guard
 	r.mu.RUnlock()
@@ -423,7 +424,7 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 	}
 	groups := make(map[lsp.Client][]protocol.FileEvent, 1)
 	for _, ev := range params.Changes {
-		path := strings.TrimPrefix(ev.URI, "file://")
+		path := paths.URIToPath(ev.URI)
 		_, language, err := r.pool.Detect(filepath.Dir(path))
 		if err == nil && language == LanguageNone {
 			continue

@@ -12,6 +12,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/redact"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -171,7 +172,7 @@ func tallyEpisodic(calls []stats.Call, workspace string) episodicDetail {
 // appendTouched adds the deduped basenames of a write call's paths to touched.
 func appendTouched(touched []string, seen map[string]bool, args map[string]any) []string {
 	for _, p := range touchedPaths(args) {
-		if rel := filepath.Base(strings.TrimPrefix(p, "file://")); rel != "." && rel != "/" && rel != "" && !seen[rel] {
+		if rel := filepath.Base(paths.URIToPath(p)); rel != "." && rel != "/" && rel != "" && !seen[rel] {
 			seen[rel] = true
 			touched = append(touched, rel)
 		}
@@ -192,7 +193,7 @@ func appendSourcePaths(out []string, seen map[string]bool, args map[string]any, 
 }
 
 func episodicRelPath(workspace, raw string) string {
-	raw = strings.TrimPrefix(raw, "file://")
+	raw = paths.URIToPath(raw)
 	if raw == "" {
 		return ""
 	}

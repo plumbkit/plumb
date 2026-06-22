@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // routingInvProxy is a diagnosticsSource that dispatches Diagnostics(uri)
@@ -57,7 +58,7 @@ func (r *routingInvProxy) checkURI(uri string) error {
 	if guard == nil {
 		return nil
 	}
-	return guard(strings.TrimPrefix(uri, "file://"))
+	return guard(paths.URIToPath(uri))
 }
 
 // timedDiagnosticsContract mirrors internal/tools' timedDiagnosticsSource
@@ -98,7 +99,7 @@ func (r *routingInvProxy) resetPrimary(root, language string, inv *cache.Invalid
 
 // uriUnderRoot reports whether uri (file:// form) refers to a path under root.
 func uriUnderRoot(uri, root string) bool {
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	return path == root || strings.HasPrefix(path, root+"/")
 }
 
@@ -126,7 +127,7 @@ func (r *routingInvProxy) Tracked(uri string) bool {
 	if uri == "" || primary == nil {
 		return false
 	}
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	targetLang := r.routeLang(path, language)
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
@@ -154,7 +155,7 @@ func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 		}
 		return primary.Diagnostics(uri)
 	}
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	targetLang := r.routeLang(path, language)
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
@@ -246,7 +247,7 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 	if primary == nil {
 		return nil, nil
 	}
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	targetLang := r.routeLang(path, language)
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
@@ -271,7 +272,7 @@ func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) (
 	if primary == nil {
 		return nil, nil
 	}
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	targetLang := r.routeLang(path, language)
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
