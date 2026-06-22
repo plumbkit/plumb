@@ -48,6 +48,19 @@ func (idx *Indexer) processResync(ctx context.Context) error {
 	present := make(map[string]bool)
 	processed := 0
 	err := filepath.Walk(idx.workspace, func(path string, info os.FileInfo, walkErr error) error {
+		// Abort promptly on shutdown or context cancellation, independent of
+		// pacing. pace() is the only other place the walk observes idx.done/ctx,
+		// and it is a no-op when pacing is disabled (resyncBatch/resyncPause == 0),
+		// so without this unconditional check a pacing-off resync would run to
+		// completion and block Stop()'s wg.Wait() for the whole walk of a large
+		// workspace. See #65.
+		select {
+		case <-idx.done:
+			return errResyncAborted
+		case <-ctx.Done():
+			return errResyncAborted
+		default:
+		}
 		if walkErr != nil {
 			// Surface permission errors and other walk failures in the last-error field
 			// rather than silently swallowing them.
