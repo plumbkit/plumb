@@ -46,6 +46,7 @@ import (
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // fileSHA256 computes the hex-encoded SHA-256 of the named file's full
@@ -183,7 +184,7 @@ func lockPath(path string) func() {
 }
 
 func lockPathKey(path string) string {
-	path = strings.TrimPrefix(path, "file://")
+	path = paths.URIToPath(path)
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}

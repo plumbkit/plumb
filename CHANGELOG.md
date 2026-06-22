@@ -4,6 +4,10 @@
 
 Open development cycle — entries land here as work merges.
 
+### Fixed
+
+- **URI↔path conversion is consolidated into Windows-safe `paths` helpers, replacing two divergent helpers and 60+ inline strip sites ([#67](https://github.com/plumbkit/plumb/issues/67)).** Path→URI conversion had a Windows-safe `protocol.FileURI` *and* a naive `toFileURI` (`"file://" + s`, which mangles drive-lettered Windows paths), while URI→path was hand-inlined as `strings.TrimPrefix(x, "file://")` at 62 sites across 29 files — none of which strip the leading slash from the `file:///C:/…` form. Both directions now route through one pair in the low-level `internal/paths` package: `paths.PathToURI` (lifting the correct `FileURI` logic) and the new `paths.URIToPath` (the Windows-safe inverse, a behaviour-preserving no-op on Unix). `protocol.FileURI` and the tools' `toFileURI`/`toFileURIAnchored` now delegate to them (the latter keeping its empty/relative/anchoring policy). A genuine cross-platform correctness fix plus a single choke point for any future change; behaviour on the supported platforms is unchanged.
+
 ## 0.9.22 (unreleased)
 
 Public website launch refresh: the modern landing page is now the published site, with refreshed logo-derived favicons and social preview assets. Plus review-pass fixes to the 0.9.17/0.9.18 write-tool, detection, proxy, and Linux-testing work.

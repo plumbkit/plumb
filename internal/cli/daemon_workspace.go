@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // rootFromRoots calls roots/list on the MCP client and returns the first root
@@ -91,7 +91,7 @@ func seedPathFromArgs(args json.RawMessage) string {
 	}
 	switch {
 	case a.URI != "":
-		return strings.TrimPrefix(a.URI, "file://")
+		return paths.URIToPath(a.URI)
 	case a.FilePath != "":
 		return a.FilePath
 	case a.Path != "":

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
@@ -22,7 +23,7 @@ import (
 // attachWorkspace resolves rootURI to a project root, acquires the shared
 // language server if needed, and updates the session record.
 func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
-	folder := strings.TrimPrefix(rootURI, "file://")
+	folder := paths.URIToPath(rootURI)
 	if folder == "" || folder == "/" {
 		return
 	}
@@ -114,7 +115,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 // infer. An unknown or inactive override is ignored (detection wins), so a typo
 // or an uninstalled server never breaks the pin.
 func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string) (string, error) {
-	folder = strings.TrimPrefix(folder, "file://")
+	folder = paths.URIToPath(folder)
 	if folder == "" || folder == "/" {
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
 	}
@@ -148,7 +149,7 @@ func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
 		s.applyProjectConfig(s.workspace())
 		return
 	}
-	folder := strings.TrimPrefix(rootURI, "file://")
+	folder := paths.URIToPath(rootURI)
 	if folder == "" || folder == "/" {
 		return // client reported no usable root — keep the current pin
 	}
@@ -244,7 +245,7 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 	if uri == "" {
 		return ""
 	}
-	folder := strings.TrimPrefix(uri, "file://")
+	folder := paths.URIToPath(uri)
 	if folder == "" || folder == "/" {
 		return ""
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -144,7 +145,7 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 
 func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResult, error) {
 	a.URI = toFileURIAnchored(a.URI, t.ws)
-	path := strings.TrimPrefix(a.URI, "file://")
+	path := paths.URIToPath(a.URI)
 	if err := t.guard.check(path); err != nil {
 		return nil, fmt.Errorf("file_outline: %w", err)
 	}
@@ -165,7 +166,7 @@ func (t *FileOutline) run(ctx context.Context, a fileOutlineArgs) (*outlineResul
 // whose documentSymbol is too noisy — a node per tag and attribute — to serve
 // as an outline). The LSP remains the source for hover/diagnostics.
 func preferStructuralOutline(uri string) bool {
-	lang, ok := langsupport.ByPath(strings.TrimPrefix(uri, "file://"))
+	lang, ok := langsupport.ByPath(paths.URIToPath(uri))
 	return ok && lang.PreferStructuralOutline
 }
 

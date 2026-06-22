@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // BoundaryGuard rejects paths outside the workspace pinned to this MCP
@@ -42,7 +44,7 @@ func (g BoundaryGuard) check(path string) error {
 }
 
 func cleanToolPath(path string) string {
-	return strings.TrimPrefix(path, "file://")
+	return paths.URIToPath(path)
 }
 
 func NewWorkspaceBoundaryError(workspace, path string) error {

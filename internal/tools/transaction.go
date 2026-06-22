@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -206,10 +207,10 @@ func (t *TransactionApply) txCheckRateLimits(a transactionApplyArgs) error {
 
 // txCanonicalPaths deduplicates and lexically sorts the operation paths.
 func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error) {
-	paths := make([]string, 0, len(ops))
+	out := make([]string, 0, len(ops))
 	seen := make(map[string]struct{}, len(ops))
 	for _, op := range ops {
-		p := strings.TrimPrefix(op.Path, "file://")
+		p := paths.URIToPath(op.Path)
 		if err := t.deps.checkBoundary(p); err != nil {
 			return nil, fmt.Errorf("transaction_apply: %w", err)
 		}
@@ -219,10 +220,10 @@ func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error)
 			)}
 		}
 		seen[p] = struct{}{}
-		paths = append(paths, p)
+		out = append(out, p)
 	}
-	sort.Strings(paths)
-	return paths, nil
+	sort.Strings(out)
+	return out, nil
 }
 
 // txDirtyCheck batches paths by directory and refuses if any are dirty and not
@@ -268,7 +269,7 @@ func txDirtyCheck(ctx context.Context, writes *WriteTracker, paths []string, dir
 func txPhase1Validate(ops []txOperation) ([]txPrepared, error) {
 	prepared := make([]txPrepared, 0, len(ops))
 	for i, op := range ops {
-		p, err := txValidateOp(i, op, strings.TrimPrefix(op.Path, "file://"))
+		p, err := txValidateOp(i, op, paths.URIToPath(op.Path))
 		if err != nil {
 			return nil, err
 		}

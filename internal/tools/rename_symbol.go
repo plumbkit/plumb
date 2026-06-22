@@ -13,6 +13,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 const renameStaleIndexHint = `
@@ -144,18 +145,18 @@ func (t *RenameSymbol) collectRenameTargets(we *protocol.WorkspaceEdit) ([]strin
 	totalEdits := 0
 	files := []string{}
 	for uri, edits := range we.Changes {
-		if err := t.guard.check(strings.TrimPrefix(uri, "file://")); err != nil {
+		if err := t.guard.check(paths.URIToPath(uri)); err != nil {
 			return nil, 0, fmt.Errorf("rename_symbol: %w", err)
 		}
 		totalEdits += len(edits)
-		files = append(files, strings.TrimPrefix(uri, "file://"))
+		files = append(files, paths.URIToPath(uri))
 	}
 	for _, dce := range we.DocumentChanges {
-		if err := t.guard.check(strings.TrimPrefix(dce.TextDocument.URI, "file://")); err != nil {
+		if err := t.guard.check(paths.URIToPath(dce.TextDocument.URI)); err != nil {
 			return nil, 0, fmt.Errorf("rename_symbol: %w", err)
 		}
 		totalEdits += len(dce.Edits)
-		files = append(files, strings.TrimPrefix(dce.TextDocument.URI, "file://"))
+		files = append(files, paths.URIToPath(dce.TextDocument.URI))
 	}
 	return files, totalEdits, nil
 }
@@ -166,7 +167,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 		return "", err
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
-	if err := t.guard.check(strings.TrimPrefix(a.URI, "file://")); err != nil {
+	if err := t.guard.check(paths.URIToPath(a.URI)); err != nil {
 		return "", fmt.Errorf("rename_symbol: %w", err)
 	}
 
@@ -194,7 +195,7 @@ func (t *RenameSymbol) onRenameUnavailable(ctx context.Context, a renameSymbolAr
 	if a.StructuralFallback && t.fallback != nil {
 		return t.structuralFallback(ctx, a, reason)
 	}
-	oldName, _ := identifierAtFile(strings.TrimPrefix(a.URI, "file://"), a.Line, a.Character)
+	oldName, _ := identifierAtFile(paths.URIToPath(a.URI), a.Line, a.Character)
 	return "", fmt.Errorf("%w%s", baseErr, renameLSPFailureHint(oldName, a.NewName, t.fallback != nil))
 }
 
@@ -204,7 +205,7 @@ func (t *RenameSymbol) onRenameEmpty(ctx context.Context, a renameSymbolArgs) (s
 	if a.StructuralFallback && t.fallback != nil {
 		return t.structuralFallback(ctx, a, "the language server returned an empty edit set")
 	}
-	oldName, _ := identifierAtFile(strings.TrimPrefix(a.URI, "file://"), a.Line, a.Character)
+	oldName, _ := identifierAtFile(paths.URIToPath(a.URI), a.Line, a.Character)
 	return "No changes — rename returned an empty edit set (symbol may not be renameable here)." +
 		renameLSPFailureHint(oldName, a.NewName, t.fallback != nil), nil
 }
@@ -248,7 +249,7 @@ func (t *RenameSymbol) applyOrPreview(a renameSymbolArgs, we *protocol.Workspace
 // the position, then runs a word-boundary regex replace across same-extension
 // files under the workspace, honouring the caller's dry_run.
 func (t *RenameSymbol) structuralFallback(ctx context.Context, a renameSymbolArgs, reason string) (string, error) {
-	path := strings.TrimPrefix(a.URI, "file://")
+	path := paths.URIToPath(a.URI)
 	oldName, err := identifierAtFile(path, a.Line, a.Character)
 	if err != nil {
 		return "", fmt.Errorf("rename_symbol: structural fallback could not resolve the symbol name at the position: %w", err)

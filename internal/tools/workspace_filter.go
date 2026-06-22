@@ -3,6 +3,8 @@ package tools
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // isInWorkspace reports whether uri's path lies inside workspace and is not
@@ -16,7 +18,7 @@ func isInWorkspace(uri, workspace string) bool {
 	if workspace == "" {
 		return true
 	}
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 
 	// Reject obvious dependency paths regardless of workspace.
 	switch {

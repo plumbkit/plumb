@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var listDirectorySchema = json.RawMessage(`{
@@ -244,7 +246,7 @@ func plural(n int, singular, pluralSuffix string) string {
 // any workspace, so resolving against it would silently touch the wrong file;
 // leaving the path relative lets the boundary check reject it honestly instead.
 func resolvePath(path string, ws WorkspaceFn) string {
-	p := strings.TrimPrefix(path, "file://")
+	p := paths.URIToPath(path)
 	if filepath.IsAbs(p) {
 		return p
 	}

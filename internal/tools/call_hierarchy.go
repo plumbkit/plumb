@@ -11,6 +11,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -290,7 +291,7 @@ func topologyCentre(ctx context.Context, store *topology.Store, uri string, line
 		return topology.Node{}, false
 	}
 	cands, err := store.ResolveNodes(ctx, enc.Name,
-		topology.NodeHint{PathSubstr: filepath.Base(strings.TrimPrefix(uri, "file://"))})
+		topology.NodeHint{PathSubstr: filepath.Base(paths.URIToPath(uri))})
 	if err != nil || len(cands) == 0 {
 		return topology.Node{}, false
 	}

@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/lsp/watcher"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // Adapter implements lsp.Client for vscode-html-language-server.
@@ -145,7 +145,7 @@ func (a *Adapter) ensureOpen(ctx context.Context, uri string) error {
 	if a.open[uri] {
 		return nil
 	}
-	content, err := os.ReadFile(strings.TrimPrefix(uri, "file://"))
+	content, err := os.ReadFile(paths.URIToPath(uri))
 	if err != nil {
 		return fmt.Errorf("vscode-html-language-server open %s: %w", uri, err)
 	}

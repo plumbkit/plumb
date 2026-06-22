@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // diagnosticsSource is satisfied by *cache.Invalidator and by the daemon's
@@ -143,7 +144,7 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 		a.URIs = []string{a.URI}
 	}
 	for _, uri := range a.URIs {
-		if err := t.guard.check(strings.TrimPrefix(uri, "file://")); err != nil {
+		if err := t.guard.check(paths.URIToPath(uri)); err != nil {
 			return "", fmt.Errorf("diagnostics: %w", err)
 		}
 	}
@@ -174,7 +175,7 @@ func (t *Diagnostics) singleURI(ctx context.Context, uri string) string {
 			if t.opener != nil {
 				return t.openAndWait(ctx, uri)
 			}
-			path := strings.TrimPrefix(uri, "file://")
+			path := paths.URIToPath(uri)
 			return fmt.Sprintf("File %s is not yet tracked by the language server. "+
 				"No LSP client is available to trigger analysis.", path)
 		}
@@ -220,7 +221,7 @@ func (t *Diagnostics) tryPull(ctx context.Context, uri string) (string, bool) {
 // openAndWait sends textDocument/didOpen for uri, waits up to 10 s for gopls
 // to push publishDiagnostics, then sends didClose and returns the result.
 func (t *Diagnostics) openAndWait(ctx context.Context, uri string) string {
-	path := strings.TrimPrefix(uri, "file://")
+	path := paths.URIToPath(uri)
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Sprintf("cannot read %s: %v", path, err)
@@ -303,7 +304,7 @@ func formatDiagnosticsWithTimes(byURI map[string][]protocol.Diagnostic, times ma
 		if len(byURI[uri]) == 0 {
 			continue
 		}
-		path := strings.TrimPrefix(uri, "file://")
+		path := paths.URIToPath(uri)
 		fi, err := os.Stat(path)
 		if err == nil && fi.ModTime().After(diagTime) {
 			staleURIs[uri] = true
@@ -321,7 +322,7 @@ func formatDiagnosticsWithTimes(byURI map[string][]protocol.Diagnostic, times ma
 		if len(diags) == 0 {
 			continue
 		}
-		path := strings.TrimPrefix(uri, "file://")
+		path := paths.URIToPath(uri)
 		if staleURIs[uri] {
 			fmt.Fprintf(&sb, "\n%s  (file modified after last analysis — may be stale)\n", path)
 		} else {
@@ -366,7 +367,7 @@ func formatDiagnostics(byURI map[string][]protocol.Diagnostic) string {
 		if len(diags) == 0 {
 			continue
 		}
-		path := strings.TrimPrefix(uri, "file://")
+		path := paths.URIToPath(uri)
 		fmt.Fprintf(&sb, "\n%s\n", path)
 		for _, d := range diags {
 			sev := severityLabel(d.Severity)

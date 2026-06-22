@@ -11,6 +11,7 @@ import (
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // CallerSite is a single reference to a symbol from another file: a workspace
@@ -109,11 +110,11 @@ func cachedDocumentSymbols(ctx context.Context, client lsp.Client, c *cache.Cach
 // workspace-relative when they fall under workspaceRoot, so the block matches
 // topology's relative-path style; paths outside the root stay absolute.
 func crossFileSites(locs []protocol.Location, selfURI, workspaceRoot string) []CallerSite {
-	self := strings.TrimPrefix(selfURI, "file://")
+	self := paths.URIToPath(selfURI)
 	seen := map[string]bool{}
 	var out []CallerSite
 	for _, l := range locs {
-		p := strings.TrimPrefix(l.URI, "file://")
+		p := paths.URIToPath(l.URI)
 		if p == self {
 			continue // intra-file: the topology call graph already covers it
 		}
