@@ -18,6 +18,14 @@ import (
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
+// episodicWaitDeadline bounds the polls that wait for an episodic summary to land
+// via the asynchronous stats Writer (a ~200ms batched flush). It is deliberately
+// generous: a healthy run satisfies the poll in well under a second, so a large
+// ceiling never slows the suite — it only stops a starved shared CI runner (the
+// whole `go test ./...` matrix competing for CPU) from tripping the deadline and
+// flaking. See plumbkit/plumb#80.
+const episodicWaitDeadline = 30 * time.Second
+
 func TestBuildEpisodic(t *testing.T) {
 	calls := []stats.Call{
 		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/internal/a.go"}`},
@@ -128,7 +136,7 @@ func TestEvictIdle_SummarisesBeforeCancel(t *testing.T) {
 	})
 
 	reg.evictIdle(1 * time.Minute) // idle 2min > 1min ttl
-	deadline := time.After(time.Second)
+	deadline := time.After(episodicWaitDeadline)
 	for atomic.LoadInt32(&summarised) == 0 {
 		select {
 		case <-deadline:
@@ -177,7 +185,7 @@ func TestRunIdleReaper_SummarisesWhenGlobalSummariesOff(t *testing.T) {
 	go runIdleReaper(ctx, store, reg, ticks)
 	ticks <- time.Now()
 
-	deadline := time.After(time.Second)
+	deadline := time.After(episodicWaitDeadline)
 	for atomic.LoadInt32(&summarised) == 0 {
 		select {
 		case <-deadline:
@@ -256,7 +264,7 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 
 	// The episodic insert rides the async stats Writer (200ms flush); retry.
 	var got stats.Episodic
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(episodicWaitDeadline)
 	for {
 		if ro, _ := stats.SharedReadOnly(); ro != nil {
 			if e, ok, _ := ro.LatestEpisodic(ws); ok {
@@ -359,7 +367,7 @@ func TestSummariseIdle_FiresClosureOncePerSpell(t *testing.T) {
 	reg.add(sessID, connHandle{summarise: func() { atomic.AddInt32(&fired, 1) }})
 
 	reg.summariseIdle(1 * time.Minute)
-	deadline := time.After(time.Second)
+	deadline := time.After(episodicWaitDeadline)
 	for atomic.LoadInt32(&fired) == 0 {
 		select {
 		case <-deadline:
