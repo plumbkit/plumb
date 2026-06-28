@@ -74,6 +74,25 @@ func symbolEditDiff(path string, edit protocol.TextEdit) string {
 	return unifiedDiff(path, string(old), string(out))
 }
 
+// symbolEditsDiff renders the unified diff a set of TextEdits would produce
+// against path's current on-disk content. Best-effort: returns "" when there are
+// no edits, the file can't be read, or the edits can't be reconstructed
+// in-memory — the diff is presentation only, never a hard failure of the edit.
+func symbolEditsDiff(path string, edits []protocol.TextEdit) string {
+	if len(edits) == 0 {
+		return ""
+	}
+	old, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	out, err := applyTextEdits(old, edits)
+	if err != nil {
+		return ""
+	}
+	return unifiedDiff(path, string(old), string(out))
+}
+
 func capitalise(s string) string {
 	if s == "" {
 		return s

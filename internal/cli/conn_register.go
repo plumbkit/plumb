@@ -144,8 +144,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 			return ""
 		}))
-	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithBoundary(writeBoundary).WithWorkspace(s.workspace).WithStructuralFallback(wd))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
+	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithBoundary(writeBoundary).WithWorkspace(s.workspace).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace).WithShowWriteDiff(showDiffFn))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace).WithShowWriteDiff(showDiffFn))
 	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace).WithShowWriteDiff(showDiffFn))
