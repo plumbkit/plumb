@@ -125,7 +125,7 @@ func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 		return c, nil
 	}
 	if root == "" || lang == "" {
-		return nil, fmt.Errorf("LSP server not yet ready")
+		return nil, warmingErr(0, "")
 	}
 	e, err := r.pool.acquireLang(ctx, root, lang, false)
 	if err != nil {
@@ -135,7 +135,8 @@ func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 		e.proxy.touch()
 		return c, nil
 	}
-	return nil, fmt.Errorf("LSP server not yet ready")
+	_, elapsed := r.pool.warmupFor(e.root, e.language)
+	return nil, warmingErr(elapsed, "")
 }
 
 // route returns the Client responsible for the workspace containing uri.
@@ -196,7 +197,8 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 		r.noteActivated(root, targetLang)
 		return c, nil
 	}
-	return nil, fmt.Errorf("LSP server not yet ready for %s", root)
+	_, elapsed := r.pool.warmupFor(e.root, e.language)
+	return nil, warmingErr(elapsed, root)
 }
 
 // noteActivated reports a secondary language server coming live for a file

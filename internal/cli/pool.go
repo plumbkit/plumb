@@ -106,6 +106,12 @@ type poolEntry struct {
 	// path), not here.
 	state poolLifecycle
 
+	// startedAt is when this entry's language server began warming — set when the
+	// entry is created and refreshed on each wake from hibernation. It backs the
+	// warm-up elapsed time surfaced to tools and session_start while proxy.get()
+	// is still nil (handshake incomplete). Guarded by workspacePool.mu.
+	startedAt time.Time
+
 	// refs counts the sessions that hold this root as their PINNED primary
 	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
 	// for a non-primary URI) deliberately do NOT pin, so a route target is never
@@ -286,7 +292,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	c := cache.New(p.cacheTTL)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
-	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c, state: poolActive}
+	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now()}
 	proxy.touch()
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
@@ -387,6 +393,28 @@ func (p *workspacePool) awaitReady(ctx context.Context, e *poolEntry, readyCh <-
 	case <-ctx.Done():
 		return e, nil
 	}
+}
+
+// warmupFor reports whether the language server for (root, language) is still
+// warming — its handshake incomplete, so proxy.get() is nil — and how long it
+// has been warming. Resolution-only: it never starts or wakes a server, so a
+// caller (a tool, session_start) can fail fast with an elapsed-time advisory
+// instead of blocking on a cold handshake. Returns (false, 0) when no entry
+// exists or the server is already ready.
+func (p *workspacePool) warmupFor(root, language string) (warming bool, elapsed time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[poolKey{root, language}]
+	if !ok {
+		return false, 0
+	}
+	if e.proxy.get() != nil {
+		return false, 0
+	}
+	if e.startedAt.IsZero() {
+		return true, 0
+	}
+	return true, time.Since(e.startedAt)
 }
 
 // poolOnStart builds the supervisor OnStart hook: construct the adapter,

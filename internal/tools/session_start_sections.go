@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/fsguard"
@@ -42,6 +43,8 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErro
 	switch {
 	case hasErrors:
 		sb.WriteString("Active errors detected — start with `diagnostics` to review them.\n\n")
+	case t.writeLSPWarming(sb):
+		// warming advisory already written
 	case t.lspAttached():
 		sb.WriteString("LSP is available — use `workspace_symbols` to survey the codebase.\n\n")
 	case t.topologyActive():
@@ -73,6 +76,26 @@ func (t *SessionStart) writeNoLSPGuidance(sb *strings.Builder, lang, lspKey stri
 		fmt.Fprintf(sb, "Its adapter is opt-in — set `[lsp.%s] enabled = true` and ensure the server is on PATH. "+
 			"For language-server-free symbol search, enable the topology index (`[topology] enabled = true`).\n\n", lspKey)
 	}
+}
+
+// writeLSPWarming writes a warm-up advisory when the primary language server is
+// attached but its handshake has not finished, and reports whether it did. A
+// cold server (rust-analyzer running cargo metadata, a large gopls module) can
+// take minutes; meanwhile the tree-sitter index already answers, so the agent is
+// steered there rather than into a semantic tool that would block on the warm-up.
+func (t *SessionStart) writeLSPWarming(sb *strings.Builder) bool {
+	warming, elapsed := t.lspWarming()
+	if !warming {
+		return false
+	}
+	if elapsed > 0 {
+		fmt.Fprintf(sb, "Language server is still warming up (~%s elapsed). ", elapsed.Round(time.Second))
+	} else {
+		sb.WriteString("Language server is still warming up. ")
+	}
+	sb.WriteString("`topology_search`, `find_symbol`, and `file_outline` answer now; " +
+		"`get_definition`, `find_references`, and the hierarchies will work once it's ready (retry shortly).\n\n")
+	return true
 }
 
 func (t *SessionStart) hasActiveDiagnosticErrors() bool {

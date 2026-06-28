@@ -246,6 +246,7 @@ func (p *workspacePool) wakeLocked(e *poolEntry) (<-chan error, error) {
 		watcher.Start()
 	}
 	e.state = poolActive
+	e.startedAt = time.Now()
 	e.proxy.touch()
 	return readyCh, nil
 }

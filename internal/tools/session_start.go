@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // session_start is split across files by concern: the orientation-packet
@@ -80,6 +81,7 @@ type SessionStart struct {
 	repin        func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
 	episodicFn   func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
 	toolProfile  func() (profile string, hidden int)                                   // may be nil; the resolved tool profile + count of tools hidden from tools/list
+	lspWarmingFn func() (bool, time.Duration)                                          // may be nil; reports whether the primary LSP is still warming + elapsed
 }
 
 // WithToolProfile wires an accessor returning the connection's resolved tool
@@ -187,6 +189,25 @@ func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace, languag
 // lspAttached reports whether a language server is attached for this session.
 func (t *SessionStart) lspAttached() bool {
 	return t.lspLangFn != nil && t.lspLangFn() != ""
+}
+
+// WithLSPWarmup wires an accessor reporting whether the session's primary
+// language server is still warming (handshake incomplete) and for how long. When
+// it reports warming, session_start softens "LSP is available" into a warming
+// advisory that steers the agent to topology/find_symbol meanwhile. Nil-safe:
+// unset means never warming. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPWarmup(fn func() (bool, time.Duration)) *SessionStart {
+	t.lspWarmingFn = fn
+	return t
+}
+
+// lspWarming reports the primary LSP warm-up state, or (false, 0) when no
+// accessor is wired.
+func (t *SessionStart) lspWarming() (bool, time.Duration) {
+	if t.lspWarmingFn == nil {
+		return false, 0
+	}
+	return t.lspWarmingFn()
 }
 
 // NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted

@@ -309,6 +309,18 @@ func (s *connSession) acquiredLanguageLabels() []string {
 	return s.view().discoveredLangs
 }
 
+// lspWarming reports whether this session's primary language server is still
+// warming (handshake incomplete) and how long it has been. session_start uses it
+// to soften "LSP is available" into a warming advisory so an agent reaches for
+// topology/find_symbol meanwhile instead of blocking a semantic tool on a cold
+// server. Returns (false, 0) when no language is attached or the server is ready.
+func (s *connSession) lspWarming() (bool, time.Duration) {
+	if s.acquiredLanguageName() == "" {
+		return false, 0
+	}
+	return s.sessionProxy.WarmupStatus("")
+}
+
 // sessionName returns the current human-readable session name.
 func (s *connSession) sessionName() string {
 	return s.view().sessName
