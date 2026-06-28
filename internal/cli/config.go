@@ -16,7 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
-	"github.com/plumbkit/plumb/internal/tui"
+	"github.com/plumbkit/plumb/internal/theme"
 )
 
 var configCmd = &cobra.Command{
@@ -40,8 +40,8 @@ var configPrintCmd = &cobra.Command{
 
 		// Use chroma to highlight TOML if stdout is a terminal, else just print it.
 		chromaStyle := "nord"
-		if t, ok := tui.AvailableThemes[cfg.UI.Theme]; ok && t.ChromaStyle != "" {
-			chromaStyle = t.ChromaStyle
+		if p, ok := theme.Get(cfg.UI.Theme); ok && p.ChromaStyle != "" {
+			chromaStyle = p.ChromaStyle
 		}
 		if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
 			if err := quick.Highlight(os.Stdout, buf.String(), "toml", "terminal256", chromaStyle); err != nil {
@@ -125,7 +125,6 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading project config: %w", perr)
 	}
 
-	tui.RebuildStyles()
 	PrintLogo()
 	printRecoveredHijacks()
 
@@ -146,16 +145,16 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	ctxTable.Row("global config", existsIcon(globalPath), contractConfigPath(globalPath))
 	ctxTable.Row("project config", existsIcon(projectPath), contractConfigPath(projectPath))
 	if requestedWorkspace != "" && requestedWorkspace != ws {
-		ctxTable.Row("requested workspace", tui.OkStyle.Render("✓"), contractConfigPath(requestedWorkspace))
+		ctxTable.Row("requested workspace", configShowOkStyle().Render("✓"), contractConfigPath(requestedWorkspace))
 	}
-	workspaceIcon := tui.OkStyle.Render("✓")
+	workspaceIcon := configShowOkStyle().Render("✓")
 	if !workspaceAttachable {
-		workspaceIcon = tui.WarnStyle.Render("!")
+		workspaceIcon = configShowWarnStyle().Render("!")
 	}
 	ctxTable.Row("workspace", workspaceIcon, contractConfigPath(ws))
 	fmt.Println(renderConfigShowTable(ctxTable))
 	if !workspaceAttachable {
-		fmt.Println(tui.WarnStyle.Render(
+		fmt.Println(configShowWarnStyle().Render(
 			"! not an attachable workspace — no .plumb/ marker, language root marker, or .git/ above it; " +
 				"the daemon would refuse to attach here (run `plumb init`, or enable [workspace].auto_attach)"))
 	}
@@ -269,12 +268,12 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	// reports a concrete restart-pending state via the daemon_info tool.
 	fmt.Printf("\nReload behaviour\n")
 	reloadTable := tableBase().Headers("Config group", "Applies")
-	reloadTable.Row("edits, git, walk", tui.OkStyle.Render("live"))
-	reloadTable.Row("log_level", tui.OkStyle.Render("live (set-level)"))
-	reloadTable.Row("ui.theme", tui.OkStyle.Render("live (TUI)"))
-	reloadTable.Row("topology", tui.OkStyle.Render("live (reconciled)"))
-	reloadTable.Row("workspace, quality, lsp_query", tui.OkStyle.Render("live on next attach/session"))
-	reloadTable.Row("lsp.* servers, cache, log_format", tui.WarnStyle.Render("needs daemon restart"))
+	reloadTable.Row("edits, git, walk", configShowOkStyle().Render("live"))
+	reloadTable.Row("log_level", configShowOkStyle().Render("live (set-level)"))
+	reloadTable.Row("ui.theme", configShowOkStyle().Render("live (TUI)"))
+	reloadTable.Row("topology", configShowOkStyle().Render("live (reconciled)"))
+	reloadTable.Row("workspace, quality, lsp_query", configShowOkStyle().Render("live on next attach/session"))
+	reloadTable.Row("lsp.* servers, cache, log_format", configShowWarnStyle().Render("needs daemon restart"))
 	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 
@@ -300,16 +299,16 @@ func printDirectoriesSection() {
 		{"runtime", paths.CacheDir(), "socket, pid, locks, version"},
 	}
 	for _, r := range rows {
-		dirTable.Row(r.name, existsIcon(r.path), contractConfigPath(r.path), tui.MutedStyle.Render(r.holds))
+		dirTable.Row(r.name, existsIcon(r.path), contractConfigPath(r.path), configShowMutedStyle().Render(r.holds))
 	}
 	fmt.Println(renderConfigShowTable(dirTable))
 }
 
 func formatConfigVal(val string) string {
 	if val == "" {
-		return tui.MutedStyle.Render("(none)")
+		return configShowMutedStyle().Render("(none)")
 	}
-	return tui.ValStyle.Render(val)
+	return configShowValStyle().Render(val)
 }
 
 func addConfigSection(t *table.Table, name string, items [][]string) {
@@ -322,9 +321,9 @@ func addConfigSection(t *table.Table, name string, items [][]string) {
 		}
 		keys.WriteString(item[0])
 		vals.WriteString(formatConfigVal(item[1]))
-		provs.WriteString(tui.MutedStyle.Render(item[2]))
+		provs.WriteString(configShowMutedStyle().Render(item[2]))
 	}
-	t.Row(tui.KeyStyle.Render(name), keys.String(), vals.String(), provs.String())
+	t.Row(configShowKeyStyle().Render(name), keys.String(), vals.String(), provs.String())
 }
 
 func sortedLSPKeys(m map[string]config.LSPConfig) []string {
@@ -355,7 +354,7 @@ var configShowBorder = lipgloss.Border{
 func configShowTableBase() *table.Table {
 	return table.New().
 		Border(configShowBorder).
-		BorderStyle(tui.SepStyle).
+		BorderStyle(configShowSepStyle()).
 		BorderRow(true).
 		BorderColumn(true).
 		StyleFunc(func(row, col int) lipgloss.Style {
@@ -374,29 +373,29 @@ func renderConfigShowTable(t *table.Table) string {
 
 func existsIcon(path string) string {
 	if path == "" {
-		return tui.MutedStyle.Render("-")
+		return configShowMutedStyle().Render("-")
 	}
 	if _, err := os.Stat(path); err == nil {
-		return tui.OkStyle.Render("✓")
+		return configShowOkStyle().Render("✓")
 	}
-	return tui.WarnStyle.Render("✗")
+	return configShowWarnStyle().Render("✗")
 }
 
 func registeredIcon(path string) string {
 	if path == "" {
-		return tui.MutedStyle.Render("-")
+		return configShowMutedStyle().Render("-")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return tui.WarnStyle.Render("✗")
+		return configShowWarnStyle().Render("✗")
 	}
 
 	// A simple string search is robust enough for checking registration status
 	// across the JSON schemas and Codex's TOML schema.
 	if strings.Contains(string(data), "plumb") {
-		return tui.OkStyle.Render("✓")
+		return configShowOkStyle().Render("✓")
 	}
-	return tui.WarnStyle.Render("✗")
+	return configShowWarnStyle().Render("✗")
 }
 
 // maskConfigKey renders a literal API key for `config show` without leaking it:
@@ -410,7 +409,7 @@ func maskConfigKey(k string) string {
 
 func contractConfigPath(p string) string {
 	if p == "" {
-		return tui.MutedStyle.Render("(none)")
+		return configShowMutedStyle().Render("(none)")
 	}
 	return render.ContractPath(p)
 }
