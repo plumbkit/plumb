@@ -39,11 +39,11 @@ func TestPublishSchema_DropsAliasTargetFromRequired(t *testing.T) {
 }
 
 func TestPublishSchema_KeepsNonAliasRequired(t *testing.T) {
-	// content is NOT an alias target, name IS — only name should be dropped.
-	in := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"content":{"type":"string"}},"required":["name","content"],"additionalProperties":false}`)
+	// session_id is NOT an alias target, name IS — only name should be dropped.
+	in := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"session_id":{"type":"string"}},"required":["name","session_id"],"additionalProperties":false}`)
 	got := parseSchema(t, publishSchema(in))
 
-	if want := []string{"content"}; !reflect.DeepEqual(got.Required, want) {
+	if want := []string{"session_id"}; !reflect.DeepEqual(got.Required, want) {
 		t.Errorf("required = %v, want %v", got.Required, want)
 	}
 }

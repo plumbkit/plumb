@@ -172,21 +172,43 @@ func decodeArgsObject(raw json.RawMessage) (map[string]any, error) {
 // true if any key was renamed.
 func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]string) bool {
 	changed := false
-	type rename struct{ from, to string }
+	type rename struct {
+		from, to string
+		fuzzy    bool
+	}
 	var renames []rename
+	targets := map[string]bool{} // canonical names already claimed this level
+	claimed := map[string]bool{} // unknown keys already given a rename
+	// Pass 1: curated/exact alias resolution (unchanged behaviour).
 	for key := range obj {
 		if _, ok := sh.props[key]; ok {
 			continue
 		}
 		if canon, ok := canonicalFor(key, sh, obj); ok {
 			renames = append(renames, rename{from: key, to: canon})
+			targets[canon] = true
+			claimed[key] = true
+		}
+	}
+	// Pass 2: high-confidence typo correction for any key no alias claimed, never
+	// stealing a target an alias already took.
+	for key := range obj {
+		if _, ok := sh.props[key]; ok {
+			continue
+		}
+		if claimed[key] {
+			continue
+		}
+		if canon, ok := fuzzyCanonical(key, sh, obj); ok && !targets[canon] {
+			renames = append(renames, rename{from: key, to: canon, fuzzy: true})
+			targets[canon] = true
 		}
 	}
 	sort.Slice(renames, func(i, j int) bool { return renames[i].from < renames[j].from })
 	for _, r := range renames {
 		obj[r.to] = obj[r.from]
 		delete(obj, r.from)
-		*warnings = append(*warnings, fmt.Sprintf("interpreted %q as %q", joinPath(path, r.from), r.to))
+		*warnings = append(*warnings, renameWarning(joinPath(path, r.from), r.to, r.fuzzy))
 		changed = true
 	}
 	for key, child := range sh.children {
@@ -195,6 +217,16 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 		}
 	}
 	return changed
+}
+
+// renameWarning describes one applied key rewrite. A fuzzy (edit-distance)
+// correction is flagged as an assumed typo so the caller can see it was a guess,
+// not a curated alias.
+func renameWarning(from, to string, fuzzy bool) string {
+	if fuzzy {
+		return fmt.Sprintf("corrected likely typo %q to %q", from, to)
+	}
+	return fmt.Sprintf("interpreted %q as %q", from, to)
 }
 
 // descend applies child to a property value: an object, or each object element
