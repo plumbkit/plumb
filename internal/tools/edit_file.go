@@ -21,9 +21,25 @@ var editFileSchema = json.RawMessage(`{
       "type": "string",
       "description": "Absolute path, file:// URI, or workspace-relative path of the file to edit."
     },
+    "start_anchor": {
+      "type": "string",
+      "description": "Anchor-bounded edit mode (alternative to edits): a unique substring marking the START of the span to replace. Must appear EXACTLY ONCE. Combine with end_anchor + new_string. Mutually exclusive with edits. CRLF / display-only gutter (\"<n>\\t\") tolerated."
+    },
+    "end_anchor": {
+      "type": "string",
+      "description": "Anchor-bounded edit mode: a unique substring marking the END of the span to replace. Must appear EXACTLY ONCE and after start_anchor. Combine with start_anchor + new_string."
+    },
+    "new_string": {
+      "type": "string",
+      "description": "Anchor-bounded edit mode: the replacement text for the span between (or, with include_anchors, including) the two anchors. Empty string deletes the span. Only used when start_anchor/end_anchor are set."
+    },
+    "include_anchors": {
+      "type": "boolean",
+      "description": "Anchor-bounded edit mode: when true the anchors themselves are part of the replaced span (the whole inclusive span becomes new_string); when false (default) only the text strictly between the anchors is replaced and the anchors are preserved as boundaries."
+    },
     "edits": {
       "type": "array",
-      "description": "Ordered list of str_replace edits to apply sequentially.",
+      "description": "Ordered list of str_replace edits to apply sequentially. Mutually exclusive with the start_anchor/end_anchor mode.",
       "items": {
         "type": "object",
         "properties": {
@@ -78,7 +94,7 @@ var editFileSchema = json.RawMessage(`{
       "description": "When true, do NOT reject the edit if the file changed since your read (expected_mtime / expected_sha mismatch); apply against the current on-disk content instead, relying on the exact-once old_string match for safety. Use it for the edit→format(gofumpt/golangci-lint --fix)→edit loop, where a formatter bumped the mtime but your anchors still match. Default false (the mtime guard stays strict)."
     }
   },
-  "required": ["file_path", "edits"],
+  "required": ["file_path"],
   "additionalProperties": false
 }`)
 
@@ -132,11 +148,17 @@ func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
 	return "Apply one or more edits to an existing file (use this over a native edit tool — see the " +
-		"Edit lane note in session_start). Each edit is one of two modes: " +
+		"Edit lane note in session_start). Two request shapes (mutually exclusive): pass an edits array, OR " +
+		"start_anchor + end_anchor + new_string. " +
+		"In the edits array, each edit is one of two modes: " +
 		"(1) str_replace (default): old_string must appear EXACTLY ONCE — rejected if absent or ambiguous. " +
 		"(2) range: start_line/end_line (1-based) replace that line span with new_string; start_line: -1 " +
 		"appends at end of file, end_line: -1 runs through the last line (the clean way to delete a block " +
 		"or append, no anchor needed). " +
+		"Anchor mode replaces the span BETWEEN two unique anchors with new_string — each anchor must match " +
+		"EXACTLY ONCE and end_anchor must follow start_anchor; include_anchors=false (default) keeps the " +
+		"anchors and rewrites only the text between them, include_anchors=true replaces the whole inclusive " +
+		"span. Ideal for rewriting a block whose interior changes but whose stable boundary lines do not. " +
 		"CRLF is tolerated; edits apply sequentially in memory then write atomically (temp + rename) under " +
 		"a per-path lock. Pass expected_mtime (from a read_file header) to guarantee the file is unchanged " +
 		"since you read it. For a SOLE agent doing a burst of sequential edits to one file, OMITTING " +
@@ -158,12 +180,41 @@ type strEdit struct {
 type editFileArgs struct {
 	Path             string    `json:"file_path"`
 	Edits            []strEdit `json:"edits"`
+	StartAnchor      string    `json:"start_anchor"`
+	EndAnchor        string    `json:"end_anchor"`
+	NewStr           string    `json:"new_string"`
+	IncludeAnchors   bool      `json:"include_anchors"`
 	ExpectedMtime    string    `json:"expected_mtime"`
 	ExpectedSha      string    `json:"expected_sha"`
 	DirtyOk          bool      `json:"dirty_ok"`
 	ApplyPartial     bool      `json:"apply_partial"`
 	AwaitDiagnostics bool      `json:"await_diagnostics"`
 	Reconcile        bool      `json:"reconcile"`
+}
+
+// anchorMode reports whether this request uses the anchor-bounded edit shape
+// (start_anchor / end_anchor) rather than the str_replace / range edits array.
+// The two shapes are mutually exclusive; validateMode enforces it.
+func (a editFileArgs) anchorMode() bool {
+	return a.StartAnchor != "" || a.EndAnchor != ""
+}
+
+// validateMode enforces that exactly one edit shape is used: either the edits
+// array, or the start_anchor/end_anchor pair — never both, never neither.
+func (a editFileArgs) validateMode() error {
+	if a.anchorMode() {
+		if len(a.Edits) > 0 {
+			return fmt.Errorf("edit_file: provide either edits or start_anchor/end_anchor, not both")
+		}
+		if a.StartAnchor == "" || a.EndAnchor == "" {
+			return fmt.Errorf("edit_file: anchor mode requires both start_anchor and end_anchor")
+		}
+		return nil
+	}
+	if len(a.Edits) == 0 {
+		return fmt.Errorf("edit_file: at least one edit is required (or pass start_anchor/end_anchor)")
+	}
+	return nil
 }
 
 func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -188,6 +239,22 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", err
 	}
 
+	// Anchor mode resolves its start_anchor/end_anchor pair into a single
+	// synthetic str_replace edit against the current bytes, then flows through
+	// the exact same write path as the edits array (locks, retry, LSP notify,
+	// cache invalidation, diff). Only the span computation is new.
+	var anchorNote string
+	if a.anchorMode() {
+		edit, note, err := t.resolveAnchorEdit(path, a)
+		if err != nil {
+			return "", err
+		}
+		a.Edits = []strEdit{edit}
+		if note != "" {
+			anchorNote = "\n" + note
+		}
+	}
+
 	uri := "file://" + path
 	// Captured before the write (which bumps the mtime): warn if the file moved
 	// on disk since this session read it and no explicit version guard governs it.
@@ -195,14 +262,14 @@ func (t *EditFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 
 	if a.ApplyPartial {
 		t.deps.notifyTopology(path)
-		return t.executePartial(ctx, path, a.Edits, uri, a.AwaitDiagnostics) + staleNote + t.deps.reportQuality(ctx, path), nil
+		return t.executePartial(ctx, path, a.Edits, uri, a.AwaitDiagnostics) + anchorNote + staleNote + t.deps.reportQuality(ctx, path), nil
 	}
 	result, err := t.editFileApply(ctx, path, a, uri)
 	if err != nil {
 		return "", err
 	}
 	t.deps.notifyTopology(path)
-	return result + staleNote + t.deps.reportQuality(ctx, path), nil
+	return result + anchorNote + staleNote + t.deps.reportQuality(ctx, path), nil
 }
 
 // staleReadNote returns a one-line warning when this session read the file and it
@@ -240,8 +307,8 @@ func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
 	if a.Path == "" {
 		return a, fmt.Errorf("edit_file: file_path is required")
 	}
-	if len(a.Edits) == 0 {
-		return a, fmt.Errorf("edit_file: at least one edit is required")
+	if err := a.validateMode(); err != nil {
+		return a, err
 	}
 	return a, nil
 }

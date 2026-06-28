@@ -297,6 +297,23 @@ have moved, so re-read before further edits. **Inputs:**
 appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
 check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
 
+**Anchor-bounded mode (alternative to `edits`).** Instead of an exact
+`old_string`, supply `start_anchor` + `end_anchor` (two unique substrings) and a
+`new_string` that replaces the span they bound. The two request shapes are
+mutually exclusive — provide *either* `edits` *or* the anchor trio, never both.
+Each anchor must match **exactly once** (ambiguous/absent → the same clear error
+as `old_string`), `end_anchor` must occur after `start_anchor`, and the matcher
+mirrors `str_replace`: CRLF-tolerant and forgiving of a pasted display-only
+read_file gutter (`<n>\t`). `include_anchors=false` (default) replaces only the
+text *between* the anchors, leaving them in place as stable boundaries;
+`include_anchors=true` replaces the whole inclusive span (anchors included). An
+empty `new_string` deletes the span. Everything downstream — the per-path lock,
+`expected_mtime`/`expected_sha` guards, LSP notify, cache invalidation, diff
+output, and write-rate budget — is the same write path as `edits`. Ideal for
+rewriting a block whose interior changes but whose boundary lines are stable.
+**Anchor inputs:** `start_anchor`, `end_anchor`, `new_string`,
+`include_anchors` (bool, default false).
+
 ### `delete_file`
 Delete a file (refuses directories unless `allow_dir` and the directory is empty).
 The response reports the line and byte count removed (bytes only for a binary or
