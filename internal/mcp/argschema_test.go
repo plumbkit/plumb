@@ -49,13 +49,16 @@ func TestPublishSchema_KeepsNonAliasRequired(t *testing.T) {
 }
 
 func TestPublishSchema_RecursesIntoArrayItems(t *testing.T) {
-	// operations[].file_path is an alias target; edits is not. The nested required
-	// must be relaxed too, or a host rejects the call before the daemon sees it.
+	// operations is an array-OF-OBJECTS, so it is dropped from the published
+	// top-level required (the daemon can rebuild it from misplaced top-level keys —
+	// the wrap recovery). Its nested required is still relaxed: file_path is an
+	// alias target (dropped), while the inner `edits` is an array of SCALARS (no
+	// object items), so it is not wrappable and stays required.
 	in := json.RawMessage(`{"type":"object","properties":{"operations":{"type":"array","items":{"type":"object","properties":{"file_path":{"type":"string"},"edits":{"type":"array"}},"required":["file_path","edits"],"additionalProperties":false}}},"required":["operations"]}`)
 	got := parseSchema(t, publishSchema(in))
 
-	if want := []string{"operations"}; !reflect.DeepEqual(got.Required, want) {
-		t.Errorf("top required = %v, want %v (operations is not an alias target)", got.Required, want)
+	if len(got.Required) != 0 {
+		t.Errorf("top required = %v, want empty (operations is an array-of-objects, dropped for the wrap recovery)", got.Required)
 	}
 
 	var props map[string]json.RawMessage

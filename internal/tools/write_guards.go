@@ -18,7 +18,8 @@ import (
 //
 // Both write tools funnel through this one helper: write_file calls it directly,
 // and edit_file's checkExpectedVersion delegates here (wrapping a failure as an
-// edit-logic error), so the two enforce identical semantics and wording.
+// edit-logic error, and appending a reconcile hint for an anchored batch), so the
+// two enforce identical semantics and wording.
 func verifyExpectedVersion(tool, path, expectedMtime, expectedSha string) error {
 	if expectedMtime != "" {
 		want, err := time.Parse(time.RFC3339Nano, expectedMtime)

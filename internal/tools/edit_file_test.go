@@ -133,7 +133,9 @@ func TestEditFile_ReconcileBypassesMtimeGuard(t *testing.T) {
 	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
 	staleMtime := time.Now().Add(-time.Hour).Format(time.RFC3339Nano)
 
-	// A stale expected_mtime is normally rejected.
+	// A stale expected_mtime is rejected (NOT auto-reconciled — that would clobber a
+	// possible concurrent change; see TestMultiSession_StaleExpectedMtime_Rejected),
+	// but the rejection is actionable: for an anchored batch it names reconcile:true.
 	_, err := callEditFile(t, map[string]any{
 		"file_path":      path,
 		"expected_mtime": staleMtime,
@@ -141,6 +143,9 @@ func TestEditFile_ReconcileBypassesMtimeGuard(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "modified since you read it") {
 		t.Fatalf("expected mtime-mismatch rejection, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reconcile: true") {
+		t.Errorf("rejection should point at the reconcile escape hatch, got: %v", err)
 	}
 
 	// With reconcile, the stale mtime is ignored and the unique anchor still applies.

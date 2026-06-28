@@ -20,6 +20,7 @@ type shape struct {
 	required    []string
 	rejectExtra bool              // only when the schema sets additionalProperties:false
 	children    map[string]*shape // property → nested object shape (arrays use their element shape)
+	arrays      map[string]bool   // which children are arrays-of-objects (vs a plain object)
 }
 
 // parseShape builds the top-level shape for a tool schema. It returns ok=false
@@ -49,36 +50,41 @@ func parseObjectShape(schema json.RawMessage) (*shape, bool) {
 		required:    raw.Required,
 		rejectExtra: bytes.Equal(bytes.TrimSpace(raw.AdditionalProperties), []byte("false")),
 		children:    map[string]*shape{},
+		arrays:      map[string]bool{},
 	}
 	for _, k := range order {
 		sh.props[k] = struct{}{}
-		if child, ok := childShape(propSchemas[k]); ok {
+		if child, isArray, ok := childShape(propSchemas[k]); ok {
 			sh.children[k] = child
+			sh.arrays[k] = isArray
 		}
 	}
 	return sh, true
 }
 
 // childShape returns the object shape to descend into for a property: the
-// object's own shape, or for an array its element object shape. nil/false when
-// the property is a scalar or an array of scalars.
-func childShape(propSchema json.RawMessage) (*shape, bool) {
+// object's own shape, or for an array its element object shape. isArray reports
+// which of the two it was. nil/false when the property is a scalar or an array of
+// scalars.
+func childShape(propSchema json.RawMessage) (sh *shape, isArray, ok bool) {
 	var raw struct {
 		Type  string          `json:"type"`
 		Items json.RawMessage `json:"items"`
 	}
 	if err := json.Unmarshal(propSchema, &raw); err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	switch raw.Type {
 	case "object":
-		return parseObjectShape(propSchema)
+		s, ok := parseObjectShape(propSchema)
+		return s, false, ok
 	case "array":
 		if len(bytes.TrimSpace(raw.Items)) > 0 {
-			return parseObjectShape(raw.Items)
+			s, ok := parseObjectShape(raw.Items)
+			return s, true, ok
 		}
 	}
-	return nil, false
+	return nil, false, false
 }
 
 // objectProps returns a JSON object's keys in declaration order plus each key's
@@ -133,6 +139,12 @@ func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessa
 
 	var warnings []string
 	changed := rewriteObject(sh, obj, "", &warnings)
+	// After alias/typo resolution, repair a parameter placed at the wrong level
+	// (hoist out of an array element, or wrap scattered top-level keys into an
+	// absent array param). Only touches keys validation would otherwise reject.
+	if relocateMisplaced(sh, obj, &warnings) {
+		changed = true
+	}
 	if err := validateObject(sh, obj, "", toolName); err != nil {
 		return raw, nil, err
 	}
