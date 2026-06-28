@@ -511,7 +511,10 @@ Text/regex find-and-replace across files; **dry-run by default.** **Inputs:**
 `pattern`, `replacement` (required), `path`, `glob`, `use_regex`, `dry_run`
 (default true), `dirty_ok`, `format_after` (run the workspace formatter),
 `case_sensitive`, `max_files`, `max_file_bytes`. Prefer `rename_symbol` for
-renaming identifiers — it understands scope and types.
+renaming identifiers — it understands scope and types. When `[edits].show_write_diff`
+is on (default), the response appends a per-file unified diff in both preview and
+applied modes, for up to the first 20 changed files, with a `+N more file(s)`
+summary beyond that.
 
 ### `file_diff`
 Unified diff between two files (system `diff -U`). **Inputs:** two file paths.
