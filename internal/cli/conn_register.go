@@ -115,7 +115,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 				LastReloaded:  s.store.LastReloaded(),
 				RestartNeeded: s.store.RestartNeeded(),
 			}
-		}))
+		}).
+		WithPurpose(s.sessionPurpose))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
@@ -136,6 +137,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			ws := s.workspace()
 			s.markBoundaryViolation(fmt.Sprintf("session_start workspace switch refused: connection is pinned to %s; requested %s", ws, requested))
 		}).
+		WithPurpose(s.setPurpose).
 		WithExternalID(func(externalID string) string {
 			session.SetExternalID(s.sessID, externalID)
 			if prev := session.FindEnded(externalID, 24*time.Hour); prev != nil {

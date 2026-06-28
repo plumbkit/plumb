@@ -224,7 +224,7 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 			if p.ClientName != "" {
 				client = fmt.Sprintf(" [%s]", p.ClientName)
 			}
-			fmt.Fprintf(&sb, "  %s%s%s%s%s\n", p.Name, selfMark, client, sessionLSP(p), idle)
+			fmt.Fprintf(&sb, "  %s%s%s%s%s%s\n", p.Name, selfMark, sessionPurpose(p), client, sessionLSP(p), idle)
 		}
 	}
 
@@ -250,6 +250,15 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 	}
 
 	return sb.String()
+}
+
+// sessionPurpose renders a session's optional human-readable purpose tag as a
+// compact " (purpose: deploy-fix)" suffix, or "" when no purpose is set.
+func sessionPurpose(p session.Info) string {
+	if p.Purpose == "" {
+		return ""
+	}
+	return " (purpose: " + p.Purpose + ")"
 }
 
 // sessionLSP renders a session's active language servers as a compact " · LSP

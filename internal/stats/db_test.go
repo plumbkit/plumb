@@ -424,7 +424,7 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	if v != SchemaVersion {
 		t.Errorf("user_version = %d, want %d", v, SchemaVersion)
 	}
-	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version", "tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
+	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version", "tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens", "purpose"} {
 		has, err := hasColumn(db.db, "tool_calls", col)
 		if err != nil {
 			t.Fatalf("hasColumn(%s): %v", col, err)
@@ -500,6 +500,115 @@ func TestMigrateAddsSavingsColumns(t *testing.T) {
 	}
 	if modelVer != 0 {
 		t.Fatalf("legacy row savings_model_version = %d, want 0 (unscored)", modelVer)
+	}
+}
+
+// TestMigrateAddsPurposeColumn proves that opening a pre-v13 database upgrades it
+// cleanly: the purpose column is added and legacy rows backfill with the
+// empty-string default. It seeds an old-shape tool_calls table stamped
+// user_version=12, then exercises the real Open() upgrade path rather than the
+// internal migrate helper.
+func TestMigrateAddsPurposeColumn(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	path := DBPathFor()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Seed a pre-purpose database: the full v12 tool_calls shape (every column
+	// except purpose), stamped as schema version 12 so Open() runs exactly the
+	// v12→v13 step. All columns the baseline indexes reference must be present.
+	seed, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open seed: %v", err)
+	}
+	if _, err := seed.Exec(`CREATE TABLE tool_calls (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL DEFAULT '',
+		session_name TEXT NOT NULL DEFAULT '',
+		workspace TEXT NOT NULL DEFAULT '',
+		tool TEXT NOT NULL,
+		called_at INTEGER NOT NULL,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		input_bytes INTEGER NOT NULL DEFAULT 0,
+		output_bytes INTEGER NOT NULL DEFAULT 0,
+		success INTEGER NOT NULL DEFAULT 1,
+		error_msg TEXT NOT NULL DEFAULT '',
+		input_json TEXT NOT NULL DEFAULT '',
+		output_text TEXT NOT NULL DEFAULT '',
+		client_name TEXT NOT NULL DEFAULT '',
+		client_version TEXT NOT NULL DEFAULT '',
+		tokens_saved INTEGER NOT NULL DEFAULT 0,
+		savings_model_version INTEGER NOT NULL DEFAULT 0,
+		capability_tokens INTEGER NOT NULL DEFAULT 0,
+		efficiency_tokens INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		t.Fatalf("seed tool_calls: %v", err)
+	}
+	if _, err := seed.Exec(`INSERT INTO tool_calls (session_id, workspace, tool, called_at) VALUES ('legacy', '/w', 'read_file', 1)`); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	if _, err := seed.Exec(`PRAGMA user_version = 12`); err != nil {
+		t.Fatalf("stamp user_version: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open (upgrade): %v", err)
+	}
+	defer db.Close()
+
+	var v int
+	if err := db.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		t.Fatalf("reading user_version: %v", err)
+	}
+	if v != SchemaVersion {
+		t.Fatalf("user_version after upgrade = %d, want %d", v, SchemaVersion)
+	}
+	// A successful SELECT proves the column exists; the legacy row reads back ''.
+	var purpose string
+	if err := db.db.QueryRow(`SELECT purpose FROM tool_calls WHERE session_id='legacy'`).Scan(&purpose); err != nil {
+		t.Fatalf("scan legacy row purpose (column missing?): %v", err)
+	}
+	if purpose != "" {
+		t.Fatalf("legacy row purpose = %q, want \"\"", purpose)
+	}
+}
+
+// TestPurposeRoundTrips proves a recorded purpose tag survives a write/read cycle
+// on a fresh database, and an unset purpose defaults to "".
+func TestPurposeRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Record(Call{SessionID: "s1", Workspace: "/w", Tool: "read_file", CalledAt: time.Now(), Success: true, Purpose: "deploy-fix"}); err != nil {
+		t.Fatalf("Record with purpose: %v", err)
+	}
+	if err := db.Record(Call{SessionID: "s2", Workspace: "/w", Tool: "read_file", CalledAt: time.Now(), Success: true}); err != nil {
+		t.Fatalf("Record without purpose: %v", err)
+	}
+	var withPurpose string
+	if err := db.db.QueryRow(`SELECT purpose FROM tool_calls WHERE session_id='s1'`).Scan(&withPurpose); err != nil {
+		t.Fatalf("scan s1 purpose: %v", err)
+	}
+	if withPurpose != "deploy-fix" {
+		t.Fatalf("s1 purpose = %q, want deploy-fix", withPurpose)
+	}
+	var noPurpose string
+	if err := db.db.QueryRow(`SELECT purpose FROM tool_calls WHERE session_id='s2'`).Scan(&noPurpose); err != nil {
+		t.Fatalf("scan s2 purpose: %v", err)
+	}
+	if noPurpose != "" {
+		t.Fatalf("s2 purpose = %q, want \"\"", noPurpose)
 	}
 }
 

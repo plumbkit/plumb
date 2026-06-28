@@ -70,6 +70,12 @@ type Info struct {
 	// session_id parameter. It is persisted so FindEnded can match a
 	// reconnecting agent to its previous session across plumb restarts.
 	ExternalID string `json:"external_id,omitempty"`
+	// Purpose is an optional human-readable tag set by the caller via
+	// session_start's purpose parameter (e.g. "deploy-fix"). It is purely
+	// descriptive, surfaced in the TUI, daemon_info, and workspace_sessions so an
+	// operator can tell concurrent sessions apart at a glance. Validated to
+	// alphanumeric + hyphen, max 32 characters; empty when unset.
+	Purpose string `json:"purpose,omitempty"`
 	// EndedAt is set by Unregister instead of deleting the file. A non-zero
 	// value means the session has ended; zero means it is still active.
 	EndedAt       time.Time `json:"ended_at,omitempty"`
@@ -254,6 +260,15 @@ func Touch(id string) {
 func SetExternalID(id, externalID string) {
 	Patch(id, func(info *Info) {
 		info.ExternalID = externalID
+	})
+}
+
+// SetPurpose persists the human-readable purpose tag on the session file.
+// The caller is expected to pass an already-validated value (see
+// NormalisePurpose); SetPurpose itself does no validation.
+func SetPurpose(id, purpose string) {
+	Patch(id, func(info *Info) {
+		info.Purpose = purpose
 	})
 }
 

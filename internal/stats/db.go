@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     tokens_saved          INTEGER NOT NULL DEFAULT 0,
     savings_model_version INTEGER NOT NULL DEFAULT 0,
     capability_tokens     INTEGER NOT NULL DEFAULT 0,
-    efficiency_tokens     INTEGER NOT NULL DEFAULT 0
+    efficiency_tokens     INTEGER NOT NULL DEFAULT 0,
+    purpose               TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -105,6 +106,9 @@ var migrations = []migration{
 	{from: 9, to: 10, addColumn: "savings_model_version", sql: `ALTER TABLE tool_calls ADD COLUMN savings_model_version INTEGER NOT NULL DEFAULT 0`},
 	{from: 10, to: 11, addColumn: "capability_tokens", sql: `ALTER TABLE tool_calls ADD COLUMN capability_tokens     INTEGER NOT NULL DEFAULT 0`},
 	{from: 11, to: 12, addColumn: "efficiency_tokens", sql: `ALTER TABLE tool_calls ADD COLUMN efficiency_tokens     INTEGER NOT NULL DEFAULT 0`},
+	// v13 adds the optional human-readable session purpose tag. Defaults to '',
+	// so every existing row reads as "no purpose set".
+	{from: 12, to: 13, addColumn: "purpose", sql: `ALTER TABLE tool_calls ADD COLUMN purpose               TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -191,7 +195,8 @@ func DBPathFor() string {
 //	10 — added savings_model_version column (tokens-saved redesign P0)
 //	11 — added capability_tokens column (tokens-saved redesign P0)
 //	12 — added efficiency_tokens column (tokens-saved redesign P0)
-const SchemaVersion = 12
+//	13 — added purpose column (session purpose-tagging)
+const SchemaVersion = 13
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
@@ -299,6 +304,10 @@ type Call struct {
 	SavingsModelVersion int
 	CapabilityTokens    int
 	EfficiencyTokens    int
+
+	// Purpose is the optional human-readable session purpose tag (e.g.
+	// "deploy-fix"), set via session_start. Empty when unset.
+	Purpose string
 }
 
 // maxStoredBytes caps the size of input_json and output_text stored per call.
@@ -315,8 +324,8 @@ func capString(s string) string {
 
 // insertCallSQL inserts one tool_calls row. Shared by Record and RecordBatch.
 const insertCallSQL = `INSERT INTO tool_calls
-	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // validateCall reports the required-field error for c, or nil when storable.
 func validateCall(c Call) error {
@@ -345,6 +354,7 @@ func callArgs(c Call) []any {
 		capString(c.InputJSON), capString(c.OutputText),
 		c.ClientName, c.ClientVersion,
 		c.TokensSaved, c.SavingsModelVersion, c.CapabilityTokens, c.EfficiencyTokens,
+		c.Purpose,
 	}
 }
 

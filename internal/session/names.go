@@ -66,6 +66,32 @@ func NormaliseName(name string) (string, error) {
 	return name, nil
 }
 
+// MaxPurposeLength is the longest accepted session purpose tag.
+const MaxPurposeLength = 32
+
+// NormalisePurpose validates an optional, human-readable session purpose tag and
+// returns the stored form. Purposes may contain ASCII letters (any case), digits,
+// and hyphens, up to MaxPurposeLength characters. Surrounding whitespace is
+// trimmed; case is preserved. An empty (or whitespace-only) input is valid and
+// normalises to "", meaning "no purpose set".
+func NormalisePurpose(purpose string) (string, error) {
+	purpose = strings.TrimSpace(purpose)
+	if purpose == "" {
+		return "", nil
+	}
+	if len(purpose) > MaxPurposeLength {
+		return "", fmt.Errorf("purpose is too long: max %d characters", MaxPurposeLength)
+	}
+	for _, r := range purpose {
+		isLetter := (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+		isDigit := r >= '0' && r <= '9'
+		if !isLetter && !isDigit && r != '-' {
+			return "", fmt.Errorf("purpose may contain only letters, digits, and hyphens; got '%c'", r)
+		}
+	}
+	return purpose, nil
+}
+
 var adjectives = []string{
 	"amber", "ancient", "arctic", "azure", "bold", "brave", "bright",
 	"bronze", "calm", "clever", "cobalt", "cool", "coral", "cosmic",

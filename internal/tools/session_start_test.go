@@ -865,3 +865,46 @@ func TestSessionStart_FullProfileNoNote(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionStart_PurposeValidAndPersisted(t *testing.T) {
+	ws := t.TempDir()
+	var got string
+	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		WithPurpose(func(p string) { got = p })
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"purpose":"deploy-fix"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got != "deploy-fix" {
+		t.Fatalf("persisted purpose = %q, want deploy-fix", got)
+	}
+}
+
+func TestSessionStart_PurposeInvalidRejected(t *testing.T) {
+	ws := t.TempDir()
+	called := false
+	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		WithPurpose(func(string) { called = true })
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"purpose":"bad purpose!"}`))
+	if err == nil {
+		t.Fatalf("expected error for invalid purpose")
+	}
+	if !strings.Contains(err.Error(), "invalid purpose") {
+		t.Fatalf("error = %v, want it to mention invalid purpose", err)
+	}
+	if called {
+		t.Fatalf("purpose callback must not run for an invalid value")
+	}
+}
+
+func TestSessionStart_EmptyPurposeIsNoOp(t *testing.T) {
+	ws := t.TempDir()
+	called := false
+	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		WithPurpose(func(string) { called = true })
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if called {
+		t.Fatalf("purpose callback must not run when no purpose supplied")
+	}
+}
