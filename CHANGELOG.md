@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.9.23 (unreleased)
+## 0.9.23 (2026-06-29)
 
-Open development cycle — entries land here as work merges.
+First tagged release. Automated cross-platform binaries — macOS (Intel + Apple Silicon) and Linux (Intel + ARM) — plus a Homebrew tap now ship from the release pipeline on every `v*` tag.
 
 ### Added
 
