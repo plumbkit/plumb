@@ -34,3 +34,30 @@ func TestEditFile_VersionGuardHint_OnlyForAnchoredBatch(t *testing.T) {
 		t.Errorf("rejected edit modified the file: %q", data)
 	}
 }
+
+// TestCheckExpectedVersion_HintSuppressedInStrict proves the reconcile hint is
+// shown only when it would actually help: in strict mode reconcile alone does not
+// satisfy checkStrictRead (a fresh read is still required), so the hint is omitted
+// to avoid a wasted round-trip.
+func TestCheckExpectedVersion_HintSuppressedInStrict(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.go")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+	a := editFileArgs{
+		Path:          path,
+		ExpectedMtime: time.Now().Add(-time.Hour).Format(time.RFC3339Nano),
+		Edits:         []strEdit{{OldStr: "hello", NewStr: "world"}},
+	}
+
+	err := checkExpectedVersion(path, a, false)
+	if err == nil || !strings.Contains(err.Error(), "reconcile: true") {
+		t.Fatalf("non-strict should include the reconcile hint, got: %v", err)
+	}
+
+	err = checkExpectedVersion(path, a, true)
+	if err == nil || strings.Contains(err.Error(), "reconcile: true") {
+		t.Fatalf("strict mode should suppress the reconcile hint, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "modified since you read it") {
+		t.Errorf("strict mode should still reject with the mismatch message, got: %v", err)
+	}
+}
