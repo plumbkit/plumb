@@ -42,6 +42,7 @@ type RenameSymbol struct {
 	guard    BoundaryGuard
 	ws       WorkspaceFn // may be nil; anchors a workspace-relative input uri to the pinned root
 	fallback *findReplaceTool
+	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
@@ -72,16 +73,23 @@ func (t *RenameSymbol) WithStructuralFallback(deps WriteDeps) *RenameSymbol {
 	return t
 }
 
+// WithShowWriteDiff wires the per-session show_write_diff resolver. Nil-safe;
+// when unset (e.g. in tests) the diff defaults on, matching the config default.
+func (t *RenameSymbol) WithShowWriteDiff(fn func() bool) *RenameSymbol {
+	t.showDiff = fn
+	return t
+}
+
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 
 func (*RenameSymbol) Description() string {
 	return `No native Claude Code equivalent. Rename a symbol throughout the workspace using LSP semantic refactoring.
 
-The language server identifies every reference (across all files) and produces a precise edit set. Plumb applies the edits atomically. Safer than text-based find-and-replace because it understands scope, shadowing, and types — won't rename unrelated identifiers that happen to share the name.
+The language server identifies every reference across all files and applies a precise edit set atomically. Safer than text find-and-replace: it understands scope, shadowing, and types, so it won't rename unrelated identifiers that share the name.
 
-Provide the cursor position on the identifier you want to rename. By default, runs in dry_run mode and returns a summary of files that would change. Set dry_run=false to actually apply the rename.
+Provide the cursor position on the identifier. Runs in dry_run mode by default; set dry_run=false to apply. The response appends a per-file unified diff (a preview in dry-run, the applied change otherwise), capped at 20 files, unless show_write_diff is disabled.
 
-If the language server cannot compute the rename (an error, or an empty edit set — common with sourcekit-lsp before the project's build graph resolves), the tool returns actionable guidance. Pass structural_fallback=true to additionally attempt a best-effort, identifier-boundary text rename via find_replace (still dry_run by default). The fallback is NOT scope-aware — it renames every whole-word occurrence of the identifier in same-extension files — so review the preview before applying.`
+If the language server cannot compute the rename (an error, or an empty edit set — common with sourcekit-lsp before the build graph resolves), pass structural_fallback=true to attempt a best-effort identifier-boundary text rename via find_replace (still dry_run by default). The fallback is NOT scope-aware — it renames every whole-word occurrence in same-extension files — so review the preview before applying.`
 }
 
 func (*RenameSymbol) InputSchema() json.RawMessage {
@@ -218,6 +226,13 @@ func (t *RenameSymbol) applyOrPreview(a renameSymbolArgs, we *protocol.Workspace
 	}
 	sort.Strings(files)
 
+	// Reconstruct the diff against the current on-disk content BEFORE applying,
+	// so the read bytes are the true "before" in both the dry-run and apply paths.
+	diff := ""
+	if resolveShowDiff(t.showDiff) {
+		diff = renameFileDiffs(we, files)
+	}
+
 	var sb strings.Builder
 	verb := "would change"
 	if !a.DryRun {
@@ -238,10 +253,61 @@ func (t *RenameSymbol) applyOrPreview(a renameSymbolArgs, we *protocol.Workspace
 	for _, f := range files {
 		fmt.Fprintf(&sb, "  %s\n", f)
 	}
+	if diff != "" {
+		sb.WriteString("\n")
+		sb.WriteString(diff)
+		sb.WriteString("\n")
+	}
 	if a.DryRun {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
 	return sb.String(), nil
+}
+
+// maxRenameDiffFiles caps the number of per-file diffs rendered in a
+// rename_symbol response; files beyond it are summarised, not diffed.
+const maxRenameDiffFiles = 20
+
+// renameFileDiffs renders a per-file unified diff for the WorkspaceEdit by
+// applying each file's TextEdits to a copy of its current on-disk bytes. It must
+// run BEFORE the edits land on disk so the read content is the true "before".
+// Files are rendered in the given (sorted) order, capped at maxRenameDiffFiles
+// with an "and N more file(s)" summary. Best-effort: a file that can't be read
+// or reconstructed is skipped (the rename itself is unaffected).
+func renameFileDiffs(we *protocol.WorkspaceEdit, files []string) string {
+	byPath := groupEditsByPath(we)
+	limit := len(files)
+	if limit > maxRenameDiffFiles {
+		limit = maxRenameDiffFiles
+	}
+	var sb strings.Builder
+	for _, path := range files[:limit] {
+		d := symbolEditsDiff(path, byPath[path])
+		if d == "" {
+			continue
+		}
+		sb.WriteString(d)
+		sb.WriteString("\n\n")
+	}
+	if len(files) > maxRenameDiffFiles {
+		fmt.Fprintf(&sb, "… and %d more file(s) (diff omitted; use file_diff)", len(files)-maxRenameDiffFiles)
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// groupEditsByPath collects every TextEdit in we keyed by filesystem path,
+// merging the Changes and DocumentChanges forms (matching applyWorkspaceEdit).
+func groupEditsByPath(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
+	byPath := make(map[string][]protocol.TextEdit)
+	for uri, edits := range we.Changes {
+		p := paths.URIToPath(uri)
+		byPath[p] = append(byPath[p], edits...)
+	}
+	for _, dce := range we.DocumentChanges {
+		p := paths.URIToPath(dce.TextDocument.URI)
+		byPath[p] = append(byPath[p], dce.Edits...)
+	}
+	return byPath
 }
 
 // structuralFallback performs a best-effort, identifier-boundary text rename via

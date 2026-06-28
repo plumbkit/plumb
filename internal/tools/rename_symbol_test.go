@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,125 @@ func TestRenameSymbol_StaleIndexError(t *testing.T) {
 	}
 	if !strings.Contains(msg, "find_replace") {
 		t.Errorf("expected find_replace fallback suggestion in error; got: %s", msg)
+	}
+}
+
+// renameEditFor builds a WorkspaceEdit replacing the "Foo" identifier on line 2
+// (char 5–8) of the standard test source with newText.
+func renameEditFor(path, newText string) *protocol.WorkspaceEdit {
+	return &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			"file://" + path: {
+				{
+					Range: protocol.Range{
+						Start: protocol.Position{Line: 2, Character: 5},
+						End:   protocol.Position{Line: 2, Character: 8},
+					},
+					NewText: newText,
+				},
+			},
+		},
+	}
+}
+
+func TestRenameSymbol_AppliedShowsDiff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{renameResult: renameEditFor(path, "Bar")}
+	tool := tools.NewRenameSymbol(mock, 0) // showDiff unwired → defaults on
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 5, "new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(out, "--- a/"+path) || !strings.Contains(out, "-func Foo() {}") || !strings.Contains(out, "+func Bar() {}") {
+		t.Errorf("expected applied unified diff; got: %s", out)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "func Bar() {}") {
+		t.Errorf("rename not applied: %s", got)
+	}
+}
+
+func TestRenameSymbol_DryRunShowsDiff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	src := "package p\n\nfunc Foo() {}\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{renameResult: renameEditFor(path, "Bar")}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 5, "new_name": "Bar", // dry_run defaults true
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(out, "DRY RUN") || !strings.Contains(out, "+func Bar() {}") {
+		t.Errorf("expected dry-run preview diff; got: %s", out)
+	}
+	if got, _ := os.ReadFile(path); string(got) != src {
+		t.Errorf("dry run must not modify the file; got: %s", got)
+	}
+}
+
+func TestRenameSymbol_ShowDiffGateOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{renameResult: renameEditFor(path, "Bar")}
+	tool := tools.NewRenameSymbol(mock, 0).WithShowWriteDiff(func() bool { return false })
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 5, "new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if strings.Contains(out, "--- a/") || strings.Contains(out, "@@") {
+		t.Errorf("show_write_diff=false must suppress the diff; got: %s", out)
+	}
+	if !strings.Contains(out, "changed") {
+		t.Errorf("expected the file summary even with the diff off; got: %s", out)
+	}
+}
+
+func TestRenameSymbol_MultiFileDiffTruncation(t *testing.T) {
+	dir := t.TempDir()
+	changes := map[string][]protocol.TextEdit{}
+	const nFiles = 25 // maxRenameDiffFiles (20) + 5 beyond the cap
+	for i := 0; i < nFiles; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("f%02d.go", i))
+		if err := os.WriteFile(p, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		changes["file://"+p] = []protocol.TextEdit{{
+			Range:   protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+			NewText: "Bar",
+		}}
+	}
+	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{Changes: changes}}
+	tool := tools.NewRenameSymbol(mock, 0)
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + filepath.Join(dir, "f00.go"), "line": 2, "character": 5, "new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(out, "and 5 more file(s)") {
+		t.Errorf("expected truncation summary for files beyond the cap; got tail: %s", out[max(0, len(out)-300):])
 	}
 }
 

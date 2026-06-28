@@ -140,7 +140,10 @@ func TestFullToolSet_Count(t *testing.T) {
 func TestLeanProfileBudget(t *testing.T) {
 	lean := payloadBytes(t, leanToolSet())
 	full := payloadBytes(t, append(leanToolSet(), nonLeanToolSet()...))
-	const maxRatio = 0.50 // lean must stay under half the full tools/list payload
+	// The lean set legitimately grew as heavyweight write tools gained steering
+	// (edit_file anchor-bounded mode, rename_symbol/find_replace unified diffs),
+	// so the cap has a little headroom over half the full tools/list payload.
+	const maxRatio = 0.52
 	ratio := float64(lean) / float64(full)
 	t.Logf("tools/list payload: lean=%d B, full=%d B (lean is %.0f%% of full)", lean, full, ratio*100)
 	if ratio > maxRatio {

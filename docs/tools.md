@@ -196,6 +196,10 @@ resolves), the tool returns actionable guidance. Pass `structural_fallback=true`
 to fall through to a best-effort, identifier-boundary text rename via
 `find_replace` (word-boundary match across same-extension files, honouring
 `dry_run`) — **not scope-aware**, so review the preview before applying.
+The response carries a per-file unified diff of the change — a preview in
+dry-run, the applied change otherwise — unless `show_write_diff` is disabled;
+diffs are capped at 20 files with an "and N more file(s)" summary. The
+structural-fallback path instead surfaces `find_replace`'s own match output.
 
 ### `replace_symbol_body`
 Replace a symbol's entire declaration. **Inputs:** `uri`, `name_path`,
