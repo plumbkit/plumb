@@ -40,7 +40,7 @@ archives:
       - README.md
       - CHANGELOG.md
 
-checksums:
+checksum:
   name_template: "checksums.txt"
 
 snapshot:
