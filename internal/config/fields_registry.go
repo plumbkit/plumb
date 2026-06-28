@@ -152,6 +152,40 @@ var registryData = []Field{
 		Description: "Minutes idle before the daemon force-closes a connection. 0 disables eviction.",
 	},
 
+	// --- Memory ---
+	{
+		Key: "memory.enabled", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "The memory.db FTS5 index. Off ⇒ search_memories uses grep only.",
+	},
+	{
+		Key: "memory.generated_summaries", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Rule-based episodic summaries (no LLM) written when a session goes idle.",
+	},
+	{
+		Key: "memory.inject_hints", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Append a \"[Hint: relevant memory …]\" block to path-bearing tool responses.",
+	},
+	{
+		Key: "memory.hint_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Byte cap on an injected hint block.",
+	},
+	{
+		Key: "memory.episodic_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Byte cap on the session_start \"last session\" summary.",
+	},
+	{
+		Key: "memory.max_hints", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Max memories hinted per response.",
+	},
+	{
+		Key: "memory.idle_summary_minutes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Idle threshold for episodic generation. 0 falls back to session.idle_threshold_minutes.",
+	},
+	{
+		Key: "memory.generated_memory_keep", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Newest episodic-* markdown memories retained per workspace. 0 disables pruning.",
+	},
+
 	// --- Workspace ---
 	{
 		Key: "workspace.auto_attach", Type: FieldBool, ReloadTier: ReloadNextSession,

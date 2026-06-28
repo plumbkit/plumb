@@ -72,6 +72,14 @@ const (
 	skAnalysers
 	skIdleThresholdMin
 	skEvictionTTLMin
+	skMemoryEnabled
+	skMemoryGeneratedSummaries
+	skMemoryInjectHints
+	skMemoryHintBudgetBytes
+	skMemoryEpisodicBudgetBytes
+	skMemoryMaxHints
+	skMemoryIdleSummaryMin
+	skMemoryGeneratedKeep
 	skPathStyle
 	skWebPort
 	skAgentConfigWrites
@@ -246,6 +254,15 @@ func buildSettingItems(cfg config.Config) []settingItem {
 
 		{group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes)},
 		{group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes)},
+
+		{group: "Memory", label: "Memory index", kind: settingToggle, key: skMemoryEnabled, value: onOff(cfg.Memory.Enabled)},
+		{group: "Memory", label: "Generated summaries", kind: settingToggle, key: skMemoryGeneratedSummaries, value: onOff(cfg.Memory.GeneratedSummaries)},
+		{group: "Memory", label: "Inject hints", kind: settingToggle, key: skMemoryInjectHints, value: onOff(cfg.Memory.InjectHints)},
+		{group: "Memory", label: "Hint budget (B)", kind: settingNumber, key: skMemoryHintBudgetBytes, value: itoa(cfg.Memory.HintBudgetBytes)},
+		{group: "Memory", label: "Episodic budget (B)", kind: settingNumber, key: skMemoryEpisodicBudgetBytes, value: itoa(cfg.Memory.EpisodicBudgetBytes)},
+		{group: "Memory", label: "Max hints", kind: settingNumber, key: skMemoryMaxHints, value: itoa(cfg.Memory.MaxHints)},
+		{group: "Memory", label: "Idle summary (min)", kind: settingNumber, key: skMemoryIdleSummaryMin, value: itoa(cfg.Memory.IdleSummaryMinutes)},
+		{group: "Memory", label: "Generated keep", kind: settingNumber, key: skMemoryGeneratedKeep, value: itoa(cfg.Memory.GeneratedMemoryKeep)},
 
 		{group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
 		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},

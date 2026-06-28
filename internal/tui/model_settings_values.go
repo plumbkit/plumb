@@ -112,21 +112,26 @@ var numberMetaTable = map[settingKey]struct {
 	step  int
 	label string
 }{
-	skRateLimit:             {10, "rate limit"},
-	skCacheMaxSize:          {100, "cache max_size"},
-	skWebPort:               {1, "web port"},
-	skPostWriteDiagMs:       {50, "post-write diag (ms)"},
-	skConcurrentSkewMs:      {25, "concurrent skew (ms)"},
-	skTopoMaxFileSize:       {65536, "max file size (B)"},
-	skTopoResyncBatch:       {25, "resync batch"},
-	skTopoResyncPauseMs:     {5, "resync pause (ms)"},
-	skTopoResyncIntervalMin: {5, "resync interval (min)"},
-	skQualityTimeoutMs:      {500, "quality timeout (ms)"},
-	skQualityMaxFindings:    {1, "max findings/file"},
-	skIdleThresholdMin:      {5, "idle threshold (min)"},
-	skEvictionTTLMin:        {5, "eviction ttl (min)"},
-	skChildScanDepth:        {1, "child scan depth"},
-	skSemRerankCandidates:   {10, "rerank candidates"},
+	skRateLimit:                 {10, "rate limit"},
+	skCacheMaxSize:              {100, "cache max_size"},
+	skWebPort:                   {1, "web port"},
+	skPostWriteDiagMs:           {50, "post-write diag (ms)"},
+	skConcurrentSkewMs:          {25, "concurrent skew (ms)"},
+	skTopoMaxFileSize:           {65536, "max file size (B)"},
+	skTopoResyncBatch:           {25, "resync batch"},
+	skTopoResyncPauseMs:         {5, "resync pause (ms)"},
+	skTopoResyncIntervalMin:     {5, "resync interval (min)"},
+	skQualityTimeoutMs:          {500, "quality timeout (ms)"},
+	skQualityMaxFindings:        {1, "max findings/file"},
+	skIdleThresholdMin:          {5, "idle threshold (min)"},
+	skEvictionTTLMin:            {5, "eviction ttl (min)"},
+	skChildScanDepth:            {1, "child scan depth"},
+	skSemRerankCandidates:       {10, "rerank candidates"},
+	skMemoryHintBudgetBytes:     {128, "hint budget (B)"},
+	skMemoryEpisodicBudgetBytes: {256, "episodic budget (B)"},
+	skMemoryMaxHints:            {1, "max hints"},
+	skMemoryIdleSummaryMin:      {5, "idle summary (min)"},
+	skMemoryGeneratedKeep:       {10, "generated keep"},
 }
 
 // numberMeta returns the adjust step and status label for a numeric setting.
@@ -138,7 +143,8 @@ func numberMeta(key settingKey) (int, string) {
 }
 
 // intField returns a pointer to the int config field a numeric row edits
-// (excluding the two bespoke ones and the int64 topology cap).
+// (excluding the two bespoke ones and the int64 topology cap). Split across two
+// functions to stay within the gocyclo-15 contract.
 func intField(c *config.Config, key settingKey) *int {
 	switch key {
 	case skRateLimit:
@@ -161,6 +167,13 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Quality.TimeoutMs
 	case skQualityMaxFindings:
 		return &c.Quality.MaxFindingsPerFile
+	default:
+		return intFieldMore(c, key)
+	}
+}
+
+func intFieldMore(c *config.Config, key settingKey) *int {
+	switch key {
 	case skIdleThresholdMin:
 		return &c.Session.IdleThresholdMinutes
 	case skEvictionTTLMin:
@@ -169,6 +182,16 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Workspace.ChildScanDepth
 	case skSemRerankCandidates:
 		return &c.Semantics.RerankCandidates
+	case skMemoryHintBudgetBytes:
+		return &c.Memory.HintBudgetBytes
+	case skMemoryEpisodicBudgetBytes:
+		return &c.Memory.EpisodicBudgetBytes
+	case skMemoryMaxHints:
+		return &c.Memory.MaxHints
+	case skMemoryIdleSummaryMin:
+		return &c.Memory.IdleSummaryMinutes
+	case skMemoryGeneratedKeep:
+		return &c.Memory.GeneratedMemoryKeep
 	default:
 		return nil
 	}
@@ -253,6 +276,12 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Workspace.AutoAttach
 	case skSemEnabled:
 		return &c.Semantics.Enabled
+	case skMemoryEnabled:
+		return &c.Memory.Enabled
+	case skMemoryGeneratedSummaries:
+		return &c.Memory.GeneratedSummaries
+	case skMemoryInjectHints:
+		return &c.Memory.InjectHints
 	default:
 		return nil
 	}
@@ -372,6 +401,19 @@ func toggleLabel(key settingKey) string {
 		return "workspace auto-attach"
 	case skSemEnabled:
 		return "semantics"
+	default:
+		return toggleLabelMore(key)
+	}
+}
+
+func toggleLabelMore(key settingKey) string {
+	switch key {
+	case skMemoryEnabled:
+		return "memory index"
+	case skMemoryGeneratedSummaries:
+		return "generated summaries"
+	case skMemoryInjectHints:
+		return "inject hints"
 	default:
 		return ""
 	}
