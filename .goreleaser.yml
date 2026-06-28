@@ -93,3 +93,27 @@ release:
     name: plumb
   draft: false
   prerelease: auto # tags like v0.9.0-rc1 are marked pre-release automatically
+  footer: |
+    ## Install
+
+    **Homebrew** (macOS + Linux):
+
+    ```sh
+    brew install plumbkit/plumb/plumb
+    ```
+
+    **Direct download:** grab the archive for your OS/arch below, extract it, and
+    put the `plumb` binary on your `PATH`.
+
+    | Platform | Archive |
+    |---|---|
+    | macOS, Apple Silicon (M-series) | `plumb_{{ .Version }}_darwin_arm64.tar.gz` |
+    | macOS, Intel | `plumb_{{ .Version }}_darwin_amd64.tar.gz` |
+    | Linux, Intel/AMD 64-bit | `plumb_{{ .Version }}_linux_amd64.tar.gz` |
+    | Linux, ARM 64-bit | `plumb_{{ .Version }}_linux_arm64.tar.gz` |
+
+    Verify your download against `checksums.txt`.
+
+    > **macOS note:** these binaries are not yet code-signed. On a direct download
+    > Gatekeeper may block the first run — clear the quarantine flag once:
+    > `xattr -dr com.apple.quarantine ./plumb`. Homebrew installs are unaffected.
