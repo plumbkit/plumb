@@ -45,7 +45,8 @@ type GetDefinition struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
-	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
+	topo    topologyStoreFn // may be nil; the by-name topology fallback when the LSP is unavailable
 }
 
 // NewGetDefinition creates a GetDefinition tool. Pass a nil cache to disable caching.
@@ -56,6 +57,17 @@ func NewGetDefinition(client lsp.Client, c *cache.Cache, ttl, timeout time.Durat
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
 func (t *GetDefinition) WithWorkspace(ws WorkspaceFn) *GetDefinition {
 	t.ws = ws
+	return t
+}
+
+// WithTopologyFallback wires the topology store so a by-name lookup degrades to
+// the tree-sitter index when the language server is unavailable (still warming,
+// or erroring) instead of surfacing the error. Approximate (declaration line,
+// not the precise definition), and only for the symbol_name path — a raw
+// position has no name to resolve against the index. Nil-safe. Returns the
+// receiver for chaining.
+func (t *GetDefinition) WithTopologyFallback(fn topologyStoreFn) *GetDefinition {
+	t.topo = fn
 	return t
 }
 
@@ -99,7 +111,23 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character)
 }
 
+// executeByName resolves a definition through the language server, falling back
+// to the topology index by name when any LSP step fails (the still-warming
+// server is the common case). The fallback fires only on a hard error, never on
+// an authoritative "no symbol named…" answer, so a working server's negative
+// result is never masked by a stale index hit.
 func (t *GetDefinition) executeByName(ctx context.Context, uri, name string) (string, error) {
+	result, err := t.lspDefinitionByName(ctx, uri, name)
+	if err != nil {
+		if fb, ok := topologyDefinitionFallback(t.topo, name); ok {
+			return fb, nil
+		}
+		return "", err
+	}
+	return result, nil
+}
+
+func (t *GetDefinition) lspDefinitionByName(ctx context.Context, uri, name string) (string, error) {
 	key := uri + ":docSymbols"
 	var syms []protocol.DocumentSymbol
 	if t.cache != nil {

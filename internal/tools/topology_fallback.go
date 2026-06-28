@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -78,6 +79,56 @@ func formatTopologyFill(header string, nodes []topology.Node) string {
 		fmt.Fprintf(&sb, "- %s (%s) at %s:%d\n", n.Name, string(n.Kind), n.Path, n.StartLine)
 	}
 	return sb.String()
+}
+
+// topologyDefinitionNote prefixes the get_definition fallback. It is deliberately
+// explicit that the location is the symbol's DECLARATION line found by name, not
+// the precise cursor target a language server would jump to: the index has no
+// position-level go-to-definition, only declaration sites.
+const topologyDefinitionNote = "[topology fallback — language server unavailable; located by symbol name, declaration line not cursor offset. source=topology, mode=indexed-approximate]"
+
+// topologyDefinitionFallback resolves name to its declaration site(s) in the
+// index and formats them, or returns ("", false) when topology is unavailable or
+// the name is unknown. get_definition uses it when the language server is
+// unavailable (still warming, or erroring): approximate — the declaration line,
+// not the exact definition the LSP would resolve — but it keeps navigation
+// working while the server warms. A dotted name (ReceiverType.MethodName) retries
+// on its final segment, mirroring the LSP name resolver.
+func topologyDefinitionFallback(fn topologyStoreFn, name string) (string, bool) {
+	store := activeTopology(fn)
+	if store == nil {
+		return "", false
+	}
+	ctx := context.Background()
+	nodes, err := store.ResolveNodes(ctx, name, topology.NodeHint{})
+	if err != nil || len(nodes) == 0 {
+		if base := symbolBaseSegment(name); base != name {
+			nodes, err = store.ResolveNodes(ctx, base, topology.NodeHint{})
+		}
+	}
+	if err != nil || len(nodes) == 0 {
+		return "", false
+	}
+	return formatTopologyDefinition(name, nodes), true
+}
+
+// formatTopologyDefinition renders a name-resolved definition fallback.
+func formatTopologyDefinition(name string, nodes []topology.Node) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s\nDeclaration of %q:\n\n", topologyDefinitionNote, name)
+	for _, n := range nodes {
+		fmt.Fprintf(&sb, "- %s (%s) at %s:%d\n", n.Name, string(n.Kind), n.Path, n.StartLine)
+	}
+	return sb.String()
+}
+
+// symbolBaseSegment returns the final dot-separated segment of name (the method
+// name in ReceiverType.MethodName), or name itself when undotted.
+func symbolBaseSegment(name string) string {
+	if i := strings.LastIndexByte(name, '.'); i >= 0 && i < len(name)-1 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // formatTopologyOutline renders a single-file outline fallback result.
