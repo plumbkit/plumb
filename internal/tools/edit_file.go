@@ -345,7 +345,7 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 		return &editLogicErr{fmt.Errorf("edit_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)}
 	}
-	if err := checkExpectedVersion(path, a); err != nil {
+	if err := checkExpectedVersion(path, a, t.isStrict()); err != nil {
 		return err
 	}
 	return t.checkStrictRead(path)
@@ -363,8 +363,11 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 // (see TestMultiSession_StaleExpectedMtime_Rejected). Instead, for an all-anchor-based
 // batch the rejection is made actionable: it names reconcile: true as the
 // one-call escape hatch for the single-agent edit→format→edit loop, so the agent
-// recovers without a blind retry while the safety contract stays intact.
-func checkExpectedVersion(path string, a editFileArgs) error {
+// recovers without a blind retry while the safety contract stays intact. The
+// hint is suppressed in strict mode, where reconcile alone is NOT enough —
+// checkStrictRead would still demand a fresh read — so pointing at reconcile there
+// would just cost an extra failed round-trip.
+func checkExpectedVersion(path string, a editFileArgs, strict bool) error {
 	if a.Reconcile {
 		return nil
 	}
@@ -372,7 +375,7 @@ func checkExpectedVersion(path string, a editFileArgs) error {
 	if err == nil {
 		return nil
 	}
-	if allAnchorBased(a.Edits) {
+	if !strict && allAnchorBased(a.Edits) {
 		err = fmt.Errorf("%w\n"+
 			"  If only a formatter changed the file since your read (the edit→format→edit loop), "+
 			"pass reconcile: true to apply against the current content — the exact-once old_string "+

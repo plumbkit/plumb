@@ -126,6 +126,42 @@ func TestRelocate_PublishedSchemaEnablesWrap(t *testing.T) {
 	}
 }
 
+// editLikeTolerantSchema is editLikeSchema with additionalProperties:true at both
+// levels — a stray key validates as-is there, so relocation must NOT fire.
+const editLikeTolerantSchema = `{
+  "type":"object",
+  "properties":{
+    "file_path":{"type":"string"},
+    "expected_mtime":{"type":"string"},
+    "edits":{"type":"array","items":{"type":"object",
+      "properties":{"old_string":{"type":"string"},"new_string":{"type":"string"}},
+      "required":["new_string"],"additionalProperties":true}}
+  },
+  "required":["file_path"],
+  "additionalProperties":true
+}`
+
+// TestRelocate_NotWhenLevelToleratesExtras locks in the invariant: relocation
+// fires only where a stray key would be hard-rejected. Under additionalProperties:
+// true the call validates as-is, so neither wrap nor hoist may touch it.
+func TestRelocate_NotWhenLevelToleratesExtras(t *testing.T) {
+	// Top-level tolerates extras → no wrap.
+	obj, _ := resolveOK(t, editLikeTolerantSchema, `{"file_path":"/x","old_string":"a","new_string":"b"}`)
+	if _, wrapped := obj["edits"]; wrapped {
+		t.Errorf("must not wrap under additionalProperties:true: %#v", obj)
+	}
+	if obj["old_string"] != "a" {
+		t.Errorf("stray key should be left in place, got %#v", obj["old_string"])
+	}
+
+	// Element tolerates extras → no hoist (expected_mtime stays nested).
+	obj2, _ := resolveOK(t, editLikeTolerantSchema,
+		`{"file_path":"/x","edits":[{"new_string":"b","expected_mtime":"T"}]}`)
+	if _, hoisted := obj2["expected_mtime"]; hoisted {
+		t.Errorf("must not hoist out of an additionalProperties:true element: %#v", obj2)
+	}
+}
+
 func hasWarning(warnings []string, sub string) bool {
 	for _, w := range warnings {
 		if strings.Contains(w, sub) {

@@ -9,12 +9,14 @@ import (
 // relocateMisplaced repairs a call that put a DECLARED parameter at the wrong
 // structural level — the parameter exists in the schema, just nested wrong. It
 // runs after alias/typo resolution and BEFORE validation, and only ever touches a
-// key that is unknown at its current level (one validation would otherwise
-// hard-reject as "unknown parameter"), so it can never alter a call that already
-// validates. Unlike the fuzzy corrector this is EXACT — the relocated key is the
-// declared parameter name verbatim, just at the wrong level — so there is no
-// guessing and the safety-critical gate is not needed. Two directions, both
-// warned:
+// key that is unknown at its current level AND at a level that rejects extras
+// (additionalProperties:false) — one validation would otherwise hard-reject as
+// "unknown parameter" — so it can never alter a call that already validates. A
+// level that tolerates extras (additionalProperties:true) is left untouched,
+// because there the stray key would have validated as-is. Unlike the fuzzy
+// corrector this is EXACT — the relocated key is the declared parameter name
+// verbatim, just at the wrong level — so there is no guessing and the safety-
+// critical gate is not needed. Two directions, both warned:
 //
 //   - hoist: a key inside an array element that is actually a top-level parameter
 //     (edit_file's expected_mtime sent inside an edits[] item) moves up.
@@ -39,7 +41,9 @@ func hoistFromArrayChildren(sh *shape, obj map[string]any, warnings *[]string) b
 	for k, isArray := range sh.arrays {
 		elemShape := sh.children[k]
 		list, ok := obj[k].([]any)
-		if !isArray || !ok || elemShape == nil {
+		// elemShape == nil is checked before !elemShape.rejectExtra so the latter
+		// never dereferences nil (|| short-circuits left to right).
+		if !isArray || !ok || elemShape == nil || !elemShape.rejectExtra {
 			continue
 		}
 		for _, e := range list {
@@ -111,6 +115,11 @@ func wrapIntoArrayChild(sh *shape, obj map[string]any, warnings *[]string) bool 
 // ("", nil). More than one array param is ambiguous; an already-supplied array
 // means a stray top-level key is a genuine error, not a misplacement.
 func singleAbsentArrayChild(sh *shape, obj map[string]any) (string, *shape) {
+	// Wrap is safe only where an un-wrapped stray key would be hard-rejected; under
+	// additionalProperties:true the call would validate as-is, so leave it alone.
+	if !sh.rejectExtra {
+		return "", nil
+	}
 	found := ""
 	for k, isArray := range sh.arrays {
 		if !isArray {
