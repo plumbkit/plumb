@@ -49,8 +49,75 @@ var paramAliases = map[string][]string{
 	// Move / copy.
 	"source":      {"from"},
 	"destination": {"to"},
+	// File content (write_file / write_memory).
+	"text":     {"content"},
+	"contents": {"content"},
+	"body":     {"content"},
+	// Read window.
+	"start": {"start_line"},
+	"end":   {"end_line"},
+	// Git.
+	"msg":           {"message"},
+	"commitmessage": {"message"},
+	"repository":    {"repo"},
+	"subcmd":        {"subcommand"},
 	// Workspace pin.
 	"workspacepath": {"workspace"},
+}
+
+// safetyCriticalParams names canonical parameters a fuzzy (edit-distance) match
+// must never auto-correct TO: a wrong guess here flips a side-effect or defeats a
+// guard, so an ambiguous typo is surfaced as a rejection ("did you mean") rather
+// than silently applied. The curated paramAliases table and the case/separator-
+// insensitive match are still allowed for these names — only edit-distance
+// guessing is gated, because those two are exact, not approximate.
+var safetyCriticalParams = map[string]bool{
+	"confirm":           true,
+	"use_regex":         true,
+	"replace_all":       true,
+	"allow_dir":         true,
+	"dirty_ok":          true,
+	"overwrite_changed": true,
+	"reconcile":         true,
+	"expected_mtime":    true,
+	"expected_sha":      true,
+	"subcommand":        true,
+	"force":             true,
+}
+
+// fuzzyCanonical promotes a high-confidence single-character typo of a declared
+// parameter to an auto-rewrite: a UNIQUE candidate at edit distance 1, currently
+// unset, not safety-critical, and a typed key long enough (≥4 runes) that a
+// distance-1 match is meaningful rather than coincidental. Anything looser — a
+// tie, distance ≥2, a short key, or a guarded target — returns false, so the
+// caller leaves the key for validation's "did you mean" rejection. This is the
+// approximate path canonicalFor deliberately refuses; it stays separate so the
+// curated alias resolution remains exact.
+func fuzzyCanonical(key string, sh *shape, obj map[string]any) (string, bool) {
+	if len([]rune(key)) < 4 {
+		return "", false
+	}
+	lowerKey := strings.ToLower(key)
+	best, bestDist, ties := "", -1, 0
+	for _, p := range sh.order {
+		d := levenshtein(lowerKey, strings.ToLower(p))
+		switch {
+		case bestDist == -1 || d < bestDist:
+			best, bestDist, ties = p, d, 1
+		case d == bestDist:
+			ties++
+		}
+	}
+	if bestDist != 1 || ties != 1 {
+		return "", false
+	}
+	if safetyCriticalParams[best] {
+		return "", false
+	}
+	if !eligible(best, sh, obj) {
+		return "", false
+	}
+	return best, true
 }
 
 // aliasNotice formats the leading note prepended to a tool result when one or
@@ -63,9 +130,9 @@ func aliasNotice(warnings []string) string {
 // canonicalFor resolves an unknown key to a canonical parameter of sh, or
 // returns ("", false). It tries the curated alias table first, then a
 // case/separator-insensitive match against the level's declared parameters. It
-// never guesses by edit distance — a fuzzy near-match is surfaced only as a
-// suggestion in the rejection error, never silently applied (especially for
-// side-effecting tools).
+// never guesses by edit distance — that approximate path lives in the separately
+// gated fuzzyCanonical (rewriteObject's second pass), so the curated resolution
+// here stays exact.
 func canonicalFor(key string, sh *shape, obj map[string]any) (string, bool) {
 	nk := normaliseKey(key)
 	for _, canon := range paramAliases[nk] {

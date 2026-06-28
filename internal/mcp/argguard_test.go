@@ -133,10 +133,41 @@ func TestResolveArgs(t *testing.T) {
 			wantArgsSub: []string{`"name":"Foo"`},
 		},
 		{
+			// distance 2 (transposition) — too far for fuzzy auto-correct, so it is
+			// still rejected, but close enough for the "did you mean" suggestion.
 			name:    "genuine unknown is rejected with a suggestion",
 			schema:  nameSchema,
-			args:    `{"namex": "x"}`,
-			wantErr: []string{`unknown parameter "namex"`, `did you mean "name"`, `valid parameters: name`},
+			args:    `{"naem": "x"}`,
+			wantErr: []string{`unknown parameter "naem"`, `did you mean "name"`, `valid parameters: name`},
+		},
+		{
+			// distance 1, unique, eligible — auto-corrected with a typo warning.
+			name:        "single-char typo is auto-corrected",
+			schema:      nameSchema,
+			args:        `{"namex": "Foo"}`,
+			wantWarn:    []string{`corrected likely typo "namex" to "name"`},
+			wantArgsSub: []string{`"name":"Foo"`},
+		},
+		{
+			// a fuzzy match must never auto-correct to a safety-critical parameter.
+			name:    "typo near a guarded param stays rejected",
+			schema:  `{"type":"object","properties":{"confirm":{"type":"boolean"}},"required":[],"additionalProperties":false}`,
+			args:    `{"confir": true}`,
+			wantErr: []string{`unknown parameter "confir"`},
+		},
+		{
+			// two params equidistant from the key — ambiguous, so no auto-correct.
+			name:    "ambiguous fuzzy tie stays rejected",
+			schema:  `{"type":"object","properties":{"name":{"type":"string"},"mane":{"type":"string"}},"required":[],"additionalProperties":false}`,
+			args:    `{"nane": "x"}`,
+			wantErr: []string{`unknown parameter "nane"`},
+		},
+		{
+			// short keys are not fuzzy-corrected (distance-1 is coincidental there).
+			name:    "short typo stays rejected",
+			schema:  `{"type":"object","properties":{"to":{"type":"string"}},"required":[],"additionalProperties":false}`,
+			args:    `{"go": "x"}`,
+			wantErr: []string{`unknown parameter "go"`},
 		},
 		{
 			name:    "missing required",
