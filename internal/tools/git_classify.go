@@ -49,6 +49,38 @@ func checkGitGlobalFlags(args []string) error {
 	return nil
 }
 
+// normaliseSwitchCreate rewrites `git switch -c/-C` to its long form
+// (--create/--force-create). git switch's short create flags collide with the
+// globally-denylisted -c/-C (the -c key=value config-injection and -C run-in-path
+// vectors), so a legitimate `git switch -c <branch>` is otherwise refused with
+// "flag -c is not permitted". The rewrite is a pure synonym — git treats -c and
+// --create identically — applied ONLY for the switch subcommand (where any -c in
+// args is unambiguously the create flag, never git's global config flag, which
+// can only precede the subcommand and so never reaches here) and only to a bare
+// flag token. Returns the possibly-rewritten args and a note when it acted.
+func normaliseSwitchCreate(sub string, args []string) ([]string, string) {
+	if sub != "switch" {
+		return args, ""
+	}
+	out := make([]string, len(args))
+	rewrote := false
+	for i, a := range args {
+		switch a {
+		case "-c":
+			out[i], rewrote = "--create", true
+		case "-C":
+			out[i], rewrote = "--force-create", true
+		default:
+			out[i] = a
+		}
+	}
+	if !rewrote {
+		return args, ""
+	}
+	return out, "# plumb-note: rewrote `git switch -c/-C` to its long form (--create/--force-create) — " +
+		"the short form collides with git's global -c/-C config flag, which plumb denies.\n"
+}
+
 // classifyGit maps a subcommand + args to a tier. Ambiguous subcommands
 // (branch, tag, stash, checkout, switch, restore) inspect their args; the
 // classification is safe-biased — when in doubt it returns the higher tier.

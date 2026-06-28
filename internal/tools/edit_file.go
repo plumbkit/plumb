@@ -356,14 +356,42 @@ func (t *EditFile) editFilePreconditions(ctx context.Context, path string, a edi
 // a failure as an edit-logic error so the retry loop never re-attempts it. Both
 // guards are skipped when reconcile is set, so the edit applies against current
 // content relying on the exact-once match.
+//
+// A mismatch is NOT auto-reconciled: an explicit version guard is deliberate
+// optimistic-concurrency control, and a stale guard whose anchor still matches a
+// peer's concurrent change is exactly the clobber the guard exists to prevent
+// (see TestMultiSession_StaleExpectedMtime_Rejected). Instead, for an all-anchor-based
+// batch the rejection is made actionable: it names reconcile: true as the
+// one-call escape hatch for the single-agent edit→format→edit loop, so the agent
+// recovers without a blind retry while the safety contract stays intact.
 func checkExpectedVersion(path string, a editFileArgs) error {
 	if a.Reconcile {
 		return nil
 	}
-	if err := verifyExpectedVersion("edit_file", path, a.ExpectedMtime, a.ExpectedSha); err != nil {
-		return &editLogicErr{err}
+	err := verifyExpectedVersion("edit_file", path, a.ExpectedMtime, a.ExpectedSha)
+	if err == nil {
+		return nil
 	}
-	return nil
+	if allAnchorBased(a.Edits) {
+		err = fmt.Errorf("%w\n"+
+			"  If only a formatter changed the file since your read (the edit→format→edit loop), "+
+			"pass reconcile: true to apply against the current content — the exact-once old_string "+
+			"match keeps the edit safe; if a peer may have changed it, re-read instead", err)
+	}
+	return &editLogicErr{err}
+}
+
+// allAnchorBased reports whether every edit uses an exact-once old_string anchor
+// (str_replace mode) rather than a line range. Only such a batch is safe to
+// reconcile — the unique match proves the region is intact — so the reconcile
+// hint is offered only then.
+func allAnchorBased(edits []strEdit) bool {
+	for _, e := range edits {
+		if e.StartLine != 0 || e.OldStr == "" {
+			return false
+		}
+	}
+	return len(edits) > 0
 }
 
 // checkStrictRead enforces strict mode: the file must have been read in this

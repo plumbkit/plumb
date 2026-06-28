@@ -102,6 +102,10 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := a.validate(); err != nil {
 		return "", err
 	}
+	// Accept `git switch -c/-C` by rewriting to --create/--force-create before the
+	// global-flag denylist (which otherwise refuses the colliding -c/-C).
+	newArgs, switchNote := normaliseSwitchCreate(a.Subcommand, a.Args)
+	a.Args = newArgs
 	if err := checkGitGlobalFlags(a.Args); err != nil {
 		return "", err
 	}
@@ -135,7 +139,11 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	}
 	// runGit serialises every non-read tier; a read (status/log/diff) must
 	// never queue behind a slow commit.
-	return runGit(ctx, a.Repo, a.Subcommand, argv, tier)
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier)
+	if err != nil {
+		return "", err
+	}
+	return switchNote + out, nil
 }
 
 // defaultRepo returns repo, or the session workspace when repo is empty.

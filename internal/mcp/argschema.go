@@ -85,7 +85,7 @@ func relaxObject(schema json.RawMessage, targets map[string]struct{}) (json.RawM
 		return schema, false
 	}
 
-	changed := dropAliasTargetsFromRequired(fields, targets)
+	changed := dropPublishedRequired(fields, requiredDropSet(targets, fields["properties"]))
 
 	if raw, ok := fields["additionalProperties"]; !ok || !bytes.Equal(bytes.TrimSpace(raw), []byte("true")) {
 		fields["additionalProperties"] = json.RawMessage("true")
@@ -109,10 +109,54 @@ func relaxObject(schema json.RawMessage, targets map[string]struct{}) (json.RawM
 	return out, true
 }
 
-// dropAliasTargetsFromRequired removes alias-target names from the `required`
-// array, deleting the key entirely when nothing remains. Returns whether it
-// changed anything.
-func dropAliasTargetsFromRequired(fields map[string]json.RawMessage, targets map[string]struct{}) bool {
+// requiredDropSet is the set of property names to drop from the PUBLISHED
+// `required` list: alias targets (the field may arrive under a different name)
+// PLUS array-of-object parameters. The daemon can synthesise the latter from
+// misplaced top-level keys (the wrap recovery in argrelocate.go), so a client
+// must not pre-reject a call for a "missing" edits/operations array before the
+// daemon rebuilds it. The server-side strict schema still requires every
+// original field, so the real contract is unchanged.
+func requiredDropSet(targets map[string]struct{}, props json.RawMessage) map[string]struct{} {
+	out := make(map[string]struct{}, len(targets))
+	for k := range targets {
+		out[k] = struct{}{}
+	}
+	for name := range arrayObjectPropNames(props) {
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+// arrayObjectPropNames returns the names of properties that are arrays whose
+// items are objects (the shape the wrap recovery can synthesise).
+func arrayObjectPropNames(props json.RawMessage) map[string]struct{} {
+	out := map[string]struct{}{}
+	order, schemas, err := objectProps(props)
+	if err != nil {
+		return out
+	}
+	for _, k := range order {
+		var raw struct {
+			Type  string          `json:"type"`
+			Items json.RawMessage `json:"items"`
+		}
+		if json.Unmarshal(schemas[k], &raw) != nil || raw.Type != "array" || len(bytes.TrimSpace(raw.Items)) == 0 {
+			continue
+		}
+		var it struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw.Items, &it) == nil && it.Type == "object" {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
+// dropPublishedRequired removes the named properties from the `required` array,
+// deleting the key entirely when nothing remains. Returns whether it changed
+// anything.
+func dropPublishedRequired(fields map[string]json.RawMessage, drop map[string]struct{}) bool {
 	raw, ok := fields["required"]
 	if !ok {
 		return false
@@ -123,7 +167,7 @@ func dropAliasTargetsFromRequired(fields map[string]json.RawMessage, targets map
 	}
 	kept := make([]string, 0, len(req))
 	for _, r := range req {
-		if _, isTarget := targets[r]; !isTarget {
+		if _, dropped := drop[r]; !dropped {
 			kept = append(kept, r)
 		}
 	}
