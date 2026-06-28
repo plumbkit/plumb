@@ -141,7 +141,7 @@ func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) 
 		want[d] = true
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path,
+		SELECT n.id, n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path,
 		       n.has_bytes, n.start_byte, n.end_byte, n.start_col, n.end_col, n.doc_start_byte, n.doc_end_byte
 		FROM topology_nodes n
 		JOIN topology_files f ON f.id = n.file_id
@@ -155,7 +155,7 @@ func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) 
 		var n Node
 		var kind string
 		var hasBytes int
-		if scanErr := rows.Scan(&kind, &n.Name, &n.Qualified, &n.Signature,
+		if scanErr := rows.Scan(&n.ID, &kind, &n.Name, &n.Qualified, &n.Signature,
 			&n.StartLine, &n.EndLine, &n.Language, &n.Path,
 			&hasBytes, &n.StartByte, &n.EndByte, &n.StartCol, &n.EndCol, &n.DocStartByte, &n.DocEndByte); scanErr != nil {
 			continue

@@ -61,6 +61,55 @@ func TestTopologyAffected_ColocatedTests(t *testing.T) {
 	}
 }
 
+// TestTopologyAffected_MultipleColocatedTests is the regression for #87: when a
+// seeded directory holds more than one test, all of them must surface. The bug
+// was that TestsInDirs left Node.ID == 0 on every row, so the caller's
+// g.seen[n.ID] dedup collapsed every co-located test onto key 0 and emitted only
+// the first. Three tests across two sibling files must all appear.
+func TestTopologyAffected_MultipleColocatedTests(t *testing.T) {
+	ws := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(ws, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("demo.go", "package demo\n\nfunc HandleRequest() {}\n")
+	// None of these call HandleRequest — only co-location can find them.
+	write("demo_test.go", "package demo\n\nimport \"testing\"\n\nfunc TestAlpha(t *testing.T) {}\n\nfunc TestBeta(t *testing.T) {}\n")
+	write("more_test.go", "package demo\n\nimport \"testing\"\n\nfunc TestGamma(t *testing.T) {}\n")
+
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n1, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "demo.go"))
+		n2, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "demo_test.go"))
+		n3, _ := s.SymbolsInFile(context.Background(), filepath.Join(ws, "more_test.go"))
+		if len(n1) > 0 && len(n2) > 0 && len(n3) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := tools.NewTopologyAffected(func() *topology.Store { return s })
+	args, _ := json.Marshal(map[string]any{"symbols": []string{"HandleRequest"}})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"TestAlpha", "TestBeta", "TestGamma"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("co-located test %s should be flagged (regression #87); got:\n%s", name, out)
+		}
+	}
+}
+
 // TestTopologyAffected_FileRootSeedsColocation proves the files: input path:
 // a changed file resolved by its exact path (SymbolsInFile, not an FTS5
 // path-string search) seeds its directory, so co-located sibling tests surface
