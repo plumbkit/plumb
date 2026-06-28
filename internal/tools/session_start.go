@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/session"
 )
 
 // session_start is split across files by concern: the orientation-packet
@@ -28,6 +30,10 @@ var sessionStartSchema = json.RawMessage(`{
     "language": {
       "type": "string",
       "description": "Optional override for the workspace's primary language when automatic detection cannot infer it — e.g. an Xcode app that has .swift sources but no SwiftPM Package.swift, so no root marker resolves. Pass the [lsp.<lang>] key (e.g. 'swift', 'typescript', 'rust') to force that language server as the primary, so workspace_symbols and the call/type hierarchies work. The server must be installed and enabled; an unknown, uninstalled, or disabled language is ignored and normal detection applies. Honoured on the connection's current workspace, or alongside an explicit 'workspace' arg."
+    },
+    "purpose": {
+      "type": "string",
+      "description": "Optional human-readable tag describing what this session is for (e.g. 'deploy-fix', 'feature-auth'). Surfaced in the TUI session list, daemon_info, and workspace_sessions so an operator can tell concurrent sessions apart. Allowed characters: letters, digits, and hyphens; max 32 characters. An invalid value is rejected with a clear error."
     }
   },
   "additionalProperties": false
@@ -82,6 +88,7 @@ type SessionStart struct {
 	episodicFn   func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
 	toolProfile  func() (profile string, hidden int)                                   // may be nil; the resolved tool profile + count of tools hidden from tools/list
 	lspWarmingFn func() (bool, time.Duration)                                          // may be nil; reports whether the primary LSP is still warming + elapsed
+	purposeFn    func(purpose string)                                                  // may be nil; persists a validated session purpose tag
 }
 
 // WithToolProfile wires an accessor returning the connection's resolved tool
@@ -186,6 +193,15 @@ func (t *SessionStart) WithRepin(fn func(ctx context.Context, workspace, languag
 	return t
 }
 
+// WithPurpose wires the callback that persists a validated session purpose tag
+// (set on the session record and stamped on this session's stats rows). Nil-safe:
+// with no callback wired, a supplied purpose is validated but not persisted.
+// Returns the receiver for chaining.
+func (t *SessionStart) WithPurpose(fn func(purpose string)) *SessionStart {
+	t.purposeFn = fn
+	return t
+}
+
 // lspAttached reports whether a language server is attached for this session.
 func (t *SessionStart) lspAttached() bool {
 	return t.lspLangFn != nil && t.lspLangFn() != ""
@@ -242,6 +258,9 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
+	if err := t.applyPurpose(raw); err != nil {
+		return "", err
+	}
 	var inheritedName string
 	if t.externalIDFn != nil {
 		var a struct {
@@ -284,6 +303,28 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)
 	return sb.String(), nil
+}
+
+// applyPurpose validates an optional `purpose` argument and, when valid and
+// non-empty, persists it via the wired callback. An invalid purpose is rejected
+// with a clear error rather than silently dropped, so a malformed tag is a loud
+// caller-side bug. A missing or empty purpose is a no-op (the session keeps any
+// previously-set tag).
+func (t *SessionStart) applyPurpose(raw json.RawMessage) error {
+	var a struct {
+		Purpose string `json:"purpose"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil || a.Purpose == "" {
+		return nil
+	}
+	purpose, err := session.NormalisePurpose(a.Purpose)
+	if err != nil {
+		return fmt.Errorf("session_start: invalid purpose: %w", err)
+	}
+	if purpose != "" && t.purposeFn != nil {
+		t.purposeFn(purpose)
+	}
+	return nil
 }
 
 // resolveSessionWorkspace resolves the workspace for this call. repinnedFrom is

@@ -32,7 +32,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
-| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 12); also holds the `episodic_memories` table for idle-session summaries |
+| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 13); also holds the `episodic_memories` table for idle-session summaries |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
 | `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter, many languages) + canonical-grammar WASM via wazero for TypeScript/TSX/JSX + Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
@@ -219,7 +219,7 @@ conversation, so global state lives in one file keyed by `workspace` and
 
 | Database | Scope | Location (Linux / macOS) | Tables | Lifecycle |
 |---|---|---|---|---|
-| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 12) |
+| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 13) |
 | `topology.db` | **Per project** | `<workspace>/.plumb/` | `topology_files`, `topology_nodes`, `topology_edges`, `topology_fts`, `topology_embeddings` | Rebuildable index; dropped & recreated on a version bump |
 | `memory.db` | **Per project** | `<workspace>/.plumb/` | `memory_files`, `memory_records`, `memory_fts` | Rebuildable index over the markdown memories |
 
@@ -269,7 +269,8 @@ CREATE TABLE tool_calls (
     tokens_saved          INTEGER NOT NULL DEFAULT 0,  -- counterfactual savings total
     savings_model_version INTEGER NOT NULL DEFAULT 0,  -- scoring-model version (0 = pre-redesign, excluded)
     capability_tokens     INTEGER NOT NULL DEFAULT 0,  -- work a thin client couldn't do natively
-    efficiency_tokens     INTEGER NOT NULL DEFAULT 0   -- fewer tokens for the same result
+    efficiency_tokens     INTEGER NOT NULL DEFAULT 0,  -- fewer tokens for the same result
+    purpose               TEXT    NOT NULL DEFAULT ''  -- optional session purpose tag (session.Info.Purpose)
 );
 CREATE INDEX idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX idx_tc_called_at ON tool_calls(called_at);

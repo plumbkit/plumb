@@ -24,6 +24,15 @@ type daemonInfo struct {
 	daemonVersion string
 	startedAt     time.Time
 	configStatus  func() ConfigStatus // optional; nil when no store is wired
+	purpose       func() string       // optional; nil when no purpose accessor is wired
+}
+
+// WithPurpose wires an accessor returning this session's human-readable purpose
+// tag ("" when unset). Nil-safe: when unset or returning empty, daemon_info omits
+// the purpose line. Returns the receiver for chaining.
+func (t *daemonInfo) WithPurpose(fn func() string) *daemonInfo {
+	t.purpose = fn
+	return t
 }
 
 // WithConfigStatus wires a provider for live config-store state (generation,
@@ -90,6 +99,11 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 		t.startedAt.Format(time.RFC3339),
 		upStr,
 	)
+	if t.purpose != nil {
+		if p := t.purpose(); p != "" {
+			out += fmt.Sprintf("\npurpose:        %s", p)
+		}
+	}
 	if t.configStatus != nil {
 		cs := t.configStatus()
 		restart := "no"

@@ -81,10 +81,19 @@ names/descriptions, top-5 tool usage, 5 recently-modified files, 3 recent
 commits, the live git tool policy (whether commits/destructive/push are
 enabled), and active diagnostics. Idempotent.
 **Inputs:** `workspace` (string, optional — defaults to the daemon's resolved
-workspace, then a cwd walk).
+workspace, then a cwd walk); `language` (string, optional — force the primary
+LSP language when detection cannot infer it); `session_id` (string, optional —
+links the plumb session to the caller's own session for name inheritance);
+`purpose` (string, optional — a human-readable tag for this session, e.g.
+`deploy-fix`; letters, digits, and `-` only, max 32 chars; surfaced in the TUI
+session list, `daemon_info`, and `workspace_sessions`. An invalid value is
+rejected with a clear error).
 
 ### `daemon_info`
-Current session name and ID, daemon version, start time, and uptime; live config-store state (generation, last reload time, whether a restart is needed); and this session's tool-call count plus its slowest calls (per-call durations from recorded stats).
+Current session name and ID, daemon version, start time, and uptime; the
+session's `purpose` tag when set; live config-store state (generation, last
+reload time, whether a restart is needed); and this session's tool-call count
+plus its slowest calls (per-call durations from recorded stats).
 **Inputs:** none.
 
 ### `rename_session`
@@ -102,8 +111,9 @@ recent-write entries to return.
 **Output sections:**
 - `you` — this session's name.
 - `active_sessions` — sessions currently connected to this workspace with their
-  client identity and idle status. A single session with `is_self=true` means
-  you are the only agent here — your view of the workspace is authoritative.
+  client identity, optional `purpose` tag, and idle status. A single session with
+  `is_self=true` means you are the only agent here — your view of the workspace is
+  authoritative.
 - `recent_writes` — the last N write/edit/rename/git/… operations by any
   session on this workspace, showing the session name, tool, relative file path,
   and age. If a file you are about to edit appears here, re-read it first.

@@ -276,5 +276,6 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		CapabilityTokens:    saved.Capability,
 		EfficiencyTokens:    saved.Efficiency,
 		SavingsModelVersion: clientcaps.ModelVersion,
+		Purpose:             v.purpose,
 	})
 }

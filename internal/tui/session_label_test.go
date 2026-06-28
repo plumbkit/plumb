@@ -106,3 +106,21 @@ func TestIdleThreshold_FallsBackToConst(t *testing.T) {
 		t.Errorf("idleThreshold(10) = %v, want 10m", got)
 	}
 }
+
+func TestSessionPurposeTag(t *testing.T) {
+	tests := []struct {
+		name string
+		info session.Info
+		want string
+	}{
+		{"empty purpose renders nothing", session.Info{Name: "wild-otter"}, ""},
+		{"purpose renders as suffix", session.Info{Name: "wild-otter", Purpose: "deploy-fix"}, " · deploy-fix"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionPurposeTag(tt.info); got != tt.want {
+				t.Fatalf("sessionPurposeTag = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

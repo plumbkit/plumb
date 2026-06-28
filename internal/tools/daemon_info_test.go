@@ -52,6 +52,30 @@ func TestDaemonInfo_RestartNeededNo(t *testing.T) {
 	}
 }
 
+func TestDaemonInfo_IncludesPurposeWhenSet(t *testing.T) {
+	d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now()).
+		WithPurpose(func() string { return "deploy-fix" })
+	out, err := d.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "purpose:        deploy-fix") {
+		t.Errorf("expected purpose line:\n%s", out)
+	}
+}
+
+func TestDaemonInfo_OmitsPurposeWhenEmpty(t *testing.T) {
+	d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now()).
+		WithPurpose(func() string { return "" })
+	out, err := d.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(out, "purpose:") {
+		t.Errorf("purpose line should be omitted when empty:\n%s", out)
+	}
+}
+
 // TestRunWithTimeout_ReturnsResultBeforeTimeout verifies the happy path:
 // a fast producer's value is returned, not the sentinel.
 func TestRunWithTimeout_ReturnsResultBeforeTimeout(t *testing.T) {

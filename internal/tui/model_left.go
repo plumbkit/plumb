@@ -55,6 +55,7 @@ func (m Model) leftLines() []string {
 		if sessionIsIdle(s, idleThreshold(m.settingsCfg.Session.IdleThresholdMinutes)) {
 			firstLine += " ~"
 		}
+		firstLine += sessionPurposeTag(s)
 		path := "resolving…"
 		if s.Folder != "" {
 			// Subtract one extra so the rendered line stays within m.leftWidth-1
@@ -93,6 +94,16 @@ func leftSessionRowLines(firstLine, secondLine string, selected, lf bool) []stri
 		return []string{ItemStyle.Render(firstLine), MutedStyle.Render(secondLine)}
 	}
 	return []string{FadedStyle.Render(firstLine), FadedStyle.Render(secondLine)}
+}
+
+// sessionPurposeTag renders a session's optional human-readable purpose tag as
+// an unobtrusive " · <purpose>" suffix, or "" when no purpose is set. The row's
+// own style is applied by the caller, so no styling is done here.
+func sessionPurposeTag(s session.Info) string {
+	if s.Purpose == "" {
+		return ""
+	}
+	return " · " + s.Purpose
 }
 
 // idleThreshold converts the configured minute value to a duration, falling

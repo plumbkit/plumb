@@ -53,7 +53,11 @@ type sessionView struct {
 	clientName    string
 	clientVersion string
 	sessName      string
-	lastCfgMtime  time.Time
+	// purpose is the optional human-readable session tag set via session_start's
+	// purpose arg. Descriptive only; stamped on this session's stats rows and
+	// surfaced by daemon_info. "" when unset.
+	purpose      string
+	lastCfgMtime time.Time
 	// boundBudgetKey is the (client, workspace) key of the shared write budget
 	// this session currently holds a reference on (see sharedBudgets), or "" when
 	// none is held. Released and re-acquired on re-pin, released on close, so a
@@ -324,6 +328,19 @@ func (s *connSession) lspWarming() (bool, time.Duration) {
 // sessionName returns the current human-readable session name.
 func (s *connSession) sessionName() string {
 	return s.view().sessName
+}
+
+// sessionPurpose returns the current session purpose tag ("" when unset).
+func (s *connSession) sessionPurpose() string {
+	return s.view().purpose
+}
+
+// setPurpose records a validated session purpose tag on the live session view
+// and persists it to the session file so the TUI and workspace_sessions surface
+// it. Subsequent stats rows for this session carry the tag.
+func (s *connSession) setPurpose(purpose string) {
+	s.mutate(func(v *sessionView) { v.purpose = purpose })
+	session.SetPurpose(s.sessID, purpose)
 }
 
 // renameSession renames the session, persisting the new name in the session

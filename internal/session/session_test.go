@@ -460,3 +460,64 @@ func TestList_SortedByStartedAt(t *testing.T) {
 		t.Error("sessions not sorted by StartedAt ascending")
 	}
 }
+
+func TestNormalisePurpose(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"empty is valid no-op", "", "", false},
+		{"whitespace trims to empty", "   ", "", false},
+		{"simple tag", "deploy-fix", "deploy-fix", false},
+		{"alphanumeric and hyphen", "feature-auth-2", "feature-auth-2", false},
+		{"case preserved", "Deploy-Fix", "Deploy-Fix", false},
+		{"surrounding whitespace trimmed", "  deploy  ", "deploy", false},
+		{"max length ok", strings.Repeat("a", 32), strings.Repeat("a", 32), false},
+		{"too long rejected", strings.Repeat("a", 33), "", true},
+		{"space inside rejected", "deploy fix", "", true},
+		{"underscore rejected", "deploy_fix", "", true},
+		{"slash rejected", "deploy/fix", "", true},
+		{"non-ascii rejected", "déploy", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := session.NormalisePurpose(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("NormalisePurpose(%q) = %q, want error", tt.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NormalisePurpose(%q): unexpected error %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Fatalf("NormalisePurpose(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSetPurposePersists(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	id, err := session.Register(session.Info{Language: "go", Folder: "/a", Adapter: "gopls"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	defer session.Unregister(id)
+
+	session.SetPurpose(id, "deploy-fix")
+
+	sessions, err := session.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Purpose != "deploy-fix" {
+		t.Fatalf("Purpose = %q, want deploy-fix", sessions[0].Purpose)
+	}
+}
