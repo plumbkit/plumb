@@ -769,3 +769,116 @@ func TestFindReplace_FormatterCmd(t *testing.T) {
 		}
 	}
 }
+
+func TestFindReplace_ShowWriteDiff_PreviewIncludesDiff(t *testing.T) {
+	dir := setupReplaceTree(t)
+	tool := NewFindReplace(WriteDeps{ShowWriteDiff: true})
+
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "TODO",
+		"replacement": "DONE",
+		"dry_run":     true,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "DRY RUN") {
+		t.Fatalf("expected dry-run banner; got:\n%s", out)
+	}
+	if !strings.Contains(out, "@@") {
+		t.Errorf("expected a unified-diff hunk header in preview output; got:\n%s", out)
+	}
+	if !strings.Contains(out, "-// TODO: fix this") || !strings.Contains(out, "+// DONE: fix this") {
+		t.Errorf("expected the replaced line in the diff; got:\n%s", out)
+	}
+	// Dry-run must not have written anything.
+	got, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if strings.Contains(string(got), "DONE") {
+		t.Errorf("dry-run must not write; file was modified:\n%s", got)
+	}
+}
+
+func TestFindReplace_ShowWriteDiff_AppliedIncludesDiff(t *testing.T) {
+	dir := setupReplaceTree(t)
+	tool := NewFindReplace(WriteDeps{
+		ShowWriteDiff: true,
+		Limiter:       NewRateLimiter(10, time.Minute),
+	})
+
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "TODO",
+		"replacement": "DONE",
+		"dry_run":     false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "@@") {
+		t.Errorf("expected a unified-diff hunk header in applied output; got:\n%s", out)
+	}
+	if !strings.Contains(out, "+// DONE: fix this") {
+		t.Errorf("expected the replaced line in the diff; got:\n%s", out)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.go"))
+	if !strings.Contains(string(got), "DONE") {
+		t.Errorf("applied mode should have written the change; got:\n%s", got)
+	}
+}
+
+func TestFindReplace_ShowWriteDiff_OffSuppressesDiff(t *testing.T) {
+	dir := setupReplaceTree(t)
+	tool := NewFindReplace(WriteDeps{ShowWriteDiff: false})
+
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "TODO",
+		"replacement": "DONE",
+		"dry_run":     true,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "@@") {
+		t.Errorf("expected no diff when show_write_diff is off; got:\n%s", out)
+	}
+	// The file summary list is still present.
+	if !strings.Contains(out, "(1)") {
+		t.Errorf("expected the per-file replacement summary; got:\n%s", out)
+	}
+}
+
+func TestFindReplace_ShowWriteDiff_TruncationSummary(t *testing.T) {
+	dir := t.TempDir()
+	const total = maxFindReplaceDiffFiles + 5
+	for i := range total {
+		name := filepath.Join(dir, fmt.Sprintf("f%03d.txt", i))
+		if err := os.WriteFile(name, []byte("alpha\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := NewFindReplace(WriteDeps{ShowWriteDiff: true})
+
+	args, _ := json.Marshal(map[string]any{
+		"path":        dir,
+		"pattern":     "alpha",
+		"replacement": "beta",
+		"dry_run":     true,
+		"max_files":   total,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "+5 more file(s)") {
+		t.Errorf("expected a truncation summary for %d files; got:\n%s", total, out)
+	}
+	// Each rendered diff carries exactly one "--- a/" file header.
+	if n := strings.Count(out, "--- a/"); n != maxFindReplaceDiffFiles {
+		t.Errorf("expected exactly %d rendered diffs, got %d; out:\n%s", maxFindReplaceDiffFiles, n, out)
+	}
+}
