@@ -345,6 +345,35 @@ func TestSettingsGenericNumber_Persists(t *testing.T) {
 	}
 }
 
+// TestSettingsMemoryRows_Persist exercises the [memory] rows: a bool toggle and
+// a number step, confirming they flow through the shared field mappers.
+func TestSettingsMemoryRows_Persist(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newSettingsModel()
+
+	// Toggle a memory bool (inject_hints defaults on → off).
+	m.settingsCursor = cursorFor(m.settingsItems, skMemoryInjectHints)
+	start := m.settingsCfg.Memory.InjectHints
+	m, _ = m.adjustSetting(1)
+	if got := m.settingsCfg.Memory.InjectHints; got == start {
+		t.Errorf("inject hints = %v, want toggled from %v", got, start)
+	}
+
+	// Step a memory number (max_hints, step 1, floors at 0).
+	m.settingsCursor = cursorFor(m.settingsItems, skMemoryMaxHints)
+	n := m.settingsCfg.Memory.MaxHints
+	m, _ = m.adjustSetting(1)
+	if got := m.settingsCfg.Memory.MaxHints; got != n+1 {
+		t.Errorf("max hints = %d, want %d", got, n+1)
+	}
+	for range 100 {
+		m, _ = m.adjustSetting(-1)
+	}
+	if got := m.settingsCfg.Memory.MaxHints; got != 0 {
+		t.Errorf("max hints floored = %d, want 0", got)
+	}
+}
+
 // TestSettingsGenericCycle_Persists exercises the generic setCycle path on the
 // quality mode enum.
 func TestSettingsGenericCycle_Persists(t *testing.T) {
