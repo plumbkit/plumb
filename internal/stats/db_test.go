@@ -425,11 +425,7 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 		t.Errorf("user_version = %d, want %d", v, SchemaVersion)
 	}
 	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version", "tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
-		has, err := hasColumn(db.db, "tool_calls", col)
-		if err != nil {
-			t.Fatalf("hasColumn(%s): %v", col, err)
-		}
-		if !has {
+		if !columnExists(t, db.db, "tool_calls", col) {
 			t.Fatalf("tool_calls missing column %s", col)
 		}
 	}
@@ -439,6 +435,117 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 			t.Fatalf("index %s missing: %v", idx, err)
 		}
 	}
+}
+
+// TestOpenReopenIsIdempotent proves a second Open against an established
+// database leaves the version stamp and the stored rows intact — the
+// version-stamping write only fires on a fresh database.
+func TestOpenReopenIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Record(Call{SessionID: "s", Workspace: "/w", Tool: "read_file", CalledAt: time.Now(), Success: true}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	db.Close()
+
+	reopened, err := Open()
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+
+	var v int
+	if err := reopened.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		t.Fatalf("reading user_version: %v", err)
+	}
+	if v != SchemaVersion {
+		t.Errorf("reopened user_version = %d, want %d", v, SchemaVersion)
+	}
+	got, err := reopened.Recent(10, Filter{})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("reopen lost rows: got %d, want 1", len(got))
+	}
+}
+
+// TestOpenRejectsOldSchema proves Open refuses an existing database stamped at
+// an older version — both a pre-versioned (version 0, table present) store and
+// an intermediate versioned one — with a clear delete instruction, rather than
+// running the dropped migrations or re-stamping a partial schema.
+func TestOpenRejectsOldSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version int
+	}{
+		{name: "pre-versioned", version: 0},
+		{name: "intermediate", version: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_DATA_HOME", dir)
+			path := DBPathFor()
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			raw, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatalf("manual open: %v", err)
+			}
+			if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
+				t.Fatalf("seed schema: %v", err)
+			}
+			if _, err := raw.Exec(fmt.Sprintf("PRAGMA user_version = %d", tc.version)); err != nil {
+				t.Fatalf("seed version: %v", err)
+			}
+			if err := raw.Close(); err != nil {
+				t.Fatalf("close seed: %v", err)
+			}
+
+			db, err := Open()
+			if db != nil {
+				db.Close()
+			}
+			if err == nil {
+				t.Fatalf("Open() error = nil, want old-schema rejection")
+			}
+			if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "delete") {
+				t.Fatalf("Open() error = %q, want delete instruction naming %q", err, path)
+			}
+		})
+	}
+}
+
+// columnExists reports whether table has a column named col, via PRAGMA
+// table_info — a test-only helper now that the production hasColumn is gone.
+func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
+	t.Helper()
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		t.Fatalf("table_info(%s): %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == col {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	return false
 }
 
 // TestSavingsColumnsUnscoredByDefault proves P0 is a no-behaviour-change schema
@@ -464,42 +571,6 @@ func TestSavingsColumnsUnscoredByDefault(t *testing.T) {
 	}
 	if savedTok != 0 || modelVer != 0 || capTok != 0 || effTok != 0 {
 		t.Fatalf("unscored row = (%d,%d,%d,%d), want all 0", savedTok, modelVer, capTok, effTok)
-	}
-}
-
-// TestMigrateAddsSavingsColumns proves the v8→v12 steps add the four savings
-// columns to an existing database and backfill legacy rows as unscored
-// (savings_model_version = 0), so historical data is never silently rescored.
-func TestMigrateAddsSavingsColumns(t *testing.T) {
-	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "v8.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer raw.Close()
-	if _, err := raw.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
-		t.Fatalf("seed v8 tool_calls: %v", err)
-	}
-	if _, err := raw.Exec(`INSERT INTO tool_calls (tool, called_at) VALUES ('read_file', 1)`); err != nil {
-		t.Fatalf("seed legacy row: %v", err)
-	}
-	if err := migrate(raw, 8, SchemaVersion); err != nil {
-		t.Fatalf("migrate 8→%d: %v", SchemaVersion, err)
-	}
-	for _, col := range []string{"tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens"} {
-		has, err := hasColumn(raw, "tool_calls", col)
-		if err != nil {
-			t.Fatalf("hasColumn(%s): %v", col, err)
-		}
-		if !has {
-			t.Fatalf("migrated tool_calls missing %s", col)
-		}
-	}
-	var modelVer int
-	if err := raw.QueryRow(`SELECT savings_model_version FROM tool_calls LIMIT 1`).Scan(&modelVer); err != nil {
-		t.Fatalf("scan legacy row: %v", err)
-	}
-	if modelVer != 0 {
-		t.Fatalf("legacy row savings_model_version = %d, want 0 (unscored)", modelVer)
 	}
 }
 
@@ -571,72 +642,6 @@ func TestOpenReadOnlyOldSchemaTellsUserToDeleteDB(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "delete") || !strings.Contains(err.Error(), "fresh global stats database") {
 		t.Fatalf("OpenReadOnly error = %q, want delete instruction", err)
-	}
-}
-
-// episodicColumns returns the column shape of episodic_memories as
-// "name type notnull dflt pk" rows, for byte-comparing two database states.
-func episodicColumns(t *testing.T, db *sql.DB) []string {
-	t.Helper()
-	rows, err := db.Query("PRAGMA table_info(episodic_memories)")
-	if err != nil {
-		t.Fatalf("table_info: %v", err)
-	}
-	defer rows.Close()
-	var cols []string
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, ctype string
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		cols = append(cols, fmt.Sprintf("%s %s notnull=%d dflt=%q pk=%d", name, ctype, notnull, dflt.String, pk))
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("rows: %v", err)
-	}
-	if len(cols) == 0 {
-		t.Fatal("episodic_memories has no columns (table missing?)")
-	}
-	return cols
-}
-
-// TestEpisodicSchemaParity proves a fresh database (baseline schema) and a
-// migrated database (v7→v8 step) produce a byte-identical episodic_memories
-// table — the single episodicMemoriesDDL const guarantees it, this guards it.
-func TestEpisodicSchemaParity(t *testing.T) {
-	// Fresh: full baseline schema.
-	fresh, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "fresh.db"))
-	if err != nil {
-		t.Fatalf("open fresh: %v", err)
-	}
-	defer fresh.Close()
-	if _, err := fresh.Exec(schema); err != nil {
-		t.Fatalf("apply baseline schema: %v", err)
-	}
-
-	// Migrated: a v7 database (tool_calls only) brought to v8 via migrate.
-	migrated, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrated.db"))
-	if err != nil {
-		t.Fatalf("open migrated: %v", err)
-	}
-	defer migrated.Close()
-	if _, err := migrated.Exec(`CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, tool TEXT, called_at INTEGER)`); err != nil {
-		t.Fatalf("seed v7 schema: %v", err)
-	}
-	if err := migrate(migrated, 7, SchemaVersion); err != nil {
-		t.Fatalf("migrate 7→%d: %v", SchemaVersion, err)
-	}
-
-	fc, mc := episodicColumns(t, fresh), episodicColumns(t, migrated)
-	if len(fc) != len(mc) {
-		t.Fatalf("column count differs: fresh=%v migrated=%v", fc, mc)
-	}
-	for i := range fc {
-		if fc[i] != mc[i] {
-			t.Errorf("column %d differs:\n fresh:    %s\n migrated: %s", i, fc[i], mc[i])
-		}
 	}
 }
 

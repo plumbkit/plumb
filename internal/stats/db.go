@@ -22,10 +22,8 @@ import (
 )
 
 // episodicMemoriesDDL is the single source of truth for the episodic_memories
-// table shape. It is embedded in both the baseline schema (fresh database) and
-// the v7→v8 migration (existing database), so the two can never drift — a fresh
-// DB and a migrated DB are byte-identical by construction. `CREATE TABLE IF NOT
-// EXISTS` keeps both paths idempotent and overlap-safe.
+// table shape, embedded in the baseline schema below. `CREATE TABLE IF NOT
+// EXISTS` keeps the create path idempotent on re-open.
 const episodicMemoriesDDL = `CREATE TABLE IF NOT EXISTS episodic_memories (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     workspace     TEXT    NOT NULL DEFAULT '',
@@ -74,90 +72,25 @@ CREATE INDEX IF NOT EXISTS idx_tc_tool_dur ON tool_calls(tool, duration_ms);
 CREATE INDEX IF NOT EXISTS idx_em_ws ON episodic_memories(workspace, generated_at);
 `
 
-// migration describes a single forward schema step. For ADD COLUMN migrations,
-// addColumn names the column being added so we can skip the step if it
-// already exists (recovering from databases stamped by older buggy builds
-// that created the column up-front).
-type migration struct {
-	from, to  int
-	addColumn string
-	sql       string
-}
-
-// migrations is the ordered list of schema upgrades. Each entry carries the
-// version it upgrades *from* and the version it produces. Apply in order.
-var migrations = []migration{
-	{from: 1, to: 2, addColumn: "input_json", sql: `ALTER TABLE tool_calls ADD COLUMN input_json    TEXT NOT NULL DEFAULT ''`},
-	{from: 2, to: 3, addColumn: "output_text", sql: `ALTER TABLE tool_calls ADD COLUMN output_text  TEXT NOT NULL DEFAULT ''`},
-	{from: 3, to: 4, addColumn: "session_name", sql: `ALTER TABLE tool_calls ADD COLUMN session_name TEXT NOT NULL DEFAULT ''`},
-	{from: 4, to: 5, addColumn: "workspace", sql: `ALTER TABLE tool_calls ADD COLUMN workspace    TEXT NOT NULL DEFAULT ''`},
-	{from: 5, to: 6, addColumn: "client_name", sql: `ALTER TABLE tool_calls ADD COLUMN client_name    TEXT NOT NULL DEFAULT ''`},
-	{from: 6, to: 7, addColumn: "client_version", sql: `ALTER TABLE tool_calls ADD COLUMN client_version TEXT NOT NULL DEFAULT ''`},
-	// v8 adds a new table, not a column — addColumn stays empty so the step always
-	// runs; CREATE TABLE IF NOT EXISTS makes it idempotent and overlap-safe with
-	// the baseline schema. Shares episodicMemoriesDDL with the baseline so the two
-	// can never drift.
-	{from: 7, to: 8, sql: episodicMemoriesDDL},
-	// v9–v12 add the per-call savings columns for the tokens-saved redesign
-	// (provenance + two-axis scoring). All default 0, so every existing row reads
-	// as unscored (savings_model_version = 0) until a scorer stamps it.
-	{from: 8, to: 9, addColumn: "tokens_saved", sql: `ALTER TABLE tool_calls ADD COLUMN tokens_saved          INTEGER NOT NULL DEFAULT 0`},
-	{from: 9, to: 10, addColumn: "savings_model_version", sql: `ALTER TABLE tool_calls ADD COLUMN savings_model_version INTEGER NOT NULL DEFAULT 0`},
-	{from: 10, to: 11, addColumn: "capability_tokens", sql: `ALTER TABLE tool_calls ADD COLUMN capability_tokens     INTEGER NOT NULL DEFAULT 0`},
-	{from: 11, to: 12, addColumn: "efficiency_tokens", sql: `ALTER TABLE tool_calls ADD COLUMN efficiency_tokens     INTEGER NOT NULL DEFAULT 0`},
-}
-
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
-// read-only query paths. Open it read-write through Open to apply migrations.
+// the read-only query paths. Incremental upgrades are no longer supported, so
+// the remedy is to delete the database file and let plumb recreate it fresh.
 var ErrReadOnlySchemaUpgradeRequired = errors.New("stats schema upgrade required")
 
-// migrate applies all pending forward migrations from currentVersion up to
-// targetVersion. ADD COLUMN steps are skipped when the column already exists,
-// which keeps the path idempotent in two cases: (a) an unstamped database
-// created by a build that defined the column in the baseline schema; (b)
-// re-running migrate after a partial earlier run.
-func migrate(db *sql.DB, currentVersion, targetVersion int) error {
-	for _, m := range migrations {
-		if m.from < currentVersion || m.to > targetVersion {
-			continue
-		}
-		if m.addColumn != "" {
-			has, err := hasColumn(db, "tool_calls", m.addColumn)
-			if err != nil {
-				return fmt.Errorf("stats: migration v%d→v%d: check column: %w", m.from, m.to, err)
-			}
-			if has {
-				continue
-			}
-		}
-		if _, err := db.Exec(m.sql); err != nil {
-			return fmt.Errorf("stats: migration v%d→v%d: %w", m.from, m.to, err)
-		}
+// tableExists reports whether the database has a table named name. It is the
+// fresh-vs-legacy discriminator for a version-0 database: a brand-new file has
+// no tables, whereas a pre-versioned (pre-0.9) database already carries
+// tool_calls.
+func tableExists(db *sql.DB, name string) (bool, error) {
+	var found string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
-	return nil
-}
-
-// hasColumn reports whether table has a column named col, via PRAGMA
-// table_info. Used to make ADD COLUMN migrations idempotent.
-func hasColumn(db *sql.DB, table, col string) (bool, error) {
-	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("stats: checking table %s: %w", name, err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false, err
-		}
-		if name == col {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
+	return true, nil
 }
 
 // DB is a thread-safe statistics store backed by SQLite.
@@ -172,11 +105,15 @@ func DBPathFor() string {
 	return filepath.Join(config.DataDir(), "stats.db")
 }
 
-// SchemaVersion is the current on-disk stats schema version. Persisted in
-// PRAGMA user_version on every Open. Open reads the on-disk version, applies
-// any pending migrations, then stamps the new version.
+// SchemaVersion is the current on-disk stats schema version, persisted in
+// PRAGMA user_version. Open creates the full schema and stamps this version on
+// a fresh database; an existing database already at this version is left
+// untouched. Incremental migration is no longer supported — the
+// backward-compatibility floor is 0.9, and every live database is already at
+// the current version. A database that reports an older version is rejected
+// (rather than silently re-stamped) so its real shape is never misrepresented.
 //
-// History:
+// History (the column/table each version introduced; retained for provenance):
 //
 //	0 — pre-versioned (everything up to 0.5.2)
 //	1 — first explicitly versioned schema (0.5.3+) — no column changes
@@ -194,6 +131,14 @@ func DBPathFor() string {
 const SchemaVersion = 12
 
 // Open opens (or creates) the stats database at the conventional global path.
+//
+// A fresh database has the full current schema created and is stamped with
+// SchemaVersion directly. An existing database already at SchemaVersion (or
+// newer, opened by an older build) is left as-is — the version stamp is never
+// rewritten, so a routine open does not contend for the write lock. A database
+// that reports an older version — a pre-0.9 store — is rejected with a clear
+// instruction to delete it, rather than running the dropped incremental
+// migrations or re-stamping a schema that may be missing columns.
 func Open() (*DB, error) {
 	path := DBPathFor()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -212,30 +157,52 @@ func Open() (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("stats: synchronous: %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := ensureSchema(db, path); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("stats: schema: %w", err)
-	}
-	// Read the current schema version and apply any pending migrations. The
-	// user_version stamp is a write, so only issue it when the version actually
-	// moved — stamping on every Open turns a read-only open into a writer that
-	// contends for the write lock.
-	var currentVersion int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("stats: reading user_version: %w", err)
-	}
-	if currentVersion < SchemaVersion {
-		if err := migrate(db, currentVersion, SchemaVersion); err != nil {
-			db.Close()
-			return nil, err
-		}
-		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("stats: stamping user_version: %w", err)
-		}
+		return nil, err
 	}
 	return &DB{db: db}, nil
+}
+
+// ensureSchema brings an open database to the current schema, or rejects it.
+// Fresh ⇒ create the schema and stamp SchemaVersion. Already current (or
+// newer) ⇒ leave it untouched. Older ⇒ a clear, non-destructive error.
+func ensureSchema(db *sql.DB, path string) error {
+	var currentVersion int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
+		return fmt.Errorf("stats: reading user_version: %w", err)
+	}
+	fresh, err := isFreshDatabase(db, currentVersion)
+	if err != nil {
+		return err
+	}
+	if !fresh && currentVersion < SchemaVersion {
+		return fmt.Errorf("stats: database at %s is schema version %d, but this build requires version %d and no longer migrates pre-0.9 databases; delete %s so plumb can create a fresh global stats database", path, currentVersion, SchemaVersion, path)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("stats: schema: %w", err)
+	}
+	if fresh {
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
+			return fmt.Errorf("stats: stamping user_version: %w", err)
+		}
+	}
+	return nil
+}
+
+// isFreshDatabase reports whether db is a brand-new (empty) store. A fresh file
+// reports user_version 0 and has no tool_calls table; a version-0 database that
+// already carries tool_calls is a pre-versioned pre-0.9 store, which is not
+// fresh (and is rejected by the caller).
+func isFreshDatabase(db *sql.DB, currentVersion int) (bool, error) {
+	if currentVersion != 0 {
+		return false, nil
+	}
+	exists, err := tableExists(db, "tool_calls")
+	if err != nil {
+		return false, err
+	}
+	return !exists, nil
 }
 
 // OpenReadOnly opens the existing global stats database for reading only.
