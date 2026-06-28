@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -16,7 +17,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var serveFlagNoReconnect bool
+var (
+	serveFlagNoReconnect bool
+	serveFlagAllowDirs   []string
+)
 
 var serveCmd = &cobra.Command{
 	Use:         "serve",
@@ -28,6 +32,8 @@ var serveCmd = &cobra.Command{
 func init() {
 	serveCmd.Flags().BoolVar(&serveFlagNoReconnect, "no-reconnect", false,
 		"disable transparent daemon reconnect; exit on daemon failure (legacy byte-pump proxy)")
+	serveCmd.Flags().StringArrayVar(&serveFlagAllowDirs, "allow-dir", nil,
+		"grant an extra read-write root to this connection (repeatable; also PLUMB_ALLOWED_DIRS, os-list-separated). Additive to the detected workspace and config extra_roots.")
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
@@ -44,8 +50,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("plumb serve: %w", err)
 	}
 
+	allowDirs := resolveAllowDirs(serveFlagAllowDirs, os.Getenv("PLUMB_ALLOWED_DIRS"))
+
 	if serveFlagNoReconnect || !proxyReconnectEnabled() {
 		defer conn.Close()
+		if len(allowDirs) > 0 {
+			slog.Warn("serve: --allow-dir is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")
+		}
 		return proxyStdio(ctx, conn)
 	}
 
@@ -56,8 +67,35 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		dial:              func(ctx context.Context) (net.Conn, error) { return connectOrStartDaemon(ctx, socketPath) },
 		killDaemon:        killHungDaemon,
 		heartbeatInterval: proxyHeartbeatInterval(),
+		allowDirs:         allowDirs,
 	})
 	return p.run(ctx)
+}
+
+// resolveAllowDirs normalises the client-granted extra read-write roots from the
+// --allow-dir flags and the PLUMB_ALLOWED_DIRS env var (os-list-separated, e.g.
+// ':' on Unix). Each entry is $VAR-expanded in the serve process's environment
+// and made absolute, so the daemon — a separate, possibly differently-rooted
+// process — receives canonical-ready paths. Blank entries are dropped and order
+// is preserved (flags first, then env). An empty result transports nothing, so
+// behaviour is identical to today.
+func resolveAllowDirs(flags []string, env string) []string {
+	raw := append([]string(nil), flags...)
+	if env != "" {
+		raw = append(raw, filepath.SplitList(env)...)
+	}
+	out := make([]string, 0, len(raw))
+	for _, d := range raw {
+		d = strings.TrimSpace(os.ExpandEnv(d))
+		if d == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(d); err == nil {
+			d = abs
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // proxyReconnectEnabled reports whether the resilient reconnecting proxy is

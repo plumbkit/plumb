@@ -76,6 +76,16 @@ func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
 			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessReadWrite, Label: "configured"})
 		}
 	}
+	// Client-granted extra roots (serve --allow-dir) are additive read-write
+	// roots, never replacing the workspace baseline. They arrive already
+	// $VAR-expanded and absolute from the serve process; NewPathPolicy then
+	// canonicalises each (symlink-/firmlink-aware), so an allow-dir cannot be used
+	// to escape via a symlink any more than the workspace root can.
+	for _, d := range v.allowDirs {
+		if d != "" {
+			roots = append(roots, tools.AllowedRoot{Path: d, Access: tools.AccessReadWrite, Label: "allow-dir"})
+		}
+	}
 	for _, r := range v.ws.ReadRoots {
 		if p := os.ExpandEnv(r); p != "" {
 			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessRead, Label: "read-root"})

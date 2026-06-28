@@ -58,6 +58,11 @@ type proxyDeps struct {
 	// different (e.g. freshly-respawned) daemon. Called only on the hang path.
 	killDaemon func(pid int)
 
+	// allowDirs are extra read-write roots (--allow-dir / PLUMB_ALLOWED_DIRS)
+	// folded into the captured initialize frame's _meta, so they reach the daemon
+	// per-connection and ride every handshake replay. Empty ⇒ frame untouched.
+	allowDirs []string
+
 	heartbeatInterval time.Duration // 0 disables hang detection
 	pingTimeout       time.Duration
 	maxReconnects     int
@@ -207,7 +212,7 @@ func (p *reconnectingProxy) pumpClientToDaemon(ctx context.Context) error {
 		if err != nil {
 			return nil // client closed stdin — normal end of session
 		}
-		p.captureHandshake(frame)
+		frame = p.captureHandshake(frame)
 		for {
 			gen, werr := p.writeDaemon(frame)
 			if werr == nil {
@@ -274,14 +279,17 @@ func (p *reconnectingProxy) writeClient(frame []byte) {
 
 func (p *reconnectingProxy) out() io.Writer { return p.deps.out }
 
-// captureHandshake records the MCP handshake frames so a reconnect can replay
-// them. It runs *before* the frame is written, because the handshake must stay
-// replayable even if the daemon dies mid-write. In-flight request tracking is
-// deliberately not done here — see trackOutstanding.
-func (p *reconnectingProxy) captureHandshake(frame []byte) {
+// captureHandshake records the handshake frames for replay and returns the
+// frame to forward — for initialize the allow-dirs-augmented frame
+// (injectAllowDirs), so the extra roots reach the daemon on the first connect
+// and on every replay. Runs *before* the write so the handshake stays
+// replayable even if the daemon dies mid-write; in-flight tracking is not done
+// here — see trackOutstanding.
+func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 	e := parseEnvelope(frame)
 	switch {
 	case e.Method == "initialize" && e.hasID():
+		frame = injectAllowDirs(frame, p.deps.allowDirs)
 		p.hsMu.Lock()
 		p.initializeFrame = cloneBytes(frame)
 		p.initializeID = idKey(e.ID)
@@ -291,6 +299,7 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) {
 		p.initializedFrame = cloneBytes(frame)
 		p.hsMu.Unlock()
 	}
+	return frame
 }
 
 // outstandingReq is one confirmed-sent, unanswered request: its wire id plus
@@ -488,73 +497,6 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 	}
 }
 
-// replayHandshake re-establishes the MCP session on a fresh connection by
-// resending the captured initialize request, consuming its response, then
-// resending the initialized notification. It owns the connection exclusively
-// (no pump reads it until publish), so reading the handshake response here
-// races with nothing. The returned reader is handed to the daemon pump so it
-// continues from any bytes already buffered.
-func (p *reconnectingProxy) replayHandshake(conn net.Conn) (*frameReader, error) {
-	fr := newFrameReader(conn)
-
-	p.hsMu.Lock()
-	initFrame := p.initializeFrame
-	initID := p.initializeID
-	initzFrame := p.initializedFrame
-	p.hsMu.Unlock()
-
-	if initFrame == nil {
-		return fr, nil // client has not completed the handshake yet
-	}
-	if err := writeFrame(conn, initFrame); err != nil {
-		return nil, fmt.Errorf("replaying initialize: %w", err)
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(p.deps.handshakeWait))
-	if err := p.consumeInitializeResponse(fr, initID); err != nil {
-		return nil, err
-	}
-	_ = conn.SetReadDeadline(time.Time{})
-
-	if initzFrame != nil {
-		if err := writeFrame(conn, initzFrame); err != nil {
-			return nil, fmt.Errorf("replaying initialized: %w", err)
-		}
-	}
-	return fr, nil
-}
-
-// consumeInitializeResponse reads frames until the replayed initialize response
-// arrives. The response is swallowed (the client already received its
-// initialize result from the original daemon) unless the client never got one
-// because the daemon died mid-handshake, in which case it is forwarded.
-func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID string) error {
-	for {
-		frame, err := fr.read()
-		if err != nil {
-			return fmt.Errorf("awaiting initialize response: %w", err)
-		}
-		e := parseEnvelope(frame)
-		if e.isResponse() && idKey(e.ID) == initID {
-			p.hsMu.Lock()
-			answered := p.initializeAnswered
-			p.initializeAnswered = true
-			// The replayed response comes from the freshly started daemon — the
-			// version the upcoming reconnect note must report. Adopt it
-			// *unconditionally*, including "" for a legacy daemon with no
-			// serverInfo: a modern→legacy replacement must fall back to the proxy
-			// version in the note, not keep reporting the dead modern daemon's
-			// stale version.
-			p.daemonVersion = serverInfoVersion(frame)
-			p.hsMu.Unlock()
-			if !answered {
-				p.writeClient(frame)
-			}
-			return nil
-		}
-		p.writeClient(frame) // an unrelated notification arrived mid-handshake
-	}
-}
-
 // failOutstandingBelow synthesises a retryable JSON-RPC error for every
 // in-flight request written under a connection generation older than gen, so
 // the client is never left waiting for a response a dead daemon will never
@@ -587,10 +529,4 @@ func (p *reconnectingProxy) failOutstandingBelow(gen uint64) {
 // must not stay blocked on an in-flight call for the whole outage.
 func (p *reconnectingProxy) failAllOutstanding() {
 	p.failOutstandingBelow(p.generation() + 1)
-}
-
-func (p *reconnectingProxy) handshakeComplete() bool {
-	p.hsMu.Lock()
-	defer p.hsMu.Unlock()
-	return p.initializeFrame != nil
 }

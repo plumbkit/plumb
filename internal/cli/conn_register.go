@@ -179,6 +179,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnClientInfo = func(_ context.Context, name, version string) {
 		s.onClientInfo(name, version)
 	}
+	srv.OnAllowDirs = func(_ context.Context, dirs []string) {
+		s.onAllowDirs(dirs)
+	}
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError)
 	}

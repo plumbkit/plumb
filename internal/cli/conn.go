@@ -106,6 +106,15 @@ type sessionView struct {
 	// for a single-language root. Surfaced as the multi-language session_start
 	// identity line (e.g. "Swift, Zig").
 	discoveredLangs []string
+
+	// allowDirs are extra read-write roots the client granted at connection time
+	// via `plumb serve --allow-dir` / PLUMB_ALLOWED_DIRS, transported in the
+	// initialize params' _meta (see onAllowDirs). They are per-connection — never
+	// shared with another session — and folded into the PathPolicy by
+	// buildPathPolicy as read-write roots, additive to the workspace and config
+	// extra_roots. Set once during the initialize exchange, before attach, and
+	// preserved across re-pins (a re-pin keeps the client's grant).
+	allowDirs []string
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

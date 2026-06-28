@@ -159,6 +159,25 @@ func (s *connSession) onClientInfo(name, version string) {
 	s.bindWriteLimiterParent()
 }
 
+// onAllowDirs records the extra read-write roots the client granted at
+// connection time (serve --allow-dir / PLUMB_ALLOWED_DIRS, transported in the
+// initialize params' _meta). It runs synchronously during the initialize
+// exchange — before OnInit attaches the workspace — so the roots are present
+// when buildPathPolicy first runs at attach. The rebuild here is a no-op while
+// the session is still unattached (nil policy) and a belt-and-braces refresh
+// otherwise. The grant is per-connection: it lives only in this session's view
+// and is preserved across re-pins.
+func (s *connSession) onAllowDirs(dirs []string) {
+	if len(dirs) == 0 {
+		return
+	}
+	s.mutate(func(v *sessionView) {
+		v.allowDirs = dirs
+		v.policy = s.buildPathPolicy(v)
+	})
+	s.log().Info("daemon: client granted extra read-write roots", "count", len(dirs))
+}
+
 // bindWriteLimiterParent links the session's write limiter to the budget shared
 // by all connections from the same client identity working the SAME workspace.
 //

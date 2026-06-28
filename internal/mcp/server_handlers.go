@@ -25,6 +25,12 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		}
 	}
 
+	if s.OnAllowDirs != nil && req.Params != nil {
+		if dirs := allowDirsFromParams(req.Params); len(dirs) > 0 {
+			s.OnAllowDirs(ctx, dirs)
+		}
+	}
+
 	type serverInfoWire struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
@@ -91,6 +97,34 @@ func (s *Server) snapshotTools() []toolSnapshot {
 		snaps = append(snaps, toolSnapshot{name: t.Name(), description: t.Description(), schema: schema})
 	}
 	return snaps
+}
+
+// allowDirsFromParams extracts the extra read-write roots from the initialize
+// params' _meta[MetaAllowDirsKey] field. Fail-safe: any shape mismatch (no
+// _meta, wrong key, non-array, malformed JSON) yields nil, and empty/blank
+// entries are dropped — so a client that sends nothing changes nothing.
+func allowDirsFromParams(params json.RawMessage) []string {
+	var p struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil
+	}
+	raw, ok := p.Meta[MetaAllowDirsKey]
+	if !ok {
+		return nil
+	}
+	var dirs []string
+	if err := json.Unmarshal(raw, &dirs); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
