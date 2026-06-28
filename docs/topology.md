@@ -96,11 +96,13 @@ pipeline has four parts:
 1. **Extractors read your source.** Per language, a lightweight extractor turns
    a file into a list of *entities* (functions, types, methods, imports, tests)
    and *edges* (calls, imports, containment). Go uses the standard library's
-   `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin, Swift and
-   Java use the pure-Go gotreesitter runtime; JavaScript (`.js`/`.mjs`/`.cjs`)
-   and TypeScript (`.ts`) also use gotreesitter; and only TSX/JSX (`.tsx`/`.jsx`)
-   still use a fast regex scanner (gotreesitter's TSX grammar cascades on typed
-   arrow params).
+   `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin and
+   Java use the pure-Go gotreesitter runtime, as does JavaScript
+   (`.js`/`.mjs`/`.cjs`); and TypeScript (`.ts`), TSX/JSX (`.tsx`/`.jsx`) and
+   Swift use the canonical tree-sitter grammars compiled to WASM and run via
+   wazero (gotreesitter's TSX grammar cascades on typed-arrow params, so the
+   canonical grammar parses them cleanly). The old line-by-line regex TS/JS
+   scanner survives only as a wasm-init-failure fallback.
    None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
    tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual
