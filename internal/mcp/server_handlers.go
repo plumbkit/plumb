@@ -61,32 +61,63 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 	return okResp(req.ID, res)
 }
 
+// toolSnapshot is an immutable copy of one registered tool's advertised
+// metadata, captured under s.mu so tools/list can filter and marshal the
+// response with the lock released.
+type toolSnapshot struct {
+	name        string
+	description string
+	schema      json.RawMessage
+}
+
+// snapshotTools copies every registered tool's advertised metadata in insertion
+// order under s.mu, then releases the lock. The copy is deliberately cheap so
+// the lock is held only across the map reads — ToolFilter (which may resolve a
+// client profile of unbounded cost) and the response marshal both run on the
+// caller's side, off the lock.
+//
+// Concurrency: takes s.mu in read mode for the duration of the copy only; the
+// returned slice shares no mutable state with the server.
+func (s *Server) snapshotTools() []toolSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snaps := make([]toolSnapshot, 0, len(s.order))
+	for _, name := range s.order {
+		t := s.tools[name]
+		schema := s.pubSchema[name]
+		if schema == nil {
+			schema = t.InputSchema()
+		}
+		snaps = append(snaps, toolSnapshot{name: t.Name(), description: t.Description(), schema: schema})
+	}
+	return snaps
+}
+
 func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	type toolDef struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		InputSchema json.RawMessage `json:"inputSchema"`
 	}
-	s.mu.RLock()
-	defs := make([]toolDef, 0, len(s.order))
-	for _, name := range s.order {
+	// Snapshot the registry under s.mu, then apply ToolFilter and build the
+	// response with the lock released. A lightweight probe (ping, daemon_info)
+	// contending on the per-connection write mutex must never queue behind a slow
+	// filter or marshal held under the shared registry lock.
+	snaps := s.snapshotTools()
+	filter := s.ToolFilter // set before Serve; read without the lock
+	defs := make([]toolDef, 0, len(snaps))
+	for _, sn := range snaps {
 		// A filtered-out tool is hidden from the advertised list but stays
 		// callable by name — handleToolsCall does not consult ToolFilter.
-		if s.ToolFilter != nil && !s.ToolFilter(name) {
+		if filter != nil && !filter(sn.name) {
 			continue
 		}
-		t := s.tools[name]
-		schema := s.pubSchema[name]
-		if schema == nil {
-			schema = t.InputSchema()
-		}
 		defs = append(defs, toolDef{
-			Name:        t.Name(),
-			Description: t.Description(),
-			InputSchema: schema,
+			Name:        sn.name,
+			Description: sn.description,
+			InputSchema: sn.schema,
 		})
 	}
-	s.mu.RUnlock()
 	return okResp(req.ID, map[string]any{"tools": defs})
 }
 

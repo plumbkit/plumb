@@ -226,6 +226,55 @@ func TestToolFilter_HidesFromListNotCall(t *testing.T) {
 	}
 }
 
+// TestToolsList_FilterRunsWithoutHoldingLock is the lock-free-liveness contract:
+// tools/list must snapshot the registry under s.mu and then run ToolFilter with
+// the lock RELEASED, so a slow filter cannot wedge the shared registry lock
+// against concurrent work (a Register, or another connection's probe). The test
+// parks inside the filter and proves a concurrent Register — which needs the
+// exclusive lock — completes while the filter is still running. If the filter
+// ran under s.mu.RLock (the old behaviour), Register would block until the
+// filter returned and the test would time out.
+func TestToolsList_FilterRunsWithoutHoldingLock(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(&echoTool{})
+
+	filterEntered := make(chan struct{})
+	releaseFilter := make(chan struct{})
+	var once sync.Once
+	s.ToolFilter = func(string) bool {
+		once.Do(func() { close(filterEntered) })
+		<-releaseFilter // park inside the filter, lock must be released by now
+		return true
+	}
+
+	registered := make(chan struct{})
+	go func() {
+		<-filterEntered          // the filter is now parked
+		s.Register(strictTool{}) // needs s.mu.Lock — blocks if the filter holds it
+		close(registered)
+	}()
+
+	listDone := make(chan struct{})
+	go func() {
+		defer close(listDone)
+		var out bytes.Buffer
+		_ = s.Serve(context.Background(),
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`+"\n"), &out)
+	}()
+
+	select {
+	case <-registered:
+		// Register completed while the filter was still parked: the lock was not
+		// held across filtering.
+	case <-time.After(2 * time.Second):
+		close(releaseFilter)
+		<-listDone
+		t.Fatal("Register blocked while ToolFilter ran — tools/list held the lock across filtering")
+	}
+	close(releaseFilter)
+	<-listDone
+}
+
 func TestServer_ToolsCall(t *testing.T) {
 	resps := serve(t, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hello"}}}`)
 	if len(resps) != 1 {
