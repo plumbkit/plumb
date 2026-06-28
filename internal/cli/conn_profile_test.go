@@ -79,13 +79,13 @@ func TestResolveToolProfile(t *testing.T) {
 		client string
 		want   string
 	}{
-		{"auto + claude-code => lean", config.ToolsConfig{Profile: "auto"}, "claude-code", "lean"},
+		{"auto + claude-code => full (schema-discovery only)", config.ToolsConfig{Profile: "auto"}, "claude-code", "full"},
 		{"auto + codex => lean", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "lean"},
 		{"auto + claude-desktop => full", config.ToolsConfig{Profile: "auto"}, "claude-ai", "full"},
 		{"auto + unknown => full", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full"},
 		{"explicit lean wins over desktop", config.ToolsConfig{Profile: "lean"}, "claude-ai", "lean"},
 		{"explicit full wins over claude-code", config.ToolsConfig{Profile: "full"}, "claude-code", "full"},
-		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "claude-code", "lean"},
+		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "codex", "lean"},
 		{
 			"per-client override beats profile",
 			config.ToolsConfig{Profile: "full", ClientProfiles: map[string]string{"claude-code": "lean"}},

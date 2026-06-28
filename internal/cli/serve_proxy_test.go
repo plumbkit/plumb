@@ -341,7 +341,8 @@ func TestReconnectNoteText(t *testing.T) {
 	differ := reconnectNoteText("2.0.0", "1.2.3")
 	if !strings.Contains(differ, "daemon now 2.0.0") ||
 		!strings.Contains(differ, "this serve proxy is still 1.2.3") ||
-		!strings.Contains(differ, "start a new client session") {
+		!strings.Contains(differ, "restart `plumb serve`") ||
+		strings.Contains(differ, "start a new client session") {
 		t.Errorf("differ note wrong: %q", differ)
 	}
 }

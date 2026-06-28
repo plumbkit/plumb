@@ -121,7 +121,10 @@ func serverInfoVersion(frame []byte) string {
 // version leads; when it differs from this proxy's compiled version the note
 // also says so — a long-lived `plumb serve` keeps running the old binary
 // after a daemon upgrade, and the agent/user otherwise has no in-band signal
-// of that lag. An unknown daemon version falls back to the proxy's.
+// of that lag. The mismatch is harmless (the proxy reconnected transparently
+// and tools stay registered), so the note reports it without prescribing an
+// action an autonomous agent cannot take. An unknown daemon version falls back
+// to the proxy's.
 func reconnectNoteText(daemonVersion, proxyVersion string) string {
 	const tail = " — your session state (read-tracking, caches) was rebuilt, so " +
 		"re-read a file before editing it (or pass dirty_ok:true for a file you " +
@@ -133,7 +136,7 @@ func reconnectNoteText(daemonVersion, proxyVersion string) string {
 		}
 		return fmt.Sprintf("# plumb-note: plumb daemon reconnected (now %s)%s", v, tail)
 	}
-	return fmt.Sprintf("# plumb-note: plumb daemon reconnected (daemon now %s; this serve proxy is still %s — start a new client session to refresh it)%s",
+	return fmt.Sprintf("# plumb-note: plumb daemon reconnected (daemon now %s; this serve proxy is still %s — the mismatch is harmless; restart `plumb serve` when convenient to match versions)%s",
 		daemonVersion, proxyVersion, tail)
 }
 

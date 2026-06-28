@@ -25,12 +25,19 @@ func (s *connSession) resolveToolProfile() string {
 
 // autoProfile is the auto-mode decision: "lean" only for a RECOGNISED CLI agent
 // that reads files and searches natively (so the hidden commodity tools have a
-// safe native equivalent). Claude Desktop (a thin client) and any UNKNOWN client
-// get "full" — the unknown fallback in clientcaps reports native tooling for
-// scoring purposes, so we gate on the recognised name, not the bare booleans.
+// safe native equivalent) AND can invoke a tool it was never advertised. Three
+// kinds of client get "full": Claude Desktop (a thin client), any UNKNOWN client
+// (the unknown fallback in clientcaps reports native tooling for scoring, so we
+// gate on the recognised name, not the bare booleans), and any SchemaDiscoveryOnly
+// client — one that builds its tool set (and ToolSearch deferred list) purely
+// from tools/list, for which a lean-hidden tool is unreachable rather than merely
+// undisplayed (e.g. Claude Code).
 func autoProfile(client string) string {
 	caps := clientcaps.Lookup(client)
 	if caps.Name == "unknown" || caps.Name == "claude-desktop" {
+		return "full"
+	}
+	if caps.SchemaDiscoveryOnly {
 		return "full"
 	}
 	if caps.NativeFileRead && caps.NativeSearch {

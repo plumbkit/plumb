@@ -30,6 +30,29 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 	}
 }
 
+// TestSchemaDiscoveryOnly pins which clients can only invoke advertised tools.
+// Claude Code is the one flagged true (it builds its tool/ToolSearch list from
+// tools/list, so a lean-hidden tool is unreachable); the other CLI agents and the
+// unknown fallback are false until verified, so they stay eligible for lean.
+func TestSchemaDiscoveryOnly(t *testing.T) {
+	tests := []struct {
+		client string
+		want   bool
+	}{
+		{"claude-code", true},
+		{"claude-code/1.2.3", true},
+		{"codex", false},
+		{"gemini-cli", false},
+		{"claude-desktop", false},
+		{"totally-unknown-xyz", false},
+	}
+	for _, tc := range tests {
+		if got := Lookup(tc.client).SchemaDiscoveryOnly; got != tc.want {
+			t.Errorf("Lookup(%q).SchemaDiscoveryOnly = %v, want %v", tc.client, got, tc.want)
+		}
+	}
+}
+
 func TestTokensForRatiosAndFallback(t *testing.T) {
 	// 350 code bytes at the Claude code ratio (3.5) → 100 tokens.
 	if got := tokensFor(FamilyClaude, ContentCode, 350); got != 100 {
