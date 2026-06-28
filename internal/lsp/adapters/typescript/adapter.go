@@ -155,9 +155,12 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 // ── Diagnostics (pull) ─────────────────────────────────────────────────────────
 
 // SupportsPullDiagnostics reports whether the server advertised the
-// textDocument/diagnostic pull model during initialize. typescript-language-server
-// ≥ 5.3 does not push publishDiagnostics for files outside its open-document set,
-// so the diagnostics tool must pull instead. Returns false before Initialize.
+// textDocument/diagnostic pull model during initialize. In practice
+// typescript-language-server (≥ 5.3) advertises no diagnosticProvider and returns
+// -32601 for textDocument/diagnostic, so this is false for it: the server publishes
+// diagnostics over the push stream instead, once the client declares the
+// textDocument.publishDiagnostics capability (see DefaultClientCapabilities).
+// Returns false before Initialize.
 func (a *Adapter) SupportsPullDiagnostics() bool {
 	a.capsMu.RLock()
 	defer a.capsMu.RUnlock()
