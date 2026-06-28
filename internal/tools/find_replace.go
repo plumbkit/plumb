@@ -30,7 +30,21 @@ type fileChange struct {
 	path  string
 	count int
 	err   error
+	// oldData/newData hold the pre- and post-replacement content for the
+	// unified diff. Populated only when show_write_diff is on and the file is
+	// within the diff size cap; nil otherwise (the diff is then omitted).
+	oldData []byte
+	newData []byte
 }
+
+// maxFindReplaceDiffFiles caps how many per-file unified diffs are rendered in
+// a find_replace response. Beyond it, a "+N more file(s)" summary is appended.
+const maxFindReplaceDiffFiles = 20
+
+// maxFindReplaceDiffBytes bounds the pre-replacement content captured for the
+// diff, mirroring write_file's 200 KiB cap. A larger file still gets replaced;
+// only its inline diff is skipped.
+const maxFindReplaceDiffBytes = 200 * 1024
 
 func NewFindReplace(deps ...WriteDeps) *findReplaceTool {
 	var d WriteDeps
@@ -46,6 +60,8 @@ func (*findReplaceTool) Description() string {
 	return `Grep-equivalent: find text across files with optional replacement. Search and replace text across files in a directory tree.
 
 Defaults to dry_run=true so you can preview the diff before committing. Set dry_run=false to write changes.
+
+When the [edits].show_write_diff config flag is on (the default), the response appends a per-file unified diff — in both preview and applied modes — for up to the first 20 changed files, with a "+N more file(s)" summary beyond that. Set show_write_diff=false to suppress it.
 
 Skips binary files (detected via null-byte sniff of the first 8 KB). Skips files larger than max_file_bytes (50 MiB default). Honours .gitignore. Use 'glob' to limit which files to touch (e.g. "*.go", "**/*.md"); a glob with a literal directory prefix (e.g. "src/**/*.go") prunes sibling directories from the walk entirely. Files are processed in parallel; output is sorted by path.
 
@@ -113,7 +129,8 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 
-	changes, writeErrs, totalReplacements := t.findReplaceRunWorkers(ctx, files, a, re)
+	wantDiff := t.deps.showWriteDiff()
+	changes, writeErrs, totalReplacements := t.findReplaceRunWorkers(ctx, files, a, re, wantDiff)
 
 	var formatted int
 	var formatErrs []error
@@ -121,7 +138,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		formatted, formatErrs = runFormatterOnFiles(ctx, changes)
 	}
 
-	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs)
+	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs, wantDiff)
 	if len(writeErrs) > 0 {
 		return out, errors.Join(writeErrs...)
 	}
@@ -214,29 +231,43 @@ func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs) ([]string, 
 }
 
 // findReplaceScanFile reads path, applies the pattern, and returns the match
-// count and replacement bytes. Returns (0, nil) for binary, oversized, or
-// zero-match files.
-func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp) (int, []byte) {
+// count, the original bytes, and the replacement bytes. Returns (0, nil, nil)
+// for binary, oversized, or zero-match files. oldData is returned only when
+// wantDiff is set and the file is within the diff size cap; nil otherwise.
+func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool) (count int, oldData, newData []byte) {
 	if fi, err := os.Stat(path); err != nil || fi.Size() > a.MaxFileBytes {
-		return 0, nil
+		return 0, nil, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	head := make([]byte, binarySniffBytes)
 	n, _ := io.ReadFull(f, head)
 	head = head[:n]
 	if bytes.IndexByte(head, 0) >= 0 {
 		f.Close()
-		return 0, nil
+		return 0, nil, nil
 	}
 	rest, err := io.ReadAll(f)
 	f.Close()
 	if err != nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 	data := append(head, rest...)
+	count, newData = applyFindReplace(data, a, re)
+	if count == 0 {
+		return 0, nil, nil
+	}
+	if wantDiff && len(data) <= maxFindReplaceDiffBytes {
+		oldData = data
+	}
+	return count, oldData, newData
+}
+
+// applyFindReplace counts matches in data and returns the replacement bytes.
+// Returns (0, nil) when nothing matches.
+func applyFindReplace(data []byte, a findReplaceArgs, re *regexp.Regexp) (int, []byte) {
 	switch {
 	case a.UseRegex:
 		count := len(re.FindAll(data, -1))
@@ -283,7 +314,33 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 	return nil
 }
 
-func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []string, a findReplaceArgs, re *regexp.Regexp) ([]fileChange, []error, int) {
+// findReplaceWorkerStep scans one file and, when it changed and is within the
+// max_files budget, applies the write (non-dry-run) and builds its fileChange.
+// The second return is false when the file should be skipped (no match, over
+// budget). On a write error or over-budget claim it cancels the shared context.
+func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool, claimed *atomic.Int64, maxFiles int64, cancel context.CancelFunc) (fileChange, bool) {
+	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff)
+	if count == 0 {
+		return fileChange{}, false
+	}
+	if claimed.Add(1) > maxFiles {
+		cancel()
+		return fileChange{}, false
+	}
+	if !a.dryRun {
+		if err := t.findReplaceProcessFile(wctx, path, newData, a); err != nil {
+			cancel()
+			return fileChange{path: path, count: count, err: err}, true
+		}
+	}
+	fc := fileChange{path: path, count: count}
+	if wantDiff {
+		fc.oldData, fc.newData = oldData, newData
+	}
+	return fc, true
+}
+
+func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool) ([]fileChange, []error, int) {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -300,23 +357,12 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 				if wctx.Err() != nil {
 					continue
 				}
-				count, newData := findReplaceScanFile(path, a, re)
-				if count == 0 {
+				fc, send := t.findReplaceWorkerStep(wctx, path, a, re, wantDiff, &claimed, maxFiles, cancel)
+				if !send {
 					continue
-				}
-				if claimed.Add(1) > maxFiles {
-					cancel()
-					continue
-				}
-				if !a.dryRun {
-					if err := t.findReplaceProcessFile(wctx, path, newData, a); err != nil {
-						results <- fileChange{path: path, count: count, err: err}
-						cancel()
-						continue
-					}
 				}
 				select {
-				case results <- fileChange{path: path, count: count}:
+				case results <- fc:
 				case <-wctx.Done():
 				}
 			}
@@ -354,7 +400,7 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 	return changes, writeErrs, totalReplacements
 }
 
-func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error) string {
+func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff bool) string {
 	var sb strings.Builder
 	if a.dryRun {
 		sb.WriteString("DRY RUN — no files modified.\n\n")
@@ -365,11 +411,10 @@ func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalRepla
 	}
 	fmt.Fprintf(&sb, "%d file(s), %d replacement(s) %s\n\n", len(changes), totalReplacements, verb)
 	for _, c := range changes {
-		rel := c.path
-		if r, err := filepath.Rel(a.Path, c.path); err == nil && !strings.HasPrefix(r, "..") {
-			rel = r
-		}
-		fmt.Fprintf(&sb, "  %s  (%d)\n", rel, c.count)
+		fmt.Fprintf(&sb, "  %s  (%d)\n", findReplaceRelPath(a.Path, c.path), c.count)
+	}
+	if wantDiff {
+		appendFindReplaceDiffs(&sb, changes, a.Path)
 	}
 	if a.dryRun && len(changes) > 0 {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
@@ -382,6 +427,42 @@ func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalRepla
 		sb.WriteString(fe.Error())
 	}
 	return sb.String()
+}
+
+// findReplaceRelPath renders path relative to root, falling back to the
+// absolute path when it lies outside root.
+func findReplaceRelPath(root, path string) string {
+	if r, err := filepath.Rel(root, path); err == nil && !strings.HasPrefix(r, "..") {
+		return r
+	}
+	return path
+}
+
+// appendFindReplaceDiffs writes a per-file unified diff for up to
+// maxFindReplaceDiffFiles changes, then a "+N more file(s)" summary when the
+// set is larger. Files captured without diff content (oversized or unchanged
+// rendering) are skipped silently.
+func appendFindReplaceDiffs(sb *strings.Builder, changes []fileChange, root string) {
+	shown := 0
+	for _, c := range changes {
+		if shown >= maxFindReplaceDiffFiles {
+			break
+		}
+		if c.oldData == nil {
+			continue
+		}
+		d := unifiedDiff(findReplaceRelPath(root, c.path), string(c.oldData), string(c.newData))
+		if d == "" {
+			continue
+		}
+		sb.WriteString("\n")
+		sb.WriteString(d)
+		sb.WriteString("\n")
+		shown++
+	}
+	if remaining := len(changes) - maxFindReplaceDiffFiles; shown >= maxFindReplaceDiffFiles && remaining > 0 {
+		fmt.Fprintf(sb, "\n… +%d more file(s) (diffs omitted)\n", remaining)
+	}
 }
 
 // runFormatterOnFiles runs the appropriate source formatter on each changed
