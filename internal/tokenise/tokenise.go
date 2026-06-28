@@ -17,22 +17,50 @@ func SplitIdentifier(s string) string {
 	if s == "" {
 		return ""
 	}
-	s = strings.NewReplacer("_", " ", "-", " ", ".", " ", "/", " ").Replace(s)
-	var buf strings.Builder
 	runes := []rune(s)
+	var buf strings.Builder
+	buf.Grow(len(s) + len(s)/4)
+	started := false // at least one kept rune has been emitted
+	pending := false // a separator was seen; emit one space before the next kept rune
 	for i, r := range runes {
-		if i > 0 && runes[i-1] != ' ' {
+		if isSeparator(r) {
+			if started {
+				pending = true // collapses runs; never leading (started is false first)
+			}
+			continue
+		}
+		// Case-boundary space — only when the previous rune was itself kept. A
+		// preceding separator already forces the break via pending, mirroring the
+		// old implementation's "no boundary space when the prior char is a space".
+		if started && !pending {
+			prev := runes[i-1]
 			// Split on a lower→upper boundary: "workspacePool" → "workspace pool".
-			lowerToUpper := unicode.IsUpper(r) && !unicode.IsUpper(runes[i-1])
-			// Split before the last uppercase letter of a consecutive-uppercase run
-			// when the next letter is lowercase: "HTTPServer" → "http server".
-			upperSeqToLower := unicode.IsUpper(r) && unicode.IsUpper(runes[i-1]) &&
+			lowerToUpper := unicode.IsUpper(r) && !unicode.IsUpper(prev)
+			// Split before the last uppercase of a consecutive-uppercase run when the
+			// next letter is lowercase: "HTTPServer" → "http server".
+			upperSeqToLower := unicode.IsUpper(r) && unicode.IsUpper(prev) &&
 				i+1 < len(runes) && unicode.IsLower(runes[i+1])
 			if lowerToUpper || upperSeqToLower {
 				buf.WriteRune(' ')
 			}
 		}
+		if pending {
+			buf.WriteRune(' ')
+			pending = false
+		}
 		buf.WriteRune(unicode.ToLower(r))
+		started = true
 	}
-	return strings.Join(strings.Fields(buf.String()), " ")
+	return buf.String()
+}
+
+// isSeparator reports whether r breaks an identifier into tokens: the explicit
+// snake/kebab/dotted/slashed separators, plus any Unicode whitespace (which the
+// previous implementation's terminal strings.Fields collapsed and trimmed).
+func isSeparator(r rune) bool {
+	switch r {
+	case '_', '-', '.', '/':
+		return true
+	}
+	return unicode.IsSpace(r)
 }
