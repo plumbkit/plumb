@@ -17,7 +17,7 @@ New here? Start with the [README](../README.md), then
 
 - [**CLI Reference**](cli-reference.md) — every command, subcommand, and flag.
 - [**Configuration**](configuration.md) — all config sections, environment variables, and a sample `config.toml`.
-- [**Tools (MCP API)**](tools.md) — the 54 tools, with inputs and conventions.
+- [**Tools (MCP API)**](tools.md) — the 55 tools, with inputs and conventions.
 
 ## Concepts
 

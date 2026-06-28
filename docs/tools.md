@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **54** structured tools to AI assistants. Every write tool is
+Plumb exposes **55** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -270,6 +270,15 @@ ripgrep-style content search; smart-case; honours `.gitignore`. **Inputs:**
 `case_sensitive`, `context_lines` (0–10), `max_results` (default 200),
 `include_hidden`, `max_file_bytes`, `include_enclosing_symbol` (bool —
 annotates each hit with the deepest enclosing LSP symbol; requires LSP).
+
+### `file_status`
+Lightweight, read-only "did this file change under me?" probe — no content
+read. **Inputs:** `paths` (array, 1–50, required). Per path reports `git_dirty`
+(uncommitted vs git HEAD/index — untracked counts as dirty),
+`changed_since_plumb_wrote` (on-disk mtime advanced since plumb last wrote it
+this session), `last_writer` (`plumb` | `external` | `unknown`), `mtime`, and
+`size`. Missing files are reported, not an error. Does **not** satisfy strict
+mode's read-before-edit requirement — it is a status probe, not a read.
 
 ---
 

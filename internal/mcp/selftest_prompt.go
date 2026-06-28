@@ -25,7 +25,7 @@ var (
 
 	selftestReads = []string{
 		"read_file", "read_symbol", "read_multiple_files", "list_directory",
-		"list_files", "find_files", "search_in_files",
+		"list_files", "find_files", "search_in_files", "file_status",
 	}
 
 	selftestGitRead = []string{"git"}

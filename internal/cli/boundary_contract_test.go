@@ -25,6 +25,7 @@ var knownToolGuarding = map[string]string{
 	"NewReadFile":              "guard",
 	"NewReadSymbol":            "guard",
 	"NewReadMultipleFiles":     "guard",
+	"NewFileStatus":            "guard",
 	"NewSearchInFiles":         "guard",
 	"NewFindFiles":             "guard",
 	"NewFileDiff":              "guard",
