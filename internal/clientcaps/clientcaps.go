@@ -41,6 +41,13 @@ type Capabilities struct {
 	NativeShell    bool // arbitrary shell access
 	NativeLSP      bool // native semantic/LSP understanding of code
 
+	// SchemaDiscoveryOnly is true when the client can only invoke tools it has
+	// been advertised in tools/list (it builds its tool set, including any
+	// deferred-tool/ToolSearch list, from that response). A tool hidden from
+	// tools/list is then unreachable — the lean profile's "callable by name"
+	// escape hatch does not apply — so such a client must get the full profile.
+	SchemaDiscoveryOnly bool
+
 	Tokeniser Family
 }
 
@@ -58,12 +65,18 @@ var registry = []Capabilities{
 		Tokeniser: FamilyClaude,
 	},
 	{
-		Name:           "claude-code",
-		Prefixes:       []string{"claude-code"},
-		NativeFileRead: true,
-		NativeSearch:   true,
-		NativeShell:    true,
-		Tokeniser:      FamilyClaude,
+		// Claude Code builds its tool list (and its ToolSearch deferred-tool list)
+		// only from tools/list, so a lean-hidden tool has no schema to load and
+		// cannot be invoked — it therefore needs the full profile. Codex and Gemini
+		// stay unflagged (still lean) until their invocation behaviour is likewise
+		// verified.
+		Name:                "claude-code",
+		Prefixes:            []string{"claude-code"},
+		NativeFileRead:      true,
+		NativeSearch:        true,
+		NativeShell:         true,
+		SchemaDiscoveryOnly: true,
+		Tokeniser:           FamilyClaude,
 	},
 	{
 		Name:           "codex",
