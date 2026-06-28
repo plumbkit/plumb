@@ -55,6 +55,7 @@ type mockDaemon struct {
 	mcpToolResult bool         // answer tool calls with an MCP content-array result shape
 	version       string       // serverInfo.version in the initialize reply; default "1.0.0-mock"
 	noServerInfo  bool         // emit the legacy initialize shape without serverInfo
+	onInit        func([]byte) // when set, called with each initialize frame the daemon receives
 }
 
 func startMockDaemon(m *mockDaemon) {
@@ -68,6 +69,9 @@ func startMockDaemon(m *mockDaemon) {
 			e := parseEnvelope(frame)
 			switch {
 			case e.Method == "initialize":
+				if m.onInit != nil {
+					m.onInit(frame)
+				}
 				if m.noServerInfo {
 					_ = writeFrame(m.conn, fmt.Appendf(nil,
 						`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05"}}`, e.ID))
@@ -124,7 +128,7 @@ type proxyHarness struct {
 	proxy     *reconnectingProxy
 }
 
-func startProxy(t *testing.T, initialProxySide net.Conn, hb, pingTO time.Duration) *proxyHarness {
+func startProxy(t *testing.T, initialProxySide net.Conn, hb, pingTO time.Duration, allowDirs ...string) *proxyHarness {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -150,6 +154,7 @@ func startProxy(t *testing.T, initialProxySide net.Conn, hb, pingTO time.Duratio
 		killDaemon:        func(int) { h.killCount.Add(1) },
 		heartbeatInterval: hb,
 		pingTimeout:       pingTO,
+		allowDirs:         allowDirs,
 		maxReconnects:     3,
 		baseBackoff:       time.Millisecond,
 		// Generous waits: these fire only on failure, but a tight deadline

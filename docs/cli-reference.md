@@ -74,6 +74,13 @@ prints a warning to stderr suggesting `plumb restart` to refresh.
 | Flag | Default | Effect |
 |---|---|---|
 | `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
+| `--allow-dir <path>` | — | Grant an extra **read-write** root to this connection (repeatable). Additive to the detected workspace and config `extra_roots`; never replaces them. Also read from `PLUMB_ALLOWED_DIRS` (OS-list-separated). Each path is `$VAR`-expanded and made absolute, then canonicalised (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
+
+The `--allow-dir` grant is transported to the daemon inside the captured
+`initialize` frame's `params._meta` (`dev.plumbkit/allow-dirs`), so it rides the
+handshake replay automatically — a reconnected daemon re-applies it with no
+separate message. The grant is per-connection: it never leaks into another
+client's session, and it survives a workspace re-pin.
 
 ---
 

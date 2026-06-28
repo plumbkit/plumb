@@ -41,6 +41,13 @@ const (
 	codeInvalidParams  = -32602
 )
 
+// MetaAllowDirsKey is the MCP initialize-params `_meta` key under which
+// `plumb serve` transports per-connection extra read-write roots (`--allow-dir`
+// / PLUMB_ALLOWED_DIRS). It travels inside the captured initialize frame, so the
+// resilient proxy's handshake replay re-applies it on every reconnect for free.
+// Reverse-DNS namespaced per the MCP `_meta` convention.
+const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
+
 // RequestFn sends a server-initiated JSON-RPC request to the MCP client and
 // returns the decoded result payload, or an error if the call fails or times out.
 type RequestFn func(ctx context.Context, method string, params any) (json.RawMessage, error)
@@ -135,6 +142,14 @@ type Server struct {
 	// OnClientInfo is called once during the initialize exchange with the
 	// client's self-reported name and version.
 	OnClientInfo func(ctx context.Context, name, version string)
+
+	// OnAllowDirs is called once during the initialize exchange with the extra
+	// read-write roots the client transported in the initialize params'
+	// _meta[MetaAllowDirsKey] field (see `plumb serve --allow-dir`). It runs
+	// synchronously, before OnInit attaches the workspace, so the roots are
+	// available when the connection's PathPolicy is first built. Empty/absent ⇒
+	// not called.
+	OnAllowDirs func(ctx context.Context, dirs []string)
 
 	// ToolFilter, if set, decides which tools appear in tools/list: a tool whose
 	// name it rejects is hidden from the advertised set but STAYS CALLABLE via

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 // Newline-delimited JSON-RPC framing for the resilient serve proxy.
@@ -92,6 +94,66 @@ func idKey(raw json.RawMessage) string {
 		return string(trimmed)
 	}
 	return string(b)
+}
+
+// injectAllowDirs folds the client-granted extra read-write roots into an
+// initialize request frame's params._meta[mcp.MetaAllowDirsKey] array, returning
+// the augmented frame. Because the resilient proxy captures and replays this
+// exact frame, the allow-dirs travel with every handshake replay automatically —
+// no separate post-initialize control message is needed.
+//
+// Fully fail-safe and zero-cost when there is nothing to add: an empty dirs
+// slice, or any frame that does not round-trip as a JSON object with an object
+// params, is returned unchanged — so a session with no --allow-dir behaves
+// exactly as before. An existing _meta is preserved; only the one key is set.
+func injectAllowDirs(frame []byte, dirs []string) []byte {
+	if len(dirs) == 0 {
+		return frame
+	}
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(frame, &full); err != nil {
+		return frame
+	}
+	paramsRaw, ok := full["params"]
+	params := map[string]json.RawMessage{}
+	if ok {
+		if err := json.Unmarshal(paramsRaw, &params); err != nil {
+			return frame
+		}
+	}
+	meta := map[string]json.RawMessage{}
+	if metaRaw, ok := params["_meta"]; ok {
+		if err := json.Unmarshal(metaRaw, &meta); err != nil {
+			return frame
+		}
+	}
+	dirsRaw, err := json.Marshal(dirs)
+	if err != nil {
+		return frame
+	}
+	meta[mcp.MetaAllowDirsKey] = dirsRaw
+	if !encodeInto(meta, params, "_meta") {
+		return frame
+	}
+	if !encodeInto(params, full, "params") {
+		return frame
+	}
+	out, err := json.Marshal(full)
+	if err != nil {
+		return frame
+	}
+	return out
+}
+
+// encodeInto marshals child and stores it under key in parent, reporting
+// success. A helper purely to keep injectAllowDirs flat (gocyclo).
+func encodeInto(child any, parent map[string]json.RawMessage, key string) bool {
+	raw, err := json.Marshal(child)
+	if err != nil {
+		return false
+	}
+	parent[key] = raw
+	return true
 }
 
 func cloneBytes(b []byte) []byte {
