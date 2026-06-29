@@ -292,6 +292,23 @@ func LoadProject(base Config, workspace string) (Config, error) {
 	// (untrusted) .plumb/config.toml cannot rebind the web port or flip the theme.
 	merged.Web = base.Web
 	merged.UI = base.UI
+	// [semantics] configures an OUTBOUND embedding endpoint plus the credentials
+	// sent to it. Like [web]/[ui] it is a daemon-global concern, not a per-project
+	// one. If an untrusted project .plumb/config.toml could set provider/base_url/
+	// api_key_env, a routine topology_search would become an SSRF + secret-exfil
+	// primitive: Resolve() runs os.Getenv on the attacker-named variable and the
+	// client POSTs it as a bearer token to the attacker-named URL. Force the global
+	// (trusted) values to win regardless of what the project file sets.
+	merged.Semantics = base.Semantics
+	// [workspace] extra_roots / read_roots widen the filesystem-access allowlist —
+	// extra_roots to read-WRITE roots, read_roots to read-only — and take effect on
+	// attach with no per-call confirmation. A cloned hostile repo shipping
+	// extra_roots = ["/"] would otherwise gain read-write access outside the
+	// workspace the moment a session attaches, defeating the "a write outside the
+	// workspace is refused by construction" invariant. These roots are global-only
+	// (the agent_config tool already treats them as un-writable); force them to base.
+	merged.Workspace.ExtraRoots = base.Workspace.ExtraRoots
+	merged.Workspace.ReadRoots = base.Workspace.ReadRoots
 	normaliseConfig(&merged)
 	if err := validate(merged); err != nil {
 		return base, fmt.Errorf("invalid project config: %w", err)

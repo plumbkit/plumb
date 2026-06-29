@@ -107,14 +107,14 @@ func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
 		settingsScopeCursor: 1,
 	}
 	m.settingsItems = m.buildScopeItems()
-	m.settingsCursor = cursorFor(m.settingsItems, skReadRoots)
+	m.settingsCursor = cursorFor(m.settingsItems, skExcludePatterns)
 	if m.settingsCursor < 0 {
-		t.Fatal("read_roots row missing from workspace scope")
+		t.Fatal("exclude_patterns row missing from workspace scope")
 	}
 
 	m = m.activateSetting()
 	if m.settingsListEditor == nil {
-		t.Fatal("activating read_roots should open the list editor")
+		t.Fatal("activating exclude_patterns should open the list editor")
 	}
 	for _, entry := range []string{"/a", "/b"} {
 		m.settingsListEditor.adding = true
@@ -137,8 +137,8 @@ func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(merged.Workspace.ReadRoots) != 1 || merged.Workspace.ReadRoots[0] != "/b" {
-		t.Errorf("read_roots = %v, want [/b]", merged.Workspace.ReadRoots)
+	if len(merged.Topology.ExcludePatterns) != 1 || merged.Topology.ExcludePatterns[0] != "/b" {
+		t.Errorf("exclude_patterns = %v, want [/b]", merged.Topology.ExcludePatterns)
 	}
 }
 
@@ -152,7 +152,7 @@ func TestListEditor_EscAutoSaves(t *testing.T) {
 		settingsScopeCursor: 1,
 	}
 	m.settingsItems = m.buildScopeItems()
-	m.settingsCursor = cursorFor(m.settingsItems, skReadRoots)
+	m.settingsCursor = cursorFor(m.settingsItems, skExcludePatterns)
 	m = m.activateSetting()
 	m.settingsListEditor.adding = true
 	m.settingsListEditor.input = "/x"
@@ -169,8 +169,8 @@ func TestListEditor_EscAutoSaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(merged.Workspace.ReadRoots) != 1 || merged.Workspace.ReadRoots[0] != "/x" {
-		t.Errorf("read_roots = %v, want [/x] (esc auto-saves)", merged.Workspace.ReadRoots)
+	if len(merged.Topology.ExcludePatterns) != 1 || merged.Topology.ExcludePatterns[0] != "/x" {
+		t.Errorf("exclude_patterns = %v, want [/x] (esc auto-saves)", merged.Topology.ExcludePatterns)
 	}
 }
 
