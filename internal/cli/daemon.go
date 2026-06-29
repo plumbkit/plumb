@@ -20,6 +20,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/web"
 )
@@ -237,6 +238,18 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	statsStore := newStatsStore()
 	defer statsStore.Close()
 
+	// session_state.db persists the per-connection state (strict-mode read tracking
+	// + the pinned workspace) that must survive a daemon restart, so the resilient
+	// proxy's reconnect is transparent. A failure to open degrades gracefully:
+	// sessState stays nil and every persist/rehydrate call no-ops.
+	sessState, err := sessionstate.Open()
+	if err != nil {
+		slog.Warn("daemon: session-state persistence unavailable; a restart will not rehydrate sessions", "err", err)
+		sessState = nil
+	}
+	defer sessState.Close()
+	pruneSessionState(sessState, cfg.Session.PersistStateTTLMinutes)
+
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()
 	pool.startJanitor(ctx)
@@ -323,19 +336,33 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, store, statsStore, daemonStartedAt, budgets, registry)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
 	return nil
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+// pruneSessionState reclaims persisted per-connection state older than the TTL,
+// dropping rows left by a serve proxy that died without reconnecting. A TTL of 0
+// disables pruning (state lingers until the next daemon restart with a positive
+// TTL). Best-effort and nil-safe.
+func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int) {
+	if sessState == nil || ttlMinutes <= 0 {
+		return
+	}
+	if err := sessState.Prune(time.Now().Add(-time.Duration(ttlMinutes) * time.Minute)); err != nil {
+		slog.Debug("daemon: session-state prune failed", "err", err)
+	}
+}
+
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	var wg sync.WaitGroup
 
 	// Idle-session reaper: cancel connections that have not called any tool
-	// for longer than the configured eviction TTL.
+	// for longer than the configured eviction TTL, and prune expired persisted
+	// per-connection state on the same tick.
 	go func() {
 		ticker := time.NewTicker(reaperInterval)
 		defer ticker.Stop()
-		runIdleReaper(ctx, store, registry, ticker.C)
+		runIdleReaper(ctx, store, registry, sessState, ticker.C)
 	}()
 
 	go func() {
@@ -377,7 +404,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, memPool, store, statsStore, daemonStartedAt, budgets, registry)
+			handleConn(ctx, conn, pool, topoPool, memPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
 		})
 	}
 }
@@ -405,9 +432,9 @@ func serverWriteTimeout() time.Duration {
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	defer conn.Close()
-	s := newConnSession(ctx, pool, topoPool, store, statsStore, budgets)
+	s := newConnSession(ctx, pool, topoPool, store, statsStore, sessState, budgets)
 	s.memoryPool = memPool
 	registry.add(s.sessID, connHandle{
 		cancel:        s.cancel,

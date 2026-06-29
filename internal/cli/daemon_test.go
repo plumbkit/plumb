@@ -415,7 +415,7 @@ func TestNewConnSession_ContextWiring(t *testing.T) {
 
 	t.Run("daemon shutdown cancels the session", func(t *testing.T) {
 		parent, cancelParent := context.WithCancel(context.Background())
-		s := newConnSession(parent, pool, nil, store, nil, newSharedBudgets())
+		s := newConnSession(parent, pool, nil, store, nil, nil, newSharedBudgets())
 		defer s.close()
 		cancelParent() // daemon-wide shutdown
 		select {
@@ -426,7 +426,7 @@ func TestNewConnSession_ContextWiring(t *testing.T) {
 	})
 
 	t.Run("idle eviction cancels the session", func(t *testing.T) {
-		s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
+		s := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
 		defer s.close()
 		s.cancel() // exactly what connRegistry.evictIdle invokes via the registry
 		select {
@@ -449,7 +449,7 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(context.Background(), serverConn, pool, nil, nil, store, nil, time.Now(), newSharedBudgets(), registry)
+		handleConn(context.Background(), serverConn, pool, nil, nil, store, nil, nil, time.Now(), newSharedBudgets(), registry)
 		close(done)
 	}()
 
@@ -484,7 +484,7 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 	reaperCtx, cancelReaper := context.WithCancel(context.Background())
 	defer cancelReaper()
 	ticks := make(chan time.Time)
-	go runIdleReaper(reaperCtx, store, registry, ticks)
+	go runIdleReaper(reaperCtx, store, registry, nil, ticks)
 	ticks <- time.Now()
 
 	select {
@@ -543,7 +543,7 @@ func TestConnSession_LoggerCarriesSessionID(t *testing.T) {
 	defer slog.SetDefault(prev)
 
 	store := config.NewStore(config.Defaults())
-	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, newSharedBudgets())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
 	defer s.close()
 
 	// Emit one record via the session logger (session-scoped).

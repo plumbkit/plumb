@@ -294,6 +294,8 @@ var settingDottedKeys = map[settingKey]string{
 	skProtectedBranches:         "git.protected_branches",
 	skIdleThresholdMin:          "session.idle_threshold_minutes",
 	skEvictionTTLMin:            "session.eviction_ttl_minutes",
+	skPersistState:              "session.persist_state",
+	skPersistStateTTLMin:        "session.persist_state_ttl_minutes",
 	skMemoryEnabled:             "memory.enabled",
 	skMemoryGeneratedSummaries:  "memory.generated_summaries",
 	skMemoryInjectHints:         "memory.inject_hints",

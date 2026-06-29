@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log/slog"
@@ -68,6 +69,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		killDaemon:        killHungDaemon,
 		heartbeatInterval: proxyHeartbeatInterval(),
 		allowDirs:         allowDirs,
+		proxySessionID:    newProxySessionID(),
 	})
 	return p.run(ctx)
 }
@@ -96,6 +98,22 @@ func resolveAllowDirs(flags []string, env string) []string {
 		out = append(out, d)
 	}
 	return out
+}
+
+// newProxySessionID returns a fresh, process-stable proxy session ID (a random
+// UUIDv4). Generated once per `plumb serve` and injected into the captured
+// initialize frame's _meta, identical across every handshake replay so the
+// daemon can correlate a reconnected connection after a restart. A crypto/rand
+// failure (vanishingly rare) yields "" — the daemon then treats the connection
+// as fresh, which is the safe fallback.
+func newProxySessionID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // proxyReconnectEnabled reports whether the resilient reconnecting proxy is

@@ -16,10 +16,21 @@ import (
 // mtime unchanged (a same-tick write, or a tool that preserves mtime such as
 // `cp -p` or some formatters) — a change an mtime-only comparison misses.
 //
-// Concurrency: all methods are safe for concurrent use.
+// Concurrency: all methods are safe for concurrent use. The optional persist
+// sink set by SetPersistSink is invoked outside the tracker lock, so it may do
+// blocking I/O without stalling concurrent reads.
 type ReadTracker struct {
 	mu      sync.RWMutex
 	entries map[string]readEntry // filepath.Clean(path) → last-read state
+	persist func(path string, mtime time.Time, sha string)
+}
+
+// ReadRecord is one path's recorded read state, used to rehydrate a tracker
+// from a persisted store (e.g. after a daemon restart).
+type ReadRecord struct {
+	Path  string
+	Mtime time.Time
+	SHA   string
 }
 
 // readEntry is the state read_file observed for a path: its mtime and the
@@ -41,8 +52,41 @@ func (r *ReadTracker) Record(path string, mtime time.Time, sha string) {
 	if r == nil {
 		return
 	}
+	clean := filepath.Clean(path)
 	r.mu.Lock()
-	r.entries[filepath.Clean(path)] = readEntry{mtime: mtime, sha: sha}
+	r.entries[clean] = readEntry{mtime: mtime, sha: sha}
+	persist := r.persist
+	r.mu.Unlock()
+	// Persist outside the lock; last-writer-wins races on the store are benign
+	// and converge with the in-memory map.
+	if persist != nil {
+		persist(clean, mtime, sha)
+	}
+}
+
+// SetPersistSink installs a sink called after every Record with the recorded
+// (path, mtime, sha), so reads can be mirrored to a durable store. The sink
+// runs outside the tracker lock. Pass nil to disable. nil-safe.
+func (r *ReadTracker) SetPersistSink(fn func(path string, mtime time.Time, sha string)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.persist = fn
+	r.mu.Unlock()
+}
+
+// Hydrate loads previously-recorded reads into the tracker without firing the
+// persist sink (the records came from the store; re-persisting them is wasted
+// work). Existing entries for the same paths are overwritten. nil-safe.
+func (r *ReadTracker) Hydrate(records []ReadRecord) {
+	if r == nil || len(records) == 0 {
+		return
+	}
+	r.mu.Lock()
+	for _, rec := range records {
+		r.entries[filepath.Clean(rec.Path)] = readEntry{mtime: rec.Mtime, sha: rec.SHA}
+	}
 	r.mu.Unlock()
 }
 

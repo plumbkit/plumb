@@ -26,13 +26,13 @@ func TestAllowDir_PerConnectionIsolation(t *testing.T) {
 
 	// Connection A: grant the allow-dir (as serve transports it during initialize),
 	// then attach the workspace (as OnInit does after).
-	sessA := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
+	sessA := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
 	defer sessA.close()
 	sessA.onAllowDirs([]string{allowDir})
 	sessA.attachWorkspace(context.Background(), "file://"+ws)
 
 	// Connection B: same workspace, no allow-dir.
-	sessB := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
+	sessB := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
 	defer sessB.close()
 	sessB.attachWorkspace(context.Background(), "file://"+ws)
 
@@ -69,7 +69,7 @@ func TestAllowDir_PreservedAcrossRepin(t *testing.T) {
 	allowDir := freshTempDir(t)
 	target := filepath.Join(allowDir, "file.txt")
 
-	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
+	s := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
 	defer s.close()
 	s.onAllowDirs([]string{allowDir})
 	s.attachWorkspace(context.Background(), "file://"+rootA)

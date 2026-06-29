@@ -412,8 +412,10 @@ resync_interval_minutes = 60                # periodic full resync FALLBACK (sup
 watch                   = true              # OS-level file watching: re-index on change, whoever made it
 
 [session]
-idle_threshold_minutes = 30                 # TUI idle marker threshold (cosmetic)
-eviction_ttl_minutes   = 60                 # daemon force-closes a connection idle this long; 0 disables
+idle_threshold_minutes    = 30              # TUI idle marker threshold (cosmetic)
+eviction_ttl_minutes      = 60              # daemon force-closes a connection idle this long; 0 disables
+persist_state             = true            # persist read-tracking + pinned workspace across a daemon restart (env PLUMB_PERSIST_SESSION_STATE)
+persist_state_ttl_minutes = 1440            # how long persisted per-connection state lingers before pruning; 0 disables pruning
 
 [lsp_query]
 timeout = "30s"          # per-operation cap; 0 disables; global only

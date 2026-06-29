@@ -51,8 +51,10 @@ var defaults = Config{
 		Watch:                 true,
 	},
 	Session: SessionConfig{
-		IdleThresholdMinutes: 30,
-		EvictionTTLMinutes:   60,
+		IdleThresholdMinutes:   30,
+		EvictionTTLMinutes:     60,
+		PersistState:           true,
+		PersistStateTTLMinutes: 1440,
 	},
 	Memory: MemoryConfig{
 		Enabled:             true,

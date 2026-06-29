@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 // connHandle is the per-connection state the registry tracks: the cancel func
@@ -161,7 +162,7 @@ func (r *connRegistry) evictIdle(ttl time.Duration) {
 // reaperInterval is how often the idle-session reaper runs.
 const reaperInterval = 5 * time.Minute
 
-func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegistry, ticks <-chan time.Time) {
+func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegistry, sessState *sessionstate.Store, ticks <-chan time.Time) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -171,6 +172,7 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 				return
 			}
 			cur := store.Current()
+			pruneSessionState(sessState, cur.Session.PersistStateTTLMinutes)
 			// Always run summariseIdle (no global gate): the per-session closure
 			// re-checks the project [memory] config, so a per-project episodic
 			// opt-in is honoured even when the global default is off. The threshold

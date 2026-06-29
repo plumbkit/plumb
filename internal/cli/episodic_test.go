@@ -182,7 +182,7 @@ func TestRunIdleReaper_SummarisesWhenGlobalSummariesOff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ticks := make(chan time.Time)
-	go runIdleReaper(ctx, store, reg, ticks)
+	go runIdleReaper(ctx, store, reg, nil, ticks)
 	ticks <- time.Now()
 
 	deadline := time.After(episodicWaitDeadline)
@@ -238,7 +238,7 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	ss := newStatsStore()
 	defer ss.Close()
 
-	s := newConnSession(context.Background(), detectTestPool(), nil, store, ss, newSharedBudgets())
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, ss, nil, newSharedBudgets())
 	defer s.close()
 	s.mutate(func(v *sessionView) { v.acquiredRoot = ws })
 

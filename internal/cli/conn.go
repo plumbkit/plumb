@@ -27,6 +27,7 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/quality"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/topology"
 )
@@ -79,6 +80,7 @@ type sessionView struct {
 	semantics config.SemanticsConfig
 	memory    config.MemoryConfig
 	tools     config.ToolsConfig
+	session   config.SessionConfig
 	// tasks holds the resolved [tasks.<lang>] command templates; agentConfigWrites
 	// is the resolved enable knob for the agent-writable-config tool. Both are
 	// swapped per project on every attach / re-pin / reload, like the blocks above.
@@ -115,6 +117,14 @@ type sessionView struct {
 	// extra_roots. Set once during the initialize exchange, before attach, and
 	// preserved across re-pins (a re-pin keeps the client's grant).
 	allowDirs []string
+
+	// proxySessionID is the stable per-proxy session ID `plumb serve` transported
+	// in the initialize params' _meta (see onProxySession). It keys the persisted
+	// per-connection state (read-tracking, pinned workspace) so a reconnected
+	// connection after a daemon restart rehydrates rather than starting fresh. Set
+	// once during the initialize exchange, before attach, and preserved across
+	// re-pins. "" when the client is not a session-id-injecting serve proxy.
+	proxySessionID string
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,
@@ -130,7 +140,11 @@ type connSession struct {
 	pool       *workspacePool
 	store      *config.Store
 	statsStore *statsStore
-	budgets    *sharedBudgets
+	// sessionState persists read-tracking + the pinned workspace across daemon
+	// restarts. nil when persistence could not be opened ⇒ all persist/rehydrate
+	// calls no-op (see conn_persist.go).
+	sessionState *sessionstate.Store
+	budgets      *sharedBudgets
 
 	sessID string
 
@@ -201,7 +215,7 @@ func (s *connSession) mutate(fn func(v *sessionView)) {
 // daemon-wide shutdown cancels every session; s.cancel() additionally lets the
 // idle reaper cancel one session in isolation. handleConn drives mcp.Serve on
 // s.ctx, so either cancellation makes Serve return and the deferred cleanup run.
-func newConnSession(parent context.Context, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, budgets *sharedBudgets) *connSession {
+func newConnSession(parent context.Context, pool *workspacePool, topoPool *topologyPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, budgets *sharedBudgets) *connSession {
 	cfg := store.Current()
 	ttl := cfg.Cache.TTL.Duration
 	sessName := session.GenerateName()
@@ -218,6 +232,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		hintCache:    &memoryHintCache{},
 		store:        store,
 		statsStore:   statsStore,
+		sessionState: sessState,
 		budgets:      budgets,
 		sessID:       sessID,
 		ttl:          ttl,
@@ -239,7 +254,12 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		semantics: cfg.Semantics,
 		memory:    cfg.Memory,
 		tools:     cfg.Tools,
+		session:   cfg.Session,
 	})
+	// Mirror every strict-mode read to the durable store so it survives a daemon
+	// restart; the sink reads the live view (proxy id + workspace + gate) per call,
+	// so it is correct across re-pins and a no-op when persistence is off.
+	s.readTracker.SetPersistSink(s.persistRead)
 	// Re-merge the per-project view whenever the global base config changes, so
 	// a global edit (TUI, external editor, or `plumb config reload`) propagates
 	// to every live session without a daemon restart.
