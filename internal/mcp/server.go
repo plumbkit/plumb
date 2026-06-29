@@ -48,6 +48,13 @@ const (
 // Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 
+// MetaProxySessionKey is the MCP initialize-params `_meta` key under which
+// `plumb serve` transports its stable per-proxy session ID. It is identical
+// across every handshake replay, so the daemon can recognise a reconnected
+// connection (after a daemon restart) as a continuation of the previous one and
+// rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
+const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
+
 // RequestFn sends a server-initiated JSON-RPC request to the MCP client and
 // returns the decoded result payload, or an error if the call fails or times out.
 type RequestFn func(ctx context.Context, method string, params any) (json.RawMessage, error)
@@ -150,6 +157,13 @@ type Server struct {
 	// available when the connection's PathPolicy is first built. Empty/absent ⇒
 	// not called.
 	OnAllowDirs func(ctx context.Context, dirs []string)
+
+	// OnProxySession is called once during the initialize exchange with the stable
+	// proxy session ID the client transported in _meta[MetaProxySessionKey]. It
+	// runs synchronously, before OnInit attaches the workspace, so the ID is
+	// available when the connection rehydrates persisted state. Empty/absent ⇒
+	// not called.
+	OnProxySession func(ctx context.Context, id string)
 
 	// ToolFilter, if set, decides which tools appear in tools/list: a tool whose
 	// name it rejects is hidden from the advertised set but STAYS CALLABLE via

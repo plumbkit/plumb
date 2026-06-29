@@ -96,18 +96,18 @@ func idKey(raw json.RawMessage) string {
 	return string(b)
 }
 
-// injectAllowDirs folds the client-granted extra read-write roots into an
-// initialize request frame's params._meta[mcp.MetaAllowDirsKey] array, returning
-// the augmented frame. Because the resilient proxy captures and replays this
-// exact frame, the allow-dirs travel with every handshake replay automatically —
-// no separate post-initialize control message is needed.
+// injectInitMeta folds the given key/value pairs into an initialize request
+// frame's params._meta object in a single pass, returning the augmented frame.
+// Because the resilient proxy captures and replays this exact frame, the
+// metadata travels with every handshake replay automatically — no separate
+// post-initialize control message is needed.
 //
-// Fully fail-safe and zero-cost when there is nothing to add: an empty dirs
-// slice, or any frame that does not round-trip as a JSON object with an object
-// params, is returned unchanged — so a session with no --allow-dir behaves
-// exactly as before. An existing _meta is preserved; only the one key is set.
-func injectAllowDirs(frame []byte, dirs []string) []byte {
-	if len(dirs) == 0 {
+// Fully fail-safe and zero-cost when there is nothing to add: an empty kv map,
+// or any frame that does not round-trip as a JSON object with an object params,
+// is returned unchanged — so a session that injects nothing behaves exactly as
+// before. An existing _meta is preserved; only the given keys are set.
+func injectInitMeta(frame []byte, kv map[string]json.RawMessage) []byte {
+	if len(kv) == 0 {
 		return frame
 	}
 	var full map[string]json.RawMessage
@@ -127,11 +127,9 @@ func injectAllowDirs(frame []byte, dirs []string) []byte {
 			return frame
 		}
 	}
-	dirsRaw, err := json.Marshal(dirs)
-	if err != nil {
-		return frame
+	for k, v := range kv {
+		meta[k] = v
 	}
-	meta[mcp.MetaAllowDirsKey] = dirsRaw
 	if !encodeInto(meta, params, "_meta") {
 		return frame
 	}
@@ -145,8 +143,38 @@ func injectAllowDirs(frame []byte, dirs []string) []byte {
 	return out
 }
 
+// buildInitMeta assembles the _meta key/values the proxy injects into the
+// initialize frame: the client-granted allow-dirs (when any) and the stable
+// proxy session ID (when set). Returns nil when there is nothing to inject, so
+// the frame is left byte-identical.
+func buildInitMeta(dirs []string, proxySessionID string) map[string]json.RawMessage {
+	meta := map[string]json.RawMessage{}
+	if len(dirs) > 0 {
+		if raw, err := json.Marshal(dirs); err == nil {
+			meta[mcp.MetaAllowDirsKey] = raw
+		}
+	}
+	if proxySessionID != "" {
+		if raw, err := json.Marshal(proxySessionID); err == nil {
+			meta[mcp.MetaProxySessionKey] = raw
+		}
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
+}
+
+// injectAllowDirs folds the client-granted extra read-write roots into an
+// initialize request frame's params._meta[mcp.MetaAllowDirsKey] array. Thin
+// wrapper over injectInitMeta retained for the direct allow-dir tests; an empty
+// dirs slice or a non-object frame is returned unchanged.
+func injectAllowDirs(frame []byte, dirs []string) []byte {
+	return injectInitMeta(frame, buildInitMeta(dirs, ""))
+}
+
 // encodeInto marshals child and stores it under key in parent, reporting
-// success. A helper purely to keep injectAllowDirs flat (gocyclo).
+// success. A helper purely to keep injectInitMeta flat (gocyclo).
 func encodeInto(child any, parent map[string]json.RawMessage, key string) bool {
 	raw, err := json.Marshal(child)
 	if err != nil {

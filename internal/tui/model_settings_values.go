@@ -125,6 +125,7 @@ var numberMetaTable = map[settingKey]struct {
 	skQualityMaxFindings:        {1, "max findings/file"},
 	skIdleThresholdMin:          {5, "idle threshold (min)"},
 	skEvictionTTLMin:            {5, "eviction ttl (min)"},
+	skPersistStateTTLMin:        {60, "persist state ttl (min)"},
 	skChildScanDepth:            {1, "child scan depth"},
 	skSemRerankCandidates:       {10, "rerank candidates"},
 	skMemoryHintBudgetBytes:     {128, "hint budget (B)"},
@@ -178,6 +179,8 @@ func intFieldMore(c *config.Config, key settingKey) *int {
 		return &c.Session.IdleThresholdMinutes
 	case skEvictionTTLMin:
 		return &c.Session.EvictionTTLMinutes
+	case skPersistStateTTLMin:
+		return &c.Session.PersistStateTTLMinutes
 	case skChildScanDepth:
 		return &c.Workspace.ChildScanDepth
 	case skSemRerankCandidates:
@@ -282,6 +285,8 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Memory.GeneratedSummaries
 	case skMemoryInjectHints:
 		return &c.Memory.InjectHints
+	case skPersistState:
+		return &c.Session.PersistState
 	default:
 		return nil
 	}
@@ -414,6 +419,8 @@ func toggleLabelMore(key settingKey) string {
 		return "generated summaries"
 	case skMemoryInjectHints:
 		return "inject hints"
+	case skPersistState:
+		return "persist session state"
 	default:
 		return ""
 	}

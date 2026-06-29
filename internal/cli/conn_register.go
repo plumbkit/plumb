@@ -182,6 +182,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnAllowDirs = func(_ context.Context, dirs []string) {
 		s.onAllowDirs(dirs)
 	}
+	srv.OnProxySession = func(_ context.Context, id string) {
+		s.onProxySession(id)
+	}
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError)
 	}
@@ -194,6 +197,11 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		})
 		s.setClientRequest(request)
 		s.attachWorkspace(initCtx, rootFromRoots(initCtx, request))
+		if s.workspace() == "" {
+			// Client reported no roots (e.g. Claude Desktop). Re-pin from the
+			// persisted pin so a restart does not strand the connection unpinned.
+			s.rehydratePin(initCtx)
+		}
 		s.applyProjectConfig(s.workspace())
 		s.startConfigWatcher()
 	}

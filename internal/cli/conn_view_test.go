@@ -30,7 +30,7 @@ func TestSessionView_ConcurrentReadsDuringMutation(t *testing.T) {
 	mustGitDir(t, rootB)
 	allowed := map[string]bool{"": true, rootA: true, rootB: true}
 
-	s := newConnSession(context.Background(), pool, nil, store, nil, newSharedBudgets())
+	s := newConnSession(context.Background(), pool, nil, store, nil, nil, newSharedBudgets())
 	defer s.close()
 
 	var wg sync.WaitGroup

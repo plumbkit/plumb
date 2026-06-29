@@ -127,6 +127,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PLUMB_TOOLS_PROFILE"); v != "" {
 		cfg.Tools.Profile = v
 	}
+	if v, ok := envBool("PLUMB_PERSIST_SESSION_STATE"); ok {
+		cfg.Session.PersistState = v
+	}
 	normaliseConfig(cfg)
 }
 

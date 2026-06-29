@@ -41,6 +41,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.semantics = projectCfg.Semantics
 		v.memory = projectCfg.Memory
 		v.tools = projectCfg.Tools
+		v.session = projectCfg.Session
 		v.tasks = projectCfg.Tasks
 		v.agentConfigWrites = projectCfg.AgentConfigWrites
 		if !cfgMtime.IsZero() {

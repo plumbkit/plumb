@@ -63,6 +63,13 @@ type proxyDeps struct {
 	// per-connection and ride every handshake replay. Empty ⇒ frame untouched.
 	allowDirs []string
 
+	// proxySessionID is this serve proxy's stable per-process session ID, folded
+	// into the captured initialize frame's _meta. Identical across every handshake
+	// replay, so the daemon recognises a reconnected connection (after a daemon
+	// restart) as a continuation and rehydrates its persisted state. Empty ⇒ frame
+	// untouched (and the daemon falls back to a fresh, non-rehydrated session).
+	proxySessionID string
+
 	heartbeatInterval time.Duration // 0 disables hang detection
 	pingTimeout       time.Duration
 	maxReconnects     int
@@ -280,16 +287,16 @@ func (p *reconnectingProxy) writeClient(frame []byte) {
 func (p *reconnectingProxy) out() io.Writer { return p.deps.out }
 
 // captureHandshake records the handshake frames for replay and returns the
-// frame to forward — for initialize the allow-dirs-augmented frame
-// (injectAllowDirs), so the extra roots reach the daemon on the first connect
-// and on every replay. Runs *before* the write so the handshake stays
+// frame to forward — for initialize the _meta-augmented frame (injectInitMeta:
+// allow-dirs + the stable proxy session ID), so they reach the daemon on the
+// first connect and on every replay. Runs *before* the write so the handshake stays
 // replayable even if the daemon dies mid-write; in-flight tracking is not done
 // here — see trackOutstanding.
 func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 	e := parseEnvelope(frame)
 	switch {
 	case e.Method == "initialize" && e.hasID():
-		frame = injectAllowDirs(frame, p.deps.allowDirs)
+		frame = injectInitMeta(frame, buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID))
 		p.hsMu.Lock()
 		p.initializeFrame = cloneBytes(frame)
 		p.initializeID = idKey(e.ID)

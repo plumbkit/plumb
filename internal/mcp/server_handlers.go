@@ -31,6 +31,12 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		}
 	}
 
+	if s.OnProxySession != nil && req.Params != nil {
+		if id := proxySessionFromParams(req.Params); id != "" {
+			s.OnProxySession(ctx, id)
+		}
+	}
+
 	type serverInfoWire struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
@@ -125,6 +131,28 @@ func allowDirsFromParams(params json.RawMessage) []string {
 		}
 	}
 	return out
+}
+
+// proxySessionFromParams extracts the stable proxy session ID from the
+// initialize params' _meta[MetaProxySessionKey] field. Fail-safe: any shape
+// mismatch (no _meta, wrong key, non-string, malformed JSON) yields "", so a
+// client that sends nothing changes nothing.
+func proxySessionFromParams(params json.RawMessage) string {
+	var p struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ""
+	}
+	raw, ok := p.Meta[MetaProxySessionKey]
+	if !ok {
+		return ""
+	}
+	var id string
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return ""
+	}
+	return id
 }
 
 func (s *Server) handleToolsList(req mcpRequest) mcpResponse {

@@ -151,6 +151,14 @@ var registryData = []Field{
 		Key: "session.eviction_ttl_minutes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Minutes idle before the daemon force-closes a connection. 0 disables eviction.",
 	},
+	{
+		Key: "session.persist_state", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Persist read-tracking + pinned workspace so they survive a daemon restart (rehydrated on proxy reconnect).",
+	},
+	{
+		Key: "session.persist_state_ttl_minutes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
+		Description: "Minutes persisted per-connection state lingers before the daemon prunes it. Default 1440 (24h).",
+	},
 
 	// --- Memory ---
 	{

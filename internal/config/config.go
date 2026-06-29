@@ -297,6 +297,16 @@ type SessionConfig struct {
 	// EvictionTTLMinutes is how long after the last tool call the daemon
 	// force-closes an idle connection. 0 disables eviction. Default 60.
 	EvictionTTLMinutes int `toml:"eviction_ttl_minutes"`
+	// PersistState: when true, per-connection state that must survive a daemon
+	// restart (strict-mode read-tracking and the pinned workspace) is persisted to
+	// session_state.db and rehydrated when the resilient proxy reconnects under the
+	// same proxy session ID. Default true. Env: PLUMB_PERSIST_SESSION_STATE.
+	PersistState bool `toml:"persist_state"`
+	// PersistStateTTLMinutes is how long persisted per-connection state lingers
+	// before the daemon prunes it, reclaiming rows left by a serve proxy that died
+	// without reconnecting. Independent of EvictionTTLMinutes (eviction must not
+	// delete state that may be rehydrated). Default 1440 (24h).
+	PersistStateTTLMinutes int `toml:"persist_state_ttl_minutes"`
 }
 
 // MemoryConfig controls the Advanced Memory Engine: the FTS5 index over the

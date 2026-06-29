@@ -72,6 +72,8 @@ const (
 	skAnalysers
 	skIdleThresholdMin
 	skEvictionTTLMin
+	skPersistState
+	skPersistStateTTLMin
 	skMemoryEnabled
 	skMemoryGeneratedSummaries
 	skMemoryInjectHints
@@ -254,6 +256,8 @@ func buildSettingItems(cfg config.Config) []settingItem {
 
 		{group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes)},
 		{group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes)},
+		{group: "Session", label: "Persist state", kind: settingToggle, key: skPersistState, value: onOff(cfg.Session.PersistState)},
+		{group: "Session", label: "Persist state TTL (min)", kind: settingNumber, key: skPersistStateTTLMin, value: itoa(cfg.Session.PersistStateTTLMinutes)},
 
 		{group: "Memory", label: "Memory index", kind: settingToggle, key: skMemoryEnabled, value: onOff(cfg.Memory.Enabled)},
 		{group: "Memory", label: "Generated summaries", kind: settingToggle, key: skMemoryGeneratedSummaries, value: onOff(cfg.Memory.GeneratedSummaries)},

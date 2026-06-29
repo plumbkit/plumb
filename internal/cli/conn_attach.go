@@ -46,6 +46,11 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = folder
 		v.acquiredLanguage = language
+		// Rehydrate strict-mode reads for this root (after a daemon restart) and
+		// persist the pin, both scoped to the proxy session ID. No-ops when
+		// persistence is off or this is not a serve-proxy connection.
+		s.rehydrateReads(v.proxySessionID, folder, v.session.PersistState)
+		s.persistPin(v.proxySessionID, folder, language, v.session.PersistState)
 		s.startQualityRunner(v, folder)
 		s.startTopologyIndexer(v, folder)
 		v.policy = s.buildPathPolicy(v)
@@ -74,6 +79,8 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 			return
 		}
 		v.acquiredRoot = root
+		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
+		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState)
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
@@ -207,6 +214,11 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		v.acquiredRoot = root
 		v.acquiredLanguage = language
 		v.lastCfgMtime = time.Time{}
+		// Rehydrate AFTER the Reset() above, keyed by the NEW root, so a re-pin to a
+		// different workspace can never restore the old project's reads. Re-persist
+		// the pin for the switched-to root.
+		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
+		s.persistPin(v.proxySessionID, root, language, v.session.PersistState)
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
