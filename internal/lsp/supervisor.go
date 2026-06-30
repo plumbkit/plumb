@@ -227,7 +227,10 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 				slog.Error("supervisor: OnStart failed", "err", err)
 				_ = conn.Close()
 				_ = proc.Process.Kill()
-				_, _ = proc.Process.Wait()
+				// exec.Cmd.Wait (not os.Process.Wait) so the cmd's stdin/stdout pipe
+				// parent ends are closed and its IO goroutines joined, matching the
+				// normal-exit path — os.Process.Wait leaks both until GC.
+				_ = proc.Wait()
 				if first {
 					readyCh <- fmt.Errorf("supervisor: OnStart: %w", err)
 					return

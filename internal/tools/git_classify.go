@@ -135,7 +135,10 @@ func classifyBranch(args []string) gitTier {
 	if hasAnyFlag(args, "-d", "-D", "--delete") {
 		return tierDestructive
 	}
-	if hasAnyFlag(args, "-m", "-M", "--move", "-c", "-C", "--copy") {
+	// -c/-C (branch copy) collide with git's -c/-C config-injection flags and are
+	// denied by the global-flag denylist before classification runs, so they are
+	// unreachable here; branch copy is reached via the long --copy form.
+	if hasAnyFlag(args, "-m", "-M", "--move", "--copy") {
 		return tierWrite
 	}
 	if hasAnyFlag(args, "--list", "-l", "-a", "--all", "-r", "--remotes",
