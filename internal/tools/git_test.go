@@ -186,6 +186,16 @@ func TestCheckPushProtection(t *testing.T) {
 		{"ad-hoc https url", []string{"https://evil.example/x", "main"}, "ad-hoc URL"},
 		{"ad-hoc scp url", []string{"git@evil.example:x/y", "main"}, "ad-hoc URL"},
 		{"ext url", []string{"ext::sh -c id", "main"}, "ad-hoc URL"},
+		{"force via +refspec protected", []string{"origin", "+main"}, "force-pushing protected"},
+		{"force via +src:dst protected", []string{"origin", "+feature:main"}, "force-pushing protected"},
+		{"+refspec non-protected ok", []string{"origin", "+feature"}, ""},
+		{"force +HEAD targets current branch", []string{"origin", "+HEAD"}, "no explicit destination"},
+		{"force -f no refspec", []string{"-f", "origin"}, "no explicit destination"},
+		{"force -f no remote", []string{"-f"}, "no explicit destination"},
+		{"force +HEAD:feature explicit dst ok", []string{"origin", "+HEAD:feature"}, ""},
+		{"safe-bias +tmp:tmp then protected main", []string{"origin", "+tmp:tmp", "main"}, "force-pushing protected"},
+		{"safe-bias +main:feature (protected as src)", []string{"origin", "+main:feature"}, "force-pushing protected"},
+		{"generic transport-helper remote", []string{"weird::addr", "main"}, "ad-hoc URL"},
 	}
 	for _, c := range cases {
 		a := gitToolArgs{Subcommand: "push", Args: c.args}
@@ -198,6 +208,25 @@ func TestCheckPushProtection(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 			t.Errorf("%s: want error containing %q, got %v", c.name, c.wantErr, err)
+		}
+	}
+}
+
+// TestCheckPushProtection_NetworkSubcommandURLRefusal verifies the ad-hoc-URL /
+// remote-helper refusal applies to every network subcommand (fetch and pull, not
+// just push) — `git fetch ext::sh -c <cmd>` is an RCE vector.
+func TestCheckPushProtection_NetworkSubcommandURLRefusal(t *testing.T) {
+	p := GitPolicy{ProtectedBranches: []string{"main"}}
+	for _, sub := range []string{"push", "fetch", "pull"} {
+		a := gitToolArgs{Subcommand: sub, Args: []string{"ext::sh -c id", "main"}}
+		if err := checkPushProtection(a, p, tierNetwork); err == nil || !strings.Contains(err.Error(), "ad-hoc URL") {
+			t.Errorf("%s ext:: remote: want ad-hoc URL refusal, got %v", sub, err)
+		}
+	}
+	for _, sub := range []string{"fetch", "pull"} {
+		a := gitToolArgs{Subcommand: sub, Args: []string{"origin"}}
+		if err := checkPushProtection(a, p, tierNetwork); err != nil {
+			t.Errorf("%s origin: unexpected error: %v", sub, err)
 		}
 	}
 }
