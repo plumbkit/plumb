@@ -2,6 +2,7 @@ package topology
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,5 +91,31 @@ func TestStatusForWorkspace_ReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(DBPath(dir) + "-wal"); err == nil {
 		t.Error("read-only status created a -wal sidecar")
+	}
+}
+
+// TestStatusForWorkspace_BusyTimeoutApplied guards against regressing the
+// read-only status DSN to the mattn-style `_busy_timeout=` form, which the
+// modernc driver silently ignores (busy_timeout stays 0). It opens a freshly
+// created index with the production statusReadDSN and asserts the pragma applied.
+func TestStatusForWorkspace_BusyTimeoutApplied(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(DBPath(dir))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	db.Close()
+
+	ro, err := sql.Open("sqlite", DBPath(dir)+statusReadDSN)
+	if err != nil {
+		t.Fatalf("open ro: %v", err)
+	}
+	defer ro.Close()
+	var bt int
+	if err := ro.QueryRow("PRAGMA busy_timeout").Scan(&bt); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if bt != 2000 {
+		t.Errorf("busy_timeout = %d, want 2000 (the _pragma= DSN must apply; mattn-style _busy_timeout= is ignored by modernc)", bt)
 	}
 }
