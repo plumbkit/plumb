@@ -950,6 +950,63 @@ func TestTokenSavingsBar(t *testing.T) {
 	}
 }
 
+func TestSplitGroups(t *testing.T) {
+	tests := []struct {
+		name             string
+		cap, eff         int64
+		groups           int
+		wantCap, wantEff int
+	}{
+		{"zero total", 0, 0, 8, 0, 0},
+		{"zero groups", 100, 100, 0, 0, 0},
+		{"even split", 100, 100, 8, 4, 4},
+		{"all capability", 500, 0, 8, 8, 0},
+		{"all efficiency", 0, 500, 8, 0, 8},
+		{"tiny capability sliver", 166, 27_897_000, 8, 1, 7},
+		{"tiny efficiency sliver", 27_897_000, 166, 8, 7, 1},
+		{"rounds up to six", 3, 1, 8, 6, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCap, gotEff := splitGroups(tt.cap, tt.eff, tt.groups)
+			if gotCap != tt.wantCap || gotEff != tt.wantEff {
+				t.Fatalf("splitGroups(%d,%d,%d) = (%d,%d), want (%d,%d)", tt.cap, tt.eff, tt.groups, gotCap, gotEff, tt.wantCap, tt.wantEff)
+			}
+			if tt.groups > 0 && tt.cap+tt.eff > 0 && gotCap+gotEff != tt.groups {
+				t.Fatalf("split does not sum to groups: %d+%d != %d", gotCap, gotEff, tt.groups)
+			}
+		})
+	}
+}
+
+func TestTokenSavingsSplitRow(t *testing.T) {
+	RebuildStyles()
+	const groups = 8
+
+	row := tokenSavingsSplitRow(stats.AxisTotals{Capability: 166, Efficiency: 27_897_000}, groups)
+	if got := strings.Count(ansiStripForTest(row), "▆▆"); got != groups {
+		t.Fatalf("split row column count = %d, want %d", got, groups)
+	}
+	if got := strings.Count(row, OkStyle.Render("▆▆")); got != 1 {
+		t.Fatalf("capability columns = %d, want 1", got)
+	}
+	if got := strings.Count(row, SelectedStyle.Render("▆▆")); got != groups-1 {
+		t.Fatalf("efficiency columns = %d, want %d", got, groups-1)
+	}
+
+	// No savings recorded yet: every column is the dim separator style, none lit.
+	empty := tokenSavingsSplitRow(stats.AxisTotals{}, groups)
+	if got := strings.Count(ansiStripForTest(empty), "▆▆"); got != groups {
+		t.Fatalf("empty split row column count = %d, want %d", got, groups)
+	}
+	if got := strings.Count(empty, SepStyle.Render("▆▆")); got != groups {
+		t.Fatalf("empty split row dim columns = %d, want %d", got, groups)
+	}
+	if strings.Contains(empty, OkStyle.Render("▆▆")) || strings.Contains(empty, SelectedStyle.Render("▆▆")) {
+		t.Fatalf("empty split row should have no lit columns")
+	}
+}
+
 func TestDashDaemonWidgetUsesMemoryRows(t *testing.T) {
 	RebuildStyles()
 	m := Model{

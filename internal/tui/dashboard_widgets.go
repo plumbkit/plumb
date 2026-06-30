@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -140,16 +141,22 @@ func (m Model) dashTokensWidget(inner int) []string {
 	if m.activity.Window > 0 {
 		uptimeLabel += " (" + formatUptime(m.activity.Window) + ")"
 	}
-	// The lifetime total is just capability + efficiency, so showing it next to the
-	// axes reads as a duplicate whenever one axis dominates. Show the honest split.
-	rightLabel := "cap ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Capability)) +
-		" · eff ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Efficiency))
+	// The lifetime total is just capability + efficiency, so the right-hand block
+	// shows the honest split between the two axes rather than progress toward a
+	// fixed target (which lifetime totals always saturate). Colour each axis label
+	// to match its columns in the block below: capability green, efficiency accent.
+	capPart := "cap ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Capability))
+	effPart := "eff ~" + stats.FormatSavings(int(m.dashLifetimeAxes.Efficiency))
+	rightLabel := capPart + " · " + effPart
+	rightStyled := OkStyle.Render(capPart) + DetailStyle.Render(" · ") + SelectedStyle.Render(effPart)
 	if !m.dashLifetimeFirstAt.IsZero() {
-		rightLabel += " (" + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt)) + ")"
+		suffix := " (" + formatUptimePrecise(time.Since(m.dashLifetimeFirstAt)) + ")"
+		rightLabel += suffix
+		rightStyled += DetailStyle.Render(suffix)
 	}
 
 	leftBlocks := tokenSavingsBlockRow(m.tokenSavings, groups)
-	rightBlocks := tokenSavingsBlockRow(m.dashLifetimeTokens, groups)
+	rightBlocks := tokenSavingsSplitRow(m.dashLifetimeAxes, groups)
 	blockLine := strings.Repeat(" ", margin) + leftBlocks + strings.Repeat(" ", gap) + rightBlocks + strings.Repeat(" ", margin)
 	labelGap := max(blockW+gap-lipgloss.Width(uptimeLabel), 1)
 	// dashBox does not widen for an over-long line; clamp the gap so the caption
@@ -157,7 +164,7 @@ func (m Model) dashTokensWidget(inner int) []string {
 	if over := margin + lipgloss.Width(uptimeLabel) + labelGap + lipgloss.Width(rightLabel) - inner; over > 0 {
 		labelGap = max(labelGap-over, 1)
 	}
-	labelLine := strings.Repeat(" ", margin) + DetailStyle.Render(uptimeLabel) + strings.Repeat(" ", labelGap) + DetailStyle.Render(rightLabel)
+	labelLine := strings.Repeat(" ", margin) + DetailStyle.Render(uptimeLabel) + strings.Repeat(" ", labelGap) + rightStyled
 
 	content := make([]string, 0, blockH+2)
 	for range blockH {
@@ -179,6 +186,56 @@ func tokenSavingsBlockRow(tokens int64, groups int) string {
 		} else {
 			parts = append(parts, SepStyle.Render(block))
 		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// splitGroups apportions `groups` filled columns between the capability and
+// efficiency savings axes by their share of the total. A non-zero axis always
+// gets at least one column (mirroring tokenSavingsBar's "show at least one"),
+// and the two counts always sum to groups. A zero total returns (0, 0) so the
+// caller can render the row as empty.
+func splitGroups(capTokens, effTokens int64, groups int) (capGroups, effGroups int) {
+	total := capTokens + effTokens
+	if groups <= 0 || total <= 0 {
+		return 0, 0
+	}
+	capGroups = int(math.Round(float64(capTokens) / float64(total) * float64(groups)))
+	if capGroups < 0 {
+		capGroups = 0
+	}
+	if capGroups > groups {
+		capGroups = groups
+	}
+	if capTokens > 0 && capGroups == 0 {
+		capGroups = 1
+	}
+	if effTokens > 0 && capGroups == groups {
+		capGroups = groups - 1
+	}
+	return capGroups, groups - capGroups
+}
+
+// tokenSavingsSplitRow renders a full row of `groups` lit blocks split by the
+// capability/efficiency composition of all-time savings: capability columns in
+// the success colour, efficiency columns in the accent colour. Unlike the
+// progress-style left block, every column is lit — the row shows a ratio, not
+// progress toward a target. With no savings recorded yet it renders a dim row.
+func tokenSavingsSplitRow(axes stats.AxisTotals, groups int) string {
+	capGroups, effGroups := splitGroups(axes.Capability, axes.Efficiency, groups)
+	const block = "▆▆"
+	parts := make([]string, 0, groups)
+	if capGroups == 0 && effGroups == 0 {
+		for range groups {
+			parts = append(parts, SepStyle.Render(block))
+		}
+		return strings.Join(parts, " ")
+	}
+	for range capGroups {
+		parts = append(parts, OkStyle.Render(block))
+	}
+	for range effGroups {
+		parts = append(parts, SelectedStyle.Render(block))
 	}
 	return strings.Join(parts, " ")
 }
