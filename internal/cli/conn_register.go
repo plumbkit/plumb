@@ -28,9 +28,17 @@ func hasStructuralEngine(path string) bool {
 
 // buildWriteDeps assembles the WriteDeps struct used by all write tools.
 func (s *connSession) buildWriteDeps() tools.WriteDeps {
-	var qualityReport tools.QualityReportFn
-	if r := s.view().qualityRunner; r != nil {
-		qualityReport = r.Report
+	// Resolve the quality runner lazily on each write, for the same reason as
+	// topologyNotify below: buildWriteDeps runs during tool registration, before
+	// the client handshake attaches the workspace and creates the runner, so an
+	// eager capture here is always nil — permanently disabling the post-write
+	// quality findings the [quality] feature appends to write responses.
+	qualityReport := func(ctx context.Context, path string) string {
+		r := s.view().qualityRunner
+		if r == nil {
+			return ""
+		}
+		return r.Report(ctx, path)
 	}
 	// Resolve the topology store lazily on each write: buildWriteDeps runs during
 	// tool registration, before the client handshake attaches the workspace, so
