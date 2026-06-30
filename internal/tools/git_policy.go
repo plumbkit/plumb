@@ -50,18 +50,31 @@ func gateGit(tier gitTier, p GitPolicy, confirm bool) error {
 	}
 }
 
-// checkPushProtection refuses pushing to an ad-hoc URL and force-pushing any
-// protected branch, regardless of confirm.
+// checkPushProtection guards the network tier (push/fetch/pull): it refuses an
+// ad-hoc URL/remote on ANY of them (an ext::/scp-like/:// positional remote, or
+// any <transport>:: remote-helper form, is a git remote-helper RCE vector —
+// `git fetch ext::sh -c <cmd>` runs the command). For `push` it also enforces
+// protected branches against a force push (a -f/--force flag OR a +-prefixed
+// refspec): a refspec that NAMES a protected branch is refused, and — because
+// this guard matches lexically and does not resolve git's symbolic HEAD — a
+// force push that relies on the current branch for its destination (`+HEAD`, or
+// no refspec so push.default chooses it) is also refused when any branch is
+// protected, since it could land on one. The cost of that safe bias is that a
+// force push must name its destination branch explicitly. Enforced regardless of
+// confirm.
 func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
-	if tier != tierNetwork || a.Subcommand != "push" {
+	if tier != tierNetwork {
 		return nil
 	}
 	for _, arg := range a.Args {
 		if looksLikeGitURL(arg) {
-			return fmt.Errorf("git push: pushing to an ad-hoc URL is not permitted; use a named remote")
+			return fmt.Errorf("git %s: using an ad-hoc URL/remote is not permitted; use a named remote", a.Subcommand)
 		}
 	}
-	if !hasForceFlag(a.Args) {
+	if a.Subcommand != "push" {
+		return nil
+	}
+	if !hasForceFlag(a.Args) && !hasForceRefspec(a.Args) {
 		return nil
 	}
 	for _, arg := range a.Args {
@@ -69,7 +82,41 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 			return fmt.Errorf("git push: force-pushing protected branch %q is not permitted", arg)
 		}
 	}
+	// A force push that targets the current branch (`+HEAD`, or no refspec) names
+	// no branch in argv, so the lexical check above cannot tell whether it lands on
+	// a protected branch. Refuse it (safe-bias) when any branch is protected,
+	// rather than let a possible protected-branch force-push slip through.
+	if len(p.ProtectedBranches) > 0 && forcePushTargetsCurrentBranch(a.Args) {
+		return fmt.Errorf("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`")
+	}
 	return nil
+}
+
+// forcePushTargetsCurrentBranch reports whether a push relies on git's current
+// branch for its destination — an explicit HEAD/+HEAD refspec, or no refspec at
+// all (push.default). Such a destination is not present in argv, so it cannot be
+// matched against the protected list lexically.
+func forcePushTargetsCurrentBranch(args []string) bool {
+	var positional []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			positional = append(positional, a)
+		}
+	}
+	// positional[0] (if any) is the remote; the rest are refspecs.
+	refspecs := positional
+	if len(refspecs) > 0 {
+		refspecs = refspecs[1:]
+	}
+	if len(refspecs) == 0 {
+		return true // push.default chooses the current branch
+	}
+	for _, r := range refspecs {
+		if r == "HEAD" || r == "+HEAD" {
+			return true
+		}
+	}
+	return false
 }
 
 func hasForceFlag(args []string) bool {
@@ -81,8 +128,27 @@ func hasForceFlag(args []string) bool {
 	return false
 }
 
+// hasForceRefspec reports whether any positional refspec is force-prefixed with
+// '+' (e.g. "+main" or "+feature:main"), git's non-flag way to force a
+// non-fast-forward update — which hasForceFlag does not catch.
+func hasForceRefspec(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if strings.HasPrefix(a, "+") {
+			return true
+		}
+	}
+	return false
+}
+
 func looksLikeGitURL(s string) bool {
-	if strings.Contains(s, "://") || strings.HasPrefix(s, "ext::") {
+	// A scheme URL (https://, git://, ssh://) or a transport remote-helper of the
+	// generic `<transport>::<address>` form. ext:: is git's built-in
+	// arbitrary-command transport, but ANY `name::` dispatches to a
+	// git-remote-<name> helper on PATH, so match `::` generally, not just ext::.
+	if strings.Contains(s, "://") || strings.Contains(s, "::") {
 		return true
 	}
 	at := strings.IndexByte(s, '@')

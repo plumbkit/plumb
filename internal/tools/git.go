@@ -71,7 +71,9 @@ func (t *Git) Description() string {
 		"Destructive subcommands (reset, clean, checkout, restore, rebase, revert, branch/tag delete, stash drop) " +
 		"need allow_destructive AND confirm:true. " +
 		"Network subcommands (push, fetch, pull) need allow_push AND confirm:true; force-pushing a protected branch " +
-		"and pushing to an ad-hoc URL are always refused. " +
+		"(via -f/--force or a +refspec) and using an ad-hoc URL/remote (incl. any <transport>:: helper) on any network " +
+		"subcommand are always refused — and a force push must name its destination branch (a bare -f or +HEAD that " +
+		"relies on the current branch is refused, since it may target a protected branch). " +
 		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
 		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
 		"worktree); every other subcommand uses args. " +
