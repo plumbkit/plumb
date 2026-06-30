@@ -121,8 +121,19 @@ func DBPath(workspace string) string {
 	return filepath.Join(workspace, ".plumb", "topology.db")
 }
 
-// openDB opens or creates the topology SQLite database at path, sets WAL mode,
-// busy timeout, and applies the schema. Returns a ready-to-use *sql.DB.
+// dbDSNParams configures EVERY pooled connection at open time. busy_timeout and
+// foreign_keys are per-connection SQLite pragmas, so they must travel in the DSN:
+// a one-off db.Exec sets them on only the single connection that served it,
+// leaving every other pooled connection with foreign_keys OFF (ON DELETE CASCADE
+// silently no-ops, so orphan topology_edges accumulate on every re-index/prune)
+// and busy_timeout 0 (recoverable writer contention becomes an immediate
+// "database is locked"). The modernc driver applies _pragma= params on each new
+// connection.
+const dbDSNParams = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
+
+// openDB opens or creates the topology SQLite database at path with WAL mode,
+// busy timeout, and foreign-key enforcement set per-connection via the DSN, then
+// applies the schema. Returns a ready-to-use *sql.DB.
 func openDB(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("topology: create db dir: %w", err)
@@ -130,7 +141,7 @@ func openDB(path string) (*sql.DB, error) {
 	if err := ensureGitignore(filepath.Dir(path)); err != nil {
 		slog.Warn("topology: ensure .gitignore", "dir", filepath.Dir(path), "err", err)
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+dbDSNParams)
 	if err != nil {
 		return nil, fmt.Errorf("topology: open db: %w", err)
 	}
@@ -188,15 +199,8 @@ func ensureGitignore(dir string) error {
 }
 
 func initDB(db *sql.DB) error {
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
-		return fmt.Errorf("topology: WAL mode: %w", err)
-	}
-	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
-		return fmt.Errorf("topology: busy_timeout: %w", err)
-	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return fmt.Errorf("topology: foreign_keys: %w", err)
-	}
+	// WAL / busy_timeout / foreign_keys are set per-connection via dbDSNParams so
+	// they apply to every pooled connection, not just the one a db.Exec would hit.
 	if err := ensureSchemaVersion(db); err != nil {
 		return err
 	}
