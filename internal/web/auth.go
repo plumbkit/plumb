@@ -117,18 +117,41 @@ func isStateChanging(method string) bool {
 }
 
 // sameOrigin verifies the request's Origin (or, absent that, its Host) matches
-// the server's own loopback address — the CSRF guard for write endpoints.
+// the server's own loopback address on the bound port — the CSRF guard for
+// write endpoints. Any loopback host (127.0.0.1, localhost, ::1) is accepted on
+// that port, so opening the UI via http://localhost:<port> is not rejected as
+// cross-origin while a genuine foreign origin still is.
 func (s *Server) sameOrigin(r *http.Request) bool {
 	s.mu.Lock()
 	addr := s.addr
 	s.mu.Unlock()
-
+	_, wantPort, err := net.SplitHostPort(addr)
+	if err != nil {
+		wantPort = addr
+	}
+	matches := func(hostport string) bool {
+		host, port, err := net.SplitHostPort(hostport)
+		if err != nil {
+			return hostport == addr
+		}
+		return port == wantPort && isLoopbackHost(host)
+	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		host := strings.TrimPrefix(strings.TrimPrefix(origin, "http://"), "https://")
-		return host == addr
+		return matches(host)
 	}
 	// No Origin header (some same-origin fetches omit it): fall back to Host.
-	return r.Host == addr
+	return matches(r.Host)
+}
+
+// isLoopbackHost reports whether host is a loopback name or IP (localhost,
+// 127.0.0.0/8, ::1).
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isLoopback reports whether remoteAddr is a loopback peer. The listener already

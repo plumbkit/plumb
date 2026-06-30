@@ -71,10 +71,27 @@ func (s *Server) writeProjectSetting(w http.ResponseWriter, req settingsSetReque
 		writeError(w, http.StatusBadRequest, "setting is global-only: "+req.Key)
 		return
 	}
+	// The scope must be a currently-attached workspace. Without this an arbitrary
+	// req.Scope would write a .plumb/config.toml to any path on disk.
+	if !isActiveWorkspace(req.Scope) {
+		writeError(w, http.StatusBadRequest, "unknown workspace scope: "+req.Scope)
+		return
+	}
 	path := strings.Split(req.Key, ".")
 	if err := config.SetProjectValue(req.Scope, path, req.Value); err != nil {
 		writeError(w, http.StatusInternalServerError, "saving project setting: "+err.Error())
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "scope": req.Scope, "key": req.Key})
+}
+
+// isActiveWorkspace reports whether folder is one of the currently-attached
+// workspaces, so a settings write cannot target an arbitrary on-disk path.
+func isActiveWorkspace(folder string) bool {
+	for _, ref := range activeWorkspaces() {
+		if ref.Folder == folder {
+			return true
+		}
+	}
+	return false
 }
