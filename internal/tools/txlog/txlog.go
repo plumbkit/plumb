@@ -155,12 +155,21 @@ func (l *Log) Rollback() {
 	}
 }
 
-// Scan finds orphaned .plumb/tx-log/* directories in workspace (left behind
-// by a daemon crash mid-transaction) and rolls each one back. Call once
-// after a workspace attaches, before accepting new transactions.
+// Scan finds orphaned .plumb/tx-log/* directories left by a daemon that crashed
+// mid-transaction and rolls each one back. A directory whose manifest StartedAt
+// is at or after liveCutoff belongs to the CURRENT daemon run — a possibly
+// in-flight transaction owned by some connection — and is left untouched; only
+// the owning transaction may roll it back. Pass the daemon's start time as
+// liveCutoff so a second connection attaching to a workspace can never roll back
+// a live transaction another connection is running on it (which would silently
+// revert that transaction's already-written files).
+//
+// A directory whose StartedAt cannot be read (a crash before the first manifest
+// write, or a corrupt previous-run orphan) is treated as a recoverable orphan —
+// a live transaction always has a valid manifest by the time Begin returns.
 //
 // Scan is a no-op when workspace is empty or no tx-log directory exists.
-func Scan(workspace string) {
+func Scan(workspace string, liveCutoff time.Time) {
 	if workspace == "" {
 		return
 	}
@@ -177,12 +186,32 @@ func Scan(workspace string) {
 			continue
 		}
 		dir := filepath.Join(logDir, e.Name())
+		if startedAt, ok := manifestStartedAt(dir); ok && !startedAt.Before(liveCutoff) {
+			// Created by the current daemon run: a live or just-committed
+			// transaction owns it. Never roll it back from here.
+			continue
+		}
 		slog.Warn("txlog: orphaned transaction log found — rolling back", "txid", e.Name(), "workspace", workspace)
 		rollbackDir(dir)
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("txlog: failed to remove orphaned log after rollback", "dir", dir, "err", err)
 		}
 	}
+}
+
+// manifestStartedAt reads the StartedAt timestamp from a tx-log directory's
+// manifest. ok is false when the manifest is missing, unparseable, or carries no
+// timestamp — callers then treat the directory as a recoverable orphan.
+func manifestStartedAt(dir string) (time.Time, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	var m txManifest
+	if err := json.Unmarshal(data, &m); err != nil || m.StartedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return m.StartedAt, true
 }
 
 // rollbackDir reads the manifest from dir and restores each snapshotted file.

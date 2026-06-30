@@ -145,6 +145,11 @@ type connSession struct {
 	// calls no-op (see conn_persist.go).
 	sessionState *sessionstate.Store
 	budgets      *sharedBudgets
+	// daemonStartedAt is this daemon process's start time. It is the txlog
+	// orphan-recovery cutoff: Scan only rolls back tx-log dirs older than it, so a
+	// connection's attach never reverts a live transaction another connection
+	// started this run.
+	daemonStartedAt time.Time
 
 	sessID string
 
