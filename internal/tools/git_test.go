@@ -196,6 +196,10 @@ func TestCheckPushProtection(t *testing.T) {
 		{"safe-bias +tmp:tmp then protected main", []string{"origin", "+tmp:tmp", "main"}, "force-pushing protected"},
 		{"safe-bias +main:feature (protected as src)", []string{"origin", "+main:feature"}, "force-pushing protected"},
 		{"generic transport-helper remote", []string{"weird::addr", "main"}, "ad-hoc URL"},
+		{"force -o value-flag shifts remote, no refspec (bypass)", []string{"-f", "-o", "ci.skip", "origin"}, "no explicit destination"},
+		{"force --push-option value-flag, no refspec", []string{"-f", "--push-option", "ci.skip", "origin"}, "no explicit destination"},
+		{"force -o value-flag with explicit non-protected dst ok", []string{"-f", "-o", "ci.skip", "origin", "+feature"}, ""},
+		{"force -o value-flag targeting protected", []string{"-f", "-o", "ci.skip", "origin", "main"}, "force-pushing protected"},
 	}
 	for _, c := range cases {
 		a := gitToolArgs{Subcommand: "push", Args: c.args}

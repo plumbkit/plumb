@@ -92,17 +92,49 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	return nil
 }
 
+// pushValueFlags are `git push` flags whose value is the FOLLOWING argument (the
+// separate-arg form; the --flag=value form carries its value inline and consumes
+// nothing). They must be skipped together with their value when scanning for the
+// positional remote/refspecs — otherwise the value is misread as the remote and
+// shifts every positional, which is exactly how `git push -f -o ci.skip origin`
+// (ci.skip consumed as the remote, origin demoted to a "refspec") would smuggle a
+// no-explicit-destination force past forcePushTargetsCurrentBranch. -o is the
+// short form of --push-option; --receive-pack/--exec are denied outright by the
+// global-flag denylist but are listed here for completeness.
+var pushValueFlags = map[string]bool{
+	"-o":             true,
+	"--push-option":  true,
+	"--repo":         true,
+	"--receive-pack": true,
+	"--exec":         true,
+}
+
+// pushPositionals returns the positional arguments of a `git push` (the remote
+// followed by any refspecs), arity-aware: it skips flags and the value consumed
+// by a value-taking flag, so a flag value is never mistaken for the remote.
+func pushPositionals(args []string) []string {
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			positional = append(positional, a)
+			continue
+		}
+		if pushValueFlags[a] && i+1 < len(args) {
+			i++ // consume the flag's value so it is not read as the remote
+		}
+	}
+	return positional
+}
+
 // forcePushTargetsCurrentBranch reports whether a push relies on git's current
 // branch for its destination — an explicit HEAD/+HEAD refspec, or no refspec at
 // all (push.default). Such a destination is not present in argv, so it cannot be
-// matched against the protected list lexically.
+// matched against the protected list lexically, and a force push to it is refused
+// when any branch is protected. The positional scan is arity-aware (pushPositionals)
+// so a value-taking flag cannot shift the remote and hide a no-refspec force.
 func forcePushTargetsCurrentBranch(args []string) bool {
-	var positional []string
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
-			positional = append(positional, a)
-		}
-	}
+	positional := pushPositionals(args)
 	// positional[0] (if any) is the remote; the rest are refspecs.
 	refspecs := positional
 	if len(refspecs) > 0 {
