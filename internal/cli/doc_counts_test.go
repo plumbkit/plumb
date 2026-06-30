@@ -41,15 +41,15 @@ func TestDocToolCountMatchesRegistry(t *testing.T) {
 // TestLanguageAndClientSourceCountsPinned pins the source-of-truth counts for
 // supported languages and `plumb setup` clients. The website restates these as
 // exact figures, but the displayed numbers are editorial: the language stat folds
-// the .tsx alias into TypeScript (registry 18 → shown 17) and the client stat
-// collapses the two Antigravity entries into one chip (setup targets 13 → shown
-// 12). Encoding those collapse rules in code would be brittle, so this test pins
+// the .tsx alias into TypeScript (registry 18 → shown 17). The client stat now
+// shows all 13 setup targets (the two Antigravity entries are listed separately).
+// Encoding display rules in code would be brittle, so this test pins
 // the source counts instead — change a count and CI goes red here, pointing at
 // the exact display strings to revisit.
 func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	const (
 		wantLanguages = 18 // langsupport registry entries; site shows 17 (.tsx folds into TypeScript), README says "15+"
-		wantClients   = 13 // plumb setup targets; site shows 12 (Antigravity CLI + Desktop = one chip)
+		wantClients   = 13 // plumb setup targets; site shows 13 ("Thirteen agents")
 	)
 	if got := len(langsupport.All()); got != wantLanguages {
 		t.Errorf("langsupport registry has %d entries, pinned at %d.\n"+
@@ -60,7 +60,7 @@ func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 	if got := len(allSetupClients()); got != wantClients {
 		t.Errorf("plumb has %d setup clients, pinned at %d.\n"+
 			"If intended, update the website's client count (site/index.html — the \"AI clients\" "+
-			"stat and the \"Twelve agents\" heading/chips, currently 12 with Antigravity collapsed) "+
+			"stat and the \"Thirteen agents\" heading/chips, currently 13) "+
 			"and the docs/cli-reference.md + AGENTS.md setup tables, then bump wantClients.", got, wantClients)
 	}
 }
