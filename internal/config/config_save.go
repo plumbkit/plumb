@@ -29,12 +29,18 @@ func Print(cfg Config, w io.Writer) error {
 // watcher never observes a half-written config and a crash mid-write leaves the
 // previous file intact.
 //
+// Active PLUMB_* env overrides are NOT baked into the written file: Save loads
+// defaults+file only (loadForSave), so re-encoding the whole struct cannot
+// persist a transient environment override as if the user had chosen it.
+//
 // Known limitation: re-encoding rewrites the whole file, so any comments the
-// user added by hand are lost on the first save.
+// user added by hand are lost on the first save, and compiled defaults are
+// materialised into it (a single touched key is better written with the sparse
+// SetGlobalValue).
 func Save(apply func(*Config)) error {
-	cfg, err := Load()
+	cfg, err := loadForSave()
 	if err != nil {
-		return fmt.Errorf("refusing to save config: existing config is unreadable (fix it first): %w", err)
+		return err
 	}
 	apply(&cfg)
 	path := GlobalConfigPath()
@@ -45,6 +51,32 @@ func Save(apply func(*Config)) error {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
 	return writeConfigAtomic(path, cfg)
+}
+
+// loadForSave loads the global config for a full-struct Save: compiled defaults
+// overlaid with the on-disk file, but WITHOUT the PLUMB_* env overlay that Load
+// applies. Save re-encodes the whole struct, so overlaying env here would bake a
+// transient environment override into config.toml as if the user had chosen it,
+// outliving the env var. A missing file yields defaults; an unparseable file is
+// an error so Save refuses rather than clobbering recoverable settings.
+func loadForSave() (Config, error) {
+	cfg := cloneConfig(defaults)
+	path := configPath()
+	if path != "" {
+		data, err := os.ReadFile(path)
+		switch {
+		case err == nil:
+			if err := toml.Unmarshal(data, &cfg); err != nil {
+				return Config{}, fmt.Errorf("refusing to save config: existing config is unreadable (fix it first): %w", err)
+			}
+		case os.IsNotExist(err):
+			// absent — defaults stand; first save creates the file
+		default:
+			return Config{}, fmt.Errorf("reading config %s: %w", path, err)
+		}
+	}
+	normaliseConfig(&cfg)
+	return cfg, nil
 }
 
 // writeConfigAtomic encodes cfg and writes it atomically over path. Thin
