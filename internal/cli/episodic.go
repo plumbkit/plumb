@@ -153,6 +153,11 @@ func tallyEpisodic(calls []stats.Call, workspace string) episodicDetail {
 			d.SourceCalls = append(d.SourceCalls, c.Tool)
 		}
 		if isEpisodicWrite(c.Tool, args) {
+			if !c.Success {
+				// A failed mutation is not a modification — never report it as a
+				// write or a touched/source path in the episodic summary.
+				continue
+			}
 			d.WriteN++
 			d.Touched = appendTouched(d.Touched, seenFile, args)
 			d.SourcePaths = appendSourcePaths(d.SourcePaths, seenSourcePath, args, workspace)
