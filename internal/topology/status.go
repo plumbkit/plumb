@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// statusReadDSN opens the topology index read-only with busy_timeout applied via
+// the `_pragma=` form. The modernc driver SILENTLY IGNORES the mattn-style
+// `_busy_timeout=` param (same defect fixed for stats/sessionstate), so a bare
+// `_busy_timeout=2000` left this read-only status handle at busy_timeout=0 —
+// turning recoverable writer contention into an immediate "database is locked"
+// for topology_status / the CLI status read while the daemon holds the writer.
+const statusReadDSN = "?mode=ro&_pragma=busy_timeout(2000)"
+
 // Report builds a Status snapshot of the topology index.
 func Report(db *sql.DB, workspace string, idx *Indexer) Status {
 	s := Status{}
@@ -40,7 +48,7 @@ func StatusForWorkspace(ws string) (Status, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return Status{}, err
 	}
-	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_busy_timeout=2000")
+	db, err := sql.Open("sqlite", dbPath+statusReadDSN)
 	if err != nil {
 		return Status{}, fmt.Errorf("topology: open db read-only: %w", err)
 	}
