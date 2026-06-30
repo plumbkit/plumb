@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -94,6 +95,10 @@ func (s *Server) workspaceScope(base config.Config, ref workspaceRef) settingsSc
 func buildRow(f config.Field, value any, overridden bool) settingRowDTO {
 	if f.Secret {
 		value = redactSecretValue(value)
+	} else if s, ok := value.(string); ok {
+		// A URL-valued field (e.g. semantics.base_url) may carry embedded
+		// credentials; mask the userinfo so they are not echoed verbatim.
+		value = redactURLUserinfo(s)
 	}
 	return settingRowDTO{
 		Key: f.Key, Group: topSection(f.Key), Type: f.Type.String(),
@@ -114,6 +119,19 @@ func redactSecretValue(v any) any {
 		return redactedSecret
 	}
 	return ""
+}
+
+// redactURLUserinfo masks credentials embedded in a URL-valued field (e.g. a
+// `semantics.base_url` like http://user:pass@host) so GET /api/settings never
+// echoes them, while still showing the rest of the URL. A non-URL string, or a
+// URL with no userinfo, is returned unchanged.
+func redactURLUserinfo(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	u.User = url.User("redacted")
+	return u.String()
 }
 
 func topSection(key string) string {

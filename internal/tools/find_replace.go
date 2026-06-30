@@ -227,8 +227,10 @@ func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs) ([]string, 
 		files = append(files, path)
 		return nil
 	})
-	// Deterministic order so the max_files budget selects the same (lowest-path)
-	// files set on a dry-run preview and the subsequent apply.
+	// Sort the feed so the max_files budget prefers the lowest-path files. NOTE:
+	// this only biases the selection — the workers consume `files` concurrently and
+	// race on the `claimed` budget counter, so the exact set that wins the last
+	// slots is not guaranteed identical between a dry-run preview and the apply.
 	sort.Strings(files)
 	return files, nil
 }
