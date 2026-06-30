@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -47,7 +46,13 @@ func (c *cohere) Embed(ctx context.Context, texts []string) ([][]float32, error)
 		return nil, fmt.Errorf("semantics: cohere request: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, over, err := readCapped(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("semantics: reading cohere response: %w", err)
+	}
+	if over {
+		return nil, fmt.Errorf("semantics: cohere response exceeded %d bytes", maxResponseBytes)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("semantics: cohere returned %d: %s", resp.StatusCode, snippet(raw))
 	}
