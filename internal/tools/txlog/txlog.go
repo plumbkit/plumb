@@ -252,5 +252,37 @@ func (l *Log) writeManifest() error {
 	if err != nil {
 		return fmt.Errorf("txlog: marshalling manifest: %w", err)
 	}
-	return os.WriteFile(filepath.Join(l.dir, "manifest.json"), data, 0o600)
+	return atomicWriteManifest(filepath.Join(l.dir, "manifest.json"), data)
+}
+
+// atomicWriteManifest writes the manifest via a uniquely-named temp file in the
+// same directory, fsync'd then renamed into place. The manifest is rewritten on
+// every Record of a live multi-file transaction, and a cross-connection Scan can
+// os.ReadFile it concurrently for orphan recovery: a non-atomic truncate-in-place
+// write would let Scan observe a half-written manifest, fail to unmarshal it, miss
+// the StartedAt-cutoff guard, and roll back the *live* transaction's already-
+// written files (silent corruption). The POSIX-atomic rename guarantees a reader
+// always sees a complete manifest — the old one or the new one, never a torn one.
+func atomicWriteManifest(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".manifest-*.tmp")
+	if err != nil {
+		return fmt.Errorf("txlog: creating temp manifest: %w", err)
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op once the rename below succeeds
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("txlog: writing temp manifest: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("txlog: syncing temp manifest: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("txlog: closing temp manifest: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("txlog: renaming manifest into place: %w", err)
+	}
+	return nil
 }
