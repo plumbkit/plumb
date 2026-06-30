@@ -28,9 +28,18 @@ func (s *Server) handleSettingsSet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "key required")
 		return
 	}
-	if _, ok := config.Lookup(req.Key); !ok {
+	f, ok := config.Lookup(req.Key)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "unknown setting: "+req.Key)
 		return
+	}
+	// A redacted secret echoed back from the UI must never overwrite the stored
+	// credential with the mask sentinel — treat it as an unchanged no-op.
+	if f.Secret {
+		if s, isStr := req.Value.(string); isStr && s == redactedSecret {
+			writeJSON(w, map[string]any{"ok": true, "scope": req.Scope, "key": req.Key, "unchanged": true})
+			return
+		}
 	}
 	if err := config.ValidateKeyValue(req.Key, req.Value); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

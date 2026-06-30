@@ -279,7 +279,7 @@ var registryData = []Field{
 		Description: "Name of the env var holding the API key (used when 'api key' is blank). ✓ = the var is set.",
 	},
 	{
-		Key: "semantics.api_key", Type: FieldString, ReloadTier: ReloadLive,
+		Key: "semantics.api_key", Type: FieldString, ReloadTier: ReloadLive, Secret: true,
 		Description: "Key stored in config; takes precedence over the env var. Prefer the env var to keep secrets out of files.",
 	},
 	{

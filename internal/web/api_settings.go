@@ -92,11 +92,28 @@ func (s *Server) workspaceScope(base config.Config, ref workspaceRef) settingsSc
 }
 
 func buildRow(f config.Field, value any, overridden bool) settingRowDTO {
+	if f.Secret {
+		value = redactSecretValue(value)
+	}
 	return settingRowDTO{
 		Key: f.Key, Group: topSection(f.Key), Type: f.Type.String(),
 		Value: value, Options: config.EnumValues(f), Help: f.Description,
 		ReloadTier: f.ReloadTier.String(), Overridden: overridden,
 	}
+}
+
+// redactedSecret is the placeholder shown for a Secret field whose value is set.
+// It must never reach stored config — handleSettingsSet treats an incoming value
+// equal to it as "unchanged", so the mask cannot round-trip into the config file.
+const redactedSecret = "••••••••" //nolint:gosec // G101 false positive: a fixed display mask, not a credential
+
+// redactSecretValue masks a credential for display: a non-empty value becomes the
+// redactedSecret sentinel (signalling "set" without leaking it); empty stays "".
+func redactSecretValue(v any) any {
+	if s, ok := v.(string); ok && s != "" {
+		return redactedSecret
+	}
+	return ""
 }
 
 func topSection(key string) string {
