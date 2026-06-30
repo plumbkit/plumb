@@ -130,7 +130,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 	}
 
 	wantDiff := t.deps.showWriteDiff()
-	changes, writeErrs, totalReplacements := t.findReplaceRunWorkers(ctx, files, a, re, wantDiff)
+	changes, writeErrs, totalReplacements, truncated := t.findReplaceRunWorkers(ctx, files, a, re, wantDiff)
 
 	var formatted int
 	var formatErrs []error
@@ -138,7 +138,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		formatted, formatErrs = runFormatterOnFiles(ctx, changes)
 	}
 
-	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs, wantDiff)
+	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs, wantDiff, truncated)
 	if len(writeErrs) > 0 {
 		return out, errors.Join(writeErrs...)
 	}
@@ -227,6 +227,9 @@ func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs) ([]string, 
 		files = append(files, path)
 		return nil
 	})
+	// Deterministic order so the max_files budget selects the same (lowest-path)
+	// files set on a dry-run preview and the subsequent apply.
+	sort.Strings(files)
 	return files, nil
 }
 
@@ -318,12 +321,23 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 // max_files budget, applies the write (non-dry-run) and builds its fileChange.
 // The second return is false when the file should be skipped (no match, over
 // budget). On a write error or over-budget claim it cancels the shared context.
-func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool, claimed *atomic.Int64, maxFiles int64, cancel context.CancelFunc) (fileChange, bool) {
+func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool, claimed *atomic.Int64, maxFiles int64, truncated *atomic.Bool, cancel context.CancelFunc) (fileChange, bool) {
+	// A regular file found by walking the (in-boundary) root is itself in-boundary;
+	// only a symlink can point outside it. Resolve + boundary-check symlinks so
+	// find_replace cannot read (preview) or write THROUGH an in-tree symlink to a
+	// target outside the workspace — the per-target guard every other write tool
+	// applies. checkBoundary resolves symlinks, so a symlink-to-outside is rejected.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if t.deps.checkBoundary(path) != nil {
+			return fileChange{}, false
+		}
+	}
 	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff)
 	if count == 0 {
 		return fileChange{}, false
 	}
 	if claimed.Add(1) > maxFiles {
+		truncated.Store(true)
 		cancel()
 		return fileChange{}, false
 	}
@@ -340,7 +354,7 @@ func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path strin
 	return fc, true
 }
 
-func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool) ([]fileChange, []error, int) {
+func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool) ([]fileChange, []error, int, bool) {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -348,6 +362,7 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 	paths := make(chan string)
 	results := make(chan fileChange, workers)
 	var claimed atomic.Int64
+	var truncated atomic.Bool
 	maxFiles := int64(a.MaxFiles)
 
 	var wg sync.WaitGroup
@@ -357,7 +372,7 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 				if wctx.Err() != nil {
 					continue
 				}
-				fc, send := t.findReplaceWorkerStep(wctx, path, a, re, wantDiff, &claimed, maxFiles, cancel)
+				fc, send := t.findReplaceWorkerStep(wctx, path, a, re, wantDiff, &claimed, maxFiles, &truncated, cancel)
 				if !send {
 					continue
 				}
@@ -406,10 +421,10 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 		totalReplacements += r.count
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].path < changes[j].path })
-	return changes, writeErrs, totalReplacements
+	return changes, writeErrs, totalReplacements, truncated.Load()
 }
 
-func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff bool) string {
+func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff, truncated bool) string {
 	var sb strings.Builder
 	if a.dryRun {
 		sb.WriteString("DRY RUN — no files modified.\n\n")
@@ -419,6 +434,9 @@ func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalRepla
 		verb = "changed"
 	}
 	fmt.Fprintf(&sb, "%d file(s), %d replacement(s) %s\n\n", len(changes), totalReplacements, verb)
+	if truncated {
+		fmt.Fprintf(&sb, "⚠ reached max_files=%d — additional matching file(s) were NOT modified. Raise max_files or narrow the glob/path to cover them.\n\n", a.MaxFiles)
+	}
 	for _, c := range changes {
 		fmt.Fprintf(&sb, "  %s  (%d)\n", findReplaceRelPath(a.Path, c.path), c.count)
 	}
