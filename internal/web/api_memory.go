@@ -32,7 +32,11 @@ type workspaceRef struct {
 // handleMemoryList lists memories for the requested (or default) workspace, plus
 // the set of active workspaces so the SPA can offer a workspace switcher.
 func (s *Server) handleMemoryList(w http.ResponseWriter, r *http.Request) {
-	ws := resolveWorkspace(r.URL.Query().Get("workspace"))
+	ws, ok := resolveWorkspace(r.URL.Query().Get("workspace"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown workspace: "+r.URL.Query().Get("workspace"))
+		return
+	}
 	out := memoryListDTO{Workspace: ws, Workspaces: activeWorkspaces(), Memories: []memoryDTO{}}
 	if ws == "" {
 		writeJSON(w, out)
@@ -56,7 +60,11 @@ func (s *Server) handleMemoryList(w http.ResponseWriter, r *http.Request) {
 
 // handleMemoryRead returns the full markdown body of one memory.
 func (s *Server) handleMemoryRead(w http.ResponseWriter, r *http.Request) {
-	ws := resolveWorkspace(r.URL.Query().Get("workspace"))
+	ws, ok := resolveWorkspace(r.URL.Query().Get("workspace"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown workspace: "+r.URL.Query().Get("workspace"))
+		return
+	}
 	name := r.PathValue("name")
 	if ws == "" || name == "" {
 		writeError(w, http.StatusBadRequest, "workspace and name required")
