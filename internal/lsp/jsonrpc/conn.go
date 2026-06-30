@@ -163,6 +163,9 @@ func (e *MethodNotFoundError) Error() string {
 // Call sends a request and blocks until a response arrives or ctx is cancelled.
 // result is JSON-decoded from the response; pass nil if not needed.
 func (c *Conn) Call(ctx context.Context, method string, params, result any) error {
+	if err := ctx.Err(); err != nil {
+		return err // already cancelled — don't put a request on the wire only to cancel it
+	}
 	rawID := json.RawMessage(strconv.FormatInt(c.nextID.Add(1), 10))
 	idKey := string(rawID)
 
@@ -175,7 +178,15 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 	c.pending.Store(idKey, &pending{ch: ch, ctx: ctx})
 	defer c.pending.Delete(idKey)
 
-	if err := c.sendCtx(ctx, wireMessage{
+	// Send the request WITHOUT aborting the write on ctx — cancellation is handled
+	// solely by the response-wait select below, which emits $/cancelRequest. Watching
+	// ctx on the write raced: when the write completed and ctx was cancelled in the
+	// same instant, sendCtx's select could pick ctx.Done() over the just-completed
+	// write, return ctx.Err() before the response-wait select ran, and so never emit
+	// the $/cancelRequest the server needs to abandon the now-in-flight request — a
+	// CI-only deadlock the cancel test hit only under scheduling load. The write stays
+	// bounded by writeStallTimeout and c.done inside sendCtx.
+	if err := c.sendCtx(context.Background(), wireMessage{
 		JSONRPC: "2.0",
 		ID:      rawID,
 		Method:  method,
@@ -248,9 +259,12 @@ func (c *Conn) Close() error {
 
 // writeStallTimeout bounds a single write to the language server's stdin. A pipe
 // write blocks only when the OS buffer is full and the server has stopped
-// draining it — a wedged (not crashed) server. A var, not a const, so tests can
-// lower it.
-var writeStallTimeout = 30 * time.Second
+// draining it — a wedged (not crashed) server. Kept distinctly below the smallest
+// expected request deadline (the default [lsp_query] timeout is 30s) so a stalled
+// write is detected and the connection torn down *before* the request deadline
+// fires — otherwise an equal 30s/30s pair would race on which trips first. A var,
+// not a const, so tests can lower it.
+var writeStallTimeout = 15 * time.Second
 
 // sendCtx writes msg without ever blocking the caller indefinitely on a stalled
 // language-server pipe. The raw write runs in a goroutine; the caller returns
