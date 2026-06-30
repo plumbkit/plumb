@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -241,11 +242,27 @@ func findAllDaemonByArgs() []int {
 	var pids []int
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		pid, err := strconv.Atoi(strings.TrimSpace(line))
-		if err == nil && pid > 0 && pid != self {
+		if err == nil && pid > 0 && pid != self && isPlumbDaemonProcess(pid) {
 			pids = append(pids, pid)
 		}
 	}
 	return pids
+}
+
+// isPlumbDaemonProcess verifies a pgrep candidate really is a `plumb daemon`
+// process — its executable basename is "plumb" and its first argument is
+// "daemon" — so `plumb stop` never signals an unrelated process whose argv
+// merely contains the substring "plumb daemon" (e.g. `vim plumb daemon.go`).
+func isPlumbDaemonProcess(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output() //nolint:gosec // G204: pid is a strconv-formatted int from pgrep, not user input
+	if err != nil {
+		return false
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) < 2 {
+		return false
+	}
+	return filepath.Base(fields[0]) == "plumb" && fields[1] == "daemon"
 }
 
 // processAlive returns true if a process with the given PID exists.

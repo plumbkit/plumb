@@ -28,8 +28,8 @@ const episodicWaitDeadline = 30 * time.Second
 
 func TestBuildEpisodic(t *testing.T) {
 	calls := []stats.Call{
-		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/internal/a.go"}`},
-		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/internal/b.go"}`},
+		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/internal/a.go"}`, Success: true},
+		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/internal/b.go"}`, Success: true},
 		{Tool: "find_references", InputJSON: `{"name":"UserSession"}`},
 		{Tool: "read_file", InputJSON: `{"file_path":"/ws/c.go"}`},
 		{Tool: "read_file", InputJSON: `{}`},
@@ -67,7 +67,7 @@ func TestBuildEpisodic_EmptyWhenNoActivity(t *testing.T) {
 func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 	calls := []stats.Call{
 		{Tool: "find_symbol", InputJSON: `{"name":"ghp_0123456789abcdefghijklmnopqrstuvwxyz1"}`},
-		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/a.go"}`},
+		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/a.go"}`, Success: true},
 	}
 	summary := buildEpisodicDetail(calls, "").Summary
 	cleaned, n := redact.Redact(summary)
@@ -80,10 +80,10 @@ func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 // nested under operations[], and find_replace is a write only when dry_run=false.
 func TestBuildEpisodic_TransactionAndFindReplace(t *testing.T) {
 	calls := []stats.Call{
-		{Tool: "transaction_apply", InputJSON: `{"operations":[{"path":"/ws/a.go"},{"from":"/ws/b.go","to":"/ws/c.go"}]}`},
-		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/default-dry.go"}`},             // default dry-run → read
-		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/dry.go","dry_run":true}`},      // explicit dry-run → read
-		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/applied.go","dry_run":false}`}, // applied → write
+		{Tool: "transaction_apply", InputJSON: `{"operations":[{"path":"/ws/a.go"},{"from":"/ws/b.go","to":"/ws/c.go"}]}`, Success: true},
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/default-dry.go"}`},                            // default dry-run → read
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/dry.go","dry_run":true}`},                     // explicit dry-run → read
+		{Tool: "find_replace", InputJSON: `{"file_path":"/ws/applied.go","dry_run":false}`, Success: true}, // applied → write
 	}
 	d := buildEpisodicDetail(calls, "")
 	summary, touched := d.Summary, d.Touched
