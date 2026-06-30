@@ -81,7 +81,13 @@ func (c *openAICompatible) Embed(ctx context.Context, texts []string) ([][]float
 		return nil, fmt.Errorf("semantics: embeddings request: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, over, err := readCapped(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("semantics: reading response: %w", err)
+	}
+	if over {
+		return nil, fmt.Errorf("semantics: %s response exceeded %d bytes", c.baseURL, maxResponseBytes)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("semantics: %s returned %d: %s", c.baseURL, resp.StatusCode, snippet(raw))
 	}
@@ -106,6 +112,28 @@ func (c *openAICompatible) Embed(ctx context.Context, texts []string) ([][]float
 		}
 	}
 	return out, nil
+}
+
+// maxResponseBytes caps an embeddings response body. The http.Client carries a
+// timeout but no byte bound, so a misbehaving or (with a project-controlled
+// base_url) hostile endpoint could stream an arbitrarily large body within the
+// timeout and force the daemon to buffer it all. Real embedding responses are
+// far smaller; an over-limit read is an error, so topology_search falls back to
+// the FTS5 baseline.
+const maxResponseBytes = 16 << 20 // 16 MiB
+
+// readCapped reads up to maxResponseBytes from r, reporting overflow when the
+// body would exceed the cap so the caller fails rather than trusting a
+// truncated body.
+func readCapped(r io.Reader) (data []byte, overflow bool, err error) {
+	data, err = io.ReadAll(io.LimitReader(r, maxResponseBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) > maxResponseBytes {
+		return data[:maxResponseBytes], true, nil
+	}
+	return data, false, nil
 }
 
 func snippet(b []byte) string {
