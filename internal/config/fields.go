@@ -87,6 +87,10 @@ type Field struct {
 	Min, Max      *int64   // optional inclusive bounds for FieldInt; nil = unbounded
 	// PerLanguage marks a keyed sub-table family ([lsp.<lang>].*, [tasks.<lang>].*).
 	PerLanguage bool
+	// Secret marks a field whose value is a credential. Surfaces that serialise
+	// config to a client (the web /api/settings response) must redact it rather
+	// than echo the literal value.
+	Secret bool
 }
 
 const langPlaceholder = "<lang>"
