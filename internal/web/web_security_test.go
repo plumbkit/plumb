@@ -49,3 +49,33 @@ func TestSettingsSet_RejectsUnknownWorkspaceScope(t *testing.T) {
 		t.Errorf("body = %q, want an unknown-scope error", w.Body.String())
 	}
 }
+
+// TestReadEndpoints_RejectUnknownWorkspace is the read-side counterpart to
+// TestSettingsSet_RejectsUnknownWorkspaceScope: handleTopology / handleMemoryList
+// must not read an arbitrary on-disk path's index or memories via an unvalidated
+// ?workspace= param. With the requested path not an active workspace, the read is
+// refused with 400 rather than resolved.
+func TestReadEndpoints_RejectUnknownWorkspace(t *testing.T) {
+	s := &Server{}
+	const bad = "/tmp/definitely-not-an-active-workspace"
+	cases := []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{"topology", s.handleTopology},
+		{"memoryList", s.handleMemoryList},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/api/x?workspace="+bad, nil)
+			w := httptest.NewRecorder()
+			tc.handler(w, r)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (an unknown workspace must be rejected, not read)", w.Code)
+			}
+			if !strings.Contains(w.Body.String(), "unknown workspace") {
+				t.Errorf("body = %q, want an unknown-workspace error", w.Body.String())
+			}
+		})
+	}
+}

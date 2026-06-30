@@ -27,7 +27,11 @@ type topologyDTO struct {
 // default) workspace. A missing index is reported as available=false, not an
 // error, so the SPA can render an empty state.
 func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
-	ws := resolveWorkspace(r.URL.Query().Get("workspace"))
+	ws, ok := resolveWorkspace(r.URL.Query().Get("workspace"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown workspace: "+r.URL.Query().Get("workspace"))
+		return
+	}
 	out := topologyDTO{Workspace: ws}
 	if ws == "" {
 		writeJSON(w, out)
@@ -53,20 +57,28 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// resolveWorkspace picks the workspace to report on: the explicit query value
-// if non-empty, else the folder of the first active session.
-func resolveWorkspace(explicit string) string {
+// resolveWorkspace picks the workspace to report on: the explicit query value —
+// validated to be a currently-attached workspace, so a read endpoint cannot be
+// pointed at an arbitrary on-disk path's .plumb/ index or memories (the read-side
+// counterpart to the settings-write isActiveWorkspace guard) — if non-empty, else
+// the folder of the first active session. ok is false only when an explicit
+// workspace was given that is not active; an empty explicit value defaults and is
+// always ok.
+func resolveWorkspace(explicit string) (ws string, ok bool) {
 	if explicit != "" {
-		return explicit
+		if !isActiveWorkspace(explicit) {
+			return "", false
+		}
+		return explicit, true
 	}
 	infos, err := session.List()
 	if err != nil {
-		return ""
+		return "", true
 	}
 	for _, info := range infos {
 		if info.EndedAt.IsZero() && info.Folder != "" {
-			return info.Folder
+			return info.Folder, true
 		}
 	}
-	return ""
+	return "", true
 }
