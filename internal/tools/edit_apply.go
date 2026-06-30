@@ -46,8 +46,19 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 	return modified, nil
 }
 
-// applyTextEditsToFile applies a list of TextEdits to a single file atomically.
+// applyTextEditsToFile applies a list of TextEdits to a single file atomically,
+// under the per-path write lock every other write tool holds. Without it, a
+// concurrent edit_file / symbol-edit / rename on the same file (the daemon
+// dispatches tool calls concurrently across connections) could read the same
+// pre-edit content and lost-update each other. It writes through safeWrite,
+// which stages a UNIQUELY-named temp file and renames it into place — never a
+// fixed "<path>.tmp" that two concurrent writers would collide on. The lock is
+// taken and released per file, so applyWorkspaceEdit's multi-file rename never
+// holds two path locks at once (no lock-ordering deadlock).
 func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
+	unlock := lockPath(path)
+	defer unlock()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -56,13 +67,7 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	if err != nil {
 		return err
 	}
-
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o644); err != nil { //nolint:gosec // G306: user source files are world-readable by convention; 0644 is intentional
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	if _, err := safeWrite(path, out, 0o644); err != nil {
 		return err
 	}
 	return nil
