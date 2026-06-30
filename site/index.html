@@ -397,7 +397,7 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
         <div class="ck">The GPS · LSP</div>
         <h3>Precise. Type-aware.</h3>
         <p>The same language servers your editor trusts: real go-to-definition, every reference, scope- and type-aware rename. Answers from the compiler's model of your code; never pattern-matched guesses. Warm in one shared daemon, across every conversation.</p>
-        <div class="cov">Go · Python first-class <span>· Java/Rust/Swift validated; more adapters experimental</span></div>
+        <div class="cov">Go · Python first-class <span>· Java/Rust/Swift/TypeScript/Zig validated; Kotlin/HTML experimental</span></div>
       </div>
     </div>
   </section>
@@ -418,8 +418,8 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
             <tr><td class="lng">Java</td><td>jdtls</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
             <tr><td class="lng">Rust</td><td>rust-analyzer</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
             <tr><td class="lng">Swift</td><td>sourcekit-lsp</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
-            <tr><td class="lng">TS/JS</td><td>typescript-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
-            <tr><td class="lng">Zig</td><td>zls</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
+            <tr><td class="lng">TS/JS</td><td>typescript-language-server</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
+            <tr><td class="lng">Zig</td><td>zls</td><td class="t2">validated</td><td class="rdy">ready</td></tr>
             <tr><td class="lng">Kotlin</td><td>kotlin-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
             <tr><td class="lng">HTML</td><td>vscode-html-language-server</td><td class="t3">experimental</td><td class="gat">install-gated</td></tr>
           </tbody>
@@ -436,8 +436,8 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
     <div class="toolcols">
       <div class="tc rv"><h4><span class="d" style="background:#b35a2e"></span>Orient<span class="tmark">*</span><span class="c">×5</span></h4><div class="dd">Drop into any repo and get the whole picture in one call; branch, diagnostics, recent work, and the project’s own memory.</div><ul><li>session_start</li><li>workspace_sessions<span class="st">*</span></li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#2f6e4f"></span>Understand<span class="c">×10</span></h4><div class="dd">Jump to any definition, list every caller, walk the type tree; answers from the compiler itself, never a text-search guess.</div><ul><li>find_references</li><li>call_hierarchy</li></ul></div>
-      <div class="tc rv"><h4><span class="d" style="background:#a14a26"></span>Edit<span class="tmark">*</span><span class="c">×12</span></h4><div class="dd">Rename across the whole codebase, apply multi-file changes in one atomic step, delete safely. It all lands, or nothing does.</div><ul><li>rename_symbol</li><li>transaction_apply<span class="st">*</span></li></ul></div>
-      <div class="tc rv"><h4><span class="d" style="background:#6b6535"></span>Read<span class="c">×7</span></h4><div class="dd">Pull exactly what you need: a single symbol, a line range, a glob, instead of dragging a whole file into context.</div><ul><li>read_symbol</li><li>file_outline</li></ul></div>
+      <div class="tc rv"><h4><span class="d" style="background:#a14a26"></span>Edit<span class="tmark">*</span><span class="c">×13</span></h4><div class="dd">Rename across the whole codebase, apply multi-file changes in one atomic step, delete safely. It all lands, or nothing does.</div><ul><li>rename_symbol</li><li>transaction_apply<span class="st">*</span></li></ul></div>
+      <div class="tc rv"><h4><span class="d" style="background:#6b6535"></span>Read<span class="c">×8</span></h4><div class="dd">Pull exactly what you need: a single symbol, a line range, a glob, instead of dragging a whole file into context.</div><ul><li>read_symbol</li><li>file_outline</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#46606c"></span>Map<span class="tmark">*</span><span class="c">×8</span></h4><div class="dd">Search the repo, trace what a change touches, and get the precise tests to run; in milliseconds, even while the code won’t compile.</div><ul><li>topology_impact<span class="st">*</span></li><li>topology_affected</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#8a5e2c"></span>Recall<span class="c">×9</span></h4><div class="dd">Durable per-repo memory the agent can write to, plus a typed, shell-free git that keeps every commit clean.</div><ul><li>write_memory</li><li>git</li></ul></div>
       <div class="tc rv"><h4><span class="d" style="background:#6e5a7a"></span>Tasks &amp; config<span class="c">×2</span></h4><div class="dd">Run the repo’s own build, test and lint commands; no shell, bounded; and let the agent set task and config keys within a user-controlled allowlist.</div><ul><li>run_task</li><li>agent_config</li></ul></div>
@@ -633,11 +633,11 @@ footer{border-top:1px solid var(--rule);padding:32px 0 44px;font-size:13px;color
 
   <section class="blk wrap center">
     <span class="k rv">Clients</span>
-    <h2 class="rv">Twelve agents,<br>set up in <span class="grad">one command</span>.</h2>
-    <p class="intro rv"><code style="font-family:var(--mono);font-size:.9em">plumb setup</code> wires up Claude, Codex, Gemini, Cursor and eight more for you; no JSON to hand-edit. And because plumb is a standard MCP server, <b>any client that speaks the protocol</b> can connect; these twelve just skip the setup.</p>
+    <h2 class="rv">Thirteen agents,<br>set up in <span class="grad">one command</span>.</h2>
+    <p class="intro rv"><code style="font-family:var(--mono);font-size:.9em">plumb setup</code> wires up Claude, Codex, Gemini, Cursor and nine more for you; no JSON to hand-edit. And because plumb is a standard MCP server, <b>any client that speaks the protocol</b> can connect; these thirteen just skip the setup.</p>
     <div class="cmarq rv"><div class="tr">
-      <span class="chip"><i>●</i>Claude Desktop</span><span class="chip"><i>●</i>Claude Code</span><span class="chip"><i>●</i>Codex</span><span class="chip"><i>●</i>Gemini CLI</span><span class="chip"><i>●</i>Cursor</span><span class="chip"><i>●</i>Augment</span><span class="chip"><i>●</i>Qwen Code</span><span class="chip"><i>●</i>Antigravity CLI</span><span class="chip"><i>●</i>OpenCode</span><span class="chip"><i>●</i>Crush</span><span class="chip"><i>●</i>Goose</span><span class="chip"><i>●</i>Hermes</span>
-      <span class="chip" aria-hidden="true"><i>●</i>Claude Desktop</span><span class="chip" aria-hidden="true"><i>●</i>Claude Code</span><span class="chip" aria-hidden="true"><i>●</i>Codex</span><span class="chip" aria-hidden="true"><i>●</i>Gemini CLI</span><span class="chip" aria-hidden="true"><i>●</i>Cursor</span><span class="chip" aria-hidden="true"><i>●</i>Augment</span><span class="chip" aria-hidden="true"><i>●</i>Qwen Code</span><span class="chip" aria-hidden="true"><i>●</i>Antigravity CLI</span><span class="chip" aria-hidden="true"><i>●</i>OpenCode</span><span class="chip" aria-hidden="true"><i>●</i>Crush</span><span class="chip" aria-hidden="true"><i>●</i>Goose</span><span class="chip" aria-hidden="true"><i>●</i>Hermes</span>
+      <span class="chip"><i>●</i>Claude Desktop</span><span class="chip"><i>●</i>Claude Code</span><span class="chip"><i>●</i>Codex</span><span class="chip"><i>●</i>Gemini CLI</span><span class="chip"><i>●</i>Cursor</span><span class="chip"><i>●</i>Augment</span><span class="chip"><i>●</i>Qwen Code</span><span class="chip"><i>●</i>Antigravity CLI</span><span class="chip"><i>●</i>Antigravity Desktop</span><span class="chip"><i>●</i>OpenCode</span><span class="chip"><i>●</i>Crush</span><span class="chip"><i>●</i>Goose</span><span class="chip"><i>●</i>Hermes</span>
+      <span class="chip" aria-hidden="true"><i>●</i>Claude Desktop</span><span class="chip" aria-hidden="true"><i>●</i>Claude Code</span><span class="chip" aria-hidden="true"><i>●</i>Codex</span><span class="chip" aria-hidden="true"><i>●</i>Gemini CLI</span><span class="chip" aria-hidden="true"><i>●</i>Cursor</span><span class="chip" aria-hidden="true"><i>●</i>Augment</span><span class="chip" aria-hidden="true"><i>●</i>Qwen Code</span><span class="chip" aria-hidden="true"><i>●</i>Antigravity CLI</span><span class="chip" aria-hidden="true"><i>●</i>Antigravity Desktop</span><span class="chip" aria-hidden="true"><i>●</i>OpenCode</span><span class="chip" aria-hidden="true"><i>●</i>Crush</span><span class="chip" aria-hidden="true"><i>●</i>Goose</span><span class="chip" aria-hidden="true"><i>●</i>Hermes</span>
     </div></div>
     <p class="clnote rv">One <code>plumb setup &lt;client&gt;</code> per agent; or point any MCP client at the daemon yourself.</p>
   </section>
@@ -685,7 +685,7 @@ cd my-project && plumb init">copy all</button></div>
 <footer>
   <div class="wrap foot">
     <!-- version stamped at deploy; do not hand-edit -->
-    <span>© 2026 plumb · MIT · set in Australian English · v0.9.19</span>
+    <span>© 2026 plumb · MIT · set in Australian English · v0.9.23</span>
     <div class="lk">
       <a href="blog/index.html">blog</a>
       <a href="https://github.com/plumbkit/plumb">github</a>
