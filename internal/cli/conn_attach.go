@@ -55,7 +55,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		s.startTopologyIndexer(v, folder)
 		v.policy = s.buildPathPolicy(v)
 		s.warmDepRoots(language)
-		recoverWorkspaceTxlog(folder, txlog.Scan)
+		recoverWorkspaceTxlog(folder, func(ws string) { txlog.Scan(ws, s.daemonStartedAt) })
 		cn, cv := v.clientName, v.clientVersion
 		session.Patch(s.sessID, func(info *session.Info) {
 			info.Folder = folder
@@ -84,7 +84,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
-		recoverWorkspaceTxlog(root, txlog.Scan)
+		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt) })
 		cn, cv := v.clientName, v.clientVersion
 		session.Patch(s.sessID, func(info *session.Info) {
 			info.Folder = root
@@ -223,7 +223,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
 		s.warmDepRoots(language)
-		recoverWorkspaceTxlog(root, txlog.Scan)
+		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt) })
 		cn, cv := v.clientName, v.clientVersion
 		session.Patch(s.sessID, func(info *session.Info) {
 			info.Folder = root

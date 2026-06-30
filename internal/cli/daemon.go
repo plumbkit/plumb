@@ -436,6 +436,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	defer conn.Close()
 	s := newConnSession(ctx, pool, topoPool, store, statsStore, sessState, budgets)
 	s.memoryPool = memPool
+	s.daemonStartedAt = daemonStartedAt
 	registry.add(s.sessID, connHandle{
 		cancel:        s.cancel,
 		workspace:     s.workspace,

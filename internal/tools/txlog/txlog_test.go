@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // initWorkspace creates a temp dir with a .plumb/ subdirectory to satisfy
@@ -143,7 +144,7 @@ func TestScan_CrashSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Scan(ws)
+	Scan(ws, time.Now().Add(time.Hour))
 
 	// tx-log dir must be gone.
 	if _, err := os.Stat(txDir); !os.IsNotExist(err) {
@@ -159,12 +160,12 @@ func TestScan_CrashSimulation(t *testing.T) {
 // TestScan_NopWhenEmpty is a no-op when no tx-log directory exists.
 func TestScan_NopWhenEmpty(t *testing.T) {
 	ws := initWorkspace(t)
-	Scan(ws) // must not panic or error
+	Scan(ws, time.Now().Add(time.Hour)) // must not panic or error
 }
 
 // TestScan_EmptyWorkspace is a no-op on empty workspace.
 func TestScan_EmptyWorkspace(t *testing.T) {
-	Scan("") // must not panic
+	Scan("", time.Now()) // must not panic
 }
 
 // TestConcurrentTransactions verifies that concurrent transactions on disjoint
@@ -382,7 +383,7 @@ func TestScan_MissingManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No manifest.json written — Scan must not panic.
-	Scan(ws) // should log an error and continue
+	Scan(ws, time.Now().Add(time.Hour)) // should log an error and continue
 	// Directory should survive (Scan's RemoveAll only fires after rollbackDir).
 	// Either outcome (removed or not) is acceptable — what we care about is no panic.
 }
@@ -398,5 +399,5 @@ func TestScan_CorruptManifest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(txDir, "manifest.json"), []byte("not valid json{{{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	Scan(ws) // must not panic
+	Scan(ws, time.Now().Add(time.Hour)) // must not panic
 }
