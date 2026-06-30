@@ -204,15 +204,17 @@ func Open() (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("stats: mkdir: %w", err)
 	}
-	db, err := sql.Open("sqlite", path+"?_busy_timeout=5000&_journal_mode=WAL")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("stats: open %s: %w", path, err)
 	}
 	db.SetMaxOpenConns(1)
 	// synchronous=NORMAL is corruption-safe under WAL and avoids an fsync per
 	// commit; the only exposure is losing the last batch of stats on a hard
-	// power cut, which is acceptable for metrics. WAL + busy_timeout come from
-	// the DSN; assert NORMAL here since it is per-connection.
+	// power cut, which is acceptable for metrics. WAL + busy_timeout come from the
+	// DSN via the `_pragma=` form — the modernc driver SILENTLY IGNORES the
+	// mattn-style `_busy_timeout=`/`_journal_mode=` params — and synchronous is
+	// asserted here since it is per-connection.
 	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("stats: synchronous: %w", err)
@@ -250,7 +252,7 @@ func OpenReadOnly() (*DB, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
 	}
-	db, err := sql.Open("sqlite", path+"?mode=ro&_busy_timeout=1000")
+	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=busy_timeout(1000)")
 	if err != nil {
 		return nil, fmt.Errorf("stats: open readonly %s: %w", path, err)
 	}
