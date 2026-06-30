@@ -95,23 +95,44 @@ type Conn struct {
 	reqMu     sync.RWMutex
 	onRequest RequestHandler
 
+	// notifyQ carries server notifications to a single delivery goroutine so they
+	// reach the handler in wire order (see notifyLoop).
+	notifyQ chan notifyItem
+
 	done chan struct{}
 	once sync.Once
 }
+
+// notifyItem is one server notification queued for in-order delivery.
+type notifyItem struct {
+	method string
+	params json.RawMessage
+}
+
+// notifyQueueSize bounds buffered server notifications. The handler (e.g. the
+// diagnostics cache invalidator) is fast, so this is generous headroom; if it
+// ever fills, the read loop applies backpressure rather than spawning unbounded
+// goroutines.
+const notifyQueueSize = 1024
 
 // NewConn creates a Conn over r/w and starts the read loop.
 // The caller owns the lifecycle of r and w; close them after calling Close.
 func NewConn(r io.Reader, w io.Writer) *Conn {
 	c := &Conn{
-		writer: w,
-		done:   make(chan struct{}),
+		writer:  w,
+		notifyQ: make(chan notifyItem, notifyQueueSize),
+		done:    make(chan struct{}),
 	}
 	go c.readLoop(bufio.NewReader(r))
+	go c.notifyLoop()
 	return c
 }
 
-// SetNotificationHandler registers fn to be called (in its own goroutine) for
-// every server-initiated notification. Only one handler is active at a time.
+// SetNotificationHandler registers fn to be called for every server-initiated
+// notification. Only one handler is active at a time. fn is invoked serially,
+// in wire order, from a single delivery goroutine (see notifyLoop), so it must
+// not block — in particular it must not make a blocking Call back into this
+// Conn, which would stall all later notifications.
 func (c *Conn) SetNotificationHandler(fn func(method string, params json.RawMessage)) {
 	c.notifyMu.Lock()
 	c.onNotify = fn
@@ -154,7 +175,7 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 	c.pending.Store(idKey, &pending{ch: ch, ctx: ctx})
 	defer c.pending.Delete(idKey)
 
-	if err := c.send(wireMessage{
+	if err := c.sendCtx(ctx, wireMessage{
 		JSONRPC: "2.0",
 		ID:      rawID,
 		Method:  method,
@@ -198,7 +219,7 @@ func (c *Conn) cancelRequest(id json.RawMessage) {
 	if err != nil {
 		return
 	}
-	_ = c.send(wireMessage{JSONRPC: "2.0", Method: "$/cancelRequest", Params: params})
+	_ = c.sendCtx(context.Background(), wireMessage{JSONRPC: "2.0", Method: "$/cancelRequest", Params: params})
 }
 
 // Notify sends a notification (no ID, no response expected).
@@ -215,16 +236,7 @@ func (c *Conn) Notify(ctx context.Context, method string, params any) error {
 		return fmt.Errorf("jsonrpc notify %s: marshaling params: %w", method, err)
 	}
 	msg := wireMessage{JSONRPC: "2.0", Method: method, Params: encoded}
-	errc := make(chan error, 1)
-	go func() { errc <- c.send(msg) }()
-	select {
-	case err := <-errc:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-c.done:
-		return fmt.Errorf("jsonrpc: connection closed")
-	}
+	return c.sendCtx(ctx, msg)
 }
 
 // Close signals the connection to stop. It does not close the underlying
@@ -232,6 +244,44 @@ func (c *Conn) Notify(ctx context.Context, method string, params any) error {
 func (c *Conn) Close() error {
 	c.once.Do(func() { close(c.done) })
 	return nil
+}
+
+// writeStallTimeout bounds a single write to the language server's stdin. A pipe
+// write blocks only when the OS buffer is full and the server has stopped
+// draining it — a wedged (not crashed) server. A var, not a const, so tests can
+// lower it.
+var writeStallTimeout = 30 * time.Second
+
+// sendCtx writes msg without ever blocking the caller indefinitely on a stalled
+// language-server pipe. The raw write runs in a goroutine; the caller returns
+// early if ctx is cancelled or the connection closes. Crucially, if the write
+// itself stalls past writeStallTimeout the server is wedged, so the connection
+// is closed — unblocking every pending call with a clear error and letting the
+// pool tear it down — rather than leaving the held write lock to wedge every
+// future call (which no ctx deadline could rescue, since acquiring the lock
+// precedes the ctx-aware select).
+func (c *Conn) sendCtx(ctx context.Context, msg wireMessage) error {
+	select {
+	case <-c.done:
+		return fmt.Errorf("jsonrpc: connection closed")
+	default:
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- c.send(msg) }()
+	timer := time.NewTimer(writeStallTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return fmt.Errorf("jsonrpc: connection closed")
+	case <-timer.C:
+		slog.Warn("jsonrpc: write stalled — closing connection", "method", msg.Method, "timeout", writeStallTimeout)
+		_ = c.Close()
+		return fmt.Errorf("jsonrpc: write stalled after %s, connection closed", writeStallTimeout)
+	}
 }
 
 func (c *Conn) send(msg wireMessage) error {
@@ -295,11 +345,33 @@ func (c *Conn) dispatch(msg wireMessage) {
 	if msg.Method == "" {
 		return
 	}
-	c.notifyMu.RLock()
-	fn := c.onNotify
-	c.notifyMu.RUnlock()
-	if fn != nil {
-		go fn(msg.Method, msg.Params)
+	// Queue for in-order, single-goroutine delivery. Spawning a goroutine per
+	// notification raced: an out-of-order publishDiagnostics for a URI could leave
+	// the stale set winning, and a flood spawned unbounded goroutines.
+	select {
+	case c.notifyQ <- notifyItem{method: msg.Method, params: msg.Params}:
+	case <-c.done:
+	}
+}
+
+// notifyLoop delivers queued server notifications to the registered handler one
+// at a time, in the order they arrived on the wire. A single delivery goroutine
+// (rather than one per notification) preserves ordering — critical for
+// publishDiagnostics, where a later set must not be overtaken by an earlier one
+// — and bounds goroutine growth under a notification flood.
+func (c *Conn) notifyLoop() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case it := <-c.notifyQ:
+			c.notifyMu.RLock()
+			fn := c.onNotify
+			c.notifyMu.RUnlock()
+			if fn != nil {
+				fn(it.method, it.params)
+			}
+		}
 	}
 }
 
@@ -344,7 +416,7 @@ func (c *Conn) handleServerRequest(req wireMessage) {
 			}
 		}
 	}
-	if err := c.send(resp); err != nil {
+	if err := c.sendCtx(context.Background(), resp); err != nil {
 		// We can't do anything useful here; the connection is dying. The
 		// read loop's EOF handler will close c.done shortly.
 		_ = err
