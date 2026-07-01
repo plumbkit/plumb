@@ -88,14 +88,35 @@ func TestExecTool_FastToolReturnsResult(t *testing.T) {
 	}
 }
 
-func TestExecTool_InjectsDeadlineForBoundedTool(t *testing.T) {
-	s := newTestServer(time.Second)
-	var had bool
-	if _, err := s.execTool(context.Background(), &boundedFake{hadDeadline: &had}, "bounded_fake", nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// cancelObserverFake blocks until its context is cancelled, then reports the
+// cancellation cause — used to prove the dispatcher cancels a bounded tool when
+// the deadline elapses (so a ctx-honouring tool unwinds instead of leaking).
+type cancelObserverFake struct{ observed chan error }
+
+func (*cancelObserverFake) Name() string                 { return "cancel_fake" }
+func (*cancelObserverFake) Description() string          { return "cancel fake" }
+func (*cancelObserverFake) InputSchema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (*cancelObserverFake) ExecTimeoutBounded()          {}
+func (f *cancelObserverFake) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	<-ctx.Done()
+	f.observed <- ctx.Err()
+	return "", ctx.Err()
+}
+
+func TestExecTool_CancelsBoundedToolOnTimeout(t *testing.T) {
+	s := newTestServer(20 * time.Millisecond)
+	observed := make(chan error, 1)
+	_, err := s.execTool(context.Background(), &cancelObserverFake{observed: observed}, "cancel_fake", nil)
+	if err == nil || !strings.Contains(err.Error(), "execution deadline") {
+		t.Fatalf("want the actionable deadline error, got %v", err)
 	}
-	if !had {
-		t.Fatal("a bounded tool should receive the injected execution deadline")
+	select {
+	case cerr := <-observed:
+		if cerr == nil {
+			t.Fatal("tool observed a nil cancellation cause")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the bounded tool was never cancelled after the deadline elapsed")
 	}
 }
 
