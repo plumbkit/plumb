@@ -21,8 +21,20 @@ import (
 )
 
 // attachWorkspace resolves rootURI to a project root, acquires the shared
-// language server if needed, and updates the session record.
+// language server if needed, and updates the session record. This entry point
+// attaches from a deliberate source — a client-reported root (OnInit /
+// onRootsChanged) or a restored persisted pin — so the resulting pin is recorded
+// as the sticky, explicit target.
 func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
+	s.attachWorkspacePin(ctx, rootURI, true)
+}
+
+// attachWorkspacePin is attachWorkspace with control over whether the pin is
+// persisted as the explicit sticky target. explicit is false for an auto-attach
+// seeded from an incidental tool path (onBeforeTool), so a reconnect restores
+// the last workspace the caller actually chose rather than whatever file it
+// touched first. See persistPin.
+func (s *connSession) attachWorkspacePin(ctx context.Context, rootURI string, explicit bool) {
 	folder := paths.URIToPath(rootURI)
 	if folder == "" || folder == "/" {
 		return
@@ -50,7 +62,7 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 		// persist the pin, both scoped to the proxy session ID. No-ops when
 		// persistence is off or this is not a serve-proxy connection.
 		s.rehydrateReads(v.proxySessionID, folder, v.session.PersistState)
-		s.persistPin(v.proxySessionID, folder, language, v.session.PersistState)
+		s.persistPin(v.proxySessionID, folder, language, v.session.PersistState, explicit)
 		s.startQualityRunner(v, folder)
 		s.startTopologyIndexer(v, folder)
 		v.policy = s.buildPathPolicy(v)
@@ -80,7 +92,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 		}
 		v.acquiredRoot = root
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
-		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState)
+		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState, false)
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
@@ -218,7 +230,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// different workspace can never restore the old project's reads. Re-persist
 		// the pin for the switched-to root.
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
-		s.persistPin(v.proxySessionID, root, language, v.session.PersistState)
+		s.persistPin(v.proxySessionID, root, language, v.session.PersistState, true)
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
@@ -275,6 +287,21 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	if s.view().acquiredRoot != "" {
 		return
 	}
+	// A `workspace` arg is a deliberate pin (session_start); an incidental
+	// file_path/path/uri is not. Only the former persists as the sticky target.
+	explicit := workspaceArgPresent(args)
+	if !explicit {
+		// On an unpinned connection, prefer restoring the last EXPLICIT pin over
+		// seeding from whatever file a tool happens to touch — so reading a file in
+		// another project by absolute path can never silently re-pin the connection
+		// away from the workspace the caller actually chose.
+		s.rehydratePin(toolCtx)
+		if s.view().acquiredRoot != "" {
+			s.applyProjectConfig(s.workspace())
+			s.startConfigWatcher()
+			return
+		}
+	}
 	seedPath := seedPathFromArgs(args)
 	if seedPath == "" {
 		return
@@ -304,7 +331,7 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 		s.startConfigWatcher()
 		return
 	}
-	s.attachWorkspace(toolCtx, "file://"+root)
+	s.attachWorkspacePin(toolCtx, "file://"+root, explicit)
 	s.applyProjectConfig(s.workspace())
 	s.startConfigWatcher()
 }
