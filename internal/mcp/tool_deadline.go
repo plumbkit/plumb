@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // ExecTimeoutBounded is an optional Tool capability. A tool that implements it
@@ -22,9 +23,14 @@ type ExecTimeoutBounded interface {
 // ExecTimeoutBounded. The bound is applied only when the timeout is positive and
 // ctx does not already carry a deadline (a caller-supplied deadline already
 // bounds the work). A bounded call runs on a child goroutine so a wedged syscall
-// cannot hold the dispatcher: if the deadline elapses first, execTool returns an
-// actionable error and the orphaned goroutine unwinds when its syscall returns
-// (execCtx is cancelled, so a ctx-honouring tool bails promptly).
+// cannot hold the dispatcher.
+//
+// The timer is the authoritative "deadline exceeded" signal: when it fires first
+// execTool returns the actionable message and cancels execCtx so a ctx-honouring
+// tool unwinds (a blocked syscall is orphaned and reaps when it returns). It
+// deliberately does NOT then read the tool's own result — a ctx-honouring tool
+// propagates a bare "context deadline exceeded", and surfacing that instead of
+// the actionable text would defeat the purpose (and races the timer under load).
 func (s *Server) execTool(ctx context.Context, t Tool, name string, args json.RawMessage) (string, error) {
 	if _, ok := t.(ExecTimeoutBounded); !ok || s.ToolExecTimeout <= 0 {
 		return t.Execute(ctx, args)
@@ -33,7 +39,7 @@ func (s *Server) execTool(ctx context.Context, t Tool, name string, args json.Ra
 		return t.Execute(ctx, args)
 	}
 
-	execCtx, cancel := context.WithTimeout(ctx, s.ToolExecTimeout)
+	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	type result struct {
@@ -46,23 +52,17 @@ func (s *Server) execTool(ctx context.Context, t Tool, name string, args json.Ra
 		done <- result{text, err}
 	}()
 
+	timer := time.NewTimer(s.ToolExecTimeout)
+	defer timer.Stop()
 	select {
 	case r := <-done:
 		return r.text, r.err
-	case <-execCtx.Done():
-		// Prefer a result that landed in the same tick as the deadline, so a tool
-		// that just finished is never mislabelled a timeout.
-		select {
-		case r := <-done:
-			return r.text, r.err
-		default:
-		}
-		// A cancelled parent (daemon shutdown, idle eviction) is not a tool timeout.
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
+	case <-timer.C:
+		cancel() // unwind a ctx-honouring tool; a blocked syscall is orphaned
 		return "", fmt.Errorf("%s: exceeded its %s execution deadline — the target path may be "+
 			"on a slow or unresponsive filesystem (a stalled network, iCloud, or FUSE mount); "+
 			"the call was abandoned. Raise PLUMB_TOOL_EXEC_TIMEOUT or check the mount", name, s.ToolExecTimeout)
+	case <-ctx.Done():
+		return "", ctx.Err() // parent cancelled (daemon shutdown / idle eviction)
 	}
 }
