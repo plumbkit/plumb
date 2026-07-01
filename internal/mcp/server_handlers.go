@@ -160,13 +160,17 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		InputSchema json.RawMessage `json:"inputSchema"`
+		// Meta carries per-tool `_meta`; omitempty keeps a non-pinned entry
+		// byte-identical to the pre-AlwaysLoad payload.
+		Meta map[string]any `json:"_meta,omitempty"`
 	}
 	// Snapshot the registry under s.mu, then apply ToolFilter and build the
 	// response with the lock released. A lightweight probe (ping, daemon_info)
 	// contending on the per-connection write mutex must never queue behind a slow
 	// filter or marshal held under the shared registry lock.
 	snaps := s.snapshotTools()
-	filter := s.ToolFilter // set before Serve; read without the lock
+	filter := s.ToolFilter     // set before Serve; read without the lock
+	alwaysLoad := s.AlwaysLoad // set before Serve; read without the lock
 	defs := make([]toolDef, 0, len(snaps))
 	for _, sn := range snaps {
 		// A filtered-out tool is hidden from the advertised list but stays
@@ -174,11 +178,18 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 		if filter != nil && !filter(sn.name) {
 			continue
 		}
-		defs = append(defs, toolDef{
+		def := toolDef{
 			Name:        sn.name,
 			Description: sn.description,
 			InputSchema: sn.schema,
-		})
+		}
+		// Pin the hot tools into the client's context so it never runs an MCP
+		// tool-search round-trip (or guesses parameter names) for them; the long
+		// tail stays deferred, preserving that context saving.
+		if alwaysLoad != nil && alwaysLoad(sn.name) {
+			def.Meta = map[string]any{MetaAlwaysLoadKey: true}
+		}
+		defs = append(defs, def)
 	}
 	return okResp(req.ID, map[string]any{"tools": defs})
 }

@@ -52,6 +52,12 @@ var LeanTools = map[string]bool{
 }
 
 // IsLean reports whether name is advertised under the lean profile.
+//
+// Double duty: this same set is also the "always loaded" set wired into
+// mcp.Server.AlwaysLoad (see conn_register.go) — the tools plumb pins into a
+// Claude Code client's context so MCP tool search never defers them behind a
+// ToolSearch round-trip. Editing LeanTools moves BOTH behaviours; that is
+// intentional ("the tools that matter most" is one list, not two).
 func IsLean(name string) bool { return LeanTools[name] }
 
 // LeanProfileNote is the terse session_start line shown when the lean profile is
