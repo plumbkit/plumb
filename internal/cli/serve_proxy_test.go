@@ -1,16 +1,44 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// TestProxyReconnect_LogsReason verifies the cause threaded from the call site
+// reaches the reconnect logs, so an operator can distinguish crash / EOF / hang
+// reconnects instead of only seeing THAT one happened.
+func TestProxyReconnect_LogsReason(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	p := newReconnectingProxy(proxyDeps{
+		dial:          func(context.Context) (net.Conn, error) { return nil, errors.New("no daemon") },
+		maxReconnects: 1,
+		baseBackoff:   time.Millisecond,
+	})
+	// Pre-cancel so the (otherwise unbounded) retry loop exits deterministically
+	// after emitting the fast-phase failure logs.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = p.reconnect(ctx, p.generation(), false, "daemon closed connection (EOF)")
+
+	out := buf.String()
+	if !strings.Contains(out, "reason=") || !strings.Contains(out, "daemon closed connection") {
+		t.Fatalf("reconnect logs did not carry the reason; got:\n%s", out)
+	}
+}
 
 func TestIDKeyNormalisation(t *testing.T) {
 	t.Parallel()
@@ -639,7 +667,7 @@ func TestProxyKillTargetsCapturedPID(t *testing.T) {
 	// context lets reconnect terminate deterministically once the kill has run.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_ = p.reconnect(ctx, p.generation(), true) // kill=true → hang path
+	_ = p.reconnect(ctx, p.generation(), true, "test") // kill=true → hang path
 	if killed != 4242 {
 		t.Errorf("kill targeted pid %d; want the captured 4242", killed)
 	}
@@ -661,7 +689,7 @@ func TestProxyReconnectStaleGenerationDoesNotKill(t *testing.T) {
 	})
 	staleGen := p.generation()
 	p.publish(nil, nil) // a concurrent reconnect advanced the generation past staleGen
-	if err := p.reconnect(context.Background(), staleGen, true); err != nil {
+	if err := p.reconnect(context.Background(), staleGen, true, "test"); err != nil {
 		t.Fatalf("stale-generation reconnect should be a no-op, got error: %v", err)
 	}
 	if killed {

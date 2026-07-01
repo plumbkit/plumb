@@ -229,7 +229,7 @@ func (p *reconnectingProxy) pumpClientToDaemon(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if rerr := p.reconnect(ctx, gen, false); rerr != nil {
+			if rerr := p.reconnect(ctx, gen, false, fmt.Sprintf("client→daemon write failed: %v", werr)); rerr != nil {
 				return rerr
 			}
 		}
@@ -246,7 +246,7 @@ func (p *reconnectingProxy) pumpDaemonToClient(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if rerr := p.reconnect(ctx, gen, false); rerr != nil {
+			if rerr := p.reconnect(ctx, gen, false, "daemon connection unavailable"); rerr != nil {
 				return rerr
 			}
 			continue
@@ -256,7 +256,7 @@ func (p *reconnectingProxy) pumpDaemonToClient(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if rerr := p.reconnect(ctx, gen, false); rerr != nil {
+			if rerr := p.reconnect(ctx, gen, false, fmt.Sprintf("daemon closed connection (%v) — likely daemon crash or idle eviction; check daemon.log", err)); rerr != nil {
 				return rerr
 			}
 			continue
@@ -439,7 +439,11 @@ func (p *reconnectingProxy) deliverPong(key string) bool {
 // caller saw fail; if the live generation has already moved past it another
 // goroutine reconnected and this is a no-op (idempotent coalescing). When kill
 // is true the stuck daemon is terminated first (hang path).
-func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kill bool) error {
+// reason is a short human-readable cause (write error, daemon EOF, heartbeat
+// hang) threaded from the call site into the reconnect logs, so an operator can
+// tell WHY each reconnect fired — crash vs hang vs idle-drop — rather than only
+// THAT it fired.
+func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kill bool, reason string) error {
 	p.reconnectMu.Lock()
 	defer p.reconnectMu.Unlock()
 
@@ -470,13 +474,13 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 				// never swept.
 				p.failOutstandingBelow(gen)
 				p.daemonPID.Store(int64(readDaemonPID())) // track the PID we are now connected to
-				slog.Warn("serve: reconnected to daemon after failure", "attempt", attempt, "generation", gen)
+				slog.Warn("serve: reconnected to daemon after failure", "attempt", attempt, "generation", gen, "reason", reason)
 				return nil
 			}
 			_ = conn.Close()
 			err = herr
 		}
-		slog.Warn("serve: daemon reconnect attempt failed", "attempt", attempt, "error", err)
+		slog.Warn("serve: daemon reconnect attempt failed", "attempt", attempt, "error", err, "reason", reason)
 		// Once the bounded fast phase is exhausted the daemon is still gone (a
 		// restart/upgrade window that outlasts the quick retries). Exiting here
 		// would close the client's stdio and make the host de-register every
@@ -491,7 +495,7 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 			failedFast = true
 			p.failAllOutstanding()
 			slog.Warn("serve: daemon unreachable after fast retries — keeping the client connection alive and retrying in the background",
-				"attempts", attempt)
+				"attempts", attempt, "reason", reason)
 		}
 		select {
 		case <-ctx.Done():
