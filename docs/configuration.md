@@ -87,6 +87,8 @@ config. `plumb web --port` overrides it for a single launch.
 | `strict` | bool | `false` | `PLUMB_STRICT_EDITS` | Require every `edit_file` target to have been read via `read_file` this session, with a matching mtime. |
 | `rate_limit_per_minute` | int | `120` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. |
 | `post_write_diagnostics_ms` | int | `300` | `PLUMB_POST_WRITE_DIAG_MS` | Ceiling on how long to wait for the LSP server to re-publish diagnostics after a write; the effective wait adapts down to the server's observed latency. `0` disables. |
+| `post_write_cross_file` | bool | `true` | `PLUMB_POST_WRITE_CROSS_FILE` | After a write, compare workspace diagnostics against a pre-write baseline and flag NEW errors the edit introduced in OTHER files (the "edit A silently breaks B" case). The edited file's own diagnostics block keeps priority. |
+| `post_write_cross_file_settle_ms` | int | `200` | `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | Bounded grace the cross-file sweep waits, after the edited file's own diagnostics land, for dependent-file re-publishes before comparing. `0` compares immediately. |
 | `concurrent_write_skew_ms` | int | `100` | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | Clock-skew allowance for `edit_file`'s concurrent-write detector. Raise on slow/network filesystems. |
 | `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
 
@@ -328,6 +330,8 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_STRICT_EDITS` | `edits.strict` |
 | `PLUMB_WRITE_RATE_LIMIT` | `edits.rate_limit_per_minute` |
 | `PLUMB_POST_WRITE_DIAG_MS` | `edits.post_write_diagnostics_ms` |
+| `PLUMB_POST_WRITE_CROSS_FILE` | `edits.post_write_cross_file` |
+| `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | `edits.post_write_cross_file_settle_ms` |
 | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | `edits.concurrent_write_skew_ms` |
 | `PLUMB_SHOW_WRITE_DIFF` | `edits.show_write_diff` |
 | `PLUMB_REFUSE_HOME_ROOTS` | `walk.refuse_home_roots` |
@@ -375,6 +379,8 @@ max_size = 1000
 strict                    = false   # require read_file before edit_file
 rate_limit_per_minute     = 120     # 0 disables
 post_write_diagnostics_ms = 300     # ceiling; effective wait adapts down to observed latency; 0 disables
+post_write_cross_file          = true  # flag NEW errors the edit introduced in OTHER files (edit A breaks B)
+post_write_cross_file_settle_ms = 200  # bounded grace for dependent-file re-publishes; 0 compares immediately
 concurrent_write_skew_ms  = 100     # clock-skew allowance for concurrent-write detection
 show_write_diff           = true    # append a unified diff to write/edit responses
 
