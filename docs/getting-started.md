@@ -130,8 +130,9 @@ on your `PATH`. Install `pyright-langserver` and Python is live; install
 `rust-analyzer` and every Cargo project resolves as Rust; and so on. Restart the
 daemon (`plumb stop`) or start a new session to pick up a newly-installed server.
 
-Go and Python are validated; Rust, Swift, Zig, TypeScript/JavaScript, Kotlin, and
-HTML are experimental (see the *Adapter validation status* table in `AGENTS.md`).
+Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript
+are validated; Kotlin and HTML are experimental (see the *Adapter validation
+status* table in `AGENTS.md`).
 
 To **exclude** a language even when its server is installed, set `enabled = false`
 in `~/.config/plumb/config.toml` (global) or `<workspace>/.plumb/config.toml`

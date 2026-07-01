@@ -49,7 +49,7 @@ boundary: no `.plumb/` marker, no language root marker (`go.mod`,
 `pyproject.toml`, …), **and no `.git/` directory** in it or any ancestor.
 
 A git repository *is* a recognised boundary (since 0.7.20): a repo with no
-language marker resolves to its git root with language `?` (filesystem tools,
+language marker resolves to its git root with language `none` (filesystem tools,
 stats, memory, and project config all work; LSP tools are unavailable). So the
 remaining stuck case is a directory that is neither a git repo nor a marked
 project. Fixes:

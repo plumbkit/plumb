@@ -324,7 +324,7 @@ workspace, session, timing, and I/O sizes. The workspace and session fields are
 required row attributes because the single stats database contains all projects
 served by the single daemon.
 
-Schema versioning is driven by `PRAGMA user_version` (currently 12). `stats.Open()`
+Schema versioning is driven by `PRAGMA user_version` (currently 13). `stats.Open()`
 (the daemon — the single writer) applies forward migrations (`ALTER TABLE ADD
 COLUMN`) when the on-disk version is older, then stamps the current version, so
 existing history is preserved across upgrades. `OpenReadOnly()` (TUI, `plumb
