@@ -150,6 +150,12 @@ func applyEditsEnv(cfg *Config) {
 	if v, ok := envBoolNeg("PLUMB_SHOW_WRITE_DIFF"); ok {
 		cfg.Edits.ShowWriteDiff = v
 	}
+	if v, ok := envBoolNeg("PLUMB_POST_WRITE_CROSS_FILE"); ok {
+		cfg.Edits.PostWriteCrossFile = v
+	}
+	if n, ok := envNonNegInt("PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS"); ok {
+		cfg.Edits.PostWriteCrossFileSettleMs = n
+	}
 }
 
 // applyGitEnv overlays the [git] environment variables onto cfg.

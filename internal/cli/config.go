@@ -199,6 +199,8 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
 		{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
 		{"post_write_diagnostics_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteDiagnosticsMs), sourceFor("post_write_diagnostics_ms", defaultsCfg.Edits.PostWriteDiagnosticsMs, globalCfg.Edits.PostWriteDiagnosticsMs, projectCfg.Edits.PostWriteDiagnosticsMs)},
+		{"post_write_cross_file", fmt.Sprintf("%v", projectCfg.Edits.PostWriteCrossFile), sourceFor("post_write_cross_file", defaultsCfg.Edits.PostWriteCrossFile, globalCfg.Edits.PostWriteCrossFile, projectCfg.Edits.PostWriteCrossFile)},
+		{"post_write_cross_file_settle_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteCrossFileSettleMs), sourceFor("post_write_cross_file_settle_ms", defaultsCfg.Edits.PostWriteCrossFileSettleMs, globalCfg.Edits.PostWriteCrossFileSettleMs, projectCfg.Edits.PostWriteCrossFileSettleMs)},
 	})
 
 	addConfigSection(cfgTable, "walk", [][]string{

@@ -63,6 +63,14 @@ var registryData = []Field{
 		Description: "Clock-skew allowance for edit_file's concurrent-write detector. Raise on network mounts.",
 	},
 	{
+		Key: "edits.post_write_cross_file", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "After a write, flag NEW errors the edit introduced in OTHER files (vs a pre-write baseline).",
+	},
+	{
+		Key: "edits.post_write_cross_file_settle_ms", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
+		Description: "Bounded grace the cross-file sweep waits for dependent-file diagnostics to land. 0 compares immediately.",
+	},
+	{
 		Key: "walk.refuse_home_roots", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Refuse walks rooted at $HOME or a protected dir (macOS TCC prompt guard).",
 	},

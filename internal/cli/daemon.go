@@ -52,6 +52,16 @@ func concurrentWriteSkew(edits config.EditsConfig) time.Duration {
 	return time.Duration(edits.ConcurrentWriteSkewMs) * time.Millisecond
 }
 
+// crossFileSettle is the bounded grace the post-write cross-file sweep waits for
+// dependent-file diagnostics to land. 0 (or a non-positive config) means compare
+// immediately without waiting.
+func crossFileSettle(edits config.EditsConfig) time.Duration {
+	if edits.PostWriteCrossFileSettleMs <= 0 {
+		return 0
+	}
+	return time.Duration(edits.PostWriteCrossFileSettleMs) * time.Millisecond
+}
+
 var daemonCmd = &cobra.Command{
 	Use:         "daemon",
 	Short:       "Run the background daemon (usually started automatically by serve)",

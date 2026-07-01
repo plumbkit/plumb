@@ -79,6 +79,20 @@ type WriteDeps struct {
 	// treated as a ceiling. Shared per connection so all write tools learn
 	// together. nil disables adaptation (the full window is always used).
 	DiagWait *DiagWaitEstimator
+	// CrossFileDiag enables the cross-file post-write diagnostics sweep: after a
+	// write, plumb reports NEW errors the edit introduced in OTHER files (see
+	// post_write_diag_crossfile.go). Off in a bare WriteDeps{}; the daemon sets
+	// CrossFileDiagFn from [edits].post_write_cross_file.
+	CrossFileDiag bool
+	// CrossFileDiagFn, when set, overrides CrossFileDiag at call time so project
+	// config loaded after tool registration takes effect.
+	CrossFileDiagFn func() bool
+	// CrossFileSettle is the bounded grace the cross-file sweep waits for
+	// dependent-file diagnostics to land before comparing. Zero compares
+	// immediately.
+	CrossFileSettle time.Duration
+	// CrossFileSettleFn, when set, overrides CrossFileSettle at call time.
+	CrossFileSettleFn func() time.Duration
 	// ConcurrentWriteSkew is the clock-skew allowance for edit_file's
 	// post-rename mtime check. Zero falls back to the 100 ms compiled-in
 	// default. Increase on slow filesystems (network mounts, FUSE).
@@ -142,7 +156,7 @@ const longPostWriteDiagWindow = 5 * time.Second
 // implied by silence — closing the "I had to shell out to go build to be sure"
 // gap reported in dogfooding. A globally-disabled post-write window
 // (negative) is still honoured (await is a no-op).
-func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool) string {
+func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool, baseline *diagBaseline) string {
 	if d.Diag == nil {
 		return ""
 	}
@@ -152,10 +166,63 @@ func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool) st
 	}
 	diags, fresh := awaitDiagnosticsRefresh(d.Diag, uri, ceiling, d.DiagWait)
 	out := formatPostWriteDiagnostics(diags, fresh, lineCount(content))
+	out += d.crossFileDiagnostics(uri, fresh, baseline)
 	if awaitFresh && fresh && out == "" {
 		return "\n✓ fresh diagnostics pass — no errors or warnings"
 	}
 	return out
+}
+
+func (d WriteDeps) crossFileEnabled() bool {
+	if d.CrossFileDiagFn != nil {
+		return d.CrossFileDiagFn()
+	}
+	return d.CrossFileDiag
+}
+
+func (d WriteDeps) crossFileSettleWindow() time.Duration {
+	if d.CrossFileSettleFn != nil {
+		return d.CrossFileSettleFn()
+	}
+	return d.CrossFileSettle
+}
+
+// captureCrossFileBaseline snapshots pre-write workspace error state when the
+// cross-file sweep is enabled and the Diag source can serve a whole-workspace
+// snapshot. Returns nil (skipping the sweep) otherwise — near-zero cost when off.
+// Callers MUST invoke this BEFORE the write mutates the file, so the baseline
+// reflects the pre-edit language-server state.
+func (d WriteDeps) captureCrossFileBaseline() *diagBaseline {
+	if d.Diag == nil || !d.crossFileEnabled() {
+		return nil
+	}
+	return newDiagBaseline(d.Diag)
+}
+
+// crossFileDiagnostics runs the bounded cross-file sweep and renders any NEW
+// errors this write introduced in files other than the one edited. It is a no-op
+// unless the sweep is enabled, a pre-write baseline was captured, and the edited
+// file itself re-published fresh (else the server is lagging and any delta is
+// unreliable). The settle grace lets dependent files re-publish before the
+// comparison; the single-file result is already built and is never delayed or
+// dropped by this step.
+func (d WriteDeps) crossFileDiagnostics(editedURI string, fresh bool, baseline *diagBaseline) string {
+	if baseline == nil || !fresh || !d.crossFileEnabled() {
+		return ""
+	}
+	cf, ok := d.Diag.(crossFileDiagSource)
+	if !ok {
+		return ""
+	}
+	if settle := d.crossFileSettleWindow(); settle > 0 {
+		<-time.After(settle)
+	}
+	breaks := computeCrossFileDelta(baseline, cf.AllDiagnostics(), cf.AllDiagnosticTimes(), editedURI)
+	root := ""
+	if d.WorkspaceFn != nil {
+		root = d.WorkspaceFn()
+	}
+	return formatCrossFileDiagnostics(breaks, root)
 }
 
 func (d WriteDeps) concurrentWriteSkew() time.Duration {

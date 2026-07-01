@@ -25,6 +25,9 @@ func validate(cfg Config) error {
 	if cfg.Edits.ConcurrentWriteSkewMs < 0 {
 		return fmt.Errorf("edits.concurrent_write_skew_ms must be non-negative")
 	}
+	if cfg.Edits.PostWriteCrossFileSettleMs < 0 {
+		return fmt.Errorf("edits.post_write_cross_file_settle_ms must be non-negative (0 disables the grace)")
+	}
 	if cfg.LSPQuery.Timeout.Duration < 0 {
 		return fmt.Errorf("lsp_query.timeout must be non-negative (0 disables)")
 	}
