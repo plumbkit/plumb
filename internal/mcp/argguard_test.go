@@ -126,6 +126,31 @@ func TestResolveArgs(t *testing.T) {
 			wantArgsSub: []string{`"uri":"/tmp/x.go"`},
 		},
 		{
+			// file_path-canonical tool (read_file): a "uri" carried over from an LSP
+			// tool now reaches "file_path" instead of erroring — the reported gap.
+			name:        "alias uri → file_path (file-content tool)",
+			schema:      `{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"],"additionalProperties":false}`,
+			args:        `{"uri":"/tmp/x.go"}`,
+			wantWarn:    []string{`interpreted "uri" as "file_path"`},
+			wantArgsSub: []string{`"file_path":"/tmp/x.go"`},
+		},
+		{
+			// path-canonical tool (list_directory): a "uri" reaches "path".
+			name:        "alias uri → path (dir tool)",
+			schema:      `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`,
+			args:        `{"uri":"/tmp/dir"}`,
+			wantWarn:    []string{`interpreted "uri" as "path"`},
+			wantArgsSub: []string{`"path":"/tmp/dir"`},
+		},
+		{
+			// root-canonical tool (list_files): a "uri" reaches "root".
+			name:        "alias uri → root (list_files)",
+			schema:      `{"type":"object","properties":{"root":{"type":"string"}},"required":[],"additionalProperties":false}`,
+			args:        `{"uri":"/tmp/dir"}`,
+			wantWarn:    []string{`interpreted "uri" as "root"`},
+			wantArgsSub: []string{`"root":"/tmp/dir"`},
+		},
+		{
 			name:        "alias symbol → name (read_symbol)",
 			schema:      `{"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},"required":["path","name"],"additionalProperties":false}`,
 			args:        `{"path":"/tmp/x.go","symbol":"Foo"}`,
