@@ -22,8 +22,13 @@ import "strings"
 // mined from the stats DB) and must be unambiguous — never a semantic flip
 // (include≠exclude) or a safety-critical guess (no git subcommand/confirm).
 var paramAliases = map[string][]string{
-	// File / directory location.
+	// File / directory location. Note keys are matched post-normalisation (see
+	// normaliseKey), so "filepath" already covers a literal `file_path` argument —
+	// hence no separate "file_path" entry. "uri" is the reciprocal that lets the
+	// LSP tools' `uri` cross-accept onto the file/dir tools' file_path/path/root
+	// (read_file({uri: …}) previously errored because no "uri" key existed).
 	"path":      {"file_path", "uri", "root"},
+	"uri":       {"file_path", "path", "root"},
 	"filepath":  {"file_path", "path", "uri"},
 	"filename":  {"file_path", "uri"},
 	"file":      {"file_path", "path", "uri"},
