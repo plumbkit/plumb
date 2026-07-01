@@ -175,13 +175,21 @@ type readFileArgs struct {
 	Limit     *int   `json:"limit"`
 }
 
-func (t *ReadFile) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+// ExecTimeoutBounded opts read_file into the dispatcher's tool-execution
+// deadline: a blocking stat/open on a stalled mount fails fast instead of
+// hanging the call to the client's own timeout. See mcp.ExecTimeoutBounded.
+func (*ReadFile) ExecTimeoutBounded() {}
+
+func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a readFileArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("read_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
 		return "", fmt.Errorf("read_file: file_path is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	// Accept absolute paths, file:// URIs, and workspace-relative paths.

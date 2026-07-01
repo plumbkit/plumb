@@ -76,16 +76,24 @@ type listFilesArgs struct {
 	IncludeHidden bool   `json:"include_hidden"`
 }
 
-func (t *ListFiles) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+// ExecTimeoutBounded opts list_files into the dispatcher's tool-execution
+// deadline: a recursive walk of a huge or slow tree fails fast instead of
+// hanging the call to the client's own timeout. See mcp.ExecTimeoutBounded.
+func (*ListFiles) ExecTimeoutBounded() {}
+
+func (t *ListFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	a, err := parseListFilesArgs(raw)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	root := filepath.Clean(resolvePath(a.Root, t.ws))
 	if err := t.guard.check(root); err != nil {
 		return "", fmt.Errorf("list_files: %w", err)
 	}
-	paths, err := listFilesWalk(root, a)
+	paths, err := listFilesWalk(ctx, root, a)
 	if err != nil {
 		return "", err
 	}
@@ -100,12 +108,12 @@ func parseListFilesArgs(raw json.RawMessage) (listFilesArgs, error) {
 	return a, nil
 }
 
-func listFilesWalk(root string, a listFilesArgs) ([]string, error) {
+func listFilesWalk(ctx context.Context, root string, a listFilesArgs) ([]string, error) {
 	maxDepth := 8
 	if a.MaxDepth != nil {
 		maxDepth = *a.MaxDepth
 	}
-	w := &listFilesWalker{root: root, maxDepth: maxDepth, a: a}
+	w := &listFilesWalker{ctx: ctx, root: root, maxDepth: maxDepth, a: a}
 	if err := filepath.WalkDir(root, w.visit); err != nil {
 		return nil, fmt.Errorf("list_files: walking %s: %w", root, err)
 	}
@@ -113,6 +121,7 @@ func listFilesWalk(root string, a listFilesArgs) ([]string, error) {
 }
 
 type listFilesWalker struct {
+	ctx      context.Context
 	root     string
 	maxDepth int
 	a        listFilesArgs
@@ -120,6 +129,9 @@ type listFilesWalker struct {
 }
 
 func (w *listFilesWalker) visit(path string, d fs.DirEntry, err error) error {
+	if cerr := w.ctx.Err(); cerr != nil {
+		return cerr // abandon the walk once the execution deadline elapses
+	}
 	if err != nil {
 		return nil // skip unreadable entries
 	}
