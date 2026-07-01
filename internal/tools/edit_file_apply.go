@@ -14,6 +14,9 @@ import (
 // editFileApply runs the retry loop, notifies the LSP on success, and
 // delegates response formatting to formatEditFileSuccess.
 func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArgs, uri string) (string, error) {
+	// Captured before any write attempt so the cross-file sweep compares against
+	// the pre-edit language-server state.
+	baseline := t.deps.captureCrossFileBaseline()
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, notes, err := t.tryEdit(ctx, path, a.Edits)
@@ -45,12 +48,12 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 		invalidateCache(t.deps.Cache, uri)
 		t.deps.recordWritten(path)
 		t.deps.recordUndo(path, before, content, true, "edit_file")
-		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, a.AwaitDiagnostics, notes), nil
+		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, uri, a.AwaitDiagnostics, notes, baseline), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
 }
 
-func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string, awaitFresh bool, notes []string) string {
+func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content, uri string, awaitFresh bool, notes []string, baseline *diagBaseline) string {
 	noun := "edit"
 	if len(edits) > 1 {
 		noun = "edits"
@@ -80,7 +83,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 			sb.WriteString(d)
 		}
 	}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh))
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh, baseline))
 	return sb.String()
 }
 

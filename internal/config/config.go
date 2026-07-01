@@ -182,6 +182,19 @@ type EditsConfig struct {
 	// mode where only path, size, and mtime metadata are returned — useful when
 	// tokens matter more than inline confirmation.
 	ShowWriteDiff bool `toml:"show_write_diff"`
+	// PostWriteCrossFile enables the cross-file post-write diagnostics sweep:
+	// after a write, plumb compares workspace diagnostics against a pre-write
+	// baseline and, when the edit INTRODUCED new errors in files OTHER than the
+	// one written, appends a heads-up naming them. The current-file diagnostics
+	// block is unaffected and keeps priority. Defaults to true.
+	PostWriteCrossFile bool `toml:"post_write_cross_file"`
+	// PostWriteCrossFileSettleMs is the bounded grace (in milliseconds) the
+	// cross-file sweep waits AFTER the edited file's own diagnostics land, so a
+	// language server's dependent-file re-publishes can arrive before the
+	// snapshot is compared. Applied only when PostWriteCrossFile is on and a
+	// baseline was captured. 0 disables the grace (compare immediately).
+	// Defaults to 200.
+	PostWriteCrossFileSettleMs int `toml:"post_write_cross_file_settle_ms"`
 }
 
 // GitConfig controls the unified git tool's tiered allowlist. Read-only

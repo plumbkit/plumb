@@ -61,6 +61,8 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Undo:                  s.undoStore,
 		PostWriteDiagWindowFn: func() time.Duration { return postWriteDiagWindow(s.editsConfig()) },
 		DiagWait:              tools.NewDiagWaitEstimator(),
+		CrossFileDiagFn:       func() bool { return s.editsConfig().PostWriteCrossFile },
+		CrossFileSettleFn:     func() time.Duration { return crossFileSettle(s.editsConfig()) },
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspace,
 		Boundary:              s.writeBoundaryGuard,

@@ -16,11 +16,13 @@ var defaults = Config{
 		MaxSize: 1000,
 	},
 	Edits: EditsConfig{
-		Strict:                 false,
-		RateLimitPerMinute:     120,
-		PostWriteDiagnosticsMs: 300,
-		ConcurrentWriteSkewMs:  100,
-		ShowWriteDiff:          true,
+		Strict:                     false,
+		RateLimitPerMinute:         120,
+		PostWriteDiagnosticsMs:     300,
+		ConcurrentWriteSkewMs:      100,
+		ShowWriteDiff:              true,
+		PostWriteCrossFile:         true,
+		PostWriteCrossFileSettleMs: 200,
 	},
 	Walk: WalkConfig{
 		RefuseHomeRoots: true,

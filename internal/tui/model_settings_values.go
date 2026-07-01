@@ -112,27 +112,28 @@ var numberMetaTable = map[settingKey]struct {
 	step  int
 	label string
 }{
-	skRateLimit:                 {10, "rate limit"},
-	skCacheMaxSize:              {100, "cache max_size"},
-	skWebPort:                   {1, "web port"},
-	skPostWriteDiagMs:           {50, "post-write diag (ms)"},
-	skConcurrentSkewMs:          {25, "concurrent skew (ms)"},
-	skTopoMaxFileSize:           {65536, "max file size (B)"},
-	skTopoResyncBatch:           {25, "resync batch"},
-	skTopoResyncPauseMs:         {5, "resync pause (ms)"},
-	skTopoResyncIntervalMin:     {5, "resync interval (min)"},
-	skQualityTimeoutMs:          {500, "quality timeout (ms)"},
-	skQualityMaxFindings:        {1, "max findings/file"},
-	skIdleThresholdMin:          {5, "idle threshold (min)"},
-	skEvictionTTLMin:            {5, "eviction ttl (min)"},
-	skPersistStateTTLMin:        {60, "persist state ttl (min)"},
-	skChildScanDepth:            {1, "child scan depth"},
-	skSemRerankCandidates:       {10, "rerank candidates"},
-	skMemoryHintBudgetBytes:     {128, "hint budget (B)"},
-	skMemoryEpisodicBudgetBytes: {256, "episodic budget (B)"},
-	skMemoryMaxHints:            {1, "max hints"},
-	skMemoryIdleSummaryMin:      {5, "idle summary (min)"},
-	skMemoryGeneratedKeep:       {10, "generated keep"},
+	skRateLimit:                  {10, "rate limit"},
+	skCacheMaxSize:               {100, "cache max_size"},
+	skWebPort:                    {1, "web port"},
+	skPostWriteDiagMs:            {50, "post-write diag (ms)"},
+	skPostWriteCrossFileSettleMs: {50, "cross-file settle (ms)"},
+	skConcurrentSkewMs:           {25, "concurrent skew (ms)"},
+	skTopoMaxFileSize:            {65536, "max file size (B)"},
+	skTopoResyncBatch:            {25, "resync batch"},
+	skTopoResyncPauseMs:          {5, "resync pause (ms)"},
+	skTopoResyncIntervalMin:      {5, "resync interval (min)"},
+	skQualityTimeoutMs:           {500, "quality timeout (ms)"},
+	skQualityMaxFindings:         {1, "max findings/file"},
+	skIdleThresholdMin:           {5, "idle threshold (min)"},
+	skEvictionTTLMin:             {5, "eviction ttl (min)"},
+	skPersistStateTTLMin:         {60, "persist state ttl (min)"},
+	skChildScanDepth:             {1, "child scan depth"},
+	skSemRerankCandidates:        {10, "rerank candidates"},
+	skMemoryHintBudgetBytes:      {128, "hint budget (B)"},
+	skMemoryEpisodicBudgetBytes:  {256, "episodic budget (B)"},
+	skMemoryMaxHints:             {1, "max hints"},
+	skMemoryIdleSummaryMin:       {5, "idle summary (min)"},
+	skMemoryGeneratedKeep:        {10, "generated keep"},
 }
 
 // numberMeta returns the adjust step and status label for a numeric setting.
@@ -156,6 +157,8 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Web.Port
 	case skPostWriteDiagMs:
 		return &c.Edits.PostWriteDiagnosticsMs
+	case skPostWriteCrossFileSettleMs:
+		return &c.Edits.PostWriteCrossFileSettleMs
 	case skConcurrentSkewMs:
 		return &c.Edits.ConcurrentWriteSkewMs
 	case skTopoResyncBatch:
@@ -246,6 +249,8 @@ func boolField(c *config.Config, key settingKey) *bool {
 		return &c.Edits.Strict
 	case skShowWriteDiff:
 		return &c.Edits.ShowWriteDiff
+	case skPostWriteCrossFile:
+		return &c.Edits.PostWriteCrossFile
 	case skTopology:
 		return &c.Topology.Enabled
 	case skTopoResyncOnAttach:
@@ -413,6 +418,8 @@ func toggleLabel(key settingKey) string {
 
 func toggleLabelMore(key settingKey) string {
 	switch key {
+	case skPostWriteCrossFile:
+		return "cross-file diag"
 	case skMemoryEnabled:
 		return "memory index"
 	case skMemoryGeneratedSummaries:

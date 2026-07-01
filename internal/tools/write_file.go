@@ -121,6 +121,9 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	uri := "file://" + path
 
 	oldContent, undoBefore, undoOK := t.writeFileCapture(path, isNew)
+	// Baseline must be captured before the bytes change so the cross-file sweep
+	// can tell errors this write introduced from ones already present.
+	baseline := t.deps.captureCrossFileBaseline()
 
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
@@ -130,7 +133,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if undoOK {
 		t.deps.recordUndo(path, undoBefore, a.Content, !isNew, "write_file")
 	}
-	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, a.AwaitDiagnostics)
+	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, uri, a.AwaitDiagnostics, baseline)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
 }
@@ -223,7 +226,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 	t.deps.recordWritten(path)
 }
 
-func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, awaitFresh bool) string {
+func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, uri string, awaitFresh bool, baseline *diagBaseline) string {
 	verb := "updated"
 	if isNew {
 		verb = "created"
@@ -238,6 +241,6 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 			sb.WriteString(d)
 		}
 	}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, newContent, awaitFresh))
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, newContent, awaitFresh, baseline))
 	return sb.String()
 }

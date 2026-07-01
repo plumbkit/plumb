@@ -30,6 +30,7 @@ func (t *EditFile) executePartial(
 	uri string,
 	awaitFresh bool,
 ) string {
+	baseline := t.deps.captureCrossFileBaseline()
 	results, res, original, content, writeErr := t.tryEditPartial(ctx, path, edits)
 	applied := countApplied(results)
 	var sb strings.Builder
@@ -37,7 +38,7 @@ func (t *EditFile) executePartial(
 	sb.WriteString(formatPartialEditsResults(results))
 	if writeErr == nil && applied > 0 {
 		_ = res
-		t.executePartialPostWrite(ctx, path, uri, content, awaitFresh, &sb)
+		t.executePartialPostWrite(ctx, path, uri, content, awaitFresh, &sb, baseline)
 		t.deps.recordUndo(path, original, content, true, "edit_file")
 	}
 	return sb.String()
@@ -98,7 +99,7 @@ func formatPartialEditsResults(results []partialEditResult) string {
 	return sb.String()
 }
 
-func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, content string, awaitFresh bool, sb *strings.Builder) {
+func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, content string, awaitFresh bool, sb *strings.Builder, baseline *diagBaseline) {
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 		slog.Warn("edit_file: LSP notification failed", "path", path, "err", err)
 	}
@@ -109,7 +110,7 @@ func (t *EditFile) executePartialPostWrite(ctx context.Context, path, uri, conte
 	}
 	invalidateCache(t.deps.Cache, uri)
 	t.deps.recordWritten(path)
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh))
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh, baseline))
 }
 
 // applyPartialEdit applies a single edit to content and returns the (possibly

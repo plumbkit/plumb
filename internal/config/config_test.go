@@ -335,6 +335,44 @@ func TestApplyEnv_PostWriteDiagMs(t *testing.T) {
 	}
 }
 
+func TestDefaults_PostWriteCrossFile(t *testing.T) {
+	if !defaults.Edits.PostWriteCrossFile {
+		t.Error("default PostWriteCrossFile = false, want true")
+	}
+	if defaults.Edits.PostWriteCrossFileSettleMs != 200 {
+		t.Errorf("default PostWriteCrossFileSettleMs = %d, want 200", defaults.Edits.PostWriteCrossFileSettleMs)
+	}
+}
+
+func TestValidate_PostWriteCrossFileSettleMs_NegativeRejected(t *testing.T) {
+	cfg := defaults
+	cfg.Edits.PostWriteCrossFileSettleMs = -1
+	if err := validate(cfg); err == nil {
+		t.Fatal("expected validation error for negative post_write_cross_file_settle_ms")
+	}
+}
+
+func TestValidate_PostWriteCrossFileSettleMs_ZeroAllowed(t *testing.T) {
+	cfg := defaults
+	cfg.Edits.PostWriteCrossFileSettleMs = 0
+	if err := validate(cfg); err != nil {
+		t.Fatalf("zero post_write_cross_file_settle_ms should be valid (disables the grace): %v", err)
+	}
+}
+
+func TestApplyEnv_PostWriteCrossFile(t *testing.T) {
+	t.Setenv("PLUMB_POST_WRITE_CROSS_FILE", "0")
+	t.Setenv("PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS", "50")
+	cfg := defaults
+	applyEnv(&cfg)
+	if cfg.Edits.PostWriteCrossFile {
+		t.Error("PLUMB_POST_WRITE_CROSS_FILE=0 not applied")
+	}
+	if cfg.Edits.PostWriteCrossFileSettleMs != 50 {
+		t.Errorf("PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS=50 not applied, got %d", cfg.Edits.PostWriteCrossFileSettleMs)
+	}
+}
+
 func TestDefaults_LogFormat(t *testing.T) {
 	if defaults.LogFormat != "text" {
 		t.Errorf("default LogFormat = %q, want \"text\"", defaults.LogFormat)

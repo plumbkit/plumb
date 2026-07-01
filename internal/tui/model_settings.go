@@ -42,6 +42,8 @@ const (
 	skShowWriteDiff
 	skRateLimit
 	skPostWriteDiagMs
+	skPostWriteCrossFile
+	skPostWriteCrossFileSettleMs
 	skConcurrentSkewMs
 	skRefuseHomeRoots
 	skTopology
@@ -231,6 +233,8 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
 		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute)},
 		{group: "Editing", label: "Post-write diag (ms)", kind: settingNumber, key: skPostWriteDiagMs, value: itoa(cfg.Edits.PostWriteDiagnosticsMs)},
+		{group: "Editing", label: "Cross-file diag", kind: settingToggle, key: skPostWriteCrossFile, value: onOff(cfg.Edits.PostWriteCrossFile)},
+		{group: "Editing", label: "Cross-file settle (ms)", kind: settingNumber, key: skPostWriteCrossFileSettleMs, value: itoa(cfg.Edits.PostWriteCrossFileSettleMs)},
 		{group: "Editing", label: "Concurrent skew (ms)", kind: settingNumber, key: skConcurrentSkewMs, value: itoa(cfg.Edits.ConcurrentWriteSkewMs)},
 		{group: "Editing", label: "Refuse home roots", kind: settingToggle, key: skRefuseHomeRoots, value: onOff(cfg.Walk.RefuseHomeRoots)},
 
