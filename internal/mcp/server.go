@@ -55,6 +55,16 @@ const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 // rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
 const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 
+// MetaAlwaysLoadKey is the per-tool `tools/list` `_meta` key Claude Code reads to
+// exempt a tool from MCP tool-search deferral: a tool advertised with
+// `_meta["anthropic/alwaysLoad"] = true` is loaded into the client's context at
+// session start instead of being deferred behind a ToolSearch round-trip.
+// Unlike plumb's own `dev.plumbkit/…` keys, this one deliberately carries
+// Anthropic's namespace because it is a client-recognised key, not a
+// plumb-private one. Clients that predate the convention ignore the unknown
+// `_meta` field, so emitting it is forward-compatible.
+const MetaAlwaysLoadKey = "anthropic/alwaysLoad"
+
 // RequestFn sends a server-initiated JSON-RPC request to the MCP client and
 // returns the decoded result payload, or an error if the call fails or times out.
 type RequestFn func(ctx context.Context, method string, params any) (json.RawMessage, error)
@@ -171,6 +181,14 @@ type Server struct {
 	// may resolve a profile that depends on the (by then known) client identity.
 	// Must be set before Serve.
 	ToolFilter func(name string) bool
+
+	// AlwaysLoad, if set, decides which advertised tools are pinned into the
+	// client's context at session start rather than deferred behind MCP tool
+	// search: a tool whose name it accepts is emitted with
+	// _meta[MetaAlwaysLoadKey]=true in tools/list. Consulted per tools/list with
+	// the registry lock released, exactly like ToolFilter. Must be set before
+	// Serve.
+	AlwaysLoad func(name string) bool
 
 	// Resources, if set, is consulted by resources/list and resources/read.
 	// Leaving it nil disables the resources capability entirely.

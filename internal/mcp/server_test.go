@@ -189,6 +189,50 @@ func TestServer_ToolsList(t *testing.T) {
 	if tool["inputSchema"] == nil {
 		t.Fatal("expected inputSchema to be present")
 	}
+	// AlwaysLoad is unset here, so _meta must be omitted entirely — the
+	// pre-pin payload stays byte-identical.
+	if _, present := tool["_meta"]; present {
+		t.Errorf("tool should carry no _meta when AlwaysLoad is unset, got %v", tool["_meta"])
+	}
+}
+
+// TestToolsList_AlwaysLoadMeta is the pin contract: a tool the AlwaysLoad
+// predicate accepts is advertised with _meta["anthropic/alwaysLoad"]=true so
+// Claude Code's MCP tool search loads it upfront instead of deferring it behind
+// a ToolSearch round-trip; a tool it rejects carries no _meta.
+func TestToolsList_AlwaysLoadMeta(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(&echoTool{})
+	s.Register(&editLikeTool{})
+	s.AlwaysLoad = func(name string) bool { return name == "echo" }
+
+	resps := serveOn(t, s,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`,
+	)
+	listed := resultByID(t, resps, 1)
+	byName := map[string]map[string]any{}
+	for _, tl := range listed["tools"].([]any) {
+		m := tl.(map[string]any)
+		byName[m["name"].(string)] = m
+	}
+
+	echo := byName["echo"]
+	if echo == nil {
+		t.Fatal("echo missing from tools/list")
+	}
+	meta, ok := echo["_meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("pinned tool echo should carry _meta, got %v", echo["_meta"])
+	}
+	if meta[mcp.MetaAlwaysLoadKey] != true {
+		t.Errorf("echo _meta[%q] = %v, want true", mcp.MetaAlwaysLoadKey, meta[mcp.MetaAlwaysLoadKey])
+	}
+
+	if edit := byName["edit_like"]; edit == nil {
+		t.Fatal("edit_like missing from tools/list")
+	} else if _, present := edit["_meta"]; present {
+		t.Errorf("unpinned tool edit_like should carry no _meta, got %v", edit["_meta"])
+	}
 }
 
 // TestToolFilter_HidesFromListNotCall is the hidden≠unregistered contract: a
