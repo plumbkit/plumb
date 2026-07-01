@@ -82,16 +82,24 @@ type dirEntry struct {
 	target   string // symlink target (raw, as stored), empty for non-links
 }
 
-func (t *ListDirectory) Execute(_ context.Context, raw json.RawMessage) (string, error) {
+// ExecTimeoutBounded opts list_directory into the dispatcher's tool-execution
+// deadline: a blocking stat/readdir on a stalled mount fails fast instead of
+// hanging the call to the client's own timeout. See mcp.ExecTimeoutBounded.
+func (*ListDirectory) ExecTimeoutBounded() {}
+
+func (t *ListDirectory) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	a, err := parseListDirectoryArgs(raw)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	dir := resolvePath(a.Path, t.ws)
 	if err := t.guard.check(dir); err != nil {
 		return "", fmt.Errorf("list_directory: %w", err)
 	}
-	entries, err := collectDirEntries(dir, a)
+	entries, err := collectDirEntries(ctx, dir, a)
 	if err != nil {
 		return "", err
 	}
@@ -110,7 +118,7 @@ func parseListDirectoryArgs(raw json.RawMessage) (listDirectoryArgs, error) {
 	return a, nil
 }
 
-func collectDirEntries(dir string, a listDirectoryArgs) ([]dirEntry, error) {
+func collectDirEntries(ctx context.Context, dir string, a listDirectoryArgs) ([]dirEntry, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("list_directory: %w", err)
@@ -122,12 +130,15 @@ func collectDirEntries(dir string, a listDirectoryArgs) ([]dirEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list_directory: reading %q: %w", dir, err)
 	}
-	return filterDirEntries(dir, rawEntries, a)
+	return filterDirEntries(ctx, dir, rawEntries, a)
 }
 
-func filterDirEntries(dir string, rawEntries []os.DirEntry, a listDirectoryArgs) ([]dirEntry, error) {
+func filterDirEntries(ctx context.Context, dir string, rawEntries []os.DirEntry, a listDirectoryArgs) ([]dirEntry, error) {
 	var entries []dirEntry
 	for _, e := range rawEntries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !a.IncludeHidden && strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
