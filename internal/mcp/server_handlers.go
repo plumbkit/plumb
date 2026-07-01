@@ -218,7 +218,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	var text string
 	args, warnings, err := s.resolveToolArgs(params.Name, params.Arguments)
 	if err == nil {
-		text, err = t.Execute(ctx, args)
+		text, err = s.execTool(ctx, t, params.Name, args)
 	}
 	dur := time.Since(start)
 

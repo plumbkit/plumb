@@ -70,6 +70,39 @@ func TestServerWriteTimeout(t *testing.T) {
 	}
 }
 
+func TestServerToolExecTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{name: "unset uses default", want: mcp.DefaultToolExecTimeout},
+		{name: "duration override", env: "5s", want: 5 * time.Second},
+		{name: "trimmed duration override", env: " 250ms ", want: 250 * time.Millisecond},
+		{name: "zero disables", env: "0", want: 0},
+		{name: "off disables", env: "off", want: 0},
+		{name: "disable disables", env: "disable", want: 0},
+		{name: "disabled disables", env: "disabled", want: 0},
+		{name: "none disables", env: "none", want: 0},
+		{name: "bad value uses default", env: "not-a-duration", want: mcp.DefaultToolExecTimeout},
+		{name: "negative value uses default", env: "-1s", want: mcp.DefaultToolExecTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.env == "" {
+				t.Setenv("PLUMB_TOOL_EXEC_TIMEOUT", "")
+				_ = os.Unsetenv("PLUMB_TOOL_EXEC_TIMEOUT")
+			} else {
+				t.Setenv("PLUMB_TOOL_EXEC_TIMEOUT", tt.env)
+			}
+			if got := serverToolExecTimeout(); got != tt.want {
+				t.Errorf("serverToolExecTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSeedPathFromArgs(t *testing.T) {
 	tests := []struct {
 		name string

@@ -440,6 +440,28 @@ func serverWriteTimeout() time.Duration {
 	return d
 }
 
+// serverToolExecTimeout bounds a single Execute call for tools that opt into it
+// (the filesystem read/list tools). Without a cap a stat/open/readdir on a slow
+// or unresponsive mount runs unbounded until the MCP client abandons the call at
+// its own multi-minute timeout. PLUMB_TOOL_EXEC_TIMEOUT accepts a Go duration;
+// "0"/"off"/"disable" disables the bound. An unset or unparseable value uses
+// mcp's built-in default.
+func serverToolExecTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv("PLUMB_TOOL_EXEC_TIMEOUT"))
+	if v == "" {
+		return mcp.DefaultToolExecTimeout
+	}
+	switch strings.ToLower(v) {
+	case "0", "off", "disable", "disabled", "none":
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return mcp.DefaultToolExecTimeout
+	}
+	return d
+}
+
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
 func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
@@ -459,6 +481,9 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	writeTimeout := serverWriteTimeout()
 	srv.WriteTimeout = writeTimeout
 	slog.Debug("daemon: MCP response write timeout configured", "timeout", writeTimeout)
+	toolExecTimeout := serverToolExecTimeout()
+	srv.ToolExecTimeout = toolExecTimeout
+	slog.Debug("daemon: MCP tool execution timeout configured", "timeout", toolExecTimeout)
 	s.registerAllTools(srv, daemonStartedAt)
 	s.registerHooks(srv)
 	// Serve on the session context (a child of the daemon ctx) — NOT the bare
