@@ -27,6 +27,9 @@ they reach the tree.
 | `make lint` | `golangci-lint run` |
 | `make verify` | build + test + lint — the **definition of "ready to commit"**. |
 | `make tidy` | `go mod tidy` |
+| `make clean` | Remove build artefacts. |
+| `make install-clients` | Install every supported client CLI, for local client-integration testing. |
+| `make clients-test` / `make clients-test-auth` | On-demand connection/auth tiers that drive each installed client CLI headless (own build tags, never part of `make verify`) — see the comments above these targets in the `Makefile`. |
 
 > **Formatting:** always format via `golangci-lint run --fix ./...` (what the
 > hook runs), not a standalone `gofumpt` binary — the two can pin different
@@ -63,7 +66,7 @@ history over squashed PRs.
 - **A new MCP tool** — follow the checklist in
   [`AGENTS.md` → "How to add an MCP tool"](../AGENTS.md). Implement the `Tool`
   interface, take `WriteDeps` for write tools, register it in
-  `internal/cli/conn.go`, add tests, and document it in
+  `registerAllTools` (`internal/cli/conn_register.go`), add tests, and document it in
   [`docs/tools.md`](tools.md).
 - **A new LSP adapter** — see [`docs/adding-an-lsp.md`](adding-an-lsp.md).
 - **A new config field** — add it to `config.Config`, update `defaults`,
