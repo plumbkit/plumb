@@ -52,7 +52,7 @@ func (p *reconnectingProxy) runHeartbeat(ctx context.Context) {
 			continue
 		}
 		slog.Warn("serve: daemon heartbeat timed out — assuming hung; killing and reconnecting")
-		if err := p.reconnect(ctx, gen, true); err != nil {
+		if err := p.reconnect(ctx, gen, true, "heartbeat timeout — daemon unresponsive; killed and reconnecting"); err != nil {
 			return // give-up: run() observes the pump error and exits
 		}
 	}
