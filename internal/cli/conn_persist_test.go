@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,114 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
+
+func TestWorkspaceArgPresent(t *testing.T) {
+	cases := []struct {
+		name string
+		args string
+		want bool
+	}{
+		{"workspace arg", `{"workspace":"/x"}`, true},
+		{"empty workspace", `{"workspace":""}`, false},
+		{"incidental file_path", `{"file_path":"/x/a.go"}`, false},
+		{"incidental path", `{"path":"/x"}`, false},
+		{"no fields", `{}`, false},
+		{"invalid json", `not json`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := workspaceArgPresent(json.RawMessage(c.args)); got != c.want {
+				t.Errorf("workspaceArgPresent(%s) = %v, want %v", c.args, got, c.want)
+			}
+		})
+	}
+}
+
+// TestPersist_AutoAttachDoesNotPersistPin: an auto-attach seeded from an
+// incidental tool path must NOT persist the pin, so a reconnect does not
+// resurrect a workspace the caller never explicitly chose.
+func TestPersist_AutoAttachDoesNotPersistPin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	before := newPersistSession(t, store, ss, "proxyX")
+	before.attachWorkspacePin(context.Background(), "file://"+root, false) // auto
+	if got := before.workspace(); got != root {
+		t.Fatalf("auto-attach pinned %q in-memory, want %q", got, root)
+	}
+	before.close()
+
+	// A reconnected connection must find NO persisted pin (auto-attach wrote none).
+	after := newPersistSession(t, store, ss, "proxyX")
+	after.rehydratePin(context.Background())
+	if got := after.workspace(); got != "" {
+		t.Fatalf("auto-attach persisted a pin (%q); only explicit pins are sticky", got)
+	}
+}
+
+// TestPersist_ExplicitAttachPersistsPin: an explicit attach (session_start
+// workspace arg / client root) persists and survives a reconnect.
+func TestPersist_ExplicitAttachPersistsPin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	before := newPersistSession(t, store, ss, "proxyX")
+	before.attachWorkspacePin(context.Background(), "file://"+root, true) // explicit
+	before.close()
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	after.rehydratePin(context.Background())
+	if got := after.workspace(); got != root {
+		t.Fatalf("explicit pin did not survive reconnect: got %q, want %q", got, root)
+	}
+}
+
+// TestOnBeforeTool_IncidentalReadRestoresExplicitPin is the headline pin-drift
+// fix: on a reconnected, unpinned connection, reading a file in ANOTHER project
+// by absolute path restores the last EXPLICIT pin instead of silently drifting
+// to the other project.
+func TestOnBeforeTool_IncidentalReadRestoresExplicitPin(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	rootA := freshTempDir(t)
+	rootB := freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	// Explicitly pin rootA, persisting it.
+	before := newPersistSession(t, store, ss, "proxyX")
+	before.attachWorkspacePin(context.Background(), "file://"+rootA, true)
+	before.close()
+
+	// Reconnect, then read a rootB file by absolute path BEFORE any explicit pin.
+	after := newPersistSession(t, store, ss, "proxyX")
+	after.onBeforeTool(context.Background(), "read_file", json.RawMessage(`{"file_path":"`+filepath.Join(rootB, "a.go")+`"}`))
+	if got := after.workspace(); got != rootA {
+		t.Fatalf("incidental rootB read pinned %q; must restore the explicit pin %q", got, rootA)
+	}
+}
 
 // newPersistSession builds a connSession wired to a shared session-state store
 // with the given proxy session ID set (as the initialize handshake would), then
