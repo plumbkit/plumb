@@ -60,6 +60,21 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage) string {
 	return root
 }
 
+// workspaceArgPresent reports whether the tool arguments carry a non-empty
+// `workspace` field — the deliberate, user-declared pin (session_start), as
+// opposed to an incidental file_path/path/uri that merely happens to sit inside
+// a project. Only a workspace-arg pin (or a client-reported root) is persisted
+// as the sticky target across reconnects; an incidental seed is not.
+func workspaceArgPresent(args json.RawMessage) bool {
+	var a struct {
+		Workspace string `json:"workspace"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return false
+	}
+	return a.Workspace != ""
+}
+
 // seedPathFromArgs extracts a single filesystem path from a tool call's raw
 // JSON arguments. Probes the argument shapes plumb's tools use:
 //
