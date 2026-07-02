@@ -293,7 +293,7 @@ Controls **which tools appear in `tools/list`**, to spare clients that already h
 
 | Client | Command | Config target |
 |---|---|---|
-| Claude Desktop | `plumb setup claude-desktop` | Platform-specific Claude Desktop JSON config |
+| Claude Desktop | `plumb setup claude-desktop` | Platform-specific Claude Desktop JSON config (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` — the one path Anthropic documents; also heuristically repoints any sibling `Claude*/claude_desktop_config.json` profile that already exists, e.g. `Claude-Personal`, the shape produced by the unofficial multi-account convention of a second `--user-data-dir` or a duplicated `.app` — not an Anthropic-documented mechanism, see `claudeDesktopExtraConfigPaths`) |
 | Claude Code, user scope | `plumb setup claude-code` | `~/.claude.json` + `~/.claude/skills/` (skill files) |
 | Claude Code, project scope | `plumb setup claude-code --project` | `.mcp.json` in the current directory + `~/.claude/skills/` |
 | Codex | `plumb setup codex` | `$CODEX_HOME/config.toml`, or `~/.codex/config.toml` when unset |

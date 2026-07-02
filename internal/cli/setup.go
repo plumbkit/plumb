@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -28,7 +29,16 @@ var setupAllFlag bool
 var setupClaudeDesktopCmd = &cobra.Command{
 	Use:   "claude-desktop",
 	Short: "Register plumb as an MCP server in Claude Desktop's config",
-	RunE:  runSetupClaudeDesktop,
+	Long: `Register plumb as an MCP server in Claude Desktop's config.
+
+Writes the one config path Anthropic documents (` + "`~/Library/Application Support/Claude/claude_desktop_config.json`" + ` on
+macOS). It also heuristically registers plumb in any sibling "Claude*" profile
+directory that already has its own claude_desktop_config.json — the shape
+produced by the unofficial multi-account technique of launching Claude Desktop
+with a distinct --user-data-dir, or installing the app a second time under a
+different name. This is a best-effort naming match, not an Anthropic-documented
+mechanism, so an unusually-named profile may be missed.`,
+	RunE: runSetupClaudeDesktop,
 }
 
 var (
@@ -72,7 +82,7 @@ func init() {
 
 func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 	PrintLogo()
-	cfgPath, err := claudeDesktopConfigPath()
+	cfgPaths, err := claudeDesktopConfigPaths()
 	if err != nil {
 		return fmt.Errorf("locating Claude Desktop config: %w", err)
 	}
@@ -82,20 +92,36 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolving plumb binary path: %w", err)
 	}
 
-	added, preserved, err := setupClaudeDesktopInto(cfgPath, plumbBin)
-	if err != nil {
-		return err
+	lines := make([]string, 0, len(cfgPaths))
+	var preservedAny []string
+	changed := 0
+	for _, cfgPath := range cfgPaths {
+		added, preserved, err := setupClaudeDesktopInto(cfgPath, plumbBin)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: error: %v", render.ContractPath(cfgPath), err))
+			continue
+		}
+		if !added {
+			lines = append(lines, fmt.Sprintf("%s: already current", render.ContractPath(cfgPath)))
+			continue
+		}
+		changed++
+		lines = append(lines, fmt.Sprintf("%s: registered", render.ContractPath(cfgPath)))
+		preservedAny = append(preservedAny, preserved...)
 	}
 
-	if !added {
-		fmt.Println("plumb is already registered in Claude Desktop — no changes made.")
-		fmt.Printf("Config: %s\n", cfgPath)
+	if changed == 0 {
+		fmt.Println("plumb is already registered in every detected Claude Desktop profile — no changes made.")
+		fmt.Println(strings.Join(lines, "\n"))
 		return nil
 	}
 
-	ctxStr := fmt.Sprintf("Registered in %s\nBinary: %s", cfgPath, plumbBin)
-	if len(preserved) > 0 {
-		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
+	ctxStr := fmt.Sprintf("Binary: %s\n\n%s", plumbBin, strings.Join(lines, "\n"))
+	if len(cfgPaths) > 1 {
+		ctxStr += fmt.Sprintf("\n\n%d extra profile(s) matched the unofficial \"Claude*\" multi-account naming\nconvention (see `plumb setup claude-desktop --help`).", len(cfgPaths)-1)
+	}
+	if len(preservedAny) > 0 {
+		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preservedAny)
 	}
 
 	tui.RebuildStyles()
