@@ -21,28 +21,39 @@ import (
 // funnel through mergeServerEntry, so each client differs only in path, key,
 // entry shape, and serialisation. extractFn powers `plumb doctor`'s mismatched-
 // binary detection and `plumb setup --all`'s "is plumb already registered?" gate.
+// pathsFn is optional: when set it overrides pathFn for `plumb setup --all`,
+// resolving every config path to manage instead of just one — currently only
+// Claude Desktop sets it, for its heuristic sibling-profile discovery
+// (claudeDesktopConfigPaths). pathFn stays the single source of truth for
+// `plumb doctor`'s canonical-path check.
 type setupTarget struct {
 	use       string
 	name      string
 	pathFn    func() (string, error)
+	pathsFn   func() ([]string, error)
 	intoFn    func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
 	extractFn func(cfgPath string) (binPath string, registered bool, err error)
 }
+
+// claudeDesktopCommandExtractor reads the plumb launch binary back from a
+// Claude Desktop-shaped mcpServers JSON config. Shared by the claude-desktop
+// setupTarget and the extra-profile doctor check (checkClaudeDesktopExtraProfiles).
+var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")
 
 // extraSetupTargets are the command-line MCP-client agents that consume external
 // MCP servers and therefore make sense as `plumb setup` targets. The first three
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
-	{"cursor", "Cursor", CursorConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
-	{"augment", "Augment Code", AugmentConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
-	{"qwen", "Qwen Code", QwenConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
-	{"antigravity", "Antigravity CLI", AntigravityConfigPath, setupAntigravityInto, antigravityCommandExtractor},
-	{"antigravity-desktop", "Antigravity Desktop", AntigravityDesktopConfigPath, setupAntigravityInto, antigravityCommandExtractor},
-	{"opencode", "OpenCode", OpenCodeConfigPath, setupOpenCodeInto, mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
-	{"crush", "Crush", CrushConfigPath, setupCrushInto, mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
-	{"goose", "Goose", GooseConfigPath, setupGooseInto, mapCommandExtractor(readOrInitYAMLConfig, "extensions", "cmd")},
-	{"hermes", "Hermes", HermesConfigPath, setupHermesInto, mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command")},
+	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
+	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
+	{use: "opencode", name: "OpenCode", pathFn: OpenCodeConfigPath, intoFn: setupOpenCodeInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
+	{use: "crush", name: "Crush", pathFn: CrushConfigPath, intoFn: setupCrushInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
+	{use: "goose", name: "Goose", pathFn: GooseConfigPath, intoFn: setupGooseInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "extensions", "cmd")},
+	{use: "hermes", name: "Hermes", pathFn: HermesConfigPath, intoFn: setupHermesInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command")},
 }
 
 // allSetupClients lists every client `plumb setup` supports, for the `config show`
@@ -53,10 +64,10 @@ var extraSetupTargets = []setupTarget{
 func allSetupClients() []setupTarget {
 	clients := make([]setupTarget, 0, 4+len(extraSetupTargets))
 	clients = append(clients,
-		setupTarget{"claude-code", "Claude Code", claudeCodeConfigPath, setupClaudeCodeInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
-		setupTarget{"claude-desktop", "Claude Desktop", claudeDesktopConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
-		setupTarget{"gemini", "Gemini CLI", GeminiConfigPath, setupClaudeDesktopInto, mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")},
-		setupTarget{"codex", "Codex", CodexConfigPath, setupCodexInto, mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")},
+		setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor},
+		setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+		setupTarget{use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+		setupTarget{use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto, extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")},
 	)
 	return append(clients, extraSetupTargets...)
 }
@@ -206,15 +217,46 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 // refreshClient repoints one client's plumb registration at plumbBin, but only
 // when the client is installed and already references plumb — it never adds plumb
 // to a client that doesn't use it. Returns a human status line and whether it
-// changed anything.
+// changed anything. A client with pathsFn set (currently only Claude Desktop) is
+// refreshed at every resolved path, not just one.
 func refreshClient(c setupTarget, plumbBin string) (status string, changed bool) {
 	if c.intoFn == nil {
 		return "skipped (no updater)", false
 	}
-	cfgPath, err := c.pathFn()
+	paths, err := resolveTargetPaths(c)
 	if err != nil {
 		return "error: " + err.Error(), false
 	}
+
+	statuses := make([]string, 0, len(paths))
+	for _, cfgPath := range paths {
+		s, didChange := refreshClientAt(c, cfgPath, plumbBin)
+		if didChange {
+			changed = true
+		}
+		if len(paths) > 1 {
+			s = render.ContractPath(cfgPath) + ": " + s
+		}
+		statuses = append(statuses, s)
+	}
+	return strings.Join(statuses, "; "), changed
+}
+
+// resolveTargetPaths returns every config path refreshClient should manage for
+// c: c.pathsFn's full list when set, otherwise the single c.pathFn path.
+func resolveTargetPaths(c setupTarget) ([]string, error) {
+	if c.pathsFn != nil {
+		return c.pathsFn()
+	}
+	p, err := c.pathFn()
+	if err != nil {
+		return nil, err
+	}
+	return []string{p}, nil
+}
+
+// refreshClientAt is refreshClient's single-path body.
+func refreshClientAt(c setupTarget, cfgPath, plumbBin string) (status string, changed bool) {
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		return "not installed — skipped", false
 	}

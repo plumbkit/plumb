@@ -67,14 +67,69 @@ func checkDaemon() []checkResult {
 // executable.
 func checkMCPClients() []checkResult {
 	selfPath, _ := os.Executable()
-	results := make([]checkResult, 0, len(allSetupClients())+1)
+	results := make([]checkResult, 0, len(allSetupClients())+2)
 	for _, c := range allSetupClients() {
 		results = append(results, checkOneClient(c, selfPath))
 	}
 	if r, ok := checkLegacyAntigravityConfigs(selfPath); ok {
 		results = append(results, r)
 	}
+	if r, ok := checkClaudeDesktopExtraProfiles(selfPath); ok {
+		results = append(results, r)
+	}
 	return results
+}
+
+// checkClaudeDesktopExtraProfiles validates the plumb binary registered in any
+// heuristically-discovered sibling Claude Desktop profile (see
+// claudeDesktopExtraConfigPaths) — the unofficial multi-account convention of
+// running Claude Desktop under a second Application Support directory.
+// checkOneClient only ever sees the one canonical path Anthropic documents, so a
+// stale entry in a sibling profile would otherwise pass unflagged. ok is false
+// when no extra profile is found — the result is then omitted rather than shown
+// as a spurious pass.
+func checkClaudeDesktopExtraProfiles(selfPath string) (checkResult, bool) {
+	extras, err := claudeDesktopExtraConfigPaths()
+	if err != nil || len(extras) == 0 {
+		return checkResult{}, false
+	}
+
+	var missing, mismatch []string
+	present := 0
+	for _, p := range extras {
+		bin, ok, err := claudeDesktopCommandExtractor(p)
+		if err != nil || !ok {
+			continue
+		}
+		bin = expandRegisteredPath(bin)
+		present++
+		switch {
+		case !binaryExists(bin):
+			missing = append(missing, contractConfigPath(p))
+		case selfPath != "" && !sameBinary(bin, selfPath):
+			mismatch = append(mismatch, contractConfigPath(p))
+		}
+	}
+	if present == 0 {
+		return checkResult{}, false
+	}
+	return claudeDesktopExtraProfilesResult(present, missing, mismatch), true
+}
+
+// claudeDesktopExtraProfilesResult shapes the check from the scan tallies: a
+// missing binary is a failure, a mismatch-but-present binary a non-fatal
+// warning, all-current a clean pass — mirroring legacyAntigravityResult.
+func claudeDesktopExtraProfilesResult(present int, missing, mismatch []string) checkResult {
+	const name = "Claude Desktop (extra profiles)"
+	const fix = "run `plumb setup claude-desktop` to repoint every detected profile"
+	switch {
+	case len(missing) > 0:
+		return checkResult{name: name, ok: false, detail: "registered binary missing in: " + strings.Join(missing, ", "), fix: fix}
+	case len(mismatch) > 0:
+		return checkResult{name: name, ok: true, warn: true, detail: "stale plumb binary in: " + strings.Join(mismatch, ", "), fix: fix}
+	default:
+		return checkResult{name: name, ok: true, detail: fmt.Sprintf("%d extra profile(s) current (heuristic — not an Anthropic-documented path)", present)}
+	}
 }
 
 // checkLegacyAntigravityConfigs validates the plumb binary in the flat
