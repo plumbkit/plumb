@@ -5,6 +5,7 @@
 ### Added
 
 - **`run_task`'s parameter-alias table now accepts `task` as an alias for `slot`.** `paramAliases` (`internal/mcp/argalias.go`) had no entry for the common name an agent reaches for when asking to run a task, so `run_task({"task": "lint"})` was rejected client-side (against the published schema, before the daemon's own alias-tolerant resolution could run) rather than being interpreted as `{"slot": "lint"}`. Added `"task": {"slot"}` to the table, matching the existing empirically-driven pattern. Guarded by a new case in `TestResolveArgs_ExpandedAliases`.
+- **Real-schema alias parity tests.** The alias-resolution tests exercised hand-written synthetic schemas only, so a quirk in a real tool's registered schema (one that `parseShape` could not guard, silently disabling aliases for that tool) or an alias entry that did not resolve against a tool's actual properties would pass the suite while failing in the field. `argalias_realschema_test.go` now drives full `tools/call` JSON-RPC round-trips (Serve → alias rewrite → real `Execute`) against the real `read_file`/`edit_file`/`write_file`/`delete_file`/`rename_file`/`list_files`/`search_in_files`/`run_task` tools with the field-reported alias spellings (`path`, `file`, `filename`, `filepath`, `dir`, `query`, `text`, `source`/`destination`, `old_str`/`new_str`, `task`), asserting the rewrite notice and the successful result.
 
 ## 0.9.24 (2026-07-02)
 
