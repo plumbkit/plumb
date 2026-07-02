@@ -117,30 +117,100 @@ func backupFile(src string) error {
 	return os.WriteFile(dst, data, 0o600) //nolint:gosec // G703: dst is derived from OS-native config path helpers (UserHomeDir, Executable), not user input
 }
 
-// claudeDesktopConfigPath returns the platform-specific path for
-// claude_desktop_config.json. It does not check whether the file exists.
-func claudeDesktopConfigPath() (string, error) {
+// claudeDesktopConfigBaseDir returns the platform-specific directory Claude
+// Desktop stores its per-user data under: macOS's Application Support,
+// Windows's %APPDATA%, or the unofficial Linux ~/.config. Shared by
+// claudeDesktopConfigPath (the one path Anthropic documents) and
+// claudeDesktopExtraConfigPaths (the heuristic sibling-profile scan below).
+func claudeDesktopConfigBaseDir() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), nil
+		return filepath.Join(home, "Library", "Application Support"), nil
 	case "windows":
 		appData := os.Getenv("APPDATA")
 		if appData == "" {
 			return "", fmt.Errorf("APPDATA environment variable not set")
 		}
-		return filepath.Join(appData, "Claude", "claude_desktop_config.json"), nil
+		return appData, nil
 	default:
 		// Unofficial Linux path — Claude Desktop isn't fully supported there yet.
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(home, ".config", "Claude", "claude_desktop_config.json"), nil
+		return filepath.Join(home, ".config"), nil
 	}
+}
+
+// claudeDesktopConfigPath returns the platform-specific path for
+// claude_desktop_config.json. It does not check whether the file exists.
+// This is the ONE location Anthropic's own docs name (support.claude.com) —
+// there is no officially documented multi-profile config path.
+func claudeDesktopConfigPath() (string, error) {
+	base, err := claudeDesktopConfigBaseDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "Claude", "claude_desktop_config.json"), nil
+}
+
+// claudeDesktopProfileGlob is NOT an Anthropic-documented mechanism. It is a
+// best-effort match against a well-known *unofficial* community convention for
+// running multiple Claude Desktop accounts on one machine — launching with
+// Electron's --user-data-dir="$HOME/Library/Application Support/Claude-<name>"
+// flag, or installing the .app bundle a second time under a different name
+// (macOS then gives it its own Application Support directory automatically).
+// Because it's a naming heuristic rather than a spec, it can both over-match (an
+// unrelated "Claude Extras" folder that happens to hold a config-shaped file)
+// and under-match (a profile not named with a literal "Claude" prefix).
+const claudeDesktopProfileGlob = "Claude*"
+
+// claudeDesktopExtraConfigPaths heuristically discovers sibling Claude Desktop
+// profile configs alongside the canonical one — see claudeDesktopProfileGlob.
+// Only directories that already contain a claude_desktop_config.json are
+// returned, so plumb never materialises a new profile out of thin air; the
+// canonical path itself is excluded from the result.
+func claudeDesktopExtraConfigPaths() ([]string, error) {
+	base, err := claudeDesktopConfigBaseDir()
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := claudeDesktopConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	matches, err := filepath.Glob(filepath.Join(base, claudeDesktopProfileGlob, "claude_desktop_config.json"))
+	if err != nil {
+		return nil, nil // malformed pattern is unreachable here — degrade to "no extras found"
+	}
+	sort.Strings(matches)
+	extras := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if m != canonical {
+			extras = append(extras, m)
+		}
+	}
+	return extras, nil
+}
+
+// claudeDesktopConfigPaths returns the canonical Claude Desktop config path
+// (always first, always included even if it doesn't exist yet, so setup still
+// creates it on a first run) plus any heuristically-discovered sibling profiles
+// (claudeDesktopExtraConfigPaths).
+func claudeDesktopConfigPaths() ([]string, error) {
+	canonical, err := claudeDesktopConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	extras, err := claudeDesktopExtraConfigPaths()
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{canonical}, extras...), nil
 }
 
 // readOrInitClaudeConfig reads cfgPath as JSON into a generic map.
