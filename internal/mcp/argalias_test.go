@@ -82,6 +82,13 @@ func TestResolveArgs_ExpandedAliases(t *testing.T) {
 			wantArgsSub: `"symbol_name":"Foo"`,
 		},
 		{
+			name:        "task → slot (run_task)",
+			schema:      `{"type":"object","properties":{"slot":{"type":"string"},"target":{"type":"string"}},"required":["slot"],"additionalProperties":false}`,
+			args:        `{"task":"lint"}`,
+			wantWarn:    `interpreted "task" as "slot"`,
+			wantArgsSub: `"slot":"lint"`,
+		},
+		{
 			name:        "eligibility no-op: pattern stays canonical on its own tool",
 			schema:      `{"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"],"additionalProperties":false}`,
 			args:        `{"pattern":"x"}`,

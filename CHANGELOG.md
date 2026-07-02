@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **`run_task`'s parameter-alias table now accepts `task` as an alias for `slot`.** `paramAliases` (`internal/mcp/argalias.go`) had no entry for the common name an agent reaches for when asking to run a task, so `run_task({"task": "lint"})` was rejected client-side (against the published schema, before the daemon's own alias-tolerant resolution could run) rather than being interpreted as `{"slot": "lint"}`. Added `"task": {"slot"}` to the table, matching the existing empirically-driven pattern. Guarded by a new case in `TestResolveArgs_ExpandedAliases`.
+
 ## 0.9.24 (2026-07-02)
 
 ### Added
