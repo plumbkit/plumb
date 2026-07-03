@@ -54,7 +54,7 @@ Key packages:
 | `internal/cache/` | Session-scoped symbol cache + LSP-driven invalidator |
 | `internal/config/` | TOML config, XDG paths, project-config merging |
 | `internal/session/` | Session-file registration + client identity tracking |
-| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, P95, client-aware). Writes funnel through one batched-transaction `Writer` (single-writer goroutine; non-blocking enqueue, never on the response path); reads use a process-cached `SharedReadOnly` handle. Also holds the `episodic_memories` table; stats schema `user_version` 12 |
+| `internal/stats/` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, P95, client-aware). Writes funnel through one batched-transaction `Writer` (single-writer goroutine; non-blocking enqueue, never on the response path); reads use a process-cached `SharedReadOnly` handle. Also holds the `episodic_memories` table; stats schema `user_version` 13 |
 | `internal/memory/` | Per-workspace markdown memory store (source of truth), exposed as MCP resources. Plus a rebuildable per-workspace FTS5 index (`memory.db`, separate from `topology.db`) backing ranked `search_memories`; generated-memory provenance + redaction (`internal/redact`); and `paths:`-glob hint matching for response injection |
 | `internal/redact/` | Secret scrubber (API keys, tokens, PEM keys, URL credentials, secret assignments) applied before any generated/episodic memory is persisted |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
@@ -373,7 +373,7 @@ Pyright is the worked example; full guide in `docs/adding-an-lsp.md`.
 1. Create `internal/tools/<name>.go`.
 2. Implement the `Tool` interface from `internal/mcp/tools.go` (`Name`, `Description`, `InputSchema`, `Execute`). The `Description` is the authoritative per-tool reference clients read — make it carry the steering.
 3. For write/edit tools, take a single `WriteDeps` parameter — don't grow the constructor with positional params; add a `WriteDeps` field for a new cross-cutting concern.
-4. Register the tool in `handleConn` (`internal/cli/daemon.go`); write tools use the shared `writeDeps`.
+4. Register the tool in `registerAllTools` (`internal/cli/conn_register.go`), called from `handleConn` (`internal/cli/daemon.go`); write tools use the shared `writeDeps`.
 5. Unit-test in `internal/tools/<name>_test.go` (`WriteDeps{}` is the nil-safe setup); document in `docs/tools.md` and update the tool table below.
 
 ## Available tools (55)

@@ -56,6 +56,8 @@ var paramAliases = map[string][]string{
 	// Read window.
 	"start": {"start_line"},
 	"end":   {"end_line"},
+	// Tasks.
+	"task": {"slot"},
 	// Git.
 	"msg":           {"message"},
 	"commitmessage": {"message"},

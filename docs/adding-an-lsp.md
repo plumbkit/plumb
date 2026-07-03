@@ -351,9 +351,12 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 
 - **Binary**: `zls` — install from https://github.com/zigtools/zls (or
   `brew install zls`).
-- **Status**: experimental — unit-tested with a mocked transport; the
-  integration test (`internal/lsp/adapters/zig/`, `testdata/zig-fixture/`) is
-  written and gated `//go:build integration` but skips until `zls` is on PATH.
+- **Status**: validated (promoted 2026-06-17) — unit-tested with a mocked
+  transport, and the integration test (`internal/lsp/adapters/zig/`,
+  `testdata/zig-fixture/`) now runs green against a real zls 0.16: document-symbol
+  extraction plus the `DidChangeWatchedFiles`+`DidOpen` → `publishDiagnostics`
+  round-trip both pass, once plumb advertised the `textDocument.publishDiagnostics`
+  client capability (the earlier "zls is pull-only" hypothesis was wrong).
 - **Root markers**: `build.zig`, `build.zig.zon`.
 - **Workspace model**: requires `rootUri` pointing at the project root (the
   directory containing `build.zig`); zls resolves the build graph from it.
@@ -373,10 +376,13 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
 
 - **Binary**: `typescript-language-server` — install with
   `npm install -g typescript-language-server typescript`.
-- **Status**: experimental — unit-tested with a mocked transport; the
-  integration test (`internal/lsp/adapters/typescript/`,
-  `testdata/typescript-fixture/`) is written and gated `//go:build integration`
-  but skips until the binary is on PATH.
+- **Status**: validated (promoted 2026-06-16) — unit-tested with a mocked
+  transport, and the integration test (`internal/lsp/adapters/typescript/`,
+  `testdata/typescript-fixture/`) now runs green against a real
+  typescript-language-server 5.3.0: document-symbol extraction plus the
+  `DidChangeWatchedFiles`+`DidOpen` → `publishDiagnostics` round-trip both pass.
+  It publishes nothing unless the client advertises `textDocument.publishDiagnostics`
+  — it does not implement pull diagnostics despite the earlier assumption.
 - **Root markers**: `tsconfig.json`, `jsconfig.json`, `package.json`.
 - **Serves both languages**: this one server provides the semantic GPS for
   TypeScript *and* JavaScript, so both the `typescript` and `javascript`
@@ -403,8 +409,10 @@ language-server–specific behaviour (workspace model, sync requirements, etc.).
   https://github.com/fwcd/kotlin-language-server (needs a JDK).
 - **Status**: experimental — unit-tested with a mocked transport; the
   integration test (`internal/lsp/adapters/kotlin/`, `testdata/kotlin-fixture/`)
-  is written and gated `//go:build integration` but skips until the binary is on
-  PATH.
+  is written and gated `//go:build integration` and would exercise the same
+  round-trip as zls/typescript-language-server above, but the binary isn't
+  installed on the validation machine, so it skips rather than fails. Promote
+  once it runs green against a real server.
 - **Root markers**: `settings.gradle.kts`, `build.gradle.kts`. Note the
   `build.gradle.kts` overlap with Java's markers — with both `[lsp.java]` and
   `[lsp.kotlin]` active, the alphabetical detect order makes Java win for a

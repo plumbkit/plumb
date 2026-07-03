@@ -159,12 +159,14 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 
 ## `[session]` — idle detection & eviction
 
-| Field | Type | Default | Effect |
-|---|---|---|---|
-| `idle_threshold_minutes` | int | `30` | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
-| `eviction_ttl_minutes` | int | `60` | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
+| Field | Type | Default | Env | Effect |
+|---|---|---|---|---|
+| `idle_threshold_minutes` | int | `30` | — | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
+| `eviction_ttl_minutes` | int | `60` | — | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
+| `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. |
+| `persist_state_ttl_minutes` | int | `1440` | — | How long persisted session state is honoured on restart before it's treated as stale and discarded. |
 
-Global or per-project; no environment override. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
+Global or per-project; no environment override except `persist_state`. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
 
 ## `[memory]` — per-workspace memory engine
 
@@ -207,6 +209,18 @@ model.** Project-overridable, hot-reloaded.
 |---|---|---|---|---|
 | `timeout` | duration | `"30s"` | `PLUMB_LSP_QUERY_TIMEOUT` | Caps a single LSP tool operation when the caller's context carries no deadline, so a wedged language server can't hang a request. `0` disables. |
 
+## `[tools]` — tool advertisement profile
+
+Governs which tools are *advertised* in `tools/list` — a hidden tool stays
+callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
+advertised set so a client with its own native filesystem tools isn't billed for
+commodity duplicates. Project-overridable.
+
+| Field | Type | Default | Env | Effect |
+|---|---|---|---|---|
+| `profile` | string | `"auto"` | `PLUMB_TOOLS_PROFILE` | `auto` (resolve from the client's native capabilities) \| `lean` (commodity tools hidden) \| `full` (every tool advertised). |
+| `client_profiles` | map | `{}` | — | Per-client override, keyed by a case-insensitive `clientInfo.name` prefix (e.g. `"claude-code"`); each value is `auto`\|`lean`\|`full`. An empty or absent entry falls through to `profile`. |
+
 ## `[lsp.<language>]` — language servers
 
 A map keyed by language name. **Every supported language is enabled by default**
@@ -246,8 +260,9 @@ these servers are installed):
 | `kotlin` | `kotlin-language-server` | `settings.gradle.kts`, `build.gradle.kts` |
 | `html` | `vscode-html-language-server --stdio` | weak: `index.html` |
 
-Go and Python are validated; the rest are experimental (see the *Adapter
-validation status* table in `AGENTS.md`).
+Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript
+are validated; Kotlin and HTML are experimental (see the *Adapter validation
+status* table in `AGENTS.md`).
 
 jdtls is heavyweight (~0.8–1.5 GB RSS); it defaults to `idle_timeout = "20m"` and
 `max_workspaces = 2` so idle JVMs are hibernated and concurrent JVMs are capped.
@@ -341,6 +356,8 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_AUTO_ATTACH` | `workspace.auto_attach` |
 | `PLUMB_AUTO_ATTACH_PERSIST` | `workspace.auto_attach_persist` |
 | `PLUMB_LSP_QUERY_TIMEOUT` | `lsp_query.timeout` |
+| `PLUMB_TOOLS_PROFILE` | `tools.profile` |
+| `PLUMB_PERSIST_SESSION_STATE` | `session.persist_state` |
 
 ---
 
