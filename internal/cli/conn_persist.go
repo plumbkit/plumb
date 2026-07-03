@@ -83,7 +83,18 @@ func (s *connSession) rehydrateReads(proxyID, root string, persistState bool) {
 // so a client that does not report roots (e.g. Claude Desktop) comes back pinned
 // after a restart. Called from inside the attach mutation lane with explicit
 // args, for the same reason as rehydrateReads.
-func (s *connSession) persistPin(proxyID, root, language string, persistState bool) {
+//
+// Only an EXPLICIT pin is persisted: a deliberate session_start workspace arg or
+// a client-reported root. An auto-attach seeded from an incidental tool path
+// (onBeforeTool) passes explicit=false and writes nothing, so it can never
+// overwrite the sticky target — a reconnect then lands back on the last
+// workspace the caller actually chose rather than on whatever file it read
+// first. This closes the silent pin-drift where reading a file in project B by
+// absolute path re-pinned a connection away from the explicitly-chosen A.
+func (s *connSession) persistPin(proxyID, root, language string, persistState, explicit bool) {
+	if !explicit {
+		return
+	}
 	if s.sessionState == nil || !persistState || proxyID == "" || root == "" {
 		return
 	}

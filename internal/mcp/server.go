@@ -33,6 +33,15 @@ const maxMessageBytes = 4 << 20 // 4 MiB per newline-delimited JSON-RPC message
 // SetWriteDeadline (e.g. test pipes) are unaffected. 0 disables the deadline.
 const DefaultWriteTimeout = 30 * time.Second
 
+// DefaultToolExecTimeout bounds a single Execute call for tools that opt in via
+// ExecTimeoutBounded (the filesystem read/list tools, which perform blocking
+// syscalls with no internal deadline). Without it a stat/open/readdir on a slow
+// or unresponsive mount (a stalled network/iCloud/FUSE volume) runs unbounded
+// until the MCP client abandons the call at its own multi-minute timeout. 10s is
+// far longer than any healthy local read yet short enough to fail fast; the
+// daemon overrides it from PLUMB_TOOL_EXEC_TIMEOUT. 0 disables the bound.
+const DefaultToolExecTimeout = 10 * time.Second
+
 // JSON-RPC 2.0 standard error codes.
 const (
 	codeParseError     = -32700
@@ -200,6 +209,12 @@ type Server struct {
 	// before Serve.
 	WriteTimeout time.Duration // see DefaultWriteTimeout
 
+	// ToolExecTimeout bounds a single Execute call for tools that implement
+	// ExecTimeoutBounded. Defaults to DefaultToolExecTimeout (set by New); the
+	// daemon overrides it from PLUMB_TOOL_EXEC_TIMEOUT. 0 disables the bound. Must
+	// be set before Serve.
+	ToolExecTimeout time.Duration // see DefaultToolExecTimeout
+
 	// pending tracks in-flight server-initiated requests by string ID.
 	pendingMu  sync.Mutex
 	pending    map[string]chan json.RawMessage
@@ -214,13 +229,14 @@ type Server struct {
 // New creates a Server with the given identity.
 func New(info ServerInfo) *Server {
 	return &Server{
-		info:         info,
-		tools:        make(map[string]Tool),
-		argShapes:    make(map[string]*shape),
-		pubSchema:    make(map[string]json.RawMessage),
-		pending:      make(map[string]chan json.RawMessage),
-		prompts:      make(map[string]Prompt),
-		WriteTimeout: DefaultWriteTimeout,
+		info:            info,
+		tools:           make(map[string]Tool),
+		argShapes:       make(map[string]*shape),
+		pubSchema:       make(map[string]json.RawMessage),
+		pending:         make(map[string]chan json.RawMessage),
+		prompts:         make(map[string]Prompt),
+		WriteTimeout:    DefaultWriteTimeout,
+		ToolExecTimeout: DefaultToolExecTimeout,
 	}
 }
 
@@ -343,81 +359,6 @@ func (ss *serveState) write(resp mcpResponse) {
 	if err := ss.encode(resp); err != nil {
 		ss.fail(err)
 	}
-}
-
-// makeRequest sends a server-initiated JSON-RPC request and waits for the
-// response, satisfying the RequestFn signature.
-func (ss *serveState) makeRequest(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	id := fmt.Sprintf("srv-%d", ss.s.reqCounter.Add(1))
-	ch := make(chan json.RawMessage, 1)
-
-	ss.s.pendingMu.Lock()
-	ss.s.pending[id] = ch
-	ss.s.pendingMu.Unlock()
-
-	msg := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
-	if params != nil {
-		msg["params"] = params
-	}
-	ss.wrMu.Lock()
-	var encErr error
-	if ss.broken {
-		encErr = errors.New("connection closed")
-	} else if encErr = ss.encode(msg); encErr != nil {
-		ss.fail(encErr)
-	}
-	ss.wrMu.Unlock()
-	if encErr != nil {
-		ss.s.pendingMu.Lock()
-		delete(ss.s.pending, id)
-		ss.s.pendingMu.Unlock()
-		return nil, fmt.Errorf("sending %s: %w", method, encErr)
-	}
-
-	select {
-	case raw := <-ch:
-		return ss.parseResponse(method, raw)
-	case <-ctx.Done():
-		ss.s.pendingMu.Lock()
-		delete(ss.s.pending, id)
-		ss.s.pendingMu.Unlock()
-		return nil, ctx.Err()
-	}
-}
-
-// notify sends a server-initiated JSON-RPC notification (no id), satisfying the
-// NotifyFn signature. Guarded by wrMu like every other socket write.
-func (ss *serveState) notify(method string, params any) error {
-	msg := map[string]any{"jsonrpc": "2.0", "method": method}
-	if params != nil {
-		msg["params"] = params
-	}
-	ss.wrMu.Lock()
-	defer ss.wrMu.Unlock()
-	if ss.broken {
-		return errors.New("connection closed")
-	}
-	if err := ss.encode(msg); err != nil {
-		ss.fail(err)
-		return err
-	}
-	return nil
-}
-
-func (ss *serveState) parseResponse(method string, raw json.RawMessage) (json.RawMessage, error) {
-	var r struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, fmt.Errorf("parsing %s response: %w", method, err)
-	}
-	if r.Error != nil {
-		return nil, fmt.Errorf("%s: %s", method, r.Error.Message)
-	}
-	return r.Result, nil
 }
 
 // dispatchMessage handles one inbound message in a wg.Go goroutine.
