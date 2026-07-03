@@ -358,23 +358,9 @@ Real-binary validation has been exercised on macOS only; Linux integration runs 
 | `kotlin-language-server` | **Experimental** — `[lsp.kotlin] enabled = true`; root markers `settings.gradle.kts`/`build.gradle.kts` (overlaps Java's — with both enabled, alphabetical detect order makes Java win). Real-binary retest (2026-06-10): passes `TestIntegration_DocumentSymbols`, fails `TestIntegration_DidChangeWatchedFiles` (needs a real Gradle/Maven project to publish diagnostics). |
 | `vscode-html-language-server` | **Experimental** — `[lsp.html] enabled = true`; root marker `index.html` (only consulted while html is enabled). Serves document symbols, hover, completion, embedded-CSS/JS validation; does **not** implement workspace/symbol, call hierarchy, or type hierarchy. |
 
-## How to add an LSP adapter
+## Contributor recipes
 
-Pyright is the worked example; full guide in `docs/adding-an-lsp.md`.
-
-1. Create `internal/lsp/adapters/<name>/` with a `doc.go` stating validation status.
-2. Implement every `LSPClient` method (`internal/lsp/client.go`), including `DidChangeWatchedFiles` — the LSP-correct primitive for external file changes. No per-adapter extension methods.
-3. Register `conn.SetRequestHandler(a.handleServerRequest)` to answer `client/registerCapability` / `client/unregisterCapability`; without it the server may stall.
-4. Implement initialisation: capability negotiation (base on `protocol.DefaultClientCapabilities()`), workspace model, init options.
-5. Unit-test with `internal/lsp/jsonrpc/mock.go`; cover the `DidChangeWatchedFiles` wire format (gopls and pyright have explicit tests).
-
-## How to add an MCP tool
-
-1. Create `internal/tools/<name>.go`.
-2. Implement the `Tool` interface from `internal/mcp/tools.go` (`Name`, `Description`, `InputSchema`, `Execute`). The `Description` is the authoritative per-tool reference clients read — make it carry the steering.
-3. For write/edit tools, take a single `WriteDeps` parameter — don't grow the constructor with positional params; add a `WriteDeps` field for a new cross-cutting concern.
-4. Register the tool in `registerAllTools` (`internal/cli/conn_register.go`), called from `handleConn` (`internal/cli/daemon.go`); write tools use the shared `writeDeps`.
-5. Unit-test in `internal/tools/<name>_test.go` (`WriteDeps{}` is the nil-safe setup); document in `docs/tools.md` and update the tool table below.
+Step-by-step procedures live as project skills in `.claude/skills/` (plain markdown, readable from any client): `add-lsp-adapter` (adapter checklist + promotion rule; full guide in `docs/adding-an-lsp.md`) and `add-mcp-tool` (tool checklist incl. the thin-orchestrator `Execute()` pattern and the lean-profile decision).
 
 ## Available tools (55)
 
@@ -414,21 +400,6 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - **Max ~600 lines per file.** Split if it grows. Exception allowlist: `internal/lsp/protocol/types.go`. No other file qualifies without explicit justification added here.
 - **Comments only when the WHY is non-obvious.** No what-comments.
 - **Gocyclo-15 contract.** No first-party non-test function may exceed cyclomatic complexity 15. CI enforces.
-
-## Tool implementation pattern
-
-Every `Tool.Execute()` must be a thin orchestrator over named, individually-testable steps (parse/validate → domain logic → presentation). PRs that add a monolithic `Execute()` are non-conforming. Each inner function stays under gocyclo 15.
-
-```go
-func (t *Foo) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
-    args, err := parseFooArgs(raw)        // JSON decode + shape validation only
-    if err != nil { return "", err }
-    if err := args.validate(); err != nil { return "", err }
-    res, err := t.run(ctx, args)          // domain logic — no formatting
-    if err != nil { return "", err }
-    return formatFooResult(res), nil      // presentation — no logic
-}
-```
 
 ## Testing requirements
 
