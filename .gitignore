@@ -64,7 +64,11 @@ coverage.html
 # Shared rules/context files live at the repo ROOT (AGENTS.md, CLAUDE.md, QWEN.md,
 # .goosehints, …) and are intentionally NOT ignored. These dirs are machine-local.
 # (gitignore has no inline comments — keep each note on its own line.)
-.claude/
+.claude/*
+# Project-scoped skills (SKILL.md playbooks) are shared contributor content, not
+# per-developer local state — un-ignore them specifically while everything else under
+# .claude/ (settings.local.json, etc.) stays ignored.
+!.claude/skills/
 # Cursor editor + cursor-agent CLI; also holds rules — un-ignore to share them
 .cursor/
 .gemini/
