@@ -60,14 +60,19 @@ it is a shared, high-stakes list.
 Add `internal/tools/<name>_test.go`; `WriteDeps{}` is the nil-safe zero-value setup for
 write-tool tests.
 
-**Don't forget the integration-gated tool-list parity test.** `TestSmoke_ToolListParity`
-(build-tagged `integration`) asserts the live `tools/list` against an expected tool set —
-plain `go test ./...` skips it, so it's easy to add a tool, pass CI, and still leave this
-test stale. Update its expected tool list when adding, renaming, or removing a tool.
+**Don't forget the canonical coverage list.** The expected tool set lives in the selftest
+coverage groups in `internal/mcp/selftest_prompt.go` — add the new tool's name to the
+matching group (or remove/rename it there). Two tests enforce it: the integration-gated
+`TestSmoke_ToolListParity` (build-tagged `integration`; asserts the live `tools/list`
+equals the list — plain `go test ./...` skips it) and the plain-unit `TestAgentsToolCount`
+(`internal/mcp`; asserts the `AGENTS.md` documented count equals the list — fails fast in
+every `go test`/`make verify`).
 
 ## 6. Docs and tables to update
 
 - `docs/tools.md` — full tool reference.
 - `AGENTS.md`'s `## Available tools (N)` heading (bump the count) and its index bullet
-  (which category/bullet the new tool belongs under).
+  (which category/bullet the new tool belongs under). The count is test-enforced:
+  `TestAgentsToolCount` fails plain `go test` if the heading disagrees with the canonical
+  list in `internal/mcp/selftest_prompt.go`.
 - `CHANGELOG.md` — one entry for the change.
