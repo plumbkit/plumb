@@ -41,6 +41,46 @@ func TestBuildPathPolicy_ExtraAndReadRoots(t *testing.T) {
 	}
 }
 
+// TestBuildPathPolicy_TrustedWorkspaceRoots proves the manually-granted,
+// out-of-repo per-workspace roots are folded into the allowlist: extra roots
+// read-write, read roots read-only. XDG_DATA_HOME is sandboxed so the store
+// resolves under a temp dir, never the developer's real data dir.
+func TestBuildPathPolicy_TrustedWorkspaceRoots(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	extra := t.TempDir()
+	readonly := t.TempDir()
+	store := config.NewWorkspaceRootsStore()
+	if err := store.SetExtraRoots(ws, []string{extra}); err != nil {
+		t.Fatalf("SetExtraRoots: %v", err)
+	}
+	if err := store.SetReadRoots(ws, []string{readonly}); err != nil {
+		t.Fatalf("SetReadRoots: %v", err)
+	}
+
+	s := &connSession{}
+	v := &sessionView{acquiredRoot: ws, ws: config.WorkspaceConfig{}}
+	pol := s.buildPathPolicy(v)
+
+	if _, err := pol.Check(filepath.Join(extra, "a.go"), tools.AccessReadWrite); err != nil {
+		t.Errorf("granted extra root should be writable: %v", err)
+	}
+	if _, err := pol.Check(filepath.Join(readonly, "b.go"), tools.AccessRead); err != nil {
+		t.Errorf("granted read root should be readable: %v", err)
+	}
+	if _, err := pol.Check(filepath.Join(readonly, "b.go"), tools.AccessReadWrite); err == nil {
+		t.Error("granted read root must not be writable")
+	}
+	if label := pol.OutsideWorkspaceLabel(filepath.Join(extra, "a.go")); label != "workspace-root" {
+		t.Errorf("outside-workspace label = %q, want workspace-root", label)
+	}
+	// A path under no root at all is still refused — the store only widens to the
+	// exact granted paths.
+	if _, err := pol.Check(filepath.Join(t.TempDir(), "c.go"), tools.AccessRead); err == nil {
+		t.Error("a path under no granted root must still be refused")
+	}
+}
+
 func TestBuildPathPolicy_GoDependencyReads(t *testing.T) {
 	goroot := build.Default.GOROOT
 	stdlib := filepath.Join(goroot, "src", "fmt", "print.go")

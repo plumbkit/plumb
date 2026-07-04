@@ -207,10 +207,21 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"refuse_home_roots", fmt.Sprintf("%v", projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
 	})
 
-	addConfigSection(cfgTable, "workspace", [][]string{
+	wsRows := [][]string{
 		{"auto_attach", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttach), sourceFor("auto_attach", defaultsCfg.Workspace.AutoAttach, globalCfg.Workspace.AutoAttach, projectCfg.Workspace.AutoAttach)},
 		{"auto_attach_persist", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttachPersist), sourceFor("auto_attach_persist", defaultsCfg.Workspace.AutoAttachPersist, globalCfg.Workspace.AutoAttachPersist, projectCfg.Workspace.AutoAttachPersist)},
-	})
+	}
+	// Trusted per-workspace roots granted manually (via the TUI / CLI), recorded
+	// in plumb's data dir — never in the project config. Distinct provenance from
+	// the config-file fields above, so shown with a "data-dir grant" source.
+	if ws != "" {
+		granted := config.NewWorkspaceRootsStore().Get(ws)
+		wsRows = append(wsRows,
+			[]string{"extra_roots (granted)", fmt.Sprintf("%v", granted.ExtraRoots), "data-dir grant"},
+			[]string{"read_roots (granted)", fmt.Sprintf("%v", granted.ReadRoots), "data-dir grant"},
+		)
+	}
+	addConfigSection(cfgTable, "workspace", wsRows)
 
 	addConfigSection(cfgTable, "git", [][]string{
 		{"allow_writes", fmt.Sprintf("%v", projectCfg.Git.AllowWrites), sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites)},

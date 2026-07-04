@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -57,7 +58,9 @@ func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 
 // buildPathPolicy assembles the allowlist for v's pinned workspace: the
 // workspace (read-write), configured extra roots (read-write), configured read
-// roots (read-only), and — when dependency reads are enabled and v.depRoots were
+// roots (read-only), the trusted per-workspace roots the user granted manually
+// (extra read-write / read read-only, from the out-of-repo WorkspaceRootsStore),
+// and — when dependency reads are enabled and v.depRoots were
 // computed for the current session language — the session language's toolchain
 // dependency roots (read-only, from v.depRoots, which warmDepRoots populates off
 // the mutation lane). The depRootsLang guard prevents a stale cross-language
@@ -89,6 +92,23 @@ func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
 	for _, r := range v.ws.ReadRoots {
 		if p := os.ExpandEnv(r); p != "" {
 			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessRead, Label: "read-root"})
+		}
+	}
+	// Trusted per-workspace roots the user granted manually through the TUI /
+	// CLI, recorded in plumb's data dir keyed by the workspace root — never in
+	// the (untrusted) project config. Additive to the config roots: extra roots
+	// read-write, read roots read-only. buildPathPolicy runs only on the mutation
+	// lane (attach / re-pin / config reload / warmDepRoots), never per tool call,
+	// so reading the small store here is off the hot path.
+	granted := config.NewWorkspaceRootsStore().Get(ws)
+	for _, r := range granted.ExtraRoots {
+		if p := os.ExpandEnv(r); p != "" {
+			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessReadWrite, Label: "workspace-root"})
+		}
+	}
+	for _, r := range granted.ReadRoots {
+		if p := os.ExpandEnv(r); p != "" {
+			roots = append(roots, tools.AllowedRoot{Path: p, Access: tools.AccessRead, Label: "workspace-read-root"})
 		}
 	}
 	if v.ws.AllowDependencyReads && v.depRootsLang == v.acquiredLanguage {

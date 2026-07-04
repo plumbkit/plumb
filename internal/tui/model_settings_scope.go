@@ -49,6 +49,12 @@ func (m *Model) buildScopeItems() []settingItem {
 	raw, _ := config.LoadProjectRaw(scope.folder)
 	out := make([]settingItem, 0, len(buildSettingItems(merged)))
 	for _, it := range buildSettingItems(merged) {
+		if storeBackedWorkspaceKey(it.key) {
+			// A manual, out-of-repo per-workspace grant (WorkspaceRootsStore), not a
+			// project-config override — populate the row from the store.
+			out = append(out, applyStoreRoots(it, scope.folder))
+			continue
+		}
 		path, ok := itemTOMLPath(it)
 		if !ok { // global-only setting: hidden in a workspace scope
 			continue
@@ -166,6 +172,12 @@ func (m Model) resetToInherit() Model {
 		return m
 	}
 	it := m.settingsItems[m.settingsCursor]
+	if storeBackedWorkspaceKey(it.key) {
+		if m.writeWorkspaceRoots(it.key, nil) {
+			m.settingsStatus = it.label + " → inherit"
+		}
+		return m
+	}
 	path, ok := itemTOMLPath(it)
 	if !ok {
 		return m

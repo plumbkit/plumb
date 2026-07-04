@@ -100,6 +100,14 @@ func (m Model) commitListEditor() Model {
 		}
 		return m
 	}
+	if !m.currentScope().global && storeBackedWorkspaceKey(ed.key) {
+		// A workspace scope persists these to the out-of-repo roots store, not the
+		// project config (which cannot widen its own filesystem access).
+		if m.writeWorkspaceRoots(ed.key, entries) {
+			m.settingsStatus = workspaceRootsStatus(ed.key, len(entries))
+		}
+		return m
+	}
 	apply := func(c *config.Config) {
 		if p := listField(c, ed.key); p != nil {
 			*p = entries
@@ -207,6 +215,9 @@ func stringField(c *config.Config, key settingKey) *string {
 // merged project value in a workspace scope, the global snapshot in Global.
 // Handles both the static list fields and the per-language [lsp.<lang>] lists.
 func (m Model) effectiveList(it settingItem) []string {
+	if scope := m.currentScope(); !scope.global && storeBackedWorkspaceKey(it.key) {
+		return workspaceRootsFor(scope.folder, it.key)
+	}
 	cfg := m.settingsCfg
 	if scope := m.currentScope(); !scope.global {
 		if merged, err := config.LoadProject(m.settingsCfg, scope.folder); err == nil {

@@ -40,7 +40,7 @@ func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 		t.Fatal("workspace scope produced no rows")
 	}
 	for _, it := range items {
-		if _, ok := itemTOMLPath(it); !ok {
+		if _, ok := itemTOMLPath(it); !ok && !storeBackedWorkspaceKey(it.key) {
 			t.Errorf("workspace scope leaked a global-only row: %v", it.key)
 		}
 	}
@@ -139,6 +139,59 @@ func TestListEditor_AddRemoveCommitWritesWorkspace(t *testing.T) {
 	}
 	if len(merged.Topology.ExcludePatterns) != 1 || merged.Topology.ExcludePatterns[0] != "/b" {
 		t.Errorf("exclude_patterns = %v, want [/b]", merged.Topology.ExcludePatterns)
+	}
+}
+
+// TestWorkspaceRoots_EditsWriteStoreNotProject exercises the store-backed roots
+// rows in a workspace scope: the row appears, committing the list editor writes
+// the out-of-repo WorkspaceRootsStore (never the project config), sets the
+// project-reload signal, and resetToInherit clears the grant.
+func TestWorkspaceRoots_EditsWriteStoreNotProject(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	m := Model{
+		settingsCfg:         config.Defaults(),
+		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
+		settingsScopeCursor: 1,
+	}
+	m.settingsItems = m.buildScopeItems()
+	m.settingsCursor = cursorFor(m.settingsItems, skExtraRoots)
+	if m.settingsCursor < 0 {
+		t.Fatal("extra_roots row missing from workspace scope")
+	}
+
+	m = m.activateSetting()
+	if m.settingsListEditor == nil {
+		t.Fatal("activating extra_roots should open the list editor")
+	}
+	m.settingsListEditor.adding = true
+	m.settingsListEditor.input = "/data/shared"
+	m.settingsListEditor.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = m.commitListEditor()
+
+	if m.pendingProjectReload != ws {
+		t.Errorf("pendingProjectReload = %q, want %q", m.pendingProjectReload, ws)
+	}
+	// The grant landed in the store, not the project config file.
+	if got := config.NewWorkspaceRootsStore().Get(ws).ExtraRoots; len(got) != 1 || got[0] != "/data/shared" {
+		t.Errorf("store extra roots = %v, want [/data/shared]", got)
+	}
+	if present, _ := config.ProjectValuePresent(ws, []string{"workspace", "extra_roots"}); present {
+		t.Error("extra_roots must NOT be written to the project config file")
+	}
+
+	// The row now reflects the grant as an override.
+	m.settingsItems = m.buildScopeItems()
+	idx := cursorFor(m.settingsItems, skExtraRoots)
+	if !m.settingsItems[idx].overridden {
+		t.Error("a granted extra_roots row should be marked overridden")
+	}
+
+	// Reset clears the grant from the store.
+	m.settingsCursor = idx
+	m = m.resetToInherit()
+	if got := config.NewWorkspaceRootsStore().Get(ws).ExtraRoots; len(got) != 0 {
+		t.Errorf("resetToInherit should clear the store grant, got %v", got)
 	}
 }
 

@@ -20,7 +20,12 @@ Plumb is built so that an agent cannot quietly exceed the access you granted:
   per-connection allowlist of roots, each tagged read-only or read-write. A write
   outside a read-write root is refused by construction — not by convention. The
   detected workspace is read-write; `extra_roots` add read-write roots; `read_roots`
-  (and, for Go, the module cache + `GOROOT`) add read-only roots.
+  (and, for Go, the module cache + `GOROOT`) add read-only roots. `extra_roots`/
+  `read_roots` in a **project** config are ignored (forced back to the global base)
+  so a cloned repo cannot widen its own access on attach; to grant one workspace
+  extra roots, add them manually in the TUI — recorded out-of-repo in plumb's data
+  dir, keyed by the workspace root (the VS Code "workspace trust" model), so only a
+  deliberate user action ever widens the boundary.
 - **Single-workspace-per-connection.** Once a connection attaches a workspace, paths
   outside its allowed roots raise a `workspace boundary violation`; the connection is
   marked blocked. Switching projects requires an explicit, deliberate re-pin.

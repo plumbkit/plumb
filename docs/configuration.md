@@ -111,8 +111,22 @@ project.
 | `auto_attach` | bool | `false` | `PLUMB_AUTO_ATTACH` | When detection finds no marker at all (no `.plumb/`, language marker, or `.git/`), fall back to a synthetic root (the seed directory). Stats, TUI, and project config work; LSP is unavailable. |
 | `auto_attach_persist` | bool | `false` | `PLUMB_AUTO_ATTACH_PERSIST` | Create `.plumb/` at the synthetic root on first attach so later sessions resolve normally. **Implies `auto_attach`.** |
 | `allow_dependency_reads` | bool | `true` | — | For a Go session, allow read/search (never write) into the module cache (`GOMODCACHE`) + `GOROOT`. |
-| `extra_roots` | []string | `[]` | — | Additional read-**write** directories, additive to the workspace (`$VAR`-expanded). |
-| `read_roots` | []string | `[]` | — | Additional read-**only** directories — vendored deps, shared libs (`$VAR`-expanded). |
+| `extra_roots` | []string | `[]` | — | Additional read-**write** directories, additive to the workspace (`$VAR`-expanded). Honoured from **global** config only (see below). |
+| `read_roots` | []string | `[]` | — | Additional read-**only** directories — vendored deps, shared libs (`$VAR`-expanded). Honoured from **global** config only (see below). |
+
+### Per-workspace roots (trusted grants)
+
+`extra_roots` / `read_roots` set in a **project** `.plumb/config.toml` are ignored
+— `LoadProject` forces them back to the global value, because a cloned repo is
+an untrusted surface and must not be able to widen its own filesystem access the
+moment a session attaches. To grant **one** workspace extra roots, add them
+manually in the TUI Settings screen under that workspace's scope (Extra roots /
+Read roots rows). Such a grant is recorded in plumb's own data dir
+(`<DataDir>/workspace_roots.json`), keyed by the canonical workspace root —
+**never** in the repo — so a cloned repository can neither write it nor change a
+granted path after the fact (the VS Code "workspace trust" model). The grants are
+additive to the global config roots and shown by `plumb config show --workspace
+<dir>` with a `data-dir grant` source.
 
 ## `[git]` — tiered git-tool gating
 
