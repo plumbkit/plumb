@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **55** structured tools to AI assistants. Every write tool is
+Plumb exposes **57** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -127,6 +127,49 @@ ever exposed). Backed by `internal/session` (session files) and
 `stats.RecentWritesByWorkspace` (the `tool_calls` stats table). Both data
 sources are read under a 500 ms hard timeout so the tool never blocks the MCP
 response.
+
+When `[collab] intents` is on, the output also lists each active session's live
+intent (an unverified claim, distinct from the observed `recent_writes`); when
+`[collab] mailbox` is on it lists the notes addressed to the caller (pending, not
+consumed here — `session_start` delivers them). Neither ever creates `collab.db`.
+
+---
+
+## Cross-agent sharing (`[collab]`)
+
+Two opt-in, advisory tools for concurrent agents on one workspace. Both are gated
+by their own `[collab]` flag (default off) and refuse with a clear enable hint
+when the flag is off. Everything is **advisory** — nothing here ever blocks a
+write — **secret-scrubbed** (`internal/redact`) before storage, **byte-budgeted**
+when injected, and **strictly per-workspace**. What an agent *says* is a **claim**,
+rendered distinctly from what the daemon *observed* (phase-1 peer awareness).
+Rows live in `<workspace>/.plumb/collab.db` (WAL, auto-gitignored like
+`topology.db`), created lazily on first use, expiring per `[collab]
+intent_ttl_minutes` and pruned on the daemon session-reaper tick. Delivery is by
+polling and hint injection only — plumb cannot push to another agent.
+
+### `share_intent`
+Broadcast what you are working on so peers can steer around it (e.g. "refactoring
+the rate limiter — avoid `internal/tools/ratelimit*`"). You have at most one live
+intent — a new call replaces it — and it is cleared automatically when your
+session ends. Peers see it in `workspace_sessions`, and a peer whose write touches
+a path matching your `path_globs` gets a bounded advisory hint labelled
+`[Peer intent (claim, unverified): …]`. Requires `[collab] intents = true`.
+
+**Inputs:** `body` (string, required — free text); `path_globs` (array of
+strings, optional — workspace-relative globs for the area you are working on);
+`ttl_minutes` (integer, optional — expiry override; defaults to `[collab]
+intent_ttl_minutes`).
+
+### `leave_note`
+Leave a short message for a named peer session, or for `next` (whoever attaches to
+this workspace next). A minimal mailbox — notes only, no tasks, threads, or
+replies. An addressed note is delivered at that peer's `session_start` and listed
+in its `workspace_sessions` until it expires; a `next` note is delivered once, to
+the first session that attaches, then consumed. Requires `[collab] mailbox = true`.
+
+**Inputs:** `body` (string, required — the message); `to` (string, optional — a
+peer session name, or `next` (default) for whoever attaches next).
 
 ---
 

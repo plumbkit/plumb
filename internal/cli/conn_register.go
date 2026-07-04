@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -130,7 +131,21 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
 		WithTopology(topoFn).
-		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }))
+		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }).
+		WithCollab(
+			func() (bool, bool) { c := s.collabConfig(); return c.Intents, c.Mailbox },
+			s.collabStoreIfExists,
+			s.sessionName,
+		))
+	collabDeps := tools.CollabDeps{
+		Workspace:   s.workspace,
+		SessionName: s.sessionName,
+		SessionID:   s.sessID,
+		Policy:      s.collabPolicy,
+		Store:       s.collabStoreCreate,
+	}
+	srv.Register(tools.NewShareIntent(collabDeps))
+	srv.Register(tools.NewLeaveNote(collabDeps))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int) {
@@ -145,6 +160,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithCollab(func() (bool, int) {
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
+		}).
+		WithMailbox(func() (bool, *collab.Store, string, int) {
+			c := s.collabConfig()
+			return c.Mailbox, s.collabStoreIfExists(), s.sessionName(), c.HintBudgetBytes
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPLanguages(s.acquiredLanguageLabels).

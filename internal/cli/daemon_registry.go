@@ -159,10 +159,25 @@ func (r *connRegistry) evictIdle(ttl time.Duration) {
 	}
 }
 
+// pruneCollab deletes expired intents/notes across every open collab store on
+// the reaper tick. Reads filter expired rows regardless, so this is a space
+// reclaim, not a correctness requirement. Best-effort and nil-safe.
+func pruneCollab(ctx context.Context, collabPool *collabPool) {
+	if collabPool == nil {
+		return
+	}
+	now := time.Now()
+	for _, s := range collabPool.openStores() {
+		if _, err := s.Prune(ctx, now); err != nil {
+			slog.Debug("collab: prune failed", "workspace", s.Workspace(), "err", err)
+		}
+	}
+}
+
 // reaperInterval is how often the idle-session reaper runs.
 const reaperInterval = 5 * time.Minute
 
-func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegistry, sessState *sessionstate.Store, ticks <-chan time.Time) {
+func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegistry, sessState *sessionstate.Store, collabPool *collabPool, ticks <-chan time.Time) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -173,6 +188,7 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 			}
 			cur := store.Current()
 			pruneSessionState(sessState, cur.Session.PersistStateTTLMinutes)
+			pruneCollab(ctx, collabPool)
 			// Always run summariseIdle (no global gate): the per-session closure
 			// re-checks the project [memory] config, so a per-project episodic
 			// opt-in is honoured even when the global default is off. The threshold

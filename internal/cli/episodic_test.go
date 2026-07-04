@@ -182,7 +182,7 @@ func TestRunIdleReaper_SummarisesWhenGlobalSummariesOff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ticks := make(chan time.Time)
-	go runIdleReaper(ctx, store, reg, nil, ticks)
+	go runIdleReaper(ctx, store, reg, nil, nil, ticks)
 	ticks <- time.Now()
 
 	deadline := time.After(episodicWaitDeadline)

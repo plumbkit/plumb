@@ -27,6 +27,65 @@ func TestCollab_Defaults(t *testing.T) {
 	if d.Collab.HintBudgetBytes != 512 {
 		t.Errorf("collab.hint_budget_bytes default = %d, want 512", d.Collab.HintBudgetBytes)
 	}
+	if d.Collab.Intents {
+		t.Error("collab.intents should default to false (opt-in)")
+	}
+	if d.Collab.Mailbox {
+		t.Error("collab.mailbox should default to false (opt-in)")
+	}
+	if d.Collab.IntentTTLMinutes != 120 {
+		t.Errorf("collab.intent_ttl_minutes default = %d, want 120", d.Collab.IntentTTLMinutes)
+	}
+}
+
+// TestLoadProject_CollabPhase2OverridesBothDirections asserts the phase-2 opt-in
+// flags follow the same both-directions override rule: a project may ENABLE
+// intents/mailbox under a global default-off, and DISABLE them under a global
+// opt-in.
+func TestLoadProject_CollabPhase2OverridesBothDirections(t *testing.T) {
+	t.Run("project enables under global off", func(t *testing.T) {
+		base := Defaults() // intents=false, mailbox=false
+		ws := writeCollabProject(t, "[collab]\nintents = true\nmailbox = true\n")
+		got, err := LoadProject(base, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Collab.Intents || !got.Collab.Mailbox {
+			t.Errorf("project opt-in must win: intents=%v mailbox=%v", got.Collab.Intents, got.Collab.Mailbox)
+		}
+	})
+
+	t.Run("project disables under global on", func(t *testing.T) {
+		base := Defaults()
+		base.Collab.Intents = true
+		base.Collab.Mailbox = true
+		ws := writeCollabProject(t, "[collab]\nintents = false\nmailbox = false\n")
+		got, err := LoadProject(base, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Collab.Intents || got.Collab.Mailbox {
+			t.Errorf("project opt-out must win: intents=%v mailbox=%v", got.Collab.Intents, got.Collab.Mailbox)
+		}
+	})
+
+	t.Run("project overrides ttl", func(t *testing.T) {
+		ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 30\n")
+		got, err := LoadProject(Defaults(), ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Collab.IntentTTLMinutes != 30 {
+			t.Errorf("intent_ttl_minutes = %d, want 30", got.Collab.IntentTTLMinutes)
+		}
+	})
+}
+
+func TestValidateCollab_NegativeTTLRejected(t *testing.T) {
+	ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = -5\n")
+	if _, err := LoadProject(Defaults(), ws); err == nil {
+		t.Fatal("expected validation error for negative collab.intent_ttl_minutes")
+	}
 }
 
 // TestLoadProject_CollabOverridesBothDirections asserts the generated_summaries

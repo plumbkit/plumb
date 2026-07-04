@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/session"
 )
 
@@ -91,6 +92,7 @@ type SessionStart struct {
 	purposeFn    func(purpose string)                                                  // may be nil; persists a validated session purpose tag
 	selfSessID   string                                                                // this session's ID, excluded from the peer digest
 	collabFn     func() (peerAwareness bool, hintBudgetBytes int)                      // may be nil; the resolved [collab] snapshot for the peer digest
+	mailboxFn    func() (on bool, store *collab.Store, self string, budgetBytes int)   // may be nil; the phase-2 mailbox delivery snapshot
 }
 
 // WithSelfSession records this connection's session ID so the peer digest can
@@ -105,6 +107,16 @@ func (t *SessionStart) WithSelfSession(id string) *SessionStart {
 // Nil-safe: unset ⇒ the digest is omitted. Returns the receiver for chaining.
 func (t *SessionStart) WithCollab(fn func() (bool, int)) *SessionStart {
 	t.collabFn = fn
+	return t
+}
+
+// WithMailbox wires the phase-2 mailbox delivery snapshot: whether [collab]
+// mailbox is on, an open-if-exists collab.db accessor, this session's name (the
+// note addressee), and the [collab] hint_budget_bytes bound. When on and notes
+// await, session_start delivers them (consuming "next" notes) as a "## Messages"
+// block. Nil-safe: unwired ⇒ no delivery. Returns the receiver for chaining.
+func (t *SessionStart) WithMailbox(fn func() (on bool, store *collab.Store, self string, budgetBytes int)) *SessionStart {
+	t.mailboxFn = fn
 	return t
 }
 
@@ -317,6 +329,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	writeSessionMemories(&sb, ws, recent)
 	t.writeSessionEpisodic(&sb, ws)
 	t.writeSessionPeers(&sb, ws)
+	t.writeSessionMessages(&sb, ws)
 	writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)

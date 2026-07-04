@@ -69,8 +69,11 @@ var defaults = Config{
 		GeneratedMemoryKeep: 50,
 	},
 	Collab: CollabConfig{
-		PeerAwareness:   true,
-		HintBudgetBytes: 512,
+		PeerAwareness:    true,
+		HintBudgetBytes:  512,
+		Intents:          false,
+		Mailbox:          false,
+		IntentTTLMinutes: 120,
 	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},

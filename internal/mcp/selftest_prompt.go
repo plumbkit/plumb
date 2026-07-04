@@ -49,6 +49,8 @@ var (
 
 	selftestSession = []string{"rename_session", "workspace_sessions"}
 
+	selftestCollab = []string{"share_intent", "leave_note"}
+
 	selftestTasksConfig = []string{"run_task", "agent_config"}
 
 	selftestSymbolEdit = []string{
@@ -71,7 +73,7 @@ func selftestToolNames() []string {
 	groups := [][]string{
 		selftestBootstrap, selftestLSPQuery, selftestReads, selftestGitRead,
 		selftestTopology, selftestMemoryRead, selftestFSWrite,
-		selftestMemoryWrite, selftestSession, selftestTasksConfig,
+		selftestMemoryWrite, selftestSession, selftestCollab, selftestTasksConfig,
 		selftestSymbolEdit, selftestHarnessOnly,
 	}
 	var out []string
@@ -230,6 +232,10 @@ func selftestTierB() []string {
 		"  memory named `selftest-temp`, confirm it, then `delete_memory` it.",
 		"- **Session:** " + toolList(selftestSession) + ": read the current name via `daemon_info`,",
 		"  `rename_session` to a temp name, then rename it back.",
+		"- **Cross-agent sharing (advisory):** " + toolList(selftestCollab) + ": call `share_intent`",
+		"  with a short `body`, and `leave_note` with a `body` and `to: \"next\"`. If `[collab]`",
+		"  `intents`/`mailbox` are off (the default), each refuses with a clear enable hint — that",
+		"  is a PASS. When on, confirm the intent/note appears in `workspace_sessions`.",
 	}
 }
 
