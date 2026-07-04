@@ -351,6 +351,28 @@ type MemoryConfig struct {
 	GeneratedMemoryKeep int `toml:"generated_memory_keep"`
 }
 
+// CollabConfig controls cross-agent sharing — the passive peer-awareness layer
+// that surfaces what other sessions on the same workspace have done. Phase 1 is
+// strictly advisory and derived from writes the daemon itself performed or
+// watched (never from agent claims): topology-annotated recent writes, a bounded
+// peer-activity hint on path-bearing tool responses, and a session_start peer
+// digest. Project-overridable in both directions (the generated_summaries
+// precedent); no environment override.
+//
+// Concurrency: read-only after Load returns.
+type CollabConfig struct {
+	// PeerAwareness turns on the tier-1 peer-awareness signals: topology-annotated
+	// recent_writes in workspace_sessions, the peer-activity hint injected into
+	// path-bearing tool responses, and the session_start peer digest. Default true
+	// — it is a richer version of behaviour plumb already ships. Set false (globally
+	// or per project, either direction) to fall back to bare, unannotated output.
+	PeerAwareness bool `toml:"peer_awareness"`
+	// HintBudgetBytes caps any injected peer-signal block (the peer-activity hint
+	// and the session_start peer digest) in bytes, enforced on a UTF-8 boundary.
+	// Default 512, mirroring [memory].hint_budget_bytes.
+	HintBudgetBytes int `toml:"hint_budget_bytes"`
+}
+
 // SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by
 // default. The embedder is always a hosted or user-run HTTP endpoint — plumb
 // never bundles or supervises a model. Project-overridable.
@@ -420,6 +442,7 @@ type Config struct {
 	LSPQuery  LSPQueryConfig       `toml:"lsp_query"`
 	Semantics SemanticsConfig      `toml:"semantics"`
 	Memory    MemoryConfig         `toml:"memory"`
+	Collab    CollabConfig         `toml:"collab"`
 	// Tools governs which tools appear in tools/list (lean/full/auto profiles).
 	Tools ToolsConfig `toml:"tools"`
 	// Tasks holds per-language build/lint/test/e2e/verify command templates,

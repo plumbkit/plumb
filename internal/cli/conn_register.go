@@ -128,7 +128,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithPurpose(s.sessionPurpose))
 	srv.Register(tools.NewRenameSession(s.renameSession))
-	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary))
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
+		WithTopology(topoFn).
+		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int) {
@@ -139,6 +141,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return p, hiddenToolCount(srv)
 		}).
 		WithEpisodic(s.latestEpisodic).
+		WithSelfSession(s.sessID).
+		WithCollab(func() (bool, int) {
+			c := s.collabConfig()
+			return c.PeerAwareness, c.HintBudgetBytes
+		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPWarmup(s.lspWarming).

@@ -41,7 +41,7 @@ func TestFormatWorkspaceSessions_Alone(t *testing.T) {
 	peers := []session.Info{
 		{ID: "self-1", Name: "lone-otter", Folder: "/ws", LastSeenAt: now},
 	}
-	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, now)
+	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, nil, now)
 
 	if !strings.Contains(out, "you:  lone-otter") {
 		t.Errorf("expected own session name in output:\n%s", out)
@@ -67,7 +67,7 @@ func TestFormatWorkspaceSessions_MultiplePeersAndWrites(t *testing.T) {
 		{Tool: "edit_file", SessionName: "brave-lake", CalledAt: now.Add(-30 * time.Second), InputJSON: `{"file_path":"/ws/internal/pool.go"}`},
 		{Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-2 * time.Minute), InputJSON: `{"subcommand":"commit"}`},
 	}
-	out := formatWorkspaceSessions("/ws", "self-1", peers, writes, now)
+	out := formatWorkspaceSessions("/ws", "self-1", peers, writes, nil, now)
 
 	if !strings.Contains(out, "active sessions: 2 (including you)") {
 		t.Errorf("expected a count of 2 active sessions:\n%s", out)
@@ -109,7 +109,7 @@ func TestFormatWorkspaceSessions_ListsActiveLSPs(t *testing.T) {
 			Adapter:    "gopls", // legacy record: only the primary
 		},
 	}
-	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, now)
+	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, nil, now)
 
 	if !strings.Contains(out, "LSP gopls, vscode-html-language-server") {
 		t.Errorf("expected the full active-LSP set for the multi-language session:\n%s", out)
@@ -175,7 +175,7 @@ func TestFormatWorkspaceSessions_UnknownSelf(t *testing.T) {
 	peers := []session.Info{
 		{ID: "peer-2", Name: "brave-lake", Folder: "/ws", LastSeenAt: now},
 	}
-	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, now)
+	out := formatWorkspaceSessions("/ws", "self-1", peers, nil, nil, now)
 	if !strings.Contains(out, "you:  (unknown)") {
 		t.Errorf("missing self should render as (unknown):\n%s", out)
 	}

@@ -79,6 +79,7 @@ type sessionView struct {
 	ws        config.WorkspaceConfig
 	semantics config.SemanticsConfig
 	memory    config.MemoryConfig
+	collab    config.CollabConfig
 	tools     config.ToolsConfig
 	session   config.SessionConfig
 	// tasks holds the resolved [tasks.<lang>] command templates; agentConfigWrites
@@ -170,6 +171,7 @@ type connSession struct {
 	topologyPool *topologyPool
 	memoryPool   *memoryIndexPool
 	hintCache    *memoryHintCache
+	peerWrites   *peerWriteCache
 	writeLimiter *tools.RateLimiter
 
 	// hintSeen tracks the memory names already hinted on this connection, so a
@@ -235,6 +237,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		pool:         pool,
 		topologyPool: topoPool,
 		hintCache:    &memoryHintCache{},
+		peerWrites:   &peerWriteCache{},
 		store:        store,
 		statsStore:   statsStore,
 		sessionState: sessState,
@@ -258,6 +261,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		ws:        cfg.Workspace,
 		semantics: cfg.Semantics,
 		memory:    cfg.Memory,
+		collab:    cfg.Collab,
 		tools:     cfg.Tools,
 		session:   cfg.Session,
 	})
@@ -424,6 +428,13 @@ func (s *connSession) editsConfig() config.EditsConfig {
 // config without re-reading and re-parsing .plumb/config.toml per call.
 func (s *connSession) memoryConfig() config.MemoryConfig {
 	return s.view().memory
+}
+
+// collabConfig returns the connection's snapshotted, project-resolved [collab]
+// config. Like memoryConfig it is captured on every attach / re-pin / reload, so
+// the hot peer-hint path reads it without re-parsing .plumb/config.toml per call.
+func (s *connSession) collabConfig() config.CollabConfig {
+	return s.view().collab
 }
 
 // toolsConfig returns the current resolved [tools] config off the lock-free

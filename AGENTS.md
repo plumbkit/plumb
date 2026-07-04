@@ -232,6 +232,16 @@ Project-overridable; no env override; surfaced with provenance in `plumb config 
 
 Three behaviours worth knowing (settled in 0.9.16): **per-project `generated_summaries` is honoured both ways** — a project may enable episodic summaries under a global opt-out *or* disable them under a global opt-in; only the idle *threshold* is global-resolved (`idle_summary_minutes` → `[session] idle_threshold_minutes`), and a session is always summarised before it is evicted, even when `eviction_ttl_minutes` is shorter than the threshold. **`search_memories` auto mode greps when FTS finds nothing** — a fresh index that returns zero FTS5 hits (the tokeniser is whole-token, so a substring like `essio` inside `UserSession` won't match) falls through to substring grep; `case_sensitive: true` always uses grep (FTS5 is case-insensitive); a literal `mode: fts` keeps the empty FTS result. **Hint and episodic budgets are byte caps** (`*_bytes`), enforced in bytes on a UTF-8 boundary, so a multi-byte summary cannot overrun.
 
+### `[collab]` — cross-agent peer awareness
+
+```toml
+[collab]
+peer_awareness    = true   # tier-1 passive peer awareness (a richer version of shipped behaviour)
+hint_budget_bytes = 512    # byte cap (UTF-8 boundary) on any injected peer-signal block
+```
+
+Project-overridable in **both directions** (the `generated_summaries` precedent — a project may disable it under a global opt-in, or enable it under a global opt-out); no env override; hot-reloaded; surfaced with provenance in `plumb config show`; snapshotted per connection so the hot path never reads config per call. Everything here is **advisory** (it never blocks a write), **byte-budgeted**, and **strictly per-workspace**. When `peer_awareness` is on it adds three signals, all verifiable observations derived from writes the daemon itself performed or watched (never agent claims): (1) **topology-annotated `recent_writes`** in `workspace_sessions` — each entry gains its enclosing package/symbol from the topology index (best-effort, `source=topology`); (2) a **peer-activity hint** appended to a path-bearing tool response when another *currently-active* session recently wrote that file (`[Peer: session … edited this file N min ago — consider file_status before editing.]`, recency window `min(idle threshold, 30 min)`); (3) a **`session_start` peer digest** naming active peers and the areas they recently touched. The peer hint and the digest share `hint_budget_bytes`. First of a phased, config-gated cross-agent sharing capability; later tiers (intents, mailbox, on-demand findings) are separate opt-in flags.
+
 ### `[semantics]` — opt-in semantic re-rank for `topology_search`
 
 ```toml

@@ -202,6 +202,11 @@ var registryData = []Field{
 		Description: "Newest episodic-* markdown memories retained per workspace. 0 disables pruning.",
 	},
 
+	// [collab] is intentionally absent from the registry (and so from TUI
+	// Settings): its two keys are surfaced via `plumb config show`, validated,
+	// snapshotted per connection, and hot-reloaded, but the TUI/agent-write
+	// surface for cross-agent sharing is deferred to a later phase.
+
 	// --- Workspace ---
 	{
 		Key: "workspace.auto_attach", Type: FieldBool, ReloadTier: ReloadNextSession,

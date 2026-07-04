@@ -35,7 +35,7 @@ Most sections are **hot-reloaded** without a reconnect: an `fsnotify` watch on
 the global `config.toml` (plus the `reload-config` control command and
 `plumb config reload`) re-reads the file and re-merges every live session's
 project view. `[edits]`, `[walk]`, `[git]`, `[topology]`, `[session]`,
-`[memory]`, and `[semantics]` apply live. The restart-bound exceptions are the
+`[memory]`, `[collab]`, and `[semantics]` apply live. The restart-bound exceptions are the
 `[lsp.*]` servers, `[cache]`, and `log_format`; `plumb config show` and
 `daemon_info` flag those as restart-needed.
 
@@ -197,6 +197,35 @@ Markdown memories under `<workspace>/.plumb/memories/` are the source of truth;
 | `max_hints` | int | `3` | Max memories hinted per response. |
 | `idle_summary_minutes` | int | `0` | Idle threshold before an episodic summary; `0` falls back to `[session] idle_threshold_minutes`. |
 | `generated_memory_keep` | int | `50` | Newest generated episodic memories retained per workspace; `0` disables pruning. |
+
+## `[collab]` — cross-agent peer awareness
+
+Multiple agents (Claude Code, Codex, Gemini CLI, …) share one plumb daemon per
+machine, and the daemon is the only process that observes every agent's activity
+on a workspace. This phase-1 layer surfaces that passively and **advisorily** —
+derived from writes the daemon itself performed or watched, never from an agent's
+stated intent. Nothing here ever blocks a write. Project-overridable in both
+directions (the `generated_summaries` precedent); no env override; hot-reloaded;
+strictly per-workspace.
+
+When `peer_awareness` is on it adds three signals:
+
+- **Topology-annotated `recent_writes`** — each entry in `workspace_sessions`
+  gains its enclosing package/symbol from the topology index (best-effort,
+  `source=topology`), so a peer's activity reads as "edited `RateLimiter.Allow` in
+  `internal/tools/ratelimit.go`" rather than a bare path.
+- **Peer-activity hint** — a path-bearing tool response gains a bounded
+  `[Peer: session … edited this file N min ago — consider file_status before
+  editing.]` block when another currently-active session recently wrote that file.
+  Recency window = `min(idle threshold, 30 min)`.
+- **`session_start` peer digest** — when peers are active at attach time, the
+  orientation packet gains a short "Active peers" block naming them and the areas
+  (directories/packages) they recently touched.
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `peer_awareness` | bool | `true` | Turn the three tier-1 signals on. Set `false` (globally or per project, either direction) to fall back to bare, unannotated output. |
+| `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint and the `session_start` peer digest share it. |
 
 ## `[semantics]` — opt-in semantic re-rank for `topology_search`
 

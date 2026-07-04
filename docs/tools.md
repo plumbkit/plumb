@@ -79,7 +79,9 @@ Bootstrap tool — **call first in every session.** Returns workspace path,
 language, git branch, the first 200 lines of `.plumb/context.md`, memory
 names/descriptions, top-5 tool usage, 5 recently-modified files, 3 recent
 commits, the live git tool policy (whether commits/destructive/push are
-enabled), and active diagnostics. Idempotent.
+enabled), and active diagnostics. When `[collab] peer_awareness` is on and other
+sessions are active on the workspace, it also appends an "Active peers" digest
+naming them and the areas (directories/packages) they recently touched. Idempotent.
 **Inputs:** `workspace` (string, optional — defaults to the daemon's resolved
 workspace, then a cwd walk); `language` (string, optional — force the primary
 LSP language when detection cannot infer it); `session_id` (string, optional —
@@ -116,7 +118,9 @@ recent-write entries to return.
   authoritative.
 - `recent_writes` — the last N write/edit/rename/git/… operations by any
   session on this workspace, showing the session name, tool, relative file path,
-  and age. If a file you are about to edit appears here, re-read it first.
+  and age. If a file you are about to edit appears here, re-read it first. When
+  `[collab] peer_awareness` is on and the topology index has the file, each entry
+  is annotated with its enclosing package/symbol (best-effort, `source=topology`).
 
 Read-only. Workspace-boundary-guarded (no other workspace's session data is
 ever exposed). Backed by `internal/session` (session files) and

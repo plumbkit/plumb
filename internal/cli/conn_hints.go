@@ -73,13 +73,27 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	if ws == "" {
 		return text
 	}
+	// Two independent signals, each self-gated on its own config: the relevant-
+	// memory hint ([memory] inject_hints) and the peer-activity hint ([collab]
+	// peer_awareness). Both are advisory, byte-budgeted, and appended after the
+	// tool's own output.
+	text += s.memoryHint(ctx, name, args, ws)
+	text += s.peerHint(args, ws)
+	return text
+}
+
+// memoryHint returns the relevant-memory "[Hint: …]" block for the tool's target
+// path, or "" when memory-hint injection is off, no path applies, or nothing
+// matches. Extracted from enrichToolOutput so the peer-activity hint can be
+// gated independently of [memory] inject_hints.
+func (s *connSession) memoryHint(ctx context.Context, name string, args json.RawMessage, ws string) string {
 	mcfg := s.memoryConfig()
 	if !mcfg.InjectHints {
-		return text
+		return ""
 	}
 	rel := hintRelPath(ws, args)
 	if rel == "" {
-		return text
+		return ""
 	}
 	var syms map[string]bool
 	if name == "edit_file" || name == "write_file" {
@@ -87,9 +101,9 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	}
 	names := s.unseenHints(matchingMemoryNames(s.hintCache.memories(ws), rel, syms), hintMaxHints(mcfg))
 	if len(names) == 0 {
-		return text
+		return ""
 	}
-	return text + hintBlock(names, mcfg.HintBudgetBytes)
+	return hintBlock(names, mcfg.HintBudgetBytes)
 }
 
 // unseenHints filters names down to those not yet hinted this session, caps
