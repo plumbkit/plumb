@@ -205,9 +205,9 @@ func TestRefreshClient(t *testing.T) {
 
 	t.Run("not installed is skipped", func(t *testing.T) {
 		c := newCodexTarget(filepath.Join(t.TempDir(), "config.toml")) // never created
-		status, changed := refreshClient(c, "/new/plumb")
-		if changed || status != "not installed — skipped" {
-			t.Errorf("got (%q, %v), want (not installed — skipped, false)", status, changed)
+		rows, changed := refreshClient(c, "/new/plumb")
+		if changed || len(rows) != 1 || rows[0].status != "not installed" {
+			t.Errorf("got (%+v, %v), want status \"not installed\", changed false", rows, changed)
 		}
 	})
 
@@ -216,9 +216,9 @@ func TestRefreshClient(t *testing.T) {
 		if err := os.WriteFile(path, []byte("[mcp_servers.other]\ncommand = \"x\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		status, changed := refreshClient(newCodexTarget(path), "/new/plumb")
-		if changed || status != "plumb not registered — skipped" {
-			t.Errorf("got (%q, %v), want (plumb not registered — skipped, false)", status, changed)
+		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb")
+		if changed || len(rows) != 1 || rows[0].status != "not registered" {
+			t.Errorf("got (%+v, %v), want status \"not registered\", changed false", rows, changed)
 		}
 	})
 
@@ -227,9 +227,9 @@ func TestRefreshClient(t *testing.T) {
 		if _, _, err := setupCodexInto(path, "/old/plumb"); err != nil {
 			t.Fatal(err)
 		}
-		status, changed := refreshClient(newCodexTarget(path), "/new/plumb")
+		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb")
 		if !changed {
-			t.Errorf("expected changed=true, got status %q", status)
+			t.Errorf("expected changed=true, got rows %+v", rows)
 		}
 		bin, _, err := mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")(path)
 		if err != nil || bin != "/new/plumb" {
@@ -237,9 +237,9 @@ func TestRefreshClient(t *testing.T) {
 		}
 
 		// Second pass is a no-op.
-		status, changed = refreshClient(newCodexTarget(path), "/new/plumb")
-		if changed || status != "already current" {
-			t.Errorf("second pass: got (%q, %v), want (already current, false)", status, changed)
+		rows, changed = refreshClient(newCodexTarget(path), "/new/plumb")
+		if changed || len(rows) != 1 || rows[0].status != "already current" {
+			t.Errorf("second pass: got (%+v, %v), want status \"already current\", changed false", rows, changed)
 		}
 	})
 }

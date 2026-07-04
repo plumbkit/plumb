@@ -194,18 +194,23 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 	}
 
 	tui.RebuildStyles()
-	lines := make([]string, 0, len(allSetupClients()))
+	fmt.Println(render.ContextBox(tui.MutedStyle.Render("Current binary: "+plumbBin), tui.SepStyle))
+	fmt.Println()
+
+	t := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
+		Headers("Client", "Status", "Config")
 	changed := 0
 	for _, c := range allSetupClients() {
-		status, didChange := refreshClient(c, plumbBin)
+		rows, didChange := refreshClient(c, plumbBin)
 		if didChange {
 			changed++
 		}
-		lines = append(lines, fmt.Sprintf("%-22s %s", c.name, status))
+		for _, r := range rows {
+			t.Row(r.name, r.status, r.detail)
+		}
 	}
+	fmt.Println(t.Render())
 
-	body := fmt.Sprintf("Current binary: %s\n\n%s", plumbBin, strings.Join(lines, "\n"))
-	fmt.Println(render.ContextBox(tui.MutedStyle.Render(body), tui.SepStyle))
 	if changed == 0 {
 		fmt.Println("\nNo changes — every registered client already points at this binary.")
 	} else {
@@ -214,32 +219,41 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// clientRow is one row in the `plumb setup --all` table: a client name (blank on
+// the continuation rows of a multi-path client, so the paths group visually), a
+// short status word, and the config path or error the status refers to.
+type clientRow struct {
+	name   string
+	status string
+	detail string
+}
+
 // refreshClient repoints one client's plumb registration at plumbBin, but only
 // when the client is installed and already references plumb — it never adds plumb
-// to a client that doesn't use it. Returns a human status line and whether it
-// changed anything. A client with pathsFn set (currently only Claude Desktop) is
-// refreshed at every resolved path, not just one.
-func refreshClient(c setupTarget, plumbBin string) (status string, changed bool) {
+// to a client that doesn't use it. Returns one table row per managed config path
+// and whether any of them changed. A client with pathsFn set (currently only
+// Claude Desktop) yields one row per resolved path, not just one.
+func refreshClient(c setupTarget, plumbBin string) (rows []clientRow, changed bool) {
 	if c.intoFn == nil {
-		return "skipped (no updater)", false
+		return []clientRow{{name: c.name, status: "skipped", detail: "no updater"}}, false
 	}
 	paths, err := resolveTargetPaths(c)
 	if err != nil {
-		return "error: " + err.Error(), false
+		return []clientRow{{name: c.name, status: "error", detail: err.Error()}}, false
 	}
 
-	statuses := make([]string, 0, len(paths))
-	for _, cfgPath := range paths {
-		s, didChange := refreshClientAt(c, cfgPath, plumbBin)
+	for i, cfgPath := range paths {
+		status, detail, didChange := refreshClientAt(c, cfgPath, plumbBin)
 		if didChange {
 			changed = true
 		}
-		if len(paths) > 1 {
-			s = render.ContractPath(cfgPath) + ": " + s
+		name := c.name
+		if i > 0 {
+			name = ""
 		}
-		statuses = append(statuses, s)
+		rows = append(rows, clientRow{name: name, status: status, detail: detail})
 	}
-	return strings.Join(statuses, "; "), changed
+	return rows, changed
 }
 
 // resolveTargetPaths returns every config path refreshClient should manage for
@@ -255,22 +269,25 @@ func resolveTargetPaths(c setupTarget) ([]string, error) {
 	return []string{p}, nil
 }
 
-// refreshClientAt is refreshClient's single-path body.
-func refreshClientAt(c setupTarget, cfgPath, plumbBin string) (status string, changed bool) {
+// refreshClientAt is refreshClient's single-path body. It returns a short status
+// word plus a detail cell — the contracted config path, or the error text when
+// status is "error".
+func refreshClientAt(c setupTarget, cfgPath, plumbBin string) (status, detail string, changed bool) {
+	detail = render.ContractPath(cfgPath)
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		return "not installed — skipped", false
+		return "not installed", detail, false
 	}
 	if !clientHasPlumb(c, cfgPath) {
-		return "plumb not registered — skipped", false
+		return "not registered", detail, false
 	}
 	added, _, err := c.intoFn(cfgPath, plumbBin)
 	if err != nil {
-		return "error: " + err.Error(), false
+		return "error", err.Error(), false
 	}
 	if !added {
-		return "already current", false
+		return "already current", detail, false
 	}
-	return "updated → " + render.ContractPath(plumbBin), true
+	return "updated", detail, true
 }
 
 // clientHasPlumb reports whether cfgPath already registers a plumb server, using

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **`plumb setup --all` now renders its results as a dotted table instead of space-padded lines.** The old output used `fmt.Sprintf("%-22s %s", …)` inside a context box, so a client managing more than one config path (Claude Desktop, whose sibling-profile fan-out joins each path's status with `; `) produced one very long status string that wrapped and misaligned in the terminal. `refreshClient` now returns structured per-path rows (`clientRow{name, status, detail}`) rather than a joined string, and `runSetupAll` feeds them through the shared `render.DottedTableBase` helper already used by `plumb sessions`/`plumb stats` — `Client | Status | Config` columns, one row per managed config path, with the client name blank on a multi-path client's continuation rows so its paths group visually. Status words are shortened to fit a column (`updated`/`already current`/`not registered`/`not installed`/`error`) and the config path (or error text) moves into its own aligned `Config` column. No behavioural change — the same clients are repointed. Guarded by the updated `TestRefreshClient` and `TestRefreshClient_MultiplePaths` (now asserting the structured rows).
+
 ## 0.9.25 (2026-07-04)
 
 ### Added

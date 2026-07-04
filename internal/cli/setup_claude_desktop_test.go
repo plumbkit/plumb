@@ -113,9 +113,12 @@ func TestRefreshClient_MultiplePaths(t *testing.T) {
 		extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
 	}
 
-	status, changed := refreshClient(c, "/new/plumb")
+	rows, changed := refreshClient(c, "/new/plumb")
 	if !changed {
-		t.Errorf("expected changed=true when one of two paths was stale, got status %q", status)
+		t.Errorf("expected changed=true when one of two paths was stale, got rows %+v", rows)
+	}
+	if len(rows) != 2 {
+		t.Errorf("expected one row per path (2), got %d: %+v", len(rows), rows)
 	}
 
 	bin, _, err := mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")(stale)
@@ -124,11 +127,11 @@ func TestRefreshClient_MultiplePaths(t *testing.T) {
 	}
 
 	// Second pass: both paths now current, no change.
-	status, changed = refreshClient(c, "/new/plumb")
+	rows, changed = refreshClient(c, "/new/plumb")
 	if changed {
-		t.Errorf("expected changed=false on second pass, got status %q", status)
+		t.Errorf("expected changed=false on second pass, got rows %+v", rows)
 	}
-	_ = status
+	_ = rows
 }
 
 func TestCheckClaudeDesktopExtraProfiles(t *testing.T) {
