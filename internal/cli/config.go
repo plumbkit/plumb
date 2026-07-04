@@ -258,6 +258,12 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"generated_memory_keep", fmt.Sprintf("%d", mem.GeneratedMemoryKeep), sourceFor("generated_memory_keep", dmem.GeneratedMemoryKeep, gmem.GeneratedMemoryKeep, mem.GeneratedMemoryKeep)},
 	})
 
+	col, gcol, dcol := projectCfg.Collab, globalCfg.Collab, defaultsCfg.Collab
+	addConfigSection(cfgTable, "collab", [][]string{
+		{"peer_awareness", fmt.Sprintf("%v", col.PeerAwareness), sourceFor("peer_awareness", dcol.PeerAwareness, gcol.PeerAwareness, col.PeerAwareness)},
+		{"hint_budget_bytes", fmt.Sprintf("%d", col.HintBudgetBytes), sourceFor("hint_budget_bytes", dcol.HintBudgetBytes, gcol.HintBudgetBytes, col.HintBudgetBytes)},
+	})
+
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]

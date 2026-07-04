@@ -89,6 +89,23 @@ type SessionStart struct {
 	toolProfile  func() (profile string, hidden int)                                   // may be nil; the resolved tool profile + count of tools hidden from tools/list
 	lspWarmingFn func() (bool, time.Duration)                                          // may be nil; reports whether the primary LSP is still warming + elapsed
 	purposeFn    func(purpose string)                                                  // may be nil; persists a validated session purpose tag
+	selfSessID   string                                                                // this session's ID, excluded from the peer digest
+	collabFn     func() (peerAwareness bool, hintBudgetBytes int)                      // may be nil; the resolved [collab] snapshot for the peer digest
+}
+
+// WithSelfSession records this connection's session ID so the peer digest can
+// exclude it from the active-session list. Returns the receiver for chaining.
+func (t *SessionStart) WithSelfSession(id string) *SessionStart {
+	t.selfSessID = id
+	return t
+}
+
+// WithCollab wires the resolved [collab] snapshot accessor (peer_awareness +
+// hint_budget_bytes) used to gate and bound the session_start peer digest.
+// Nil-safe: unset ⇒ the digest is omitted. Returns the receiver for chaining.
+func (t *SessionStart) WithCollab(fn func() (bool, int)) *SessionStart {
+	t.collabFn = fn
+	return t
 }
 
 // WithToolProfile wires an accessor returning the connection's resolved tool
@@ -299,6 +316,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	recent := t.writeSessionRecentFiles(&sb, ws)
 	writeSessionMemories(&sb, ws, recent)
 	t.writeSessionEpisodic(&sb, ws)
+	t.writeSessionPeers(&sb, ws)
 	writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)

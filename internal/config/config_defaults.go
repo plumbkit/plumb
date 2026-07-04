@@ -68,6 +68,10 @@ var defaults = Config{
 		IdleSummaryMinutes:  0,
 		GeneratedMemoryKeep: 50,
 	},
+	Collab: CollabConfig{
+		PeerAwareness:   true,
+		HintBudgetBytes: 512,
+	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},
 	},

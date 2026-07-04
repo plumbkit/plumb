@@ -40,6 +40,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.ws = projectCfg.Workspace
 		v.semantics = projectCfg.Semantics
 		v.memory = projectCfg.Memory
+		v.collab = projectCfg.Collab
 		v.tools = projectCfg.Tools
 		v.session = projectCfg.Session
 		v.tasks = projectCfg.Tasks

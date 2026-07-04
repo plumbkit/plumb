@@ -47,6 +47,8 @@ type WorkspaceSessions struct {
 	workspace     func() string
 	selfSessID    string
 	boundaryCheck func(string) error // read boundary guard
+	topo          topologyStoreFn    // may be nil; live topology store for write annotation
+	peerAware     func() bool        // may be nil (treated as off); [collab] peer_awareness snapshot
 }
 
 // NewWorkspaceSessions creates the workspace_sessions tool.
@@ -63,6 +65,27 @@ func (t *WorkspaceSessions) WithBoundary(fn func(string) error) *WorkspaceSessio
 	return t
 }
 
+// WithTopology wires the live topology store accessor so recent_writes entries
+// gain a best-effort enclosing package/symbol annotation (source=topology). Only
+// consulted when [collab] peer_awareness is on. Nil-safe. Returns the receiver.
+func (t *WorkspaceSessions) WithTopology(fn topologyStoreFn) *WorkspaceSessions {
+	t.topo = fn
+	return t
+}
+
+// WithPeerAwareness wires the connection's [collab] peer_awareness snapshot. When
+// it returns false (or is unwired) recent_writes stay bare paths — the shipped
+// behaviour; when true, entries are topology-annotated. Returns the receiver.
+func (t *WorkspaceSessions) WithPeerAwareness(fn func() bool) *WorkspaceSessions {
+	t.peerAware = fn
+	return t
+}
+
+// peerAwarenessOn reports whether topology annotation of recent writes is active.
+func (t *WorkspaceSessions) peerAwarenessOn() bool {
+	return t.peerAware != nil && t.peerAware()
+}
+
 func (*WorkspaceSessions) Name() string { return "workspace_sessions" }
 
 func (*WorkspaceSessions) Description() string {
@@ -76,7 +99,9 @@ func (*WorkspaceSessions) Description() string {
 		"treat any file a peer recently touched as potentially changed.\n\n" +
 		"**recent_writes** — the last N mutating operations (write_file, edit_file, " +
 		"rename_file, git commit, …) by all sessions on this workspace. " +
-		"The file path (when available), session name, operation, and age are shown.\n\n" +
+		"The file path (when available), session name, operation, and age are shown. " +
+		"When [collab] peer_awareness is on and the topology index has the file, each " +
+		"entry is annotated with its enclosing package/symbol (best-effort, source=topology).\n\n" +
 		"Use this before editing a file that another session may have recently " +
 		"modified: if it appears in recent_writes, re-read it first.\n\n" +
 		"Parameters:\n" +
@@ -181,11 +206,49 @@ func (t *WorkspaceSessions) runSync(workspace string, recentLimit int) string {
 		writes, _ = db.RecentWritesByWorkspace(workspace, writeToolNames, recentLimit)
 	}
 
-	return formatWorkspaceSessions(workspace, t.selfSessID, peers, writes, now)
+	annotations := t.annotateWrites(workspace, writes)
+	return formatWorkspaceSessions(workspace, t.selfSessID, peers, writes, annotations, now)
+}
+
+// annotateWrites resolves a topology annotation (enclosing package/symbol) for
+// each recent write's file, keyed by the extracted absolute path. Returns nil
+// when peer_awareness is off or no topology store is live, so recent_writes fall
+// back to bare paths. Bounded by its own short deadline so a slow index never
+// pushes the tool past its overall timeout.
+func (t *WorkspaceSessions) annotateWrites(workspace string, writes []stats.RecentCall) map[string]string {
+	if !t.peerAwarenessOn() || t.topo == nil {
+		return nil
+	}
+	store := t.topo()
+	if store == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wsSessionsTimeout)
+	defer cancel()
+	out := make(map[string]string)
+	for _, w := range writes {
+		file := fileFromInputJSON(w.InputJSON)
+		if file == "" {
+			continue
+		}
+		abs := file
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(workspace, abs)
+		}
+		if _, seen := out[abs]; seen {
+			continue
+		}
+		if a := fileTopologyAnnotation(ctx, store, abs); a != "" {
+			out[abs] = a
+		}
+	}
+	return out
 }
 
 // formatWorkspaceSessions renders the result string. Pure function with no I/O.
-func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info, writes []stats.RecentCall, now time.Time) string {
+// annotations maps a write's absolute file path to a best-effort topology label
+// (enclosing package/symbol); nil or a missing entry renders the bare path.
+func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info, writes []stats.RecentCall, annotations map[string]string, now time.Time) string {
 	var sb strings.Builder
 
 	// ── my session ─────────────────────────────────────────────────────────
@@ -229,27 +292,43 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 	}
 
 	// ── recent writes ──────────────────────────────────────────────────────
+	writeRecentWrites(&sb, workspace, writes, annotations, now)
+	return sb.String()
+}
+
+// writeRecentWrites renders the recent-writes block, appending a best-effort
+// topology annotation (keyed by absolute path) to each entry when present.
+func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.RecentCall, annotations map[string]string, now time.Time) {
 	if len(writes) == 0 {
 		sb.WriteString("\nrecent writes: none recorded on this workspace yet.\n")
-		return sb.String()
+		return
 	}
 	sb.WriteString("\nrecent writes (newest first):\n")
+	if len(annotations) > 0 {
+		sb.WriteString("  (symbol/package annotations are best-effort from the topology index)\n")
+	}
 	for _, w := range writes {
 		age := humaniseAge(now.Sub(w.CalledAt))
 		file := fileFromInputJSON(w.InputJSON)
-		if file != "" {
-			// Show only the path relative to the workspace so long absolute paths
-			// don't clutter the output. Fall back to the full path on error.
-			if rel, err := filepath.Rel(workspace, file); err == nil && !strings.HasPrefix(rel, "..") {
-				file = rel
-			}
-			fmt.Fprintf(&sb, "  %-20s  %-18s  %s  (%s ago)\n", w.SessionName, w.Tool, file, age)
-		} else {
-			fmt.Fprintf(&sb, "  %-20s  %-18s  (%s ago)\n", w.SessionName, w.Tool, age)
+		if file == "" {
+			fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)\n", w.SessionName, w.Tool, age)
+			continue
 		}
+		abs := file
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(workspace, abs)
+		}
+		// Show only the path relative to the workspace so long absolute paths
+		// don't clutter the output. Fall back to the full path on error.
+		if rel, err := filepath.Rel(workspace, file); err == nil && !strings.HasPrefix(rel, "..") {
+			file = rel
+		}
+		fmt.Fprintf(sb, "  %-20s  %-18s  %s  (%s ago)", w.SessionName, w.Tool, file, age)
+		if a := annotations[abs]; a != "" {
+			fmt.Fprintf(sb, "  [%s]", a)
+		}
+		sb.WriteString("\n")
 	}
-
-	return sb.String()
 }
 
 // sessionPurpose renders a session's optional human-readable purpose tag as a

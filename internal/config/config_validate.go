@@ -36,6 +36,7 @@ func validate(cfg Config) error {
 		func() error { return validateTopology(cfg.Topology) },
 		func() error { return validateSemantics(cfg.Semantics) },
 		func() error { return validateMemory(cfg.Memory) },
+		func() error { return validateCollab(cfg.Collab) },
 		func() error { return validateTasks(cfg.Tasks) },
 		func() error { return validateTools(cfg.Tools) },
 	} {
@@ -104,6 +105,13 @@ func validateMemory(m MemoryConfig) error {
 	}
 	if m.GeneratedMemoryKeep < 0 {
 		return fmt.Errorf("memory.generated_memory_keep must be non-negative (0 disables pruning)")
+	}
+	return nil
+}
+
+func validateCollab(c CollabConfig) error {
+	if c.HintBudgetBytes < 0 {
+		return fmt.Errorf("collab.hint_budget_bytes must be non-negative")
 	}
 	return nil
 }
