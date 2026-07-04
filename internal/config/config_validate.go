@@ -113,6 +113,9 @@ func validateCollab(c CollabConfig) error {
 	if c.HintBudgetBytes < 0 {
 		return fmt.Errorf("collab.hint_budget_bytes must be non-negative")
 	}
+	if c.IntentTTLMinutes < 0 {
+		return fmt.Errorf("collab.intent_ttl_minutes must be non-negative (0 uses the default)")
+	}
 	return nil
 }
 

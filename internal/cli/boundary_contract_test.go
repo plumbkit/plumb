@@ -76,6 +76,8 @@ var knownToolGuarding = map[string]string{
 	"NewTopologyRoutes":   "none",
 	"NewStructuralQuery":  "none", // queries the topology DB; reads bodies only under the pinned workspace root, no user path input
 	"NewAgentConfig":      "none", // writes structured config via the allowlist; no filesystem path input
+	"NewShareIntent":      "none", // writes an advisory intent to the per-workspace collab.db; no filesystem path input
+	"NewLeaveNote":        "none", // writes an advisory note to the per-workspace collab.db; no filesystem path input
 }
 
 // TestBoundaryGuardWiringComplete is the D10 registration-time contract test

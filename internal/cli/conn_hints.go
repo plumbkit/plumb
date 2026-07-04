@@ -73,12 +73,14 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	if ws == "" {
 		return text
 	}
-	// Two independent signals, each self-gated on its own config: the relevant-
-	// memory hint ([memory] inject_hints) and the peer-activity hint ([collab]
-	// peer_awareness). Both are advisory, byte-budgeted, and appended after the
-	// tool's own output.
+	// Three independent signals, each self-gated on its own config: the relevant-
+	// memory hint ([memory] inject_hints), the phase-1 peer-activity hint ([collab]
+	// peer_awareness, an observed fact), and the phase-2 peer-intent hint ([collab]
+	// intents, an unverified claim). All are advisory, byte-budgeted, and appended
+	// after the tool's own output.
 	text += s.memoryHint(ctx, name, args, ws)
 	text += s.peerHint(args, ws)
+	text += s.intentHint(args, ws)
 	return text
 }
 

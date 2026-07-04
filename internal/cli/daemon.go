@@ -270,6 +270,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	memPool := newMemoryIndexPool()
 	defer memPool.CloseAll()
 
+	// collabPool holds one collab.db handle per workspace that has used a
+	// cross-agent sharing feature ([collab] intents/mailbox). Opened lazily; the
+	// reaper prunes expired rows across every open store on its tick.
+	collabPool := newCollabPool()
+	defer collabPool.closeAll()
+
 	// Daemon-level reconciliation: on every global config change, reconfigure the
 	// shared pools that can reload live (topology), and log when a change needs a
 	// restart to take effect (LSP servers, cache, log format). Per-connection
@@ -346,7 +352,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
 	return nil
 }
 
@@ -363,16 +369,16 @@ func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int) {
 	}
 }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	var wg sync.WaitGroup
 
 	// Idle-session reaper: cancel connections that have not called any tool
-	// for longer than the configured eviction TTL, and prune expired persisted
-	// per-connection state on the same tick.
+	// for longer than the configured eviction TTL, prune expired persisted
+	// per-connection state, and prune expired collab intents/notes on the same tick.
 	go func() {
 		ticker := time.NewTicker(reaperInterval)
 		defer ticker.Stop()
-		runIdleReaper(ctx, store, registry, sessState, ticker.C)
+		runIdleReaper(ctx, store, registry, sessState, collabPool, ticker.C)
 	}()
 
 	go func() {
@@ -414,7 +420,7 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, memPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
+			handleConn(ctx, conn, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry)
 		})
 	}
 }
@@ -464,10 +470,11 @@ func serverToolExecTimeout() time.Duration {
 
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry) {
 	defer conn.Close()
 	s := newConnSession(ctx, pool, topoPool, store, statsStore, sessState, budgets)
 	s.memoryPool = memPool
+	s.collabPool = collabPool
 	s.daemonStartedAt = daemonStartedAt
 	registry.add(s.sessID, connHandle{
 		cancel:        s.cancel,

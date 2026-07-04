@@ -371,6 +371,20 @@ type CollabConfig struct {
 	// and the session_start peer digest) in bytes, enforced on a UTF-8 boundary.
 	// Default 512, mirroring [memory].hint_budget_bytes.
 	HintBudgetBytes int `toml:"hint_budget_bytes"`
+	// Intents gates the phase-2 tier: the share_intent tool, its listing in
+	// workspace_sessions, and the intent-aware write hint. Opt-in, default false —
+	// it introduces agent-authored claims (unlike PeerAwareness's observed facts).
+	// Project-overridable in both directions like the rest of [collab].
+	Intents bool `toml:"intents"`
+	// Mailbox gates the phase-2 minimal mailbox: the leave_note tool, note delivery
+	// at session_start, and pending-note listing in workspace_sessions. Opt-in,
+	// default false. Notes are agent-authored and advisory only.
+	Mailbox bool `toml:"mailbox"`
+	// IntentTTLMinutes is the expiry (in minutes) applied to a new intent or note.
+	// Rows past expiry are pruned on the daemon session-reaper tick and filtered
+	// from every read regardless. Default 120. A non-positive value falls back to
+	// the compiled default at the point of use.
+	IntentTTLMinutes int `toml:"intent_ttl_minutes"`
 }
 
 // SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by

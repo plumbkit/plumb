@@ -482,7 +482,7 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(context.Background(), serverConn, pool, nil, nil, store, nil, nil, time.Now(), newSharedBudgets(), registry)
+		handleConn(context.Background(), serverConn, pool, nil, nil, nil, store, nil, nil, time.Now(), newSharedBudgets(), registry)
 		close(done)
 	}()
 
@@ -517,7 +517,7 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 	reaperCtx, cancelReaper := context.WithCancel(context.Background())
 	defer cancelReaper()
 	ticks := make(chan time.Time)
-	go runIdleReaper(reaperCtx, store, registry, nil, ticks)
+	go runIdleReaper(reaperCtx, store, registry, nil, nil, ticks)
 	ticks <- time.Now()
 
 	select {

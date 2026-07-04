@@ -170,6 +170,7 @@ type connSession struct {
 
 	topologyPool *topologyPool
 	memoryPool   *memoryIndexPool
+	collabPool   *collabPool
 	hintCache    *memoryHintCache
 	peerWrites   *peerWriteCache
 	writeLimiter *tools.RateLimiter
@@ -287,6 +288,9 @@ func (s *connSession) close() {
 	if s.unsubscribe != nil {
 		s.unsubscribe()
 	}
+	// An intent must not outlive its session — clear this session's intents while
+	// the workspace is still known (before cancel/teardown). Notes survive.
+	s.clearSessionIntents()
 	s.cancel()
 	s.sessionCache.Close()
 	// Stop the quality runner, release this session's pinned language-server
