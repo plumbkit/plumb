@@ -51,6 +51,7 @@ func (s *connSession) collabPolicy() tools.CollabPolicy {
 	return tools.CollabPolicy{
 		Intents:          c.Intents,
 		Mailbox:          c.Mailbox,
+		KnowledgeHandoff: c.KnowledgeHandoff,
 		IntentTTLMinutes: c.IntentTTLMinutes,
 	}
 }

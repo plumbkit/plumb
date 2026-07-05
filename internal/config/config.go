@@ -385,6 +385,14 @@ type CollabConfig struct {
 	// from every read regardless. Default 120. A non-positive value falls back to
 	// the compiled default at the point of use.
 	IntentTTLMinutes int `toml:"intent_ttl_minutes"`
+	// KnowledgeHandoff gates the phase-3 tier: the share_findings tool, which
+	// flushes an agent's findings through the episodic-memory pipeline on demand
+	// (redact → provenance → markdown under .plumb/memories/ → FTS index →
+	// generated_memory_keep retention) rather than only when a session goes idle.
+	// Opt-in, default false — the finding is agent-authored generated content,
+	// lower-confidence than a user-written memory. Project-overridable in both
+	// directions like the rest of [collab].
+	KnowledgeHandoff bool `toml:"knowledge_handoff"`
 }
 
 // SemanticsConfig controls opt-in semantic re-rank for topology_search. Off by

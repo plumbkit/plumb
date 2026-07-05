@@ -146,6 +146,14 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	}
 	srv.Register(tools.NewShareIntent(collabDeps))
 	srv.Register(tools.NewLeaveNote(collabDeps))
+	srv.Register(tools.NewShareFindings(tools.ShareFindingsDeps{
+		Workspace:           s.workspace,
+		SessionName:         s.sessionName,
+		SessionID:           s.sessID,
+		Policy:              s.collabPolicy,
+		Index:               s.memoryIndexLive,
+		GeneratedMemoryKeep: func() int { return s.memoryConfig().GeneratedMemoryKeep },
+	}))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int) {

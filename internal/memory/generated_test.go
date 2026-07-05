@@ -164,6 +164,50 @@ func TestPruneGeneratedEpisodic_OnlyDeletesOldGeneratedEpisodic(t *testing.T) {
 	}
 }
 
+// TestPruneGeneratedEpisodic_FindingsShareRetentionPool: an on-demand
+// share_findings memory ("finding-") competes for the same generated_memory_keep
+// cap as idle episodic summaries — one shared pool, ordered purely by age.
+func TestPruneGeneratedEpisodic_FindingsShareRetentionPool(t *testing.T) {
+	ws := t.TempDir()
+	names := []string{"episodic-old", "finding-mid", "episodic-new"}
+	for i, name := range names {
+		created := time.Date(2026, 7, 1, 12, i, 0, 0, time.UTC)
+		if err := WriteGenerated(nil, ws, name, "d", "body", Provenance{Confidence: ConfidenceGenerated, CreatedAt: created}); err != nil {
+			t.Fatalf("WriteGenerated(%s): %v", name, err)
+		}
+	}
+
+	// keep=2: the finding outranks the older episodic summary and is retained.
+	deleted, err := PruneGeneratedEpisodic(nil, ws, 2)
+	if err != nil {
+		t.Fatalf("PruneGeneratedEpisodic(keep=2): %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("keep=2 deleted = %d, want 1", deleted)
+	}
+	if _, err := Read(ws, "episodic-old"); err == nil {
+		t.Error("episodic-old (oldest in the shared pool) should have been pruned")
+	}
+	if _, err := Read(ws, "finding-mid"); err != nil {
+		t.Errorf("finding-mid should remain under keep=2: %v", err)
+	}
+
+	// keep=1: the finding is itself eligible and pruned like any generated memory.
+	deleted, err = PruneGeneratedEpisodic(nil, ws, 1)
+	if err != nil {
+		t.Fatalf("PruneGeneratedEpisodic(keep=1): %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("keep=1 deleted = %d, want 1", deleted)
+	}
+	if _, err := Read(ws, "finding-mid"); err == nil {
+		t.Error("finding-mid should have been pruned under keep=1")
+	}
+	if _, err := Read(ws, "episodic-new"); err != nil {
+		t.Errorf("episodic-new (newest) should always remain: %v", err)
+	}
+}
+
 // TestPruneGeneratedEpisodic_ZeroKeepDisables: keep <= 0 must delete nothing.
 func TestPruneGeneratedEpisodic_ZeroKeepDisables(t *testing.T) {
 	ws := t.TempDir()

@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **57** structured tools to AI assistants. Every write tool is
+Plumb exposes **58** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -137,16 +137,17 @@ consumed here — `session_start` delivers them). Neither ever creates `collab.d
 
 ## Cross-agent sharing (`[collab]`)
 
-Two opt-in, advisory tools for concurrent agents on one workspace. Both are gated
-by their own `[collab]` flag (default off) and refuse with a clear enable hint
+Three opt-in, advisory tools for concurrent agents on one workspace. Each is gated
+by its own `[collab]` flag (default off) and refuses with a clear enable hint
 when the flag is off. Everything is **advisory** — nothing here ever blocks a
 write — **secret-scrubbed** (`internal/redact`) before storage, **byte-budgeted**
 when injected, and **strictly per-workspace**. What an agent *says* is a **claim**,
 rendered distinctly from what the daemon *observed* (phase-1 peer awareness).
-Rows live in `<workspace>/.plumb/collab.db` (WAL, auto-gitignored like
-`topology.db`), created lazily on first use, expiring per `[collab]
-intent_ttl_minutes` and pruned on the daemon session-reaper tick. Delivery is by
-polling and hint injection only — plumb cannot push to another agent.
+`share_intent` and `leave_note` rows live in `<workspace>/.plumb/collab.db` (WAL,
+auto-gitignored like `topology.db`), created lazily on first use, expiring per
+`[collab] intent_ttl_minutes` and pruned on the daemon session-reaper tick;
+`share_findings` instead writes a durable generated memory. Delivery is by polling
+and hint injection only — plumb cannot push to another agent.
 
 ### `share_intent`
 Broadcast what you are working on so peers can steer around it (e.g. "refactoring
@@ -170,6 +171,26 @@ the first session that attaches, then consumed. Requires `[collab] mailbox = tru
 
 **Inputs:** `body` (string, required — the message); `to` (string, optional — a
 peer session name, or `next` (default) for whoever attaches next).
+
+### `share_findings`
+Hand off what you have just learned as a durable, searchable memory *now*, instead
+of waiting for the idle episodic summary that fires when your session ends. It
+rides plumb's generated-memory pipeline end-to-end: the body is secret-scrubbed,
+stamped with your session and the date as provenance (`confidence=generated`),
+written under `<workspace>/.plumb/memories/` as `finding-<timestamp>-<session>`,
+and FTS-indexed. Peers discover it through the ordinary channels —
+`search_memories`, `workspace_search`, `relevant_memories`, memory hint injection,
+and the next `session_start`. It is **agent-generated** content: labelled
+lower-confidence than a user-written memory and never displacing one in a capped
+hint slot, and it counts against the same `[memory] generated_memory_keep`
+retention pool as an idle `episodic-*` summary. Rule-based only — you supply the
+text; there is no LLM summarisation. Requires `[collab] knowledge_handoff = true`.
+
+**Inputs:** `summary` (string, required — a one- or two-line headline, stored as
+the memory body); `description` (string, optional — longer detail appended below
+the summary); `paths` (array of strings, optional — workspace-relative globs the
+finding is about, stored as frontmatter so `relevant_memories` and hint injection
+route it to those files).
 
 ---
 

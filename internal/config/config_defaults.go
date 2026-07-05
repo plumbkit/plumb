@@ -74,6 +74,7 @@ var defaults = Config{
 		Intents:          false,
 		Mailbox:          false,
 		IntentTTLMinutes: 120,
+		KnowledgeHandoff: false,
 	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},

@@ -223,10 +223,30 @@ func DeleteIndexed(ix *Index, workspace, name string) error {
 	return nil
 }
 
-// PruneGeneratedEpisodic keeps the newest keep generated episodic memories and
-// deletes older ones. Only plumb-created memories whose name starts with
-// "episodic-" and whose provenance says confidence=generated are eligible.
-// keep <= 0 disables pruning.
+// generatedMemoryPrefixes are the name prefixes plumb uses for the memories it
+// generates itself: idle episodic summaries ("episodic-") and on-demand shared
+// findings ("finding-", written by the share_findings tool). Both are eligible
+// for the same generated_memory_keep retention pool, so an on-demand finding
+// counts against retention exactly like an idle summary — a distinguishable name
+// but one shared cap.
+var generatedMemoryPrefixes = []string{"episodic-", "finding-"}
+
+// isGeneratedMemoryName reports whether name is one plumb generated itself (an
+// episodic summary or a shared finding) and so is retention-eligible.
+func isGeneratedMemoryName(name string) bool {
+	for _, p := range generatedMemoryPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// PruneGeneratedEpisodic keeps the newest keep generated memories and deletes
+// older ones. Only plumb-created memories whose name carries a generated prefix
+// (episodic summaries and share_findings handoffs — see generatedMemoryPrefixes)
+// and whose provenance says confidence=generated are eligible; both kinds share
+// one retention pool. keep <= 0 disables pruning.
 func PruneGeneratedEpisodic(ix *Index, workspace string, keep int) (int, error) {
 	if keep <= 0 {
 		return 0, nil
@@ -241,7 +261,7 @@ func PruneGeneratedEpisodic(ix *Index, workspace string, keep int) (int, error) 
 	}
 	var cs []candidate
 	for _, m := range mems {
-		if !strings.HasPrefix(m.Name, "episodic-") {
+		if !isGeneratedMemoryName(m.Name) {
 			continue
 		}
 		rec, err := ReadMeta(workspace, m.Name)

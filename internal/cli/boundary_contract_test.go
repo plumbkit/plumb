@@ -78,6 +78,7 @@ var knownToolGuarding = map[string]string{
 	"NewAgentConfig":      "none", // writes structured config via the allowlist; no filesystem path input
 	"NewShareIntent":      "none", // writes an advisory intent to the per-workspace collab.db; no filesystem path input
 	"NewLeaveNote":        "none", // writes an advisory note to the per-workspace collab.db; no filesystem path input
+	"NewShareFindings":    "none", // writes a generated memory under the workspace's own .plumb/memories/ with a server-generated name; no user-supplied filesystem path
 }
 
 // TestBoundaryGuardWiringComplete is the D10 registration-time contract test

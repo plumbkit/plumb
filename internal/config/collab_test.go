@@ -36,6 +36,9 @@ func TestCollab_Defaults(t *testing.T) {
 	if d.Collab.IntentTTLMinutes != 120 {
 		t.Errorf("collab.intent_ttl_minutes default = %d, want 120", d.Collab.IntentTTLMinutes)
 	}
+	if d.Collab.KnowledgeHandoff {
+		t.Error("collab.knowledge_handoff should default to false (opt-in)")
+	}
 }
 
 // TestLoadProject_CollabPhase2OverridesBothDirections asserts the phase-2 opt-in
@@ -77,6 +80,50 @@ func TestLoadProject_CollabPhase2OverridesBothDirections(t *testing.T) {
 		}
 		if got.Collab.IntentTTLMinutes != 30 {
 			t.Errorf("intent_ttl_minutes = %d, want 30", got.Collab.IntentTTLMinutes)
+		}
+	})
+}
+
+// TestLoadProject_CollabPhase3OverridesBothDirections asserts knowledge_handoff
+// follows the same both-directions override rule as the other opt-in flags: a
+// project may ENABLE it under a global default-off, and DISABLE it under a
+// global opt-in.
+func TestLoadProject_CollabPhase3OverridesBothDirections(t *testing.T) {
+	t.Run("project enables under global off", func(t *testing.T) {
+		base := Defaults() // knowledge_handoff = false
+		ws := writeCollabProject(t, "[collab]\nknowledge_handoff = true\n")
+		got, err := LoadProject(base, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Collab.KnowledgeHandoff {
+			t.Error("project knowledge_handoff=true must override global false")
+		}
+	})
+
+	t.Run("project disables under global on", func(t *testing.T) {
+		base := Defaults()
+		base.Collab.KnowledgeHandoff = true
+		ws := writeCollabProject(t, "[collab]\nknowledge_handoff = false\n")
+		got, err := LoadProject(base, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Collab.KnowledgeHandoff {
+			t.Error("project knowledge_handoff=false must override global true")
+		}
+	})
+
+	t.Run("absent key keeps global", func(t *testing.T) {
+		base := Defaults()
+		base.Collab.KnowledgeHandoff = true
+		ws := writeCollabProject(t, "[collab]\nintent_ttl_minutes = 15\n")
+		got, err := LoadProject(base, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Collab.KnowledgeHandoff {
+			t.Error("absent knowledge_handoff must keep the global value (true)")
 		}
 	})
 }

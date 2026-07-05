@@ -262,6 +262,10 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	addConfigSection(cfgTable, "collab", [][]string{
 		{"peer_awareness", fmt.Sprintf("%v", col.PeerAwareness), sourceFor("peer_awareness", dcol.PeerAwareness, gcol.PeerAwareness, col.PeerAwareness)},
 		{"hint_budget_bytes", fmt.Sprintf("%d", col.HintBudgetBytes), sourceFor("hint_budget_bytes", dcol.HintBudgetBytes, gcol.HintBudgetBytes, col.HintBudgetBytes)},
+		{"intents", fmt.Sprintf("%v", col.Intents), sourceFor("intents", dcol.Intents, gcol.Intents, col.Intents)},
+		{"mailbox", fmt.Sprintf("%v", col.Mailbox), sourceFor("mailbox", dcol.Mailbox, gcol.Mailbox, col.Mailbox)},
+		{"knowledge_handoff", fmt.Sprintf("%v", col.KnowledgeHandoff), sourceFor("knowledge_handoff", dcol.KnowledgeHandoff, gcol.KnowledgeHandoff, col.KnowledgeHandoff)},
+		{"intent_ttl_minutes", fmt.Sprintf("%d", col.IntentTTLMinutes), sourceFor("intent_ttl_minutes", dcol.IntentTTLMinutes, gcol.IntentTTLMinutes, col.IntentTTLMinutes)},
 	})
 
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {

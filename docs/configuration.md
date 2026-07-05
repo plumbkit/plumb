@@ -206,7 +206,7 @@ on a workspace. This layer surfaces that **advisorily** — nothing here ever
 blocks a write. Project-overridable in both directions (the `generated_summaries`
 precedent); no env override; hot-reloaded; strictly per-workspace.
 
-Two tiers, each behind its own flag. **Tier 1 (`peer_awareness`, default on)** is
+Three tiers, each behind its own flag. **Tier 1 (`peer_awareness`, default on)** is
 passive and derived from writes the daemon itself performed or watched — verifiable
 **observations**, never agent claims. **Tier 2 (`intents` + `mailbox`, default
 off)** adds agent-authored **claims**: `share_intent` and `leave_note` (see
@@ -216,7 +216,11 @@ Claims are always rendered distinctly from observations, secret-scrubbed
 `<workspace>/.plumb/collab.db` (WAL, auto-gitignored like `topology.db`), created
 lazily on first use and pruned on the daemon session-reaper tick (reads filter
 expired rows regardless). A workspace whose `intents` and `mailbox` both stay off
-never gets a `collab.db`.
+never gets a `collab.db`. **Tier 3 (`knowledge_handoff`, default off)** adds
+`share_findings`: an on-demand flush of an agent's findings through the
+generated-memory pipeline (redacted, provenance-stamped, FTS-indexed, retained
+under `[memory] generated_memory_keep`), instantly discoverable by peers via the
+ordinary memory channels — no new storage.
 
 When `peer_awareness` is on it adds three signals:
 
@@ -238,6 +242,7 @@ When `peer_awareness` is on it adds three signals:
 | `hint_budget_bytes` | int | `512` | Byte cap (UTF-8 boundary) on any injected peer-signal block — the peer-activity hint, the `session_start` peer digest, the intent-aware write hint, and a delivered note body share it. |
 | `intents` | bool | `false` | Tier 2, opt-in: the `share_intent` tool, its listing in `workspace_sessions`, and the intent-aware peer write hint. |
 | `mailbox` | bool | `false` | Tier 2, opt-in: the `leave_note` tool, note delivery at `session_start`, and pending-note listing in `workspace_sessions`. |
+| `knowledge_handoff` | bool | `false` | Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
 | `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent or note. Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
 
 ## `[semantics]` — opt-in semantic re-rank for `topology_search`
