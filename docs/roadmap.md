@@ -34,13 +34,22 @@ distribution — before we make them. Native Windows support is intentionally **
 
 ## Shipped outside any themed row
 
-One feature landed as a standalone opt-in surface rather than under a themed
-minor: **`plumb web`** — a daemon-hosted, loopback-only web UI (Svelte 5 +
-ECharts/uPlot) with full TUI parity (Dashboard, Sessions, Memory, Logs,
-scope-aware Settings). See [`docs/web.md`](web.md) and the `[web]` config
-section. It doesn't fit any 0.1x theme above because it wasn't planned as part
-of the road to 1.0 — it's called out here so a reader scanning this roadmap
-knows it exists.
+Two capabilities landed as standalone surfaces rather than under a themed minor:
+
+- **`plumb web`** — a daemon-hosted, loopback-only web UI (Svelte 5 +
+  ECharts/uPlot) with full TUI parity (Dashboard, Sessions, Memory, Logs,
+  scope-aware Settings). See [`docs/web.md`](web.md) and the `[web]` config
+  section.
+- **`[collab]` cross-agent sharing** (shipped in 0.10) — three config-gated,
+  advisory tiers for agents that share one daemon on a machine: peer awareness
+  (daemon-observed writes), intents + a mailbox (`share_intent` / `leave_note`),
+  and on-demand knowledge handoff (`share_findings`). Everything beyond tier-1
+  awareness is opt-in, all of it is advisory (never blocks a write) and strictly
+  per-workspace. See the `[collab]` config section.
+
+Neither fits a 0.1x theme above because neither was planned as part of the road
+to 1.0 — they're called out here so a reader scanning this roadmap knows they
+exist.
 
 ## After 1.0
 
