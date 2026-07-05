@@ -141,7 +141,11 @@ func (t *ShareFindings) Execute(_ context.Context, raw json.RawMessage) (string,
 func (t *ShareFindings) run(ws string, args shareFindingsArgs) (string, error) {
 	body, redacted := shareFindingsBody(args.Summary, args.Description)
 	now := time.Now().UTC()
-	name := fmt.Sprintf("finding-%s-%s", now.Format("20060102-150405"), shortSessionSuffix(t.deps.SessionID))
+	// Nanosecond component keeps the name unique when one session shares two
+	// findings inside the same wall-clock second (e.g. two batched calls in a
+	// single turn) — the store overwrites on name collision, so a second-
+	// resolution timestamp alone would silently clobber the first finding.
+	name := fmt.Sprintf("finding-%s-%09d-%s", now.Format("20060102-150405"), now.Nanosecond(), shortSessionSuffix(t.deps.SessionID))
 	ix := t.deps.Index()
 	// WriteGenerated redacts again before persistence (idempotent) — the belt-and-
 	// braces guarantee no agent-supplied secret reaches durable storage.

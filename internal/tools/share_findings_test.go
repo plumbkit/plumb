@@ -114,6 +114,27 @@ func TestShareFindings_MissingSummaryRejected(t *testing.T) {
 	}
 }
 
+// TestShareFindings_RapidCallsDoNotCollide: two findings shared by the same
+// session in immediate succession (the same wall-clock second) must produce two
+// distinct memories — a second-resolution name alone would silently overwrite
+// the first.
+func TestShareFindings_RapidCallsDoNotCollide(t *testing.T) {
+	deps, ws := shareFindingsTestDeps(t, CollabPolicy{KnowledgeHandoff: true}, 50)
+	tool := NewShareFindings(deps)
+	for _, s := range []string{"first finding", "second finding"} {
+		if _, err := tool.Execute(context.Background(), json.RawMessage(`{"summary":`+jsonStr(s)+`}`)); err != nil {
+			t.Fatalf("Execute(%q): %v", s, err)
+		}
+	}
+	mems, err := memory.List(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mems) != 2 {
+		t.Fatalf("two rapid share_findings calls must yield two memories, got %d", len(mems))
+	}
+}
+
 func TestShareFindings_NoWorkspace(t *testing.T) {
 	tool := NewShareFindings(ShareFindingsDeps{
 		Workspace:           func() string { return "" },
