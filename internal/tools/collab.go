@@ -25,6 +25,8 @@ type CollabPolicy struct {
 	// Intents gates share_intent; Mailbox gates leave_note.
 	Intents bool
 	Mailbox bool
+	// KnowledgeHandoff gates share_findings.
+	KnowledgeHandoff bool
 	// IntentTTLMinutes is the shared TTL for intents and notes.
 	IntentTTLMinutes int
 }
