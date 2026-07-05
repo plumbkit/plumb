@@ -44,7 +44,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/lsp/protocol` | LSP types and method-name constants |
 | `internal/lsp/adapters/gopls` | Validated Go adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/pyright` | Validated Python adapter (unit- + integration-tested) |
-| `internal/lsp/adapters/jdtls` | Experimental Java adapter; activates automatically when `jdtls` (+ a Java 21+ runtime) is on PATH; set `[lsp.java] enabled = false` to exclude |
+| `internal/lsp/adapters/jdtls` | Java adapter (validated, experimental tier); activates automatically when `jdtls` (+ a Java 21+ runtime) is on PATH; set `[lsp.java] enabled = false` to exclude |
 | `internal/config` | TOML config, XDG path resolution, project-config merging; `config.Store` holds the live global base (atomic pointer + generation + observers) for hot-reload |
 | `internal/domain` | Reserved for future shared domain types (currently empty) |
 | `internal/workspace` | Reserved for future routing logic (currently empty) |

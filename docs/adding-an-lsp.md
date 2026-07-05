@@ -2,14 +2,14 @@
 
 Plumb adapters translate between the generic `lsp.LSPClient` interface and the
 quirks of a specific language server binary.  This guide walks through every
-step, using `gopls` (validated) and `pyright` (experimental) as worked examples.
+step, using `gopls` and `pyright` (both validated) as worked examples.
 
 ## Validation levels
 
 | Level | What it means | Example |
 |---|---|---|
 | **Validated** | Integration tests spawn the real binary in CI. | `internal/lsp/adapters/gopls` |
-| **Experimental** | Real Go code, unit-tested with a mocked transport; no binary in CI. | `internal/lsp/adapters/pyright` |
+| **Experimental** | Real Go code, unit-tested with a mocked transport; no binary in CI. | `internal/lsp/adapters/kotlin` |
 
 Promote an adapter from experimental to validated by adding integration tests
 (see step 6) and updating its `doc.go` status comment.

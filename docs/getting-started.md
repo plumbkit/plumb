@@ -32,6 +32,14 @@ from source.
 
 ## 2. Install plumb
 
+**Homebrew** (macOS + Linux) — the recommended path:
+
+```sh
+brew install plumbkit/plumb/plumb
+```
+
+Or with the Go toolchain:
+
 ```sh
 go install github.com/plumbkit/plumb/cmd/plumb@latest
 ```
