@@ -253,6 +253,10 @@ authoritative spine and any error falls back to plain ranking. **API /
 bring-your-own-endpoint only — plumb never bundles, downloads, or supervises a
 model.** Project-overridable, hot-reloaded.
 
+Semantic re-rank is **generally available** as of 0.10 — a supported, stable
+capability, not an experiment. It stays opt-in (and off by default) only because
+it needs an embedding endpoint you supply; nothing about it is provisional.
+
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `enabled` | bool | `false` | Turn semantic re-rank on. |
