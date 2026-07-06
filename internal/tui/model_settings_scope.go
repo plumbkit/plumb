@@ -260,6 +260,12 @@ var settingTOMLPaths = map[settingKey][]string{
 	skMemoryMaxHints:            {"memory", "max_hints"},
 	skMemoryIdleSummaryMin:      {"memory", "idle_summary_minutes"},
 	skMemoryGeneratedKeep:       {"memory", "generated_memory_keep"},
+	skCollabPeerAwareness:       {"collab", "peer_awareness"},
+	skCollabHintBudgetBytes:     {"collab", "hint_budget_bytes"},
+	skCollabIntents:             {"collab", "intents"},
+	skCollabMailbox:             {"collab", "mailbox"},
+	skCollabKnowledgeHandoff:    {"collab", "knowledge_handoff"},
+	skCollabIntentTTLMin:        {"collab", "intent_ttl_minutes"},
 	// agent_config_writes is deliberately ABSENT: it is a global-only safety knob
 	// (LoadProject forces the global value to win), so it never appears in a
 	// workspace scope — a project config cannot enable agent writes.
@@ -322,6 +328,12 @@ var settingDottedKeys = map[settingKey]string{
 	skMemoryMaxHints:             "memory.max_hints",
 	skMemoryIdleSummaryMin:       "memory.idle_summary_minutes",
 	skMemoryGeneratedKeep:        "memory.generated_memory_keep",
+	skCollabPeerAwareness:        "collab.peer_awareness",
+	skCollabHintBudgetBytes:      "collab.hint_budget_bytes",
+	skCollabIntents:              "collab.intents",
+	skCollabMailbox:              "collab.mailbox",
+	skCollabKnowledgeHandoff:     "collab.knowledge_handoff",
+	skCollabIntentTTLMin:         "collab.intent_ttl_minutes",
 	skAutoAttach:                 "workspace.auto_attach",
 	skAutoAttachPersist:          "workspace.auto_attach_persist",
 	skAllowDependencyReads:       "workspace.allow_dependency_reads",

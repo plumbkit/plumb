@@ -202,10 +202,31 @@ var registryData = []Field{
 		Description: "Newest episodic-* markdown memories retained per workspace. 0 disables pruning.",
 	},
 
-	// [collab] is intentionally absent from the registry (and so from TUI
-	// Settings): its two keys are surfaced via `plumb config show`, validated,
-	// snapshotted per connection, and hot-reloaded, but the TUI/agent-write
-	// surface for cross-agent sharing is deferred to a later phase.
+	// --- Collab ---
+	{
+		Key: "collab.peer_awareness", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Tier-1 passive peer awareness: topology-annotated recent writes, peer-activity hints, and the session_start peer digest. Default on.",
+	},
+	{
+		Key: "collab.hint_budget_bytes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Byte cap on any injected peer-signal block (peer-activity hint, session_start peer digest).",
+	},
+	{
+		Key: "collab.intents", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Tier-2 opt-in: the share_intent tool and intent-aware write hints (agent-authored claims).",
+	},
+	{
+		Key: "collab.mailbox", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Tier-2 opt-in: the leave_note tool and note delivery at session_start.",
+	},
+	{
+		Key: "collab.knowledge_handoff", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Tier-3 opt-in: the share_findings tool, flushing findings to the episodic memory pipeline on demand.",
+	},
+	{
+		Key: "collab.intent_ttl_minutes", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Expiry, in minutes, for a new intent or note before it is pruned.",
+	},
 
 	// --- Workspace ---
 	{

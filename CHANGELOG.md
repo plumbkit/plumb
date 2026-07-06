@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`[collab]` settings are now visible and editable in the TUI Settings screen.** All three cross-agent sharing tiers shipped with full config plumbing (defaults, project-override merge, `plumb config show`), but `[collab]` carried a stale comment deliberately excluding it from the config field registry — written before phase 2/3 shipped and never revisited — so a user had no way to see or toggle `peer_awareness`/`intents`/`mailbox`/`knowledge_handoff`, or tune `hint_budget_bytes`/`intent_ttl_minutes`, anywhere but by hand-editing `config.toml`. Added a new "Collab" group to the Settings screen with all six fields wired into `buildSettingItems`, the field registry (`ReloadNextSession`, matching `[memory]`'s per-connection-snapshot semantics), and the project-override machinery (`settingTOMLPaths`/`settingDottedKeys`) — so they now appear, override per-workspace, and reset-to-inherit exactly like every other section. Guarded by the existing `TestSettingsRegistryDrift`/`TestSettingDottedKeys_MatchTOMLPaths` drift checks, which now also cover `[collab]`.
+
 ## 0.10.0 (2026-07-05)
 
 ### Added

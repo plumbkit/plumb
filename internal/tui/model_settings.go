@@ -101,6 +101,13 @@ const (
 	skSemAPIKey
 	skSemRerankCandidates
 	skSemTimeout
+	// [collab] rows (the General tab, "Collab" group).
+	skCollabPeerAwareness
+	skCollabHintBudgetBytes
+	skCollabIntents
+	skCollabMailbox
+	skCollabKnowledgeHandoff
+	skCollabIntentTTLMin
 )
 
 // dottedKeyFor maps a settings row key to its config-field-registry dotted key.
@@ -271,6 +278,13 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Memory", label: "Max hints", kind: settingNumber, key: skMemoryMaxHints, value: itoa(cfg.Memory.MaxHints)},
 		{group: "Memory", label: "Idle summary (min)", kind: settingNumber, key: skMemoryIdleSummaryMin, value: itoa(cfg.Memory.IdleSummaryMinutes)},
 		{group: "Memory", label: "Generated keep", kind: settingNumber, key: skMemoryGeneratedKeep, value: itoa(cfg.Memory.GeneratedMemoryKeep)},
+
+		{group: "Collab", label: "Peer awareness", kind: settingToggle, key: skCollabPeerAwareness, value: onOff(cfg.Collab.PeerAwareness)},
+		{group: "Collab", label: "Hint budget (B)", kind: settingNumber, key: skCollabHintBudgetBytes, value: itoa(cfg.Collab.HintBudgetBytes)},
+		{group: "Collab", label: "Intents", kind: settingToggle, key: skCollabIntents, value: onOff(cfg.Collab.Intents)},
+		{group: "Collab", label: "Mailbox", kind: settingToggle, key: skCollabMailbox, value: onOff(cfg.Collab.Mailbox)},
+		{group: "Collab", label: "Knowledge handoff", kind: settingToggle, key: skCollabKnowledgeHandoff, value: onOff(cfg.Collab.KnowledgeHandoff)},
+		{group: "Collab", label: "Intent TTL (min)", kind: settingNumber, key: skCollabIntentTTLMin, value: itoa(cfg.Collab.IntentTTLMinutes)},
 
 		{group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
 		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},

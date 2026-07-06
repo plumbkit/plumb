@@ -134,6 +134,8 @@ var numberMetaTable = map[settingKey]struct {
 	skMemoryMaxHints:             {1, "max hints"},
 	skMemoryIdleSummaryMin:       {5, "idle summary (min)"},
 	skMemoryGeneratedKeep:        {10, "generated keep"},
+	skCollabHintBudgetBytes:      {128, "collab hint budget (B)"},
+	skCollabIntentTTLMin:         {30, "collab intent ttl (min)"},
 }
 
 // numberMeta returns the adjust step and status label for a numeric setting.
@@ -198,6 +200,10 @@ func intFieldMore(c *config.Config, key settingKey) *int {
 		return &c.Memory.IdleSummaryMinutes
 	case skMemoryGeneratedKeep:
 		return &c.Memory.GeneratedMemoryKeep
+	case skCollabHintBudgetBytes:
+		return &c.Collab.HintBudgetBytes
+	case skCollabIntentTTLMin:
+		return &c.Collab.IntentTTLMinutes
 	default:
 		return nil
 	}
@@ -292,6 +298,23 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Memory.InjectHints
 	case skPersistState:
 		return &c.Session.PersistState
+	default:
+		return boolFieldCollab(c, key)
+	}
+}
+
+// boolFieldCollab returns a pointer to the bool config field a [collab] toggle
+// row edits. Split out from boolFieldMore to stay within the gocyclo-15 contract.
+func boolFieldCollab(c *config.Config, key settingKey) *bool {
+	switch key {
+	case skCollabPeerAwareness:
+		return &c.Collab.PeerAwareness
+	case skCollabIntents:
+		return &c.Collab.Intents
+	case skCollabMailbox:
+		return &c.Collab.Mailbox
+	case skCollabKnowledgeHandoff:
+		return &c.Collab.KnowledgeHandoff
 	default:
 		return nil
 	}
@@ -428,6 +451,14 @@ func toggleLabelMore(key settingKey) string {
 		return "inject hints"
 	case skPersistState:
 		return "persist session state"
+	case skCollabPeerAwareness:
+		return "peer awareness"
+	case skCollabIntents:
+		return "intents"
+	case skCollabMailbox:
+		return "mailbox"
+	case skCollabKnowledgeHandoff:
+		return "knowledge handoff"
 	default:
 		return ""
 	}
