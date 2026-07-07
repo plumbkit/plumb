@@ -73,13 +73,7 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 	base := s.store.Current()
 	v := s.view()
 	trusted := config.NewTrustStore().IsTrusted(ws)
-	// An untrusted project's .plumb/config.toml cannot widen shell access: honour
-	// the merged (project) value only when the workspace is trusted, else fall
-	// back to the global base value.
-	allowShell := base.CommandPolicy.AllowShell
-	if trusted {
-		allowShell = v.commandPolicy.AllowShell
-	}
+	allowShell := gatedAllowShell(base.CommandPolicy, v.commandPolicy, trusted)
 	if !allowShell {
 		if !trusted && v.commandPolicy.AllowShell {
 			return tools.ResolvedShell{}, fmt.Errorf(
@@ -101,6 +95,18 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 		},
 		RequireSandbox: s.effectiveRequireSandbox(),
 	}, nil
+}
+
+// gatedAllowShell applies the trust rule to execute_shell_command: an untrusted
+// project's .plumb/config.toml cannot widen shell access, so the merged (project)
+// value is honoured only when the workspace is trusted; otherwise the global base
+// value wins. A project narrowing shell to false while untrusted is likewise not
+// honoured (base wins) — an untrusted project can neither raise nor lower it.
+func gatedAllowShell(base, merged config.CommandsConfig, trusted bool) bool {
+	if trusted {
+		return merged.AllowShell
+	}
+	return base.AllowShell
 }
 
 // effectiveRequireSandbox is the most-restrictive require_sandbox across the
