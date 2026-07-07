@@ -10,8 +10,11 @@ import (
 )
 
 // sandbox_darwin.go confines a command with macOS Seatbelt via sandbox-exec.
-// The SBPL profile is a write jail: `(allow default)` then `(deny file-write*)`
-// then re-allow writes to a temp/cache set (+ the workspace when allow_writes),
+// The SBPL profile is a write jail (INTEGRITY-only, not confidentiality: reads
+// stay permissive): `(allow default)` then `(deny file-write*)` then re-allow
+// writes to a temp/cache set (+ the workspace when allow_writes), then a final
+// `(deny file-write*)` on plumb's own runtime dir (<cache>/plumb, which sits
+// inside the allowed cache dir) so a command cannot clobber plumb.sock/pid/lock,
 // with `(deny network*)` appended when deny_network is set. SBPL is last-match-
 // wins, so the trailing allow/deny rules override the permissive default.
 //
@@ -32,6 +35,7 @@ func sandboxWrap(argv []string, opts SandboxOpts) ([]string, SandboxStatus) {
 		"-D", "TMP=" + seatbeltParam(tempDir()),
 		"-D", "CACHES=" + seatbeltParam(cachesDir()),
 		"-D", "GOMOD=" + seatbeltParam(goModCache()),
+		"-D", "PLUMBDIR=" + plumbRuntimeDir(),
 		"-p", buildSeatbeltProfile(opts.AllowWrites && opts.WorkspaceRoot != "", opts.DenyNetwork),
 	}
 	wrapped := make([]string, 0, len(prefix)+len(argv))
@@ -63,6 +67,9 @@ func buildSeatbeltProfile(allowWorkspaceWrites, denyNetwork bool) string {
 	b.WriteString(" (subpath (param \"CACHES\"))")
 	b.WriteString(" (subpath (param \"GOMOD\"))")
 	b.WriteString(" (subpath \"/dev\"))\n")
+	// Re-deny writes to plumb's own runtime dir (inside the allowed cache dir): a
+	// sandboxed command must not be able to delete/replace plumb.sock/pid/lock.
+	b.WriteString("(deny file-write* (subpath (param \"PLUMBDIR\")))\n")
 	if denyNetwork {
 		b.WriteString("(deny network*)\n")
 	}
@@ -80,6 +87,19 @@ func seatbeltParam(p string) string {
 }
 
 func tempDir() string { return os.TempDir() }
+
+// plumbRuntimeDir is <UserCacheDir>/plumb, where the daemon keeps plumb.sock,
+// plumb.pid, and its locks. It is denied writes even though it sits inside the
+// (writable) cache dir.
+func plumbRuntimeDir() string {
+	if d, err := os.UserCacheDir(); err == nil && d != "" {
+		return filepath.Join(d, "plumb")
+	}
+	// A non-matching sentinel (nothing lives under a device file), so the deny is
+	// a no-op rather than accidentally denying /dev/null. Only hit if UserCacheDir
+	// fails, which is very rare.
+	return "/dev/null/plumb"
+}
 
 func cachesDir() string {
 	if d, err := os.UserCacheDir(); err == nil && d != "" {

@@ -57,6 +57,13 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 	cmd.Dir = workdir
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Run in its own process group and, on timeout/cancel, SIGKILL the whole group
+	// so a build/test that forked children (or a shell that backgrounded one) does
+	// not leave orphans. WaitDelay bounds the wait if a descendant keeps the output
+	// pipes open after the group is signalled.
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = 5 * time.Second
 
 	runErr := cmd.Run()
 	res := ExecResult{

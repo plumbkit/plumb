@@ -47,6 +47,12 @@ func buildBwrapArgv(bin string, argv []string, opts SandboxOpts) []string {
 			out = append(out, "--bind-try", d, d)
 		}
 	}
+	// Re-bind plumb's own runtime dir (inside the writable cache dir) read-only so
+	// a sandboxed command cannot clobber plumb.sock/pid/lock. Comes after the cache
+	// bind, so it wins.
+	if p := linuxPlumbRuntimeDir(); p != "" {
+		out = append(out, "--ro-bind-try", p, p)
+	}
 	if opts.DenyNetwork {
 		out = append(out, "--unshare-net")
 	}
@@ -65,6 +71,16 @@ func writableLinuxDirs() []string {
 	}
 	dirs = append(dirs, linuxGoModCache())
 	return dirs
+}
+
+// linuxPlumbRuntimeDir is <UserCacheDir>/plumb, where the daemon keeps
+// plumb.sock, plumb.pid, and its locks. Re-bound read-only even though it sits
+// inside the (writable) cache dir.
+func linuxPlumbRuntimeDir() string {
+	if d, err := os.UserCacheDir(); err == nil && d != "" {
+		return filepath.Join(d, "plumb")
+	}
+	return ""
 }
 
 func linuxGoModCache() string {

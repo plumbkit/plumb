@@ -63,7 +63,7 @@ func (t *ExecuteShellCommand) InputSchema() json.RawMessage { return executeShel
 func (t *ExecuteShellCommand) Description() string {
 	return "Run an ad-hoc shell command in the workspace via sh -c (pipes/redirects/globs work), for verifying an edit compiles or tests pass without leaving plumb. " +
 		"DISABLED by default: enable it with [commands] allow_shell = true in your global config, or in a project's .plumb/config.toml plus `plumb trust`. " +
-		"Runs under an OS sandbox (a write jail) when available; output and runtime are bounded. " +
+		"Runs under an OS sandbox when available, but that sandbox is INTEGRITY-ONLY: it confines writes, not reads — the command runs with the user's credentials and the daemon's environment, so it can read any file and secret the user can (e.g. ~/.ssh, API keys) and reach the network unless [commands] deny_network is set. Enable it only for repositories you trust. Output and runtime are bounded. " +
 		"Prefer run_command for anything you run repeatedly — a named allow-list entry is safer and needs no enabling."
 }
 

@@ -92,6 +92,10 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 			// (formatters, code generators). The sandbox still confines writes away
 			// from the rest of the filesystem.
 			AllowWrites: true,
+			// The jail is integrity-only (reads stay permissive), so [commands]
+			// deny_network is the egress control against a shell command that reads a
+			// secret and exfiltrates it. Most-restrictive across base + project.
+			DenyNetwork: s.effectiveShellDenyNetwork(),
 		},
 		RequireSandbox: s.effectiveRequireSandbox(),
 	}, nil
@@ -107,6 +111,13 @@ func gatedAllowShell(base, merged config.CommandsConfig, trusted bool) bool {
 		return merged.AllowShell
 	}
 	return base.AllowShell
+}
+
+// effectiveShellDenyNetwork is the most-restrictive [commands] deny_network for
+// the shell tier across the global base and the project value: an untrusted
+// project can only ADD safety (cut the network), never restore it.
+func (s *connSession) effectiveShellDenyNetwork() bool {
+	return s.store.Current().CommandPolicy.DenyNetwork || s.view().commandPolicy.DenyNetwork
 }
 
 // effectiveRequireSandbox is the most-restrictive require_sandbox across the

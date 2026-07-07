@@ -109,6 +109,7 @@ allow_writes = true
 [commands]
 allow_shell = true
 require_sandbox = true
+deny_network = true
 `)
 	got, err := LoadProject(Defaults(), ws)
 	if err != nil {
@@ -121,8 +122,32 @@ require_sandbox = true
 	if c.Timeout.Duration != 90*time.Second || !c.AllowWrites {
 		t.Fatalf("command fields not merged: %+v", c)
 	}
-	if !got.CommandPolicy.AllowShell || !got.CommandPolicy.RequireSandbox {
+	if !got.CommandPolicy.AllowShell || !got.CommandPolicy.RequireSandbox || !got.CommandPolicy.DenyNetwork {
 		t.Fatalf("policy not merged: %+v", got.CommandPolicy)
+	}
+}
+
+// TestLoadProject_ProjectCommandsShadowGlobal documents the array-replace merge:
+// when a project declares its own [[command]] block, it REPLACES the global
+// allow-list entirely (global entries are shadowed), rather than appending.
+func TestLoadProject_ProjectCommandsShadowGlobal(t *testing.T) {
+	base := Defaults()
+	base.Commands = []CommandConfig{{Name: "global-only", Exec: []string{"echo", "g"}}}
+	ws := t.TempDir()
+	writeProjectConfig(t, ws, `
+[[command]]
+name = "project-only"
+exec = ["echo", "p"]
+`)
+	got, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if _, ok := FindCommand(got.Commands, "project-only"); !ok {
+		t.Error("project command missing after merge")
+	}
+	if _, ok := FindCommand(got.Commands, "global-only"); ok {
+		t.Error("global command must be shadowed when the project declares its own [[command]] block")
 	}
 }
 
