@@ -38,6 +38,7 @@ func validate(cfg Config) error {
 		func() error { return validateMemory(cfg.Memory) },
 		func() error { return validateCollab(cfg.Collab) },
 		func() error { return validateTasks(cfg.Tasks) },
+		func() error { return validateCommands(cfg.Commands) },
 		func() error { return validateTools(cfg.Tools) },
 	} {
 		if err := check(); err != nil {

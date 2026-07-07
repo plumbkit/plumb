@@ -183,6 +183,7 @@ func cloneConfig(cfg Config) Config {
 		}
 	}
 	out.Tasks = cloneTasks(cfg.Tasks)
+	out.Commands = cloneCommands(cfg.Commands)
 	// maps.Clone preserves nil vs empty-non-nil so cloneConfig(defaults) stays
 	// reflect.DeepEqual to defaults (see the slice note above).
 	out.Tools.ClientProfiles = maps.Clone(cfg.Tools.ClientProfiles)
