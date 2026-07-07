@@ -39,6 +39,7 @@ func (m *Model) enterSettings() {
 	m.showThemePicker = false
 	m.settingsListEditor = nil
 	m.settingsTextEditor = nil
+	m.resetCommandsFocus()
 	m.syncThemeCursor()
 }
 
@@ -59,9 +60,12 @@ func (m Model) settingsContentHeight() int {
 }
 
 // refreshSettingsItems rebuilds the rows for the current scope, keeping only the
-// active tab's settings.
+// active tab's settings. It also refreshes the Commands-tab data (which lives
+// outside the flat settingItem list) so a scope change or a saved edit is
+// reflected without a separate call site.
 func (m *Model) refreshSettingsItems() {
 	m.settingsItems = filterSettingsByTab(m.buildScopeItems(), m.settingsTab)
+	m.refreshCommands()
 }
 
 // settingsCycleFocus moves focus forward (dir +1) or backward (dir -1) through
@@ -83,6 +87,7 @@ func (m Model) settingsCycleFocus(dir int) Model {
 		m.settingsTab = newTab
 		m.settingsCursor = 0
 		m.settingsScroll = 0
+		m.resetCommandsFocus()
 		m.refreshSettingsItems()
 	}
 	return m
@@ -207,6 +212,9 @@ func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
 	if m.settingsScopeFocus {
 		return m.handleScopeNavKey(key)
 	}
+	if m.settingsTab == settingsTabCommands {
+		return m.handleCommandsKey(key)
+	}
 	return m.handleSettingsRowKey(key)
 }
 
@@ -274,6 +282,7 @@ func (m *Model) selectScope() {
 	m.settingsStatus = ""
 	m.settingsCursor = 0
 	m.settingsScroll = 0
+	m.resetCommandsFocus()
 	m.settingsScopeScroll = clampOffset(m.settingsScopeScroll, len(m.settingsScopes)+2, m.settingsScrollHeight())
 	m.refreshSettingsItems()
 }

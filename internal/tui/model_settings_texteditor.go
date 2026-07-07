@@ -14,6 +14,11 @@ type textEditor struct {
 	lspLang string
 	title   string
 	input   string
+	// cmdField, when non-empty, marks this editor as editing a Commands-tab
+	// field rather than a settingKey-backed row (see model_settings_commands.go).
+	// The commit routes to the commands model, not stringField, and the target
+	// command is the one under the list cursor.
+	cmdField string
 
 	fieldWidth int // per-render field width from the screen size; 0 falls back to listFieldWidth
 }

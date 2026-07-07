@@ -154,6 +154,9 @@ func (m Model) commitTextEditor() Model {
 	if ed == nil {
 		return m
 	}
+	if ed.cmdField != "" {
+		return m.commitCommandField(ed.cmdField, ed.input)
+	}
 	val := strings.TrimSpace(ed.input)
 	if ed.lspLang != "" {
 		if m.applyScopedLSP(settingItem{key: ed.key, lspLang: ed.lspLang}, val) {
