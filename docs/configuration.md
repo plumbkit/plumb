@@ -379,6 +379,51 @@ not run until the workspace is trusted with `plumb trust` (recorded per workspac
 root in `DataDir/trust.json`, never in the project — a cloned repo cannot
 self-trust). Default- and global-config commands always run.
 
+## `[[command]]` / `[commands]` — safe command execution
+
+Run workspace commands (build/test/lint/scripts) from within plumb, two ways.
+
+**`run_command` — the safe default.** A named allow-list of **fixed-argv**
+commands. The argv is never built from agent free-text, so it is injection-proof
+by construction; the one exception is a single `{target}` token, bounded to one
+shell-safe argument (`[A-Za-z0-9._/:@-]`).
+
+```toml
+[[command]]
+name         = "test-one"
+exec         = ["go", "test", "-run", "{target}", "./..."]  # fixed argv; optional {target}
+working_dir  = "."          # relative to the workspace root; must not escape it
+timeout      = "60s"        # default 60s
+allow_writes = true         # sandbox: may write inside the workspace (default: only $TMPDIR/caches)
+deny_network = false        # sandbox: cut network for this command (default: allowed)
+```
+
+**`execute_shell_command` — the opt-in escape hatch.** Runs an arbitrary command
+through `sh -c` (pipes/redirects/globs work). It is the one place agent free-text
+reaches a command line, so it is **disabled by default**.
+
+```toml
+[commands]
+allow_shell     = false     # gate for execute_shell_command
+require_sandbox = false     # if true, refuse to run (either tool) when no OS sandbox is active
+```
+
+**Trust gate.** A `[[command]]` entry — and a project raising `[commands]`
+`allow_shell` — supplied by a *project* `.plumb/config.toml` is honoured only
+after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
+the project — a cloned repo cannot self-enable execution). Commands and policy in
+your *global* config are user-authored and always honoured. Editing a command in
+the TUI Settings **Commands** tab auto-trusts that workspace.
+
+**OS sandbox.** Both tools run under a best-effort write jail: reads and process
+execution stay permissive (toolchains need them), writes are confined to a
+temp/cache set plus the workspace (when `allow_writes`), and the network is cut
+only when `deny_network`. macOS uses `sandbox-exec`, Linux uses `bwrap`; when the
+sandbox binary is absent the command runs unsandboxed with a clear status note
+(set `require_sandbox = true` to refuse instead). Commands inherit the daemon's
+environment (so `go`/`npm`/linters find their toolchain). Output and runtime are
+bounded (100 KiB/200 lines, timeout).
+
 ## `agent_config_writes` — agent-writable config (top level)
 
 ```toml
