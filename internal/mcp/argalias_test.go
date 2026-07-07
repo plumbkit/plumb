@@ -82,6 +82,16 @@ func TestResolveArgs_ExpandedAliases(t *testing.T) {
 			wantArgsSub: `"symbol_name":"Foo"`,
 		},
 		{
+			// call_hierarchy's real shape after RC3 2a: uri + line + character +
+			// symbol_name. The alias picks symbol_name over the (absent-here) name/
+			// query candidates, so `symbol` reaches the by-name path.
+			name:        "symbol → symbol_name (call_hierarchy shape)",
+			schema:      `{"type":"object","properties":{"uri":{"type":"string"},"line":{"type":"integer"},"character":{"type":"integer"},"symbol_name":{"type":"string"},"direction":{"type":"string"}},"required":["uri"],"additionalProperties":false}`,
+			args:        `{"uri":"file:///x.go","symbol":"Foo"}`,
+			wantWarn:    `interpreted "symbol" as "symbol_name"`,
+			wantArgsSub: `"symbol_name":"Foo"`,
+		},
+		{
 			name:        "task → slot (run_task)",
 			schema:      `{"type":"object","properties":{"slot":{"type":"string"},"target":{"type":"string"}},"required":["slot"],"additionalProperties":false}`,
 			args:        `{"task":"lint"}`,
