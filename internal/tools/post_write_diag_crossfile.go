@@ -31,10 +31,17 @@ type crossFileDiagSource interface {
 // diagBaseline is a pre-write snapshot of per-URI error state, captured before a
 // write mutates the file. Comparing the post-write snapshot against it separates
 // errors this edit INTRODUCED from errors that were already present.
+//
+// editedURI/editedPre additionally hold the FULL pre-write diagnostics of the
+// file being written (both severities, always captured when a Diag source is
+// wired, independent of the cross-file sweep) so the single-file block can
+// difference the edited file against its own pre-edit state.
 type diagBaseline struct {
-	at       time.Time                  // captured just before the write
-	errCount map[string]int             // error-severity diagnostics per URI
-	messages map[string]map[string]bool // error messages per URI (to pick a representative NEW one)
+	at        time.Time                  // captured just before the write
+	errCount  map[string]int             // error-severity diagnostics per URI (cross-file sweep)
+	messages  map[string]map[string]bool // error messages per URI (to pick a representative NEW one)
+	editedURI string                     // the file being written
+	editedPre []protocol.Diagnostic      // its diagnostics just before the write
 }
 
 // newDiagBaseline snapshots the current workspace error state. Returns nil (a

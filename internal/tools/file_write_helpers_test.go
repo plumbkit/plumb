@@ -179,27 +179,6 @@ func TestAwaitDiagnosticsRefresh_FreshFlag(t *testing.T) {
 	}
 }
 
-func TestFormatPostWriteDiagnostics_StaleSnapshotIsPending(t *testing.T) {
-	// A not-fresh snapshot predates the write: its findings must NOT be rendered
-	// (they read as fresh breakage). Surface a single pending line instead.
-	diags := errDiag("undefined: Foo")
-	pending := formatPostWriteDiagnostics(diags, false, 0)
-	if strings.Contains(pending, "undefined: Foo") {
-		t.Fatalf("a stale snapshot must not render its (pre-edit) findings:\n%s", pending)
-	}
-	if !strings.Contains(pending, "pending") {
-		t.Fatalf("expected a pending line when not fresh:\n%s", pending)
-	}
-	// An empty not-fresh snapshot is silent — no phantom pending line.
-	if got := formatPostWriteDiagnostics(nil, false, 0); got != "" {
-		t.Fatalf("empty not-fresh snapshot should be silent, got:\n%s", got)
-	}
-	// The fresh path is unchanged: real findings still render.
-	if !strings.Contains(formatPostWriteDiagnostics(diags, true, 0), "undefined: Foo") {
-		t.Fatalf("fresh diagnostics should still render their findings")
-	}
-}
-
 // diagAtLine builds one error diagnostic at the given 0-based line.
 func diagAtLine(msg string, line uint32) []protocol.Diagnostic {
 	d := []protocol.Diagnostic{{Severity: protocol.SevError, Message: msg}}
@@ -207,31 +186,37 @@ func diagAtLine(msg string, line uint32) []protocol.Diagnostic {
 	return d
 }
 
-func TestFormatPostWriteDiagnostics_OutOfRangeDowngraded(t *testing.T) {
-	// File now has 10 lines; a diagnostic at line 41 (0-based) points well past
-	// EOF — the classic stale-after-shrink case. It must be down-ranked to
+func TestFormatDifferentialDiagnostics_OutOfRangeDowngraded(t *testing.T) {
+	// File now has 10 lines; a NEW diagnostic at line 41 (0-based) points well
+	// past EOF — the classic stale-after-shrink case. It must be down-ranked to
 	// "stale?", never rendered as a hard "error".
-	out := formatPostWriteDiagnostics(diagAtLine("undefined: Gone", 41), true, 10)
+	out := formatDifferentialDiagnostics(diagAtLine("undefined: Gone", 41), nil, 10)
 	if !strings.Contains(out, "stale?") {
 		t.Fatalf("expected an out-of-range diagnostic to be grouped as stale?:\n%s", out)
 	}
 	if strings.Contains(out, "error L42") {
 		t.Fatalf("out-of-range diagnostic must not be rendered as a hard error:\n%s", out)
 	}
-	if !strings.Contains(out, "current end") {
+	if !strings.Contains(out, "re-index lag") {
 		t.Fatalf("expected the stale? explanation note:\n%s", out)
 	}
 }
 
-func TestFormatPostWriteDiagnostics_InRangeStaysError(t *testing.T) {
-	// A diagnostic at line 3 (0-based) in a 10-line file is in range — it must
+func TestFormatDifferentialDiagnostics_InRangeStaysError(t *testing.T) {
+	// A NEW diagnostic at line 3 (0-based) in a 10-line file is in range — it must
 	// still be a hard error, not downgraded.
-	out := formatPostWriteDiagnostics(diagAtLine("real error", 3), true, 10)
+	out := formatDifferentialDiagnostics(diagAtLine("real error", 3), nil, 10)
 	if !strings.Contains(out, "error L4: real error") {
 		t.Fatalf("in-range diagnostic must stay a hard error:\n%s", out)
 	}
 	if strings.Contains(out, "stale?") {
 		t.Fatalf("in-range diagnostic must not be marked stale:\n%s", out)
+	}
+}
+
+func TestFormatDifferentialDiagnostics_Empty(t *testing.T) {
+	if got := formatDifferentialDiagnostics(nil, nil, 0); got != "" {
+		t.Fatalf("no new diagnostics must render nothing, got:\n%s", got)
 	}
 }
 

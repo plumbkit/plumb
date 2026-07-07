@@ -76,7 +76,9 @@ func (t *GetDefinition) InputSchema() json.RawMessage { return getDefinitionSche
 func (t *GetDefinition) Description() string {
 	return "Returns the SOURCE LOCATION (file path + line number) of where a symbol is defined. " +
 		"No native Claude Code equivalent for LSP-backed semantic definition lookup. " +
-		"Accepts a file position (uri + line + character) or a name (uri + symbol_name). " +
+		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position " +
+		"for you, avoiding off-by-one errors; a raw file position (uri + line + character) " +
+		"is the fallback and, when it lands off an identifier, is snapped to the enclosing symbol. " +
 		"Use when you need to navigate to the implementation of a symbol. " +
 		"For documentation or type signatures at the same position, use explain_symbol instead."
 }
@@ -108,7 +110,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.Line == nil || a.Character == nil {
 		return "", fmt.Errorf("get_definition: either symbol_name or both line and character are required")
 	}
-	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character)
+	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character, true)
 }
 
 // executeByName resolves a definition through the language server, falling back
@@ -155,14 +157,14 @@ func (t *GetDefinition) lspDefinitionByName(ctx context.Context, uri, name strin
 
 	if len(matches) == 1 {
 		sym := matches[0]
-		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character)
+		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d matches for %q:\n", len(matches), name)
 	for _, sym := range matches {
 		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
-		result, err := t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character)
+		result, err := t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue
@@ -172,7 +174,24 @@ func (t *GetDefinition) lspDefinitionByName(ctx context.Context, uri, name strin
 	return sb.String(), nil
 }
 
-func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line, character uint32) (string, error) {
+// snapDefinition recovers from a raw position that missed an identifier by
+// resolving the enclosing document symbol and re-querying the definition once at
+// its SelectionRange.Start. When nothing encloses the line it returns an
+// actionable error naming nearby symbols. The retry passes allowSnap=false so a
+// snap can never recurse.
+func (t *GetDefinition) snapDefinition(ctx context.Context, uri string, line, character uint32) (string, error) {
+	snapped, syms, ok := snapPosition(ctx, t.client, uri, line)
+	if !ok {
+		return "", positionMissErr("get_definition", uri, line, syms)
+	}
+	out, err := t.executeByPosition(ctx, uri, snapped.Line, snapped.Character, false)
+	if err != nil {
+		return "", err
+	}
+	return snapNotice(uri, line, character, snapped.Line) + out, nil
+}
+
+func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line, character uint32, allowSnap bool) (string, error) {
 	key := fmt.Sprintf("%s:def:%d:%d", uri, line, character)
 	if t.cache != nil {
 		if v, ok := t.cache.Get(key); ok {
@@ -185,6 +204,9 @@ func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line,
 		Position:     protocol.Position{Line: line, Character: character},
 	})
 	if err != nil {
+		if allowSnap && isPositionMissErr(err) {
+			return t.snapDefinition(ctx, uri, line, character)
+		}
 		return "", positionErr("get_definition", err)
 	}
 

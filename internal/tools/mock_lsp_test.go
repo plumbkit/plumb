@@ -31,6 +31,10 @@ type mockLSP struct {
 	lastDefPos protocol.Position
 	lastRefPos protocol.Position
 	lastRefURI string // URI of the most recent References call (asserts path absolutisation)
+
+	// watchedEvents records every DidChangeWatchedFiles event the tool sent, so a
+	// test can assert a write path notified the language server (RC1 parity).
+	watchedEvents []protocol.FileEvent
 }
 
 func (m *mockLSP) Initialize(_ context.Context, _ protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -51,7 +55,8 @@ func (m *mockLSP) DidClose(_ context.Context, _ protocol.DidCloseTextDocumentPar
 	return m.err
 }
 
-func (m *mockLSP) DidChangeWatchedFiles(_ context.Context, _ protocol.DidChangeWatchedFilesParams) error {
+func (m *mockLSP) DidChangeWatchedFiles(_ context.Context, p protocol.DidChangeWatchedFilesParams) error {
+	m.watchedEvents = append(m.watchedEvents, p.Changes...)
 	return m.err
 }
 

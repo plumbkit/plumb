@@ -287,8 +287,15 @@ func (a *Adapter) PrepareRename(ctx context.Context, params protocol.PrepareRena
 	return &result, nil
 }
 
-// Rename performs a workspace-wide rename.
+// Rename performs a workspace-wide rename. It ensureOpens the document first,
+// like Definition/References/PrepareRename: sourcekit-lsp answers a rename only
+// for a document opened via didOpen, and a caller may invoke Rename without a
+// preceding PrepareRename, so without this the server would reply -32001 "No
+// language service found".
 func (a *Adapter) Rename(ctx context.Context, params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
+	if err := a.ensureOpen(ctx, params.TextDocument.URI); err != nil {
+		return nil, err
+	}
 	var result protocol.WorkspaceEdit
 	if err := a.conn.Call(ctx, protocol.MethodRename, params, &result); err != nil {
 		return nil, fmt.Errorf("sourcekit-lsp rename: %w", err)

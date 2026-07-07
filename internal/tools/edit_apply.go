@@ -91,7 +91,7 @@ func applyTextEdits(data []byte, edits []protocol.TextEdit) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("edit start position out of range: line %d char %d", e.Range.Start.Line, e.Range.Start.Character)
 		}
-		endOff, ok := offsetForPosition(data, e.Range.End)
+		endOff, ok := endOffsetForPosition(data, e.Range.End)
 		if !ok {
 			return nil, fmt.Errorf("edit end position out of range: line %d char %d", e.Range.End.Line, e.Range.End.Character)
 		}
@@ -105,6 +105,42 @@ func applyTextEdits(data []byte, edits []protocol.TextEdit) ([]byte, error) {
 		data = buf
 	}
 	return data, nil
+}
+
+// maxEndOvershootLines bounds how far past the last line of a file an edit's
+// END position may point before we treat the range as stale rather than clamp
+// it. An LSP symbol-range end legitimately addresses one line past the last
+// line (line == lineCount, character 0), or one character past a file with no
+// trailing newline — a small, expected overshoot that means "to end of file".
+// A larger overshoot means the range was computed against an older, longer
+// version of the file (RC2 staleness); clamping there would silently swallow
+// live content, so we refuse and let the caller surface the error / re-resolve.
+// Two lines is deliberately tight — enough to absorb the legitimate off-by-one,
+// nowhere near enough to eat a function body.
+const maxEndOvershootLines = 2
+
+// endOffsetForPosition resolves an edit's END position to a byte offset,
+// clamping a small overshoot past the end of the file to len(data). It exists
+// so a fresh symbol-range end that points one past true EOF applies cleanly
+// instead of detonating the whole edit; a wild overshoot (a stale range) still
+// returns false. START positions keep the stricter offsetForPosition — a start
+// past EOF is always an error.
+func endOffsetForPosition(data []byte, pos protocol.Position) (int, bool) {
+	if off, ok := offsetForPosition(data, pos); ok {
+		return off, true
+	}
+	var lineCount uint32
+	for _, b := range data {
+		if b == '\n' {
+			lineCount++
+		}
+	}
+	// Only clamp a position at or past the final line; an intra-line overrun on
+	// an earlier line is a broken range, not an end-of-file end, so it must fail.
+	if pos.Line < lineCount || pos.Line-lineCount > maxEndOvershootLines {
+		return 0, false
+	}
+	return len(data), true
 }
 
 // offsetForPosition returns the byte offset of pos in data, or false if pos is

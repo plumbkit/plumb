@@ -74,7 +74,9 @@ func (t *FindReferences) Description() string {
 	return "Find all references to a symbol across the entire workspace. " +
 		"No native Claude Code equivalent for workspace-wide semantic reference lookup. " +
 		"Returns file path, line number, and the source line at each reference site. " +
-		"Accepts a file position (uri + line + character) or a name (uri + symbol_name)."
+		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position " +
+		"for you, avoiding off-by-one errors; a raw file position (uri + line + character) " +
+		"is the fallback and, when it lands off an identifier, is snapped to the enclosing symbol."
 }
 
 type findReferencesArgs struct {
@@ -143,14 +145,14 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 	if len(matches) == 1 {
 		sym := matches[0]
-		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl)
+		return t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl, false)
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "References for %q (%d symbol matches):\n", name, len(matches))
 	for _, sym := range matches {
 		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
-		result, err := t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl)
+		result, err := t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl, false)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue
@@ -162,16 +164,19 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 func (t *FindReferences) executeByPosition(ctx context.Context, uri string, line, character uint32, includeDecl bool) (string, error) {
 	openFileForRefs(ctx, t.client, uri)
-	return t.queryReferences(ctx, uri, line, character, includeDecl)
+	return t.queryReferences(ctx, uri, line, character, includeDecl, true)
 }
 
-func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, character uint32, includeDecl bool) (string, error) {
+func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, character uint32, includeDecl, allowSnap bool) (string, error) {
 	locs, err := t.client.References(ctx, protocol.ReferenceParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: line, Character: character},
 		Context:      protocol.ReferenceContext{IncludeDeclaration: includeDecl},
 	})
 	if err != nil {
+		if allowSnap && isPositionMissErr(err) {
+			return t.snapReferences(ctx, uri, line, character, includeDecl)
+		}
 		return "", positionErr("find_references", err)
 	}
 	if len(locs) == 0 {
@@ -207,6 +212,23 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 		fmt.Fprintf(&sb, "%s:%d:%d%s\n", path, l+1, col+1, lineText)
 	}
 	return sb.String(), nil
+}
+
+// snapReferences recovers from a raw position that missed an identifier by
+// resolving the enclosing document symbol and re-querying references once at its
+// SelectionRange.Start. When nothing encloses the line it returns an actionable
+// error naming nearby symbols. The retry passes allowSnap=false so a snap can
+// never recurse.
+func (t *FindReferences) snapReferences(ctx context.Context, uri string, line, character uint32, includeDecl bool) (string, error) {
+	snapped, syms, ok := snapPosition(ctx, t.client, uri, line)
+	if !ok {
+		return "", positionMissErr("find_references", uri, line, syms)
+	}
+	out, err := t.queryReferences(ctx, uri, snapped.Line, snapped.Character, includeDecl, false)
+	if err != nil {
+		return "", err
+	}
+	return snapNotice(uri, line, character, snapped.Line) + out, nil
 }
 
 // openFileForRefs reads a file and sends textDocument/didOpen so the language

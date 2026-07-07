@@ -123,7 +123,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	oldContent, undoBefore, undoOK := t.writeFileCapture(path, isNew)
 	// Baseline must be captured before the bytes change so the cross-file sweep
 	// can tell errors this write introduced from ones already present.
-	baseline := t.deps.captureCrossFileBaseline()
+	baseline := t.deps.capturePreWriteBaseline(uri)
 
 	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
@@ -241,6 +241,6 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 			sb.WriteString(d)
 		}
 	}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, newContent, awaitFresh, baseline))
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, oldContent, newContent, awaitFresh, baseline))
 	return sb.String()
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -168,12 +169,20 @@ type InsertBeforeSymbol struct {
 	client   lsp.Client
 	timeout  time.Duration
 	topo     topologyStoreFn
-	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
-	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
+	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
 	return &InsertBeforeSymbol{client: client, timeout: timeout}
+}
+
+// WithCache wires the session symbol cache so a successful apply evicts uri's
+// entries (parity with edit_file/write_file). Nil-safe; returns the tool.
+func (t *InsertBeforeSymbol) WithCache(c *cache.Cache) *InsertBeforeSymbol {
+	t.cache = c
+	return t
 }
 
 // WithTopologyFallback wires the topology index so the tool can resolve the
@@ -244,7 +253,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 		Range:   protocol.Range{Start: start, End: start},
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert before", sym, viaFallback)
+	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert before", sym, viaFallback)
 }
 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
@@ -253,12 +262,20 @@ type InsertAfterSymbol struct {
 	client   lsp.Client
 	timeout  time.Duration
 	topo     topologyStoreFn
-	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
-	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
+	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
 	return &InsertAfterSymbol{client: client, timeout: timeout}
+}
+
+// WithCache wires the session symbol cache so a successful apply evicts uri's
+// entries (parity with edit_file/write_file). Nil-safe; returns the tool.
+func (t *InsertAfterSymbol) WithCache(c *cache.Cache) *InsertAfterSymbol {
+	t.cache = c
+	return t
 }
 
 // WithTopologyFallback wires the topology index for symbol resolution when the
@@ -321,7 +338,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 		Range:   protocol.Range{Start: sym.Range.End, End: sym.Range.End},
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert after", sym, viaFallback)
+	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert after", sym, viaFallback)
 }
 
 // ─── replace_symbol_body ───────────────────────────────────────────────────
@@ -330,12 +347,20 @@ type ReplaceSymbolBody struct {
 	client   lsp.Client
 	timeout  time.Duration
 	topo     topologyStoreFn
-	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
-	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
+	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
 	return &ReplaceSymbolBody{client: client, timeout: timeout}
+}
+
+// WithCache wires the session symbol cache so a successful apply evicts uri's
+// entries (parity with edit_file/write_file). Nil-safe; returns the tool.
+func (t *ReplaceSymbolBody) WithCache(c *cache.Cache) *ReplaceSymbolBody {
+	t.cache = c
+	return t
 }
 
 // WithTopologyFallback wires the topology index for symbol resolution when the
@@ -409,7 +434,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 		Range:   rng,
 		NewText: a.Content,
 	}
-	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "replace", sym, viaFallback)
+	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "replace", sym, viaFallback)
 }
 
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
@@ -417,12 +442,20 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 type SafeDeleteSymbol struct {
 	client   lsp.Client
 	timeout  time.Duration
-	ws       WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
-	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
+	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
+	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
+	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
 	return &SafeDeleteSymbol{client: client, timeout: timeout}
+}
+
+// WithCache wires the session symbol cache so a successful apply evicts uri's
+// entries (parity with edit_file/write_file). Nil-safe; returns the tool.
+func (t *SafeDeleteSymbol) WithCache(c *cache.Cache) *SafeDeleteSymbol {
+	t.cache = c
+	return t
 }
 
 // WithWorkspace anchors a relative input uri to the pinned workspace. Nil-safe.
@@ -511,7 +544,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		rng.Start = docCommentStart(paths.URIToPath(a.URI), sym.Range.Start)
 	}
 	edit := protocol.TextEdit{Range: rng, NewText: ""}
-	return applySingleEdit(a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "delete", sym, false)
+	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "delete", sym, false)
 }
 
 // rangeContains returns true if outer fully contains inner.

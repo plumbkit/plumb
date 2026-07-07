@@ -8,6 +8,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -156,7 +157,7 @@ const longPostWriteDiagWindow = 5 * time.Second
 // implied by silence — closing the "I had to shell out to go build to be sure"
 // gap reported in dogfooding. A globally-disabled post-write window
 // (negative) is still honoured (await is a no-op).
-func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool, baseline *diagBaseline) string {
+func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh bool, baseline *diagBaseline) string {
 	if d.Diag == nil {
 		return ""
 	}
@@ -165,11 +166,32 @@ func (d WriteDeps) postWriteDiagnostics(uri, content string, awaitFresh bool, ba
 		ceiling = longPostWriteDiagWindow
 	}
 	diags, fresh := awaitDiagnosticsRefresh(d.Diag, uri, ceiling, d.DiagWait)
-	out := formatPostWriteDiagnostics(diags, fresh, lineCount(content))
-	out += d.crossFileDiagnostics(uri, fresh, baseline)
-	if awaitFresh && fresh && out == "" {
-		return "\n✓ fresh diagnostics pass — no errors or warnings"
+	if !fresh {
+		// The server has not re-published since the write, so the snapshot
+		// predates it and a differential would be empty and misleading. Surface a
+		// single honest pending line rather than the pre-edit findings, which read
+		// as fresh breakage (the recurring dogfooding friction).
+		if len(diags) == 0 {
+			return ""
+		}
+		return "\ndiagnostics: pending — LSP not yet re-analysed; call diagnostics() to confirm"
 	}
+	var pre []protocol.Diagnostic
+	if baseline != nil {
+		pre = baseline.editedPre
+	}
+	lo, hi, touched := changedLineRange(before, content)
+	freshNew, likelyStale := diffFileDiagnostics(pre, diags, lo, hi, touched)
+	out := formatDifferentialDiagnostics(freshNew, likelyStale, lineCount(content))
+	out += d.crossFileDiagnostics(uri, fresh, baseline)
+	if awaitFresh && out == "" {
+		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
+	}
+	// Standing pre-existing errors are correctly dropped from the delta, but a
+	// clean "no new errors" result would otherwise hide them — an agent could
+	// commit over them. Append a count so the file's full state is not implied
+	// clean by silence.
+	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, diags, lo, hi, touched))
 	return out
 }
 
@@ -187,16 +209,27 @@ func (d WriteDeps) crossFileSettleWindow() time.Duration {
 	return d.CrossFileSettle
 }
 
-// captureCrossFileBaseline snapshots pre-write workspace error state when the
-// cross-file sweep is enabled and the Diag source can serve a whole-workspace
-// snapshot. Returns nil (skipping the sweep) otherwise — near-zero cost when off.
-// Callers MUST invoke this BEFORE the write mutates the file, so the baseline
-// reflects the pre-edit language-server state.
-func (d WriteDeps) captureCrossFileBaseline() *diagBaseline {
-	if d.Diag == nil || !d.crossFileEnabled() {
+// capturePreWriteBaseline snapshots the language server's pre-write state for a
+// write to uri. It ALWAYS records the edited file's own diagnostics (used by the
+// single-file differential block) when a Diag source is wired, and ADDITIONALLY
+// records a whole-workspace error baseline (for the cross-file sweep) when that
+// sweep is enabled and the source can serve one. Returns nil only when no Diag
+// source is wired. Callers MUST invoke this BEFORE the write mutates the file, so
+// the baseline reflects the pre-edit language-server state.
+func (d WriteDeps) capturePreWriteBaseline(uri string) *diagBaseline {
+	if d.Diag == nil {
 		return nil
 	}
-	return newDiagBaseline(d.Diag)
+	var b *diagBaseline
+	if d.crossFileEnabled() {
+		b = newDiagBaseline(d.Diag) // nil when the source cannot serve a whole-workspace snapshot
+	}
+	if b == nil {
+		b = &diagBaseline{at: time.Now()}
+	}
+	b.editedURI = uri
+	b.editedPre = d.Diag.Diagnostics(uri)
+	return b
 }
 
 // crossFileDiagnostics runs the bounded cross-file sweep and renders any NEW
