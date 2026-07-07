@@ -16,7 +16,7 @@ import (
 func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArgs, uri string) (string, error) {
 	// Captured before any write attempt so the cross-file sweep compares against
 	// the pre-edit language-server state.
-	baseline := t.deps.captureCrossFileBaseline()
+	baseline := t.deps.capturePreWriteBaseline(uri)
 	var lastErr error
 	for attempt := 1; attempt <= maxEditRetries; attempt++ {
 		result, before, content, notes, err := t.tryEdit(ctx, path, a.Edits)
@@ -83,7 +83,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 			sb.WriteString(d)
 		}
 	}
-	sb.WriteString(t.deps.postWriteDiagnostics(uri, content, awaitFresh, baseline))
+	sb.WriteString(t.deps.postWriteDiagnostics(uri, before, content, awaitFresh, baseline))
 	return sb.String()
 }
 

@@ -21,10 +21,10 @@ var findSymbolSchema = json.RawMessage(`{
     },
     "uri": {
       "type": "string",
-      "description": "Document to search within (absolute path, file:// URI, or workspace-relative path). Required."
+      "description": "Document to search within (absolute path, file:// URI, or workspace-relative path). find_symbol is single-file, so this is required; for a workspace-wide search use workspace_symbols instead."
     }
   },
-  "required": ["query", "uri"],
+  "required": ["query"],
   "additionalProperties": false
 }`)
 
@@ -77,7 +77,12 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 		return "", fmt.Errorf("find_symbol: query must not be empty")
 	}
 	if a.URI == "" {
-		return "", fmt.Errorf("find_symbol: uri is required (use workspace_symbols for workspace-wide search)")
+		// uri is intentionally NOT a schema-required parameter so this friendly
+		// redirect fires instead of a bare "missing required parameter" — agents
+		// wanting a workspace-wide search reach here having omitted uri.
+		return "", fmt.Errorf("find_symbol searches a single file and needs a uri. " +
+			"For a workspace-wide search by name, use workspace_symbols (no uri); " +
+			"to search one file, pass uri (absolute, file:// URI, or workspace-relative path)")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)

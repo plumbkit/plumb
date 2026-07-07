@@ -123,7 +123,7 @@ func TestWriteDeps_crossFileDiagnostics(t *testing.T) {
 	f := &fakeCrossDiag{all: map[string][]protocol.Diagnostic{}, times: map[string]time.Time{}}
 	d := WriteDeps{Diag: f, CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" }}
 
-	baseline := d.captureCrossFileBaseline()
+	baseline := d.capturePreWriteBaseline("file:///ws/edited.go")
 	if baseline == nil {
 		t.Fatal("expected a baseline from a cross-file-capable source")
 	}
@@ -150,9 +150,25 @@ func TestWriteDeps_crossFileDiagnostics(t *testing.T) {
 	}
 }
 
-func TestWriteDeps_captureCrossFileBaseline_NarrowSource(t *testing.T) {
-	d := WriteDeps{Diag: newStubDiag(), CrossFileDiag: true}
-	if got := d.captureCrossFileBaseline(); got != nil {
-		t.Errorf("a narrow (non-cross-file) source must yield a nil baseline, got %+v", got)
+func TestWriteDeps_capturePreWriteBaseline_NarrowSource(t *testing.T) {
+	stub := newStubDiag()
+	stub.set(errDiag("pre-existing"))
+	d := WriteDeps{Diag: stub, CrossFileDiag: true}
+
+	// A narrow (non-cross-file) source still yields a single-file baseline (the
+	// edited file's own pre-write diagnostics), so the differential block works;
+	// it carries no whole-workspace error maps, so the cross-file sweep is a no-op.
+	b := d.capturePreWriteBaseline("file:///ws/edited.go")
+	if b == nil {
+		t.Fatal("expected a single-file baseline from a narrow source")
+	}
+	if len(b.editedPre) != 1 || b.editedPre[0].Message != "pre-existing" {
+		t.Errorf("expected the edited file's pre-write diagnostics, got %+v", b.editedPre)
+	}
+	if b.errCount != nil || b.messages != nil {
+		t.Errorf("a narrow source must not populate the cross-file maps, got errCount=%v messages=%v", b.errCount, b.messages)
+	}
+	if got := d.crossFileDiagnostics("file:///ws/edited.go", true, b); got != "" {
+		t.Errorf("a narrow source must make the cross-file sweep a no-op, got %q", got)
 	}
 }

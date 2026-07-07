@@ -88,8 +88,35 @@ func TestFindSymbol_MissingURI(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when uri is missing")
 	}
-	if !strings.Contains(err.Error(), "uri is required") {
-		t.Errorf("expected uri-required error, got: %v", err)
+	// A missing uri must point the agent at workspace_symbols for a
+	// workspace-wide search, not fail with a bare "missing required parameter".
+	if !strings.Contains(err.Error(), "workspace_symbols") {
+		t.Errorf("expected the redirect to workspace_symbols, got: %v", err)
+	}
+}
+
+// TestFindSymbol_URINotSchemaRequired guards Fix 4b: uri must NOT be a
+// schema-required parameter, so a call omitting it reaches Execute's friendly
+// redirect rather than being rejected server-side with "missing required
+// parameter \"uri\"". query stays required.
+func TestFindSymbol_URINotSchemaRequired(t *testing.T) {
+	tool := tools.NewFindSymbol(&mockLSP{}, nil, time.Minute, 0)
+	var schema map[string]any
+	if err := json.Unmarshal(tool.InputSchema(), &schema); err != nil {
+		t.Fatalf("inputSchema is not valid JSON: %v", err)
+	}
+	required, _ := schema["required"].([]any)
+	hasQuery := false
+	for _, r := range required {
+		if r == "uri" {
+			t.Errorf("uri must not be schema-required (blocks the workspace_symbols redirect), got: %v", required)
+		}
+		if r == "query" {
+			hasQuery = true
+		}
+	}
+	if !hasQuery {
+		t.Errorf("query must stay schema-required, got: %v", required)
 	}
 }
 
@@ -104,16 +131,5 @@ func TestFindSymbol_Interface(t *testing.T) {
 	var schema map[string]any
 	if err := json.Unmarshal(tool.InputSchema(), &schema); err != nil {
 		t.Errorf("inputSchema is not valid JSON: %v", err)
-	}
-	// uri must now be in the required list.
-	required, _ := schema["required"].([]any)
-	hasURI := false
-	for _, r := range required {
-		if r == "uri" {
-			hasURI = true
-		}
-	}
-	if !hasURI {
-		t.Errorf("schema must mark uri as required, got: %v", required)
 	}
 }
