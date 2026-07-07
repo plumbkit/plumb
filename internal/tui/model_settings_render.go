@@ -203,8 +203,9 @@ func (m Model) renderSettingsBody(innerW, bodyHeight int, isOverlay bool) string
 	rowsW := max(innerW-1-scopeW, 10)
 
 	// Rows pane: a pinned 2-line header (tab bar + blank) above the scrollable
-	// settings rows, so the [General] [LSP] tabs stay visible while scrolling.
-	contentLines := m.settingsDisplayLines(rowsW)
+	// settings rows, so the tabs stay visible while scrolling. The Commands tab
+	// renders its own two-pane view instead of the flat settingItem rows.
+	contentLines := m.settingsRowsLines(rowsW)
 	contentVisH := max(scrollH-settingsTabHeaderRows, 1)
 	rowOff := clampOffset(m.settingsScroll, len(contentLines), contentVisH)
 	contentBar := scrollbarCol(len(contentLines), contentVisH, rowOff, isOverlay)

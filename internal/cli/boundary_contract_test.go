@@ -64,21 +64,23 @@ var knownToolGuarding = map[string]string{
 	"NewReplaceSymbolBody":  "proxy",
 	"NewSafeDeleteSymbol":   "proxy",
 	// No path input — guard not applicable
-	"NewVersion":          "none",
-	"NewDaemonInfoFunc":   "none",
-	"NewRenameSession":    "none",
-	"NewSessionStart":     "none", // workspace arg is for deliberate re-pinning, not file access
-	"NewTopologySearch":   "none",
-	"NewWorkspaceSearch":  "none", // queries the pinned connection's indexes; no user path input
-	"NewTopologyExplore":  "none",
-	"NewTopologyImpact":   "none", // topology DB by name; the LSP cross-file caller enrichment routes through the proxy-guarded sessionProxy, no direct user path input
-	"NewTopologyAffected": "none", // queries the topology DB by symbol/file name; no direct FS access
-	"NewTopologyRoutes":   "none",
-	"NewStructuralQuery":  "none", // queries the topology DB; reads bodies only under the pinned workspace root, no user path input
-	"NewAgentConfig":      "none", // writes structured config via the allowlist; no filesystem path input
-	"NewShareIntent":      "none", // writes an advisory intent to the per-workspace collab.db; no filesystem path input
-	"NewLeaveNote":        "none", // writes an advisory note to the per-workspace collab.db; no filesystem path input
-	"NewShareFindings":    "none", // writes a generated memory under the workspace's own .plumb/memories/ with a server-generated name; no user-supplied filesystem path
+	"NewVersion":             "none",
+	"NewDaemonInfoFunc":      "none",
+	"NewRenameSession":       "none",
+	"NewSessionStart":        "none", // workspace arg is for deliberate re-pinning, not file access
+	"NewTopologySearch":      "none",
+	"NewWorkspaceSearch":     "none", // queries the pinned connection's indexes; no user path input
+	"NewTopologyExplore":     "none",
+	"NewTopologyImpact":      "none", // topology DB by name; the LSP cross-file caller enrichment routes through the proxy-guarded sessionProxy, no direct user path input
+	"NewTopologyAffected":    "none", // queries the topology DB by symbol/file name; no direct FS access
+	"NewTopologyRoutes":      "none",
+	"NewStructuralQuery":     "none", // queries the topology DB; reads bodies only under the pinned workspace root, no user path input
+	"NewAgentConfig":         "none", // writes structured config via the allowlist; no filesystem path input
+	"NewShareIntent":         "none", // writes an advisory intent to the per-workspace collab.db; no filesystem path input
+	"NewLeaveNote":           "none", // writes an advisory note to the per-workspace collab.db; no filesystem path input
+	"NewShareFindings":       "none", // writes a generated memory under the workspace's own .plumb/memories/ with a server-generated name; no user-supplied filesystem path
+	"NewRunCommand":          "none", // runs a fixed-argv allow-list entry; workdir comes from the resolver, confinement is the OS sandbox, no user path arg
+	"NewExecuteShellCommand": "none", // runs sh -c; workdir comes from the resolver, confinement is the OS sandbox, no user path arg
 }
 
 // TestBoundaryGuardWiringComplete is the D10 registration-time contract test

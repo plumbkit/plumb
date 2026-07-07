@@ -87,6 +87,12 @@ type sessionView struct {
 	// swapped per project on every attach / re-pin / reload, like the blocks above.
 	tasks             map[string]config.TasksConfig
 	agentConfigWrites bool
+	// commands is the resolved [[command]] allow-list; commandPolicy is the
+	// resolved [commands] table (allow_shell / require_sandbox). Both are swapped
+	// per project on every attach / re-pin / reload, like the blocks above; the
+	// trust gate is applied at the resolver seam (conn_commands.go).
+	commands      []config.CommandConfig
+	commandPolicy config.CommandsConfig
 
 	// Live subsystem handles are pointers — cheap to copy into the snapshot and
 	// swapped (never mutated) on attach / re-pin / reconcile.

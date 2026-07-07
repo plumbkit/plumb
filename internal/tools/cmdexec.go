@@ -57,6 +57,13 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 	cmd.Dir = workdir
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Run in its own process group and, on timeout/cancel, SIGKILL the whole group
+	// so a build/test that forked children (or a shell that backgrounded one) does
+	// not leave orphans. WaitDelay bounds the wait if a descendant keeps the output
+	// pipes open after the group is signalled.
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = 5 * time.Second
 
 	runErr := cmd.Run()
 	res := ExecResult{
@@ -78,6 +85,14 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 		return res, fmt.Errorf("run %q: %w", argv[0], runErr)
 	}
 	return res, nil
+}
+
+// networkLabel renders the sandbox network state for a tool reply header.
+func networkLabel(denied bool) string {
+	if denied {
+		return "off"
+	}
+	return "on"
 }
 
 // capTaskOutput bounds output to maxTaskLines lines then maxTaskBytes bytes.

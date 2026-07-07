@@ -379,6 +379,73 @@ not run until the workspace is trusted with `plumb trust` (recorded per workspac
 root in `DataDir/trust.json`, never in the project — a cloned repo cannot
 self-trust). Default- and global-config commands always run.
 
+## `[[command]]` / `[commands]` — safe command execution
+
+Run workspace commands (build/test/lint/scripts) from within plumb, two ways.
+
+**`run_command` — the safe default.** A named allow-list of **fixed-argv**
+commands. The argv is never built from agent free-text, so it is injection-proof
+by construction; the one exception is a single `{target}` token, bounded to one
+shell-safe argument (`[A-Za-z0-9._/:@-]`).
+
+```toml
+[[command]]
+name         = "test-one"
+exec         = ["go", "test", "-run", "{target}", "./..."]  # fixed argv; optional {target}
+working_dir  = "."          # relative to the workspace root; must not escape it
+timeout      = "60s"        # default 60s
+allow_writes = true         # sandbox: may write inside the workspace (default: only $TMPDIR/caches)
+deny_network = false        # sandbox: cut network for this command (default: allowed)
+```
+
+**`execute_shell_command` — the opt-in escape hatch.** Runs an arbitrary command
+through `sh -c` (pipes/redirects/globs work). It is the one place agent free-text
+reaches a command line, so it is **disabled by default**.
+
+```toml
+[commands]
+allow_shell     = false     # gate for execute_shell_command
+require_sandbox = false     # if true, refuse to run (either tool) when no OS sandbox is active
+deny_network    = true      # execute_shell_command network egress; default ON — false to allow (a [[command]] sets its own, default false)
+```
+
+**Trust gate.** A `[[command]]` entry — and a project raising `[commands]`
+`allow_shell` — supplied by a *project* `.plumb/config.toml` is honoured only
+after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
+the project — a cloned repo cannot self-enable execution). Commands and policy in
+your *global* config are user-authored and always honoured. Editing a command in
+the TUI Settings **Commands** tab auto-trusts that workspace. A project that
+declares its own `[[command]]` block **replaces** the global allow-list entirely
+(global entries are shadowed while the project defines any) — to keep a global
+command in a project, redefine it there.
+
+**OS sandbox.** Both tools run under a best-effort write jail: reads and process
+execution stay permissive (toolchains need them), writes are confined to a
+temp/cache set plus the workspace (when `allow_writes`), and the network is cut
+only when `deny_network`. macOS uses `sandbox-exec`, Linux uses `bwrap`; when the
+sandbox binary is absent the command runs unsandboxed with a clear status note
+(set `require_sandbox = true` to refuse instead). plumb's own runtime dir
+(`<cache>/plumb`) is excluded from the writable set so a command cannot clobber
+the daemon's socket/locks. Output and runtime are bounded (100 KiB/200 lines,
+timeout).
+
+**Two limits to understand.** (1) The sandbox is **integrity-only, not
+confidentiality**: reads stay permissive and a command inherits the daemon's
+environment, so an enabled+trusted `execute_shell_command` can *read* any file or
+secret your user can (`~/.ssh`, API keys in the daemon env). To bound the damage,
+the shell tier **denies the network by default** (`[commands] deny_network =
+true`) so a read secret cannot be exfiltrated over the wire; set `deny_network =
+false` (in global config, or a trusted project) only when a command genuinely
+needs the network. When a command runs with the network off, the tool's reply
+says `network=off` with a note, so the agent can tell you to flip it. Still: only
+enable the shell tier for repositories you trust. (A `[[command]]` entry sets its
+own per-command `deny_network`, default false, since those are deliberate.) (2) The writable set is tuned for **Go** (build
+cache, module cache, `$TMPDIR`, the workspace). Other toolchains that write
+outside those (e.g. `cargo`'s `~/.cargo/registry`, `npm`'s cache) may need
+`allow_writes` and may fail under `require_sandbox = true`; only Go is validated.
+Commands inherit the daemon's environment so `go`/`npm`/linters find their
+toolchain.
+
 ## `agent_config_writes` — agent-writable config (top level)
 
 ```toml

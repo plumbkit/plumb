@@ -51,7 +51,7 @@ var (
 
 	selftestCollab = []string{"share_intent", "leave_note", "share_findings"}
 
-	selftestTasksConfig = []string{"run_task", "agent_config"}
+	selftestTasksConfig = []string{"run_task", "run_command", "execute_shell_command", "agent_config"}
 
 	selftestSymbolEdit = []string{
 		"rename_symbol", "replace_symbol_body", "insert_before_symbol",
@@ -211,10 +211,12 @@ func selftestTierA() []string {
 		"- **Topology:** " + toolList(selftestTopology) + ". If topology is disabled, SKIP all",
 		"  with reason \"topology disabled\".",
 		"- **Memory (read):** " + toolList(selftestMemoryRead) + ".",
-		"- **Tasks & config (read-only):** " + toolList(selftestTasksConfig) + ". Call",
+		"- **Tasks, commands & config:** " + toolList(selftestTasksConfig) + ". Call",
 		"  `agent_config` with `describe` to read the resolved config (never `set` here), then",
 		"  `run_task` a non-mutating slot such as `lint` or `build`. If no task is configured for",
-		"  the workspace language, note that and SKIP `run_task` with that reason.",
+		"  the workspace language, note that and SKIP `run_task` with that reason. SKIP `run_command`",
+		"  unless a [[command]] allow-list entry exists, and SKIP `execute_shell_command` unless",
+		"  [commands] allow_shell is enabled — note the reason for each.",
 	}
 }
 

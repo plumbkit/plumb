@@ -473,4 +473,10 @@ type Config struct {
 	// AgentConfigWrites gates whether the agent-writable-config tool may write
 	// project config on the user's behalf. Off by default; user-settable only.
 	AgentConfigWrites bool `toml:"agent_config_writes"`
+	// Commands is the [[command]] allow-list of fixed-argv named commands the
+	// run_command tool may run. User-authored; a project entry needs `plumb trust`.
+	Commands []CommandConfig `toml:"command"`
+	// CommandPolicy is the [commands] table: the execute_shell_command gate
+	// (allow_shell) and the sandbox-enforcement knob (require_sandbox).
+	CommandPolicy CommandsConfig `toml:"commands"`
 }
