@@ -317,3 +317,70 @@ func TestRenameSymbol_StructuralFallback_OnEmptyEditSet(t *testing.T) {
 		t.Errorf("expected fallback on empty edit set: %s", out)
 	}
 }
+
+func TestRenameSymbol_ByNameUsesSelectionRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: 2, Character: 0}, End: protocol.Position{Line: 2, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+		}},
+		renameResult: renameEditFor(path, "Bar"),
+	}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "symbol_name": "Foo", "new_name": "Bar", "dry_run": false,
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := (protocol.Position{Line: 2, Character: 5})
+	if mock.lastRenamePos != want {
+		t.Fatalf("Rename position = %+v, want SelectionRange.Start %+v", mock.lastRenamePos, want)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "func Bar() {}") {
+		t.Fatalf("rename did not apply: %s", got)
+	}
+}
+
+func TestRenameSymbol_RawPositionMissSnapsAndRetries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: 2, Character: 0}, End: protocol.Position{Line: 2, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+		}},
+		renameResult: renameEditFor(path, "Bar"),
+		renameErrs:   []error{errors.New("no identifier found")},
+	}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 0, "new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := (protocol.Position{Line: 2, Character: 5})
+	if mock.lastRenamePos != want {
+		t.Fatalf("retry Rename position = %+v, want snapped SelectionRange.Start %+v", mock.lastRenamePos, want)
+	}
+	if !strings.Contains(out, "answered for the enclosing symbol") {
+		t.Fatalf("expected snap notice in output, got: %s", out)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "func Bar() {}") {
+		t.Fatalf("rename did not apply: %s", got)
+	}
+}

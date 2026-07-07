@@ -92,6 +92,34 @@ func TestApplyWorkspaceEdit_MultipleFiles(t *testing.T) {
 	}
 }
 
+func TestApplyWorkspaceEdit_ValidatesAllFilesBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(a, []byte("aaa\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("bbb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	we := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			"file://" + a: {{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}, NewText: "AAA"}},
+			"file://" + b: {{Range: protocol.Range{Start: protocol.Position{Line: 99, Character: 0}, End: protocol.Position{Line: 99, Character: 3}}, NewText: "BBB"}},
+		},
+	}
+	if _, err := applyWorkspaceEdit(we); err == nil {
+		t.Fatal("expected invalid second-file edit to fail")
+	}
+	if got, _ := os.ReadFile(a); string(got) != "aaa\n" {
+		t.Fatalf("a.txt was written before all files validated: %q", got)
+	}
+	if got, _ := os.ReadFile(b); string(got) != "bbb\n" {
+		t.Fatalf("b.txt changed unexpectedly: %q", got)
+	}
+}
+
 func TestFindSymbolByPath(t *testing.T) {
 	syms := []protocol.DocumentSymbol{
 		{Name: "Foo", Children: []protocol.DocumentSymbol{

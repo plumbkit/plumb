@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -14,6 +15,12 @@ import (
 // `changes` (map[uri][]TextEdit) and `documentChanges` (TextDocumentEdit[])
 // forms. Returns the list of files modified.
 //
+// All target files are locked in stable order, read, and validated in memory
+// before any bytes are written. If a write fails after earlier files were
+// updated, those files are restored to their pre-edit content before returning.
+// That keeps semantic renames all-or-nothing at the filesystem level instead of
+// leaving a partially-applied WorkspaceEdit behind.
+//
 // Edits within each file are applied in reverse-order so earlier edits do not
 // shift the positions of later ones. Each file write is atomic (tmp + rename).
 //
@@ -22,10 +29,65 @@ import (
 // off-by-some for files containing wide characters in code positions. Most
 // refactoring happens on ASCII identifiers, so this is acceptable for now.
 func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
+	modified, _, err := applyWorkspaceEditDetailed(we)
+	return modified, err
+}
+
+func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit) ([]string, []workspaceEditPlan, error) {
 	if we == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
+	editsByURI := workspaceEditGroups(we)
+	pathsByURI := make(map[string]string, len(editsByURI))
+	var targetPaths []string
+	for uri := range editsByURI {
+		path := paths.URIToPath(uri)
+		pathsByURI[uri] = path
+		targetPaths = append(targetPaths, path)
+	}
+	sort.Strings(targetPaths)
+
+	unlocks := lockPaths(targetPaths)
+	defer unlockAll(unlocks)
+
+	plans := make([]workspaceEditPlan, 0, len(editsByURI))
+	for uri, edits := range editsByURI {
+		path := pathsByURI[uri]
+		before, after, mode, err := prepareTextEditsLocked(path, edits)
+		if err != nil {
+			return nil, nil, fmt.Errorf("applying edits to %s: %w", path, err)
+		}
+		plans = append(plans, workspaceEditPlan{
+			path:   path,
+			before: before,
+			after:  after,
+			mode:   mode,
+		})
+	}
+	sort.Slice(plans, func(i, j int) bool { return plans[i].path < plans[j].path })
+
+	var modified []string
+	for _, p := range plans {
+		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
+			if rbErr := rollbackWorkspaceEdit(plans, modified); rbErr != nil {
+				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %v", p.path, err, rbErr)
+			}
+			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
+		}
+		modified = append(modified, p.path)
+	}
+	return modified, plans, nil
+}
+
+type workspaceEditPlan struct {
+	path   string
+	before []byte
+	after  []byte
+	mode   os.FileMode
+}
+
+func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
 	editsByURI := make(map[string][]protocol.TextEdit)
 	for uri, edits := range we.Changes {
 		editsByURI[uri] = append(editsByURI[uri], edits...)
@@ -33,17 +95,50 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 	for _, dce := range we.DocumentChanges {
 		editsByURI[dce.TextDocument.URI] = append(editsByURI[dce.TextDocument.URI], dce.Edits...)
 	}
+	return editsByURI
+}
 
-	var modified []string
-	for uri, edits := range editsByURI {
-		path := paths.URIToPath(uri)
-		if err := applyTextEditsToFile(path, edits); err != nil {
-			return modified, fmt.Errorf("applying edits to %s: %w", path, err)
-		}
-		modified = append(modified, path)
+func lockPaths(paths []string) []func() {
+	if len(paths) == 0 {
+		return nil
 	}
-	sort.Strings(modified)
-	return modified, nil
+	uniq := paths[:0]
+	var last string
+	for i, p := range paths {
+		if i == 0 || p != last {
+			uniq = append(uniq, p)
+			last = p
+		}
+	}
+	unlocks := make([]func(), 0, len(uniq))
+	for _, p := range uniq {
+		unlocks = append(unlocks, lockPath(p))
+	}
+	return unlocks
+}
+
+func unlockAll(unlocks []func()) {
+	for i := len(unlocks) - 1; i >= 0; i-- {
+		unlocks[i]()
+	}
+}
+
+func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string) error {
+	byPath := make(map[string]workspaceEditPlan, len(plans))
+	for _, p := range plans {
+		byPath[p.path] = p
+	}
+	var errs []string
+	for i := len(modified) - 1; i >= 0; i-- {
+		p := byPath[modified[i]]
+		if _, err := safeWrite(p.path, p.before, p.mode); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // applyTextEditsToFile applies a list of TextEdits to a single file atomically,
@@ -59,18 +154,34 @@ func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	unlock := lockPath(path)
 	defer unlock()
 
-	data, err := os.ReadFile(path)
+	_, out, mode, err := prepareTextEditsLocked(path, edits)
 	if err != nil {
 		return err
 	}
-	out, err := applyTextEdits(data, edits)
-	if err != nil {
-		return err
-	}
-	if _, err := safeWrite(path, out, 0o644); err != nil {
+	if _, err := safeWrite(path, out, mode); err != nil {
 		return err
 	}
 	return nil
+}
+
+func prepareTextEditsLocked(path string, edits []protocol.TextEdit) (before, after []byte, mode os.FileMode, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	mode = info.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	before, err = os.ReadFile(path)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	after, err = applyTextEdits(before, edits)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return before, after, mode, nil
 }
 
 // applyTextEdits applies edits to data and returns the resulting content. Pure;

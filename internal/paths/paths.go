@@ -200,6 +200,9 @@ func recoveredBase(envVar string) (value string, isHijacked bool) {
 
 // underTempDir reports whether p resolves inside a system temp root.
 func underTempDir(p string) bool {
+	if p == "" {
+		return false
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		abs = filepath.Clean(p)

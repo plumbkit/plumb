@@ -3,6 +3,8 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -133,5 +135,55 @@ func TestRenameSymbol_NotifiesEachModifiedFile(t *testing.T) {
 	}
 	if _, ok := c.Get(bURI + ":documentSymbol"); ok {
 		t.Errorf("b.go cache entry survived the rename")
+	}
+}
+
+func TestReplaceSymbolBody_WithWriteDepsRecordsFullWriteBookkeeping(t *testing.T) {
+	path, uri := writeFixture(t, "main.go", "package main\n\nfunc Foo() {}\n")
+	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 13)}}
+	writes := tools.NewWriteTracker()
+	undo := tools.NewUndoStore()
+	var topologyNotified []string
+	var postWriteNotified []string
+	deps := tools.WriteDeps{
+		Client: mock,
+		Writes: writes,
+		Undo:   undo,
+		PostWriteNotifyFn: func(_ context.Context, p string) error {
+			postWriteNotified = append(postWriteNotified, p)
+			return nil
+		},
+		TopologyNotify: func(p string) { topologyNotified = append(topologyNotified, p) },
+		ShowWriteDiff:  true,
+	}
+
+	dry := false
+	args, _ := json.Marshal(map[string]any{
+		"uri": uri, "name_path": "Foo", "content": "func Foo() { return }", "dry_run": &dry,
+	})
+	tool := tools.NewReplaceSymbolBody(mock, 0).WithWriteDeps(deps)
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !writes.Wrote(path) {
+		t.Fatalf("semantic edit did not record the path in WriteTracker")
+	}
+	if len(postWriteNotified) != 1 || postWriteNotified[0] != path {
+		t.Fatalf("PostWriteNotifyFn calls = %v, want [%s]", postWriteNotified, path)
+	}
+	if len(topologyNotified) != 1 || topologyNotified[0] != path {
+		t.Fatalf("TopologyNotify calls = %v, want [%s]", topologyNotified, path)
+	}
+	if _, ok := undo.Peek(path); !ok {
+		t.Fatal("semantic edit did not record an undo snapshot")
+	}
+
+	undoArgs, _ := json.Marshal(map[string]any{"file_path": path})
+	if _, err := tools.NewUndoEdit(deps).Execute(context.Background(), undoArgs); err != nil {
+		t.Fatalf("undo_edit after semantic edit: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "func Foo() {}") || strings.Contains(string(got), "return") {
+		t.Fatalf("undo did not restore the pre-edit body: %s", got)
 	}
 }

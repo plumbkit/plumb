@@ -25,7 +25,8 @@ import (
 const symbolEditCommonSchema = `
 "uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
 "name_path":{"type":"string","description":"Slash-separated symbol path within the file (e.g. \"ClassName/methodName\", or just \"funcName\" for top-level)."},
-"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write."}
+"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write."},
+"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing a file with uncommitted changes. Default false — review/commit first, or pass true to proceed."}
 `
 
 type symbolEditArgs struct {
@@ -33,6 +34,7 @@ type symbolEditArgs struct {
 	NamePath          string `json:"name_path"`
 	Content           string `json:"content"`
 	DryRun            *bool  `json:"dry_run,omitempty"`
+	DirtyOK           bool   `json:"dirty_ok,omitempty"`
 	IncludeDocComment bool   `json:"include_doc_comment,omitempty"`
 }
 
@@ -172,6 +174,8 @@ type InsertBeforeSymbol struct {
 	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
 	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
 	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps     WriteDeps
+	hasDeps  bool
 }
 
 func NewInsertBeforeSymbol(client lsp.Client, timeout time.Duration) *InsertBeforeSymbol {
@@ -241,19 +245,20 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
-	if err != nil {
-		return "", err
-	}
-	start := sym.Range.Start
-	if a.IncludeDocComment {
-		start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
-	}
-	edit := protocol.TextEdit{
-		Range:   protocol.Range{Start: start, End: start},
-		NewText: a.Content,
-	}
-	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert before", sym, viaFallback)
+	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "insert before", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, bool, error) {
+		sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
+		if err != nil {
+			return protocol.TextEdit{}, nil, false, err
+		}
+		start := sym.Range.Start
+		if a.IncludeDocComment {
+			start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
+		}
+		return protocol.TextEdit{
+			Range:   protocol.Range{Start: start, End: start},
+			NewText: a.Content,
+		}, sym, viaFallback, nil
+	})
 }
 
 // ─── insert_after_symbol ───────────────────────────────────────────────────
@@ -265,6 +270,8 @@ type InsertAfterSymbol struct {
 	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
 	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
 	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps     WriteDeps
+	hasDeps  bool
 }
 
 func NewInsertAfterSymbol(client lsp.Client, timeout time.Duration) *InsertAfterSymbol {
@@ -330,15 +337,16 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
-	if err != nil {
-		return "", err
-	}
-	edit := protocol.TextEdit{
-		Range:   protocol.Range{Start: sym.Range.End, End: sym.Range.End},
-		NewText: a.Content,
-	}
-	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "insert after", sym, viaFallback)
+	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "insert after", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, bool, error) {
+		sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
+		if err != nil {
+			return protocol.TextEdit{}, nil, false, err
+		}
+		return protocol.TextEdit{
+			Range:   protocol.Range{Start: sym.Range.End, End: sym.Range.End},
+			NewText: a.Content,
+		}, sym, viaFallback, nil
+	})
 }
 
 // ─── replace_symbol_body ───────────────────────────────────────────────────
@@ -350,6 +358,8 @@ type ReplaceSymbolBody struct {
 	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
 	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
 	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps     WriteDeps
+	hasDeps  bool
 }
 
 func NewReplaceSymbolBody(client lsp.Client, timeout time.Duration) *ReplaceSymbolBody {
@@ -422,19 +432,20 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
-	if err != nil {
-		return "", err
-	}
-	rng := sym.Range
-	if a.IncludeDocComment {
-		rng.Start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
-	}
-	edit := protocol.TextEdit{
-		Range:   rng,
-		NewText: a.Content,
-	}
-	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "replace", sym, viaFallback)
+	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "replace", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, bool, error) {
+		sym, viaFallback, err := resolveSymbolOrFallback(ctx, t.client, t.topo, a.URI, a.NamePath)
+		if err != nil {
+			return protocol.TextEdit{}, nil, false, err
+		}
+		rng := sym.Range
+		if a.IncludeDocComment {
+			rng.Start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
+		}
+		return protocol.TextEdit{
+			Range:   rng,
+			NewText: a.Content,
+		}, sym, viaFallback, nil
+	})
 }
 
 // ─── safe_delete_symbol ────────────────────────────────────────────────────
@@ -445,6 +456,8 @@ type SafeDeleteSymbol struct {
 	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
 	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
 	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps     WriteDeps
+	hasDeps  bool
 }
 
 func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
@@ -503,48 +516,51 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 	if a.DryRun != nil {
 		dryRun = *a.DryRun
 	}
-	sym, err := resolveSymbol(ctx, t.client, a.URI, a.NamePath)
-	if err != nil {
-		return "", err
-	}
+	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "delete", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, bool, error) {
+		sym, err := resolveSymbol(ctx, t.client, a.URI, a.NamePath)
+		if err != nil {
+			return protocol.TextEdit{}, nil, false, err
+		}
 
-	// Probe references at the symbol's selection range start.
-	refs, err := t.client.References(ctx, protocol.ReferenceParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
-		Position:     sym.SelectionRange.Start,
-		Context:      protocol.ReferenceContext{IncludeDeclaration: false},
+		// Probe references at the symbol's selection range start while the file is
+		// still locked for the eventual delete, so the safety check and delete
+		// apply to one coherent on-disk version.
+		refs, err := t.client.References(ctx, protocol.ReferenceParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
+			Position:     sym.SelectionRange.Start,
+			Context:      protocol.ReferenceContext{IncludeDeclaration: false},
+		})
+		if err != nil {
+			return protocol.TextEdit{}, nil, false, lspTimeoutErr("safe_delete_symbol", t.timeout, fmt.Errorf("references: %w", err))
+		}
+		external := 0
+		var refLines []string
+		for _, r := range refs {
+			// Filter out references inside the symbol's own range.
+			if r.URI == a.URI && rangeContains(sym.Range, r.Range) {
+				continue
+			}
+			external++
+			path := paths.URIToPath(r.URI)
+			refLines = append(refLines, fmt.Sprintf("  %s:%d", path, r.Range.Start.Line+1))
+		}
+		if external > 0 {
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "REFUSED — symbol %q has %d external reference(s):\n\n", sym.Name, external)
+			for _, l := range refLines {
+				sb.WriteString(l)
+				sb.WriteByte('\n')
+			}
+			sb.WriteString("\nDelete each reference first, or use replace_symbol_body to keep the symbol but change its content.")
+			return protocol.TextEdit{}, nil, false, symbolEditRefusal{msg: sb.String()}
+		}
+
+		rng := sym.Range
+		if a.IncludeDocComment {
+			rng.Start = docCommentStart(paths.URIToPath(a.URI), sym.Range.Start)
+		}
+		return protocol.TextEdit{Range: rng, NewText: ""}, sym, false, nil
 	})
-	if err != nil {
-		return "", lspTimeoutErr("safe_delete_symbol", t.timeout, fmt.Errorf("references: %w", err))
-	}
-	external := 0
-	var refLines []string
-	for _, r := range refs {
-		// Filter out references inside the symbol's own range.
-		if r.URI == a.URI && rangeContains(sym.Range, r.Range) {
-			continue
-		}
-		external++
-		path := paths.URIToPath(r.URI)
-		refLines = append(refLines, fmt.Sprintf("  %s:%d", path, r.Range.Start.Line+1))
-	}
-	if external > 0 {
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "REFUSED — symbol %q has %d external reference(s):\n\n", sym.Name, external)
-		for _, l := range refLines {
-			sb.WriteString(l)
-			sb.WriteByte('\n')
-		}
-		sb.WriteString("\nDelete each reference first, or use replace_symbol_body to keep the symbol but change its content.")
-		return sb.String(), nil
-	}
-
-	rng := sym.Range
-	if a.IncludeDocComment {
-		rng.Start = docCommentStart(paths.URIToPath(a.URI), sym.Range.Start)
-	}
-	edit := protocol.TextEdit{Range: rng, NewText: ""}
-	return applySingleEdit(ctx, t.client, t.cache, a.URI, edit, dryRun, resolveShowDiff(t.showDiff), "delete", sym, false)
 }
 
 // rangeContains returns true if outer fully contains inner.

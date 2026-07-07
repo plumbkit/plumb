@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,30 +24,46 @@ func resolveShowDiff(fn func() bool) bool {
 	return fn()
 }
 
+type symbolEditResolver func(context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, bool, error)
+
+type symbolEditRefusal struct{ msg string }
+
+func (e symbolEditRefusal) Error() string { return e.msg }
+
 // applySingleEdit runs the standard apply-or-preview flow used by every
 // symbol-edit tool. summary is the human-readable verb ("inserted before",
 // "replaced", etc.) used in the dry-run / applied output. When showDiff is true
 // the response carries a unified diff of the change — a preview in dry-run, the
 // applied change otherwise.
 //
-// On a successful apply it notifies the language server of the on-disk change
-// and invalidates the symbol cache for uri — the same post-write housekeeping
-// every file-write tool performs (edit_file, write_file, …). Without it the
-// server keeps the pre-edit content, so the next documentSymbol/references
-// query returns positions computed against a stale file and a follow-up
-// semantic edit fails "position out of range". client and c are nil-safe (a
-// nil client / cache simply skips the corresponding step, as in tests).
-func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, uri string, edit protocol.TextEdit, dryRun, showDiff bool, summary string, sym *protocol.DocumentSymbol, viaFallback bool) (string, error) {
+// In apply mode the target file is locked BEFORE the resolver runs, so the LSP
+// range is resolved against the same on-disk bytes the edit is applied to. The
+// successful write then flows through the same write-side bookkeeping as the
+// ordinary write tools when WriteDeps is wired: LSP notify, adapter post-write
+// hook, cache invalidation, write/read tracker refresh, undo, topology, quality,
+// and differential diagnostics. client/cache remain nil-safe for unit tests.
+func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, deps *WriteDeps, uri string, dryRun, showDiff bool, summary, toolName string, dirtyOK bool, resolve symbolEditResolver) (string, error) {
 	path := paths.URIToPath(uri)
-	diff := ""
-	if showDiff {
-		diff = symbolEditDiff(path, edit)
+	if err := semanticWritePreflight(ctx, deps, toolName, path, dryRun, dirtyOK); err != nil {
+		return "", err
 	}
 	var sb strings.Builder
-	if viaFallback {
-		sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
-	}
 	if dryRun {
+		edit, sym, viaFallback, err := resolve(ctx)
+		if err != nil {
+			var refusal symbolEditRefusal
+			if errors.As(err, &refusal) {
+				return refusal.msg, nil
+			}
+			return "", err
+		}
+		diff := ""
+		if showDiff {
+			diff = symbolEditDiff(path, edit)
+		}
+		if viaFallback {
+			sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
+		}
 		sb.WriteString("DRY RUN — file not modified.\n\n")
 		fmt.Fprintf(&sb, "Would %s symbol %q in %s\n", summary, sym.Name, path)
 		fmt.Fprintf(&sb, "  Range: line %d char %d → line %d char %d\n",
@@ -59,16 +76,94 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, uri
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 		return sb.String(), nil
 	}
-	if err := applyTextEditsToFile(path, []protocol.TextEdit{edit}); err != nil {
+
+	unlock := lockPath(path)
+	defer unlock()
+
+	edit, sym, viaFallback, err := resolve(ctx)
+	if err != nil {
+		var refusal symbolEditRefusal
+		if errors.As(err, &refusal) {
+			return refusal.msg, nil
+		}
+		return "", err
+	}
+	baseline := captureSemanticBaseline(deps, uri)
+	before, after, mode, err := prepareTextEditsLocked(path, []protocol.TextEdit{edit})
+	if err != nil {
 		return "", fmt.Errorf("applying edit: %w", err)
 	}
-	notifySymbolEditWritten(ctx, client, c, path, uri)
+	if _, err := safeWrite(path, after, mode); err != nil {
+		return "", fmt.Errorf("applying edit: %w", err)
+	}
+	diff := ""
+	if showDiff {
+		diff = unifiedDiff(path, string(before), string(after))
+	}
+	if viaFallback {
+		sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
+	}
 	fmt.Fprintf(&sb, "%s symbol %q in %s\n", capitalise(summary), sym.Name, path)
 	if diff != "" {
 		sb.WriteString("\n")
 		sb.WriteString(diff)
 	}
+	sb.WriteString(semanticPostWrite(ctx, deps, client, c, path, uri, string(before), string(after), toolName, baseline))
 	return sb.String(), nil
+}
+
+func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path string, dryRun, dirtyOK bool) error {
+	if deps == nil {
+		return nil
+	}
+	if err := deps.checkBoundary(path); err != nil {
+		return fmt.Errorf("%s: %w", toolName, err)
+	}
+	if dryRun {
+		return nil
+	}
+	if deps.Limiter != nil && !deps.Limiter.Allow() {
+		return rateLimitError(toolName, deps.Limiter)
+	}
+	if !dirtyOK && deps.Writes != nil && dirtyBlocksWrite(ctx, deps.Writes, path) {
+		return fmt.Errorf("%s: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", toolName, path)
+	}
+	return nil
+}
+
+func captureSemanticBaseline(deps *WriteDeps, uri string) *diagBaseline {
+	if deps == nil {
+		return nil
+	}
+	return deps.capturePreWriteBaseline(uri)
+}
+
+func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, before, after, toolName string, baseline *diagBaseline) string {
+	if deps == nil {
+		notifySymbolEditWritten(ctx, client, c, path, uri)
+		return ""
+	}
+	writeClient := deps.Client
+	if writeClient == nil {
+		writeClient = client
+	}
+	writeCache := deps.Cache
+	if writeCache == nil {
+		writeCache = c
+	}
+	if err := notifyLSP(ctx, writeClient, path, protocol.FileChanged); err != nil {
+		slog.Warn(toolName+": LSP notification failed", "path", path, "err", err)
+	}
+	if deps.PostWriteNotifyFn != nil {
+		if err := deps.PostWriteNotifyFn(ctx, path); err != nil {
+			slog.Warn(toolName+": post-write adapter notification failed", "path", path, "err", err)
+		}
+	}
+	invalidateCache(writeCache, uri)
+	deps.recordWritten(path)
+	deps.recordUndo(path, before, after, true, toolName)
+	deps.notifyTopology(path)
+	return deps.postWriteDiagnostics(uri, before, after, false, baseline) + deps.reportQuality(ctx, path)
 }
 
 // notifySymbolEditWritten performs the post-write housekeeping shared by the
