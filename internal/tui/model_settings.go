@@ -432,11 +432,14 @@ func listSummary(items []string) string {
 	return fmt.Sprintf("(%d) %s", len(items), strings.Join(items, ", "))
 }
 
-// Settings rows-pane tabs. General holds every non-LSP setting; LSP holds the
-// per-language [lsp.<lang>] server rows. tab / shift+tab cycle through the Scope
-// column and these two tabs (Scope → General → LSP → Scope).
+// Settings rows-pane tabs. General holds every non-LSP setting; Commands manages
+// the command allow-list + [commands] policy (its own two-pane view, not the flat
+// settingItem rows); LSP holds the per-language [lsp.<lang>] server rows. tab /
+// shift+tab cycle through the Scope column and these tabs (Scope → General →
+// Commands → LSP → Semantics → Scope).
 const (
 	settingsTabGeneral = iota
+	settingsTabCommands
 	settingsTabLSP
 	settingsTabSemantics
 )
@@ -445,7 +448,7 @@ const (
 // the tab bar plus the blank line beneath it.
 const settingsTabHeaderRows = 2
 
-var settingsTabNames = []string{"General", "LSP", "Semantics"}
+var settingsTabNames = []string{"General", "Commands", "LSP", "Semantics"}
 
 // filterSettingsByTab keeps only the rows whose tab matches the active one.
 func filterSettingsByTab(items []settingItem, tab int) []settingItem {

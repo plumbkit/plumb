@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **58** structured tools to AI assistants. Every write tool is
+Plumb exposes **60** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 

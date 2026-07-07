@@ -154,6 +154,11 @@ var defaults = Config{
 	},
 	Tasks: defaultTasks(),
 	Tools: ToolsConfig{Profile: "auto"},
+	// execute_shell_command runs with the user's credentials and the daemon env and
+	// the sandbox is integrity-only, so the shell tier denies the network by default
+	// (opt back in with [commands] deny_network = false). run_command entries set
+	// their own per-[[command]] deny_network (default false).
+	CommandPolicy: CommandsConfig{DenyNetwork: true},
 }
 
 // Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
@@ -183,6 +188,7 @@ func cloneConfig(cfg Config) Config {
 		}
 	}
 	out.Tasks = cloneTasks(cfg.Tasks)
+	out.Commands = cloneCommands(cfg.Commands)
 	// maps.Clone preserves nil vs empty-non-nil so cloneConfig(defaults) stays
 	// reflect.DeepEqual to defaults (see the slice note above).
 	out.Tools.ClientProfiles = maps.Clone(cfg.Tools.ClientProfiles)

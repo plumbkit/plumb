@@ -45,6 +45,8 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.session = projectCfg.Session
 		v.tasks = projectCfg.Tasks
 		v.agentConfigWrites = projectCfg.AgentConfigWrites
+		v.commands = projectCfg.Commands
+		v.commandPolicy = projectCfg.CommandPolicy
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}

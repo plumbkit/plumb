@@ -140,6 +140,16 @@ type Model struct {
 	settingsListEditor   *listEditor    // non-nil while the list-value editor popup is open
 	settingsTextEditor   *textEditor    // non-nil while the single-line text editor popup is open
 
+	// Commands tab (settingsTabCommands) — the command allow-list + [commands]
+	// policy for the selected scope. This tab has its own two-pane view (policy
+	// toggles, then a list | detail editor), so it does not use settingsItems.
+	commandsList         []config.CommandConfig // effective [[command]] entries for the current scope
+	commandPolicy        config.CommandsConfig  // effective [commands] policy for the current scope
+	commandsFocus        commandsFocus          // which sub-area of the tab holds focus
+	commandsToggleCursor int                    // 0..1 index into the policy toggles
+	commandsListCursor   int                    // index into commandsList (also the command shown in Detail)
+	commandsDetailCursor int                    // 0..commandDetailFieldCount-1 index into the Detail fields
+
 	// Dashboard section (section 0).
 	dashLifetimeCalls       int64
 	dashLifetimeSessions    int64
