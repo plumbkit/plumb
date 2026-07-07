@@ -32,6 +32,33 @@ func TestExecuteShellCommand_NilResolver(t *testing.T) {
 	}
 }
 
+// TestExecuteShellCommand_ReportsNetworkStatus checks the reply tells the agent
+// whether the network is off (with a hint it can relay) or on, so the agent can
+// instruct the user to flip deny_network when a command needs the network.
+func TestExecuteShellCommand_ReportsNetworkStatus(t *testing.T) {
+	denied := NewExecuteShellCommand(func() (ResolvedShell, error) {
+		return ResolvedShell{WorkingDir: t.TempDir(), Sandbox: SandboxOpts{WorkspaceRoot: t.TempDir(), DenyNetwork: true}}, nil
+	})
+	out, err := denied.Execute(context.Background(), json.RawMessage(`{"command":"echo hi"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "network=off") || !strings.Contains(out, "deny_network") {
+		t.Errorf("expected a network-off notice the agent can relay:\n%s", out)
+	}
+
+	allowed := NewExecuteShellCommand(func() (ResolvedShell, error) {
+		return ResolvedShell{WorkingDir: t.TempDir()}, nil
+	})
+	out2, err := allowed.Execute(context.Background(), json.RawMessage(`{"command":"echo hi"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out2, "network=on") {
+		t.Errorf("expected network=on:\n%s", out2)
+	}
+}
+
 func TestExecuteShellCommand_RunsWithPipe(t *testing.T) {
 	sh := NewExecuteShellCommand(func() (ResolvedShell, error) {
 		return ResolvedShell{WorkingDir: t.TempDir()}, nil

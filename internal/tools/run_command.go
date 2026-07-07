@@ -124,7 +124,10 @@ func runResolved(ctx context.Context, rc ResolvedCommand) (string, error) {
 	elapsed := time.Since(start)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "run_command %s (source=%s, sandbox=%s)\n", rc.Name, rc.Provenance, status)
+	fmt.Fprintf(&b, "run_command %s (source=%s, sandbox=%s, network=%s)\n", rc.Name, rc.Provenance, status, networkLabel(rc.Sandbox.DenyNetwork))
+	if rc.Sandbox.DenyNetwork {
+		b.WriteString("network: OFF for this command (deny_network is set on its [[command]] entry).\n")
+	}
 	b.WriteString(formatStep(rc.Argv, res))
 	switch {
 	case res.TimedOut:

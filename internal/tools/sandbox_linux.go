@@ -37,6 +37,7 @@ func buildBwrapArgv(bin string, argv []string, opts SandboxOpts) []string {
 		"--dev", "/dev",
 		"--proc", "/proc",
 		"--tmpfs", "/tmp",
+		"--die-with-parent", // die if plumb kills the group (see RunArgv process-group cleanup)
 	}
 	if opts.AllowWrites && opts.WorkspaceRoot != "" {
 		out = append(out, "--bind", opts.WorkspaceRoot, opts.WorkspaceRoot)

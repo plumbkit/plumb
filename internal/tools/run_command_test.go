@@ -69,6 +69,25 @@ func TestRunCommand_Runs(t *testing.T) {
 	}
 }
 
+func TestRunCommand_ReportsNetworkOff(t *testing.T) {
+	rc := NewRunCommand(func(name, target string) (ResolvedCommand, error) {
+		return ResolvedCommand{
+			Name:       name,
+			Argv:       []string{"echo", "x"},
+			WorkingDir: t.TempDir(),
+			Provenance: "project",
+			Sandbox:    SandboxOpts{WorkspaceRoot: t.TempDir(), DenyNetwork: true},
+		}, nil
+	})
+	out, err := rc.Execute(context.Background(), json.RawMessage(`{"name":"x"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "network=off") {
+		t.Errorf("expected network=off in the run_command reply:\n%s", out)
+	}
+}
+
 var errUntrusted = &trustErr{}
 
 type trustErr struct{}

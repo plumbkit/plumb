@@ -84,6 +84,41 @@ func TestDefaults_NoCommands(t *testing.T) {
 	if d.CommandPolicy.AllowShell {
 		t.Fatal("Defaults must have allow_shell = false")
 	}
+	if !d.CommandPolicy.DenyNetwork {
+		t.Fatal("Defaults must deny the shell tier's network by default (deny_network = true)")
+	}
+}
+
+// TestSetProjectValue_CommandArrayRoundTrips guards the TUI's workspace-scope
+// save: the [[command]] array is written as a whole via SetProjectValue, so it
+// must serialise to valid array-of-tables TOML and read back intact.
+func TestSetProjectValue_CommandArrayRoundTrips(t *testing.T) {
+	ws := t.TempDir()
+	cmds := []CommandConfig{
+		{Name: "lint", Exec: []string{"golangci-lint", "run"}, WorkingDir: "internal", Timeout: Duration{90 * time.Second}, AllowWrites: true},
+		{Name: "test-one", Exec: []string{"go", "test", "-run", "{target}", "./..."}, DenyNetwork: true},
+	}
+	if err := SetProjectValue(ws, []string{"command"}, cmds); err != nil {
+		t.Fatalf("SetProjectValue: %v", err)
+	}
+	got, err := LoadProject(Defaults(), ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if len(got.Commands) != 2 {
+		t.Fatalf("round-trip lost commands: %+v", got.Commands)
+	}
+	lint, ok := FindCommand(got.Commands, "lint")
+	if !ok || lint.WorkingDir != "internal" || lint.Timeout.Duration != 90*time.Second || !lint.AllowWrites {
+		t.Fatalf("lint did not round-trip: %+v", lint)
+	}
+	if len(lint.Exec) != 2 || lint.Exec[0] != "golangci-lint" || lint.Exec[1] != "run" {
+		t.Fatalf("lint exec did not round-trip: %v", lint.Exec)
+	}
+	one, ok := FindCommand(got.Commands, "test-one")
+	if !ok || !one.DenyNetwork || len(one.Exec) != 5 || one.Exec[3] != "{target}" {
+		t.Fatalf("test-one did not round-trip: %+v", one)
+	}
 }
 
 func writeProjectConfig(t *testing.T, ws, body string) {

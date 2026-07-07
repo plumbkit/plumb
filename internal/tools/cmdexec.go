@@ -87,6 +87,14 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 	return res, nil
 }
 
+// networkLabel renders the sandbox network state for a tool reply header.
+func networkLabel(denied bool) string {
+	if denied {
+		return "off"
+	}
+	return "on"
+}
+
 // capTaskOutput bounds output to maxTaskLines lines then maxTaskBytes bytes.
 func capTaskOutput(s string) string {
 	s = truncateLines(s, maxTaskLines, "… (output truncated at 200 lines)")

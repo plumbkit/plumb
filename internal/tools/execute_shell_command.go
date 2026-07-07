@@ -98,8 +98,15 @@ func (t *ExecuteShellCommand) Execute(ctx context.Context, raw json.RawMessage) 
 	}
 	elapsed := time.Since(start)
 
+	denied := rs.Sandbox.DenyNetwork
 	var b strings.Builder
-	fmt.Fprintf(&b, "execute_shell_command (sandbox=%s)\n", status)
+	fmt.Fprintf(&b, "execute_shell_command (sandbox=%s, network=%s)\n", status, networkLabel(denied))
+	if denied {
+		b.WriteString("network: OFF — the shell tier denies network access by default. " +
+			"If this command needs the network, tell the user to set [commands] deny_network = false " +
+			"(in global config, or in this project's .plumb/config.toml which then needs `plumb trust`) — " +
+			"the toggle is in the TUI Settings → Commands screen.\n")
+	}
 	fmt.Fprintf(&b, "$ %s\n", a.Command)
 	if out := strings.TrimSpace(res.Stdout); out != "" {
 		b.WriteString(out + "\n")

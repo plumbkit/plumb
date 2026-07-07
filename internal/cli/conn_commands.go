@@ -94,8 +94,8 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 			AllowWrites: true,
 			// The jail is integrity-only (reads stay permissive), so [commands]
 			// deny_network is the egress control against a shell command that reads a
-			// secret and exfiltrates it. Most-restrictive across base + project.
-			DenyNetwork: s.effectiveShellDenyNetwork(),
+			// secret and exfiltrates it. On by default; trusted config may re-open it.
+			DenyNetwork: gatedDenyNetwork(base.CommandPolicy, v.commandPolicy, trusted),
 		},
 		RequireSandbox: s.effectiveRequireSandbox(),
 	}, nil
@@ -113,11 +113,16 @@ func gatedAllowShell(base, merged config.CommandsConfig, trusted bool) bool {
 	return base.AllowShell
 }
 
-// effectiveShellDenyNetwork is the most-restrictive [commands] deny_network for
-// the shell tier across the global base and the project value: an untrusted
-// project can only ADD safety (cut the network), never restore it.
-func (s *connSession) effectiveShellDenyNetwork() bool {
-	return s.store.Current().CommandPolicy.DenyNetwork || s.view().commandPolicy.DenyNetwork
+// gatedDenyNetwork applies the trust rule to the shell tier's deny_network
+// (default true): the merged (project) value is honoured only when the workspace
+// is trusted, otherwise the global base value wins. So an untrusted project can
+// neither re-open the network (deny_network=false ignored) nor is its extra
+// caution meaningful — a trusted user/project is the only way to allow egress.
+func gatedDenyNetwork(base, merged config.CommandsConfig, trusted bool) bool {
+	if trusted {
+		return merged.DenyNetwork
+	}
+	return base.DenyNetwork
 }
 
 // effectiveRequireSandbox is the most-restrictive require_sandbox across the

@@ -52,6 +52,33 @@ func TestGatedAllowShell(t *testing.T) {
 	}
 }
 
+// TestGatedDenyNetwork mirrors the allow_shell gate for the shell tier's
+// deny_network (default true): an untrusted project cannot re-open the network,
+// a trusted one can.
+func TestGatedDenyNetwork(t *testing.T) {
+	on := config.CommandsConfig{DenyNetwork: true}
+	off := config.CommandsConfig{DenyNetwork: false}
+	cases := []struct {
+		name    string
+		base    config.CommandsConfig
+		merged  config.CommandsConfig
+		trusted bool
+		want    bool
+	}{
+		{"default on, untrusted project re-open ignored", on, off, false, true},
+		{"default on, trusted project re-open honoured", on, off, true, false},
+		{"global off, untrusted project deny ignored", off, on, false, false},
+		{"global off, trusted project deny honoured", off, on, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := gatedDenyNetwork(tc.base, tc.merged, tc.trusted); got != tc.want {
+				t.Errorf("gatedDenyNetwork(%+v, %+v, trusted=%v) = %v, want %v", tc.base, tc.merged, tc.trusted, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCommandWorkdir(t *testing.T) {
 	ws := "/ws"
 	if got := commandWorkdir(ws, ""); got != ws {

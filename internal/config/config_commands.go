@@ -52,11 +52,12 @@ type CommandsConfig struct {
 	// RequireSandbox, when true, refuses to run a command (either tool) when no
 	// OS sandbox is active, rather than running unsandboxed with a warning.
 	RequireSandbox bool `toml:"require_sandbox"`
-	// DenyNetwork, when true, cuts network access for execute_shell_command. The
+	// DenyNetwork cuts network access for execute_shell_command. Default TRUE: the
 	// sandbox is integrity-only (reads stay permissive and the command inherits the
-	// daemon environment), so a trusted shell command can otherwise read secrets
-	// and exfiltrate over the network; set this to close the network egress path.
-	// It does not apply to run_command (each [[command]] sets its own deny_network).
+	// daemon environment), so a shell command could otherwise read secrets and
+	// exfiltrate over the network — so the network is off unless you opt in with
+	// deny_network = false. It does not apply to run_command (each [[command]] sets
+	// its own deny_network, default false).
 	DenyNetwork bool `toml:"deny_network"`
 }
 

@@ -13,13 +13,10 @@ package tui
 // Concurrency: TUI-thread only, like every other model field.
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/plumbkit/plumb/internal/config"
 )
@@ -44,7 +41,7 @@ const (
 )
 
 // commandsToggleCount is the number of [commands] policy toggles.
-const commandsToggleCount = 2
+const commandsToggleCount = 3
 
 // cmdField sentinel values carried by the text editor for the name add/rename
 // flows (the concrete field editors use the literal field names "exec" etc.).
@@ -163,6 +160,11 @@ func (m Model) toggleCommandPolicy(idx int) Model {
 		path = []string{"commands", "require_sandbox"}
 		change = "require_sandbox " + onOff(v)
 		apply = func(c *config.Config) { c.CommandPolicy.RequireSandbox = v }
+	case 2:
+		v = !m.commandPolicy.DenyNetwork
+		path = []string{"commands", "deny_network"}
+		change = "deny_network " + onOff(v)
+		apply = func(c *config.Config) { c.CommandPolicy.DenyNetwork = v }
 	default:
 		return m
 	}
@@ -233,10 +235,9 @@ func (m Model) setCommandField(field, input string) Model {
 	c := &cmds[m.commandsListCursor]
 	switch field {
 	case "exec":
-		// The argv is edited as a single space-separated line; split on
-		// whitespace. (First draft: no shell-style quoting — an argument that must
-		// contain a space is not expressible here yet.)
-		argv := strings.Fields(input)
+		// The argv is edited as a single line with shell-style quoting, so an
+		// argument that contains a space can be written as 'a b' or "a b".
+		argv := shellSplit(input)
 		if len(argv) == 0 {
 			m.settingsStatus = "exec must be a non-empty argv"
 			return m
@@ -404,7 +405,7 @@ func (m Model) activateCommandDetail() Model {
 	c := m.commandsList[m.commandsListCursor]
 	switch m.commandsDetailCursor {
 	case cmdFieldExec:
-		return m.openCommandFieldEditor("exec", c.Name+" · exec", strings.Join(c.Exec, " "))
+		return m.openCommandFieldEditor("exec", c.Name+" · exec", shellJoin(c.Exec))
 	case cmdFieldWorkingDir:
 		return m.openCommandFieldEditor("working_dir", c.Name+" · working_dir", c.WorkingDir)
 	case cmdFieldTimeout:
@@ -442,146 +443,4 @@ func (m Model) openCommandFieldEditor(field, title, current string) Model {
 	ed.cmdField = field
 	m.settingsTextEditor = ed
 	return m
-}
-
-// --- rendering -------------------------------------------------------------
-
-// settingsRowsLines returns the scrollable rows-pane lines for the active tab:
-// the Commands tab's custom two-pane view, or the flat settingItem rows for
-// every other tab.
-func (m Model) settingsRowsLines(rowsW int) []string {
-	if m.settingsTab == settingsTabCommands {
-		return m.renderCommandsLines(rowsW)
-	}
-	return m.settingsDisplayLines(rowsW)
-}
-
-// renderCommandsLines builds the Commands tab body: the two [commands] policy
-// toggles, then a side-by-side list | detail editor for the allow-list.
-func (m Model) renderCommandsLines(rowsW int) []string {
-	leftW := min(max(rowsW/3, 16), 30)
-	rightW := max(rowsW-leftW-3, 12)
-	panes := joinCommandPanes(m.cmdListPaneLines(leftW), m.cmdDetailPaneLines(rightW), leftW, rightW)
-	out := make([]string, 0, 5+len(panes))
-	out = append(out,
-		settingsHeaderDisplay("Policy", rowsW, false),
-		m.cmdToggleLine(0, "allow_shell", onOff(m.commandPolicy.AllowShell)),
-		m.cmdToggleLine(1, "require_sandbox", onOff(m.commandPolicy.RequireSandbox)),
-		"",
-		settingsHeaderDisplay("Allow-list", rowsW, false),
-	)
-	return append(out, panes...)
-}
-
-// cmdToggleLine renders one policy-toggle row, highlighted when the toggles hold
-// focus and the cursor is on it.
-func (m Model) cmdToggleLine(idx int, label, val string) string {
-	ctrl := "[ " + val + " ]"
-	if m.commandsFocus == cmdFocusToggles && m.commandsToggleCursor == idx {
-		return " " + SelectedStyle.Render(fmt.Sprintf("❯ %-18s %s", label, ctrl))
-	}
-	return "   " + ItemStyle.Render(fmt.Sprintf("%-18s", label)) + " " + MutedStyle.Render(ctrl)
-}
-
-// cmdListPaneLines renders the left pane: the command names, the cursor row
-// brightest when the list holds focus.
-func (m Model) cmdListPaneLines(w int) []string {
-	lines := []string{PanelHeaderFadedStyle.Render(fmt.Sprintf("Commands (%d)", len(m.commandsList)))}
-	if len(m.commandsList) == 0 {
-		return append(lines, MutedStyle.Render("(none — a to add)"))
-	}
-	focused := m.commandsFocus == cmdFocusList
-	for i, c := range m.commandsList {
-		name := truncate(c.Name, max(w-2, 1))
-		switch {
-		case i == m.commandsListCursor && focused:
-			lines = append(lines, SelectedStyle.Render("❯ "+name))
-		case i == m.commandsListCursor:
-			lines = append(lines, ItemStyle.Render("❯ "+name))
-		default:
-			lines = append(lines, MutedStyle.Render("∙ ")+ItemStyle.Render(name))
-		}
-	}
-	return lines
-}
-
-// cmdDetailPaneLines renders the right pane: the selected command's fields, the
-// cursor row highlighted when the Detail form holds focus.
-func (m Model) cmdDetailPaneLines(w int) []string {
-	lines := []string{PanelHeaderFadedStyle.Render("Detail")}
-	if m.commandsListCursor >= len(m.commandsList) {
-		return append(lines, MutedStyle.Render("(no command selected)"))
-	}
-	c := m.commandsList[m.commandsListCursor]
-	focused := m.commandsFocus == cmdFocusDetail
-	fields := []struct{ label, val string }{
-		{"exec", cmdExecDisplay(c.Exec)},
-		{"working_dir", cmdDirDisplay(c.WorkingDir)},
-		{"timeout", cmdTimeoutDisplay(c.Timeout)},
-		{"allow_writes", onOff(c.AllowWrites)},
-		{"deny_network", onOff(c.DenyNetwork)},
-	}
-	for i, f := range fields {
-		row := truncate(fmt.Sprintf("%-12s %s", f.label, f.val), max(w-2, 1))
-		if focused && i == m.commandsDetailCursor {
-			lines = append(lines, SelectedStyle.Render("❯ "+row))
-		} else {
-			lines = append(lines, "  "+DetailStyle.Render(row))
-		}
-	}
-	return lines
-}
-
-// joinCommandPanes lays the list and detail panes side by side, each fixed to its
-// width (truncated, never wrapped) with a thin divider between.
-func joinCommandPanes(left, right []string, leftW, rightW int) []string {
-	n := max(len(left), len(right))
-	out := make([]string, n)
-	for i := range n {
-		var l, r string
-		if i < len(left) {
-			l = left[i]
-		}
-		if i < len(right) {
-			r = right[i]
-		}
-		lc := lipgloss.NewStyle().Width(leftW).Render(ansi.Truncate(l, max(leftW-1, 1), "…"))
-		rc := lipgloss.NewStyle().Width(rightW).Render(ansi.Truncate(r, max(rightW-1, 1), "…"))
-		out[i] = " " + lc + SepStyle.Render("┆ ") + rc
-	}
-	return out
-}
-
-// cmdExecDisplay renders the argv as a space-joined line, or "(unset)" when empty.
-func cmdExecDisplay(argv []string) string {
-	if len(argv) == 0 {
-		return "(unset)"
-	}
-	return strings.Join(argv, " ")
-}
-
-// cmdDirDisplay renders working_dir, defaulting an empty value to the root.
-func cmdDirDisplay(dir string) string {
-	if strings.TrimSpace(dir) == "" {
-		return "(workspace root)"
-	}
-	return dir
-}
-
-// cmdTimeoutDisplay renders the timeout, defaulting a zero value to the runner
-// default.
-func cmdTimeoutDisplay(d config.Duration) string {
-	if d.Duration <= 0 {
-		return "(default)"
-	}
-	return d.String()
-}
-
-// cmdTimeoutInput seeds the timeout editor: blank for the default, otherwise the
-// human-friendly duration string.
-func cmdTimeoutInput(d config.Duration) string {
-	if d.Duration <= 0 {
-		return ""
-	}
-	return d.String()
 }
