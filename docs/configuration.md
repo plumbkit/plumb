@@ -406,6 +406,7 @@ reaches a command line, so it is **disabled by default**.
 [commands]
 allow_shell     = false     # gate for execute_shell_command
 require_sandbox = false     # if true, refuse to run (either tool) when no OS sandbox is active
+deny_network    = false     # cut network for execute_shell_command (a [[command]] sets its own)
 ```
 
 **Trust gate.** A `[[command]]` entry — and a project raising `[commands]`
@@ -413,16 +414,33 @@ require_sandbox = false     # if true, refuse to run (either tool) when no OS sa
 after `plumb trust` (recorded per workspace root in `DataDir/trust.json`, never in
 the project — a cloned repo cannot self-enable execution). Commands and policy in
 your *global* config are user-authored and always honoured. Editing a command in
-the TUI Settings **Commands** tab auto-trusts that workspace.
+the TUI Settings **Commands** tab auto-trusts that workspace. A project that
+declares its own `[[command]]` block **replaces** the global allow-list entirely
+(global entries are shadowed while the project defines any) — to keep a global
+command in a project, redefine it there.
 
 **OS sandbox.** Both tools run under a best-effort write jail: reads and process
 execution stay permissive (toolchains need them), writes are confined to a
 temp/cache set plus the workspace (when `allow_writes`), and the network is cut
 only when `deny_network`. macOS uses `sandbox-exec`, Linux uses `bwrap`; when the
 sandbox binary is absent the command runs unsandboxed with a clear status note
-(set `require_sandbox = true` to refuse instead). Commands inherit the daemon's
-environment (so `go`/`npm`/linters find their toolchain). Output and runtime are
-bounded (100 KiB/200 lines, timeout).
+(set `require_sandbox = true` to refuse instead). plumb's own runtime dir
+(`<cache>/plumb`) is excluded from the writable set so a command cannot clobber
+the daemon's socket/locks. Output and runtime are bounded (100 KiB/200 lines,
+timeout).
+
+**Two limits to understand.** (1) The sandbox is **integrity-only, not
+confidentiality**: reads stay permissive and a command inherits the daemon's
+environment, so an enabled+trusted `execute_shell_command` can *read* any file or
+secret your user can (`~/.ssh`, API keys in the daemon env) and — unless you set
+`deny_network` — send it over the network. Enable the shell tier only for
+repositories you trust, and set `[commands] deny_network = true` if a command has
+no need to reach the network. (2) The writable set is tuned for **Go** (build
+cache, module cache, `$TMPDIR`, the workspace). Other toolchains that write
+outside those (e.g. `cargo`'s `~/.cargo/registry`, `npm`'s cache) may need
+`allow_writes` and may fail under `require_sandbox = true`; only Go is validated.
+Commands inherit the daemon's environment so `go`/`npm`/linters find their
+toolchain.
 
 ## `agent_config_writes` — agent-writable config (top level)
 
