@@ -188,6 +188,63 @@ func changedLineRange(before, after string) (lo, hi int, ok bool) {
 	return lo, hi, true
 }
 
+// isRenderedSeverity reports whether a diagnostic severity participates in the
+// differential — only errors and warnings are rendered, so only they are matched
+// and classified.
+func isRenderedSeverity(s protocol.DiagnosticSeverity) bool {
+	return s == protocol.SevError || s == protocol.SevWarning
+}
+
+// matchPre claims, for each not-yet-dropped post diagnostic (error/warning), one
+// unclaimed pre diagnostic of the same identity for which ok reports the pair a
+// match — marking both. It mutates preClaimed and dropped in place, so callers
+// chain passes with progressively looser predicates over the same masks.
+func matchPre(pre, post []protocol.Diagnostic, preClaimed, dropped []bool, ok func(preD, postD protocol.Diagnostic) bool) {
+	for i := range post {
+		if dropped[i] || !isRenderedSeverity(post[i].Severity) {
+			continue
+		}
+		id := identityOf(post[i])
+		for j := range pre {
+			if preClaimed[j] || identityOf(pre[j]) != id || !ok(pre[j], post[i]) {
+				continue
+			}
+			preClaimed[j] = true
+			dropped[i] = true
+			break
+		}
+	}
+}
+
+// matchCarriedOver decides which post diagnostics are carried over from the
+// pre-write set (dropped) and, symmetrically, which pre diagnostics are still
+// present (preClaimed). It matches in two passes to close the equal-count
+// message-swap hole — an edit that RESOLVES a pre-existing (message,code) on a
+// touched line while INTRODUCING a genuinely-new one with the identical
+// (message,code) elsewhere:
+//
+//   - Pass 1 (exact line): a post diagnostic on the SAME line as an unclaimed pre
+//     diagnostic of the same identity is unambiguously carried over — drop it.
+//   - Pass 2 (line-shift robustness): a post diagnostic whose identity matches an
+//     unclaimed pre diagnostic sitting OUTSIDE the edit's touched range is a
+//     (possibly line-shifted) pre-existing error — drop it. A pre diagnostic
+//     INSIDE the touched range is ambiguous (the edit may have fixed it), so it
+//     does NOT license dropping a same-identity post diagnostic: err toward
+//     SHOWING. When the touched range is unknown we cannot reason about position,
+//     so pass 2 falls back to identity-only matching (line ignored), preserving
+//     the original count-aware behaviour.
+func matchCarriedOver(pre, post []protocol.Diagnostic, touchedLo, touchedHi int, touchedOK bool) (preClaimed, dropped []bool) {
+	preClaimed = make([]bool, len(pre))
+	dropped = make([]bool, len(post))
+	matchPre(pre, post, preClaimed, dropped, func(preD, postD protocol.Diagnostic) bool {
+		return preD.Range.Start.Line == postD.Range.Start.Line
+	})
+	matchPre(pre, post, preClaimed, dropped, func(preD, _ protocol.Diagnostic) bool {
+		return !touchedOK || !lineWithin(int(preD.Range.Start.Line), touchedLo, touchedHi)
+	})
+	return preClaimed, dropped
+}
+
 // diffFileDiagnostics splits the edited file's post-write diagnostics relative to
 // its pre-write set. It is the core of differential post-write diagnostics — the
 // fix for the #1 dogfooding complaint that the write response reported STALE
@@ -195,32 +252,30 @@ func changedLineRange(before, after string) (lo, hi int, ok bool) {
 //
 //   - Every diagnostic carried over from before the write is DROPPED (a
 //     pre-existing problem, or a stale copy of one the edit just resolved that
-//     the server has not cleared). Matching is by (message, code) and by count,
-//     so it is robust to line shifts yet a genuinely ADDITIONAL occurrence of the
-//     same message is still reported new.
+//     the server has not cleared). Matching is by (message, code): exact-line
+//     first, then line-shift-tolerant for pre diagnostics OUTSIDE the touched
+//     range (see matchCarriedOver).
 //   - Among the genuinely new diagnostics, an ERROR of a known re-index-lag class
 //     (undefined / imported-and-not-used / declared-and-not-used) that lands on a
 //     line the edit touched is separated into likelyStale rather than reported as
-//     fresh breakage. This is conservative: nothing is hidden (likelyStale is
-//     still surfaced, just clearly labelled), and the class/touched-line gate
-//     keeps a genuinely new error the agent introduced — a different message, or
-//     one away from the edit — in the fresh group.
+//     fresh breakage. likelyStale is still surfaced, just clearly labelled.
+//
+// Guarantee (honest): a genuinely new diagnostic is never dropped when its
+// (message,code) is absent from the pre-write set, or when it matches a pre
+// occurrence only INSIDE the touched range (that pre occurrence may have been the
+// one the edit fixed). It can still be dropped in the residual case where its
+// (message,code) exactly matches an untouched pre occurrence — indistinguishable
+// from a carried-over error and treated as one. The bias is toward SHOWING a
+// borderline diagnostic rather than hiding a real new one.
 //
 // Only error and warning severities are considered, matching the rendered set.
 func diffFileDiagnostics(pre, post []protocol.Diagnostic, touchedLo, touchedHi int, touchedOK bool) (fresh, likelyStale []protocol.Diagnostic) {
-	remaining := make(map[diagIdentity]int, len(pre))
-	for _, d := range pre {
-		remaining[identityOf(d)]++
-	}
-	for _, d := range post {
-		if d.Severity != protocol.SevError && d.Severity != protocol.SevWarning {
+	_, dropped := matchCarriedOver(pre, post, touchedLo, touchedHi, touchedOK)
+	for i := range post {
+		if dropped[i] || !isRenderedSeverity(post[i].Severity) {
 			continue
 		}
-		id := identityOf(d)
-		if remaining[id] > 0 {
-			remaining[id]-- // carried over from before the write — not this edit's doing
-			continue
-		}
+		d := post[i]
 		if d.Severity == protocol.SevError && isReindexLagClass(d.Message) &&
 			touchedOK && lineWithin(int(d.Range.Start.Line), touchedLo, touchedHi) {
 			likelyStale = append(likelyStale, d)
@@ -229,6 +284,32 @@ func diffFileDiagnostics(pre, post []protocol.Diagnostic, touchedLo, touchedHi i
 		fresh = append(fresh, d)
 	}
 	return fresh, likelyStale
+}
+
+// standingPreExistingErrors counts the pre-write ERROR diagnostics that are still
+// present after the write (carried over, hence dropped from the differential).
+// These are real problems the edit neither introduced nor fixed; the differential
+// view omits them, so callers surface a one-line heads-up lest an agent commit
+// over them.
+func standingPreExistingErrors(pre, post []protocol.Diagnostic, touchedLo, touchedHi int, touchedOK bool) int {
+	preClaimed, _ := matchCarriedOver(pre, post, touchedLo, touchedHi, touchedOK)
+	n := 0
+	for j := range pre {
+		if preClaimed[j] && pre[j].Severity == protocol.SevError {
+			n++
+		}
+	}
+	return n
+}
+
+// formatStandingPreExistingNote renders the omitted-pre-existing-issues heads-up,
+// or "" when there is nothing standing. It is appended after the differential so
+// a clean "no new errors" result never implies the file itself is clean.
+func formatStandingPreExistingNote(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n(%d pre-existing %s in this file not shown — call diagnostics() for full state)", n, plural(n, "issue", "issues"))
 }
 
 // formatDifferentialDiagnostics renders the differential result as a compact

@@ -150,6 +150,49 @@ func TestWriteDeps_crossFileDiagnostics(t *testing.T) {
 	}
 }
 
+// TestWriteDeps_postWriteDiagnostics_StandingPreExistingNote exercises the
+// omitted-pre-existing-issues heads-up through the full postWriteDiagnostics
+// path: a clean edit over a file that still carries a pre-existing error appends
+// the note, while a clean baseline stays silent.
+func TestWriteDeps_postWriteDiagnostics_StandingPreExistingNote(t *testing.T) {
+	edited := "file:///ws/edited.go"
+
+	t.Run("standing pre-existing error appends the note", func(t *testing.T) {
+		// Pre-existing error on line 2 (0-based 1); it persists after the write.
+		f := &fakeCrossDiag{
+			all:   map[string][]protocol.Diagnostic{edited: {errAt("undefined: Foo", 1)}},
+			times: map[string]time.Time{},
+		}
+		d := WriteDeps{Diag: f, WorkspaceFn: func() string { return "/ws" }}
+		baseline := d.capturePreWriteBaseline(edited)
+
+		// The edit touches the last line only; the pre-existing error is elsewhere,
+		// so it is carried over (dropped from the delta) and the edit is otherwise
+		// clean.
+		out := d.postWriteDiagnostics(edited, "a\nb\nc\nd", "a\nb\nc\nD", false, baseline)
+		if !strings.Contains(out, "1 pre-existing issue in this file not shown") {
+			t.Fatalf("expected the standing pre-existing note, got:\n%q", out)
+		}
+		if !strings.Contains(out, "diagnostics()") {
+			t.Fatalf("note must point at diagnostics(), got:\n%q", out)
+		}
+	})
+
+	t.Run("clean baseline stays silent", func(t *testing.T) {
+		f := &fakeCrossDiag{all: map[string][]protocol.Diagnostic{}, times: map[string]time.Time{}}
+		d := WriteDeps{Diag: f, WorkspaceFn: func() string { return "/ws" }}
+		baseline := d.capturePreWriteBaseline(edited)
+
+		out := d.postWriteDiagnostics(edited, "a\nb", "a\nB", false, baseline)
+		if strings.Contains(out, "pre-existing") {
+			t.Fatalf("a clean baseline must not mention pre-existing issues, got:\n%q", out)
+		}
+		if out != "" {
+			t.Fatalf("a clean edit over a clean file must render nothing, got:\n%q", out)
+		}
+	})
+}
+
 func TestWriteDeps_capturePreWriteBaseline_NarrowSource(t *testing.T) {
 	stub := newStubDiag()
 	stub.set(errDiag("pre-existing"))

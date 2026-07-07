@@ -185,8 +185,13 @@ func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh 
 	out := formatDifferentialDiagnostics(freshNew, likelyStale, lineCount(content))
 	out += d.crossFileDiagnostics(uri, fresh, baseline)
 	if awaitFresh && out == "" {
-		return "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
+		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
 	}
+	// Standing pre-existing errors are correctly dropped from the delta, but a
+	// clean "no new errors" result would otherwise hide them — an agent could
+	// commit over them. Append a count so the file's full state is not implied
+	// clean by silence.
+	out += formatStandingPreExistingNote(standingPreExistingErrors(pre, diags, lo, hi, touched))
 	return out
 }
 

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -95,6 +96,20 @@ func TestDiffFileDiagnostics(t *testing.T) {
 			wantFresh: []string{"declared and not used: x"},
 		},
 		{
+			name: "equal-count message swap: a resolved error on a touched line does not hide a new identical one elsewhere",
+			// The edit RESOLVED (M) on the touched line 5 but INTRODUCED a
+			// genuinely-new (M) with the identical (message,code) at untouched line
+			// 40. pre-count == post-count == 1, so a line-ignoring count match would
+			// drop the new one and falsely report a clean pass. The pre occurrence sat
+			// on a touched line (ambiguous — the edit may have fixed it), so it must
+			// NOT license the drop; line 40 is outside the touched range, so the new
+			// occurrence surfaces as a real error.
+			pre:  []protocol.Diagnostic{mkDiag(errSev, "declared and not used: err", 5)},
+			post: []protocol.Diagnostic{mkDiag(errSev, "declared and not used: err", 40)},
+			lo:   4, hi: 6, touched: true,
+			wantFresh: []string{"declared and not used: err"},
+		},
+		{
 			name: "new re-index-lag class on a touched line is separated as likely-stale",
 			pre:  nil,
 			post: []protocol.Diagnostic{mkDiag(errSev, "undefined: Bar", 20)},
@@ -164,6 +179,74 @@ func TestDiffFileDiagnostics(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDiffFileDiagnostics_EqualCountSwapNotHidden proves the equal-count
+// message-swap hole is closed end-to-end: when an edit resolves a pre-existing
+// error on a touched line and introduces a genuinely-new one with the identical
+// (message,code) on a DIFFERENT untouched line, the new one is reported (not
+// dropped) and the rendered output is NOT the clean pass.
+func TestDiffFileDiagnostics_EqualCountSwapNotHidden(t *testing.T) {
+	const msg = "declared and not used: err"
+	pre := []protocol.Diagnostic{mkDiag(protocol.SevError, msg, 5)}
+	post := []protocol.Diagnostic{mkDiag(protocol.SevError, msg, 40)}
+
+	fresh, stale := diffFileDiagnostics(pre, post, 4, 6, true)
+	if !hasMsg(fresh, msg) {
+		t.Fatalf("the new %q at an untouched line must be reported new, got fresh=%v stale=%v", msg, msgsOf(fresh), msgsOf(stale))
+	}
+
+	out := formatDifferentialDiagnostics(fresh, stale, 100)
+	if out == "" {
+		t.Fatalf("a genuinely-new error must render output, not an implied clean pass")
+	}
+	if !strings.Contains(out, msg) {
+		t.Fatalf("rendered output must name the new error, got:\n%s", out)
+	}
+}
+
+// TestStandingPreExistingNote covers the omitted-pre-existing-issues heads-up:
+// the count reflects pre-write errors still present after the write, and the note
+// text renders (and singular/plural correctly) — while a clean baseline yields
+// nothing.
+func TestStandingPreExistingNote(t *testing.T) {
+	const errSev = protocol.SevError
+	const warnSev = protocol.SevWarning
+
+	t.Run("carried-over errors are counted, resolved and warnings are not", func(t *testing.T) {
+		pre := []protocol.Diagnostic{
+			mkDiag(errSev, "undefined: A", 2),   // still present → counted
+			mkDiag(errSev, "undefined: B", 8),   // resolved by the edit → not present → not counted
+			mkDiag(warnSev, "unused import", 3), // warning → not counted
+		}
+		post := []protocol.Diagnostic{
+			mkDiag(errSev, "undefined: A", 2),
+			mkDiag(warnSev, "unused import", 3),
+		}
+		// The edit touches line 8 (where B lived); A and the warning are elsewhere.
+		if n := standingPreExistingErrors(pre, post, 7, 9, true); n != 1 {
+			t.Fatalf("want 1 standing pre-existing error, got %d", n)
+		}
+	})
+
+	t.Run("clean baseline counts zero", func(t *testing.T) {
+		post := []protocol.Diagnostic{mkDiag(errSev, "brand new", 3)}
+		if n := standingPreExistingErrors(nil, post, 2, 4, true); n != 0 {
+			t.Fatalf("a clean baseline must have no standing errors, got %d", n)
+		}
+	})
+
+	t.Run("note wording is singular/plural aware and empty at zero", func(t *testing.T) {
+		if got := formatStandingPreExistingNote(0); got != "" {
+			t.Fatalf("zero must render nothing, got %q", got)
+		}
+		if got := formatStandingPreExistingNote(1); !strings.Contains(got, "1 pre-existing issue in this file not shown") || !strings.Contains(got, "diagnostics()") {
+			t.Fatalf("singular note wrong: %q", got)
+		}
+		if got := formatStandingPreExistingNote(3); !strings.Contains(got, "3 pre-existing issues in this file not shown") {
+			t.Fatalf("plural note wrong: %q", got)
+		}
+	})
 }
 
 func TestChangedLineRange(t *testing.T) {
