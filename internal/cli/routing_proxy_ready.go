@@ -26,6 +26,25 @@ const warmReadyCap = 10 * time.Second
 // enough that the server flipping ready is picked up near-instantly.
 const warmPollInterval = 50 * time.Millisecond
 
+// entryClient resolves e's live client under one of two readiness policies.
+// wait=true is the query path: block up to r.warmCap for a warming server
+// (awaitEntryReady). wait=false is the notify path: a single non-blocking handle
+// check (touch-on-hit, nil-on-miss) — the prior fast behaviour. Scoping the wait
+// this way keeps a cold-start notify (fired by every write tool's LSP sync) from
+// blocking ~warmCap, and prevents an N-file transaction/rename from stacking
+// N×warmCap against a slow warmer; a notify to a still-warming server is anyway
+// redundant, as the server's initial scan reads current on-disk content.
+func (r *routingProxy) entryClient(ctx context.Context, e *poolEntry, wait bool) lsp.Client {
+	if wait {
+		return r.awaitEntryReady(ctx, e)
+	}
+	if c := e.proxy.get(); c != nil {
+		e.proxy.touch()
+		return c
+	}
+	return nil
+}
+
 // awaitEntryReady returns e's live client, blocking up to r.warmCap (further
 // capped by ctx) for a still-warming server instead of failing the query
 // outright. On success it touches the proxy so the idle clock reflects the call.

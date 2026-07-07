@@ -147,6 +147,34 @@ func TestRoutingProxy_QueryTimesOutWhileWarming(t *testing.T) {
 	}
 }
 
+// TestRoutingProxy_NotifyReturnsFastWhileWarming is the mirror of
+// TestRoutingProxy_QueryBlocksUntilWarm: a NOTIFY (DidOpen) routed to a
+// still-warming server must NOT block for the readiness cap. The readiness
+// block-and-retry is scoped to query paths only — a notify to a warming server is
+// redundant (its initial scan reads current on-disk content), and blocking would
+// stack N×cap across an N-file transaction/rename. With a 10s cap set, the notify
+// must return well under it (prior fast behaviour), not sleep out the cap.
+func TestRoutingProxy_NotifyReturnsFastWhileWarming(t *testing.T) {
+	rootA, _ := setupTwoProjects(t)
+	pool := newTestPool()
+	cp := &clientProxy{} // stays warming for the duration of the call
+	pool.entries[poolKey{rootA, "go"}] = &poolEntry{root: rootA, language: "go", proxy: cp, startedAt: time.Now()}
+
+	rp := newRoutingProxy(pool)
+	rp.warmCap = 10 * time.Second // long cap: a blocking notify would sleep this out
+	rp.setPrimary(rootA, "go", cp)
+
+	start := time.Now()
+	// A notify to a warming server returns the honest warming error, but fast —
+	// the point is that it does not block on awaitEntryReady.
+	_ = rp.DidOpen(context.Background(), protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: "file://" + filepath.Join(rootA, "main.go")},
+	})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("notify blocked on the readiness cap (%s); it must take the fast path", elapsed)
+	}
+}
+
 // TestRoutingProxy_QueryReturnsPromptlyOnCancel proves the block-and-retry wait
 // honours context cancellation promptly even under a long cap.
 func TestRoutingProxy_QueryReturnsPromptlyOnCancel(t *testing.T) {

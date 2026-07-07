@@ -120,6 +120,16 @@ func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
 // misleading "not yet ready". A genuinely cold first start (no primary pinned
 // yet) still returns that error.
 func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
+	return r.primaryClientWait(ctx, true)
+}
+
+// primaryClientWait is primaryClient with an explicit readiness policy. wait=true
+// blocks up to warmCap for a still-warming primary (the query path — the caller
+// needs an answer now); wait=false takes the fast, pre-fe9111d behaviour (a single
+// non-blocking handle check, warmingErr on miss) for the LSP notify path, where a
+// notify to a warming server is redundant — its initial scan reads current
+// on-disk content — so blocking would only stack latency, not correctness.
+func (r *routingProxy) primaryClientWait(ctx context.Context, wait bool) (lsp.Client, error) {
 	r.mu.RLock()
 	p := r.primary
 	root := r.primaryRoot
@@ -136,7 +146,7 @@ func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("waking primary %s for %s: %w", lang, root, err)
 	}
-	if c := r.awaitEntryReady(ctx, e); c != nil {
+	if c := r.entryClient(ctx, e, wait); c != nil {
 		return c, nil
 	}
 	_, elapsed := r.pool.warmupFor(e.root, e.language)
@@ -145,9 +155,12 @@ func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 
 // route returns the Client responsible for the workspace containing uri.
 // Falls back to the primary if uri is empty or workspace resolution fails.
-func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error) {
+// wait selects the readiness policy (see primaryClientWait): query methods pass
+// true to block-and-retry a warming server, notify methods pass false to keep the
+// prior fast behaviour.
+func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Client, error) {
 	if uri == "" {
-		return r.primaryClient(ctx)
+		return r.primaryClientWait(ctx, wait)
 	}
 	path := paths.URIToPath(uri)
 	r.mu.RLock()
@@ -160,7 +173,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 	}
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	if err != nil {
-		return r.primaryClient(ctx)
+		return r.primaryClientWait(ctx, wait)
 	}
 
 	// Pick the language by file extension first (so a .html file in a Go root
@@ -173,7 +186,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 		targetLang = fileLang
 	}
 	if targetLang == "" || targetLang == LanguageNone {
-		return r.primaryClient(ctx)
+		return r.primaryClientWait(ctx, wait)
 	}
 
 	r.mu.RLock()
@@ -196,7 +209,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 	if err != nil {
 		return nil, fmt.Errorf("acquiring %s for %s: %w", targetLang, root, err)
 	}
-	if c := r.awaitEntryReady(ctx, e); c != nil {
+	if c := r.entryClient(ctx, e, wait); c != nil {
 		r.noteActivated(root, targetLang)
 		return c, nil
 	}
@@ -398,7 +411,7 @@ func (r *routingProxy) Subscribe(handler func(string, json.RawMessage)) func() {
 
 // URI-bearing document methods route by URI.
 func (r *routingProxy) DidOpen(ctx context.Context, params protocol.DidOpenTextDocumentParams) error {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, false)
 	if err != nil {
 		return err
 	}
@@ -406,7 +419,7 @@ func (r *routingProxy) DidOpen(ctx context.Context, params protocol.DidOpenTextD
 }
 
 func (r *routingProxy) DidChange(ctx context.Context, params protocol.DidChangeTextDocumentParams) error {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, false)
 	if err != nil {
 		return err
 	}
@@ -414,7 +427,7 @@ func (r *routingProxy) DidChange(ctx context.Context, params protocol.DidChangeT
 }
 
 func (r *routingProxy) DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, false)
 	if err != nil {
 		return err
 	}
@@ -434,7 +447,7 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 		if err == nil && language == LanguageNone {
 			continue
 		}
-		c, err := r.route(ctx, ev.URI)
+		c, err := r.route(ctx, ev.URI, false)
 		if err != nil {
 			return err
 		}
@@ -450,7 +463,7 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 }
 
 func (r *routingProxy) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +471,7 @@ func (r *routingProxy) DocumentSymbols(ctx context.Context, params protocol.Docu
 }
 
 func (r *routingProxy) Definition(ctx context.Context, params protocol.DefinitionParams) ([]protocol.Location, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +479,7 @@ func (r *routingProxy) Definition(ctx context.Context, params protocol.Definitio
 }
 
 func (r *routingProxy) References(ctx context.Context, params protocol.ReferenceParams) ([]protocol.Location, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +487,7 @@ func (r *routingProxy) References(ctx context.Context, params protocol.Reference
 }
 
 func (r *routingProxy) Hover(ctx context.Context, params protocol.HoverParams) (*protocol.Hover, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +495,7 @@ func (r *routingProxy) Hover(ctx context.Context, params protocol.HoverParams) (
 }
 
 func (r *routingProxy) PrepareRename(ctx context.Context, params protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -490,7 +503,7 @@ func (r *routingProxy) PrepareRename(ctx context.Context, params protocol.Prepar
 }
 
 func (r *routingProxy) Rename(ctx context.Context, params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +511,7 @@ func (r *routingProxy) Rename(ctx context.Context, params protocol.RenameParams)
 }
 
 func (r *routingProxy) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +519,7 @@ func (r *routingProxy) PrepareCallHierarchy(ctx context.Context, params protocol
 }
 
 func (r *routingProxy) IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
-	c, err := r.route(ctx, params.Item.URI)
+	c, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +527,7 @@ func (r *routingProxy) IncomingCalls(ctx context.Context, params protocol.CallHi
 }
 
 func (r *routingProxy) OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
-	c, err := r.route(ctx, params.Item.URI)
+	c, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +535,7 @@ func (r *routingProxy) OutgoingCalls(ctx context.Context, params protocol.CallHi
 }
 
 func (r *routingProxy) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
+	c, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +543,7 @@ func (r *routingProxy) PrepareTypeHierarchy(ctx context.Context, params protocol
 }
 
 func (r *routingProxy) Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
-	c, err := r.route(ctx, params.Item.URI)
+	c, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
@@ -538,61 +551,11 @@ func (r *routingProxy) Supertypes(ctx context.Context, params protocol.TypeHiera
 }
 
 func (r *routingProxy) Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
-	c, err := r.route(ctx, params.Item.URI)
+	c, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
 	return c.Subtypes(ctx, params)
-}
-
-// ─── Pull diagnostics (textDocument/diagnostic) ────────────────────────────
-//
-// routingProxy is the per-connection LSP handle the diagnostics tool is
-// constructed with. The tool type-asserts that handle to its pullDiagnoser
-// interface (SupportsPullDiagnostics + Diagnostic) and, for an untracked file a
-// pull-only server never pushed on, requests diagnostics directly. The proxy
-// satisfies that interface structurally by delegating to the per-file adapter:
-// before these methods existed the assertion failed at runtime and the pull
-// path was dormant live. The path is purely additive — the tool only reaches it
-// when the push cache is empty for an untracked URI and the routed adapter both
-// implements pull and reports the server advertised it.
-
-// pullCapableClient is the optional pull-diagnostics surface an underlying
-// adapter (zls, typescript-language-server) may expose. Resolved structurally
-// from the routed lsp.Client.
-type pullCapableClient interface {
-	SupportsPullDiagnostics() bool
-	Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error)
-}
-
-// SupportsPullDiagnostics reports whether the connection's primary adapter
-// supports the LSP 3.17 pull model. URI-less by nature (the diagnostics tool
-// calls it before it has routed a specific file), so it consults the primary —
-// the same fallback every URI-less routingProxy method uses. Nil/err-safe:
-// returns false whenever the primary is not ready or does not implement pull.
-func (r *routingProxy) SupportsPullDiagnostics() bool {
-	c, err := r.primaryClient(context.Background())
-	if err != nil {
-		return false
-	}
-	pc, ok := c.(pullCapableClient)
-	return ok && pc.SupportsPullDiagnostics()
-}
-
-// Diagnostic routes the pull request to the adapter owning params' URI and
-// delegates. Returns a wrapped error when the routed adapter does not implement
-// the pull model, so the diagnostics tool falls back to its push (open-and-wait)
-// path rather than surfacing a hard failure.
-func (r *routingProxy) Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
-	c, err := r.route(ctx, params.TextDocument.URI)
-	if err != nil {
-		return nil, err
-	}
-	pc, ok := c.(pullCapableClient)
-	if !ok {
-		return nil, fmt.Errorf("pull diagnostics unsupported for %s", params.TextDocument.URI)
-	}
-	return pc.Diagnostic(ctx, params)
 }
 
 var _ lsp.Client = (*routingProxy)(nil)
