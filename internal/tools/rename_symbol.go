@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -40,13 +42,21 @@ type RenameSymbol struct {
 	client   lsp.Client
 	timeout  time.Duration
 	guard    BoundaryGuard
-	ws       WorkspaceFn // may be nil; anchors a workspace-relative input uri to the pinned root
+	ws       WorkspaceFn  // may be nil; anchors a workspace-relative input uri to the pinned root
+	cache    *cache.Cache // may be nil; evicted per modified file after a successful apply
 	fallback *findReplaceTool
 	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
 }
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
 	return &RenameSymbol{client: client, timeout: timeout}
+}
+
+// WithCache wires the session symbol cache so a successful rename evicts every
+// modified file's entries (parity with edit_file/write_file). Nil-safe.
+func (t *RenameSymbol) WithCache(c *cache.Cache) *RenameSymbol {
+	t.cache = c
+	return t
 }
 
 func (t *RenameSymbol) WithBoundary(guard BoundaryGuard) *RenameSymbol {
@@ -193,7 +203,7 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	if we == nil || (len(we.Changes) == 0 && len(we.DocumentChanges) == 0) {
 		return t.onRenameEmpty(ctx, a)
 	}
-	return t.applyOrPreview(a, we)
+	return t.applyOrPreview(ctx, a, we)
 }
 
 // onRenameUnavailable handles a failed LSP rename: it runs the structural
@@ -219,7 +229,7 @@ func (t *RenameSymbol) onRenameEmpty(ctx context.Context, a renameSymbolArgs) (s
 }
 
 // applyOrPreview applies (or previews, in dry-run) a server-computed edit set.
-func (t *RenameSymbol) applyOrPreview(a renameSymbolArgs, we *protocol.WorkspaceEdit) (string, error) {
+func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, we *protocol.WorkspaceEdit) (string, error) {
 	files, totalEdits, err := t.collectRenameTargets(we)
 	if err != nil {
 		return "", err
@@ -243,6 +253,11 @@ func (t *RenameSymbol) applyOrPreview(a renameSymbolArgs, we *protocol.Workspace
 			}
 			return "", fmt.Errorf("applying rename: %w", applyErr)
 		}
+		// Post-write housekeeping for EVERY rewritten file — parity with the
+		// file-write tools. A rename that touches N files must refresh the server
+		// and evict the cache for all N, or a follow-up query against any of them
+		// resolves positions from stale content.
+		t.notifyRenameWritten(ctx, modified)
 		files = modified
 		verb = "changed"
 	} else {
@@ -262,6 +277,18 @@ func (t *RenameSymbol) applyOrPreview(a renameSymbolArgs, we *protocol.Workspace
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
 	return sb.String(), nil
+}
+
+// notifyRenameWritten runs the post-write LSP notification + cache eviction for
+// each file a rename rewrote. Best-effort per file: a notification failure is
+// logged, never fatal. client and cache are nil-safe.
+func (t *RenameSymbol) notifyRenameWritten(ctx context.Context, modified []string) {
+	for _, f := range modified {
+		if err := notifyLSP(ctx, t.client, f, protocol.FileChanged); err != nil {
+			slog.Warn("rename_symbol: LSP notification failed", "path", f, "err", err)
+		}
+		invalidateCache(t.cache, protocol.FileURI(f))
+	}
 }
 
 // maxRenameDiffFiles caps the number of per-file diffs rendered in a

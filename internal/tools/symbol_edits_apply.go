@@ -1,10 +1,14 @@
 package tools
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -24,7 +28,15 @@ func resolveShowDiff(fn func() bool) bool {
 // "replaced", etc.) used in the dry-run / applied output. When showDiff is true
 // the response carries a unified diff of the change — a preview in dry-run, the
 // applied change otherwise.
-func applySingleEdit(uri string, edit protocol.TextEdit, dryRun, showDiff bool, summary string, sym *protocol.DocumentSymbol, viaFallback bool) (string, error) {
+//
+// On a successful apply it notifies the language server of the on-disk change
+// and invalidates the symbol cache for uri — the same post-write housekeeping
+// every file-write tool performs (edit_file, write_file, …). Without it the
+// server keeps the pre-edit content, so the next documentSymbol/references
+// query returns positions computed against a stale file and a follow-up
+// semantic edit fails "position out of range". client and c are nil-safe (a
+// nil client / cache simply skips the corresponding step, as in tests).
+func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, uri string, edit protocol.TextEdit, dryRun, showDiff bool, summary string, sym *protocol.DocumentSymbol, viaFallback bool) (string, error) {
 	path := paths.URIToPath(uri)
 	diff := ""
 	if showDiff {
@@ -50,12 +62,27 @@ func applySingleEdit(uri string, edit protocol.TextEdit, dryRun, showDiff bool, 
 	if err := applyTextEditsToFile(path, []protocol.TextEdit{edit}); err != nil {
 		return "", fmt.Errorf("applying edit: %w", err)
 	}
+	notifySymbolEditWritten(ctx, client, c, path, uri)
 	fmt.Fprintf(&sb, "%s symbol %q in %s\n", capitalise(summary), sym.Name, path)
 	if diff != "" {
 		sb.WriteString("\n")
 		sb.WriteString(diff)
 	}
 	return sb.String(), nil
+}
+
+// notifySymbolEditWritten performs the post-write housekeeping shared by the
+// symbol-edit apply paths: it tells the language server the file changed on disk
+// (workspace/didChangeWatchedFiles) and evicts the symbol cache for uri. This is
+// byte-identical to what edit_file/write_file do after every write; keeping it
+// here means a semantic edit no longer leaves the server holding stale content.
+// Best-effort — a notification failure is logged, never fatal to a write that
+// already landed. client and c are nil-safe.
+func notifySymbolEditWritten(ctx context.Context, client lsp.Client, c *cache.Cache, path, uri string) {
+	if err := notifyLSP(ctx, client, path, protocol.FileChanged); err != nil {
+		slog.Warn("symbol edit: LSP notification failed", "path", path, "err", err)
+	}
+	invalidateCache(c, uri)
 }
 
 // symbolEditDiff renders the unified diff a single TextEdit would produce
