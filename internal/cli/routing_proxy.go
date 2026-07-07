@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -46,12 +47,16 @@ type routingProxy struct {
 	// the elected primary. Both guarded by mu; nil/empty for a single-language root.
 	wsRoot     string
 	discovered []discoveredRoot
+	// warmCap bounds the block-and-retry wait for a still-warming routed server
+	// (see awaitEntryReady). A field so tests shorten it; set once at construction.
+	warmCap time.Duration
 }
 
 func newRoutingProxy(pool *workspacePool) *routingProxy {
 	return &routingProxy{
 		pool:    pool,
 		primary: &clientProxy{},
+		warmCap: warmReadyCap,
 	}
 }
 
@@ -131,8 +136,7 @@ func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("waking primary %s for %s: %w", lang, root, err)
 	}
-	if c := e.proxy.get(); c != nil {
-		e.proxy.touch()
+	if c := r.awaitEntryReady(ctx, e); c != nil {
 		return c, nil
 	}
 	_, elapsed := r.pool.warmupFor(e.root, e.language)
@@ -192,8 +196,7 @@ func (r *routingProxy) route(ctx context.Context, uri string) (lsp.Client, error
 	if err != nil {
 		return nil, fmt.Errorf("acquiring %s for %s: %w", targetLang, root, err)
 	}
-	if c := e.proxy.get(); c != nil {
-		e.proxy.touch()
+	if c := r.awaitEntryReady(ctx, e); c != nil {
 		r.noteActivated(root, targetLang)
 		return c, nil
 	}

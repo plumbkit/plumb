@@ -373,6 +373,44 @@ func TestAdapter_Rename(t *testing.T) {
 	}
 }
 
+// TestAdapter_RenameEnsuresOpen verifies Rename sends textDocument/didOpen
+// (ensureOpen) before the rename request — even with no preceding PrepareRename,
+// which is how rename_symbol may invoke it. Without the open, sourcekit-lsp
+// replies -32001 "No language service found".
+func TestAdapter_RenameEnsuresOpen(t *testing.T) {
+	ad, mock := newAdapter(t)
+	ctx := context.Background()
+	mock.HandleOK(protocol.MethodRename, protocol.WorkspaceEdit{})
+
+	if _, err := ad.Initialize(ctx, swift.DefaultInitParams("file:///p")); err != nil {
+		t.Fatal(err)
+	}
+	uri := writeTempSwift(t, "struct Greeter {}\n")
+	if _, err := ad.Rename(ctx, protocol.RenameParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 0, Character: 7},
+		NewName:      "Welcomer",
+	}); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	var firstOpen, firstRename int
+	for i, c := range mock.Calls() {
+		switch c.Method {
+		case protocol.MethodDidOpen:
+			if firstOpen == 0 {
+				firstOpen = i + 1
+			}
+		case protocol.MethodRename:
+			if firstRename == 0 {
+				firstRename = i + 1
+			}
+		}
+	}
+	if firstOpen == 0 || firstRename == 0 || firstOpen > firstRename {
+		t.Fatalf("didOpen (idx %d) must precede rename (idx %d)", firstOpen, firstRename)
+	}
+}
+
 // TestAdapter_EnsureOpenBeforeQuery verifies the adapter sends textDocument/
 // didOpen before its first per-document query and caches it (one open across
 // repeated queries) — sourcekit-lsp refuses documentSymbol on an unopened file.
