@@ -149,7 +149,7 @@ func (t *CallHierarchy) executeByName(ctx context.Context, uri, name, direction 
 	}
 	matches := resolveSymbolsByName(syms, name)
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbol named %q in %s.", name, uri), nil
+		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
 	}
 	if len(matches) == 1 {
 		return t.executeByPosition(ctx, queryForSymbol(uri, matches[0], direction), false)

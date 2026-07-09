@@ -152,7 +152,7 @@ func (t *GetDefinition) lspDefinitionByName(ctx context.Context, uri, name strin
 
 	matches := resolveSymbolsByName(syms, name)
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbol named %q in %s.", name, uri), nil
+		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
 	}
 
 	if len(matches) == 1 {

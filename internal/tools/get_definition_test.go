@@ -161,3 +161,27 @@ func TestGetDefinition_Interface(t *testing.T) {
 		t.Errorf("inputSchema is not valid JSON: %v", err)
 	}
 }
+
+// TestGetDefinition_ByName_NotFound_Suggests verifies the by-name path appends
+// a "did you mean?" fragment for a near-miss query.
+func TestGetDefinition_ByName_NotFound_Suggests(t *testing.T) {
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{
+			{Name: "fsWatcher", Kind: protocol.SKStruct},
+		},
+	}
+	tool := tools.NewGetDefinition(mock, nil, time.Minute, 0)
+	args, _ := json.Marshal(map[string]any{
+		"uri":         "file:///p/main.go",
+		"symbol_name": "Watcher",
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"No symbol", "Did you mean:", "`fsWatcher`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}

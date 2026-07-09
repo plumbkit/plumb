@@ -254,3 +254,88 @@ func readSymbolHeaderMtime(header string) string {
 	}
 	return rest
 }
+
+// TestReadSymbol_NotFound_Suggests verifies a near-miss query gets a "did you
+// mean?" fragment built from the already-fetched symbol list.
+func TestReadSymbol_NotFound_Suggests(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.go")
+	if err := os.WriteFile(path, []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{
+			{Name: "fsWatcher", Kind: protocol.SKStruct},
+			{Name: "startIndexer", Kind: protocol.SKFunction},
+		},
+	}
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker())
+	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Watcher"})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"No symbol", "Did you mean:", "`fsWatcher`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "startIndexer") {
+		t.Errorf("unrelated symbol suggested:\n%s", out)
+	}
+}
+
+// TestReadSymbol_NotFound_NoSuggestionsPlainMessage verifies the not-found
+// message stays byte-identical when nothing in the file is a near miss.
+func TestReadSymbol_NotFound_NoSuggestionsPlainMessage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.go")
+	if err := os.WriteFile(path, []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{
+			{Name: "startIndexer", Kind: protocol.SKFunction},
+		},
+	}
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker())
+	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Zebra"})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `No symbol named "Zebra" in ` + path + "."
+	if out != want {
+		t.Errorf("message not byte-identical:\ngot  %q\nwant %q", out, want)
+	}
+}
+
+// TestReadSymbol_NotFound_OutsideWorkspaceHint verifies the out-of-workspace
+// hint still renders on the not-found path alongside the suggestions.
+func TestReadSymbol_NotFound_OutsideWorkspaceHint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p.go")
+	if err := os.WriteFile(path, []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{
+			{Name: "fsWatcher", Kind: protocol.SKStruct},
+		},
+	}
+	tool := tools.NewReadSymbol(mock, nil, time.Minute, 0, tools.NewReadTracker()).
+		WithOutsideLabel(func(string) string { return "GOMODCACHE" })
+	raw, _ := json.Marshal(map[string]any{"path": path, "name": "Watcher"})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{"Did you mean:", "`fsWatcher`", "outside the workspace"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
