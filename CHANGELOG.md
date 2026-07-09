@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **`session_start` now renders memories in three tiers instead of enumerating every one — roughly a 10× token reduction on a memory-heavy workspace.** The memories section listed every memory by name, description, and size; on a workspace where most memories are auto-generated `episodic-*` session summaries that was ~1,500 tokens of mostly-irrelevant listing an agent had to scan past at every orientation — and the same episodic content is already surfaced by the "Last session" block. The section now partitions on `Memory.UserAuthored()`: user-authored memories keep the existing one-line format (still ordered recently-relevant-first via `recentFirstMemories`), capped at 10 with an `…and N more — use list_memories to browse all.` pointer; generated memories (episodic summaries and `share_findings` handoffs) collapse to a single count line pointing at `search_memories`/`list_memories` — collapsed, not hidden, so their existence stays discoverable. A workspace with no generated memories keeps the simple `## Memories (N)` header, and the zero-memory guidance is unchanged; `list_memories` and `search_memories` remain the full-fidelity paths. Guarded by first-of-their-kind render tests for the section: `TestWriteSessionMemories_MixedTiers`, `_UserCap`, `_AllGenerated`, `_SingularGenerated`, `_Empty`, and `_UserOnly`.
+
 ### Fixed
 
 - **`file_outline` and `write_file` called on a directory now return actionable errors instead of a bare "is a directory".** `file_outline` on a directory surfaced `<path> is a directory` — no suggested alternative — costing the agent a wasted round-trip working out which tool to reach for instead, where `read_file` already models the right pattern (`read_file: "…" is a directory — use list_files to browse directories`). `file_outline`'s message now points at `list_directory` (`readSourceLines`, `internal/tools/file_outline.go`), and `write_file`'s directory refusal explains the fix (`write_file: "…" is a directory — pass a file path, not a directory`). Guarded by `TestFileOutline_DirectoryTarget` and the extended `TestWriteFile_RejectsDirectory`.
