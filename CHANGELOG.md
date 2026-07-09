@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 (2026-07-10)
+
 ### Added
 
 - **Workspace detection now content-sniffs for a language when no root marker resolves — a git repo full of `.py` files with no `pyproject.toml` attaches Python (when pyright is installed).** Detection keyed only off root markers (`go.mod`, `pyproject.toml`, …), so a project in an ecosystem with no mandatory manifest — a Python repo driven by `requirements.txt` alone, or loose scripts — resolved as `LanguageNone`: no diagnostics, no `get_definition`/`find_references`, symbols only from the approximate topology fallback. Dogfooding on exactly such a repo reported this as the biggest gap. Detection now, as a **last resort** before returning `"none"` at a `.git/` boundary (and when resolving a `.plumb/` marker root), scans the root — bounded to `extScanDepth` (2) levels and `extScanMaxFiles` (2000) files, pruning `.git`/`node_modules`/build outputs — for source files of an **active** language and resolves the dominant one (`extLangAt`/`bestSniffedLang`, `internal/cli/pool_detect.go`). It is gated on the language server being installed (via `fileLanguage` → the effective `p.langs` set), fires only after every strong and weak marker has failed, is confined to the confirmed project boundary (never ascends, never scans `$HOME`), and is defensive throughout (a read error skips the entry, never crashes detection). Strong markers still win outright; the sniff never overrides an explicit resolution. Guarded by `TestDetect_ExtSniffPythonAtGitRoot`, `_ExtSniffPythonInSubdir`, `_ExtSniffInactiveLanguageStaysNone`, `_StrongMarkerBeatsExtSniff`, `_ExtSniffPlumbMarkerRoot`, and `_ExtSniffRespectsDepthBound`.
