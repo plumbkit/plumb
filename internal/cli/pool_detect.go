@@ -249,6 +249,88 @@ func (p *workspacePool) weakLangAt(dir string) string {
 	return ""
 }
 
+// extScanDepth / extScanMaxFiles bound the content sniff so it can never stall
+// detection on a large tree: it descends at most this many levels below the root
+// and examines at most this many files before giving up.
+const (
+	extScanDepth    = 2
+	extScanMaxFiles = 2000
+)
+
+// extLangAt is the last-resort content sniff for a resolved LanguageNone root:
+// it returns the ACTIVE language (installed + enabled — fileLanguage gates on
+// the effective set) owning the most source files in a bounded shallow scan of
+// dir, or "". This is what lets a git repo full of .py files with no
+// pyproject.toml attach Python when pyright is installed, matching the
+// "install → on" philosophy for ecosystems that have no mandatory manifest. It
+// runs at attach only AFTER strong-marker child discovery finds nothing (so a
+// true monorepo is rooted per-child, not collapsed to one language here), and
+// scans dir without ascending. Defensive throughout — any read error skips that
+// entry rather than failing, so detection never crashes on an odd filesystem;
+// noise dirs (.git, node_modules, build outputs) are pruned.
+func (p *workspacePool) extLangAt(dir string) string {
+	if len(p.langs) == 0 {
+		return ""
+	}
+	type item struct {
+		dir   string
+		depth int
+	}
+	counts := map[string]int{}
+	scanned := 0
+	stack := []item{{dir: dir, depth: 0}}
+	for len(stack) > 0 && scanned < extScanMaxFiles {
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		entries, err := os.ReadDir(it.dir)
+		if err != nil {
+			continue
+		}
+		for _, de := range entries {
+			if de.IsDir() {
+				if it.depth < extScanDepth && !skipChildDir(de.Name()) {
+					stack = append(stack, item{dir: filepath.Join(it.dir, de.Name()), depth: it.depth + 1})
+				}
+				continue
+			}
+			scanned++
+			if scanned > extScanMaxFiles {
+				break
+			}
+			if lang := p.fileLanguage(de.Name()); lang != "" {
+				counts[lang]++
+			}
+		}
+	}
+	return bestSniffedLang(counts)
+}
+
+// bestSniffedLang picks the dominant language from a sniff count map with a
+// deterministic total order (independent of map iteration): most files wins,
+// then "go" first, then alphabetical. Returns "" for an empty map.
+func bestSniffedLang(counts map[string]int) string {
+	best := ""
+	for lang := range counts {
+		if best == "" || sniffLess(lang, counts[lang], best, counts[best]) {
+			best = lang
+		}
+	}
+	return best
+}
+
+func sniffLess(a string, na int, b string, nb int) bool {
+	if na != nb {
+		return na > nb
+	}
+	if a == "go" {
+		return true
+	}
+	if b == "go" {
+		return false
+	}
+	return a < b
+}
+
 // languageForRoot resolves the language for an already-determined workspace root
 // (a .plumb marker, or a re-pin): a strong marker at the root or an ancestor,
 // else a weak marker at the root itself, else LanguageNone.
