@@ -197,6 +197,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	addConfigSection(cfgTable, "edits", [][]string{
 		{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
+		{"block_dirty_writes", fmt.Sprintf("%v", projectCfg.Edits.BlockDirtyWrites), sourceFor("block_dirty_writes", defaultsCfg.Edits.BlockDirtyWrites, globalCfg.Edits.BlockDirtyWrites, projectCfg.Edits.BlockDirtyWrites)},
 		{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
 		{"post_write_diagnostics_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteDiagnosticsMs), sourceFor("post_write_diagnostics_ms", defaultsCfg.Edits.PostWriteDiagnosticsMs, globalCfg.Edits.PostWriteDiagnosticsMs, projectCfg.Edits.PostWriteDiagnosticsMs)},
 		{"post_write_cross_file", fmt.Sprintf("%v", projectCfg.Edits.PostWriteCrossFile), sourceFor("post_write_cross_file", defaultsCfg.Edits.PostWriteCrossFile, globalCfg.Edits.PostWriteCrossFile, projectCfg.Edits.PostWriteCrossFile)},
@@ -473,6 +474,8 @@ func envVarForField(field string) string {
 		return "PLUMB_LOG_FORMAT"
 	case "post_write_diagnostics_ms":
 		return "PLUMB_POST_WRITE_DIAG_MS"
+	case "block_dirty_writes":
+		return "PLUMB_BLOCK_DIRTY_WRITES"
 	case "auto_attach":
 		return "PLUMB_AUTO_ATTACH"
 	case "auto_attach_persist":

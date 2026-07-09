@@ -51,6 +51,10 @@ var registryData = []Field{
 		Description: "Append a unified diff to edit_file/write_file responses.",
 	},
 	{
+		Key: "edits.block_dirty_writes", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Refuse a destructive write to a pre-existing dirty file unless dirty_ok. Set false to disable.",
+	},
+	{
 		Key: "edits.rate_limit_per_minute", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Max write ops per session per minute. 0 disables limiting.",
 	},

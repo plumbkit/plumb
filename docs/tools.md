@@ -38,8 +38,10 @@ These apply across many tools:
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.
-- **`dirty_ok`.** Filesystem and semantic write tools refuse to touch a file with
-  uncommitted git changes unless you pass `dirty_ok: true`.
+- **`dirty_ok`.** Filesystem and semantic write tools refuse to touch a file
+  with uncommitted git changes that plumb did not write this session, unless
+  you pass `dirty_ok: true`. Disable the guard entirely with
+  `[edits] block_dirty_writes = false` (or `PLUMB_BLOCK_DIRTY_WRITES=0`).
 - **`expected_mtime` / `expected_sha`.** `read_file` and `read_symbol` emit a
   header line — `# plumb-read mtime=<RFC3339Nano> sha256=<hash> indent=<…>` —
   whose `mtime`/`sha256` you can pass back to **`edit_file` *or* `write_file`**

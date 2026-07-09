@@ -38,7 +38,10 @@ You hit the per-session write cap (default 120/min). Wait, raise
 
 The target file is dirty in git and a write tool refused to clobber it. Review
 and commit the changes, or pass `dirty_ok: true` to the write call to proceed
-anyway.
+anyway. This guards only pre-existing uncommitted work plumb did not create —
+re-editing a file plumb wrote this session is never blocked. If it fires too
+often for your workflow (you iterate on uncommitted WIP), disable the guard
+with `[edits] block_dirty_writes = false` (or `PLUMB_BLOCK_DIRTY_WRITES=0`).
 
 ## The TUI / `plumb sessions` is stuck on "resolving…"
 

@@ -302,7 +302,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		return rateLimitError("find_replace", t.deps.Limiter)
 	}
 	unlock := lockPath(path)
-	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
+	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		unlock()
 		return fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
 	}

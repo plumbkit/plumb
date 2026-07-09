@@ -91,6 +91,7 @@ config. `plumb web --port` overrides it for a single launch.
 | `post_write_cross_file_settle_ms` | int | `200` | `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | Bounded grace the cross-file sweep waits, after the edited file's own diagnostics land, for dependent-file re-publishes before comparing. `0` compares immediately. |
 | `concurrent_write_skew_ms` | int | `100` | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | Clock-skew allowance for `edit_file`'s concurrent-write detector. Raise on slow/network filesystems. |
 | `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
+| `block_dirty_writes` | bool | `true` | `PLUMB_BLOCK_DIRTY_WRITES` | Refuse a destructive write (`write_file`, `edit_file`, `delete_file`, `find_replace`, `rename_file`, `copy_file`, `transaction_apply`) to a file with uncommitted git changes that plumb did not write this session, unless `dirty_ok: true`. Set false to disable the guard — for a workflow that iterates on uncommitted WIP. Re-editing a file plumb wrote this session is never blocked either way. |
 
 ## `[walk]` — filesystem-traversal safety
 
@@ -481,6 +482,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | `edits.post_write_cross_file_settle_ms` |
 | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | `edits.concurrent_write_skew_ms` |
 | `PLUMB_SHOW_WRITE_DIFF` | `edits.show_write_diff` |
+| `PLUMB_BLOCK_DIRTY_WRITES` | `edits.block_dirty_writes` |
 | `PLUMB_REFUSE_HOME_ROOTS` | `walk.refuse_home_roots` |
 | `PLUMB_GIT_ALLOW_WRITES` | `git.allow_writes` |
 | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | `git.allow_destructive` |

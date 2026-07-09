@@ -374,7 +374,7 @@ func (t *RenameSymbol) preflightTargets(ctx context.Context, files []string, a r
 		if err := t.guard.check(f); err != nil {
 			return fmt.Errorf("rename_symbol: %w", err)
 		}
-		if deps != nil && !a.DirtyOK && deps.Writes != nil && dirtyBlocksWrite(ctx, deps.Writes, f) {
+		if deps != nil && !a.DirtyOK && dirtyBlocksWrite(ctx, *deps, f) {
 			return fmt.Errorf("rename_symbol: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", f)
 		}
 	}

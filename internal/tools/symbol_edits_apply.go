@@ -125,7 +125,7 @@ func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path
 	if deps.Limiter != nil && !deps.Limiter.Allow() {
 		return rateLimitError(toolName, deps.Limiter)
 	}
-	if !dirtyOK && deps.Writes != nil && dirtyBlocksWrite(ctx, deps.Writes, path) {
+	if !dirtyOK && dirtyBlocksWrite(ctx, *deps, path) {
 		return fmt.Errorf("%s: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", toolName, path)
 	}
 	return nil

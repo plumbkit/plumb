@@ -68,6 +68,7 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		WorkspaceFn:           s.workspace,
 		Boundary:              s.writeBoundaryGuard,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
+		BlockDirtyFn:          func() bool { return s.editsConfig().BlockDirtyWrites },
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
 		QualityReport:         qualityReport,
 		TopologyNotify:        topologyNotify,

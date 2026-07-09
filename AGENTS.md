@@ -118,6 +118,7 @@ Built in four layers, each overriding the prior; `plumb config show` prints the 
 strict = false                # require read_file (matching mtime) before edit_file; per-session
 rate_limit_per_minute = 120   # sliding-window cap per session; 0 disables. A shared parent budget (keyed by (client, workspace)) caps combined rate across connections from the same client to one project
 show_write_diff = true        # append a unified diff to the content-modifying tools' responses: edit_file/write_file/undo_edit, the semantic symbol edits (replace_symbol_body, insert_before/after_symbol, safe_delete_symbol — preview + applied), and transaction_apply
+block_dirty_writes = true     # refuse a destructive write to a file with uncommitted git changes plumb did not write this session, unless dirty_ok; set false to disable the guard entirely (iterate on uncommitted WIP without dirty_ok). Re-editing a file plumb wrote this session is never blocked either way
 post_write_diagnostics_ms = 300 # ceiling on the wait for the LSP to re-publish diagnostics after a write; adapts down to observed latency; 0 disables
 post_write_cross_file = true  # after a write, compare workspace diagnostics against a pre-write baseline and flag NEW errors the edit introduced in OTHER files (the "edit A silently breaks B" case); the single-file block keeps priority
 post_write_cross_file_settle_ms = 200 # bounded grace the cross-file sweep waits, after the edited file's own diagnostics land, for dependent-file re-publishes; 0 compares immediately
@@ -125,7 +126,7 @@ post_write_cross_file_settle_ms = 200 # bounded grace the cross-file sweep waits
 
 The cross-file sweep is honest by construction: it only reports a file whose error count ROSE versus the pre-write baseline AND that the language server re-published after the write, so pre-existing errors and untouched files are never mis-attributed; the edited file's own block is unaffected and returned first, and the heads-up hedges the mid-series case rather than claiming "the build is broken".
 
-Env: `PLUMB_STRICT_EDITS`, `PLUMB_WRITE_RATE_LIMIT`, `PLUMB_SHOW_WRITE_DIFF`, `PLUMB_POST_WRITE_DIAG_MS`, `PLUMB_POST_WRITE_CROSS_FILE`, `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS`.
+Env: `PLUMB_STRICT_EDITS`, `PLUMB_WRITE_RATE_LIMIT`, `PLUMB_SHOW_WRITE_DIFF`, `PLUMB_BLOCK_DIRTY_WRITES`, `PLUMB_POST_WRITE_DIAG_MS`, `PLUMB_POST_WRITE_CROSS_FILE`, `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS`.
 
 ### `[workspace]` — root detection fallback + path-access roots
 
@@ -338,7 +339,7 @@ Setup helpers preserve existing MCP servers, back up config first, and resolve l
 
 1. **`.plumb/` marker** — explicit workspace. Returns `(dir, language)` if an LSP language is detectable here or in an ancestor; otherwise `(dir, "none")` (filesystem tools, stats, project config still work; LSP tools fail until a language attaches).
 2. **A strong language root marker** (`go.mod`, `Cargo.toml`, `Package.swift`, `pyproject.toml`, …) at `dir` or any ancestor — returns `(dir, language)`.
-3. **A `.git/` directory** — an unambiguous project boundary. Returns `(dir, "none")` so a multi-language repo with no language marker still resolves. `$HOME` is excluded; nearest-wins, so a `.plumb/` or language marker beats a `.git/` further up.
+3. **A `.git/` directory** — an unambiguous project boundary. Returns `(dir, "none")` so a multi-language repo with no language marker still resolves. `$HOME` is excluded; nearest-wins, so a `.plumb/` or language marker beats a `.git/` further up. **Content sniff (last resort):** before returning `"none"` at a `.git/` boundary (or resolving a `.plumb/` marker root), plumb scans that root — bounded, up to 2 levels deep, noise dirs pruned — for source files of an **active** language and, if one dominates, resolves that language instead (`extLangAt`, `pool_detect.go`). So a git repo full of `.py` files with **no** `pyproject.toml`/`setup.py` attaches Python when pyright is installed — matching the "install → on" philosophy for ecosystems with no mandatory manifest. It fires only after all strong/weak markers fail, is confined to the confirmed boundary (never ascends, never `$HOME`), and is gated on the language server being installed.
 
 Walks to the parent otherwise; errors only after passing the filesystem root.
 

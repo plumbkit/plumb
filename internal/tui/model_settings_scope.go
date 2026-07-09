@@ -221,6 +221,7 @@ func rawHasPath(m map[string]any, path []string) bool {
 var settingTOMLPaths = map[settingKey][]string{
 	skStrict:                     {"edits", "strict"},
 	skShowWriteDiff:              {"edits", "show_write_diff"},
+	skBlockDirtyWrites:           {"edits", "block_dirty_writes"},
 	skRateLimit:                  {"edits", "rate_limit_per_minute"},
 	skPostWriteDiagMs:            {"edits", "post_write_diagnostics_ms"},
 	skPostWriteCrossFile:         {"edits", "post_write_cross_file"},
@@ -293,6 +294,7 @@ var settingDottedKeys = map[settingKey]string{
 	skLogFile:                    "log_file",
 	skStrict:                     "edits.strict",
 	skShowWriteDiff:              "edits.show_write_diff",
+	skBlockDirtyWrites:           "edits.block_dirty_writes",
 	skRateLimit:                  "edits.rate_limit_per_minute",
 	skPostWriteDiagMs:            "edits.post_write_diagnostics_ms",
 	skPostWriteCrossFile:         "edits.post_write_cross_file",

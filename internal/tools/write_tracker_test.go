@@ -165,16 +165,20 @@ func TestDirtyBlocksWrite_SessionAware(t *testing.T) {
 
 	ctx := context.Background()
 	w := NewWriteTracker()
-	if !dirtyBlocksWrite(ctx, w, f) {
+	if !dirtyBlocksWrite(ctx, WriteDeps{Writes: w}, f) {
 		t.Fatal("a dirty file plumb did not write should block")
 	}
 	w.Record(f)
-	if dirtyBlocksWrite(ctx, w, f) {
+	if dirtyBlocksWrite(ctx, WriteDeps{Writes: w}, f) {
 		t.Fatal("a dirty file plumb wrote this session should not block")
 	}
 	// A nil tracker falls back to the strict dirty check.
-	if !dirtyBlocksWrite(ctx, nil, f) {
+	if !dirtyBlocksWrite(ctx, WriteDeps{}, f) {
 		t.Fatal("a nil tracker should still block a dirty file")
+	}
+	// The guard is a no-op when block_dirty_writes is disabled.
+	if dirtyBlocksWrite(ctx, WriteDeps{Writes: NewWriteTracker(), BlockDirtyFn: func() bool { return false }}, f) {
+		t.Fatal("a disabled dirty-guard should never block")
 	}
 }
 
@@ -189,7 +193,7 @@ func TestDirtyBlocksMove_SessionAware(t *testing.T) {
 	if err := os.WriteFile(u, []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if dirtyBlocksMove(ctx, NewWriteTracker(), u) {
+	if dirtyBlocksMove(ctx, WriteDeps{Writes: NewWriteTracker()}, u) {
 		t.Fatal("an untracked source should not block a move")
 	}
 
@@ -204,11 +208,11 @@ func TestDirtyBlocksMove_SessionAware(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := NewWriteTracker()
-	if !dirtyBlocksMove(ctx, w, f) {
+	if !dirtyBlocksMove(ctx, WriteDeps{Writes: w}, f) {
 		t.Fatal("a tracked, modified source should block a move")
 	}
 	w.Record(f)
-	if dirtyBlocksMove(ctx, w, f) {
+	if dirtyBlocksMove(ctx, WriteDeps{Writes: w}, f) {
 		t.Fatal("a source plumb wrote this session should not block a move")
 	}
 }
@@ -267,5 +271,39 @@ func TestEditFile_DirtyGuardBlocksPreExistingDirt(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "uncommitted changes") {
 		t.Errorf("want an uncommitted-changes error, got: %v", err)
+	}
+}
+
+// TestEditFile_DirtyGuardDisabledByKnob confirms [edits].block_dirty_writes=false
+// lets a pre-existing dirty file be edited without dirty_ok — the workflow the
+// knob exists to serve — while the same setup blocks under the default.
+func TestEditFile_DirtyGuardDisabledByKnob(t *testing.T) {
+	dir := initGitRepo(t)
+	f := filepath.Join(dir, "baz.txt")
+	if err := os.WriteFile(f, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "baz.txt")
+	gitExec(t, dir, "commit", "-m", "add baz")
+	// Dirty the file outside plumb.
+	if err := os.WriteFile(f, []byte("one two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	edit := map[string]any{
+		"file_path": f,
+		"edits":     []map[string]string{{"old_string": "one", "new_string": "X"}},
+	}
+
+	// Guard on (default): blocked.
+	blocking := NewEditFile(WriteDeps{Writes: NewWriteTracker()})
+	if _, err := blocking.Execute(context.Background(), mustJSON(edit)); err == nil {
+		t.Fatal("guard on: a pre-existing dirty file should be blocked")
+	}
+
+	// Guard off: allowed.
+	off := NewEditFile(WriteDeps{Writes: NewWriteTracker(), BlockDirtyFn: func() bool { return false }})
+	if _, err := off.Execute(context.Background(), mustJSON(edit)); err != nil {
+		t.Fatalf("guard off: the edit should be allowed, got: %v", err)
 	}
 }

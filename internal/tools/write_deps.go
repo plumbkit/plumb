@@ -113,6 +113,12 @@ type WriteDeps struct {
 	ShowWriteDiff bool
 	// ShowWriteDiffFn, when set, overrides ShowWriteDiff at call time.
 	ShowWriteDiffFn func() bool
+	// BlockDirtyFn reports whether the dirty-guard is enabled for this call
+	// (the resolved [edits].block_dirty_writes / PLUMB_BLOCK_DIRTY_WRITES). When
+	// it returns false the guard is a no-op — a destructive write to a
+	// pre-existing dirty file is allowed without dirty_ok. nil means "enabled"
+	// (blockDirty defaults to true) so a bare WriteDeps{} keeps the safe default.
+	BlockDirtyFn func() bool
 	// PostWriteNotifyFn, when non-nil, is called after a successful
 	// notifyLSP to perform any adapter-specific post-write notification.
 	// The daemon sets this for Java workspaces to send DidOpen + DidClose so
@@ -270,6 +276,16 @@ func (d WriteDeps) showWriteDiff() bool {
 		return d.ShowWriteDiffFn()
 	}
 	return d.ShowWriteDiff
+}
+
+// blockDirty reports whether the dirty-guard is enabled for this call. A nil
+// BlockDirtyFn defaults to true so a bare WriteDeps{} (tests, headless) keeps
+// the safe default; the daemon wires it to the resolved [edits].block_dirty_writes.
+func (d WriteDeps) blockDirty() bool {
+	if d.BlockDirtyFn != nil {
+		return d.BlockDirtyFn()
+	}
+	return true
 }
 
 // reportQuality invokes QualityReport if set and returns its output.

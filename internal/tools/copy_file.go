@@ -98,7 +98,7 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	unlock2 := lockPath(second)
 	defer unlock2()
 
-	data, perm, err := copyFilePreconditions(ctx, t.deps.Writes, from, to, a)
+	data, perm, err := copyFilePreconditions(ctx, t.deps, from, to, a)
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +126,7 @@ func parseCopyFileArgs(raw json.RawMessage) (copyFileArgs, error) {
 // copyFilePreconditions validates the source, checks the dirty state, checks
 // for destination conflicts, creates parent directories, and reads the source
 // content. Returns the content and source permissions on success.
-func copyFilePreconditions(ctx context.Context, writes *WriteTracker, from, to string, a copyFileArgs) ([]byte, os.FileMode, error) {
+func copyFilePreconditions(ctx context.Context, deps WriteDeps, from, to string, a copyFileArgs) ([]byte, os.FileMode, error) {
 	info, err := os.Stat(from)
 	if err != nil {
 		return nil, 0, fmt.Errorf("copy_file: source: %w", err)
@@ -134,7 +134,7 @@ func copyFilePreconditions(ctx context.Context, writes *WriteTracker, from, to s
 	if info.IsDir() {
 		return nil, 0, fmt.Errorf("copy_file: %q is a directory — refusing to copy recursively", from)
 	}
-	if !a.DirtyOk && dirtyBlocksMove(ctx, writes, from) {
+	if !a.DirtyOk && dirtyBlocksMove(ctx, deps, from) {
 		return nil, 0, fmt.Errorf("copy_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", from)
 	}

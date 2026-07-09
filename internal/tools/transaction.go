@@ -158,7 +158,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 		}
 	}()
 
-	if err := txDirtyCheck(ctx, t.deps.Writes, paths, a.DirtyOk); err != nil {
+	if err := txDirtyCheck(ctx, t.deps, paths, a.DirtyOk); err != nil {
 		return "", err
 	}
 
@@ -227,9 +227,10 @@ func (t *TransactionApply) txCanonicalPaths(ops []txOperation) ([]string, error)
 }
 
 // txDirtyCheck batches paths by directory and refuses if any are dirty and not
-// written by plumb this session (writes).
-func txDirtyCheck(ctx context.Context, writes *WriteTracker, paths []string, dirtyOk bool) error {
-	if dirtyOk {
+// written by plumb this session. It is a no-op when dirty_ok is set or the
+// dirty-guard is disabled ([edits].block_dirty_writes = false).
+func txDirtyCheck(ctx context.Context, deps WriteDeps, paths []string, dirtyOk bool) error {
+	if dirtyOk || !deps.blockDirty() {
 		return nil
 	}
 	type dirBatch struct {
@@ -249,7 +250,7 @@ func txDirtyCheck(ctx context.Context, writes *WriteTracker, paths []string, dir
 	for dir, batch := range batches {
 		dirty := dirtyBasenamesInDir(ctx, dir, batch.bases, false)
 		for i, base := range batch.bases {
-			if dirty[base] && !writes.Wrote(batch.fulls[i]) {
+			if dirty[base] && !deps.Writes.Wrote(batch.fulls[i]) {
 				dirtyPaths = append(dirtyPaths, batch.fulls[i])
 			}
 		}
