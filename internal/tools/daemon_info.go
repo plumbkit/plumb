@@ -17,6 +17,15 @@ type ConfigStatus struct {
 	RestartNeeded bool      // a restart-bound setting changed since daemon start
 }
 
+// LSPStatus is a snapshot of the session's primary language-server state,
+// surfaced by daemon_info as a three-state row: ready, warming, or none
+// attached.
+type LSPStatus struct {
+	Language string        // attached LSP language; "" or "none" means no server is attached
+	Warming  bool          // the server is attached but its handshake has not completed
+	Elapsed  time.Duration // how long the warm-up has been running; 0 when unknown
+}
+
 // daemonInfo returns session and daemon metadata to the calling agent.
 type daemonInfo struct {
 	sessID        string
@@ -25,6 +34,15 @@ type daemonInfo struct {
 	startedAt     time.Time
 	configStatus  func() ConfigStatus // optional; nil when no store is wired
 	purpose       func() string       // optional; nil when no purpose accessor is wired
+	lspStatus     func() LSPStatus    // optional; nil when no LSP accessor is wired
+}
+
+// WithLSPStatus wires an accessor returning the session's live language-server
+// state. Nil-safe: when unset, daemon_info omits the lsp row. Returns the
+// receiver for chaining.
+func (t *daemonInfo) WithLSPStatus(fn func() LSPStatus) *daemonInfo {
+	t.lspStatus = fn
+	return t
 }
 
 // WithPurpose wires an accessor returning this session's human-readable purpose
@@ -104,6 +122,9 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 			out += fmt.Sprintf("\npurpose:        %s", p)
 		}
 	}
+	if t.lspStatus != nil {
+		out += fmt.Sprintf("\nlsp:            %s", formatLSPStatusRow(t.lspStatus()))
+	}
 	if t.configStatus != nil {
 		cs := t.configStatus()
 		restart := "no"
@@ -119,6 +140,31 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	}
 	out += formatSessionLatency(t.sessID)
 	return out, nil
+}
+
+// formatLSPStatusRow renders the three-state language-server row: ready,
+// warming (with elapsed time when known), or none attached.
+func formatLSPStatusRow(s LSPStatus) string {
+	if s.Language == "" || s.Language == "none" {
+		return "none attached"
+	}
+	if !s.Warming {
+		return fmt.Sprintf("ready (%s)", s.Language)
+	}
+	if d := roundLSPElapsed(s.Elapsed); d > 0 {
+		return fmt.Sprintf("warming (%s, ~%s elapsed)", s.Language, d)
+	}
+	return fmt.Sprintf("warming (%s)", s.Language)
+}
+
+// roundLSPElapsed rounds a warm-up duration for display: 100 ms precision under
+// a second, whole seconds beyond. Local because the cli package's equivalent
+// helper is unexported.
+func roundLSPElapsed(d time.Duration) time.Duration {
+	if d < time.Second {
+		return d.Round(100 * time.Millisecond)
+	}
+	return d.Round(time.Second)
 }
 
 // sessionLatencyTimeout caps how long daemon_info will wait for its optional

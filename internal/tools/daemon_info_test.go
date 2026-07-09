@@ -76,6 +76,45 @@ func TestDaemonInfo_OmitsPurposeWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestDaemonInfoLSPStatusRow covers the three-state lsp row (ready / warming /
+// none attached) and its omission when no accessor is wired.
+func TestDaemonInfoLSPStatusRow(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *LSPStatus // nil ⇒ accessor unwired
+		want   string     // "" ⇒ the row must be absent
+	}{
+		{"ready", &LSPStatus{Language: "go"}, "lsp:            ready (go)"},
+		{"warming with elapsed", &LSPStatus{Language: "go", Warming: true, Elapsed: 3200 * time.Millisecond}, "lsp:            warming (go, ~3s elapsed)"},
+		{"warming without elapsed", &LSPStatus{Language: "go", Warming: true}, "lsp:            warming (go)"},
+		{"empty language means none attached", &LSPStatus{}, "lsp:            none attached"},
+		{"LanguageNone means none attached", &LSPStatus{Language: "none"}, "lsp:            none attached"},
+		{"accessor unwired omits the row", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now())
+			if tt.status != nil {
+				s := *tt.status
+				d = d.WithLSPStatus(func() LSPStatus { return s })
+			}
+			out, err := d.Execute(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if tt.want == "" {
+				if strings.Contains(out, "lsp:") {
+					t.Errorf("lsp row should be omitted when no accessor is wired:\n%s", out)
+				}
+				return
+			}
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("missing %q:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
 // TestRunWithTimeout_ReturnsResultBeforeTimeout verifies the happy path:
 // a fast producer's value is returned, not the sentinel.
 func TestRunWithTimeout_ReturnsResultBeforeTimeout(t *testing.T) {

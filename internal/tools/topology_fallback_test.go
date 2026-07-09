@@ -93,6 +93,67 @@ func TestFindSymbol_TopologyFallback(t *testing.T) {
 	}
 }
 
+// legacyFallbackNote pins the byte-exact banner emitted for a genuinely-absent
+// language server — the pre-warming-awareness text, which must never drift.
+const legacyFallbackNote = "[topology fallback — LSP unavailable; results are approximate and may be stale. source=topology, mode=indexed-approximate]"
+
+// TestFindSymbol_TopologyFallback_WarmingNote proves that when the warm-up
+// probe reports the server as still warming, the fallback note says so instead
+// of the misleading "LSP unavailable".
+func TestFindSymbol_TopologyFallback_WarmingNote(t *testing.T) {
+	store, uri := newIndexedStore(t)
+	tool := tools.NewFindSymbol(brokenLSP(), nil, 0, 0).
+		WithTopologyFallback(func() *topology.Store { return store }).
+		WithLSPWarmup(func(string) (bool, time.Duration) { return true, 4 * time.Second })
+	args, _ := json.Marshal(map[string]any{"query": "Handle", "uri": uri})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected topology fallback to succeed, got error: %v", err)
+	}
+	if !strings.Contains(out, "still warming") || !strings.Contains(out, "~4s") {
+		t.Errorf("expected a warming note with elapsed time, got:\n%s", out)
+	}
+	if strings.Contains(out, "LSP unavailable") {
+		t.Errorf("a warming server must not be reported unavailable:\n%s", out)
+	}
+}
+
+// TestFindSymbol_TopologyFallback_LegacyNoteWhenUnwired proves a tool without a
+// warm-up probe still emits the historical note byte-for-byte.
+func TestFindSymbol_TopologyFallback_LegacyNoteWhenUnwired(t *testing.T) {
+	store, uri := newIndexedStore(t)
+	tool := tools.NewFindSymbol(brokenLSP(), nil, 0, 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+	args, _ := json.Marshal(map[string]any{"query": "Handle", "uri": uri})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected topology fallback to succeed, got error: %v", err)
+	}
+	if !strings.Contains(out, legacyFallbackNote) {
+		t.Errorf("expected the byte-exact legacy note, got:\n%s", out)
+	}
+}
+
+// TestWorkspaceSymbols_TopologyFallback_NotWarmingKeepsLegacyNote proves a
+// wired probe that reports not-warming keeps the legacy note byte-for-byte.
+func TestWorkspaceSymbols_TopologyFallback_NotWarmingKeepsLegacyNote(t *testing.T) {
+	store, _ := newIndexedStore(t)
+	tool := tools.NewWorkspaceSymbols(brokenLSP(), nil, 0, 0, nil).
+		WithTopologyFallback(func() *topology.Store { return store }).
+		WithLSPWarmup(func(string) (bool, time.Duration) { return false, 0 })
+	args, _ := json.Marshal(map[string]any{"query": "HandleRequest"})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected topology fallback to succeed, got error: %v", err)
+	}
+	if !strings.Contains(out, legacyFallbackNote) {
+		t.Errorf("expected the byte-exact legacy note, got:\n%s", out)
+	}
+}
+
 // Without a topology fallback wired, the LSP error must surface unchanged.
 func TestWorkspaceSymbols_NoFallbackWhenTopologyNil(t *testing.T) {
 	tool := tools.NewWorkspaceSymbols(brokenLSP(), nil, 0, 0, nil)
