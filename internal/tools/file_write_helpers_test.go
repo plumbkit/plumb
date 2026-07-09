@@ -275,10 +275,17 @@ func TestAwaitDiagnosticsRefresh_ZeroWindowUsesDefault(t *testing.T) {
 
 	got, _ := awaitDiagnosticsRefresh(src, "file:///foo.go", 0, nil)
 
+	// Deterministic wait for the goroutine to finish signalling. The old
+	// non-blocking select{…default:t.Fatal} raced the goroutine's
+	// src.set()→close(changed) ordering: awaitDiagnosticsRefresh can observe the
+	// set value and return between those two statements, so the default branch
+	// fired spuriously under -race load. The got assertion below already proves
+	// we blocked past the 50ms signal (a zero/short window would return "no
+	// change"); this just confirms the goroutine ran, without the race.
 	select {
 	case <-changed:
-	default:
-		t.Fatal("goroutine should have fired before the 300ms default window expired")
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine should have fired within the 300ms default window")
 	}
 	if len(got) != 1 || got[0].Message != "changed" {
 		t.Errorf("zero window: want updated diag via default window, got %v", got)

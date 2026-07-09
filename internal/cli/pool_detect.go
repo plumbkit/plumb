@@ -267,7 +267,11 @@ const (
 // true monorepo is rooted per-child, not collapsed to one language here), and
 // scans dir without ascending. Defensive throughout — any read error skips that
 // entry rather than failing, so detection never crashes on an odd filesystem;
-// noise dirs (.git, node_modules, build outputs) are pruned.
+// noise dirs (.git, node_modules, build outputs) are pruned. The dominant-file
+// count is a coarse heuristic — a large generated/vendored tree with a
+// non-standard dir name (not caught by skipChildDir) can skew it — but as a
+// last resort it is strictly better than LanguageNone and never overrides a
+// strong or weak marker.
 func (p *workspacePool) extLangAt(dir string) string {
 	if len(p.langs) == 0 {
 		return ""
@@ -293,10 +297,10 @@ func (p *workspacePool) extLangAt(dir string) string {
 				}
 				continue
 			}
-			scanned++
-			if scanned > extScanMaxFiles {
+			if scanned >= extScanMaxFiles {
 				break
 			}
+			scanned++
 			if lang := p.fileLanguage(de.Name()); lang != "" {
 				counts[lang]++
 			}
@@ -309,6 +313,9 @@ func (p *workspacePool) extLangAt(dir string) string {
 // deterministic total order (independent of map iteration): most files wins,
 // then "go" first, then alphabetical. Returns "" for an empty map.
 func bestSniffedLang(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
 	best := ""
 	for lang := range counts {
 		if best == "" || sniffLess(lang, counts[lang], best, counts[best]) {
