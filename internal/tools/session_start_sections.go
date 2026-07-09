@@ -244,9 +244,19 @@ func (t *SessionStart) writeSessionRecentFiles(sb *strings.Builder, ws string) [
 	return files
 }
 
-// writeSessionMemories lists every memory, ordering those attached to a
-// recently modified file (paths glob or provenance) first — the memories most
-// likely to matter for the work in flight lead the list.
+// maxListedUserMemories caps the user-authored memory listing so a
+// memory-rich workspace still orients in a screenful; list_memories browses
+// the rest.
+const maxListedUserMemories = 10
+
+// writeSessionMemories renders the memory orientation block in three tiers:
+// user-authored memories listed (recently-relevant first, capped at
+// maxListedUserMemories), and generated memories (episodic session summaries,
+// shared findings) collapsed to a single count line. On a memory-heavy
+// workspace enumerating dozens of generated summaries cost ~1,500 tokens of
+// listing the agent had to scan past — their content is already surfaced by
+// the "Last session" block, and list_memories / search_memories remain the
+// full-fidelity paths.
 func writeSessionMemories(sb *strings.Builder, ws string, recent []string) {
 	mems, err := memory.List(ws)
 	if err != nil {
@@ -256,16 +266,57 @@ func writeSessionMemories(sb *strings.Builder, ws string, recent []string) {
 		sb.WriteString("## Memories\n\nNone yet. Use write_memory to save project notes.\n\n")
 		return
 	}
-	mems = recentFirstMemories(mems, recent)
-	fmt.Fprintf(sb, "## Memories (%d)\n\n", len(mems))
+	var user, generated []memory.Memory
 	for _, m := range mems {
+		if m.UserAuthored() {
+			user = append(user, m)
+		} else {
+			generated = append(generated, m)
+		}
+	}
+	if len(generated) == 0 {
+		fmt.Fprintf(sb, "## Memories (%d)\n\n", len(mems))
+	} else {
+		fmt.Fprintf(sb, "## Memories (%d: %d user, %d generated)\n\n", len(mems), len(user), len(generated))
+	}
+	writeUserMemoryList(sb, recentFirstMemories(user, recent))
+	if len(generated) > 0 {
+		if len(user) > 0 {
+			sb.WriteString("\n")
+		}
+		fmt.Fprintf(sb, "%d generated %s (episodic session summaries and shared findings — not listed; "+
+			"use search_memories to find relevant context, list_memories to browse).\n",
+			len(generated), pluralMemories(len(generated)))
+	}
+	sb.WriteString("\nUse read_memory to load any of these.\n\n")
+}
+
+// writeUserMemoryList prints user-authored memories in the established
+// one-line format, capped at maxListedUserMemories with a browse pointer for
+// the remainder.
+func writeUserMemoryList(sb *strings.Builder, user []memory.Memory) {
+	listed := user
+	if len(listed) > maxListedUserMemories {
+		listed = listed[:maxListedUserMemories]
+	}
+	for _, m := range listed {
 		fmt.Fprintf(sb, "- **%s**", m.Name)
 		if m.Description != "" {
 			fmt.Fprintf(sb, " — %s", m.Description)
 		}
 		fmt.Fprintf(sb, " (%d bytes)\n", m.SizeBytes)
 	}
-	sb.WriteString("\nUse read_memory to load any of these.\n\n")
+	if n := len(user) - len(listed); n > 0 {
+		fmt.Fprintf(sb, "…and %d more — use list_memories to browse all.\n", n)
+	}
+}
+
+// pluralMemories renders the count noun for the generated-memory summary line.
+func pluralMemories(n int) string {
+	if n == 1 {
+		return "memory"
+	}
+	return "memories"
 }
 
 // recentFirstMemories stably partitions mems: memories related to a recently
