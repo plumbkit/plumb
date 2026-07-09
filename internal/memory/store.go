@@ -45,6 +45,15 @@ func (m Memory) UserAuthored() bool {
 	return m.Confidence == "" || m.Confidence == ConfidenceUser
 }
 
+// Episodic reports whether this memory is an idle-session episodic summary,
+// marked by the "episodic-" name prefix (see generatedMemoryPrefixes). Such
+// summaries describe what a past session did, not the code itself, so hint
+// surfaces may treat them as lower-relevance than other memories. Value
+// receiver over immutable metadata — safe for concurrent use.
+func (m Memory) Episodic() bool {
+	return strings.HasPrefix(m.Name, episodicMemoryPrefix)
+}
+
 // Dir returns the memories directory path for workspace.
 func Dir(workspace string) string {
 	return filepath.Join(workspace, ".plumb", "memories")
@@ -229,7 +238,9 @@ func DeleteIndexed(ix *Index, workspace, name string) error {
 // for the same generated_memory_keep retention pool, so an on-demand finding
 // counts against retention exactly like an idle summary — a distinguishable name
 // but one shared cap.
-var generatedMemoryPrefixes = []string{"episodic-", "finding-"}
+const episodicMemoryPrefix = "episodic-"
+
+var generatedMemoryPrefixes = []string{episodicMemoryPrefix, "finding-"}
 
 // isGeneratedMemoryName reports whether name is one plumb generated itself (an
 // episodic summary or a shared finding) and so is retention-eligible.
