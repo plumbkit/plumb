@@ -524,3 +524,101 @@ func TestRenameSymbol_NarrowRenameReportsEveryFile(t *testing.T) {
 		t.Errorf("a single-file rename must not carry the cap notice, got:\n%s", out)
 	}
 }
+
+// The snap-and-retry is single-shot: if the retried position ALSO misses, the
+// tool must surface the error rather than snap again. Seeding two miss errors
+// and counting Rename calls pins that contract — a retry loop would keep calling
+// until the seeded errors ran out and then succeed, hiding the regression.
+func TestRenameSymbol_SnapRetryIsSingleShot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: 2, Character: 0}, End: protocol.Position{Line: 2, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+		}},
+		renameResult: renameEditFor(path, "Bar"),
+		renameErrs: []error{
+			errors.New("no identifier found"), // the original raw position
+			errors.New("no identifier found"), // the snapped retry
+		},
+	}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 0, "new_name": "Bar", "dry_run": false,
+	})
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("a snapped retry that also misses must surface the error, not snap again")
+	}
+	if mock.renameCalls != 2 {
+		t.Errorf("Rename called %d times, want exactly 2 (the original + one snapped retry)", mock.renameCalls)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "package p\n\nfunc Foo() {}\n" {
+		t.Errorf("a failed rename must not touch the file: %s", got)
+	}
+}
+
+// A symbol_name caller supplied no coordinates, so a server rejection of the
+// position plumb resolved for it must not be explained with a hint about the
+// line and character arguments it never passed.
+func TestRenameSymbol_ByName_ServerRejectionHintDoesNotMentionCoordinates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: 2, Character: 0}, End: protocol.Position{Line: 2, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+		}},
+		renameErrs: []error{errors.New("no identifier found")},
+	}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "symbol_name": "Foo", "new_name": "Bar", "dry_run": false,
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected the server rejection to surface")
+	}
+	if strings.Contains(err.Error(), "0-based") {
+		t.Errorf("a symbol_name caller must not be pointed at line/character it never passed: %v", err)
+	}
+	if !strings.Contains(err.Error(), `symbol "Foo"`) || !strings.Contains(err.Error(), "index is stale") {
+		t.Errorf("expected a stale-symbol-tree hint naming the symbol, got: %v", err)
+	}
+	// A by-name rename must not snap: the position already came from the tree.
+	if mock.renameCalls != 1 {
+		t.Errorf("Rename called %d times, want 1 (no snap on a by-name query)", mock.renameCalls)
+	}
+}
+
+// A raw-position caller keeps the coordinate hint.
+func TestRenameSymbol_ByPosition_ServerRejectionKeepsCoordinateHint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{renameErrs: []error{errors.New("boom")}}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 5, "new_name": "Bar", "dry_run": false,
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected the server error to surface")
+	}
+	if !strings.Contains(err.Error(), "0-based") {
+		t.Errorf("a raw-position caller keeps the coordinate hint, got: %v", err)
+	}
+}

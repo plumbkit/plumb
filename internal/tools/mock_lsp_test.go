@@ -18,6 +18,7 @@ type mockLSP struct {
 	err          error
 	renameResult *protocol.WorkspaceEdit // returned by Rename when non-nil
 	renameErrs   []error                 // optional per-call Rename errors before falling back to err
+	renameCalls  int                     // number of Rename calls, so a test can pin the snap retry to one shot
 	block        bool                    // when true, query methods wait for ctx cancellation
 
 	// Call-hierarchy responses (nil by default → same as an empty server).
@@ -98,6 +99,7 @@ func (m *mockLSP) PrepareRename(_ context.Context, _ protocol.PrepareRenameParam
 
 func (m *mockLSP) Rename(_ context.Context, p protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
 	m.lastRenamePos = p.Position
+	m.renameCalls++
 	if len(m.renameErrs) > 0 {
 		err := m.renameErrs[0]
 		m.renameErrs = m.renameErrs[1:]

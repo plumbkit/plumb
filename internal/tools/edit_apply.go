@@ -40,39 +40,40 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 // when non-nil, runs after all writes succeed but before the locks release —
 // the place for bookkeeping (write tracker, undo snapshots) whose contract
 // requires the per-path lock to still be held.
+//
+// Targets are prepared, and then written, in sorted path order rather than in
+// the WorkspaceEdit's map order. Nothing about correctness depends on which file
+// is prepared first — no byte is written until all of them have been — but a
+// deterministic order means a broken "validate as you write" refactor fails the
+// same way on every run instead of one time in N, and a failure names the same
+// file every time.
 func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]workspaceEditPlan)) ([]string, []workspaceEditPlan, error) {
 	if we == nil {
 		return nil, nil, nil
 	}
 
-	editsByURI := workspaceEditGroups(we)
-	pathsByURI := make(map[string]string, len(editsByURI))
-	var targetPaths []string
-	for uri := range editsByURI {
-		path := paths.URIToPath(uri)
-		pathsByURI[uri] = path
-		targetPaths = append(targetPaths, path)
+	targets := workspaceEditTargets(we)
+	targetPaths := make([]string, 0, len(targets))
+	for _, tgt := range targets {
+		targetPaths = append(targetPaths, tgt.path)
 	}
-	sort.Strings(targetPaths)
 
 	unlocks := lockPaths(targetPaths)
 	defer unlockAll(unlocks)
 
-	plans := make([]workspaceEditPlan, 0, len(editsByURI))
-	for uri, edits := range editsByURI {
-		path := pathsByURI[uri]
-		before, after, mode, err := prepareTextEditsLocked(path, edits)
+	plans := make([]workspaceEditPlan, 0, len(targets))
+	for _, tgt := range targets {
+		before, after, mode, err := prepareTextEditsLocked(tgt.path, tgt.edits)
 		if err != nil {
-			return nil, nil, fmt.Errorf("applying edits to %s: %w", path, err)
+			return nil, nil, fmt.Errorf("applying edits to %s: %w", tgt.path, err)
 		}
 		plans = append(plans, workspaceEditPlan{
-			path:   path,
+			path:   tgt.path,
 			before: before,
 			after:  after,
 			mode:   mode,
 		})
 	}
-	sort.Slice(plans, func(i, j int) bool { return plans[i].path < plans[j].path })
 
 	var modified []string
 	for _, p := range plans {
@@ -95,6 +96,26 @@ type workspaceEditPlan struct {
 	before []byte
 	after  []byte
 	mode   os.FileMode
+}
+
+// workspaceEditTarget is one file's share of a WorkspaceEdit, resolved to a
+// filesystem path.
+type workspaceEditTarget struct {
+	path  string
+	edits []protocol.TextEdit
+}
+
+// workspaceEditTargets groups we's edits per file and returns them in sorted
+// path order, so preparation, writing, and any resulting error are deterministic
+// regardless of Go's map iteration.
+func workspaceEditTargets(we *protocol.WorkspaceEdit) []workspaceEditTarget {
+	editsByURI := workspaceEditGroups(we)
+	targets := make([]workspaceEditTarget, 0, len(editsByURI))
+	for uri, edits := range editsByURI {
+		targets = append(targets, workspaceEditTarget{path: paths.URIToPath(uri), edits: edits})
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].path < targets[j].path })
+	return targets
 }
 
 func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
