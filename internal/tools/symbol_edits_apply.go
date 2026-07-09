@@ -184,6 +184,16 @@ func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, 
 // running it (rename_symbol's multi-file path) must have recorded the
 // write-tracker/undo bookkeeping under the lock first.
 func semanticNotifyPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, before, after, toolName string, baseline *diagBaseline) string {
+	semanticNotifyWritten(ctx, deps, client, c, path, uri, toolName)
+	return semanticPostWriteReport(ctx, deps, path, uri, before, after, baseline)
+}
+
+// semanticNotifyWritten is the cheap, non-blocking part of the post-write
+// pipeline: tell the language server the file changed on disk, run any
+// adapter-specific hook, evict the symbol cache, and enqueue a topology
+// re-index. A multi-file caller runs this for EVERY modified file — none of it
+// waits on the server.
+func semanticNotifyWritten(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, toolName string) {
 	writeClient := deps.Client
 	if writeClient == nil {
 		writeClient = client
@@ -202,6 +212,14 @@ func semanticNotifyPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Cl
 	}
 	invalidateCache(writeCache, uri)
 	deps.notifyTopology(path)
+}
+
+// semanticPostWriteReport is the expensive part: it blocks for up to
+// post_write_diagnostics_ms waiting for the server to re-publish, then runs the
+// offline quality analysers. Cost is per file and serial, so a caller with many
+// modified files must bound how many times it calls this (see
+// maxRenameReportFiles).
+func semanticPostWriteReport(ctx context.Context, deps *WriteDeps, path, uri, before, after string, baseline *diagBaseline) string {
 	return deps.postWriteDiagnostics(uri, before, after, false, baseline) + deps.reportQuality(ctx, path)
 }
 

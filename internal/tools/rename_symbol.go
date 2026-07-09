@@ -361,13 +361,37 @@ func (t *RenameSymbol) preflightTargets(ctx context.Context, files []string, a r
 	return nil
 }
 
+// maxRenameReportFiles bounds how many of a multi-file rename's modified files
+// get the expensive half of the post-write pipeline: the blocking diagnostics
+// wait (up to post_write_diagnostics_ms each) and the quality analysers (one
+// lint invocation each). Every modified file is still notified to the language
+// server, cache-invalidated, and re-indexed — only the reporting is capped, so a
+// 50-file rename costs one response's worth of waiting rather than fifty. The
+// remainder is summarised with a pointer at diagnostics().
+const maxRenameReportFiles = 5
+
+// capReportFiles returns the leading maxRenameReportFiles entries of a sorted
+// slice (or all of it, when shorter).
+func capReportFiles[T any](s []T) []T {
+	if len(s) > maxRenameReportFiles {
+		return s[:maxRenameReportFiles]
+	}
+	return s
+}
+
+// captureRenameBaselines snapshots the pre-write language-server state for the
+// files that will actually be reported on. A baseline is consumed only by the
+// differential diagnostics block, and — with the cross-file sweep enabled — each
+// one costs a whole-workspace diagnostics snapshot, so capturing one per
+// modified file would pay for reports that are never rendered. files must be
+// sorted: postWriteRename reports the same prefix.
 func (t *RenameSymbol) captureRenameBaselines(files []string) map[string]*diagBaseline {
 	deps := writeDepsPtr(t.hasDeps, &t.deps)
 	if deps == nil {
 		return nil
 	}
 	out := make(map[string]*diagBaseline, len(files))
-	for _, f := range files {
+	for _, f := range capReportFiles(files) {
 		uri := protocol.FileURI(f)
 		out[uri] = deps.capturePreWriteBaseline(uri)
 	}
@@ -390,6 +414,13 @@ func (t *RenameSymbol) recordRenameWrites(plans []workspaceEditPlan) {
 	}
 }
 
+// postWriteRename runs the post-write pipeline over a rename's modified files in
+// two passes. Every file is notified first — LSP, adapter hook, cache eviction,
+// topology — and none of that blocks, so by the time the reporting pass waits on
+// the server it has already heard about the whole edit set and the per-file
+// waits overlap. Reporting is then capped at maxRenameReportFiles: it is the
+// only blocking part, and it is what made a wide rename serialise a diagnostics
+// wait plus a lint run for every file it touched.
 func (t *RenameSymbol) postWriteRename(ctx context.Context, plans []workspaceEditPlan, baselines map[string]*diagBaseline, diagOut *strings.Builder) {
 	deps := writeDepsPtr(t.hasDeps, &t.deps)
 	for _, p := range plans {
@@ -398,7 +429,19 @@ func (t *RenameSymbol) postWriteRename(ctx context.Context, plans []workspaceEdi
 			notifySymbolEditWritten(ctx, t.client, t.cache, p.path, uri)
 			continue
 		}
-		diagOut.WriteString(semanticNotifyPostWrite(ctx, deps, t.client, t.cache, p.path, uri, string(p.before), string(p.after), "rename_symbol", baselines[uri]))
+		semanticNotifyWritten(ctx, deps, t.client, t.cache, p.path, uri, "rename_symbol")
+	}
+	if deps == nil {
+		return
+	}
+	reported := capReportFiles(plans)
+	for _, p := range reported {
+		uri := protocol.FileURI(p.path)
+		diagOut.WriteString(semanticPostWriteReport(ctx, deps, p.path, uri, string(p.before), string(p.after), baselines[uri]))
+	}
+	if len(plans) > len(reported) {
+		fmt.Fprintf(diagOut, "\ndiagnostics and code quality reported for the first %d of %d modified file(s); call diagnostics() for the rest",
+			len(reported), len(plans))
 	}
 }
 

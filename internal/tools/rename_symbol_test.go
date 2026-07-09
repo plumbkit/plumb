@@ -439,3 +439,88 @@ func TestRenameSymbol_MissingArgsNoLSPHint(t *testing.T) {
 		t.Errorf("argument validation must not carry the LSP-failure hint: %v", err)
 	}
 }
+
+// A wide rename must notify the language server, the cache, and the topology
+// index about EVERY file it changed, while paying the expensive post-write
+// report — the blocking diagnostics wait plus a lint run — only for a bounded
+// prefix. Before this cap a 50-file rename serialised 50 diagnostics waits and
+// 50 analyser invocations into one response.
+func TestRenameSymbol_WideRenameCapsPostWriteReporting(t *testing.T) {
+	const files = 8
+	dir := t.TempDir()
+	changes := map[string][]protocol.TextEdit{}
+	for i := range files {
+		path := filepath.Join(dir, fmt.Sprintf("f%d.go", i))
+		if err := os.WriteFile(path, []byte("package p\n\nvar Foo = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		changes["file://"+path] = []protocol.TextEdit{{
+			Range:   protocol.Range{Start: protocol.Position{Line: 2, Character: 4}, End: protocol.Position{Line: 2, Character: 7}},
+			NewText: "Bar",
+		}}
+	}
+
+	var quality, indexed int
+	deps := tools.WriteDeps{
+		QualityReport:  func(context.Context, string) string { quality++; return "" },
+		TopologyNotify: func(string) { indexed++ },
+	}
+	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{Changes: changes}}
+	tool := tools.NewRenameSymbol(mock, 0).WithWriteDeps(deps)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + filepath.Join(dir, "f0.go"), "line": 2, "character": 4,
+		"new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if indexed != files {
+		t.Errorf("every modified file must be re-indexed: got %d topology notifications, want %d", indexed, files)
+	}
+	if quality != 5 {
+		t.Errorf("quality analysis must be capped: got %d runs over %d files, want 5", quality, files)
+	}
+	if !strings.Contains(out, "reported for the first 5 of 8 modified file(s)") {
+		t.Errorf("expected the capped-reporting notice, got:\n%s", out)
+	}
+	for i := range files {
+		b, _ := os.ReadFile(filepath.Join(dir, fmt.Sprintf("f%d.go", i)))
+		if !strings.Contains(string(b), "var Bar = 1") {
+			t.Fatalf("f%d.go was not renamed: %s", i, b)
+		}
+	}
+}
+
+// A rename narrow enough to report on every file must not carry the cap notice.
+func TestRenameSymbol_NarrowRenameReportsEveryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nvar Foo = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var quality int
+	deps := tools.WriteDeps{QualityReport: func(context.Context, string) string { quality++; return "" }}
+	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file://" + path: {{
+			Range:   protocol.Range{Start: protocol.Position{Line: 2, Character: 4}, End: protocol.Position{Line: 2, Character: 7}},
+			NewText: "Bar",
+		}},
+	}}}
+	tool := tools.NewRenameSymbol(mock, 0).WithWriteDeps(deps)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 4, "new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if quality != 1 {
+		t.Errorf("quality runs = %d, want 1", quality)
+	}
+	if strings.Contains(out, "reported for the first") {
+		t.Errorf("a single-file rename must not carry the cap notice, got:\n%s", out)
+	}
+}
