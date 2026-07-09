@@ -153,7 +153,7 @@ func parseWriteFileArgs(raw json.RawMessage) (writeFileArgs, error) {
 
 func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a writeFileArgs) error {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return fmt.Errorf("write_file: %q is a directory", path)
+		return fmt.Errorf("write_file: %q is a directory — pass a file path, not a directory", path)
 	}
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		return fmt.Errorf("write_file: %q has uncommitted changes; "+
