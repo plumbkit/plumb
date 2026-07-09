@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,31 +94,107 @@ func TestApplyWorkspaceEdit_MultipleFiles(t *testing.T) {
 	}
 }
 
+// Several valid files sort BEFORE the one file whose edit cannot be applied, and
+// preparation runs in sorted path order, so an implementation that wrote each
+// file as it validated would have committed every valid file by the time it
+// reached the broken one. The assertion therefore fails deterministically rather
+// than depending on Go's map-iteration order to put the invalid file last.
 func TestApplyWorkspaceEdit_ValidatesAllFilesBeforeWriting(t *testing.T) {
 	dir := t.TempDir()
-	a := filepath.Join(dir, "a.txt")
-	b := filepath.Join(dir, "b.txt")
-	if err := os.WriteFile(a, []byte("aaa\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(b, []byte("bbb\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	line0 := protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}
+	pastEOF := protocol.Range{Start: protocol.Position{Line: 99, Character: 0}, End: protocol.Position{Line: 99, Character: 3}}
 
-	we := &protocol.WorkspaceEdit{
-		Changes: map[string][]protocol.TextEdit{
-			"file://" + a: {{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}, NewText: "AAA"}},
-			"file://" + b: {{Range: protocol.Range{Start: protocol.Position{Line: 99, Character: 0}, End: protocol.Position{Line: 99, Character: 3}}, NewText: "BBB"}},
-		},
+	valid := []string{"a.txt", "b.txt", "c.txt", "d.txt"}
+	changes := map[string][]protocol.TextEdit{}
+	for _, name := range valid {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("aaa\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		changes["file://"+p] = []protocol.TextEdit{{Range: line0, NewText: "AAA"}}
 	}
-	if _, err := applyWorkspaceEdit(we); err == nil {
-		t.Fatal("expected invalid second-file edit to fail")
+	// Sorts last, so every valid file is prepared before this one fails.
+	broken := filepath.Join(dir, "z.txt")
+	if err := os.WriteFile(broken, []byte("zzz\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(a); string(got) != "aaa\n" {
-		t.Fatalf("a.txt was written before all files validated: %q", got)
+	changes["file://"+broken] = []protocol.TextEdit{{Range: pastEOF, NewText: "ZZZ"}}
+
+	if _, err := applyWorkspaceEdit(&protocol.WorkspaceEdit{Changes: changes}); err == nil {
+		t.Fatal("expected the out-of-range edit to fail the whole apply")
 	}
-	if got, _ := os.ReadFile(b); string(got) != "bbb\n" {
-		t.Fatalf("b.txt changed unexpectedly: %q", got)
+	for _, name := range valid {
+		if got, _ := os.ReadFile(filepath.Join(dir, name)); string(got) != "aaa\n" {
+			t.Fatalf("%s was written before all files validated: %q", name, got)
+		}
+	}
+	if got, _ := os.ReadFile(broken); string(got) != "zzz\n" {
+		t.Fatalf("z.txt changed unexpectedly: %q", got)
+	}
+}
+
+// workspaceEditTargets must hand preparation a stable, sorted order whatever the
+// WorkspaceEdit's map iteration does.
+func TestWorkspaceEditTargets_SortedByPath(t *testing.T) {
+	we := &protocol.WorkspaceEdit{Changes: map[string][]protocol.TextEdit{
+		"file:///z.txt": {{NewText: "z"}},
+		"file:///a.txt": {{NewText: "a"}},
+		"file:///m.txt": {{NewText: "m"}},
+	}}
+	want := []string{"/a.txt", "/m.txt", "/z.txt"}
+	for range 20 { // map order varies per iteration; the result must not
+		got := workspaceEditTargets(we)
+		for i, w := range want {
+			if got[i].path != w {
+				t.Fatalf("targets[%d].path = %q, want %q", i, got[i].path, w)
+			}
+		}
+	}
+}
+
+// When a rollback cannot restore a file, the caller is told which files it could
+// not restore — those bytes are left modified on disk, and the apply's own
+// bookkeeping (LSP notify, undo, write tracker) never runs for them.
+func TestRollbackWorkspaceEdit_ReportsUnrestorableFiles(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("read-only directory is not enforced for root")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(dir, "good.txt")
+	stuck := filepath.Join(locked, "stuck.txt")
+	if err := os.WriteFile(good, []byte("GOOD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stuck, []byte("STUCK\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Both files are already written ("modified"); restoring stuck.txt fails
+	// because its parent directory refuses the rename.
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	plans := []workspaceEditPlan{
+		{path: good, before: []byte("good\n"), after: []byte("GOOD\n"), mode: 0o644},
+		{path: stuck, before: []byte("stuck\n"), after: []byte("STUCK\n"), mode: 0o644},
+	}
+	err := rollbackWorkspaceEdit(plans, []string{good, stuck})
+	if err == nil {
+		t.Fatal("expected the unrestorable file to be reported")
+	}
+	if !strings.Contains(err.Error(), stuck) {
+		t.Errorf("the error must name the file it could not restore, got: %v", err)
+	}
+	if got, _ := os.ReadFile(good); string(got) != "good\n" {
+		t.Errorf("a restorable file must still be rolled back: %q", got)
+	}
+	if got, _ := os.ReadFile(stuck); string(got) != "STUCK\n" {
+		t.Errorf("the unrestorable file is left modified, as the error says: %q", got)
 	}
 }
 

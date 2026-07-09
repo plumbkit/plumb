@@ -195,6 +195,20 @@ func (t *RenameSymbol) collectRenameTargets(we *protocol.WorkspaceEdit) ([]strin
 	return files, totalEdits, nil
 }
 
+// Execute resolves the rename with the language server, then applies the edit
+// set it returns.
+//
+// Note the ordering: unlike the single-file symbol-edit tools — which take the
+// target's path lock and only THEN resolve the symbol's range, so the range and
+// the bytes it addresses cannot drift apart — a rename must ask the server for
+// the whole WorkspaceEdit BEFORE it knows which files to lock. That is inherent
+// to an LSP rename, and it leaves a window in which a concurrent plumb-side write
+// can move the text under a range the server has already computed. Drift that
+// pushes a range past end-of-file is caught by the overshoot guard in
+// endOffsetForPosition and surfaces as the stale-index error below; drift that
+// stays in range is NOT detected, and the rename applies to whatever now sits at
+// those coordinates. Do not assume this path has the single-file tools'
+// under-lock re-resolve.
 func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	a, err := parseRenameSymbolArgs(args)
 	if err != nil {
@@ -250,6 +264,19 @@ func (t *RenameSymbol) renameByName(ctx context.Context, a renameSymbolArgs) (*p
 	return t.renameByPosition(ctx, a, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
 }
 
+// renameLSPErr renders a language-server rename failure for the caller that
+// actually made the call. A caller who passed symbol_name never supplied
+// coordinates, so positionErr's "line and character are 0-based" hint would send
+// it to inspect an argument it did not pass; the position came from plumb's own
+// resolution of the document-symbol tree, and the server rejecting it points at a
+// stale index instead.
+func renameLSPErr(a renameSymbolArgs, err error) error {
+	if a.SymbolName != "" {
+		return resolvedSymbolErr("rename_symbol", a.SymbolName, err)
+	}
+	return positionErr("rename_symbol", err)
+}
+
 // preLSPErr wraps an error raised before any language-server rename attempt —
 // argument validation or plumb-side symbol resolution (no match, ambiguous
 // match). Execute returns it verbatim: the structural fallback and the
@@ -281,7 +308,7 @@ func (t *RenameSymbol) renameByPosition(ctx context.Context, a renameSymbolArgs,
 		}
 		return we, snapNotice(a.URI, line, character, snapped.Line), nil
 	}
-	return nil, "", positionErr("rename_symbol", err)
+	return nil, "", renameLSPErr(a, err)
 }
 
 // applyOrPreview applies (or previews, in dry-run) a server-computed edit set.
