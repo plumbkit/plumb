@@ -412,13 +412,17 @@ func pathIsDirtyIgnoringUntracked(ctx context.Context, path string) bool {
 }
 
 // dirtyBlocksWrite reports whether a destructive write to path (overwrite, edit,
-// delete) must be refused for dirtiness: the file is dirty (untracked files
-// included — overwriting or deleting one is unrecoverable) AND plumb did not
-// write it earlier this session. A file plumb wrote this session is its own
-// uncommitted work, so re-editing it is never blocked; pre-existing uncommitted
-// work still is. The caller gates on dirty_ok, which overrides this entirely.
-func dirtyBlocksWrite(ctx context.Context, writes *WriteTracker, path string) bool {
-	if writes.Wrote(path) {
+// delete) must be refused for dirtiness: the guard is enabled ([edits]
+// block_dirty_writes) AND the file is dirty (untracked files included —
+// overwriting or deleting one is unrecoverable) AND plumb did not write it
+// earlier this session. A file plumb wrote this session is its own uncommitted
+// work, so re-editing it is never blocked; pre-existing uncommitted work still
+// is. The caller gates on dirty_ok, which overrides this entirely.
+func dirtyBlocksWrite(ctx context.Context, d WriteDeps, path string) bool {
+	if !d.blockDirty() {
+		return false
+	}
+	if d.Writes.Wrote(path) {
 		return false
 	}
 	return pathIsDirty(ctx, path)
@@ -426,9 +430,12 @@ func dirtyBlocksWrite(ctx context.Context, writes *WriteTracker, path string) bo
 
 // dirtyBlocksMove is the move/copy (content-preserving) variant of
 // dirtyBlocksWrite: untracked sources don't count, and a source plumb wrote
-// this session is never blocked.
-func dirtyBlocksMove(ctx context.Context, writes *WriteTracker, path string) bool {
-	if writes.Wrote(path) {
+// this session is never blocked. It, too, is a no-op when the guard is disabled.
+func dirtyBlocksMove(ctx context.Context, d WriteDeps, path string) bool {
+	if !d.blockDirty() {
+		return false
+	}
+	if d.Writes.Wrote(path) {
 		return false
 	}
 	return pathIsDirtyIgnoringUntracked(ctx, path)

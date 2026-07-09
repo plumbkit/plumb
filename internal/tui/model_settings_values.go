@@ -255,6 +255,8 @@ func boolField(c *config.Config, key settingKey) *bool {
 		return &c.Edits.Strict
 	case skShowWriteDiff:
 		return &c.Edits.ShowWriteDiff
+	case skBlockDirtyWrites:
+		return &c.Edits.BlockDirtyWrites
 	case skPostWriteCrossFile:
 		return &c.Edits.PostWriteCrossFile
 	case skTopology:
@@ -441,6 +443,8 @@ func toggleLabel(key settingKey) string {
 
 func toggleLabelMore(key settingKey) string {
 	switch key {
+	case skBlockDirtyWrites:
+		return "block dirty writes"
 	case skPostWriteCrossFile:
 		return "cross-file diag"
 	case skMemoryEnabled:

@@ -182,6 +182,15 @@ type EditsConfig struct {
 	// mode where only path, size, and mtime metadata are returned — useful when
 	// tokens matter more than inline confirmation.
 	ShowWriteDiff bool `toml:"show_write_diff"`
+	// BlockDirtyWrites controls the dirty-guard on the destructive write tools
+	// (write_file, edit_file, delete_file, find_replace, rename_file, copy_file,
+	// transaction_apply). When true (the default), a write to a file that has
+	// uncommitted git changes AND was not written by plumb earlier this session
+	// is refused unless dirty_ok is set — protecting pre-existing uncommitted
+	// work plumb did not create. Set false to disable the guard entirely (no
+	// prompt for dirty_ok), for a workflow that iterates on uncommitted WIP.
+	// Re-editing a file plumb wrote this session is never blocked either way.
+	BlockDirtyWrites bool `toml:"block_dirty_writes"`
 	// PostWriteCrossFile enables the cross-file post-write diagnostics sweep:
 	// after a write, plumb compares workspace diagnostics against a pre-write
 	// baseline and, when the edit INTRODUCED new errors in files OTHER than the

@@ -155,7 +155,7 @@ func (t *WriteFile) writeFilePreconditions(ctx context.Context, path string, a w
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		return fmt.Errorf("write_file: %q is a directory", path)
 	}
-	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
+	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		return fmt.Errorf("write_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to overwrite", path)
 	}

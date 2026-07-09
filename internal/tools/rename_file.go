@@ -98,7 +98,7 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	unlock2 := lockPath(second)
 	defer unlock2()
 
-	if err := renameFilePreconditions(ctx, t.deps.Writes, from, to, a); err != nil {
+	if err := renameFilePreconditions(ctx, t.deps, from, to, a); err != nil {
 		return "", err
 	}
 	if err := os.Rename(from, to); err != nil {
@@ -122,7 +122,7 @@ func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {
 	return a, nil
 }
 
-func renameFilePreconditions(ctx context.Context, writes *WriteTracker, from, to string, a renameFileArgs) error {
+func renameFilePreconditions(ctx context.Context, deps WriteDeps, from, to string, a renameFileArgs) error {
 	info, err := os.Stat(from)
 	if err != nil {
 		return fmt.Errorf("rename_file: source: %w", err)
@@ -130,7 +130,7 @@ func renameFilePreconditions(ctx context.Context, writes *WriteTracker, from, to
 	if info.IsDir() {
 		return fmt.Errorf("rename_file: %q is a directory — refusing to move recursively", from)
 	}
-	if !a.DirtyOk && dirtyBlocksMove(ctx, writes, from) {
+	if !a.DirtyOk && dirtyBlocksMove(ctx, deps, from) {
 		return fmt.Errorf("rename_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", from)
 	}
