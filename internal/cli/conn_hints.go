@@ -87,7 +87,9 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 // memoryHint returns the relevant-memory "[Hint: …]" block for the tool's target
 // path, or "" when memory-hint injection is off, no path applies, or nothing
 // matches. Extracted from enrichToolOutput so the peer-activity hint can be
-// gated independently of [memory] inject_hints.
+// gated independently of [memory] inject_hints. Candidates are relevance-
+// filtered by tool and target class before matching (hintEligibleMemories),
+// and generated survivors are labelled at render time (labelGeneratedHints).
 func (s *connSession) memoryHint(ctx context.Context, name string, args json.RawMessage, ws string) string {
 	mcfg := s.memoryConfig()
 	if !mcfg.InjectHints {
@@ -101,11 +103,102 @@ func (s *connSession) memoryHint(ctx context.Context, name string, args json.Raw
 	if name == "edit_file" || name == "write_file" {
 		syms = s.editedFileSymbols(ctx, ws, rel)
 	}
-	names := s.unseenHints(matchingMemoryNames(s.hintCache.memories(ws), rel, syms), hintMaxHints(mcfg))
+	class := hintClassFor(rel)
+	mems := hintEligibleMemories(s.hintCache.memories(ws), name, class)
+	names := s.unseenHints(matchingMemoryNames(mems, rel, syms), hintMaxHints(mcfg))
 	if len(names) == 0 {
 		return ""
 	}
-	return hintBlock(names, mcfg.HintBudgetBytes)
+	return hintBlock(labelGeneratedHints(names, mems), hintEffectiveBudget(mcfg.HintBudgetBytes, class))
+}
+
+// hintClass buckets a hint target file by the kind of content it holds, so the
+// hint filter can be stricter where auto-generated memories are usually noise.
+type hintClass int
+
+const (
+	hintClassSource hintClass = iota // code and everything unclassified: full budget, read-skip only
+	hintClassProse                   // .md/.txt/.rst: episodic skipped for any tool, half budget
+	hintClassConfig                  // .json/.toml/.yaml/.yml/.lock: user-authored memories only
+)
+
+// hintClassFor classifies the workspace-relative target path by extension.
+// Prose and config/data files attract path-glob matches from episodic session
+// summaries (a prior session that wrote the file seeded its paths: globs) that
+// carry no task relevance, so they get stricter filtering and — for prose — a
+// smaller byte budget.
+func hintClassFor(rel string) hintClass {
+	switch strings.ToLower(filepath.Ext(rel)) {
+	case ".md", ".txt", ".rst":
+		return hintClassProse
+	case ".json", ".toml", ".yaml", ".yml", ".lock":
+		return hintClassConfig
+	default:
+		return hintClassSource
+	}
+}
+
+// hintEligibleMemories filters mems down to those worth hinting for this tool
+// and target class. Episodic session summaries are skipped on read_file (pure
+// reads gain nothing from a past session's activity log) but kept for the
+// mutation tools, where prior-session context can matter when editing; on a
+// prose target they are skipped for every tool, and on a config/data target
+// only user-authored memories survive.
+func hintEligibleMemories(mems []memory.Memory, tool string, class hintClass) []memory.Memory {
+	var out []memory.Memory
+	for _, m := range mems {
+		if hintEligible(m, tool, class) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func hintEligible(m memory.Memory, tool string, class hintClass) bool {
+	switch class {
+	case hintClassConfig:
+		return m.UserAuthored()
+	case hintClassProse:
+		return !m.Episodic()
+	default:
+		return tool != "read_file" || !m.Episodic()
+	}
+}
+
+// hintEffectiveBudget returns the per-call byte budget for the hint block. The
+// configured [memory] hint_budget_bytes is untouched — a prose target simply
+// earns half of it, since hints beside prose reads are the noisiest case.
+// budget <= 0 means unbounded and stays unbounded.
+func hintEffectiveBudget(budget int, class hintClass) int {
+	if class != hintClassProse || budget <= 0 {
+		return budget
+	}
+	if half := budget / 2; half > 0 {
+		return half
+	}
+	return budget
+}
+
+// labelGeneratedHints prefixes each generated (non-user-authored) memory name
+// with "(generated) " so agents can deprioritise it at a glance. Labelling
+// happens at render time only — suppression tracking and matching stay on the
+// raw names — and the label counts against the byte budget like any other text.
+func labelGeneratedHints(names []string, mems []memory.Memory) []string {
+	gen := make(map[string]bool, len(mems))
+	for _, m := range mems {
+		if !m.UserAuthored() {
+			gen[m.Name] = true
+		}
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		if gen[n] {
+			out[i] = "(generated) " + n
+		} else {
+			out[i] = n
+		}
+	}
+	return out
 }
 
 // unseenHints filters names down to those not yet hinted this session, caps

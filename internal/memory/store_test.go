@@ -257,3 +257,21 @@ func TestList_PopulatesDates(t *testing.T) {
 		t.Errorf("CreatedAt = %v, want %v", byName["machine-made"].CreatedAt, created)
 	}
 }
+
+// TestMemoryEpisodic: only the "episodic-" name prefix marks an idle-session
+// summary — a share_findings "finding-" memory is generated but not episodic,
+// and a user name never is.
+func TestMemoryEpisodic(t *testing.T) {
+	cases := map[string]bool{
+		"episodic-20260611-swift-falcon": true,
+		"episodic-":                      true,
+		"finding-20260611-swift-falcon":  false,
+		"auth-gotchas":                   false,
+		"my-episodic-notes":              false,
+	}
+	for name, want := range cases {
+		if got := (Memory{Name: name}).Episodic(); got != want {
+			t.Errorf("Memory{Name: %q}.Episodic() = %v, want %v", name, got, want)
+		}
+	}
+}
