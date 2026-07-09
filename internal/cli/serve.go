@@ -53,6 +53,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	allowDirs := resolveAllowDirs(serveFlagAllowDirs, os.Getenv("PLUMB_ALLOWED_DIRS"))
 
+	// The serve proxy's working directory, transported as an advisory attach
+	// hint for clients that report no roots (e.g. Claude Desktop). Getwd returns
+	// an absolute path; on error the hint is simply omitted.
+	cwd, _ := os.Getwd()
+
 	if serveFlagNoReconnect || !proxyReconnectEnabled() {
 		defer conn.Close()
 		if len(allowDirs) > 0 {
@@ -70,6 +75,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		heartbeatInterval: proxyHeartbeatInterval(),
 		allowDirs:         allowDirs,
 		proxySessionID:    newProxySessionID(),
+		cwd:               cwd,
 	})
 	return p.run(ctx)
 }

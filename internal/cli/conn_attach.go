@@ -257,27 +257,24 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 }
 
 // rootFromClient calls roots/list on the MCP client and resolves the first
-// root URI to a workspace path via pool.Detect.
+// root URI to a workspace path via pool.Detect. When the client reports no
+// usable root (no request channel, no roots, or an unusable URI) it falls back
+// to the serve-proxy cwd hint — Detect-validated, so a hint outside any project
+// still yields "".
 func (s *connSession) rootFromClient(ctx context.Context) string {
 	s.requestMu.RLock()
 	req := s.clientRequest
 	s.requestMu.RUnlock()
-	if req == nil {
-		return ""
+	if req != nil {
+		if folder := paths.URIToPath(rootFromRoots(ctx, req)); folder != "" && folder != "/" {
+			root, _, err := s.pool.Detect(folder)
+			if err != nil {
+				return folder
+			}
+			return root
+		}
 	}
-	uri := rootFromRoots(ctx, req)
-	if uri == "" {
-		return ""
-	}
-	folder := paths.URIToPath(uri)
-	if folder == "" || folder == "/" {
-		return ""
-	}
-	root, _, err := s.pool.Detect(folder)
-	if err != nil {
-		return folder
-	}
-	return root
+	return s.rootFromHint()
 }
 
 // onBeforeTool resolves the workspace root from the tool arguments when the
@@ -296,6 +293,12 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 		// another project by absolute path can never silently re-pin the connection
 		// away from the workspace the caller actually chose.
 		s.rehydratePin(toolCtx)
+		// Next rung down: the serve-proxy cwd hint — still ahead of seeding from
+		// whatever file this tool happens to touch, and Detect-validated, so it
+		// can only land on a real project boundary.
+		if s.view().acquiredRoot == "" {
+			s.attachFromHint(toolCtx)
+		}
 		if s.view().acquiredRoot != "" {
 			s.applyProjectConfig(s.workspace())
 			s.startConfigWatcher()

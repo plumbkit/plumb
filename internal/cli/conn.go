@@ -132,6 +132,15 @@ type sessionView struct {
 	// once during the initialize exchange, before attach, and preserved across
 	// re-pins. "" when the client is not a session-id-injecting serve proxy.
 	proxySessionID string
+
+	// workspaceHint is the serve proxy's advisory working directory, transported
+	// in the initialize params' _meta (see onWorkspaceHint). Consulted only as
+	// the last attach fallback before tool-path seeding, always validated through
+	// pool.Detect, and never persisted as the sticky pin — so it can inform an
+	// attach but never overwrite a workspace the caller deliberately chose. Set
+	// once during the initialize exchange and preserved across re-pins. "" when
+	// the client is not a cwd-injecting serve proxy.
+	workspaceHint string
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

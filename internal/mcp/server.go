@@ -64,6 +64,15 @@ const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 // rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
 const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 
+// MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
+// `plumb serve` transports its own working directory as an ADVISORY workspace
+// attach hint. Unlike a client-reported root it is not authoritative: the
+// daemon consults it only after every stronger signal (explicit workspace arg,
+// client roots, persisted pin) has failed, and always validates it through
+// workspace detection before attaching. Identical across every handshake
+// replay. Reverse-DNS namespaced per the MCP `_meta` convention.
+const MetaWorkspaceKey = "dev.plumbkit/workspace"
+
 // MetaAlwaysLoadKey is the per-tool `tools/list` `_meta` key Claude Code reads to
 // exempt a tool from MCP tool-search deferral: a tool advertised with
 // `_meta["anthropic/alwaysLoad"] = true` is loaded into the client's context at
@@ -183,6 +192,13 @@ type Server struct {
 	// available when the connection rehydrates persisted state. Empty/absent ⇒
 	// not called.
 	OnProxySession func(ctx context.Context, id string)
+
+	// OnWorkspaceHint is called once during the initialize exchange with the
+	// serve proxy's working directory transported in _meta[MetaWorkspaceKey] —
+	// an advisory attach hint, not an authoritative root. It runs synchronously,
+	// before OnInit attaches the workspace, so the hint is available as the
+	// lowest attach fallback before path seeding. Absent/empty ⇒ never called.
+	OnWorkspaceHint func(ctx context.Context, dir string)
 
 	// ToolFilter, if set, decides which tools appear in tools/list: a tool whose
 	// name it rejects is hidden from the advertised set but STAYS CALLABLE via

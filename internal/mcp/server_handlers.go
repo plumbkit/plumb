@@ -13,29 +13,7 @@ import (
 )
 
 func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpResponse {
-	if s.OnClientInfo != nil && req.Params != nil {
-		var p struct {
-			ClientInfo struct {
-				Name    string `json:"name"`
-				Version string `json:"version"`
-			} `json:"clientInfo"`
-		}
-		if err := json.Unmarshal(req.Params, &p); err == nil && p.ClientInfo.Name != "" {
-			s.OnClientInfo(ctx, p.ClientInfo.Name, p.ClientInfo.Version)
-		}
-	}
-
-	if s.OnAllowDirs != nil && req.Params != nil {
-		if dirs := allowDirsFromParams(req.Params); len(dirs) > 0 {
-			s.OnAllowDirs(ctx, dirs)
-		}
-	}
-
-	if s.OnProxySession != nil && req.Params != nil {
-		if id := proxySessionFromParams(req.Params); id != "" {
-			s.OnProxySession(ctx, id)
-		}
-	}
+	s.fireInitParamHooks(ctx, req.Params)
 
 	type serverInfoWire struct {
 		Name    string `json:"name"`
@@ -71,6 +49,44 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		Instructions:    instructions,
 	}
 	return okResp(req.ID, res)
+}
+
+// fireInitParamHooks dispatches the hooks that consume per-connection metadata
+// from the initialize params: the client identity, and the `plumb serve`
+// transport keys (allow-dirs, the stable proxy session ID, the cwd workspace
+// hint). All fire synchronously, before OnInit, and each is skipped when its
+// hook is unset or its value is absent/empty — a client that sends nothing
+// changes nothing.
+func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage) {
+	if params == nil {
+		return
+	}
+	if s.OnClientInfo != nil {
+		var p struct {
+			ClientInfo struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"clientInfo"`
+		}
+		if err := json.Unmarshal(params, &p); err == nil && p.ClientInfo.Name != "" {
+			s.OnClientInfo(ctx, p.ClientInfo.Name, p.ClientInfo.Version)
+		}
+	}
+	if s.OnAllowDirs != nil {
+		if dirs := allowDirsFromParams(params); len(dirs) > 0 {
+			s.OnAllowDirs(ctx, dirs)
+		}
+	}
+	if s.OnProxySession != nil {
+		if id := proxySessionFromParams(params); id != "" {
+			s.OnProxySession(ctx, id)
+		}
+	}
+	if s.OnWorkspaceHint != nil {
+		if dir := workspaceHintFromParams(params); dir != "" {
+			s.OnWorkspaceHint(ctx, dir)
+		}
+	}
 }
 
 // toolSnapshot is an immutable copy of one registered tool's advertised
@@ -138,21 +154,36 @@ func allowDirsFromParams(params json.RawMessage) []string {
 // mismatch (no _meta, wrong key, non-string, malformed JSON) yields "", so a
 // client that sends nothing changes nothing.
 func proxySessionFromParams(params json.RawMessage) string {
+	return stringFromMeta(params, MetaProxySessionKey)
+}
+
+// workspaceHintFromParams extracts the serve proxy's working-directory attach
+// hint from the initialize params' _meta[MetaWorkspaceKey] field. Fail-safe
+// like proxySessionFromParams: any shape mismatch yields "", so a client that
+// sends nothing changes nothing.
+func workspaceHintFromParams(params json.RawMessage) string {
+	return stringFromMeta(params, MetaWorkspaceKey)
+}
+
+// stringFromMeta extracts a single string value stored under key in the given
+// params' _meta object. Fail-safe: any shape mismatch (no _meta, wrong key,
+// non-string, malformed JSON) yields "".
+func stringFromMeta(params json.RawMessage, key string) string {
 	var p struct {
 		Meta map[string]json.RawMessage `json:"_meta"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ""
 	}
-	raw, ok := p.Meta[MetaProxySessionKey]
+	raw, ok := p.Meta[key]
 	if !ok {
 		return ""
 	}
-	var id string
-	if err := json.Unmarshal(raw, &id); err != nil {
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
 		return ""
 	}
-	return id
+	return v
 }
 
 func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
