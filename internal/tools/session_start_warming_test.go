@@ -37,10 +37,29 @@ func TestSessionStart_WarmingBeatsAvailable(t *testing.T) {
 	var sb strings.Builder
 	ss.writeSessionRecommendedStart(&sb, false, "Go", "go")
 	out := sb.String()
-	if strings.Contains(out, "LSP is available") {
-		t.Fatalf("warming should pre-empt 'LSP is available': %q", out)
+	if strings.Contains(out, "LSP is ready") {
+		t.Fatalf("warming should pre-empt 'LSP is ready': %q", out)
 	}
 	if !strings.Contains(out, "warming up") {
 		t.Fatalf("expected warming advisory: %q", out)
+	}
+}
+
+// TestSessionStart_ReadyWording verifies the attached-and-not-warming branch
+// says "LSP is ready" — a guarantee (the warming case was checked first), not
+// the old "LSP is available" hope that a first semantic query could contradict
+// with a topology-fallback note.
+func TestSessionStart_ReadyWording(t *testing.T) {
+	ss := (&SessionStart{}).
+		WithLSPLanguage(func() string { return "go" }).
+		WithLSPWarmup(func() (bool, time.Duration) { return false, 0 })
+	var sb strings.Builder
+	ss.writeSessionRecommendedStart(&sb, false, "Go", "go")
+	out := sb.String()
+	if !strings.Contains(out, "LSP is ready") {
+		t.Fatalf("expected 'LSP is ready' wording: %q", out)
+	}
+	if strings.Contains(out, "LSP is available") {
+		t.Fatalf("the old 'LSP is available' wording should be gone: %q", out)
 	}
 }

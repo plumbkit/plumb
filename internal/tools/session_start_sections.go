@@ -46,7 +46,9 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErro
 	case t.writeLSPWarming(sb):
 		// warming advisory already written
 	case t.lspAttached():
-		sb.WriteString("LSP is available — use `workspace_symbols` to survey the codebase.\n\n")
+		// Warming was checked first, so attached here means the handshake is
+		// complete — "ready" is a guarantee, not a hope.
+		sb.WriteString("LSP is ready — use `workspace_symbols` to survey the codebase.\n\n")
 	case t.topologyActive():
 		sb.WriteString("No language server is attached, but the topology index is active — use " +
 			"`topology_search` and `file_outline` for discovery and structure. " +

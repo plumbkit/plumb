@@ -36,6 +36,7 @@ type FindSymbol struct {
 	ttl     time.Duration
 	timeout time.Duration
 	topo    topologyStoreFn
+	warmup  LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
@@ -43,6 +44,14 @@ type FindSymbol struct {
 // language server errors or times out. Returns the tool for chaining.
 func (t *FindSymbol) WithTopologyFallback(fn topologyStoreFn) *FindSymbol {
 	t.topo = fn
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so the topology-fallback note says
+// "still warming — retry shortly" instead of "LSP unavailable" while the
+// server's handshake completes. Nil-safe; returns the tool for chaining.
+func (t *FindSymbol) WithLSPWarmup(fn LSPWarmupFn) *FindSymbol {
+	t.warmup = fn
 	return t
 }
 
@@ -113,7 +122,8 @@ func (t *FindSymbol) topologyFallback(ctx context.Context, uri, query string) (s
 		return "", false
 	}
 	matches := filterTopologyByName(nodes, query)
-	return formatTopologyMatches(fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
+	note := topologyFallbackNoteFor(t.warmup, uri)
+	return formatTopologyMatches(note, fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
 }
 
 func (t *FindSymbol) inDocument(ctx context.Context, uri, query string) (string, error) {

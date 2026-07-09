@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/topology"
 )
@@ -17,6 +18,48 @@ type topologyStoreFn = func() *topology.Store
 // answer came from the (possibly stale, heuristic) topology index rather than a
 // live language server.
 const topologyFallbackNote = "[topology fallback — LSP unavailable; results are approximate and may be stale. source=topology, mode=indexed-approximate]"
+
+// LSPWarmupFn reports whether the language server that would serve uri — or the
+// connection primary when uri is empty — is still warming, and for how long.
+// Wired to the routing proxy's resolution-only WarmupStatus, so calling it never
+// starts a server. Implementations must be safe for concurrent use — tools call
+// it from concurrent Executes. Every call site is nil-safe: a nil fn means the
+// warm-up state is unknown, so the genuinely-unavailable wording is used.
+type LSPWarmupFn = func(uri string) (warming bool, elapsed time.Duration)
+
+// lspWarmup resolves fn for uri, treating a nil fn as not warming.
+func lspWarmup(fn LSPWarmupFn, uri string) (bool, time.Duration) {
+	if fn == nil {
+		return false, 0
+	}
+	return fn(uri)
+}
+
+// warmupElapsedSuffix renders the elapsed-time parenthetical for a warming note
+// — " (~4s elapsed)" — rounded to whole seconds, or "" when the rounded elapsed
+// time is zero (nothing useful to report).
+func warmupElapsedSuffix(elapsed time.Duration) string {
+	rounded := elapsed.Round(time.Second)
+	if rounded <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (~%s elapsed)", rounded)
+}
+
+// topologyFallbackNoteFor picks the fallback banner for a symbol-query tool:
+// the warming variant when the server that would own uri is still completing
+// its handshake (so the agent retries instead of concluding the LSP is broken),
+// else topologyFallbackNote — byte-identical to the historical text — for the
+// genuinely-unavailable case.
+func topologyFallbackNoteFor(fn LSPWarmupFn, uri string) string {
+	warming, elapsed := lspWarmup(fn, uri)
+	if !warming {
+		return topologyFallbackNote
+	}
+	return fmt.Sprintf("[topology fallback — LSP still warming%s; results are approximate and may be stale; "+
+		"semantic tools will answer once it is ready — retry shortly. source=topology, mode=indexed-approximate]",
+		warmupElapsedSuffix(elapsed))
+}
 
 // activeTopology resolves the store from a nil-safe accessor.
 func activeTopology(fn topologyStoreFn) *topology.Store {
@@ -50,10 +93,11 @@ func filterTopologyByName(nodes []topology.Node, query string) []topology.Node {
 	return out
 }
 
-// formatTopologyMatches renders a name-lookup fallback result.
-func formatTopologyMatches(header string, nodes []topology.Node) string {
+// formatTopologyMatches renders a name-lookup fallback result prefixed with
+// note (topologyFallbackNote or its warming variant).
+func formatTopologyMatches(note, header string, nodes []topology.Node) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n%s:\n\n", topologyFallbackNote, header)
+	fmt.Fprintf(&sb, "%s\n%s:\n\n", note, header)
 	if len(nodes) == 0 {
 		sb.WriteString("(no matching symbols in the index)\n")
 		return sb.String()
@@ -87,14 +131,30 @@ func formatTopologyFill(header string, nodes []topology.Node) string {
 // position-level go-to-definition, only declaration sites.
 const topologyDefinitionNote = "[topology fallback — language server unavailable; located by symbol name, declaration line not cursor offset. source=topology, mode=indexed-approximate]"
 
+// topologyDefinitionNoteFor picks the get_definition fallback banner: the
+// warming variant when the server that would own uri is still completing its
+// handshake, else topologyDefinitionNote — byte-identical to the historical
+// text — for the genuinely-unavailable case.
+func topologyDefinitionNoteFor(fn LSPWarmupFn, uri string) string {
+	warming, elapsed := lspWarmup(fn, uri)
+	if !warming {
+		return topologyDefinitionNote
+	}
+	return fmt.Sprintf("[topology fallback — language server still warming%s; located by symbol name, "+
+		"declaration line not cursor offset; semantic tools will answer once it is ready — retry shortly. "+
+		"source=topology, mode=indexed-approximate]",
+		warmupElapsedSuffix(elapsed))
+}
+
 // topologyDefinitionFallback resolves name to its declaration site(s) in the
-// index and formats them, or returns ("", false) when topology is unavailable or
+// index and formats them prefixed with note (topologyDefinitionNote or its
+// warming variant), or returns ("", false) when topology is unavailable or
 // the name is unknown. get_definition uses it when the language server is
 // unavailable (still warming, or erroring): approximate — the declaration line,
 // not the exact definition the LSP would resolve — but it keeps navigation
 // working while the server warms. A dotted name (ReceiverType.MethodName) retries
 // on its final segment, mirroring the LSP name resolver.
-func topologyDefinitionFallback(fn topologyStoreFn, name string) (string, bool) {
+func topologyDefinitionFallback(fn topologyStoreFn, note, name string) (string, bool) {
 	store := activeTopology(fn)
 	if store == nil {
 		return "", false
@@ -109,13 +169,13 @@ func topologyDefinitionFallback(fn topologyStoreFn, name string) (string, bool) 
 	if err != nil || len(nodes) == 0 {
 		return "", false
 	}
-	return formatTopologyDefinition(name, nodes), true
+	return formatTopologyDefinition(note, name, nodes), true
 }
 
 // formatTopologyDefinition renders a name-resolved definition fallback.
-func formatTopologyDefinition(name string, nodes []topology.Node) string {
+func formatTopologyDefinition(note, name string, nodes []topology.Node) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\nDeclaration of %q:\n\n", topologyDefinitionNote, name)
+	fmt.Fprintf(&sb, "%s\nDeclaration of %q:\n\n", note, name)
 	for _, n := range nodes {
 		fmt.Fprintf(&sb, "- %s (%s) at %s:%d\n", n.Name, string(n.Kind), n.Path, n.StartLine)
 	}
@@ -131,10 +191,11 @@ func symbolBaseSegment(name string) string {
 	return name
 }
 
-// formatTopologyOutline renders a single-file outline fallback result.
-func formatTopologyOutline(uri string, nodes []topology.Node) string {
+// formatTopologyOutline renders a single-file outline fallback result prefixed
+// with note (topologyFallbackNote or its warming variant).
+func formatTopologyOutline(note, uri string, nodes []topology.Node) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\nSymbols in %s (%d, source: topology)\n\n", topologyFallbackNote, uri, len(nodes))
+	fmt.Fprintf(&sb, "%s\nSymbols in %s (%d, source: topology)\n\n", note, uri, len(nodes))
 	for _, n := range nodes {
 		if n.EndLine == 0 || n.StartLine == n.EndLine {
 			fmt.Fprintf(&sb, "%s (%s) line %d\n", n.Name, string(n.Kind), n.StartLine)

@@ -342,7 +342,7 @@ func (s *connSession) workspace() string {
 
 // acquiredLanguageName returns the LSP language attached to this session, or ""
 // when none is (LanguageNone, or not yet attached). session_start uses it to
-// distinguish a real "LSP is available" from a marker-detected project whose
+// distinguish a real "LSP is ready" from a marker-detected project whose
 // server is opt-in/off/missing — it must not advertise LSP tools that error.
 func (s *connSession) acquiredLanguageName() string {
 	lang := s.view().acquiredLanguage
@@ -363,7 +363,7 @@ func (s *connSession) acquiredLanguageLabels() []string {
 
 // lspWarming reports whether this session's primary language server is still
 // warming (handshake incomplete) and how long it has been. session_start uses it
-// to soften "LSP is available" into a warming advisory so an agent reaches for
+// to soften "LSP is ready" into a warming advisory so an agent reaches for
 // topology/find_symbol meanwhile instead of blocking a semantic tool on a cold
 // server. Returns (false, 0) when no language is attached or the server is ready.
 func (s *connSession) lspWarming() (bool, time.Duration) {

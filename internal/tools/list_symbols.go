@@ -40,6 +40,7 @@ type ListSymbols struct {
 	ttl     time.Duration
 	timeout time.Duration
 	topo    topologyStoreFn
+	warmup  LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
@@ -47,6 +48,14 @@ type ListSymbols struct {
 // language server errors or times out. Returns the tool for chaining.
 func (t *ListSymbols) WithTopologyFallback(fn topologyStoreFn) *ListSymbols {
 	t.topo = fn
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so the topology-fallback note says
+// "still warming — retry shortly" instead of "LSP unavailable" while the
+// server's handshake completes. Nil-safe; returns the tool for chaining.
+func (t *ListSymbols) WithLSPWarmup(fn LSPWarmupFn) *ListSymbols {
+	t.warmup = fn
 	return t
 }
 
@@ -82,7 +91,7 @@ func (t *ListSymbols) topologyFallback(ctx context.Context, uri string) (string,
 	if err != nil || len(nodes) == 0 {
 		return "", false
 	}
-	return formatTopologyOutline(uri, nodes), true
+	return formatTopologyOutline(topologyFallbackNoteFor(t.warmup, uri), uri, nodes), true
 }
 
 func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string, error) {

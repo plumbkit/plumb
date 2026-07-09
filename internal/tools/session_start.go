@@ -176,7 +176,7 @@ func (t *SessionStart) writeSessionEpisodic(sb *strings.Builder, ws string) {
 
 // WithLSPLanguage wires an accessor for the LSP language actually attached to
 // this session ("" when no language server is attached). It lets session_start
-// tell "LSP is available" apart from a marker-detected project whose server is
+// tell "LSP is ready" apart from a marker-detected project whose server is
 // off or absent, instead of assuming a server exists whenever a diagnostics
 // source is wired (which it always is). Nil-safe. Returns the receiver.
 func (t *SessionStart) WithLSPLanguage(fn func() string) *SessionStart {
@@ -238,7 +238,7 @@ func (t *SessionStart) lspAttached() bool {
 
 // WithLSPWarmup wires an accessor reporting whether the session's primary
 // language server is still warming (handshake incomplete) and for how long. When
-// it reports warming, session_start softens "LSP is available" into a warming
+// it reports warming, session_start softens "LSP is ready" into a warming
 // advisory that steers the agent to topology/find_symbol meanwhile. Nil-safe:
 // unset means never warming. Returns the receiver for chaining.
 func (t *SessionStart) WithLSPWarmup(fn func() (bool, time.Duration)) *SessionStart {

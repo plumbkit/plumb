@@ -34,12 +34,21 @@ type WorkspaceSymbols struct {
 	timeout time.Duration
 	ws      WorkspaceFn // used to filter out dependency-cache hits
 	topo    topologyStoreFn
+	warmup  LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 }
 
 // WithTopologyFallback wires the topology index as a fallback for when the
 // language server errors or times out. Returns the tool for chaining.
 func (t *WorkspaceSymbols) WithTopologyFallback(fn topologyStoreFn) *WorkspaceSymbols {
 	t.topo = fn
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so the topology-fallback note says
+// "still warming — retry shortly" instead of "LSP unavailable" while the
+// primary server's handshake completes. Nil-safe; returns the tool for chaining.
+func (t *WorkspaceSymbols) WithLSPWarmup(fn LSPWarmupFn) *WorkspaceSymbols {
+	t.warmup = fn
 	return t
 }
 
@@ -78,7 +87,10 @@ func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, query string) (
 	for _, r := range results {
 		nodes = append(nodes, r.Node)
 	}
-	return formatTopologyMatches(fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
+	// The workspace-wide search has no single target file, so the warm-up probe
+	// inspects the connection primary (empty uri).
+	note := topologyFallbackNoteFor(t.warmup, "")
+	return formatTopologyMatches(note, fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
 }
 
 // topologyFillTreeSitter supplements an empty-but-no-error LSP result with index

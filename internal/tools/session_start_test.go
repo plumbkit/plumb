@@ -300,7 +300,7 @@ func mapKeys[V any](m map[string]V) []string {
 }
 
 // TestSessionStart_NoLSPGuidance covers recognised projects whose language
-// server is not attached. Must never claim "LSP is available" and must name
+// server is not attached. Must never claim "LSP is ready" and must name
 // the concrete next step (opt-in knob or binary-path guidance).
 func TestSessionStart_NoLSPGuidance(t *testing.T) {
 	// run creates a workspace with one marker file and asserts the output
@@ -317,8 +317,8 @@ func TestSessionStart_NoLSPGuidance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
-		if strings.Contains(out, "LSP is available") {
-			t.Errorf("must not claim LSP is available\n%s", out)
+		if strings.Contains(out, "LSP is ready") {
+			t.Errorf("must not claim LSP is ready\n%s", out)
 		}
 		if !strings.Contains(out, wantStr) {
 			t.Errorf("want %q in output\n%s", wantStr, out)
@@ -352,8 +352,8 @@ func TestSessionStart_NoLSPGuidance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
-		if strings.Contains(out, "LSP is available") {
-			t.Errorf("must not claim LSP is available\n%s", out)
+		if strings.Contains(out, "LSP is ready") {
+			t.Errorf("must not claim LSP is ready\n%s", out)
 		}
 		if !strings.Contains(out, "isn't installed") {
 			t.Errorf("want binary-path guidance for Go (on-by-default adapter)\n%s", out)
@@ -413,8 +413,8 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
-		if strings.Contains(out, "LSP is available") {
-			t.Errorf("must not claim LSP is available\n%s", out)
+		if strings.Contains(out, "LSP is ready") {
+			t.Errorf("must not claim LSP is ready\n%s", out)
 		}
 		// Go adapter is on-by-default, so the message should explain it's likely not installed.
 		if !strings.Contains(out, "isn't installed") {

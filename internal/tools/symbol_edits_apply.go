@@ -24,15 +24,46 @@ func resolveShowDiff(fn func() bool) bool {
 	return fn()
 }
 
-type symbolEditResolver func(context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, bool, error)
+type symbolEditResolver func(context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error)
 
 type symbolEditRefusal struct{ msg string }
 
 func (e symbolEditRefusal) Error() string { return e.msg }
 
+// treeSitterFallbackLegacyNote prefixes a symbol-edit response whose target was
+// located by tree-sitter because the language server is genuinely unavailable.
+const treeSitterFallbackLegacyNote = "[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n"
+
+// treeSitterFallbackNote picks the symbol-edit fallback banner: the warming
+// variant when the server that would own uri is still completing its handshake
+// (so the agent retries instead of concluding the LSP is broken), else the
+// legacy genuinely-unavailable text, byte-identical to the historical banner.
+// fn is nil-safe.
+func treeSitterFallbackNote(fn LSPWarmupFn, uri string) string {
+	warming, elapsed := lspWarmup(fn, uri)
+	if !warming {
+		return treeSitterFallbackLegacyNote
+	}
+	return fmt.Sprintf("[topology fallback — LSP still warming%s; symbol located by tree-sitter, range is line-granular]\n\n",
+		warmupElapsedSuffix(elapsed))
+}
+
+// symbolEditFallbackNote resolves the response banner for a symbol-edit whose
+// target came from the tree-sitter fallback; "" when the language server
+// resolved it (no banner).
+func symbolEditFallbackNote(viaFallback bool, fn LSPWarmupFn, uri string) string {
+	if !viaFallback {
+		return ""
+	}
+	return treeSitterFallbackNote(fn, uri)
+}
+
 // applySingleEdit runs the standard apply-or-preview flow used by every
 // symbol-edit tool. summary is the human-readable verb ("inserted before",
-// "replaced", etc.) used in the dry-run / applied output. When showDiff is true
+// "replaced", etc.) used in the dry-run / applied output. The resolver's third
+// result is the fallback banner (see symbolEditFallbackNote) — non-empty when
+// the symbol was located by tree-sitter rather than the language server; it is
+// prepended to the response. When showDiff is true
 // the response carries a unified diff of the change — a preview in dry-run, the
 // applied change otherwise.
 //
@@ -49,7 +80,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	}
 	var sb strings.Builder
 	if dryRun {
-		edit, sym, viaFallback, err := resolve(ctx)
+		edit, sym, fallbackNote, err := resolve(ctx)
 		if err != nil {
 			var refusal symbolEditRefusal
 			if errors.As(err, &refusal) {
@@ -61,9 +92,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 		if showDiff {
 			diff = symbolEditDiff(path, edit)
 		}
-		if viaFallback {
-			sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
-		}
+		sb.WriteString(fallbackNote)
 		sb.WriteString("DRY RUN — file not modified.\n\n")
 		fmt.Fprintf(&sb, "Would %s symbol %q in %s\n", summary, sym.Name, path)
 		fmt.Fprintf(&sb, "  Range: line %d char %d → line %d char %d\n",
@@ -80,7 +109,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	unlock := lockPath(path)
 	defer unlock()
 
-	edit, sym, viaFallback, err := resolve(ctx)
+	edit, sym, fallbackNote, err := resolve(ctx)
 	if err != nil {
 		var refusal symbolEditRefusal
 		if errors.As(err, &refusal) {
@@ -100,9 +129,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	if showDiff {
 		diff = unifiedDiff(path, string(before), string(after))
 	}
-	if viaFallback {
-		sb.WriteString("[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]\n\n")
-	}
+	sb.WriteString(fallbackNote)
 	fmt.Fprintf(&sb, "%s symbol %q in %s\n", capitalise(summary), sym.Name, path)
 	if diff != "" {
 		sb.WriteString("\n")

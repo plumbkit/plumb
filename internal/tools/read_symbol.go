@@ -47,6 +47,7 @@ type ReadSymbol struct {
 	timeout      time.Duration
 	tracker      *ReadTracker
 	topo         topologyStoreFn
+	warmup       LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 	guard        BoundaryGuard
 	clientNameFn func() string       // may be nil; gates the edit-lane hint to conflict-prone clients
 	outsideFn    func(string) string // may be nil; returns a root label when the path is outside the workspace
@@ -62,6 +63,14 @@ func NewReadSymbol(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration
 // unavailable. Nil-safe; returns the tool for chaining.
 func (t *ReadSymbol) WithTopologyFallback(fn topologyStoreFn) *ReadSymbol {
 	t.topo = fn
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so the topology-fallback note says
+// "still warming — retry shortly" instead of "LSP unavailable" while the
+// server's handshake completes. Nil-safe; returns the tool for chaining.
+func (t *ReadSymbol) WithLSPWarmup(fn LSPWarmupFn) *ReadSymbol {
+	t.warmup = fn
 	return t
 }
 
@@ -176,7 +185,7 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, fpath, uri, name 
 	if err != nil {
 		return "", false
 	}
-	return topologyFallbackNote + "\n" + out, true
+	return topologyFallbackNoteFor(t.warmup, uri) + "\n" + out, true
 }
 
 func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {

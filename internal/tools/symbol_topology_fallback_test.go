@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -222,6 +223,67 @@ func TestInsertAfterSymbol_TopologyFallback(t *testing.T) {
 	if ai >= gi || gi >= bi {
 		t.Errorf("Gamma should sit between Alpha and Beta (a=%d g=%d b=%d):\n%s", ai, gi, bi, s)
 	}
+}
+
+// TestReadSymbol_TopologyFallback_WarmingNote proves read_symbol's fallback
+// note says "still warming" — not "LSP unavailable" — when the warm-up probe
+// reports the server as warming.
+func TestReadSymbol_TopologyFallback_WarmingNote(t *testing.T) {
+	store, _, uri := fallbackFixture(t)
+	tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+		WithTopologyFallback(func() *topology.Store { return store }).
+		WithLSPWarmup(func(string) (bool, time.Duration) { return true, 4 * time.Second })
+	args, _ := json.Marshal(map[string]any{"path": uri, "name": "Beta"})
+
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("expected topology fallback to succeed, got: %v", err)
+	}
+	if !strings.Contains(out, "still warming") || !strings.Contains(out, "~4s") {
+		t.Errorf("expected a warming note with elapsed time:\n%s", out)
+	}
+	if strings.Contains(out, "LSP unavailable") {
+		t.Errorf("a warming server must not be reported unavailable:\n%s", out)
+	}
+}
+
+// TestSymbolEditFallbackNoteWarming proves the symbol-edit fallback banner is
+// warming-aware: with a warming probe the banner says "still warming"; without
+// one it stays the legacy text byte-for-byte.
+func TestSymbolEditFallbackNoteWarming(t *testing.T) {
+	const legacyBanner = "[topology fallback — LSP unavailable; symbol located by tree-sitter, range is line-granular]"
+
+	t.Run("warming probe swaps in the warming banner", func(t *testing.T) {
+		store, _, uri := fallbackFixture(t)
+		tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+			WithTopologyFallback(func() *topology.Store { return store }).
+			WithLSPWarmup(func(string) (bool, time.Duration) { return true, 4 * time.Second })
+		args, _ := json.Marshal(map[string]any{"uri": uri, "name_path": "Alpha", "content": "x"})
+		out, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatalf("expected fallback preview to succeed, got: %v", err)
+		}
+		if !strings.Contains(out, "still warming") || !strings.Contains(out, "~4s") {
+			t.Errorf("expected a warming banner with elapsed time:\n%s", out)
+		}
+		if strings.Contains(out, "LSP unavailable") {
+			t.Errorf("a warming server must not be reported unavailable:\n%s", out)
+		}
+	})
+
+	t.Run("unwired probe keeps the legacy banner byte-for-byte", func(t *testing.T) {
+		store, _, uri := fallbackFixture(t)
+		tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+			WithTopologyFallback(func() *topology.Store { return store })
+		args, _ := json.Marshal(map[string]any{"uri": uri, "name_path": "Alpha", "content": "x"})
+		out, err := tool.Execute(context.Background(), args)
+		if err != nil {
+			t.Fatalf("expected fallback preview to succeed, got: %v", err)
+		}
+		if !strings.Contains(out, legacyBanner) {
+			t.Errorf("expected the byte-exact legacy banner:\n%s", out)
+		}
+	})
 }
 
 // Without a fallback wired, a broken LSP must surface its error unchanged.

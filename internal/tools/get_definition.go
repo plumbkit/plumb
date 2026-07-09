@@ -47,6 +47,7 @@ type GetDefinition struct {
 	timeout time.Duration
 	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
 	topo    topologyStoreFn // may be nil; the by-name topology fallback when the LSP is unavailable
+	warmup  LSPWarmupFn     // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 }
 
 // NewGetDefinition creates a GetDefinition tool. Pass a nil cache to disable caching.
@@ -68,6 +69,15 @@ func (t *GetDefinition) WithWorkspace(ws WorkspaceFn) *GetDefinition {
 // receiver for chaining.
 func (t *GetDefinition) WithTopologyFallback(fn topologyStoreFn) *GetDefinition {
 	t.topo = fn
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so the topology-fallback note says
+// "still warming — retry shortly" instead of "language server unavailable"
+// while the server's handshake completes. Nil-safe; returns the tool for
+// chaining.
+func (t *GetDefinition) WithLSPWarmup(fn LSPWarmupFn) *GetDefinition {
+	t.warmup = fn
 	return t
 }
 
@@ -121,7 +131,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 func (t *GetDefinition) executeByName(ctx context.Context, uri, name string) (string, error) {
 	result, err := t.lspDefinitionByName(ctx, uri, name)
 	if err != nil {
-		if fb, ok := topologyDefinitionFallback(t.topo, name); ok {
+		if fb, ok := topologyDefinitionFallback(t.topo, topologyDefinitionNoteFor(t.warmup, uri), name); ok {
 			return fb, nil
 		}
 		return "", err
