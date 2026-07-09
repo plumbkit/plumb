@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"time"
 )
 
 // edit_file is split across files by concern: the all-or-nothing apply path
@@ -137,12 +135,7 @@ func NewEditFile(deps WriteDeps) *EditFile { return &EditFile{deps: deps} }
 // isStrict reports whether strict mode applies to this call. Prefers the
 // configured StrictModeFn (per-workspace + env merged by daemon); falls
 // back to env-only check when no closure is wired.
-func (t *EditFile) isStrict() bool {
-	if t.deps.Strict != nil {
-		return t.deps.Strict()
-	}
-	return strictModeEnabled()
-}
+func (t *EditFile) isStrict() bool { return strictEnabled(t.deps.Strict) }
 
 func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
@@ -398,30 +391,14 @@ func allAnchorBased(edits []strEdit) bool {
 }
 
 // checkStrictRead enforces strict mode: the file must have been read in this
-// session and not changed since. A no-op when strict mode is off.
+// session and not changed since. A no-op when strict mode is off. The failure is
+// wrapped as an edit-logic error so the retry loop never re-attempts it.
 func (t *EditFile) checkStrictRead(path string) error {
 	if !t.isStrict() {
 		return nil
 	}
-	recorded := t.deps.Reads.Mtime(path)
-	if recorded.IsZero() {
-		return &editLogicErr{fmt.Errorf(
-			"edit_file: strict mode: %q has not been read in this daemon session — call read_file first",
-			path,
-		)}
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return &editLogicErr{fmt.Errorf("edit_file: stat %q: %w", path, err)}
-	}
-	if !info.ModTime().Equal(recorded) {
-		return &editLogicErr{fmt.Errorf(
-			"edit_file: strict mode: %q has changed since you read it\n"+
-				"  recorded mtime: %s\n"+
-				"  current mtime:  %s\n"+
-				"  Re-read the file and try again",
-			path, recorded.Format(time.RFC3339Nano), info.ModTime().Format(time.RFC3339Nano),
-		)}
+	if err := requireStrictRead(t.deps.Reads, "edit_file", path); err != nil {
+		return &editLogicErr{err}
 	}
 	return nil
 }
