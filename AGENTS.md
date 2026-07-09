@@ -115,7 +115,7 @@ Built in four layers, each overriding the prior; `plumb config show` prints the 
 
 ```toml
 [edits]
-strict = false                # require read_file (matching mtime) before edit_file; per-session
+strict = false                # require read_file (matching mtime) before edit_file and the symbol-edit tools (rename_symbol exempt); per-session
 rate_limit_per_minute = 120   # sliding-window cap per session; 0 disables. A shared parent budget (keyed by (client, workspace)) caps combined rate across connections from the same client to one project
 show_write_diff = true        # append a unified diff to the content-modifying tools' responses: edit_file/write_file/undo_edit, the semantic symbol edits (replace_symbol_body, insert_before/after_symbol, safe_delete_symbol — preview + applied), and transaction_apply
 block_dirty_writes = true     # refuse a destructive write to a file with uncommitted git changes plumb did not write this session, unless dirty_ok; set false to disable the guard entirely (iterate on uncommitted WIP without dirty_ok). Re-editing a file plumb wrote this session is never blocked either way

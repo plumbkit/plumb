@@ -139,6 +139,17 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	return sb.String(), nil
 }
 
+// semanticWritePreflight gates a symbol edit exactly as edit_file's preconditions
+// gate an ordinary edit: the workspace boundary, then — in apply mode — the
+// write-rate budget, the dirty guard, and strict mode's read-before-write
+// contract.
+//
+// Strict mode applies here because these tools carry AGENT-AUTHORED CONTENT into
+// one named file: replacing a symbol body with text the agent wrote, in a file it
+// may never have read, is precisely what [edits] strict = true exists to refuse.
+// Re-resolving the range under the lock protects the WHERE of the edit, not the
+// WHAT. rename_symbol is the deliberate exemption — see preflightTargets in
+// rename_symbol.go.
 func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path string, dryRun, dirtyOK bool) error {
 	if deps == nil {
 		return nil
@@ -154,6 +165,9 @@ func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path
 	}
 	if !dirtyOK && dirtyBlocksWrite(ctx, *deps, path) {
 		return fmt.Errorf("%s: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", toolName, path)
+	}
+	if strictEnabled(deps.Strict) {
+		return requireStrictRead(deps.Reads, toolName, path)
 	}
 	return nil
 }

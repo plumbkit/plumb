@@ -342,6 +342,19 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 	return sb.String(), nil
 }
 
+// preflightTargets gates an about-to-be-applied rename: the write-rate budget
+// once, then the workspace boundary and the dirty guard for every file the
+// server's edit set touches.
+//
+// Strict mode ([edits] strict = true) is deliberately NOT enforced here, unlike
+// on the symbol-edit tools (semanticWritePreflight) and edit_file. Strict mode
+// asks "has this session read the file it is about to author content into?" —
+// and a rename authors no content: the new text is one identifier, and the file
+// set is chosen by the language server, not the agent. Demanding a prior
+// read_file of every file in a 40-file rename would make the tool unusable in
+// strict mode; demanding it of only the anchor file would be a half-guarantee
+// that protects nothing (the anchor's range is re-resolved server-side anyway).
+// The dirty guard above is what stops a rename from clobbering unreviewed work.
 func (t *RenameSymbol) preflightTargets(ctx context.Context, files []string, a renameSymbolArgs) error {
 	if a.DryRun {
 		return nil

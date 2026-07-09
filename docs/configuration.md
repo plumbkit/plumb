@@ -84,7 +84,7 @@ config. `plumb web --port` overrides it for a single launch.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `strict` | bool | `false` | `PLUMB_STRICT_EDITS` | Require every `edit_file` target to have been read via `read_file` this session, with a matching mtime. |
+| `strict` | bool | `false` | `PLUMB_STRICT_EDITS` | Require every content-authoring write target — `edit_file` and the four symbol-edit tools (`replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol`, `safe_delete_symbol`) — to have been read via `read_file` this session, with a matching mtime. `rename_symbol` is exempt (see below). |
 | `rate_limit_per_minute` | int | `120` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. |
 | `post_write_diagnostics_ms` | int | `300` | `PLUMB_POST_WRITE_DIAG_MS` | Ceiling on how long to wait for the LSP server to re-publish diagnostics after a write; the effective wait adapts down to the server's observed latency. `0` disables. |
 | `post_write_cross_file` | bool | `true` | `PLUMB_POST_WRITE_CROSS_FILE` | After a write, compare workspace diagnostics against a pre-write baseline and flag NEW errors the edit introduced in OTHER files (the "edit A silently breaks B" case). The edited file's own diagnostics block keeps priority. |
@@ -92,6 +92,21 @@ config. `plumb web --port` overrides it for a single launch.
 | `concurrent_write_skew_ms` | int | `100` | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | Clock-skew allowance for `edit_file`'s concurrent-write detector. Raise on slow/network filesystems. |
 | `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
 | `block_dirty_writes` | bool | `true` | `PLUMB_BLOCK_DIRTY_WRITES` | Refuse a destructive write (`write_file`, `edit_file`, `delete_file`, `find_replace`, `rename_file`, `copy_file`, `transaction_apply`) to a file with uncommitted git changes that plumb did not write this session, unless `dirty_ok: true`. Set false to disable the guard — for a workflow that iterates on uncommitted WIP. Re-editing a file plumb wrote this session is never blocked either way. |
+
+### Strict mode and `rename_symbol`
+
+`strict = true` asks a single question before every write: *has this session read
+the file it is about to author content into?* It therefore covers `edit_file` and
+the four symbol-edit tools, all of which write agent-authored text into one named
+file.
+
+`rename_symbol` is **deliberately exempt**. It authors no content — the new text
+is a single identifier — and the file set is computed by the language server, not
+chosen by the agent. Requiring a prior `read_file` of every file in a forty-file
+rename would make the tool unusable under strict mode, and requiring it of the
+anchor file alone would guarantee nothing, since the rename's ranges are resolved
+server-side regardless of what the agent read. The dirty guard
+(`block_dirty_writes`) is what protects unreviewed work from a rename.
 
 ## `[walk]` — filesystem-traversal safety
 
@@ -527,7 +542,7 @@ ttl      = "5m"
 max_size = 1000
 
 [edits]
-strict                    = false   # require read_file before edit_file
+strict                    = false   # require read_file before edit_file / symbol edits
 rate_limit_per_minute     = 120     # 0 disables
 post_write_diagnostics_ms = 300     # ceiling; effective wait adapts down to observed latency; 0 disables
 post_write_cross_file          = true  # flag NEW errors the edit introduced in OTHER files (edit A breaks B)
