@@ -338,7 +338,7 @@ Setup helpers preserve existing MCP servers, back up config first, and resolve l
 
 1. **`.plumb/` marker** — explicit workspace. Returns `(dir, language)` if an LSP language is detectable here or in an ancestor; otherwise `(dir, "none")` (filesystem tools, stats, project config still work; LSP tools fail until a language attaches).
 2. **A strong language root marker** (`go.mod`, `Cargo.toml`, `Package.swift`, `pyproject.toml`, …) at `dir` or any ancestor — returns `(dir, language)`.
-3. **A `.git/` directory** — an unambiguous project boundary. Returns `(dir, "none")` so a multi-language repo with no language marker still resolves. `$HOME` is excluded; nearest-wins, so a `.plumb/` or language marker beats a `.git/` further up.
+3. **A `.git/` directory** — an unambiguous project boundary. Returns `(dir, "none")` so a multi-language repo with no language marker still resolves. `$HOME` is excluded; nearest-wins, so a `.plumb/` or language marker beats a `.git/` further up. **Content sniff (last resort):** before returning `"none"` at a `.git/` boundary (or resolving a `.plumb/` marker root), plumb scans that root — bounded, up to 2 levels deep, noise dirs pruned — for source files of an **active** language and, if one dominates, resolves that language instead (`extLangAt`, `pool_detect.go`). So a git repo full of `.py` files with **no** `pyproject.toml`/`setup.py` attaches Python when pyright is installed — matching the "install → on" philosophy for ecosystems with no mandatory manifest. It fires only after all strong/weak markers fail, is confined to the confirmed boundary (never ascends, never `$HOME`), and is gated on the language server being installed.
 
 Walks to the parent otherwise; errors only after passing the filesystem root.
 

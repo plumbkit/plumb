@@ -388,6 +388,21 @@ func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, fol
 	}
 	discovered = s.pool.discoverChildLanguages(folder, s.store.Current().Workspace.ChildScanDepth)
 	if len(discovered) == 0 {
+		// No strong-marker child roots. Last resort: content-sniff the root for a
+		// language whose source files dominate (a .py repo with no manifest) and
+		// attach it rooted at folder. Gated on the server being installed
+		// (extLangAt → the effective p.langs set); a failed acquire degrades to
+		// LanguageNone like any other.
+		if sniffed := s.pool.extLangAt(folder); sniffed != "" {
+			e, err := s.pool.acquireLang(ctx, folder, sniffed, true)
+			if err == nil {
+				s.bindPrimary(v, folder, sniffed, e, repin)
+				s.sessionProxy.setDiscovered(folder, nil)
+				adp := adapterForLanguage(sniffed)
+				return sniffed, adp, nil, adaptersFor(adp)
+			}
+			s.log().Error("daemon: acquire sniffed language — attaching without LSP", "root", folder, "language", sniffed, "err", err)
+		}
 		s.sessionProxy.setDiscovered(folder, nil)
 		return LanguageNone, "", nil, nil
 	}
