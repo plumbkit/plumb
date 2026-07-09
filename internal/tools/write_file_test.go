@@ -79,6 +79,12 @@ func TestWriteFile_RejectsDirectory(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for directory path")
 	}
+	if !strings.Contains(err.Error(), "write_file:") {
+		t.Errorf("error should carry the tool prefix, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "pass a file path, not a directory") {
+		t.Errorf("error should explain what to pass instead, got: %v", err)
+	}
 }
 
 func TestWriteFile_MissingPath(t *testing.T) {

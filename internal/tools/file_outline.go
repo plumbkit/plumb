@@ -301,7 +301,7 @@ func readSourceLines(path string) ([]string, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("%s is a directory", path)
+		return nil, fmt.Errorf("%q is a directory — use list_directory to browse directories", path)
 	}
 	if info.Size() > outlineMaxBytes {
 		return nil, fmt.Errorf("file too large for an outline (%d bytes > %d)", info.Size(), outlineMaxBytes)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`file_outline` and `write_file` called on a directory now return actionable errors instead of a bare "is a directory".** `file_outline` on a directory surfaced `<path> is a directory` — no suggested alternative — costing the agent a wasted round-trip working out which tool to reach for instead, where `read_file` already models the right pattern (`read_file: "…" is a directory — use list_files to browse directories`). `file_outline`'s message now points at `list_directory` (`readSourceLines`, `internal/tools/file_outline.go`), and `write_file`'s directory refusal explains the fix (`write_file: "…" is a directory — pass a file path, not a directory`). Guarded by `TestFileOutline_DirectoryTarget` and the extended `TestWriteFile_RejectsDirectory`.
+
 ## 0.11.0 (2026-07-10)
 
 ### Added

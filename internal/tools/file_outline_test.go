@@ -148,6 +148,21 @@ func TestFileOutline_MissingURI(t *testing.T) {
 	}
 }
 
+func TestFileOutline_DirectoryTarget(t *testing.T) {
+	tool := tools.NewFileOutline(&mockLSP{docSymbols: serverDocSymbols()}, nil, 0, 0)
+	raw, _ := json.Marshal(map[string]any{"uri": "file://" + t.TempDir()})
+	_, err := tool.Execute(context.Background(), raw)
+	if err == nil {
+		t.Fatal("expected error outlining a directory")
+	}
+	if !strings.Contains(err.Error(), "file_outline:") {
+		t.Errorf("error should carry the tool prefix, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "use list_directory") {
+		t.Errorf("error should suggest list_directory, got: %v", err)
+	}
+}
+
 func TestFileOutline_NonexistentFile(t *testing.T) {
 	tool := tools.NewFileOutline(&mockLSP{docSymbols: serverDocSymbols()}, nil, 0, 0)
 	raw, _ := json.Marshal(map[string]any{"uri": "file:///no/such/file_xyz.go"})
