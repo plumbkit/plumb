@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
@@ -117,6 +118,80 @@ func TestApplyWorkspaceEdit_ValidatesAllFilesBeforeWriting(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(b); string(got) != "bbb\n" {
 		t.Fatalf("b.txt changed unexpectedly: %q", got)
+	}
+}
+
+// Two spellings of the same file (via a symlinked directory) canonicalise to
+// one lock key; a raw-string dedup would acquire the same non-reentrant mutex
+// twice and deadlock while holding it.
+func TestLockPaths_DedupsAliasedPaths(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	f := filepath.Join(real, "a.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan []func(), 1)
+	go func() { done <- lockPaths([]string{f, filepath.Join(link, "a.txt")}) }()
+	select {
+	case unlocks := <-done:
+		if len(unlocks) != 1 {
+			t.Errorf("aliased spellings must collapse to one lock, got %d", len(unlocks))
+		}
+		unlockAll(unlocks)
+	case <-time.After(10 * time.Second):
+		t.Fatal("lockPaths deadlocked on two spellings of the same file")
+	}
+}
+
+func TestApplyWorkspaceEdit_RollsBackOnMidWriteFailure(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("read-only directory is not enforced for root")
+	}
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(a, []byte("aaa\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zdir := filepath.Join(dir, "z")
+	if err := os.Mkdir(zdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	z := filepath.Join(zdir, "z.txt")
+	if err := os.WriteFile(z, []byte("zzz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Writes land in sorted path order (a.txt first). A read-only parent
+	// directory makes z.txt's staged temp file fail, after a.txt has been
+	// written — the mid-sequence failure the rollback must undo.
+	if err := os.Chmod(zdir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(zdir, 0o755) })
+
+	line0 := protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}
+	we := &protocol.WorkspaceEdit{
+		Changes: map[string][]protocol.TextEdit{
+			"file://" + a: {{Range: line0, NewText: "AAA"}},
+			"file://" + z: {{Range: line0, NewText: "ZZZ"}},
+		},
+	}
+	if _, err := applyWorkspaceEdit(we); err == nil {
+		t.Fatal("expected the unwritable second target to fail the apply")
+	}
+	if got, _ := os.ReadFile(a); string(got) != "aaa\n" {
+		t.Fatalf("a.txt was not rolled back after the mid-apply failure: %q", got)
+	}
+	if got, _ := os.ReadFile(z); string(got) != "zzz\n" {
+		t.Fatalf("z.txt changed despite its write failing: %q", got)
 	}
 }
 

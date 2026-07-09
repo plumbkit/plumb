@@ -29,11 +29,18 @@ import (
 // off-by-some for files containing wide characters in code positions. Most
 // refactoring happens on ASCII identifiers, so this is acceptable for now.
 func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
-	modified, _, err := applyWorkspaceEditDetailed(we)
+	modified, _, err := applyWorkspaceEditDetailed(we, nil)
 	return modified, err
 }
 
-func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit) ([]string, []workspaceEditPlan, error) {
+// applyWorkspaceEditDetailed applies every edit in we, holding all target path
+// locks (acquired in canonical sorted order) across prepare and write. Every
+// file is prepared in memory before any byte lands; a mid-sequence write
+// failure rolls already-written files back to their pre-edit bytes. onApplied,
+// when non-nil, runs after all writes succeed but before the locks release —
+// the place for bookkeeping (write tracker, undo snapshots) whose contract
+// requires the per-path lock to still be held.
+func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]workspaceEditPlan)) ([]string, []workspaceEditPlan, error) {
 	if we == nil {
 		return nil, nil, nil
 	}
@@ -77,6 +84,9 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit) ([]string, []workspa
 		}
 		modified = append(modified, p.path)
 	}
+	if onApplied != nil {
+		onApplied(plans)
+	}
 	return modified, plans, nil
 }
 
@@ -98,21 +108,31 @@ func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextE
 	return editsByURI
 }
 
+// lockPaths locks every distinct path and returns the unlock funcs. Paths are
+// deduplicated and ordered by their canonical lock key (lockPathKey — abs,
+// symlink-resolved), not their raw spelling: two spellings of the same file
+// (e.g. /tmp/x vs /private/tmp/x on macOS) map to one non-reentrant mutex, so
+// a raw-string dedup would self-deadlock on the second acquisition, and
+// canonical ordering keeps the acquisition order consistent across callers
+// regardless of spelling.
 func lockPaths(paths []string) []func() {
 	if len(paths) == 0 {
 		return nil
 	}
-	uniq := paths[:0]
-	var last string
-	for i, p := range paths {
-		if i == 0 || p != last {
-			uniq = append(uniq, p)
-			last = p
+	spelling := make(map[string]string, len(paths))
+	keys := make([]string, 0, len(paths))
+	for _, p := range paths {
+		k := lockPathKey(p)
+		if _, dup := spelling[k]; dup {
+			continue
 		}
+		spelling[k] = p
+		keys = append(keys, k)
 	}
-	unlocks := make([]func(), 0, len(uniq))
-	for _, p := range uniq {
-		unlocks = append(unlocks, lockPath(p))
+	sort.Strings(keys)
+	unlocks := make([]func(), 0, len(keys))
+	for _, k := range keys {
+		unlocks = append(unlocks, lockPath(spelling[k]))
 	}
 	return unlocks
 }
@@ -147,9 +167,10 @@ func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string) error {
 // dispatches tool calls concurrently across connections) could read the same
 // pre-edit content and lost-update each other. It writes through safeWrite,
 // which stages a UNIQUELY-named temp file and renames it into place — never a
-// fixed "<path>.tmp" that two concurrent writers would collide on. The lock is
-// taken and released per file, so applyWorkspaceEdit's multi-file rename never
-// holds two path locks at once (no lock-ordering deadlock).
+// fixed "<path>.tmp" that two concurrent writers would collide on. The
+// production multi-file path is applyWorkspaceEditDetailed, which holds ALL
+// target locks (canonically sorted) across prepare and write; this single-file
+// helper remains for tests and takes one lock only.
 func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	unlock := lockPath(path)
 	defer unlock()

@@ -138,11 +138,25 @@ func captureSemanticBaseline(deps *WriteDeps, uri string) *diagBaseline {
 	return deps.capturePreWriteBaseline(uri)
 }
 
+// semanticPostWrite is the full post-write pipeline for callers still holding
+// the target's path lock: write-tracker/undo bookkeeping (which requires the
+// held lock) plus the notify/diagnostics/quality half.
 func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, before, after, toolName string, baseline *diagBaseline) string {
 	if deps == nil {
 		notifySymbolEditWritten(ctx, client, c, path, uri)
 		return ""
 	}
+	deps.recordWritten(path)
+	deps.recordUndo(path, before, after, true, toolName)
+	return semanticNotifyPostWrite(ctx, deps, client, c, path, uri, before, after, toolName, baseline)
+}
+
+// semanticNotifyPostWrite is the lock-free half of the post-write pipeline:
+// LSP notify, adapter hook, cache invalidation, topology refresh, differential
+// diagnostics, and quality report. Callers that release the path lock before
+// running it (rename_symbol's multi-file path) must have recorded the
+// write-tracker/undo bookkeeping under the lock first.
+func semanticNotifyPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, before, after, toolName string, baseline *diagBaseline) string {
 	writeClient := deps.Client
 	if writeClient == nil {
 		writeClient = client
@@ -160,8 +174,6 @@ func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, 
 		}
 	}
 	invalidateCache(writeCache, uri)
-	deps.recordWritten(path)
-	deps.recordUndo(path, before, after, true, toolName)
 	deps.notifyTopology(path)
 	return deps.postWriteDiagnostics(uri, before, after, false, baseline) + deps.reportQuality(ctx, path)
 }
