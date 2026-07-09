@@ -149,7 +149,7 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		if fb, ok := t.topologyReadFallback(ctx, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
-		return t.noSymbolMessage(a.Name, fpath), nil
+		return t.noSymbolMessage(a.Name, fpath, syms), nil
 	}
 	return t.formatReadSymbolResult(fpath, a.Name, matches)
 }
@@ -196,11 +196,12 @@ func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {
 	return a, nil
 }
 
-// noSymbolMessage renders the not-found message, adding a hint when the file is
+// noSymbolMessage renders the not-found message, suggesting near-miss names
+// from the already-fetched symbol list and adding a hint when the file is
 // outside the workspace — neither the LSP nor the topology index covers those,
 // so read_file is the right tool.
-func (t *ReadSymbol) noSymbolMessage(name, fpath string) string {
-	msg := fmt.Sprintf("No symbol named %q in %s.", name, fpath)
+func (t *ReadSymbol) noSymbolMessage(name, fpath string, syms []protocol.DocumentSymbol) string {
+	msg := fmt.Sprintf("No symbol named %q in %s.", name, fpath) + didYouMean(suggestSymbols(syms, name))
 	if t.outsideFn != nil && t.outsideFn(fpath) != "" {
 		msg += " (This file is outside the workspace; neither the language server nor the topology index covers it — use read_file with a line range instead.)"
 	}

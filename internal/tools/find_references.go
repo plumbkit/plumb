@@ -138,7 +138,7 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 	matches := resolveSymbolsByName(syms, name)
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbol named %q in %s.", name, uri), nil
+		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
 	}
 
 	openFileForRefs(ctx, t.client, uri)
