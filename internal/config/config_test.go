@@ -207,6 +207,39 @@ func TestLoadProject_EnvOverridesProject(t *testing.T) {
 	}
 }
 
+func TestDefaults_BlockDirtyWritesEnabled(t *testing.T) {
+	if !defaults.Edits.BlockDirtyWrites {
+		t.Error("block_dirty_writes should default to true")
+	}
+}
+
+// TestLoadProject_BlockDirtyWrites covers both layers: a project config can
+// disable the dirty-guard, and PLUMB_BLOCK_DIRTY_WRITES overrides the project.
+func TestLoadProject_BlockDirtyWrites(t *testing.T) {
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	_ = os.MkdirAll(plumbDir, 0o755)
+	_ = os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[edits]\nblock_dirty_writes = false\n"), 0o644)
+
+	got, err := LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Edits.BlockDirtyWrites {
+		t.Error("project config should have disabled block_dirty_writes")
+	}
+
+	t.Setenv("PLUMB_BLOCK_DIRTY_WRITES", "1")
+	got, err = LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Edits.BlockDirtyWrites {
+		t.Error("env should have forced block_dirty_writes back on")
+	}
+}
+
 func TestDefaults_RefuseHomeRootsEnabled(t *testing.T) {
 	if !defaults.Walk.RefuseHomeRoots {
 		t.Error("default Walk.RefuseHomeRoots should be true so plumb does not crawl $HOME on a fresh install")

@@ -92,7 +92,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return fmt.Sprintf("deleted directory %s", path), nil
 	}
 
-	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps.Writes, path) {
+	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		return "", fmt.Errorf("delete_file: %q has uncommitted changes; "+
 			"review and commit first, or pass dirty_ok: true to proceed", path)
 	}
