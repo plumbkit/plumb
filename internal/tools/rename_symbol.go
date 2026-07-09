@@ -3,11 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -46,6 +43,8 @@ type RenameSymbol struct {
 	cache    *cache.Cache // may be nil; evicted per modified file after a successful apply
 	fallback *findReplaceTool
 	showDiff func() bool // may be nil; resolves the show_write_diff toggle (defaults on)
+	deps     WriteDeps
+	hasDeps  bool
 }
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
@@ -90,6 +89,15 @@ func (t *RenameSymbol) WithShowWriteDiff(fn func() bool) *RenameSymbol {
 	return t
 }
 
+func (t *RenameSymbol) WithWriteDeps(deps WriteDeps) *RenameSymbol {
+	t.deps = deps
+	t.hasDeps = true
+	if deps.Cache != nil {
+		t.cache = deps.Cache
+	}
+	return t
+}
+
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 
 func (*RenameSymbol) Description() string {
@@ -97,44 +105,50 @@ func (*RenameSymbol) Description() string {
 
 The language server identifies every reference across all files and applies a precise edit set atomically. Safer than text find-and-replace: it understands scope, shadowing, and types, so it won't rename unrelated identifiers that share the name.
 
-Provide the cursor position on the identifier. Runs in dry_run mode by default; set dry_run=false to apply. The response appends a per-file unified diff (a preview in dry-run, the applied change otherwise), capped at 20 files, unless show_write_diff is disabled.
+Prefer symbol_name to identify the symbol; plumb resolves it through the document-symbol tree and queries the language server at the exact identifier position. Raw line/character remains supported and recovers from narrow "no identifier" misses by snapping once to the enclosing symbol. Runs in dry_run mode by default; set dry_run=false to apply. The response appends a per-file unified diff (a preview in dry-run, the applied change otherwise), capped at 20 files, unless show_write_diff is disabled.
 
 If the language server cannot compute the rename (an error, or an empty edit set — common with sourcekit-lsp before the build graph resolves), pass structural_fallback=true to attempt a best-effort identifier-boundary text rename via find_replace (still dry_run by default). The fallback is NOT scope-aware — it renames every whole-word occurrence in same-extension files — so review the preview before applying.`
 }
 
 func (*RenameSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
-		"type":"object",
-		"properties":{
-			"uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
-			"line":{"type":"integer","minimum":0,"description":"Zero-based line of the identifier."},
-			"character":{"type":"integer","minimum":0,"description":"Zero-based character offset within the line."},
-			"new_name":{"type":"string","description":"Replacement identifier name."},
-			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview changes only."},
-			"structural_fallback":{"type":"boolean","default":false,"description":"If true, and the language server cannot compute the rename, attempt a best-effort, identifier-boundary text rename via find_replace (NOT scope-aware; honours dry_run). Default false."}
-		},
-		"required":["uri","line","character","new_name"],
-  "additionalProperties": false
-}`)
+			"type":"object",
+			"properties":{
+				"uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
+				"line":{"type":"integer","minimum":0,"description":"Zero-based line of the identifier. Required when symbol_name is not provided."},
+				"character":{"type":"integer","minimum":0,"description":"Zero-based character offset within the line. Required when symbol_name is not provided."},
+				"symbol_name":{"type":"string","description":"Symbol name to rename instead of a raw position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. When provided, line and character are not needed."},
+				"new_name":{"type":"string","description":"Replacement identifier name."},
+				"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing target files with uncommitted changes. Default false — review/commit first, or pass true to proceed."},
+				"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview changes only."},
+				"structural_fallback":{"type":"boolean","default":false,"description":"If true, and the language server cannot compute the rename, attempt a best-effort, identifier-boundary text rename via find_replace (NOT scope-aware; honours dry_run). Default false."}
+			},
+			"required":["uri","new_name"],
+	  "additionalProperties": false
+	}`)
 }
 
 type renameSymbolArgs struct {
 	URI                string
-	Line               uint32
-	Character          uint32
+	Line               *uint32
+	Character          *uint32
+	SymbolName         string
 	NewName            string
 	DryRun             bool
+	DirtyOK            bool
 	StructuralFallback bool
 }
 
 func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 	var input struct {
-		URI                string `json:"uri"`
-		Line               uint32 `json:"line"`
-		Character          uint32 `json:"character"`
-		NewName            string `json:"new_name"`
-		DryRun             *bool  `json:"dry_run,omitempty"`
-		StructuralFallback bool   `json:"structural_fallback"`
+		URI                string  `json:"uri"`
+		Line               *uint32 `json:"line"`
+		Character          *uint32 `json:"character"`
+		SymbolName         string  `json:"symbol_name"`
+		NewName            string  `json:"new_name"`
+		DryRun             *bool   `json:"dry_run,omitempty"`
+		DirtyOK            bool    `json:"dirty_ok"`
+		StructuralFallback bool    `json:"structural_fallback"`
 	}
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return renameSymbolArgs{}, fmt.Errorf("invalid args: %w", err)
@@ -150,8 +164,10 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 		URI:                input.URI,
 		Line:               input.Line,
 		Character:          input.Character,
+		SymbolName:         input.SymbolName,
 		NewName:            input.NewName,
 		DryRun:             dryRun,
+		DirtyOK:            input.DirtyOK,
 		StructuralFallback: input.StructuralFallback,
 	}, nil
 }
@@ -192,49 +208,92 @@ func (t *RenameSymbol) Execute(ctx context.Context, args json.RawMessage) (strin
 	dctx, cancel := withLSPDeadline(ctx, t.timeout)
 	defer cancel()
 
-	we, err := t.client.Rename(dctx, protocol.RenameParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
-		Position:     protocol.Position{Line: a.Line, Character: a.Character},
-		NewName:      a.NewName,
-	})
+	we, note, err := t.renameWorkspaceEdit(dctx, a)
 	if err != nil {
-		return t.onRenameUnavailable(ctx, a, "the language server returned an error", positionErr("rename_symbol", err))
+		var pre preLSPErr
+		if errors.As(err, &pre) {
+			return "", pre.err
+		}
+		return t.onRenameUnavailable(ctx, a, "the language server returned an error", err)
 	}
 	if we == nil || (len(we.Changes) == 0 && len(we.DocumentChanges) == 0) {
 		return t.onRenameEmpty(ctx, a)
 	}
-	return t.applyOrPreview(ctx, a, we)
+	return t.applyOrPreview(ctx, a, we, note)
 }
 
-// onRenameUnavailable handles a failed LSP rename: it runs the structural
-// fallback when the caller opted in and it is wired, otherwise returns the
-// original error enriched with actionable guidance.
-func (t *RenameSymbol) onRenameUnavailable(ctx context.Context, a renameSymbolArgs, reason string, baseErr error) (string, error) {
-	if a.StructuralFallback && t.fallback != nil {
-		return t.structuralFallback(ctx, a, reason)
+func (t *RenameSymbol) renameWorkspaceEdit(ctx context.Context, a renameSymbolArgs) (*protocol.WorkspaceEdit, string, error) {
+	if a.SymbolName != "" {
+		return t.renameByName(ctx, a)
 	}
-	oldName, _ := identifierAtFile(paths.URIToPath(a.URI), a.Line, a.Character)
-	return "", fmt.Errorf("%w%s", baseErr, renameLSPFailureHint(oldName, a.NewName, t.fallback != nil))
+	if a.Line == nil || a.Character == nil {
+		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: either symbol_name or both line and character are required")}
+	}
+	return t.renameByPosition(ctx, a, *a.Line, *a.Character, true)
 }
 
-// onRenameEmpty handles an empty edit set: an opt-in structural fallback, or the
-// informational message plus guidance.
-func (t *RenameSymbol) onRenameEmpty(ctx context.Context, a renameSymbolArgs) (string, error) {
-	if a.StructuralFallback && t.fallback != nil {
-		return t.structuralFallback(ctx, a, "the language server returned an empty edit set")
+func (t *RenameSymbol) renameByName(ctx context.Context, a renameSymbolArgs) (*protocol.WorkspaceEdit, string, error) {
+	syms, err := t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
+	})
+	if err != nil {
+		return nil, "", lspTimeoutErr("rename_symbol", t.timeout, fmt.Errorf("resolving symbol %q: %w", a.SymbolName, err))
 	}
-	oldName, _ := identifierAtFile(paths.URIToPath(a.URI), a.Line, a.Character)
-	return "No changes — rename returned an empty edit set (symbol may not be renameable here)." +
-		renameLSPFailureHint(oldName, a.NewName, t.fallback != nil), nil
+	matches := resolveSymbolsByName(syms, a.SymbolName)
+	if len(matches) == 0 {
+		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: no symbol named %q in %s", a.SymbolName, a.URI)}
+	}
+	if len(matches) > 1 {
+		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: %d symbols named %q in %s; use line/character to disambiguate", len(matches), a.SymbolName, a.URI)}
+	}
+	sym := matches[0]
+	return t.renameByPosition(ctx, a, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
+}
+
+// preLSPErr wraps an error raised before any language-server rename attempt —
+// argument validation or plumb-side symbol resolution (no match, ambiguous
+// match). Execute returns it verbatim: the structural fallback and the
+// LSP-failure hint exist for language-server failures and would mislead here
+// (an ambiguous symbol_name must be disambiguated, not text-renamed
+// workspace-wide).
+type preLSPErr struct{ err error }
+
+func (e preLSPErr) Error() string { return e.err.Error() }
+func (e preLSPErr) Unwrap() error { return e.err }
+
+func (t *RenameSymbol) renameByPosition(ctx context.Context, a renameSymbolArgs, line, character uint32, allowSnap bool) (*protocol.WorkspaceEdit, string, error) {
+	we, err := t.client.Rename(ctx, protocol.RenameParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: a.URI},
+		Position:     protocol.Position{Line: line, Character: character},
+		NewName:      a.NewName,
+	})
+	if err == nil {
+		return we, "", nil
+	}
+	if allowSnap && isPositionMissErr(err) {
+		snapped, syms, ok := snapPosition(ctx, t.client, a.URI, line)
+		if !ok {
+			return nil, "", positionMissErr("rename_symbol", a.URI, line, syms)
+		}
+		we, _, retryErr := t.renameByPosition(ctx, a, snapped.Line, snapped.Character, false)
+		if retryErr != nil {
+			return nil, "", retryErr
+		}
+		return we, snapNotice(a.URI, line, character, snapped.Line), nil
+	}
+	return nil, "", positionErr("rename_symbol", err)
 }
 
 // applyOrPreview applies (or previews, in dry-run) a server-computed edit set.
-func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, we *protocol.WorkspaceEdit) (string, error) {
+func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, we *protocol.WorkspaceEdit, note string) (string, error) {
 	files, totalEdits, err := t.collectRenameTargets(we)
 	if err != nil {
 		return "", err
 	}
 	sort.Strings(files)
+	if err := t.preflightTargets(ctx, files, a); err != nil {
+		return "", err
+	}
 
 	// Reconstruct the diff against the current on-disk content BEFORE applying,
 	// so the read bytes are the true "before" in both the dry-run and apply paths.
@@ -244,20 +303,21 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 	}
 
 	var sb strings.Builder
+	if note != "" {
+		sb.WriteString(note)
+	}
 	verb := "would change"
+	var diagOut strings.Builder
 	if !a.DryRun {
-		modified, applyErr := applyWorkspaceEdit(we)
+		baselines := t.captureRenameBaselines(files)
+		modified, plans, applyErr := applyWorkspaceEditDetailed(we, t.recordRenameWrites)
 		if applyErr != nil {
 			if strings.Contains(applyErr.Error(), "out of range") {
 				return "", fmt.Errorf("applying rename: %w%s", applyErr, renameStaleIndexHint)
 			}
 			return "", fmt.Errorf("applying rename: %w", applyErr)
 		}
-		// Post-write housekeeping for EVERY rewritten file — parity with the
-		// file-write tools. A rename that touches N files must refresh the server
-		// and evict the cache for all N, or a follow-up query against any of them
-		// resolves positions from stale content.
-		t.notifyRenameWritten(ctx, modified)
+		t.postWriteRename(ctx, plans, baselines, &diagOut)
 		files = modified
 		verb = "changed"
 	} else {
@@ -273,21 +333,72 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 		sb.WriteString(diff)
 		sb.WriteString("\n")
 	}
+	if diagOut.Len() > 0 {
+		sb.WriteString(diagOut.String())
+	}
 	if a.DryRun {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
 	return sb.String(), nil
 }
 
-// notifyRenameWritten runs the post-write LSP notification + cache eviction for
-// each file a rename rewrote. Best-effort per file: a notification failure is
-// logged, never fatal. client and cache are nil-safe.
-func (t *RenameSymbol) notifyRenameWritten(ctx context.Context, modified []string) {
-	for _, f := range modified {
-		if err := notifyLSP(ctx, t.client, f, protocol.FileChanged); err != nil {
-			slog.Warn("rename_symbol: LSP notification failed", "path", f, "err", err)
+func (t *RenameSymbol) preflightTargets(ctx context.Context, files []string, a renameSymbolArgs) error {
+	if a.DryRun {
+		return nil
+	}
+	deps := writeDepsPtr(t.hasDeps, &t.deps)
+	if deps != nil && deps.Limiter != nil && !deps.Limiter.Allow() {
+		return rateLimitError("rename_symbol", deps.Limiter)
+	}
+	for _, f := range files {
+		if err := t.guard.check(f); err != nil {
+			return fmt.Errorf("rename_symbol: %w", err)
 		}
-		invalidateCache(t.cache, protocol.FileURI(f))
+		if deps != nil && !a.DirtyOK && dirtyBlocksWrite(ctx, *deps, f) {
+			return fmt.Errorf("rename_symbol: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", f)
+		}
+	}
+	return nil
+}
+
+func (t *RenameSymbol) captureRenameBaselines(files []string) map[string]*diagBaseline {
+	deps := writeDepsPtr(t.hasDeps, &t.deps)
+	if deps == nil {
+		return nil
+	}
+	out := make(map[string]*diagBaseline, len(files))
+	for _, f := range files {
+		uri := protocol.FileURI(f)
+		out[uri] = deps.capturePreWriteBaseline(uri)
+	}
+	return out
+}
+
+// recordRenameWrites runs inside applyWorkspaceEditDetailed after every file
+// has been written but before the path locks release, honouring recordWritten
+// and recordUndo's held-lock contract — recording after the unlock would let a
+// concurrent session's write slip in between and have its undo snapshot and
+// read-tracker state clobbered by ours.
+func (t *RenameSymbol) recordRenameWrites(plans []workspaceEditPlan) {
+	deps := writeDepsPtr(t.hasDeps, &t.deps)
+	if deps == nil {
+		return
+	}
+	for _, p := range plans {
+		deps.recordWritten(p.path)
+		deps.recordUndo(p.path, string(p.before), string(p.after), true, "rename_symbol")
+	}
+}
+
+func (t *RenameSymbol) postWriteRename(ctx context.Context, plans []workspaceEditPlan, baselines map[string]*diagBaseline, diagOut *strings.Builder) {
+	deps := writeDepsPtr(t.hasDeps, &t.deps)
+	for _, p := range plans {
+		uri := protocol.FileURI(p.path)
+		if deps == nil {
+			notifySymbolEditWritten(ctx, t.client, t.cache, p.path, uri)
+			continue
+		}
+		diagOut.WriteString(semanticNotifyPostWrite(ctx, deps, t.client, t.cache, p.path, uri, string(p.before), string(p.after), "rename_symbol", baselines[uri]))
 	}
 }
 
@@ -335,132 +446,4 @@ func groupEditsByPath(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit
 		byPath[p] = append(byPath[p], dce.Edits...)
 	}
 	return byPath
-}
-
-// structuralFallback performs a best-effort, identifier-boundary text rename via
-// the find_replace engine when the LSP could not. It resolves the old name from
-// the position, then runs a word-boundary regex replace across same-extension
-// files under the workspace, honouring the caller's dry_run.
-func (t *RenameSymbol) structuralFallback(ctx context.Context, a renameSymbolArgs, reason string) (string, error) {
-	path := paths.URIToPath(a.URI)
-	oldName, err := identifierAtFile(path, a.Line, a.Character)
-	if err != nil {
-		return "", fmt.Errorf("rename_symbol: structural fallback could not resolve the symbol name at the position: %w", err)
-	}
-
-	root := ""
-	if t.ws != nil {
-		root = t.ws()
-	}
-	if root == "" {
-		root = filepath.Dir(path)
-	}
-	glob := ""
-	if ext := filepath.Ext(path); ext != "" {
-		glob = "*" + ext
-	}
-
-	frArgs, err := json.Marshal(map[string]any{
-		"path":           root,
-		"pattern":        `\b` + regexp.QuoteMeta(oldName) + `\b`,
-		"replacement":    a.NewName,
-		"use_regex":      true,
-		"case_sensitive": true,
-		"glob":           glob,
-		"dry_run":        a.DryRun,
-	})
-	if err != nil {
-		return "", fmt.Errorf("rename_symbol: structural fallback: %w", err)
-	}
-	out, err := t.fallback.Execute(ctx, frArgs)
-	if err != nil {
-		return "", fmt.Errorf("rename_symbol: structural fallback failed: %w", err)
-	}
-	return structuralFallbackBanner(oldName, a.NewName, reason, glob) + out, nil
-}
-
-// structuralFallbackBanner prefixes the find_replace output with a loud,
-// honest explanation that this is a non-scope-aware text rename.
-func structuralFallbackBanner(oldName, newName, reason, glob string) string {
-	scope := "all text files"
-	if glob != "" {
-		scope = glob + " files"
-	}
-	return fmt.Sprintf(
-		"STRUCTURAL FALLBACK — rename_symbol could not use the language server (%s).\n"+
-			"This is a best-effort, identifier-boundary text rename of %q → %q across %s under the workspace.\n"+
-			"It is NOT scope-aware: a same-named identifier in another scope is also matched, so review every change.\n\n",
-		reason, oldName, newName, scope)
-}
-
-// renameLSPFailureHint returns actionable recovery guidance for a rename the
-// language server could not compute. hasFallback gates the structural_fallback
-// suggestion so it is only offered when the fallback is actually wired.
-func renameLSPFailureHint(oldName, newName string, hasFallback bool) string {
-	var b strings.Builder
-	b.WriteString("\n\nThe language server could not compute this rename. This is common when the project's ")
-	b.WriteString("build graph is not fully resolved (e.g. sourcekit-lsp before a successful build, or mid-edit).\n")
-	b.WriteString("Recovery options:\n")
-	b.WriteString("  - Ensure the project builds (resolve dependencies / run a build), then retry rename_symbol.\n")
-	if hasFallback {
-		if oldName != "" {
-			fmt.Fprintf(&b, "  - Re-run with structural_fallback:true for a best-effort identifier-boundary rename of %q → %q (dry-run first; review, then apply with dry_run:false).\n", oldName, newName)
-		} else {
-			b.WriteString("  - Re-run with structural_fallback:true for a best-effort identifier-boundary rename (dry-run first).\n")
-		}
-	}
-	if oldName != "" {
-		fmt.Fprintf(&b, "  - Or use find_references + edit_file, or find_replace on %q with a word boundary, fixing any scope collisions manually.\n", oldName)
-	} else {
-		b.WriteString("  - Or use find_references + edit_file to update each call site.\n")
-	}
-	return b.String()
-}
-
-// identifierAtFile reads path and returns the identifier token spanning the
-// (line, character) position. Character is treated as a byte offset, matching
-// plumb's LSP-position convention (correct for ASCII identifiers).
-func identifierAtFile(path string, line, character uint32) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("reading %q: %w", path, err)
-	}
-	lines := strings.Split(string(data), "\n")
-	if int(line) >= len(lines) {
-		return "", fmt.Errorf("line %d is past the end of %q", line, path)
-	}
-	name := identifierAt(lines[line], int(character))
-	if name == "" {
-		return "", fmt.Errorf("no identifier at line %d, character %d", line, character)
-	}
-	return name, nil
-}
-
-// isIdentifierByte reports whether b is a [A-Za-z0-9_] identifier byte.
-func isIdentifierByte(b byte) bool {
-	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
-}
-
-// identifierAt returns the maximal [A-Za-z0-9_] run containing the byte index
-// char (or the one immediately before it, since a cursor often sits just after
-// a token), or "" when the position is not on an identifier.
-func identifierAt(line string, char int) string {
-	if char < 0 {
-		return ""
-	}
-	pos := char
-	if pos >= len(line) || !isIdentifierByte(line[pos]) {
-		pos-- // the position may sit just after the identifier
-	}
-	if pos < 0 || pos >= len(line) || !isIdentifierByte(line[pos]) {
-		return ""
-	}
-	start, end := pos, pos
-	for start > 0 && isIdentifierByte(line[start-1]) {
-		start--
-	}
-	for end < len(line) && isIdentifierByte(line[end]) {
-		end++
-	}
-	return line[start:end]
 }

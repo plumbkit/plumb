@@ -317,3 +317,125 @@ func TestRenameSymbol_StructuralFallback_OnEmptyEditSet(t *testing.T) {
 		t.Errorf("expected fallback on empty edit set: %s", out)
 	}
 }
+
+func TestRenameSymbol_ByNameUsesSelectionRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: 2, Character: 0}, End: protocol.Position{Line: 2, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+		}},
+		renameResult: renameEditFor(path, "Bar"),
+	}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "symbol_name": "Foo", "new_name": "Bar", "dry_run": false,
+	})
+	if _, err := tool.Execute(context.Background(), args); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := (protocol.Position{Line: 2, Character: 5})
+	if mock.lastRenamePos != want {
+		t.Fatalf("Rename position = %+v, want SelectionRange.Start %+v", mock.lastRenamePos, want)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "func Bar() {}") {
+		t.Fatalf("rename did not apply: %s", got)
+	}
+}
+
+func TestRenameSymbol_RawPositionMissSnapsAndRetries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockLSP{
+		docSymbols: []protocol.DocumentSymbol{{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: 2, Character: 0}, End: protocol.Position{Line: 2, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 5}, End: protocol.Position{Line: 2, Character: 8}},
+		}},
+		renameResult: renameEditFor(path, "Bar"),
+		renameErrs:   []error{errors.New("no identifier found")},
+	}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "line": 2, "character": 0, "new_name": "Bar", "dry_run": false,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	want := (protocol.Position{Line: 2, Character: 5})
+	if mock.lastRenamePos != want {
+		t.Fatalf("retry Rename position = %+v, want snapped SelectionRange.Start %+v", mock.lastRenamePos, want)
+	}
+	if !strings.Contains(out, "answered for the enclosing symbol") {
+		t.Fatalf("expected snap notice in output, got: %s", out)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "func Bar() {}") {
+		t.Fatalf("rename did not apply: %s", got)
+	}
+}
+
+func TestRenameSymbol_AmbiguousNameRefusesStructuralFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	src := "package p\n\nfunc Foo() {}\nfunc Foo2() {}\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sym := func(line uint32) protocol.DocumentSymbol {
+		return protocol.DocumentSymbol{
+			Name:           "Foo",
+			Range:          protocol.Range{Start: protocol.Position{Line: line, Character: 0}, End: protocol.Position{Line: line, Character: 13}},
+			SelectionRange: protocol.Range{Start: protocol.Position{Line: line, Character: 5}, End: protocol.Position{Line: line, Character: 8}},
+		}
+	}
+	mock := &mockLSP{docSymbols: []protocol.DocumentSymbol{sym(2), sym(3)}}
+	tool := tools.NewRenameSymbol(mock, 0).
+		WithWorkspace(func() string { return dir }).
+		WithStructuralFallback(tools.WriteDeps{})
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file://" + path, "symbol_name": "Foo", "new_name": "Bar",
+		"structural_fallback": true, "dry_run": false,
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected an ambiguity error, got success — the structural fallback must not run for an ambiguous symbol_name")
+	}
+	if !strings.Contains(err.Error(), "disambiguate") {
+		t.Errorf("expected disambiguation guidance, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not compute this rename") {
+		t.Errorf("plumb-side ambiguity must not carry the LSP-failure hint: %v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != src {
+		t.Errorf("file must be untouched after a refused ambiguous rename; got: %s", b)
+	}
+}
+
+func TestRenameSymbol_MissingArgsNoLSPHint(t *testing.T) {
+	tool := tools.NewRenameSymbol(&mockLSP{}, 0)
+	args, _ := json.Marshal(map[string]any{
+		"uri": "file:///x.go", "new_name": "Bar",
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected a validation error")
+	}
+	if !strings.Contains(err.Error(), "either symbol_name or both line and character are required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not compute this rename") {
+		t.Errorf("argument validation must not carry the LSP-failure hint: %v", err)
+	}
+}

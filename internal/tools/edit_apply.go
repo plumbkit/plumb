@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -14,6 +15,12 @@ import (
 // `changes` (map[uri][]TextEdit) and `documentChanges` (TextDocumentEdit[])
 // forms. Returns the list of files modified.
 //
+// All target files are locked in stable order, read, and validated in memory
+// before any bytes are written. If a write fails after earlier files were
+// updated, those files are restored to their pre-edit content before returning.
+// That keeps semantic renames all-or-nothing at the filesystem level instead of
+// leaving a partially-applied WorkspaceEdit behind.
+//
 // Edits within each file are applied in reverse-order so earlier edits do not
 // shift the positions of later ones. Each file write is atomic (tmp + rename).
 //
@@ -22,10 +29,75 @@ import (
 // off-by-some for files containing wide characters in code positions. Most
 // refactoring happens on ASCII identifiers, so this is acceptable for now.
 func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
+	modified, _, err := applyWorkspaceEditDetailed(we, nil)
+	return modified, err
+}
+
+// applyWorkspaceEditDetailed applies every edit in we, holding all target path
+// locks (acquired in canonical sorted order) across prepare and write. Every
+// file is prepared in memory before any byte lands; a mid-sequence write
+// failure rolls already-written files back to their pre-edit bytes. onApplied,
+// when non-nil, runs after all writes succeed but before the locks release —
+// the place for bookkeeping (write tracker, undo snapshots) whose contract
+// requires the per-path lock to still be held.
+func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]workspaceEditPlan)) ([]string, []workspaceEditPlan, error) {
 	if we == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
+	editsByURI := workspaceEditGroups(we)
+	pathsByURI := make(map[string]string, len(editsByURI))
+	var targetPaths []string
+	for uri := range editsByURI {
+		path := paths.URIToPath(uri)
+		pathsByURI[uri] = path
+		targetPaths = append(targetPaths, path)
+	}
+	sort.Strings(targetPaths)
+
+	unlocks := lockPaths(targetPaths)
+	defer unlockAll(unlocks)
+
+	plans := make([]workspaceEditPlan, 0, len(editsByURI))
+	for uri, edits := range editsByURI {
+		path := pathsByURI[uri]
+		before, after, mode, err := prepareTextEditsLocked(path, edits)
+		if err != nil {
+			return nil, nil, fmt.Errorf("applying edits to %s: %w", path, err)
+		}
+		plans = append(plans, workspaceEditPlan{
+			path:   path,
+			before: before,
+			after:  after,
+			mode:   mode,
+		})
+	}
+	sort.Slice(plans, func(i, j int) bool { return plans[i].path < plans[j].path })
+
+	var modified []string
+	for _, p := range plans {
+		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
+			if rbErr := rollbackWorkspaceEdit(plans, modified); rbErr != nil {
+				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %v", p.path, err, rbErr)
+			}
+			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
+		}
+		modified = append(modified, p.path)
+	}
+	if onApplied != nil {
+		onApplied(plans)
+	}
+	return modified, plans, nil
+}
+
+type workspaceEditPlan struct {
+	path   string
+	before []byte
+	after  []byte
+	mode   os.FileMode
+}
+
+func workspaceEditGroups(we *protocol.WorkspaceEdit) map[string][]protocol.TextEdit {
 	editsByURI := make(map[string][]protocol.TextEdit)
 	for uri, edits := range we.Changes {
 		editsByURI[uri] = append(editsByURI[uri], edits...)
@@ -33,17 +105,60 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 	for _, dce := range we.DocumentChanges {
 		editsByURI[dce.TextDocument.URI] = append(editsByURI[dce.TextDocument.URI], dce.Edits...)
 	}
+	return editsByURI
+}
 
-	var modified []string
-	for uri, edits := range editsByURI {
-		path := paths.URIToPath(uri)
-		if err := applyTextEditsToFile(path, edits); err != nil {
-			return modified, fmt.Errorf("applying edits to %s: %w", path, err)
-		}
-		modified = append(modified, path)
+// lockPaths locks every distinct path and returns the unlock funcs. Paths are
+// deduplicated and ordered by their canonical lock key (lockPathKey — abs,
+// symlink-resolved), not their raw spelling: two spellings of the same file
+// (e.g. /tmp/x vs /private/tmp/x on macOS) map to one non-reentrant mutex, so
+// a raw-string dedup would self-deadlock on the second acquisition, and
+// canonical ordering keeps the acquisition order consistent across callers
+// regardless of spelling.
+func lockPaths(paths []string) []func() {
+	if len(paths) == 0 {
+		return nil
 	}
-	sort.Strings(modified)
-	return modified, nil
+	spelling := make(map[string]string, len(paths))
+	keys := make([]string, 0, len(paths))
+	for _, p := range paths {
+		k := lockPathKey(p)
+		if _, dup := spelling[k]; dup {
+			continue
+		}
+		spelling[k] = p
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	unlocks := make([]func(), 0, len(keys))
+	for _, k := range keys {
+		unlocks = append(unlocks, lockPath(spelling[k]))
+	}
+	return unlocks
+}
+
+func unlockAll(unlocks []func()) {
+	for i := len(unlocks) - 1; i >= 0; i-- {
+		unlocks[i]()
+	}
+}
+
+func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string) error {
+	byPath := make(map[string]workspaceEditPlan, len(plans))
+	for _, p := range plans {
+		byPath[p.path] = p
+	}
+	var errs []string
+	for i := len(modified) - 1; i >= 0; i-- {
+		p := byPath[modified[i]]
+		if _, err := safeWrite(p.path, p.before, p.mode); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // applyTextEditsToFile applies a list of TextEdits to a single file atomically,
@@ -52,25 +167,42 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 // dispatches tool calls concurrently across connections) could read the same
 // pre-edit content and lost-update each other. It writes through safeWrite,
 // which stages a UNIQUELY-named temp file and renames it into place — never a
-// fixed "<path>.tmp" that two concurrent writers would collide on. The lock is
-// taken and released per file, so applyWorkspaceEdit's multi-file rename never
-// holds two path locks at once (no lock-ordering deadlock).
+// fixed "<path>.tmp" that two concurrent writers would collide on. The
+// production multi-file path is applyWorkspaceEditDetailed, which holds ALL
+// target locks (canonically sorted) across prepare and write; this single-file
+// helper remains for tests and takes one lock only.
 func applyTextEditsToFile(path string, edits []protocol.TextEdit) error {
 	unlock := lockPath(path)
 	defer unlock()
 
-	data, err := os.ReadFile(path)
+	_, out, mode, err := prepareTextEditsLocked(path, edits)
 	if err != nil {
 		return err
 	}
-	out, err := applyTextEdits(data, edits)
-	if err != nil {
-		return err
-	}
-	if _, err := safeWrite(path, out, 0o644); err != nil {
+	if _, err := safeWrite(path, out, mode); err != nil {
 		return err
 	}
 	return nil
+}
+
+func prepareTextEditsLocked(path string, edits []protocol.TextEdit) (before, after []byte, mode os.FileMode, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	mode = info.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	before, err = os.ReadFile(path)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	after, err = applyTextEdits(before, edits)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return before, after, mode, nil
 }
 
 // applyTextEdits applies edits to data and returns the resulting content. Pure;

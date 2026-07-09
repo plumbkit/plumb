@@ -17,6 +17,7 @@ type mockLSP struct {
 	caps         *protocol.ServerCapabilities
 	err          error
 	renameResult *protocol.WorkspaceEdit // returned by Rename when non-nil
+	renameErrs   []error                 // optional per-call Rename errors before falling back to err
 	block        bool                    // when true, query methods wait for ctx cancellation
 
 	// Call-hierarchy responses (nil by default → same as an empty server).
@@ -24,13 +25,13 @@ type mockLSP struct {
 	chIncoming []protocol.CallHierarchyIncomingCall
 	chOutgoing []protocol.CallHierarchyOutgoingCall
 
-	// lastDefPos / lastRefPos record the Position of the most recent
-	// Definition / References call, so a test can assert the tool queried the
-	// identifier (DocumentSymbol SelectionRange) rather than the declaration
-	// start (the keyword). See TestGetDefinition_ByName_UsesSelectionRange.
-	lastDefPos protocol.Position
-	lastRefPos protocol.Position
-	lastRefURI string // URI of the most recent References call (asserts path absolutisation)
+	// last*Pos records the Position of the most recent semantic query, so tests can
+	// assert the tool queried the identifier (DocumentSymbol SelectionRange) rather
+	// than the declaration start (the keyword).
+	lastDefPos    protocol.Position
+	lastRefPos    protocol.Position
+	lastRenamePos protocol.Position
+	lastRefURI    string // URI of the most recent References call (asserts path absolutisation)
 
 	// watchedEvents records every DidChangeWatchedFiles event the tool sent, so a
 	// test can assert a write path notified the language server (RC1 parity).
@@ -95,7 +96,16 @@ func (m *mockLSP) PrepareRename(_ context.Context, _ protocol.PrepareRenameParam
 	return nil, m.err
 }
 
-func (m *mockLSP) Rename(_ context.Context, _ protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
+func (m *mockLSP) Rename(_ context.Context, p protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
+	m.lastRenamePos = p.Position
+	if len(m.renameErrs) > 0 {
+		err := m.renameErrs[0]
+		m.renameErrs = m.renameErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+		return m.renameResult, nil
+	}
 	return m.renameResult, m.err
 }
 

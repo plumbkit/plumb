@@ -30,15 +30,17 @@ These apply across many tools:
 - **Positions are zero-based.** LSP query/edit tools that take a `line` and
   `character` use zero-based numbering (matching the LSP spec). Output line
   numbers are printed one-based.
-- **Position or name.** `get_definition`, `find_references`, and `read_symbol`
-  accept either a position (`uri` + `line` + `character`) or a symbol name
-  (`symbol_name` / `name`, plain or dotted `ReceiverType.MethodName`).
+- **Position or name.** `get_definition`, `find_references`, `call_hierarchy`,
+  `rename_symbol`, and `read_symbol` accept either a position (`uri` + `line` +
+  `character`) or a symbol name (`symbol_name` / `name`, plain or dotted
+  `ReceiverType.MethodName`). Prefer names when available; plumb resolves them
+  to the identifier's `SelectionRange.Start` and avoids hand-computed positions.
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.
-- **`dirty_ok`.** Filesystem write tools refuse to touch a file with
-  uncommitted git changes that plumb did not write this session, unless you
-  pass `dirty_ok: true`. Disable the guard entirely with
+- **`dirty_ok`.** Filesystem and semantic write tools refuse to touch a file
+  with uncommitted git changes that plumb did not write this session, unless
+  you pass `dirty_ok: true`. Disable the guard entirely with
   `[edits] block_dirty_writes = false` (or `PLUMB_BLOCK_DIRTY_WRITES=0`).
 - **`expected_mtime` / `expected_sha`.** `read_file` and `read_symbol` emit a
   header line — `# plumb-read mtime=<RFC3339Nano> sha256=<hash> indent=<…>` —
@@ -200,10 +202,12 @@ route it to those files).
 
 ### `find_symbol`
 Search symbols by name within a **single document** (case-insensitive
-substring). **Inputs:** `query` (string, required), `uri` (string, required).
-When the language server errors or times out and `[topology]` is enabled, falls
-back to the topology index, returning approximate results annotated
-`source=topology, mode=indexed-approximate`.
+substring). **Inputs:** `query` (string, required), `uri` (string, optional but
+needed for a real search). Omitting `uri` returns a friendly redirect to
+`workspace_symbols` for workspace-wide name search. When the language server
+errors or times out and `[topology]` is enabled, falls back to the topology
+index, returning approximate results annotated `source=topology,
+mode=indexed-approximate`.
 
 ### `workspace_symbols`
 Search symbols by name across the **entire workspace** via the LSP index;
@@ -248,8 +252,8 @@ All usages of a symbol across the workspace, each with its source line.
 `include_declaration` (bool, default true).
 
 ### `call_hierarchy`
-Incoming and outgoing calls for a function. **Inputs:** `uri` (required) plus a
-position (`line` + `character`).
+Incoming and outgoing calls for a function. **Inputs:** `uri` (required), and
+either `line` + `character` or `symbol_name`.
 
 ### `type_hierarchy`
 Supertypes and subtypes of a class or interface. **Inputs:** `uri` (required)
@@ -264,15 +268,20 @@ URIs to batch). A single call replaces multiple per-file calls.
 
 ## LSP semantic edits
 
-All default to `dry_run: true`.
+All default to `dry_run: true`. When applied, semantic edits use the same
+write-tool bookkeeping as filesystem writes: path locks, dirty guards,
+`workspace/didChangeWatchedFiles`, cache invalidation, undo capture, topology
+refresh, quality hooks, and differential post-write diagnostics.
 
 ### `rename_symbol`
 Workspace-wide rename via LSP — scope- and type-aware, updates every reference.
-**Inputs:** `uri`, `line`, `character`, `new_name` (all required), `dry_run`
-(default true), `structural_fallback` (default false). Provide the position of
-the identifier to rename. When the language server cannot compute the rename (an
-error, or an empty edit set — common with sourcekit-lsp before the build graph
-resolves), the tool returns actionable guidance. Pass `structural_fallback=true`
+**Inputs:** `uri`, `new_name` (required), either `symbol_name` or `line` +
+`character`, `dirty_ok`, `dry_run` (default true), `structural_fallback`
+(default false). Prefer `symbol_name`; raw positions recover from narrow
+"no identifier" misses by snapping once to the enclosing symbol's identifier.
+When the language server cannot compute the rename (an error, or an empty edit
+set — common with sourcekit-lsp before the build graph resolves), the tool
+returns actionable guidance. Pass `structural_fallback=true`
 to fall through to a best-effort, identifier-boundary text rename via
 `find_replace` (word-boundary match across same-extension files, honouring
 `dry_run`) — **not scope-aware**, so review the preview before applying.
@@ -283,24 +292,24 @@ structural-fallback path instead surfaces `find_replace`'s own match output.
 
 ### `replace_symbol_body`
 Replace a symbol's entire declaration. **Inputs:** `uri`, `name_path`,
-`content` (required), `include_doc_comment` (bool), `dry_run`.
+`content` (required), `include_doc_comment` (bool), `dry_run`, `dirty_ok`.
 
 ### `insert_before_symbol`
 Insert text immediately before a symbol's declaration. **Inputs:** `uri`,
-`name_path`, `content` (required), `include_doc_comment` (bool), `dry_run`.
+`name_path`, `content` (required), `include_doc_comment` (bool), `dry_run`,
+`dirty_ok`.
 
 ### `insert_after_symbol`
 Insert text immediately after a symbol's declaration. **Inputs:** `uri`,
-`name_path`, `content` (required), `dry_run`.
+`name_path`, `content` (required), `dry_run`, `dirty_ok`.
 
 ### `safe_delete_symbol`
 Delete a symbol only if it has no external references (reports them and refuses
 otherwise). **Inputs:** `uri`, `name_path` (required), `include_doc_comment`
-(bool), `dry_run`.
+(bool), `dry_run`, `dirty_ok`.
 
 > `name_path` is a slash-separated symbol path within the file, e.g.
-> `"ClassName/methodName"` or just `"funcName"` for a top-level symbol. This is
-> distinct from `rename_symbol`, which takes a cursor position.
+> `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.
 >
 > All four append a unified diff of the change to their response — a preview in
 > `dry_run`, the applied change otherwise — gated by `[edits].show_write_diff`
