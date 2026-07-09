@@ -64,13 +64,17 @@ project. Fixes:
 
 **Claude Desktop specifically:** Desktop does not tell plumb which folder you're
 working in (it sends no MCP `roots`), and the daemon is shared across all your
-conversations — so a fresh Desktop session has no workspace until you give it
-one. Pin the project by passing an absolute path to `session_start`:
+conversations — so a fresh Desktop session has no workspace until it gets one.
+If your MCP entry launches `plumb serve` from the project directory, the proxy
+now transports that directory as an attach hint and the workspace resolves
+automatically (the hint is validated against project markers and never
+overrides an explicit pin). Otherwise, pin the project by passing an absolute
+path to `session_start`:
 `session_start({"workspace": "/Users/you/projects/myapp"})` (passing `workspace`
-or an absolute `path` to any tool also pins it). plumb no longer guesses the
-workspace from the daemon's launch directory, so it will say "resolving…" /
-return a "pass `workspace`" error rather than silently attach the wrong
-project.
+or an absolute `path` to any tool also pins it). plumb never guesses the
+workspace from the shared *daemon's* launch directory, so with no roots, no
+usable serve cwd, and no explicit pin it will say "resolving…" / return a
+"pass `workspace`" error rather than silently attach the wrong project.
 
 If you recently upgraded plumb but the daemon is still on the old build, the
 fix won't be active — restart it with `plumb stop --force` (it respawns on the

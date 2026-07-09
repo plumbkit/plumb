@@ -82,6 +82,14 @@ handshake replay automatically — a reconnected daemon re-applies it with no
 separate message. The grant is per-connection: it never leaks into another
 client's session, and it survives a workspace re-pin.
 
+`serve` also transports its own working directory the same way
+(`dev.plumbkit/workspace`) as an **advisory workspace attach hint** for clients
+that report no MCP roots (e.g. Claude Desktop): if nothing stronger resolves
+the workspace — no explicit `session_start` pin, no client root, no persisted
+pin from an earlier reconnect — the daemon attaches from the serve cwd,
+validated against project markers. The hint never overrides an explicit choice
+and is never persisted as the sticky pin.
+
 ---
 
 ## `plumb daemon`

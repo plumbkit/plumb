@@ -144,10 +144,11 @@ func injectInitMeta(frame []byte, kv map[string]json.RawMessage) []byte {
 }
 
 // buildInitMeta assembles the _meta key/values the proxy injects into the
-// initialize frame: the client-granted allow-dirs (when any) and the stable
-// proxy session ID (when set). Returns nil when there is nothing to inject, so
-// the frame is left byte-identical.
-func buildInitMeta(dirs []string, proxySessionID string) map[string]json.RawMessage {
+// initialize frame: the client-granted allow-dirs (when any), the stable
+// proxy session ID (when set), and the proxy's working directory as an
+// advisory workspace attach hint (when known). Returns nil when there is
+// nothing to inject, so the frame is left byte-identical.
+func buildInitMeta(dirs []string, proxySessionID, cwd string) map[string]json.RawMessage {
 	meta := map[string]json.RawMessage{}
 	if len(dirs) > 0 {
 		if raw, err := json.Marshal(dirs); err == nil {
@@ -157,6 +158,11 @@ func buildInitMeta(dirs []string, proxySessionID string) map[string]json.RawMess
 	if proxySessionID != "" {
 		if raw, err := json.Marshal(proxySessionID); err == nil {
 			meta[mcp.MetaProxySessionKey] = raw
+		}
+	}
+	if cwd != "" {
+		if raw, err := json.Marshal(cwd); err == nil {
+			meta[mcp.MetaWorkspaceKey] = raw
 		}
 	}
 	if len(meta) == 0 {
@@ -170,7 +176,7 @@ func buildInitMeta(dirs []string, proxySessionID string) map[string]json.RawMess
 // wrapper over injectInitMeta retained for the direct allow-dir tests; an empty
 // dirs slice or a non-object frame is returned unchanged.
 func injectAllowDirs(frame []byte, dirs []string) []byte {
-	return injectInitMeta(frame, buildInitMeta(dirs, ""))
+	return injectInitMeta(frame, buildInitMeta(dirs, "", ""))
 }
 
 // encodeInto marshals child and stores it under key in parent, reporting

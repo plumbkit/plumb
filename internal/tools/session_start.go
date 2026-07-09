@@ -68,11 +68,14 @@ type RootsResolver func(ctx context.Context) string
 //  1. the daemon's already-attached root (authoritative — onBeforeTool attaches
 //     it before Execute, including from this call's own `workspace` arg)
 //  2. explicit `workspace` argument
-//  3. roots/list query to the MCP client
+//  3. roots/list query to the MCP client (whose resolver falls back to the
+//     serve proxy's cwd hint when the client reports no roots)
 //
-// There is deliberately no os.Getwd() fallback: in the shared daemon the
-// working directory is not a per-session signal, and guessing it reported the
-// wrong project.
+// There is deliberately no daemon-side os.Getwd() fallback: in the shared
+// daemon the working directory is not a per-session signal, and guessing it
+// reported the wrong project. The per-conversation serve proxy's cwd IS a
+// per-session signal, which is why it may enter via the roots resolver above
+// — always Detect-validated and never persisted as the sticky pin.
 type SessionStart struct {
 	ws           WorkspaceFn
 	diag         diagnosticsSource                                                     // may be nil; diagnostics section skipped when nil
