@@ -109,6 +109,9 @@ const (
 	skCollabMailbox
 	skCollabKnowledgeHandoff
 	skCollabIntentTTLMin
+	// [rastro] rows
+	skRastroEnabled
+	skRastroPath
 )
 
 // dottedKeyFor maps a settings row key to its config-field-registry dotted key.
@@ -287,6 +290,9 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Collab", label: "Mailbox", kind: settingToggle, key: skCollabMailbox, value: onOff(cfg.Collab.Mailbox)},
 		{group: "Collab", label: "Knowledge handoff", kind: settingToggle, key: skCollabKnowledgeHandoff, value: onOff(cfg.Collab.KnowledgeHandoff)},
 		{group: "Collab", label: "Intent TTL (min)", kind: settingNumber, key: skCollabIntentTTLMin, value: itoa(cfg.Collab.IntentTTLMinutes)},
+
+		{group: "Rastro", label: "Enabled", kind: settingToggle, key: skRastroEnabled, value: onOff(cfg.Rastro.Enabled)},
+		{group: "Rastro", label: "Path", kind: settingText, key: skRastroPath, value: pathOrDefault(cfg.Rastro.Path)},
 
 		{group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
 		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},

@@ -232,6 +232,16 @@ var registryData = []Field{
 		Description: "Expiry, in minutes, for a new intent or note before it is pruned.",
 	},
 
+	// --- Rastro ---
+	{
+		Key: "rastro.enabled", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Enable Rastro associative memory integration.",
+	},
+	{
+		Key: "rastro.path", Type: FieldString, ReloadTier: ReloadNextSession,
+		Description: "Path to the rastro executable.",
+	},
+
 	// --- Workspace ---
 	{
 		Key: "workspace.auto_attach", Type: FieldBool, ReloadTier: ReloadNextSession,

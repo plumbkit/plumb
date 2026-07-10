@@ -77,6 +77,10 @@ var defaults = Config{
 		IntentTTLMinutes: 120,
 		KnowledgeHandoff: false,
 	},
+	Rastro: RastroConfig{
+		Enabled: false,
+		Path:    "rastro",
+	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},
 	},

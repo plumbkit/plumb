@@ -453,6 +453,12 @@ type ToolsConfig struct {
 	ClientProfiles map[string]string `toml:"client_profiles"`
 }
 
+// RastroConfig configures the Rastro associative memory integration.
+type RastroConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Path    string `toml:"path"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
@@ -474,6 +480,7 @@ type Config struct {
 	Semantics SemanticsConfig      `toml:"semantics"`
 	Memory    MemoryConfig         `toml:"memory"`
 	Collab    CollabConfig         `toml:"collab"`
+	Rastro    RastroConfig         `toml:"rastro"`
 	// Tools governs which tools appear in tools/list (lean/full/auto profiles).
 	Tools ToolsConfig `toml:"tools"`
 	// Tasks holds per-language build/lint/test/e2e/verify command templates,
