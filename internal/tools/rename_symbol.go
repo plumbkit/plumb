@@ -175,22 +175,38 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 // collectRenameTargets walks both Changes and DocumentChanges in we, boundary-
 // checks every output URI before any edit is applied, and returns the unique
 // file list plus the total edit count for the response.
+//
+// The list must be deduplicated: applyWorkspaceEditDetailed groups its plans by
+// URI, so a server that names one file in both Changes and DocumentChanges (or
+// twice in DocumentChanges — nothing in the protocol forbids it) yields one plan
+// but would otherwise yield two entries here. captureRenameBaselines caps this
+// list and postWriteRename caps the plans, and the two prefixes must name the
+// same files or a reported file silently loses its pre-write baseline.
 func (t *RenameSymbol) collectRenameTargets(we *protocol.WorkspaceEdit) ([]string, int, error) {
 	totalEdits := 0
 	files := []string{}
-	for uri, edits := range we.Changes {
-		if err := t.guard.check(paths.URIToPath(uri)); err != nil {
-			return nil, 0, fmt.Errorf("rename_symbol: %w", err)
+	seen := make(map[string]bool)
+	add := func(uri string, edits int) error {
+		path := paths.URIToPath(uri)
+		if err := t.guard.check(path); err != nil {
+			return fmt.Errorf("rename_symbol: %w", err)
 		}
-		totalEdits += len(edits)
-		files = append(files, paths.URIToPath(uri))
+		totalEdits += edits
+		if !seen[path] {
+			seen[path] = true
+			files = append(files, path)
+		}
+		return nil
+	}
+	for uri, edits := range we.Changes {
+		if err := add(uri, len(edits)); err != nil {
+			return nil, 0, err
+		}
 	}
 	for _, dce := range we.DocumentChanges {
-		if err := t.guard.check(paths.URIToPath(dce.TextDocument.URI)); err != nil {
-			return nil, 0, fmt.Errorf("rename_symbol: %w", err)
+		if err := add(dce.TextDocument.URI, len(dce.Edits)); err != nil {
+			return nil, 0, err
 		}
-		totalEdits += len(dce.Edits)
-		files = append(files, paths.URIToPath(dce.TextDocument.URI))
 	}
 	return files, totalEdits, nil
 }
@@ -271,10 +287,7 @@ func (t *RenameSymbol) renameByName(ctx context.Context, a renameSymbolArgs) (*p
 // resolution of the document-symbol tree, and the server rejecting it points at a
 // stale index instead.
 func renameLSPErr(a renameSymbolArgs, err error) error {
-	if a.SymbolName != "" {
-		return resolvedSymbolErr("rename_symbol", a.SymbolName, err)
-	}
-	return positionErr("rename_symbol", err)
+	return queryErr("rename_symbol", a.SymbolName, err)
 }
 
 // preLSPErr wraps an error raised before any language-server rename attempt —

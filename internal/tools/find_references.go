@@ -145,14 +145,14 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 	if len(matches) == 1 {
 		sym := matches[0]
-		return t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl, false)
+		return t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl, false, name)
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "References for %q (%d symbol matches):\n", name, len(matches))
 	for _, sym := range matches {
 		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
-		result, err := t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl, false)
+		result, err := t.queryReferences(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, includeDecl, false, name)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue
@@ -164,10 +164,13 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 func (t *FindReferences) executeByPosition(ctx context.Context, uri string, line, character uint32, includeDecl bool) (string, error) {
 	openFileForRefs(ctx, t.client, uri)
-	return t.queryReferences(ctx, uri, line, character, includeDecl, true)
+	return t.queryReferences(ctx, uri, line, character, includeDecl, true, "")
 }
 
-func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, character uint32, includeDecl, allowSnap bool) (string, error) {
+// queryReferences queries the server at line/character. symbolName is non-empty
+// only when plumb resolved that position from a symbol_name argument, which
+// selects the failure hint (see queryErr).
+func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, character uint32, includeDecl, allowSnap bool, symbolName string) (string, error) {
 	locs, err := t.client.References(ctx, protocol.ReferenceParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: line, Character: character},
@@ -177,7 +180,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 		if allowSnap && isPositionMissErr(err) {
 			return t.snapReferences(ctx, uri, line, character, includeDecl)
 		}
-		return "", positionErr("find_references", err)
+		return "", queryErr("find_references", symbolName, err)
 	}
 	if len(locs) == 0 {
 		return fmt.Sprintf("No references found for symbol at %s:%d:%d.", uri, line+1, character+1), nil
@@ -224,7 +227,7 @@ func (t *FindReferences) snapReferences(ctx context.Context, uri string, line, c
 	if !ok {
 		return "", positionMissErr("find_references", uri, line, syms)
 	}
-	out, err := t.queryReferences(ctx, uri, snapped.Line, snapped.Character, includeDecl, false)
+	out, err := t.queryReferences(ctx, uri, snapped.Line, snapped.Character, includeDecl, false, "")
 	if err != nil {
 		return "", err
 	}

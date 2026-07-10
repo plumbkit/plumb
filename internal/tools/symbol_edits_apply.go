@@ -109,6 +109,9 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	unlock := lockPath(path)
 	defer unlock()
 
+	if err := semanticStrictGate(deps, toolName, path); err != nil {
+		return "", err
+	}
 	edit, sym, fallbackNote, err := resolve(ctx)
 	if err != nil {
 		var refusal symbolEditRefusal
@@ -139,17 +142,10 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	return sb.String(), nil
 }
 
-// semanticWritePreflight gates a symbol edit exactly as edit_file's preconditions
-// gate an ordinary edit: the workspace boundary, then — in apply mode — the
-// write-rate budget, the dirty guard, and strict mode's read-before-write
-// contract.
-//
-// Strict mode applies here because these tools carry AGENT-AUTHORED CONTENT into
-// one named file: replacing a symbol body with text the agent wrote, in a file it
-// may never have read, is precisely what [edits] strict = true exists to refuse.
-// Re-resolving the range under the lock protects the WHERE of the edit, not the
-// WHAT. rename_symbol is the deliberate exemption — see preflightTargets in
-// rename_symbol.go.
+// semanticWritePreflight gates a symbol edit as edit_file's preconditions gate an
+// ordinary edit: the workspace boundary, then — in apply mode — the write-rate
+// budget and the dirty guard. Strict mode is checked separately, under the path
+// lock, by semanticStrictGate.
 func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path string, dryRun, dirtyOK bool) error {
 	if deps == nil {
 		return nil
@@ -166,10 +162,27 @@ func semanticWritePreflight(ctx context.Context, deps *WriteDeps, toolName, path
 	if !dirtyOK && dirtyBlocksWrite(ctx, *deps, path) {
 		return fmt.Errorf("%s: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", toolName, path)
 	}
-	if strictEnabled(deps.Strict) {
-		return requireStrictRead(deps.Reads, toolName, path)
-	}
 	return nil
+}
+
+// semanticStrictGate enforces strict mode's read-before-write contract for a
+// symbol edit. The caller MUST already hold the target's path lock, exactly as
+// edit_file takes the lock before running its preconditions: checking the
+// recorded read against the file's mtime outside the lock would let a concurrent
+// writer land between the check and the write, and strict mode would pass on a
+// file the session no longer knows the contents of.
+//
+// Strict mode applies to these tools because they carry AGENT-AUTHORED CONTENT
+// into one named file: replacing a symbol body with text the agent wrote, in a
+// file it may never have read, is precisely what [edits] strict = true exists to
+// refuse. Re-resolving the range under the lock protects the WHERE of the edit,
+// not the WHAT. rename_symbol is the deliberate exemption — see preflightTargets
+// in rename_symbol.go. A dry run authors nothing and is never gated.
+func semanticStrictGate(deps *WriteDeps, toolName, path string) error {
+	if deps == nil || !strictEnabled(deps.Strict) {
+		return nil
+	}
+	return requireStrictRead(deps.Reads, toolName, path)
 }
 
 func captureSemanticBaseline(deps *WriteDeps, uri string) *diagBaseline {
