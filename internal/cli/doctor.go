@@ -70,6 +70,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		{"Language Servers", func() []checkResult { return checkLSPs(ws) }},
 		{"MCP Clients", checkMCPClients},
 		{"Configuration", func() []checkResult { return checkConfigs(ws) }},
+		{"Integrations", func() []checkResult { return checkRastro(ws) }},
 		{"Data", func() []checkResult { return checkStatsDB(ws) }},
 		{"Indexing", func() []checkResult { return checkTopology(ws) }},
 	}
@@ -118,6 +119,7 @@ func runDoctorJSON(ws string) error {
 		func() []checkResult { return checkLSPs(ws) },
 		checkMCPClients,
 		func() []checkResult { return checkConfigs(ws) },
+		func() []checkResult { return checkRastro(ws) },
 		func() []checkResult { return checkStatsDB(ws) },
 		func() []checkResult { return checkTopology(ws) },
 	}

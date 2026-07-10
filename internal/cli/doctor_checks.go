@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -367,5 +368,47 @@ func checkStatsDB(ws string) []checkResult {
 		name:   "stats db",
 		ok:     true,
 		detail: fmt.Sprintf("%s  (%d calls recorded)", contractConfigPath(dbPath), total),
+	}}
+}
+
+// checkRastro verifies if Rastro is configured and present.
+func checkRastro(ws string) []checkResult {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil
+	}
+	if ws != "" {
+		if c, err := config.LoadProject(cfg, ws); err == nil {
+			cfg = c
+		}
+	}
+	
+	if !cfg.Rastro.Enabled {
+		return []checkResult{{
+			name:   "rastro",
+			ok:     true,
+			detail: "disabled in config",
+		}}
+	}
+	
+	bin := cfg.Rastro.Path
+	if bin == "" {
+		bin = "rastro"
+	}
+	
+	path, err := exec.LookPath(bin)
+	if err != nil {
+		return []checkResult{{
+			name:   "rastro",
+			ok:     false,
+			detail: fmt.Sprintf("executable '%s' not found", bin),
+			fix:    "install rastro or update rastro.path in settings",
+		}}
+	}
+	
+	return []checkResult{{
+		name:   "rastro",
+		ok:     true,
+		detail: render.ContractPath(path),
 	}}
 }

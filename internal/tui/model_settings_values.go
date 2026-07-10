@@ -300,6 +300,8 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Memory.InjectHints
 	case skPersistState:
 		return &c.Session.PersistState
+	case skRastroEnabled:
+		return &c.Rastro.Enabled
 	default:
 		return boolFieldCollab(c, key)
 	}

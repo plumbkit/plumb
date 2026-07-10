@@ -267,6 +267,8 @@ var settingTOMLPaths = map[settingKey][]string{
 	skCollabMailbox:             {"collab", "mailbox"},
 	skCollabKnowledgeHandoff:    {"collab", "knowledge_handoff"},
 	skCollabIntentTTLMin:        {"collab", "intent_ttl_minutes"},
+	skRastroEnabled:             {"rastro", "enabled"},
+	skRastroPath:                {"rastro", "path"},
 	// agent_config_writes is deliberately ABSENT: it is a global-only safety knob
 	// (LoadProject forces the global value to win), so it never appears in a
 	// workspace scope — a project config cannot enable agent writes.
@@ -336,6 +338,8 @@ var settingDottedKeys = map[settingKey]string{
 	skCollabMailbox:              "collab.mailbox",
 	skCollabKnowledgeHandoff:     "collab.knowledge_handoff",
 	skCollabIntentTTLMin:         "collab.intent_ttl_minutes",
+	skRastroEnabled:              "rastro.enabled",
+	skRastroPath:                 "rastro.path",
 	skAutoAttach:                 "workspace.auto_attach",
 	skAutoAttachPersist:          "workspace.auto_attach_persist",
 	skAllowDependencyReads:       "workspace.allow_dependency_reads",

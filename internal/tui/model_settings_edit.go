@@ -209,6 +209,8 @@ func stringField(c *config.Config, key settingKey) *string {
 		return &c.Semantics.APIKeyEnv
 	case skSemAPIKey:
 		return &c.Semantics.APIKey
+	case skRastroPath:
+		return &c.Rastro.Path
 	default:
 		return nil
 	}
