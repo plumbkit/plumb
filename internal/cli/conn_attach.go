@@ -17,24 +17,25 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
 // attachWorkspace resolves rootURI to a project root, acquires the shared
 // language server if needed, and updates the session record. This entry point
-// attaches from a deliberate source — a client-reported root (OnInit /
-// onRootsChanged) or a restored persisted pin — so the resulting pin is recorded
-// as the sticky, explicit target.
+// attaches from the client's reported root, so the resulting pin records
+// PinSourceRoots — a real signal, but a weaker one than a workspace the caller
+// named themselves.
 func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
-	s.attachWorkspacePin(ctx, rootURI, true)
+	s.attachWorkspacePin(ctx, rootURI, sessionstate.PinSourceRoots)
 }
 
-// attachWorkspacePin is attachWorkspace with control over whether the pin is
-// persisted as the explicit sticky target. explicit is false for an auto-attach
-// seeded from an incidental tool path (onBeforeTool), so a reconnect restores
-// the last workspace the caller actually chose rather than whatever file it
-// touched first. See persistPin.
-func (s *connSession) attachWorkspacePin(ctx context.Context, rootURI string, explicit bool) {
+// attachWorkspacePin is attachWorkspace with control over the origin recorded
+// for the pin. PinSourceUnknown means "do not persist": an auto-attach seeded
+// from an incidental tool path (onBeforeTool) must never become the sticky
+// target, so a reconnect restores the workspace the caller actually chose rather
+// than whatever file it touched first. See persistPin.
+func (s *connSession) attachWorkspacePin(ctx context.Context, rootURI string, origin sessionstate.PinSource) {
 	folder := paths.URIToPath(rootURI)
 	if folder == "" || folder == "/" {
 		return
@@ -62,7 +63,7 @@ func (s *connSession) attachWorkspacePin(ctx context.Context, rootURI string, ex
 		// persist the pin, both scoped to the proxy session ID. No-ops when
 		// persistence is off or this is not a serve-proxy connection.
 		s.rehydrateReads(v.proxySessionID, folder, v.session.PersistState)
-		s.persistPin(v.proxySessionID, folder, language, v.session.PersistState, explicit)
+		s.persistPin(v.proxySessionID, folder, language, v.session.PersistState, origin)
 		s.startQualityRunner(v, folder)
 		s.startTopologyIndexer(v, folder)
 		v.policy = s.buildPathPolicy(v)
@@ -92,7 +93,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 		}
 		v.acquiredRoot = root
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
-		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState, false)
+		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState, sessionstate.PinSourceUnknown)
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
@@ -134,6 +135,16 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 // infer. An unknown or inactive override is ignored (detection wins), so a typo
 // or an uninstalled server never breaks the pin.
 func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string) (string, error) {
+	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart)
+}
+
+// repinWorkspaceFrom is repinWorkspace with the pin origin made explicit.
+// onRootsChanged shares this machinery but is NOT a session_start re-pin: the
+// client moved its folder, which is a weaker signal than a workspace the caller
+// named. Recording both as session_start would let a stale roots answer outrank
+// a deliberate pin on the next reconnect — the bug this distinction exists to
+// prevent.
+func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource) (string, error) {
 	folder = paths.URIToPath(folder)
 	if folder == "" || folder == "/" {
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
@@ -147,7 +158,7 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride s
 	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
 		language = langOverride
 	}
-	if s.attachOrRepinTo(ctx, root, language) {
+	if s.attachOrRepinTo(ctx, root, language, origin) {
 		s.applyProjectConfig(root)
 	}
 	return root, nil
@@ -172,7 +183,7 @@ func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
 	if folder == "" || folder == "/" {
 		return // client reported no usable root — keep the current pin
 	}
-	if _, err := s.repinWorkspace(ctx, folder, ""); err != nil {
+	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots); err != nil {
 		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
 	}
 }
@@ -183,7 +194,7 @@ func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
 // root actually changed (false on a no-op re-pin to the same root). language is
 // the LSP language for root, or LanguageNone. The whole teardown-and-reattach
 // runs under the one mutation lane so readers never see a half-switched view.
-func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string) bool {
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource) bool {
 	changed := false
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
@@ -230,7 +241,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// different workspace can never restore the old project's reads. Re-persist
 		// the pin for the switched-to root.
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
-		s.persistPin(v.proxySessionID, root, language, v.session.PersistState, true)
+		s.persistPin(v.proxySessionID, root, language, v.session.PersistState, origin)
 		s.startQualityRunner(v, root)
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
@@ -286,7 +297,11 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	}
 	// A `workspace` arg is a deliberate pin (session_start); an incidental
 	// file_path/path/uri is not. Only the former persists as the sticky target.
+	origin := sessionstate.PinSourceUnknown
 	explicit := workspaceArgPresent(args)
+	if explicit {
+		origin = sessionstate.PinSourceSessionStart
+	}
 	if !explicit {
 		// On an unpinned connection, prefer restoring the last EXPLICIT pin over
 		// seeding from whatever file a tool happens to touch — so reading a file in
@@ -343,7 +358,7 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 		s.startConfigWatcher()
 		return
 	}
-	s.attachWorkspacePin(toolCtx, "file://"+root, explicit)
+	s.attachWorkspacePin(toolCtx, "file://"+root, origin)
 	s.applyProjectConfig(s.workspace())
 	s.startConfigWatcher()
 }

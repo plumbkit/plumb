@@ -38,11 +38,17 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 )
 
-// schema is the current fresh-database shape. read_tracking is scoped by
-// (proxy_session_id, workspace) so a reconnected connection can never resurrect
-// reads for a different project; pinned_workspace records the last root pinned
-// under a given proxy session. mtime is stored as Unix nanoseconds to preserve
-// the exact time.Time.Equal comparison the strict-read guard performs.
+// schema is the v1 baseline shape, deliberately FROZEN. read_tracking is scoped
+// by (proxy_session_id, workspace) so a reconnected connection can never
+// resurrect reads for a different project; pinned_workspace records the last
+// root pinned under a given proxy session. mtime is stored as Unix nanoseconds
+// to preserve the exact time.Time.Equal comparison the strict-read guard
+// performs.
+//
+// Every column added after v1 belongs in migrate, never here. A fresh database
+// starts at user_version=0, so it runs the same migrations as an existing file;
+// declaring a migrated column here too would make its ALTER fail with
+// "duplicate column name" on every fresh open.
 const schema = `
 CREATE TABLE IF NOT EXISTS read_tracking (
     proxy_session_id TEXT    NOT NULL,
@@ -70,7 +76,27 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 // History:
 //
 //	1 — initial schema: read_tracking + pinned_workspace
-const SchemaVersion = 1
+//	2 — pinned_workspace.source: why the workspace was pinned
+const SchemaVersion = 2
+
+// PinSource records WHY a workspace was pinned. It is the discriminator that
+// lets a reconnecting connection tell a deliberate re-pin from a stale copy of
+// the client's roots: only PinSourceSessionStart outranks a fresh roots/list
+// answer, because only it represents a workspace the caller actually chose.
+//
+// A row written before this column existed reads as PinSourceUnknown, which
+// does not outrank roots — so upgrading changes no behaviour until the next
+// deliberate re-pin.
+type PinSource string
+
+const (
+	// PinSourceUnknown is a legacy row, or a pin that must not be persisted.
+	PinSourceUnknown PinSource = ""
+	// PinSourceRoots came from the client's roots/list answer.
+	PinSourceRoots PinSource = "roots"
+	// PinSourceSessionStart came from an explicit session_start workspace arg.
+	PinSourceSessionStart PinSource = "session_start"
+)
 
 // ReadRecord is one persisted read-tracking entry for a path: the mtime and
 // content SHA-256 read_file observed. It mirrors the in-memory record the
@@ -124,21 +150,51 @@ func openAt(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sessionstate: schema: %w", err)
 	}
-	if err := stampVersion(db); err != nil {
+	current, err := readVersion(db)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrate(db, current); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := stampVersion(db, current); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &Store{db: db}, nil
 }
 
-// stampVersion reads the on-disk user_version and, when behind, stamps it.
-// There are no migrations yet (v1 is the initial schema); the stamp is a write,
-// so only issue it when the version actually moved.
-func stampVersion(db *sql.DB) error {
+// readVersion reads the on-disk schema version. A database this process just
+// created reads 0; one written by an older plumb reads its own version.
+func readVersion(db *sql.DB) (int, error) {
 	var current int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
-		return fmt.Errorf("sessionstate: reading user_version: %w", err)
+		return 0, fmt.Errorf("sessionstate: reading user_version: %w", err)
 	}
+	return current, nil
+}
+
+// migrate brings a database at version `from` up to SchemaVersion. Each step is
+// gated on the on-disk version, so it runs exactly once per database and a
+// re-open is a no-op. The baseline `schema` above is frozen at v1, so a fresh
+// database (version 0) and an upgraded one converge on the same shape here.
+func migrate(db *sql.DB, from int) error {
+	if from < 2 {
+		// SQLite permits a NOT NULL column via ADD COLUMN when it carries a
+		// default, which back-fills every pre-existing row to the unknown origin.
+		const addSource = `ALTER TABLE pinned_workspace ADD COLUMN source TEXT NOT NULL DEFAULT ''`
+		if _, err := db.Exec(addSource); err != nil {
+			return fmt.Errorf("sessionstate: migrate v2 (pinned_workspace.source): %w", err)
+		}
+	}
+	return nil
+}
+
+// stampVersion records SchemaVersion once the migrations for `current` have run.
+// The stamp is a write, so only issue it when the version actually moved.
+func stampVersion(db *sql.DB, current int) error {
 	if current >= SchemaVersion {
 		return nil
 	}
@@ -211,19 +267,21 @@ func (s *Store) LoadReads(proxySessionID, workspace string) ([]ReadRecord, error
 
 // UpsertPin records the workspace root (and primary language) pinned under a
 // proxy session, so a client that does not report roots comes back pinned after
-// a restart. nil-safe; a no-op when proxySessionID or workspace is empty.
-func (s *Store) UpsertPin(proxySessionID, workspace, language string) error {
+// a restart. source records why it was pinned — see PinSource. nil-safe; a no-op
+// when proxySessionID or workspace is empty.
+func (s *Store) UpsertPin(proxySessionID, workspace, language string, source PinSource) error {
 	if s == nil || proxySessionID == "" || workspace == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO pinned_workspace (proxy_session_id, workspace, language, updated_at)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO pinned_workspace (proxy_session_id, workspace, language, source, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(proxy_session_id)
-		 DO UPDATE SET workspace=excluded.workspace, language=excluded.language, updated_at=excluded.updated_at`,
-		proxySessionID, workspace, language, time.Now().UnixMilli(),
+		 DO UPDATE SET workspace=excluded.workspace, language=excluded.language,
+		               source=excluded.source, updated_at=excluded.updated_at`,
+		proxySessionID, workspace, language, string(source), time.Now().UnixMilli(),
 	)
 	if err != nil {
 		return fmt.Errorf("sessionstate: upsert pin: %w", err)
@@ -231,25 +289,27 @@ func (s *Store) UpsertPin(proxySessionID, workspace, language string) error {
 	return nil
 }
 
-// LoadPin returns the workspace root and language pinned under proxySessionID.
-// ok is false when no pin is recorded. nil-safe (returns ok=false).
-func (s *Store) LoadPin(proxySessionID string) (workspace, language string, ok bool, err error) {
+// LoadPin returns the workspace root, language, and origin pinned under
+// proxySessionID. ok is false when no pin is recorded. A row written before the
+// source column existed reads as PinSourceUnknown. nil-safe (returns ok=false).
+func (s *Store) LoadPin(proxySessionID string) (workspace, language string, source PinSource, ok bool, err error) {
 	if s == nil || proxySessionID == "" {
-		return "", "", false, nil
+		return "", "", PinSourceUnknown, false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT workspace, language FROM pinned_workspace WHERE proxy_session_id=?`,
+		`SELECT workspace, language, source FROM pinned_workspace WHERE proxy_session_id=?`,
 		proxySessionID,
 	)
-	switch err := row.Scan(&workspace, &language); err {
+	var src string
+	switch err := row.Scan(&workspace, &language, &src); err {
 	case nil:
-		return workspace, language, true, nil
+		return workspace, language, PinSource(src), true, nil
 	case sql.ErrNoRows:
-		return "", "", false, nil
+		return "", "", PinSourceUnknown, false, nil
 	default:
-		return "", "", false, fmt.Errorf("sessionstate: load pin: %w", err)
+		return "", "", PinSourceUnknown, false, fmt.Errorf("sessionstate: load pin: %w", err)
 	}
 }
 

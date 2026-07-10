@@ -49,7 +49,7 @@ func TestPersist_AutoAttachDoesNotPersistPin(t *testing.T) {
 	mustGitDir(t, root)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	before.attachWorkspacePin(context.Background(), "file://"+root, false) // auto
+	before.attachWorkspacePin(context.Background(), "file://"+root, sessionstate.PinSourceUnknown) // auto
 	if got := before.workspace(); got != root {
 		t.Fatalf("auto-attach pinned %q in-memory, want %q", got, root)
 	}
@@ -78,7 +78,7 @@ func TestPersist_ExplicitAttachPersistsPin(t *testing.T) {
 	mustGitDir(t, root)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	before.attachWorkspacePin(context.Background(), "file://"+root, true) // explicit
+	before.attachWorkspacePin(context.Background(), "file://"+root, sessionstate.PinSourceSessionStart) // explicit
 	before.close()
 
 	after := newPersistSession(t, store, ss, "proxyX")
@@ -108,7 +108,7 @@ func TestOnBeforeTool_IncidentalReadRestoresExplicitPin(t *testing.T) {
 
 	// Explicitly pin rootA, persisting it.
 	before := newPersistSession(t, store, ss, "proxyX")
-	before.attachWorkspacePin(context.Background(), "file://"+rootA, true)
+	before.attachWorkspacePin(context.Background(), "file://"+rootA, sessionstate.PinSourceSessionStart)
 	before.close()
 
 	// Reconnect, then read a rootB file by absolute path BEFORE any explicit pin.

@@ -136,10 +136,10 @@ func TestUpsertReadNoOpOnEmptyKey(t *testing.T) {
 
 func TestPinRoundTrip(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.UpsertPin("p", "/ws", "go"); err != nil {
+	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
 		t.Fatalf("UpsertPin: %v", err)
 	}
-	ws, lang, ok, err := s.LoadPin("p")
+	ws, lang, _, ok, err := s.LoadPin("p")
 	if err != nil {
 		t.Fatalf("LoadPin: %v", err)
 	}
@@ -150,13 +150,13 @@ func TestPinRoundTrip(t *testing.T) {
 
 func TestPinUpsertOverwrites(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.UpsertPin("p", "/ws1", "go"); err != nil {
+	if err := s.UpsertPin("p", "/ws1", "go", PinSourceRoots); err != nil {
 		t.Fatalf("UpsertPin 1: %v", err)
 	}
-	if err := s.UpsertPin("p", "/ws2", "rust"); err != nil {
+	if err := s.UpsertPin("p", "/ws2", "rust", PinSourceSessionStart); err != nil {
 		t.Fatalf("UpsertPin 2: %v", err)
 	}
-	ws, lang, ok, err := s.LoadPin("p")
+	ws, lang, _, ok, err := s.LoadPin("p")
 	if err != nil {
 		t.Fatalf("LoadPin: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestPinUpsertOverwrites(t *testing.T) {
 
 func TestLoadPinMissing(t *testing.T) {
 	s := newTestStore(t)
-	_, _, ok, err := s.LoadPin("nope")
+	_, _, _, ok, err := s.LoadPin("nope")
 	if err != nil {
 		t.Fatalf("LoadPin: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestPruneByTTL(t *testing.T) {
 	if err := s.UpsertRead("p", "/ws", "/ws/a.go", time.Unix(1, 0), ""); err != nil {
 		t.Fatalf("UpsertRead: %v", err)
 	}
-	if err := s.UpsertPin("p", "/ws", "go"); err != nil {
+	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
 		t.Fatalf("UpsertPin: %v", err)
 	}
 	// Backdate both rows so the prune cutoff (now) is strictly after them.
@@ -203,7 +203,7 @@ func TestPruneByTTL(t *testing.T) {
 	if len(recs) != 0 {
 		t.Fatalf("reads survived prune: %d", len(recs))
 	}
-	if _, _, ok, _ := s.LoadPin("p"); ok {
+	if _, _, _, ok, _ := s.LoadPin("p"); ok {
 		t.Fatalf("pin survived prune")
 	}
 }
@@ -233,10 +233,10 @@ func TestNilStoreMethodsAreSafe(t *testing.T) {
 	if recs, err := s.LoadReads("p", "/ws"); err != nil || recs != nil {
 		t.Fatalf("nil LoadReads: %v %v", recs, err)
 	}
-	if err := s.UpsertPin("p", "/ws", "go"); err != nil {
+	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
 		t.Fatalf("nil UpsertPin: %v", err)
 	}
-	if _, _, ok, err := s.LoadPin("p"); err != nil || ok {
+	if _, _, _, ok, err := s.LoadPin("p"); err != nil || ok {
 		t.Fatalf("nil LoadPin: ok=%v err=%v", ok, err)
 	}
 	if err := s.Prune(time.Now()); err != nil {

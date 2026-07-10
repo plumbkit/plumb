@@ -102,7 +102,7 @@ func TestAttachFromHint_NotPersistedAsPin(t *testing.T) {
 		t.Fatalf("hint attach pinned %q in-memory, want %q", got, root)
 	}
 
-	if _, _, ok, err := ss.LoadPin("proxyX"); err != nil || ok {
+	if _, _, _, ok, err := ss.LoadPin("proxyX"); err != nil || ok {
 		t.Fatalf("hint attach persisted a pin (ok=%v err=%v); only explicit pins are sticky", ok, err)
 	}
 }
@@ -171,7 +171,7 @@ func TestOnInitOrder_PersistedPinBeatsHint(t *testing.T) {
 	mustGitDir(t, rootB)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	before.attachWorkspacePin(context.Background(), "file://"+rootA, true) // explicit
+	before.attachWorkspacePin(context.Background(), "file://"+rootA, sessionstate.PinSourceSessionStart) // explicit
 	before.close()
 
 	after := newPersistSession(t, store, ss, "proxyX")
