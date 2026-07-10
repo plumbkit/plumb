@@ -253,6 +253,18 @@ Project-overridable in **both directions** (the `generated_summaries` precedent 
 
 **Tier 3 (`knowledge_handoff`, default off)** adds the `share_findings` write tool — an on-demand flush of the episodic-memory pipeline. Instead of waiting for a session to go idle, an agent hands its findings to peers *now*: the tool writes a generated memory (secret-scrubbed via `internal/redact`, provenance-stamped `confidence=generated` with the authoring session + date, optional `paths:` globs for hint routing), indexes it in `memory.db`, and prunes to `[memory] generated_memory_keep` — the **same retention pool** as idle `episodic-*` summaries (the finding is named `finding-<timestamp>-<session>`, distinguishable but retention-shared). It is instantly discoverable through the ordinary channels — `search_memories`, `workspace_search`, `relevant_memories`, hint injection, the next `session_start` — with **no new storage or delivery mechanism**. The content is agent-authored generated content: lower-confidence than a user-written memory, and it never displaces one in a capped hint slot. Rule-based only — the agent supplies the text; no LLM summary.
 
+### `[rastro]` — Rastro associative-memory integration
+
+```toml
+[rastro]
+enabled = false     # off by default; nothing is looked up or executed while disabled
+path    = "rastro"  # executable name resolved on PATH, or an absolute path
+```
+
+Project-overridable; no env override; both fields are `ReloadNextSession` in the field registry, so the TUI Settings screen marks them `²`. Surfaced in the TUI under a **Rastro** group (Enabled toggle, Path text) and written scope-aware like every other row — a workspace row lands in `<workspace>/.plumb/config.toml`, a global row in the global config.
+
+`plumb doctor` grows an **Integrations** section that reports the integration's state: `disabled in config` when off; the resolved executable path (via `exec.LookPath`) when on and found; a **failure** naming the binary and how to fix it when on and absent. An unloadable config is reported there as a *warning*, not a second failure — the Configuration section already fails the run for that fault. `plumb` never executes the binary; it only resolves it.
+
 ### `[semantics]` — opt-in semantic re-rank for `topology_search`
 
 ```toml

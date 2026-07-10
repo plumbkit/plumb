@@ -371,18 +371,42 @@ func checkStatsDB(ws string) []checkResult {
 	}}
 }
 
-// checkRastro verifies if Rastro is configured and present.
+// checkRastro reports whether the Rastro integration is enabled and, if so,
+// whether its executable resolves on PATH. It resolves the effective config and
+// delegates the decision to rastroResults, which is pure and therefore testable
+// without touching the user's real global config.
 func checkRastro(ws string) []checkResult {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil
+		return rastroConfigErr(err)
 	}
+	// A project config that fails to load is deliberately ignored: the global
+	// config is a valid fallback, and checkConfigs reports the project fault.
 	if ws != "" {
 		if c, err := config.LoadProject(cfg, ws); err == nil {
 			cfg = c
 		}
 	}
-	
+	return rastroResults(cfg)
+}
+
+// rastroConfigErr reports an unloadable config as a WARNING, not a failure: the
+// "Configuration" section already fails the run for an unloadable global config,
+// and surfacing the same fault twice would double-count the exit code. Returning
+// nil instead would make the whole Integrations section vanish with no
+// explanation — the opposite of what doctor is for.
+func rastroConfigErr(err error) []checkResult {
+	return []checkResult{{
+		name:   "rastro",
+		ok:     true,
+		warn:   true,
+		detail: "cannot evaluate: " + err.Error(),
+		fix:    "see the Configuration section above",
+	}}
+}
+
+// rastroResults is the pure decision half of checkRastro.
+func rastroResults(cfg config.Config) []checkResult {
 	if !cfg.Rastro.Enabled {
 		return []checkResult{{
 			name:   "rastro",
@@ -390,22 +414,22 @@ func checkRastro(ws string) []checkResult {
 			detail: "disabled in config",
 		}}
 	}
-	
+
 	bin := cfg.Rastro.Path
 	if bin == "" {
-		bin = "rastro"
+		bin = "rastro" // defensive: defaults set this, but a config may blank it
 	}
-	
+
 	path, err := exec.LookPath(bin)
 	if err != nil {
 		return []checkResult{{
 			name:   "rastro",
 			ok:     false,
-			detail: fmt.Sprintf("executable '%s' not found", bin),
+			detail: fmt.Sprintf("executable %q not found", bin),
 			fix:    "install rastro or update rastro.path in settings",
 		}}
 	}
-	
+
 	return []checkResult{{
 		name:   "rastro",
 		ok:     true,
