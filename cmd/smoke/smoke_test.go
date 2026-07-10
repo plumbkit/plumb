@@ -65,11 +65,19 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	// the same pattern as the gopls adapter integration test. Editing an
 	// existing file on a cold workspace can outrun the post-write diagnostics
 	// window because gopls may not have the file in its in-memory view yet.
+	//
+	// await_diagnostics is REQUIRED here, not an optimisation. Without it the
+	// write returns as soon as the adaptive post-write window elapses
+	// ([edits] post_write_diagnostics_ms, default 300ms) — a window a cold gopls
+	// on a loaded CI runner routinely misses, so the assertion below raced and
+	// this test flaked on macOS. The flag blocks for a bounded few seconds for an
+	// authoritative re-publish, which is exactly the question being asked.
 	t.Log("write_file (new file with syntax error — expect diagnostics)")
 	brokenGo := filepath.Join(fixture, "broken.go")
 	syntaxOut := client.call(t, "write_file", map[string]any{
-		"file_path": brokenGo,
-		"content":   "package main\n\nfunc broken( { } // missing closing paren\n",
+		"file_path":         brokenGo,
+		"content":           "package main\n\nfunc broken( { } // missing closing paren\n",
+		"await_diagnostics": true,
 	}, toolTimeout)
 	assertContains(t, "write_file(syntax error)", syntaxOut, "diagnostics after write")
 
