@@ -48,6 +48,12 @@ type SupervisorOptions struct {
 
 	// BackoffMax is the maximum restart delay (default 30s).
 	BackoffMax time.Duration
+
+	// Dir is the working directory for the server process. Set it to the
+	// workspace root: the daemon deliberately runs from "/", so a server left to
+	// inherit the daemon's cwd would resolve any relative path of its own against
+	// a directory that owns no project. Empty means inherit (tests).
+	Dir string
 }
 
 // Supervisor manages the lifecycle of an LSP server subprocess.
@@ -271,6 +277,9 @@ func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error
 	cmd := exec.CommandContext(ctx, s.command, s.args...) //nolint:gosec // G204: s.command and s.args are set from adapter config (gopls/pyright binary), not from user input
 	if len(s.env) > 0 {
 		cmd.Env = s.env
+	}
+	if s.opts.Dir != "" {
+		cmd.Dir = s.opts.Dir
 	}
 
 	stdin, err := cmd.StdinPipe()

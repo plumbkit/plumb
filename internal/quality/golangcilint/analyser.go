@@ -46,6 +46,12 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 	// --out-format=json flag was removed and errors with "unknown flag".
 	args := append([]string{"run", "--output.json.path=stdout"}, files...)
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// golangci-lint resolves the Go module from its working directory. The daemon
+	// runs from "/", which is in no module, so anchor the run at the analysed file's
+	// directory. files are the absolute paths of just-written source files.
+	if dir := filepath.Dir(files[0]); filepath.IsAbs(dir) {
+		cmd.Dir = dir
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

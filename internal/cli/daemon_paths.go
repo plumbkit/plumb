@@ -68,6 +68,12 @@ func startDaemonProcess() error {
 	cmd := exec.Command(exe, "daemon")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	// Never let the daemon inherit this serve proxy's working directory. The daemon
+	// is a singleton shared across every connection, so an inherited cwd belongs to
+	// one arbitrary client's project — and any stray relative path would resolve
+	// there. Root has no project to damage. runDaemon chdirs as well, covering a
+	// daemon started by any other means.
+	cmd.Dir = "/"
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()

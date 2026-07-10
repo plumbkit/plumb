@@ -149,6 +149,20 @@ func workspaceDiagnostics(pool *workspacePool, workspace string) string {
 	return tools.FormatDiagnostics(merged)
 }
 
+// detachWorkingDirectory moves the daemon off whatever working directory it was
+// spawned in. The daemon is a singleton serving every connection, so a cwd
+// inherited from one client's project is a hazard, not a signal: any relative
+// path that escapes a tool's resolution (filepath.Abs, os.Stat, an exec without
+// cmd.Dir) would land inside that unrelated repository. Root owns no project.
+// Every subsystem that needs a directory sets cmd.Dir explicitly. Best-effort:
+// a failure leaves the inherited cwd, which the fail-closed boundary guard and
+// the relative-seed refusal already render unreachable from a tool call.
+func detachWorkingDirectory() {
+	if err := os.Chdir("/"); err != nil {
+		slog.Warn("daemon: could not change working directory to /", "err", err)
+	}
+}
+
 func runDaemon(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -166,6 +180,8 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	defer lock.Close()
+
+	detachWorkingDirectory()
 
 	// Last-resort backstop: guarantee the daemon exits within a bounded time of a
 	// shutdown signal even if some teardown step wedges, so it releases the
