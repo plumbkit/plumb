@@ -67,8 +67,8 @@ const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 // MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` transports its own working directory as an ADVISORY workspace
 // attach hint. Unlike a client-reported root it is not authoritative: the
-// daemon consults it only after every stronger signal (explicit workspace arg,
-// client roots, persisted pin) has failed, and always validates it through
+// daemon consults it only after every stronger signal (a session_start-origin
+// pin, client roots, a roots-origin pin) has failed, and always validates it through
 // workspace detection before attaching. Identical across every handshake
 // replay. Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaWorkspaceKey = "dev.plumbkit/workspace"
