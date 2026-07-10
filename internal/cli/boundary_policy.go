@@ -22,15 +22,28 @@ func (s *connSession) writeBoundaryGuard(path string) error {
 	return s.checkBoundary(path, tools.AccessReadWrite)
 }
 
-// checkBoundary consults the live PathPolicy from the session snapshot. An
-// unattached session (no pinned workspace) has a nil policy and allows
-// everything, preserving the prior behaviour and nil-safe test setups. A denial
-// is recorded as a (sticky, non-terminating) boundary violation for the
-// dashboard, exactly as before.
+// checkBoundary consults the live PathPolicy from the session snapshot.
+//
+// An unattached session (no pinned workspace) has a nil policy and FAILS CLOSED:
+// the call is refused rather than allowed. It used to be allowed, on the stated
+// assumption that an unresolvable relative path would be "rejected honestly" by
+// this very guard (see the resolvePath doc comments) — but the guard was disabled
+// in exactly that case, so the two safety nets missed each other and the tool ran
+// the filesystem operation against the daemon's cwd, i.e. an unrelated project.
+// An empty path carries no location to check and stays a no-op.
+//
+// The unattached refusal is deliberately NOT recorded via markBoundaryViolation:
+// it is transient (the next session_start clears it by pinning a workspace),
+// whereas the violation flag is sticky and would leave the session showing
+// "Health: blocked" long after it attached. A real out-of-bounds path on an
+// attached session is still recorded, exactly as before.
 func (s *connSession) checkBoundary(path string, want tools.Access) error {
-	pol := s.boundaryPolicy()
-	if pol == nil || path == "" {
+	if path == "" {
 		return nil
+	}
+	pol := s.boundaryPolicy()
+	if pol == nil {
+		return tools.UnattachedWorkspaceError{Path: path}
 	}
 	if _, err := pol.Check(path, want); err != nil {
 		s.markBoundaryViolation(err.Error())
@@ -50,8 +63,8 @@ func (s *connSession) outsideWorkspaceLabel(path string) string {
 // The policy is built eagerly on the mutation path (attach / re-pin /
 // applyProjectConfig — see conn.go) and refreshed off-lane with the session
 // language's toolchain dependency roots by warmDepRoots, so the guard never
-// builds on read. Returns nil while the session is unattached (the guards then
-// no-op).
+// builds on read. Returns nil while the session is unattached (checkBoundary
+// then refuses every path — fail closed).
 func (s *connSession) boundaryPolicy() *tools.PathPolicy {
 	return s.view().policy
 }
