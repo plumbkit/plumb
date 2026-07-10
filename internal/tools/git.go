@@ -148,17 +148,27 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	return switchNote + out, nil
 }
 
-// defaultRepo returns repo, or the session workspace when repo is empty.
+// defaultRepo resolves the repo argument against the pinned workspace: an empty
+// repo becomes the workspace root, and a RELATIVE repo (a bare filename such as
+// "README.md", or "sub/dir") is anchored to the workspace like every other
+// path-bearing argument. Left relative it would reach checkBoundary, which
+// canonicalises through filepath.Abs against the daemon's cwd — a directory that
+// belongs to no project — so a correctly-pinned session saw a spurious boundary
+// violation for a file sitting in its own workspace root.
+//
 // Keeps the git command targeted at the pinned project rather than the daemon's
 // cwd (shared across connections, may belong to another repository). When the
-// connection has no pinned workspace (WorkspaceFn nil or returning ""), the repo
-// stays empty and checkBoundary refuses — fail closed, never fall through to the
-// daemon cwd, which would run git against an unrelated repository.
+// connection has no pinned workspace (WorkspaceFn nil or returning ""), an empty
+// repo stays empty and checkBoundary refuses — fail closed, never fall through to
+// the daemon cwd, which would run git against an unrelated repository.
 func (t *Git) defaultRepo(repo string) string {
-	if repo != "" || t.deps.WorkspaceFn == nil {
-		return repo
+	if repo == "" {
+		if t.deps.WorkspaceFn == nil {
+			return ""
+		}
+		return t.deps.WorkspaceFn()
 	}
-	return t.deps.WorkspaceFn()
+	return t.deps.resolvePath(repo)
 }
 
 func (t *Git) checkBoundary(a gitToolArgs) error {
