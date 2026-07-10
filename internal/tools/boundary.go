@@ -20,6 +20,26 @@ type WorkspaceBoundaryError struct {
 	ReadOnlyRoot string // non-empty when the path is under a read-only root; indicates a write was attempted
 }
 
+// UnattachedWorkspaceError is returned when a path-bearing tool is called on a
+// connection with no pinned workspace. plumb refuses such a call rather than
+// resolving the path: with no workspace there is no allowlist to check against,
+// and a relative path would be resolved by the OS against the daemon's working
+// directory — a singleton process whose cwd belongs to whichever client happened
+// to spawn it, i.e. an unrelated repository. Fail closed: a refused call is
+// recoverable, a misplaced write is not.
+type UnattachedWorkspaceError struct {
+	Path string
+}
+
+func (e UnattachedWorkspaceError) Error() string {
+	return fmt.Sprintf(
+		"no workspace is pinned to this connection, so %s was refused rather than resolved. "+
+			"Call session_start with `workspace` set to an absolute project root to pin this connection, then retry. "+
+			"If this session was working a moment ago, the daemon may have restarted and the pin was not re-established.",
+		e.Path,
+	)
+}
+
 func (e WorkspaceBoundaryError) Error() string {
 	if e.ReadOnlyRoot != "" {
 		return fmt.Sprintf(
@@ -52,12 +72,19 @@ func NewWorkspaceBoundaryError(workspace, path string) error {
 }
 
 // IsWorkspaceBoundaryError reports whether err (or anything wrapped in it via
-// %w) is a WorkspaceBoundaryError. All call sites wrap with %w, so errors.As
-// alone is the contract — do not add a substring fallback, as it would
-// false-positive on unrelated errors that happen to echo the message.
+// %w) is a path-access refusal — either a WorkspaceBoundaryError (the path lies
+// outside the connection's allowed roots) or an UnattachedWorkspaceError (there
+// are no allowed roots because nothing is pinned). Callers use it to suppress a
+// fallback that would re-attempt the same refused path. All call sites wrap with
+// %w, so errors.As alone is the contract — do not add a substring fallback, as
+// it would false-positive on unrelated errors that happen to echo the message.
 func IsWorkspaceBoundaryError(err error) bool {
 	var boundaryErr WorkspaceBoundaryError
-	return errors.As(err, &boundaryErr)
+	if errors.As(err, &boundaryErr) {
+		return true
+	}
+	var unattachedErr UnattachedWorkspaceError
+	return errors.As(err, &unattachedErr)
 }
 
 // PathWithinWorkspace reports whether path stays inside workspace after best
