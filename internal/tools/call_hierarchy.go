@@ -100,6 +100,10 @@ type callHierarchyQuery struct {
 	line      uint32
 	character uint32
 	direction string
+	// symbolName is set only when plumb resolved line/character from a
+	// symbol_name argument, so a server rejection is explained as a stale symbol
+	// tree rather than as bad coordinates the caller never passed.
+	symbolName string
 }
 
 func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
@@ -152,13 +156,13 @@ func (t *CallHierarchy) executeByName(ctx context.Context, uri, name, direction 
 		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
 	}
 	if len(matches) == 1 {
-		return t.executeByPosition(ctx, queryForSymbol(uri, matches[0], direction), false)
+		return t.executeByPosition(ctx, queryForSymbol(uri, matches[0], direction, name), false)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Call hierarchy for %q (%d symbol matches):\n", name, len(matches))
 	for _, sym := range matches {
 		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
-		result, err := t.executeByPosition(ctx, queryForSymbol(uri, sym, direction), false)
+		result, err := t.executeByPosition(ctx, queryForSymbol(uri, sym, direction, name), false)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue
@@ -168,13 +172,16 @@ func (t *CallHierarchy) executeByName(ctx context.Context, uri, name, direction 
 	return sb.String(), nil
 }
 
-// queryForSymbol builds a query at a resolved symbol's identifier position.
-func queryForSymbol(uri string, sym protocol.DocumentSymbol, direction string) callHierarchyQuery {
+// queryForSymbol builds a query at a resolved symbol's identifier position. name
+// is the symbol_name the caller passed, recorded so a failure is reported as a
+// name resolution rather than as a coordinate the caller chose.
+func queryForSymbol(uri string, sym protocol.DocumentSymbol, direction, name string) callHierarchyQuery {
 	return callHierarchyQuery{
-		uri:       uri,
-		line:      sym.SelectionRange.Start.Line,
-		character: sym.SelectionRange.Start.Character,
-		direction: direction,
+		uri:        uri,
+		line:       sym.SelectionRange.Start.Line,
+		character:  sym.SelectionRange.Start.Character,
+		direction:  direction,
+		symbolName: name,
 	}
 }
 
@@ -194,7 +201,7 @@ func (t *CallHierarchy) executeByPosition(ctx context.Context, q callHierarchyQu
 			if allowSnap && isPositionMissErr(err) {
 				return t.snapAndRetry(ctx, q)
 			}
-			return "", positionErr("call_hierarchy", err)
+			return "", queryErr("call_hierarchy", q.symbolName, err)
 		}
 		return "No call hierarchy item found at the given position.", nil
 	}

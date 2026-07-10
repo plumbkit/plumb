@@ -32,6 +32,18 @@ func resolvedSymbolErr(tool, name string, err error) error {
 	return fmt.Errorf("%s: %w\n\nHint: the position was resolved from symbol %q via the language server's own document-symbol tree, so it is not a coordinate you passed. The server rejecting it usually means its index is stale after recent edits: call diagnostics to let it re-analyse, then retry", tool, err, name)
 }
 
+// queryErr renders a language-server failure with the hint that fits how the
+// caller addressed the symbol: a symbol_name caller never supplied coordinates,
+// so it gets resolvedSymbolErr; a raw line/character caller gets positionErr.
+// Pass an empty symbolName for the raw-position path (including a snapped
+// retry, whose coordinates still originate from the caller's request).
+func queryErr(tool, symbolName string, err error) error {
+	if symbolName != "" {
+		return resolvedSymbolErr(tool, symbolName, err)
+	}
+	return positionErr(tool, err)
+}
+
 // lspTimeout returns a timeout error when err is a deadline overrun, else nil.
 func lspTimeout(tool string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {

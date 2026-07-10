@@ -622,3 +622,36 @@ func TestRenameSymbol_ByPosition_ServerRejectionKeepsCoordinateHint(t *testing.T
 		t.Errorf("a raw-position caller keeps the coordinate hint, got: %v", err)
 	}
 }
+
+// A server that names one file in both Changes and DocumentChanges (nothing in
+// the protocol forbids it) must still be treated as one target: the apply path
+// groups its plans by URI, so a duplicated entry here would shift the file list
+// out of step with the plans and cost a reported file its pre-write baseline.
+func TestRenameSymbol_DeduplicatesTargetsAcrossEditForms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.go")
+	if err := os.WriteFile(path, []byte("package p\n\nvar Foo = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uri := "file://" + path
+	edit := protocol.TextEdit{
+		Range:   protocol.Range{Start: protocol.Position{Line: 2, Character: 4}, End: protocol.Position{Line: 2, Character: 7}},
+		NewText: "Bar",
+	}
+	mock := &mockLSP{renameResult: &protocol.WorkspaceEdit{
+		Changes:         map[string][]protocol.TextEdit{uri: {edit}},
+		DocumentChanges: []protocol.TextDocumentEdit{{TextDocument: protocol.VersionedTextDocumentIdentifier{URI: uri}}},
+	}}
+	tool := tools.NewRenameSymbol(mock, 0)
+
+	args, _ := json.Marshal(map[string]any{
+		"uri": uri, "line": 2, "character": 4, "new_name": "Bar", "dry_run": true,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "across 1 file(s)") {
+		t.Errorf("one file named twice must be counted once, got:\n%s", out)
+	}
+}

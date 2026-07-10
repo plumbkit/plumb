@@ -120,7 +120,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	if a.Line == nil || a.Character == nil {
 		return "", fmt.Errorf("get_definition: either symbol_name or both line and character are required")
 	}
-	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character, true)
+	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character, true, "")
 }
 
 // executeByName resolves a definition through the language server, falling back
@@ -167,14 +167,14 @@ func (t *GetDefinition) lspDefinitionByName(ctx context.Context, uri, name strin
 
 	if len(matches) == 1 {
 		sym := matches[0]
-		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
+		return t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false, name)
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d matches for %q:\n", len(matches), name)
 	for _, sym := range matches {
 		fmt.Fprintf(&sb, "\n## %s (%s) line %d\n\n", sym.Name, symbolKindName(sym.Kind), sym.SelectionRange.Start.Line+1)
-		result, err := t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false)
+		result, err := t.executeByPosition(ctx, uri, sym.SelectionRange.Start.Line, sym.SelectionRange.Start.Character, false, name)
 		if err != nil {
 			fmt.Fprintf(&sb, "(error: %v)\n", err)
 			continue
@@ -194,14 +194,17 @@ func (t *GetDefinition) snapDefinition(ctx context.Context, uri string, line, ch
 	if !ok {
 		return "", positionMissErr("get_definition", uri, line, syms)
 	}
-	out, err := t.executeByPosition(ctx, uri, snapped.Line, snapped.Character, false)
+	out, err := t.executeByPosition(ctx, uri, snapped.Line, snapped.Character, false, "")
 	if err != nil {
 		return "", err
 	}
 	return snapNotice(uri, line, character, snapped.Line) + out, nil
 }
 
-func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line, character uint32, allowSnap bool) (string, error) {
+// executeByPosition queries the server at line/character. symbolName is non-empty
+// only when plumb resolved that position from a symbol_name argument, which
+// selects the failure hint (see queryErr).
+func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line, character uint32, allowSnap bool, symbolName string) (string, error) {
 	key := fmt.Sprintf("%s:def:%d:%d", uri, line, character)
 	if t.cache != nil {
 		if v, ok := t.cache.Get(key); ok {
@@ -217,7 +220,7 @@ func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line,
 		if allowSnap && isPositionMissErr(err) {
 			return t.snapDefinition(ctx, uri, line, character)
 		}
-		return "", positionErr("get_definition", err)
+		return "", queryErr("get_definition", symbolName, err)
 	}
 
 	var result string
