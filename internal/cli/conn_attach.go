@@ -309,6 +309,15 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 	if seedPath == "" {
 		return
 	}
+	// A relative seed carries no location: os.Stat and pool.Detect would resolve it
+	// against the daemon's working directory (inherited from whichever client
+	// spawned the singleton daemon), so the connection could attach to — and then
+	// write into — an unrelated project. Leave the session unattached; checkBoundary
+	// refuses the call and tells the caller to pin a workspace.
+	if !filepath.IsAbs(seedPath) {
+		s.log().Warn("daemon: ignoring relative tool path as a workspace seed", "seed", seedPath)
+		return
+	}
 	startDir := seedPath
 	if info, err := os.Stat(seedPath); err != nil || !info.IsDir() {
 		startDir = filepath.Dir(seedPath)

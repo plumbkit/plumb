@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -218,6 +219,18 @@ func (p *workspacePool) acquireLang(ctx context.Context, root, language string, 
 	return p.awaitReady(ctx, e, readyCh)
 }
 
+// existingDir returns dir when it names an existing directory, else "". Used to
+// decide whether a child process can safely be given it as a working directory.
+func existingDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	return dir
+}
+
 // startOrReuse returns the existing entry for root, or builds a new one and
 // begins warming its language server in the background. For a reused entry the
 // returned channel is nil (nothing to wait on); for a freshly started one it
@@ -297,6 +310,11 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
 		OnStart: poolOnStart(language, root, rootURI, inv, proxy),
+		// Run the server from the workspace it serves, not from the daemon's cwd
+		// (which is "/"). Skipped when root is not an existing directory, so a root
+		// deleted under a live session degrades to the daemon's cwd rather than
+		// failing the spawn outright with ENOENT from chdir.
+		Dir: existingDir(root),
 	})
 	// Warm up on the pool's base (daemon-lifetime) context, not a request ctx.
 	readyCh, err := sup.StartAsync(p.baseCtx)
