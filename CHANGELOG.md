@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The strict-mode gate on the symbol-edit tools is now pinned by a test that actually discriminates the lock ordering.** 0.11.1 moved the strict check out of the unlocked `semanticWritePreflight` and into `semanticStrictGate`, called by `applySingleEdit` *after* it takes the target's path lock — closing a hole where a concurrent writer could land between the mtime check and the write, leaving strict mode passing on a file the session no longer knows. That ordering was pinned only **structurally** (one test asserts the preflight does not enforce strict, another that the gate does), and the follow-up was recorded as needing a new hook inside `applySingleEdit` to test the real interleaving. It does not: `applySingleEdit` already takes its `symbolEditResolver` as a parameter, and `deps.Strict` is a callback invoked from *inside* the gate. `TestSemanticStrictGate_RunsUnderPathLock` probes from within that callback — a second goroutine's `lockPath` on the same file must block for as long as the gate runs. The obvious formulation (assert the lock is held when `resolve` runs) would pass under **both** the correct order and the bug, since the lock is held at `resolve` either way; this one fails when the gate is moved back above `lockPath`, while the three pre-existing tests keep passing. Test-only: no production code changed.
+
 ## 0.11.1 (2026-07-10)
 
 ### Added
