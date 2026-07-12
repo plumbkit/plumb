@@ -263,7 +263,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
 		s.setClientRequest(request)
 		s.log().Info("daemon: roots changed — re-fetching workspace root")
-		s.onRootsChanged(initCtx, rootFromRoots(initCtx, request))
+		s.onRootsChanged(initCtx, rootsFromClient(initCtx, request))
 		s.startConfigWatcher()
 	}
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage) {

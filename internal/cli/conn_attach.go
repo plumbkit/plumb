@@ -164,30 +164,6 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	return root, nil
 }
 
-// onRootsChanged applies a client's updated workspace roots (the
-// notifications/roots/list_changed path). On the first attach it pins the root,
-// like OnInit. When the connection is already pinned and the client reports a
-// different root — an editor that genuinely switched folders — it re-pins to
-// follow the switch, closing the same "welded connection" gap that the
-// session_start re-pin fixed for clients that never report roots (Claude
-// Desktop). An empty or unchanged root is left alone: repinWorkspace no-ops when
-// the resolved root matches the current pin, so a spurious notification (or a
-// roots/list the client cannot satisfy) never tears the workspace down.
-func (s *connSession) onRootsChanged(ctx context.Context, rootURI string) {
-	if s.view().acquiredRoot == "" {
-		s.attachWorkspace(ctx, rootURI)
-		s.applyProjectConfig(s.workspace())
-		return
-	}
-	folder := paths.URIToPath(rootURI)
-	if folder == "" || folder == "/" {
-		return // client reported no usable root — keep the current pin
-	}
-	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots); err != nil {
-		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
-	}
-}
-
 // attachOrRepinTo points the connection at root, tearing down any previous
 // workspace's per-session subsystems first so the start* helpers (which no-op
 // when already started) re-create them for the new root. Returns true when the

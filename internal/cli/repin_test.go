@@ -188,19 +188,19 @@ func TestOnRootsChanged_RepinsOnChange(t *testing.T) {
 	defer s.close()
 
 	// First report pins A (connection not yet attached).
-	s.onRootsChanged(context.Background(), "file://"+rootA)
+	s.onRootsChanged(context.Background(), []string{"file://" + rootA})
 	if got := s.workspace(); got != rootA {
 		t.Fatalf("first roots change: workspace = %s, want %s", got, rootA)
 	}
 
 	// A genuinely different root re-pins to B.
-	s.onRootsChanged(context.Background(), "file://"+rootB)
+	s.onRootsChanged(context.Background(), []string{"file://" + rootB})
 	if got := s.workspace(); got != rootB {
 		t.Fatalf("changed roots: workspace = %s, want %s", got, rootB)
 	}
 
 	// An empty root (client cannot satisfy roots/list) keeps the current pin.
-	s.onRootsChanged(context.Background(), "")
+	s.onRootsChanged(context.Background(), nil)
 	if got := s.workspace(); got != rootB {
 		t.Fatalf("empty roots change should keep pin: workspace = %s, want %s", got, rootB)
 	}
