@@ -88,6 +88,61 @@ func TestPersistPin_RootsChangedIsNotASessionStartPin(t *testing.T) {
 	}
 }
 
+func TestPersistPin_SameRootSessionStartPromotesRootsOrigin(t *testing.T) {
+	// A session_start(workspace=B) for a B already attached from client roots must
+	// UPGRADE the stored origin roots→session_start. attachOrRepinTo returns early
+	// when the root and language are unchanged, so without a promotion step the
+	// deliberate intent is never recorded, and a later restart whose client roots
+	// point elsewhere beats the pin. The persisted-pin channel must be correct on
+	// its own, independent of the proxy replay.
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.attachWorkspace(context.Background(), "file://"+root) // client roots → origin roots
+	if _, _, src, _, _ := ss.LoadPin("proxyX"); src != sessionstate.PinSourceRoots {
+		t.Fatalf("precondition: source = %q, want roots", src)
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil { // explicit, same root
+		t.Fatalf("repinWorkspace: %v", err)
+	}
+
+	_, _, src, ok, err := ss.LoadPin("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadPin: ok=%v err=%v", ok, err)
+	}
+	if src != sessionstate.PinSourceSessionStart {
+		t.Fatalf("same-root session_start did not promote the origin: got %q, want %q",
+			src, sessionstate.PinSourceSessionStart)
+	}
+}
+
+func TestPersistPin_SameRootRootsChangeDoesNotDemote(t *testing.T) {
+	// The other direction of the same edge: a spurious onRootsChanged for the
+	// already-attached root must NOT demote a deliberate session_start pin back to
+	// roots. Promotion is one-way.
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil { // origin session_start
+		t.Fatalf("repinWorkspace: %v", err)
+	}
+	s.onRootsChanged(context.Background(), "file://"+root) // same root, roots origin
+
+	_, _, src, ok, err := ss.LoadPin("proxyX")
+	if err != nil || !ok {
+		t.Fatalf("LoadPin: ok=%v err=%v", ok, err)
+	}
+	if src != sessionstate.PinSourceSessionStart {
+		t.Fatalf("a same-root roots notification demoted the pin: got %q, want %q",
+			src, sessionstate.PinSourceSessionStart)
+	}
+}
+
 func TestPersistPin_IncidentalToolPathNotPersisted(t *testing.T) {
 	store, ss := newOriginStore(t)
 	root := freshTempDir(t)

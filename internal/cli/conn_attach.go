@@ -202,6 +202,18 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		// same-root language switch (a forced primary via session_start) must still
 		// re-acquire the new server.
 		if root == prev && language == v.acquiredLanguage {
+			// Nothing to re-acquire — but an explicit session_start still UPGRADES
+			// the pin's recorded origin. Without this, a session_start(workspace=B)
+			// for a B already attached from client roots would leave the stored
+			// origin as roots, and a later restart whose client roots point
+			// elsewhere would beat the deliberate pin — so the persisted-pin channel
+			// would not be correct on its own (independent of the proxy replay).
+			// Promotion is one-way: a same-root roots notification (origin !=
+			// session_start) is skipped here, so it can never demote a session_start
+			// pin.
+			if origin == sessionstate.PinSourceSessionStart {
+				s.persistPin(v.proxySessionID, root, language, v.session.PersistState, origin)
+			}
 			return
 		}
 		changed = true
