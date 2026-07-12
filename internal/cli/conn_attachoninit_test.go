@@ -153,6 +153,30 @@ func TestOnInit_LegacyPinDoesNotBeatRoots(t *testing.T) {
 	}
 }
 
+func TestOnInit_ReplayedMetaPinBeatsRoots(t *testing.T) {
+	// Rung 1 with no database at all: the serve proxy replayed the caller's
+	// session_start workspace in _meta (onPinnedWorkspace), and it must outrank the
+	// client's roots even when the persisted pin is absent (persist_state off, or
+	// the row pruned). This is the channel that does not depend on the DB.
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	calls := 0
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.onPinnedWorkspace(rootB) // as the replayed initialize _meta would
+	s.setClientRequest(rootsReplying(rootA, &calls))
+	s.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
+
+	if got := s.workspace(); got != rootB {
+		t.Fatalf("replayed _meta pin lost to roots: got %q, want %q", got, rootB)
+	}
+	if calls != 0 {
+		t.Fatalf("roots/list called %d times despite a replayed pin", calls)
+	}
+}
+
 func TestOnInit_RootsLessClientFallsBackToPin(t *testing.T) {
 	// The pre-existing behaviour for Claude Desktop and friends: no roots, so the
 	// persisted pin — of any origin — restores the connection.

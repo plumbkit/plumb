@@ -141,6 +141,12 @@ type sessionView struct {
 	// once during the initialize exchange and preserved across re-pins. "" when
 	// the client is not a cwd-injecting serve proxy.
 	workspaceHint string
+
+	// replayedPin is the workspace the caller chose with an explicit session_start,
+	// replayed by the serve proxy in _meta[mcp.MetaPinnedWorkspaceKey] after a
+	// daemon restart. Authoritative — it outranks a client-reported root. Empty on
+	// a first connect and on a proxy that predates the key.
+	replayedPin string
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

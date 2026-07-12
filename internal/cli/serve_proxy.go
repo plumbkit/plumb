@@ -92,6 +92,16 @@ type reconnectingProxy struct {
 	fr     *frameReader
 	gen    uint64
 
+	// pinMu guards the workspace the caller chose via session_start. `pending` is
+	// written by the client pump and read by the daemon pump; `pinned` is written
+	// by the daemon pump and read by replayHandshake, which runs on whichever pump
+	// noticed the failure. See serve_proxy_pin.go. Deliberately its own mutex:
+	// hsMu's critical sections stay tight, and `outstanding` cannot be reused here
+	// (it is swept on reconnect, and the pin must survive that).
+	pinMu   sync.Mutex
+	pending map[string]string // in-flight session_start id → requested workspace
+	pinned  string            // last workspace the daemon accepted
+
 	reconnectMu   sync.Mutex
 	daemonWriteMu sync.Mutex
 	outMu         sync.Mutex
@@ -226,6 +236,7 @@ func (p *reconnectingProxy) pumpClientToDaemon(ctx context.Context) error {
 			return nil // client closed stdin — normal end of session
 		}
 		frame = p.captureHandshake(frame)
+		p.observeClientRequest(frame) // remember a session_start re-pin for the next replay
 		for {
 			gen, werr := p.writeDaemon(frame)
 			if werr == nil {
@@ -372,6 +383,7 @@ func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {
 			return // heartbeat pong — never forwarded to the client
 		}
 		p.resolveResponse(key, frame)
+		p.commitSessionStartPin(frame) // a re-pin sticks only once the daemon accepts it
 		frame = p.annotateReconnect(frame)
 	}
 	p.writeClient(frame)

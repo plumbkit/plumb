@@ -242,6 +242,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnWorkspaceHint = func(_ context.Context, dir string) {
 		s.onWorkspaceHint(dir)
 	}
+	srv.OnPinnedWorkspace = func(_ context.Context, dir string) {
+		s.onPinnedWorkspace(dir)
+	}
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError)
 	}

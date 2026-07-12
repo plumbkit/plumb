@@ -50,6 +50,18 @@ func (s *connSession) onWorkspaceHint(dir string) {
 	s.mutate(func(v *sessionView) { v.workspaceHint = dir })
 }
 
+// onPinnedWorkspace records the workspace the caller chose with an explicit
+// session_start, replayed by the serve proxy after a daemon restart. Store-only
+// and fires before OnInit, exactly like onWorkspaceHint — but this one is
+// authoritative rather than advisory, and the ladder consults it first. An empty
+// value (a first connect, or a proxy that predates the key) is a no-op.
+func (s *connSession) onPinnedWorkspace(dir string) {
+	if dir == "" {
+		return
+	}
+	s.mutate(func(v *sessionView) { v.replayedPin = dir })
+}
+
 // attachFromHint attaches the workspace from the stored serve-proxy cwd hint —
 // the last attach rung before tool-path seeding (see the file header for the
 // full precedence chain). A no-op when no hint is stored or a workspace is

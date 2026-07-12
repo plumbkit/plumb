@@ -33,7 +33,15 @@ import (
 func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	pinRoot, pinSource, pinOK := s.loadPin()
 
-	if pinOK && pinSource == sessionstate.PinSourceSessionStart {
+	// Rung 1: the proxy replayed the caller's session_start workspace. This is the
+	// live call's own authority, re-delivered — and unlike the persisted pin it
+	// needs no database, so it holds even with [session] persist_state off or the
+	// pin row pruned.
+	if replayed := s.view().replayedPin; replayed != "" {
+		s.attachReplayedPin(ctx, replayed, sessionstate.PinSourceSessionStart)
+	}
+	// Rung 1b: the same fact from the database, for a proxy that predates the key.
+	if s.workspace() == "" && pinOK && pinSource == sessionstate.PinSourceSessionStart {
 		s.attachReplayedPin(ctx, pinRoot, pinSource)
 	}
 	if s.workspace() == "" {
