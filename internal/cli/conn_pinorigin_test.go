@@ -74,7 +74,7 @@ func TestPersistPin_RootsChangedIsNotASessionStartPin(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	s.attachWorkspace(context.Background(), "file://"+rootA)
-	s.onRootsChanged(context.Background(), "file://"+rootB)
+	s.onRootsChanged(context.Background(), []string{"file://" + rootB})
 
 	ws, _, src, ok, err := ss.LoadPin("proxyX")
 	if err != nil || !ok {
@@ -131,7 +131,7 @@ func TestPersistPin_SameRootRootsChangeDoesNotDemote(t *testing.T) {
 	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil { // origin session_start
 		t.Fatalf("repinWorkspace: %v", err)
 	}
-	s.onRootsChanged(context.Background(), "file://"+root) // same root, roots origin
+	s.onRootsChanged(context.Background(), []string{"file://" + root}) // same root, roots origin
 
 	_, _, src, ok, err := ss.LoadPin("proxyX")
 	if err != nil || !ok {
