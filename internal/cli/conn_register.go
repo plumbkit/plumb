@@ -242,6 +242,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnWorkspaceHint = func(_ context.Context, dir string) {
 		s.onWorkspaceHint(dir)
 	}
+	srv.OnPinnedWorkspace = func(_ context.Context, dir string) {
+		s.onPinnedWorkspace(dir)
+	}
 	srv.OnAfterTool = func(_ context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool) {
 		s.onAfterTool(toolName, args, output, errMsg, dur, isError)
 	}
@@ -253,20 +256,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 			v.lastToolProfile = s.resolveToolProfile()
 		})
 		s.setClientRequest(request)
-		s.attachWorkspace(initCtx, rootFromRoots(initCtx, request))
-		if s.workspace() == "" {
-			// Client reported no roots (e.g. Claude Desktop). Re-pin from the
-			// persisted pin so a restart does not strand the connection unpinned.
-			s.rehydratePin(initCtx)
-		}
-		if s.workspace() == "" {
-			// No persisted pin either — fall back to the serve proxy's cwd hint
-			// (Detect-validated, never persisted as the sticky pin). Full attach
-			// precedence, highest wins: explicit session_start workspace arg →
-			// client roots/list → persisted pin → serve-proxy cwd hint →
-			// first-tool-call path seeding.
-			s.attachFromHint(initCtx)
-		}
+		s.attachOnInit(initCtx, request)
 		s.applyProjectConfig(s.workspace())
 		s.startConfigWatcher()
 	}

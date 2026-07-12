@@ -222,9 +222,12 @@ func serverInfoVersion(frame []byte) string {
 // action an autonomous agent cannot take. An unknown daemon version falls back
 // to the proxy's.
 func reconnectNoteText(daemonVersion, proxyVersion string) string {
-	const tail = " — your session state (read-tracking, caches) was rebuilt, so " +
-		"re-read a file before editing it (or pass dirty_ok:true for a file you " +
-		"wrote earlier this session) if a write is unexpectedly refused."
+	const tail = " — your session state (read-tracking, caches, and the pinned " +
+		"workspace) was rebuilt. The daemon restores an explicit session_start " +
+		"workspace, but if you have not set one, a relative path may now resolve " +
+		"against a different project — confirm the pin before a relative-path " +
+		"write, and re-read a file before editing it (or pass dirty_ok:true for a " +
+		"file you wrote earlier this session)."
 	if daemonVersion == "" || daemonVersion == proxyVersion {
 		v := daemonVersion
 		if v == "" {

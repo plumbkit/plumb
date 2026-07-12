@@ -87,6 +87,11 @@ func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage)
 			s.OnWorkspaceHint(ctx, dir)
 		}
 	}
+	if s.OnPinnedWorkspace != nil {
+		if dir := pinnedWorkspaceFromParams(params); dir != "" {
+			s.OnPinnedWorkspace(ctx, dir)
+		}
+	}
 }
 
 // toolSnapshot is an immutable copy of one registered tool's advertised
@@ -163,6 +168,14 @@ func proxySessionFromParams(params json.RawMessage) string {
 // sends nothing changes nothing.
 func workspaceHintFromParams(params json.RawMessage) string {
 	return stringFromMeta(params, MetaWorkspaceKey)
+}
+
+// pinnedWorkspaceFromParams extracts the workspace the caller chose with an
+// explicit session_start, replayed by the serve proxy in
+// _meta[MetaPinnedWorkspaceKey]. Fail-safe like the others: any shape mismatch
+// yields "", so a proxy that predates the key changes nothing.
+func pinnedWorkspaceFromParams(params json.RawMessage) string {
+	return stringFromMeta(params, MetaPinnedWorkspaceKey)
 }
 
 // stringFromMeta extracts a single string value stored under key in the given

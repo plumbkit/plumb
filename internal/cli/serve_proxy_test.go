@@ -365,6 +365,12 @@ func TestReconnectNoteText(t *testing.T) {
 	if !strings.Contains(same, "(now 1.2.3)") || strings.Contains(same, "serve proxy") {
 		t.Errorf("same-version note wrong: %q", same)
 	}
+	// The note must name the workspace pin, not only read-tracking/caches — the
+	// original field report's sharpest point (a reconnect had silently changed
+	// which repository writes landed in).
+	if !strings.Contains(same, "workspace") {
+		t.Errorf("note does not mention the workspace pin: %q", same)
+	}
 	// Unknown daemon version: fall back to the proxy's, no lag hint.
 	fallback := reconnectNoteText("", "1.2.3")
 	if !strings.Contains(fallback, "(now 1.2.3)") || strings.Contains(fallback, "serve proxy") {

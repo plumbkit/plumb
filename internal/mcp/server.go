@@ -67,11 +67,27 @@ const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 // MetaWorkspaceKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` transports its own working directory as an ADVISORY workspace
 // attach hint. Unlike a client-reported root it is not authoritative: the
-// daemon consults it only after every stronger signal (explicit workspace arg,
-// client roots, persisted pin) has failed, and always validates it through
+// daemon consults it only after every stronger signal (a session_start-origin
+// pin, client roots, a roots-origin pin) has failed, and always validates it through
 // workspace detection before attaching. Identical across every handshake
 // replay. Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaWorkspaceKey = "dev.plumbkit/workspace"
+
+// MetaPinnedWorkspaceKey is the MCP initialize-params `_meta` key under which
+// `plumb serve` replays the workspace the caller last chose with an explicit
+// `session_start(workspace=…)` call.
+//
+// Unlike MetaWorkspaceKey — the proxy's launch directory, a mere hint — this is
+// AUTHORITATIVE: it is the same declaration of intent as the live tool call that
+// produced it, merely re-delivered to a daemon that restarted underneath the
+// connection. It therefore outranks a client-reported root, which only says
+// where the client happened to start. The proxy injects it at replay time (the
+// pin is learned after the handshake), never on the first connect, so a session
+// that never re-pins sends a byte-identical frame.
+//
+// An older daemon simply ignores the unknown key. Reverse-DNS namespaced per the
+// MCP `_meta` convention.
+const MetaPinnedWorkspaceKey = "dev.plumbkit/pinned-workspace"
 
 // MetaAlwaysLoadKey is the per-tool `tools/list` `_meta` key Claude Code reads to
 // exempt a tool from MCP tool-search deferral: a tool advertised with
@@ -199,6 +215,12 @@ type Server struct {
 	// before OnInit attaches the workspace, so the hint is available as the
 	// lowest attach fallback before path seeding. Absent/empty ⇒ never called.
 	OnWorkspaceHint func(ctx context.Context, dir string)
+
+	// OnPinnedWorkspace is called once during the initialize exchange with the
+	// workspace the caller last chose via an explicit session_start, replayed by
+	// the serve proxy in _meta[MetaPinnedWorkspaceKey]. Empty or absent on a first
+	// connect, and on any proxy that predates the key.
+	OnPinnedWorkspace func(ctx context.Context, dir string)
 
 	// ToolFilter, if set, decides which tools appear in tools/list: a tool whose
 	// name it rejects is hidden from the advertised set but STAYS CALLABLE via

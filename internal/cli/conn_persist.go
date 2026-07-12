@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -84,44 +85,62 @@ func (s *connSession) rehydrateReads(proxyID, root string, persistState bool) {
 // after a restart. Called from inside the attach mutation lane with explicit
 // args, for the same reason as rehydrateReads.
 //
-// Only an EXPLICIT pin is persisted: a deliberate session_start workspace arg or
-// a client-reported root. An auto-attach seeded from an incidental tool path
-// (onBeforeTool) passes explicit=false and writes nothing, so it can never
-// overwrite the sticky target — a reconnect then lands back on the last
-// workspace the caller actually chose rather than on whatever file it read
-// first. This closes the silent pin-drift where reading a file in project B by
-// absolute path re-pinned a connection away from the explicitly-chosen A.
-func (s *connSession) persistPin(proxyID, root, language string, persistState, explicit bool) {
-	if !explicit {
+// Only a pin with a known origin is persisted: a deliberate session_start
+// workspace arg, or a client-reported root. An auto-attach seeded from an
+// incidental tool path (onBeforeTool) passes PinSourceUnknown and writes
+// nothing, so it can never overwrite the sticky target — a reconnect then lands
+// back on the last workspace the caller actually chose rather than on whatever
+// file it read first. This closes the silent pin-drift where reading a file in
+// project B by absolute path re-pinned a connection away from the
+// explicitly-chosen A.
+//
+// The origin is stored, not just used as a gate: on reconnect only a
+// session_start-origin pin outranks the client's roots. See conn_attach_hint.go.
+func (s *connSession) persistPin(proxyID, root, language string, persistState bool, origin sessionstate.PinSource) {
+	if origin == sessionstate.PinSourceUnknown {
 		return
 	}
 	if s.sessionState == nil || !persistState || proxyID == "" || root == "" {
 		return
 	}
-	if err := s.sessionState.UpsertPin(proxyID, root, language); err != nil {
+	if err := s.sessionState.UpsertPin(proxyID, root, language, origin); err != nil {
 		s.log().Debug("daemon: persist pin failed", "err", err)
 	}
 }
 
-// rehydratePin re-pins the workspace from a persisted pin when the connection
-// came back unpinned (the client reported no roots). Idempotent: attachWorkspace
-// is first-wins, so it no-ops if a root was already pinned. Called from OnInit
-// after the normal attach attempt.
-func (s *connSession) rehydratePin(ctx context.Context) {
+// loadPin returns this proxy session's persisted pin, if any. Gated exactly like
+// persistPin, so a disabled store or a store-less session simply reports "none".
+func (s *connSession) loadPin() (root string, source sessionstate.PinSource, ok bool) {
 	v := s.view()
 	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
-		return
+		return "", sessionstate.PinSourceUnknown, false
 	}
-	root, _, ok, err := s.sessionState.LoadPin(v.proxySessionID)
+	root, _, source, ok, err := s.sessionState.LoadPin(v.proxySessionID)
 	if err != nil {
 		s.log().Debug("daemon: load pin failed", "err", err)
-		return
+		return "", sessionstate.PinSourceUnknown, false
 	}
 	if !ok || root == "" {
+		return "", sessionstate.PinSourceUnknown, false
+	}
+	return root, source, true
+}
+
+// rehydratePin re-pins the workspace from a persisted pin when the connection
+// came back unpinned. Idempotent: attachWorkspacePin is first-wins, so it no-ops
+// if a root was already pinned.
+//
+// It re-persists the pin under the origin it was LOADED with. Re-attaching via
+// attachWorkspace would stamp PinSourceRoots over a session_start row, quietly
+// demoting a deliberate pin to one that no longer outranks the client's roots —
+// the pin would then lose the very next reconnect.
+func (s *connSession) rehydratePin(ctx context.Context) {
+	root, source, ok := s.loadPin()
+	if !ok {
 		return
 	}
-	s.attachWorkspace(ctx, "file://"+root)
+	s.attachWorkspacePin(ctx, "file://"+root, source)
 	if s.workspace() != "" {
-		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", root)
+		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", root, "source", string(source))
 	}
 }

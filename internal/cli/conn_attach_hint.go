@@ -9,11 +9,22 @@ package cli
 // (mcp.MetaWorkspaceKey) as an advisory attach hint. The hint enters the attach
 // precedence chain (highest wins, every rung first-wins-idempotent):
 //
-//	explicit session_start workspace arg (re-pin)
+//	explicit session_start workspace arg — live, or replayed by the proxy in
+//	  _meta[mcp.MetaPinnedWorkspaceKey] after a daemon restart
+//	→ persisted pin whose source is session_start (this proxy session)
 //	→ client roots/list
-//	→ persisted pin (reconnect replay of this proxy session)
+//	→ persisted pin whose source is roots, or a legacy row with no source
 //	→ serve-proxy cwd hint
 //	→ first-tool-call path seeding
+//
+// A session_start-origin pin outranks client roots because it is the workspace
+// the caller actually chose, whereas roots is only where the client happened to
+// launch. Ranking roots first meant a deliberate re-pin was silently undone by
+// every daemon restart — and worse, the roots attach then overwrote the stored
+// pin, so a relative-path write landed in the wrong repository. A roots-origin
+// pin does NOT outrank a fresh roots answer: there the client is the newer
+// authority. A legacy row predates the discriminator and is treated as roots, so
+// upgrading changes no behaviour until the next deliberate re-pin.
 //
 // The persisted pin beats the replayed hint on purpose: the pin records a
 // deliberate re-pin away from the proxy's original launch directory. The hint
@@ -21,7 +32,11 @@ package cli
 // and never persisted as the sticky pin, so it can inform an attach but never
 // overwrite a workspace the caller actually chose.
 
-import "context"
+import (
+	"context"
+
+	"github.com/plumbkit/plumb/internal/sessionstate"
+)
 
 // onWorkspaceHint records the serve proxy's advisory working directory
 // transported in the initialize params' _meta. Store-only: it fires
@@ -33,6 +48,18 @@ func (s *connSession) onWorkspaceHint(dir string) {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.workspaceHint = dir })
+}
+
+// onPinnedWorkspace records the workspace the caller chose with an explicit
+// session_start, replayed by the serve proxy after a daemon restart. Store-only
+// and fires before OnInit, exactly like onWorkspaceHint — but this one is
+// authoritative rather than advisory, and the ladder consults it first. An empty
+// value (a first connect, or a proxy that predates the key) is a no-op.
+func (s *connSession) onPinnedWorkspace(dir string) {
+	if dir == "" {
+		return
+	}
+	s.mutate(func(v *sessionView) { v.replayedPin = dir })
 }
 
 // attachFromHint attaches the workspace from the stored serve-proxy cwd hint —
@@ -48,7 +75,7 @@ func (s *connSession) attachFromHint(ctx context.Context) {
 	if hint == "" || s.workspace() != "" {
 		return
 	}
-	s.attachWorkspacePin(ctx, "file://"+hint, false)
+	s.attachWorkspacePin(ctx, "file://"+hint, sessionstate.PinSourceUnknown)
 	if s.workspace() != "" {
 		s.log().Info("daemon: workspace attached from serve cwd hint", "cwd", hint, "root", s.workspace())
 	}
