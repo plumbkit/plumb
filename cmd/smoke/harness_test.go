@@ -457,6 +457,28 @@ func assertContains(t *testing.T, label, text, want string) {
 	}
 }
 
+// assertEventuallyContains polls fn until its result contains want, then returns;
+// it fails the test if that has not happened by timeout. Use it for state that
+// settles ASYNCHRONOUSLY rather than synchronously with the call that triggers it
+// — e.g. a language server re-analysing a just-written file, where a single
+// post-write window can be missed by a cold server on a loaded runner.
+func assertEventuallyContains(t *testing.T, timeout time.Duration, label string, fn func() string, want string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		last = fn()
+		if strings.Contains(last, want) {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Errorf("%s: did not contain %q within %s\nlast output:\n%s", label, want, timeout, last)
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
 // extractMtime pulls the mtime value from a read_file header line.
 // Header format: "# plumb-read mtime=<value> ..."
 func extractMtime(t *testing.T, readOut string) string {
