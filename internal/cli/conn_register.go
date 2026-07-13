@@ -283,6 +283,8 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	// they stay callable by name). Resolved per list call, so it sees the client
 	// identity set synchronously during initialize.
 	srv.ToolFilter = s.toolVisible
-	// Pin the lean set into the client's context (Claude Code MCP tool search):
-	srv.AlwaysLoad = tools.IsLean
+	// Pin the lean set (plus the bootstrap set, so a future profile change can
+	// never un-pin session_start/git/read_file/edit_file) into the client's
+	// context (Claude Code MCP tool search):
+	srv.AlwaysLoad = func(name string) bool { return tools.IsLean(name) || tools.IsBootstrap(name) }
 }

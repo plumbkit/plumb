@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // echoTool echoes its "text" argument — minimal Tool for server tests.
@@ -267,6 +268,40 @@ func TestToolFilter_HidesFromListNotCall(t *testing.T) {
 	}
 	if isErr, _ := called["isError"].(bool); isErr {
 		t.Errorf("hidden tool edit_like returned an error result: %v", called)
+	}
+}
+
+// TestToolsList_BootstrapOnlyFilter is the wire-level half of the bootstrap
+// invariant (the cli-level half is
+// cli.TestToolVisible_BootstrapAlwaysVisible): with a filter that admits only
+// tools.IsBootstrap, handleToolsList's manifest must contain exactly the four
+// bootstrap tools and nothing else — proving handleToolsList honours the
+// filter for the minimal manifest. Uses the real bootstrap tool constructors
+// (nil/zero deps, as in profile_test.go's leanToolSet) so the wire names come
+// from production code, not a hand-picked string.
+func TestToolsList_BootstrapOnlyFilter(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(tools.NewSessionStart(nil, nil, nil, nil, nil, nil))
+	s.Register(tools.NewGit(tools.WriteDeps{}, nil))
+	s.Register(tools.NewReadFile(nil))
+	s.Register(tools.NewEditFile(tools.WriteDeps{}))
+	s.Register(&echoTool{})     // not bootstrap — must stay hidden
+	s.Register(&editLikeTool{}) // not bootstrap — must stay hidden
+	s.ToolFilter = tools.IsBootstrap
+
+	resps := serveOn(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	listed := resultByID(t, resps, 1)
+	names := map[string]bool{}
+	for _, tl := range listed["tools"].([]any) {
+		names[tl.(map[string]any)["name"].(string)] = true
+	}
+	if len(names) != len(tools.BootstrapTools) {
+		t.Fatalf("filtered tools/list has %d entries %v, want exactly the %d bootstrap tools", len(names), names, len(tools.BootstrapTools))
+	}
+	for name := range tools.BootstrapTools {
+		if !names[name] {
+			t.Errorf("bootstrap tool %q missing from the filtered tools/list", name)
+		}
 	}
 }
 
