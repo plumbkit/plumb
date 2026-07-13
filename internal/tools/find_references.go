@@ -56,6 +56,13 @@ type FindReferences struct {
 	ttl     time.Duration
 	timeout time.Duration
 	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
+	xcode   XcodeHintFn
+}
+
+// WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
+func (t *FindReferences) WithXcodeHint(fn XcodeHintFn) *FindReferences {
+	t.xcode = fn
+	return t
 }
 
 func NewFindReferences(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FindReferences {
@@ -138,7 +145,7 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 
 	matches := resolveSymbolsByName(syms, name)
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
+		return appendXcodeHint(fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), uri, t.xcode), nil
 	}
 
 	openFileForRefs(ctx, t.client, uri)
@@ -183,7 +190,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 		return "", queryErr("find_references", symbolName, err)
 	}
 	if len(locs) == 0 {
-		return fmt.Sprintf("No references found for symbol at %s:%d:%d.", uri, line+1, character+1), nil
+		return appendXcodeHint(fmt.Sprintf("No references found for symbol at %s:%d:%d.", uri, line+1, character+1), uri, t.xcode), nil
 	}
 
 	byFile := make(map[string][]protocol.Location)

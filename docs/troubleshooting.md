@@ -117,6 +117,20 @@ For a project with sources but no marker (e.g. a loose Xcode / `.swift`
 directory), pass `session_start({"language": "swift"})` to force the primary
 server.
 
+## Swift semantic tools are empty in an Xcode project
+
+SourceKit-LSP needs Build Server Protocol metadata for a bare `.xcodeproj` or
+`.xcworkspace`. Run `plumb doctor --workspace .`; when `buildServer.json` is
+missing, doctor prints the exact `xcode-build-server config` command for a
+single detected marker; multiple markers require an explicit choice. Plumb only provides
+guidance in this release—it does not run project tooling automatically.
+
+After generating the file, build the selected scheme once in Xcode so its build
+log contains current compiler flags, then restart the Plumb session. A malformed
+`buildServer.json` is a doctor failure; a missing `xcode-build-server` binary is
+an optional-dependency warning. `session_start`, `workspace_symbols`,
+`get_definition`, and `find_references` repeat this guidance when applicable.
+
 ## Too much (or too little) log output
 
 Change the running daemon's level instantly, no restart:

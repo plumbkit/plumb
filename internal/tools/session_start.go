@@ -96,6 +96,13 @@ type SessionStart struct {
 	selfSessID   string                                                                // this session's ID, excluded from the peer digest
 	collabFn     func() (peerAwareness bool, hintBudgetBytes int)                      // may be nil; the resolved [collab] snapshot for the peer digest
 	mailboxFn    func() (on bool, store *collab.Store, self string, budgetBytes int)   // may be nil; the phase-2 mailbox delivery snapshot
+	xcodeHintFn  XcodeHintFn                                                           // may be nil; bare-Xcode BSP guidance
+}
+
+// WithXcodeHint wires side-effect-free build-server guidance into orientation.
+func (t *SessionStart) WithXcodeHint(fn XcodeHintFn) *SessionStart {
+	t.xcodeHintFn = fn
+	return t
 }
 
 // WithSelfSession records this connection's session ID so the peer digest can
@@ -323,6 +330,13 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	var sb strings.Builder
 	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinnedFrom)
 	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
+	if t.xcodeHintFn != nil {
+		if hint := t.xcodeHintFn(""); hint != "" {
+			sb.WriteString("\n## Xcode build server\n")
+			sb.WriteString(strings.TrimSpace(hint))
+			sb.WriteString("\n")
+		}
+	}
 	writeSessionContext(&sb, ws)
 	writeSessionCommits(&sb, ws)
 	writeSessionWorkingTree(&sb, ws)

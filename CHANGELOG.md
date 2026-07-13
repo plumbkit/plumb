@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0 (2026-07-13)
+
+### Added
+
+- **Swift-on-Xcode guidance for Build Server Protocol setup.** Bare `.xcodeproj`
+  and `.xcworkspace` roots are now inspected through one side-effect-free model.
+  `plumb doctor --workspace .` validates `buildServer.json`, treats malformed
+  JSON as a failure, reports a missing `xcode-build-server` as an optional
+  dependency warning, and prints a deterministic generation command when one
+  marker exists (multiple markers require an explicit choice). `session_start` and empty semantic results from
+  `workspace_symbols`, `get_definition`, and `find_references` provide the same
+  actionable guidance. Plumb does not execute Xcode tooling automatically.
+
 ## 0.11.2 (2026-07-12)
 
 ### Added
