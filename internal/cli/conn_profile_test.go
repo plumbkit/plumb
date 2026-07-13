@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -72,36 +73,98 @@ func TestMaybeNotifyToolProfileChange_NoNotifierIsNoOp(t *testing.T) {
 	}
 }
 
+// TestResolveToolProfile_CodexAutoResolvesFull is a regression test for the
+// incident where a Codex session was told "Tool profile: lean — 39 commodity
+// tools hidden" while its host ALSO deferred plumb's tools from the model, so
+// the model could not discover the hidden tools at all. Lean must be opt-in
+// via an explicit, verified clientcaps.ReliableDeferredToolDiscovery
+// declaration, never inferred from native file/search possession — codex has
+// NativeFileRead/NativeSearch but no verified deferred-discovery capability,
+// so auto mode must resolve it to full.
+func TestResolveToolProfile_CodexAutoResolvesFull(t *testing.T) {
+	s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "codex")
+	profile, reason := s.resolveToolProfile()
+	if profile != "full" || reason != "unverified-deferred-discovery" {
+		t.Errorf("resolveToolProfile() = (%q, %q), want (\"full\", \"unverified-deferred-discovery\")", profile, reason)
+	}
+}
+
+// TestAutoProfileFor exercises the auto-mode policy directly against synthetic
+// Capabilities, covering all four (profile, reason) outcomes without going
+// through the clientcaps registry.
+func TestAutoProfileFor(t *testing.T) {
+	cases := []struct {
+		name        string
+		caps        clientcaps.Capabilities
+		wantProfile string
+		wantReason  string
+	}{
+		{
+			"unknown client",
+			clientcaps.Capabilities{Name: "unknown"},
+			"full", "unknown-deferred-discovery",
+		},
+		{
+			"schema-discovery-only client",
+			clientcaps.Capabilities{Name: "some-client", SchemaDiscoveryOnly: true},
+			"full", "schema-discovery-only-client",
+		},
+		{
+			"verified deferred discovery",
+			clientcaps.Capabilities{Name: "some-client", ReliableDeferredToolDiscovery: true},
+			"lean", "verified-deferred-discovery",
+		},
+		{
+			"unverified deferred discovery (conservative default)",
+			clientcaps.Capabilities{Name: "some-client"},
+			"full", "unverified-deferred-discovery",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			profile, reason := autoProfileFor(c.caps)
+			if profile != c.wantProfile || reason != c.wantReason {
+				t.Errorf("autoProfileFor(%+v) = (%q, %q), want (%q, %q)", c.caps, profile, reason, c.wantProfile, c.wantReason)
+			}
+		})
+	}
+}
+
 func TestResolveToolProfile(t *testing.T) {
 	cases := []struct {
-		name   string
-		tc     config.ToolsConfig
-		client string
-		want   string
+		name       string
+		tc         config.ToolsConfig
+		client     string
+		want       string
+		wantReason string
 	}{
-		{"auto + claude-code => full (schema-discovery only)", config.ToolsConfig{Profile: "auto"}, "claude-code", "full"},
-		{"auto + codex => lean", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "lean"},
-		{"auto + claude-desktop => full", config.ToolsConfig{Profile: "auto"}, "claude-ai", "full"},
-		{"auto + unknown => full", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full"},
-		{"explicit lean wins over desktop", config.ToolsConfig{Profile: "lean"}, "claude-ai", "lean"},
-		{"explicit full wins over claude-code", config.ToolsConfig{Profile: "full"}, "claude-code", "full"},
-		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "codex", "lean"},
+		{"auto + claude-code => full (schema-discovery only)", config.ToolsConfig{Profile: "auto"}, "claude-code", "full", "schema-discovery-only-client"},
+		{"auto + codex => full (unverified deferred discovery)", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "full", "unverified-deferred-discovery"},
+		{"auto + claude-desktop => full", config.ToolsConfig{Profile: "auto"}, "claude-ai", "full", "unverified-deferred-discovery"},
+		{"auto + unknown => full", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full", "unknown-deferred-discovery"},
+		{"explicit lean wins over desktop", config.ToolsConfig{Profile: "lean"}, "claude-ai", "lean", "explicit-config"},
+		{"explicit full wins over claude-code", config.ToolsConfig{Profile: "full"}, "claude-code", "full", "explicit-config"},
+		{"empty profile treated as auto", config.ToolsConfig{Profile: ""}, "codex", "full", "unverified-deferred-discovery"},
 		{
 			"per-client override beats profile",
 			config.ToolsConfig{Profile: "full", ClientProfiles: map[string]string{"claude-code": "lean"}},
-			"claude-code", "lean",
+			"claude-code", "lean", "client-override",
 		},
 		{
 			"per-client auto falls through to profile",
 			config.ToolsConfig{Profile: "full", ClientProfiles: map[string]string{"claude-code": "auto"}},
-			"claude-code", "full",
+			"claude-code", "full", "explicit-config",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newProfileSession(t, c.tc, c.client)
-			if got := s.resolveToolProfile(); got != c.want {
-				t.Errorf("resolveToolProfile() = %q, want %q", got, c.want)
+			profile, reason := s.resolveToolProfile()
+			if profile != c.want {
+				t.Errorf("resolveToolProfile() profile = %q, want %q", profile, c.want)
+			}
+			if reason != c.wantReason {
+				t.Errorf("resolveToolProfile() reason = %q, want %q", reason, c.wantReason)
 			}
 		})
 	}
