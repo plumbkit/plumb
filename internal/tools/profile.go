@@ -85,12 +85,29 @@ func IsBootstrap(name string) bool { return BootstrapTools[name] }
 // intentional ("the tools that matter most" is one list, not two).
 func IsLean(name string) bool { return LeanTools[name] }
 
-// LeanProfileNote is the terse session_start line shown when the lean profile is
-// active. It deliberately does NOT enumerate the hidden tools (they stay
-// callable by name); hidden is the count suppressed from tools/list. Kept well
-// under 256 bytes so it cannot dominate the session_start budget.
-func LeanProfileNote(hidden int) string {
-	return fmt.Sprintf("Tool profile: lean — %d commodity tools hidden from "+
-		"tools/list (still callable by name; set [tools] profile = \"full\" to "+
-		"restore).\n\n", hidden)
+// ProfileNote is the terse session_start/orientation line reporting the
+// resolved tool profile and the reason it was chosen (see resolveToolProfile's
+// stable kebab-case reasons: client-override, explicit-config,
+// unknown-deferred-discovery, schema-discovery-only-client,
+// verified-deferred-discovery, unverified-deferred-discovery).
+//
+// Under "lean" it deliberately does NOT enumerate the hidden tools (they stay
+// callable by name); hidden is the count suppressed from tools/list, folded in
+// alongside the reason. Kept well under 256 bytes so it cannot dominate the
+// session_start budget even at a three-digit hidden count.
+//
+// Under "full" with a non-empty reason it renders one compact line naming the
+// reason. A "full" profile with an EMPTY reason is the legacy/unwired default
+// (resolvedToolProfile's zero value) and produces no output at all, so a
+// caller that never wires a profile accessor sees no behaviour change.
+func ProfileNote(profile string, hidden int, reason string) string {
+	if profile == "lean" {
+		return fmt.Sprintf("Tool profile: lean — %d commodity tools hidden from "+
+			"tools/list (still callable by name; set [tools] profile = \"full\" to "+
+			"restore) (reason: %s).\n\n", hidden, reason)
+	}
+	if reason == "" {
+		return ""
+	}
+	return fmt.Sprintf("Tool profile: full (reason: %s).\n\n", reason)
 }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,12 +154,29 @@ func TestLeanProfileBudget(t *testing.T) {
 	}
 }
 
+// TestLeanProfileNote_Budget guards the lean ProfileNote sentence — including
+// the folded-in reason clause — against runaway growth: it must stay well
+// under the session_start orientation budget even at a 3-digit hidden count
+// and the longest known reason string.
 func TestLeanProfileNote_Budget(t *testing.T) {
 	const budget = 256
 	for _, hidden := range []int{0, 9, 34, 999} {
-		if got := len(LeanProfileNote(hidden)); got > budget {
-			t.Errorf("LeanProfileNote(%d) = %d bytes, over budget %d", hidden, got, budget)
+		if got := len(ProfileNote("lean", hidden, "verified-deferred-discovery")); got > budget {
+			t.Errorf("ProfileNote(lean, %d, ...) = %d bytes, over budget %d", hidden, got, budget)
 		}
+	}
+}
+
+// TestProfileNote_FullReasonAndUnwired covers the full-profile line (one
+// compact sentence naming the reason) and the legacy silent case: a "full"
+// profile with an empty reason (the state an unwired accessor's default
+// resolves to) must produce no output at all.
+func TestProfileNote_FullReasonAndUnwired(t *testing.T) {
+	if got := ProfileNote("full", 0, "schema-discovery-only-client"); !strings.Contains(got, "Tool profile: full (reason: schema-discovery-only-client)") {
+		t.Errorf("ProfileNote(full, 0, reason) = %q, want the reason line", got)
+	}
+	if got := ProfileNote("full", 0, ""); got != "" {
+		t.Errorf("ProfileNote(full, 0, \"\") = %q, want empty (legacy/unwired silence)", got)
 	}
 }
 

@@ -90,7 +90,7 @@ type SessionStart struct {
 	pinConflict  func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
 	repin        func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
 	episodicFn   func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
-	toolProfile  func() (profile string, hidden int)                                   // may be nil; the resolved tool profile + count of tools hidden from tools/list
+	toolProfile  func() (profile string, hidden int, reason string)                    // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
 	lspWarmingFn func() (bool, time.Duration)                                          // may be nil; reports whether the primary LSP is still warming + elapsed
 	purposeFn    func(purpose string)                                                  // may be nil; persists a validated session purpose tag
 	selfSessID   string                                                                // this session's ID, excluded from the peer digest
@@ -131,19 +131,22 @@ func (t *SessionStart) WithMailbox(fn func() (on bool, store *collab.Store, self
 }
 
 // WithToolProfile wires an accessor returning the connection's resolved tool
-// profile ("lean"/"full") and the number of tools hidden from tools/list under
-// it. When the profile is "lean", session_start prepends a terse note that the
-// hidden tools stay callable by name. Nil-safe (treated as "full", no note).
-func (t *SessionStart) WithToolProfile(fn func() (profile string, hidden int)) *SessionStart {
+// profile ("lean"/"full"), the number of tools hidden from tools/list under
+// it, and the stable kebab-case reason the profile resolved that way (see
+// resolveToolProfile). session_start folds both the profile and the reason
+// into a single ProfileNote line — lean gets the note plus hidden count, full
+// gets a compact one-liner. Nil-safe: unwired ⇒ "full", 0, "" ⇒ ProfileNote
+// emits nothing, preserving legacy behaviour for callers that never wire it.
+func (t *SessionStart) WithToolProfile(fn func() (profile string, hidden int, reason string)) *SessionStart {
 	t.toolProfile = fn
 	return t
 }
 
-// resolvedToolProfile returns the profile + hidden count, defaulting to "full"
-// (no tools hidden) when no accessor is wired.
-func (t *SessionStart) resolvedToolProfile() (string, int) {
+// resolvedToolProfile returns the profile, hidden count, and resolution reason,
+// defaulting to ("full", 0, "") when no accessor is wired.
+func (t *SessionStart) resolvedToolProfile() (string, int, string) {
 	if t.toolProfile == nil {
-		return "full", 0
+		return "full", 0, ""
 	}
 	return t.toolProfile()
 }

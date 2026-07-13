@@ -3,9 +3,8 @@ package tools
 import "strings"
 
 func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
-	if profile, hidden := t.resolvedToolProfile(); profile == "lean" {
-		sb.WriteString(LeanProfileNote(hidden))
-	}
+	profile, hidden, reason := t.resolvedToolProfile()
+	sb.WriteString(ProfileNote(profile, hidden, reason))
 	switch {
 	case isClaudeCode(t.clientNameFn):
 		t.writeClaudeCodeGuidance(sb)
@@ -17,7 +16,7 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 // leanProfile reports whether the connection resolved to the lean tool profile,
 // under which guidance must not steer the agent to a tool hidden from tools/list.
 func (t *SessionStart) leanProfile() bool {
-	profile, _ := t.resolvedToolProfile()
+	profile, _, _ := t.resolvedToolProfile()
 	return profile == "lean"
 }
 
