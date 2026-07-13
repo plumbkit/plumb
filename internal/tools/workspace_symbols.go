@@ -35,6 +35,13 @@ type WorkspaceSymbols struct {
 	ws      WorkspaceFn // used to filter out dependency-cache hits
 	topo    topologyStoreFn
 	warmup  LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
+	xcode   XcodeHintFn
+}
+
+// WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
+func (t *WorkspaceSymbols) WithXcodeHint(fn XcodeHintFn) *WorkspaceSymbols {
+	t.xcode = fn
+	return t
 }
 
 // WithTopologyFallback wires the topology index as a fallback for when the
@@ -166,7 +173,7 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		if out, ok := t.topologyFillTreeSitter(ctx, a.Query); ok {
 			return out, nil
 		}
-		result = fmt.Sprintf("No symbols found matching %q.", a.Query)
+		result = appendXcodeHint(fmt.Sprintf("No symbols found matching %q.", a.Query), "", t.xcode)
 	} else {
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Found %d symbol(s) matching %q:\n\n", len(syms), a.Query)

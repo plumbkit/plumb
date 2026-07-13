@@ -10,6 +10,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
 
 // checkLSPs reports install and runtime status for all configured language servers.
@@ -55,7 +56,46 @@ func checkLSPs(ws string) []checkResult {
 		}
 	}
 	results = append(results, checkActiveLSPProcesses()...)
+	if ws != "" {
+		results = append(results, checkXcodeBuildServer(ws)...)
+	}
 	return results
+}
+
+func checkXcodeBuildServer(ws string) []checkResult {
+	i := xcodebsp.Inspect(ws)
+	if !i.IsBareXcode() {
+		return nil
+	}
+	if i.BuildServerErr != nil {
+		return []checkResult{{
+			name: "Xcode build server", ok: false,
+			detail: contractConfigPath(i.BuildServerPath) + " — " + i.BuildServerErr.Error(),
+			fix:    "regenerate it with: " + i.GenerateCommand(),
+		}}
+	}
+	if i.BuildServerOK {
+		return []checkResult{{name: "Xcode build server", ok: true, detail: contractConfigPath(i.BuildServerPath) + "  (configured)"}}
+	}
+	if i.Ambiguous() {
+		return []checkResult{{
+			name: "Xcode build server", ok: true, warn: true,
+			detail: "buildServer.json absent and multiple Xcode project/workspace markers were found",
+			fix:    "choose a marker and run xcode-build-server config with -project or -workspace",
+		}}
+	}
+	if _, err := exec.LookPath("xcode-build-server"); err != nil {
+		return []checkResult{{
+			name: "Xcode build server", ok: true, warn: true,
+			detail: "buildServer.json absent; xcode-build-server not installed (optional)",
+			fix:    "install xcode-build-server, then run: " + i.GenerateCommand(),
+		}}
+	}
+	return []checkResult{{
+		name: "Xcode build server", ok: true, warn: true,
+		detail: "buildServer.json absent; SourceKit-LSP semantic results may be incomplete",
+		fix:    "run: " + i.GenerateCommand(),
+	}}
 }
 
 // checkActiveLSPProcesses queries the running daemon for its live language

@@ -48,6 +48,13 @@ type GetDefinition struct {
 	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
 	topo    topologyStoreFn // may be nil; the by-name topology fallback when the LSP is unavailable
 	warmup  LSPWarmupFn     // may be nil; distinguishes a warming server from an unavailable one in the fallback note
+	xcode   XcodeHintFn
+}
+
+// WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
+func (t *GetDefinition) WithXcodeHint(fn XcodeHintFn) *GetDefinition {
+	t.xcode = fn
+	return t
 }
 
 // NewGetDefinition creates a GetDefinition tool. Pass a nil cache to disable caching.
@@ -162,7 +169,7 @@ func (t *GetDefinition) lspDefinitionByName(ctx context.Context, uri, name strin
 
 	matches := resolveSymbolsByName(syms, name)
 	if len(matches) == 0 {
-		return fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), nil
+		return appendXcodeHint(fmt.Sprintf("No symbol named %q in %s.%s", name, uri, didYouMean(suggestSymbols(syms, name))), uri, t.xcode), nil
 	}
 
 	if len(matches) == 1 {
@@ -227,6 +234,7 @@ func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line,
 	if len(locs) == 0 {
 		result = fmt.Sprintf("No definition found for symbol at %s:%d:%d.",
 			uri, line+1, character+1)
+		result = appendXcodeHint(result, uri, t.xcode)
 	} else {
 		var sb strings.Builder
 		if len(locs) == 1 {

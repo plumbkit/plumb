@@ -142,6 +142,10 @@ Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript
 are validated; Kotlin and HTML are experimental (see the *Adapter validation
 status* table in `AGENTS.md`).
 
+Bare Xcode projects need a `buildServer.json` for reliable Swift semantics.
+Run `plumb doctor --workspace .` for a project-specific
+`xcode-build-server config` command; see [Troubleshooting](troubleshooting.md#swift-semantic-tools-are-empty-in-an-xcode-project).
+
 To **exclude** a language even when its server is installed, set `enabled = false`
 in `~/.config/plumb/config.toml` (global) or `<workspace>/.plumb/config.toml`
 (project):
