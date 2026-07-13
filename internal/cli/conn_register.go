@@ -174,7 +174,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int) {
-			p := s.resolveToolProfile()
+			p, _ := s.resolveToolProfile()
 			if p != "lean" {
 				return p, 0
 			}
@@ -261,7 +261,8 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		// profile-changing reload is detected against the seed (no spurious fire).
 		s.mutate(func(v *sessionView) {
 			v.notify = notify
-			v.lastToolProfile = s.resolveToolProfile()
+			p, _ := s.resolveToolProfile()
+			v.lastToolProfile = p
 		})
 		s.setClientRequest(request)
 		s.attachOnInit(initCtx, request)

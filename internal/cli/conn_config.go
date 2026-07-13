@@ -88,7 +88,7 @@ func (s *connSession) maybeNotifyToolProfileChange() {
 	if v.notify == nil {
 		return
 	}
-	cur := s.resolveToolProfile()
+	cur, _ := s.resolveToolProfile()
 	if cur == v.lastToolProfile {
 		return
 	}

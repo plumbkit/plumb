@@ -48,6 +48,16 @@ type Capabilities struct {
 	// escape hatch does not apply — so such a client must get the full profile.
 	SchemaDiscoveryOnly bool
 
+	// ReliableDeferredToolDiscovery is true only when integration coverage has
+	// demonstrated the client's model can reliably discover and invoke a tool
+	// absent from its initial tools/list surface (deferred/lazy tool
+	// registries, e.g. a ToolSearch-style mechanism). Unknown or unproven ⇒
+	// false. This is the sole gate for the auto-mode lean profile: lean is
+	// opt-in via this explicit, reviewed declaration, never inferred from
+	// native file/search/shell capability. Promoting a client to true is a
+	// reviewed data change, not an inference.
+	ReliableDeferredToolDiscovery bool
+
 	Tokeniser Family
 }
 
@@ -67,9 +77,11 @@ var registry = []Capabilities{
 	{
 		// Claude Code builds its tool list (and its ToolSearch deferred-tool list)
 		// only from tools/list, so a lean-hidden tool has no schema to load and
-		// cannot be invoked — it therefore needs the full profile. Codex and Gemini
-		// stay unflagged (still lean) until their invocation behaviour is likewise
-		// verified.
+		// cannot be invoked — it therefore needs the full profile regardless of
+		// ReliableDeferredToolDiscovery. Codex and Gemini leave
+		// ReliableDeferredToolDiscovery unset (false), so auto mode gives them the
+		// full profile too, until integration coverage proves their deferred-tool
+		// invocation behaviour and a reviewed change flips the flag.
 		Name:                "claude-code",
 		Prefixes:            []string{"claude-code"},
 		NativeFileRead:      true,
