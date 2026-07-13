@@ -820,12 +820,12 @@ func TestSessionStart_GitPolicySection(t *testing.T) {
 }
 
 // TestSessionStart_LeanProfileNote checks the lean note is emitted (with the
-// hidden count, no tool enumeration) and that lean guidance never steers the
-// agent to a tool hidden from tools/list.
+// hidden count and resolution reason folded in, no tool enumeration) and that
+// lean guidance never steers the agent to a tool hidden from tools/list.
 func TestSessionStart_LeanProfileNote(t *testing.T) {
 	s := &SessionStart{
 		clientNameFn: func() string { return "claude-code" },
-		toolProfile:  func() (string, int) { return "lean", 33 },
+		toolProfile:  func() (string, int, string) { return "lean", 33, "verified-deferred-discovery" },
 	}
 	var sb strings.Builder
 	s.writeSessionGuidance(&sb)
@@ -837,6 +837,9 @@ func TestSessionStart_LeanProfileNote(t *testing.T) {
 	if !strings.Contains(out, "33 commodity tools hidden") {
 		t.Errorf("lean note should state the hidden count:\n%s", out)
 	}
+	if !strings.Contains(out, "(reason: verified-deferred-discovery)") {
+		t.Errorf("lean note should state the resolution reason:\n%s", out)
+	}
 	// The note must not enumerate hidden tool names.
 	for _, hidden := range []string{"call_hierarchy", "type_hierarchy", "topology_routes", "topology_impact", "list_symbols"} {
 		if strings.Contains(out, hidden) {
@@ -845,24 +848,36 @@ func TestSessionStart_LeanProfileNote(t *testing.T) {
 	}
 }
 
-// TestSessionStart_FullProfileNoNote verifies the lean note is absent under the
-// full profile (and when no profile accessor is wired).
-func TestSessionStart_FullProfileNoNote(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		fn   func() (string, int)
-	}{
-		{"explicit full", func() (string, int) { return "full", 0 }},
-		{"nil accessor", nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &SessionStart{clientNameFn: func() string { return "claude-code" }, toolProfile: tc.fn}
-			var sb strings.Builder
-			s.writeSessionGuidance(&sb)
-			if strings.Contains(sb.String(), "Tool profile: lean") {
-				t.Error("full profile should not emit the lean note")
-			}
-		})
+// TestSessionStart_FullProfileNote verifies the compact full-profile note
+// ("Tool profile: full (reason: ...)") is emitted when a profile accessor is
+// wired and resolves to "full" with a non-empty reason, and that it never
+// carries the lean-specific wording.
+func TestSessionStart_FullProfileNote(t *testing.T) {
+	s := &SessionStart{
+		clientNameFn: func() string { return "claude-code" },
+		toolProfile:  func() (string, int, string) { return "full", 0, "schema-discovery-only-client" },
+	}
+	var sb strings.Builder
+	s.writeSessionGuidance(&sb)
+	out := sb.String()
+	if !strings.Contains(out, "Tool profile: full (reason: schema-discovery-only-client)") {
+		t.Errorf("full profile note missing or malformed:\n%s", out)
+	}
+	if strings.Contains(out, "Tool profile: lean") {
+		t.Error("full profile should not emit the lean note")
+	}
+}
+
+// TestSessionStart_UnwiredProfileSilent verifies that a SessionStart with no
+// tool-profile accessor wired at all (the pre-Task-3 default) emits no profile
+// output whatsoever — preserving legacy behaviour for callers that never wire
+// WithToolProfile.
+func TestSessionStart_UnwiredProfileSilent(t *testing.T) {
+	s := &SessionStart{clientNameFn: func() string { return "claude-code" }}
+	var sb strings.Builder
+	s.writeSessionGuidance(&sb)
+	if strings.Contains(sb.String(), "Tool profile:") {
+		t.Errorf("no tool-profile accessor wired: expected no profile output:\n%s", sb.String())
 	}
 }
 

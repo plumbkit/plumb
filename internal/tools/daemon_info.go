@@ -32,9 +32,10 @@ type daemonInfo struct {
 	name          func() string
 	daemonVersion string
 	startedAt     time.Time
-	configStatus  func() ConfigStatus // optional; nil when no store is wired
-	purpose       func() string       // optional; nil when no purpose accessor is wired
-	lspStatus     func() LSPStatus    // optional; nil when no LSP accessor is wired
+	configStatus  func() ConfigStatus                                // optional; nil when no store is wired
+	purpose       func() string                                      // optional; nil when no purpose accessor is wired
+	lspStatus     func() LSPStatus                                   // optional; nil when no LSP accessor is wired
+	toolProfile   func() (profile string, hidden int, reason string) // optional; nil when no tool-profile accessor is wired
 }
 
 // WithLSPStatus wires an accessor returning the session's live language-server
@@ -58,6 +59,16 @@ func (t *daemonInfo) WithPurpose(fn func() string) *daemonInfo {
 // lines. Returns the receiver for chaining.
 func (t *daemonInfo) WithConfigStatus(fn func() ConfigStatus) *daemonInfo {
 	t.configStatus = fn
+	return t
+}
+
+// WithToolProfile wires an accessor returning the connection's resolved tool
+// profile ("lean"/"full"), the number of tools hidden from tools/list under
+// it, and the stable kebab-case resolution reason (see resolveToolProfile).
+// Nil-safe: when unset, daemon_info omits the tool profile line entirely.
+// Returns the receiver for chaining.
+func (t *daemonInfo) WithToolProfile(fn func() (profile string, hidden int, reason string)) *daemonInfo {
+	t.toolProfile = fn
 	return t
 }
 
@@ -137,6 +148,13 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 			cs.LastReloaded.Format(time.RFC3339),
 			restart,
 		)
+	}
+	if t.toolProfile != nil {
+		profile, hidden, reason := t.toolProfile()
+		out += fmt.Sprintf("\nTool profile: %s (reason: %s)", profile, reason)
+		if profile == "lean" {
+			out += fmt.Sprintf(", %d tools hidden", hidden)
+		}
 	}
 	out += formatSessionLatency(t.sessID)
 	return out, nil

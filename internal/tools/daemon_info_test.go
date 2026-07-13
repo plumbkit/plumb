@@ -115,6 +115,49 @@ func TestDaemonInfoLSPStatusRow(t *testing.T) {
 	}
 }
 
+// TestDaemonInfo_ToolProfile covers the three states of the daemon_info
+// profile line: wired lean (reason + hidden count), wired full (reason, no
+// hidden count), and unwired (no accessor ⇒ no profile line at all).
+func TestDaemonInfo_ToolProfile(t *testing.T) {
+	t.Run("wired lean", func(t *testing.T) {
+		d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now()).
+			WithToolProfile(func() (string, int, string) { return "lean", 33, "verified-deferred-discovery" })
+		out, err := d.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "Tool profile: lean (reason: verified-deferred-discovery), 33 tools hidden") {
+			t.Errorf("missing lean profile line:\n%s", out)
+		}
+	})
+
+	t.Run("wired full", func(t *testing.T) {
+		d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now()).
+			WithToolProfile(func() (string, int, string) { return "full", 0, "schema-discovery-only-client" })
+		out, err := d.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "Tool profile: full (reason: schema-discovery-only-client)") {
+			t.Errorf("missing full profile line:\n%s", out)
+		}
+		if strings.Contains(out, "tools hidden") {
+			t.Errorf("full profile should not mention a hidden tool count:\n%s", out)
+		}
+	})
+
+	t.Run("unwired silent", func(t *testing.T) {
+		d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now())
+		out, err := d.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "Tool profile:") {
+			t.Errorf("profile line should be omitted when no accessor is wired:\n%s", out)
+		}
+	})
+}
+
 // TestRunWithTimeout_ReturnsResultBeforeTimeout verifies the happy path:
 // a fast producer's value is returned, not the sentinel.
 func TestRunWithTimeout_ReturnsResultBeforeTimeout(t *testing.T) {

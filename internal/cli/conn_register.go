@@ -144,6 +144,13 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithLSPStatus(func() tools.LSPStatus {
 			warming, elapsed := s.lspWarming()
 			return tools.LSPStatus{Language: s.acquiredLanguageName(), Warming: warming, Elapsed: elapsed}
+		}).
+		WithToolProfile(func() (string, int, string) {
+			p, reason := s.resolveToolProfile()
+			if p != "lean" {
+				return p, 0, reason
+			}
+			return p, hiddenToolCount(srv), reason
 		}))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
@@ -173,12 +180,12 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	}))
 	srv.Register(tools.NewSessionStart(s.workspace, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
 		WithTopology(topoFn).
-		WithToolProfile(func() (string, int) {
-			p, _ := s.resolveToolProfile()
+		WithToolProfile(func() (string, int, string) {
+			p, reason := s.resolveToolProfile()
 			if p != "lean" {
-				return p, 0
+				return p, 0, reason
 			}
-			return p, hiddenToolCount(srv)
+			return p, hiddenToolCount(srv), reason
 		}).
 		WithEpisodic(s.latestEpisodic).
 		WithSelfSession(s.sessID).
