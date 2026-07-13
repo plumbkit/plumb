@@ -59,10 +59,18 @@ func autoProfileFor(caps clientcaps.Capabilities) (profile, reason string) {
 	return "full", "unverified-deferred-discovery"
 }
 
-// toolVisible is the mcp.Server.ToolFilter body: under the lean profile only the
-// lean set is advertised; under full every tool is. A hidden tool is still
+// toolVisible is the mcp.Server.ToolFilter body: the bootstrap set is always
+// advertised regardless of profile; otherwise under the lean profile only the
+// lean set is advertised, and under full every tool is. A hidden tool is still
 // callable by name (handleToolsCall ignores the filter).
 func (s *connSession) toolVisible(name string) bool {
+	// The bootstrap invariant is checked BEFORE the profile, independent of
+	// LeanTools membership (see tools.BootstrapTools) — a future profile
+	// change can never silently drop session_start/git/read_file/edit_file
+	// from the initial tools/list.
+	if tools.IsBootstrap(name) {
+		return true
+	}
 	profile, _ := s.resolveToolProfile()
 	if profile == "lean" {
 		return tools.IsLean(name)

@@ -161,3 +161,39 @@ func TestLeanProfileNote_Budget(t *testing.T) {
 		}
 	}
 }
+
+// TestBootstrapToolsAreLean asserts the advertised sets stay supersets: every
+// bootstrap tool must also be a lean tool, so a lean-profile connection never
+// loses the always-visible orientation surface.
+func TestBootstrapToolsAreLean(t *testing.T) {
+	for name := range BootstrapTools {
+		if !IsLean(name) {
+			t.Errorf("bootstrap tool %q is not in LeanTools — the lean set must stay a superset of the bootstrap set", name)
+		}
+	}
+}
+
+// TestBootstrapToolsExactSet pins BootstrapTools to exactly the four
+// orientation tools, so accidental growth (or shrinkage) is a reviewable
+// event rather than a silent drift.
+func TestBootstrapToolsExactSet(t *testing.T) {
+	want := map[string]bool{
+		"session_start": true,
+		"git":           true,
+		"read_file":     true,
+		"edit_file":     true,
+	}
+	if len(BootstrapTools) != len(want) {
+		t.Fatalf("BootstrapTools has %d entries, want exactly %d", len(BootstrapTools), len(want))
+	}
+	for name := range want {
+		if !IsBootstrap(name) {
+			t.Errorf("BootstrapTools is missing %q", name)
+		}
+	}
+	for name := range BootstrapTools {
+		if !want[name] {
+			t.Errorf("BootstrapTools has unexpected member %q", name)
+		}
+	}
+}

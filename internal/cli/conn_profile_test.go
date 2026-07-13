@@ -187,6 +187,32 @@ func TestToolVisible_LeanHidesCommodityKeepsLean(t *testing.T) {
 	}
 }
 
+// TestToolVisible_BootstrapAlwaysVisible is the independent-of-profile
+// guarantee: every bootstrap tool must be visible under a lean-resolved
+// connection, table-driven over all four names.
+//
+// The second half proves the guarantee does NOT merely piggyback on
+// LeanTools membership (today bootstrap ⊂ lean, so a naive check here would
+// pass even without the IsBootstrap fast path in toolVisible). It temporarily
+// removes "read_file" from tools.LeanTools and re-checks: without the fast
+// path toolVisible falls through to tools.IsLean and would report false;
+// with the fast path it stays true regardless of LeanTools membership.
+func TestToolVisible_BootstrapAlwaysVisible(t *testing.T) {
+	s := newProfileSession(t, config.ToolsConfig{Profile: "lean"}, "claude-code")
+	for _, name := range []string{"session_start", "git", "read_file", "edit_file"} {
+		if !s.toolVisible(name) {
+			t.Errorf("bootstrap tool %q must be visible under the lean profile", name)
+		}
+	}
+
+	saved := tools.LeanTools["read_file"]
+	delete(tools.LeanTools, "read_file")
+	defer func() { tools.LeanTools["read_file"] = saved }()
+	if !s.toolVisible("read_file") {
+		t.Error("read_file must stay visible via the IsBootstrap fast path even when absent from LeanTools")
+	}
+}
+
 // leanConstructors maps the tools.New* constructor for each lean tool to its
 // wire name. It mirrors tools.LeanTools (keyed by wire name) at the wiring layer
 // so the guard below verifies the two representations agree and that every lean

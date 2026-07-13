@@ -51,6 +51,31 @@ var LeanTools = map[string]bool{
 	"run_task":          true,
 }
 
+// BootstrapTools is the minimal orientation surface every client must see in
+// its INITIAL tools/list, whatever the resolved profile. session_start
+// orients the agent in an unfamiliar workspace, git shows history/status,
+// and read_file/edit_file are the read-before-write lane the edit contract
+// depends on. A client that never sees session_start advertised has no
+// reliable way to discover it exists, so session_start (and its bootstrap
+// companions) must never become a hidden/deferred-only capability.
+//
+// Bootstrap membership is deliberately independent of LeanTools: today
+// bootstrap ⊆ lean, but the two sets answer different questions ("what must
+// always be visible" vs "what a lean client keeps") and must be free to
+// diverge in future without silently breaking either guarantee — see
+// TestBootstrapToolsAreLean, which pins today's containment as a reviewable
+// invariant rather than an assumption baked into toolVisible.
+var BootstrapTools = map[string]bool{
+	"session_start": true,
+	"git":           true,
+	"read_file":     true,
+	"edit_file":     true,
+}
+
+// IsBootstrap reports whether name is one of the always-visible bootstrap
+// tools (see BootstrapTools).
+func IsBootstrap(name string) bool { return BootstrapTools[name] }
+
 // IsLean reports whether name is advertised under the lean profile.
 //
 // Double duty: this same set is also the "always loaded" set wired into
