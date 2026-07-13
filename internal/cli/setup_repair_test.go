@@ -205,20 +205,60 @@ func TestRefreshClient(t *testing.T) {
 
 	t.Run("not installed is skipped", func(t *testing.T) {
 		c := newCodexTarget(filepath.Join(t.TempDir(), "config.toml")) // never created
-		rows, changed := refreshClient(c, "/new/plumb")
+		rows, changed := refreshClient(c, "/new/plumb", false)
 		if changed || len(rows) != 1 || rows[0].status != "not installed" {
 			t.Errorf("got (%+v, %v), want status \"not installed\", changed false", rows, changed)
 		}
 	})
 
-	t.Run("plumb not registered is skipped", func(t *testing.T) {
+	t.Run("not installed stays untouched even with install-missing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.toml") // never created
+		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb", true)
+		if changed || len(rows) != 1 || rows[0].status != "not installed" {
+			t.Errorf("got (%+v, %v), want status \"not installed\", changed false", rows, changed)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Error("install-missing must not fabricate a config for an absent client")
+		}
+	})
+
+	t.Run("plumb not registered is skipped without install-missing", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "config.toml")
 		if err := os.WriteFile(path, []byte("[mcp_servers.other]\ncommand = \"x\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb")
+		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb", false)
 		if changed || len(rows) != 1 || rows[0].status != "not registered" {
 			t.Errorf("got (%+v, %v), want status \"not registered\", changed false", rows, changed)
+		}
+	})
+
+	t.Run("install-missing registers a config-present client", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte("[mcp_servers.other]\ncommand = \"x\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb", true)
+		if !changed || len(rows) != 1 || rows[0].status != "registered" {
+			t.Errorf("got (%+v, %v), want status \"registered\", changed true", rows, changed)
+		}
+		bin, ok, err := mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")(path)
+		if err != nil || !ok || bin != "/new/plumb" {
+			t.Errorf("plumb not registered: got %q ok=%v (err %v)", bin, ok, err)
+		}
+		// Pre-existing server is preserved.
+		cfg, _, err := readOrInitCodexConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cfg["mcp_servers"].(map[string]any)["other"]; !ok {
+			t.Error("existing mcp server dropped on install-missing register")
+		}
+
+		// Second pass is a no-op.
+		rows, changed = refreshClient(newCodexTarget(path), "/new/plumb", true)
+		if changed || len(rows) != 1 || rows[0].status != "already current" {
+			t.Errorf("second pass: got (%+v, %v), want status \"already current\", changed false", rows, changed)
 		}
 	})
 
@@ -227,9 +267,9 @@ func TestRefreshClient(t *testing.T) {
 		if _, _, err := setupCodexInto(path, "/old/plumb"); err != nil {
 			t.Fatal(err)
 		}
-		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb")
-		if !changed {
-			t.Errorf("expected changed=true, got rows %+v", rows)
+		rows, changed := refreshClient(newCodexTarget(path), "/new/plumb", false)
+		if !changed || len(rows) != 1 || rows[0].status != "updated" {
+			t.Errorf("got (%+v, %v), want status \"updated\", changed true", rows, changed)
 		}
 		bin, _, err := mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")(path)
 		if err != nil || bin != "/new/plumb" {
@@ -237,7 +277,7 @@ func TestRefreshClient(t *testing.T) {
 		}
 
 		// Second pass is a no-op.
-		rows, changed = refreshClient(newCodexTarget(path), "/new/plumb")
+		rows, changed = refreshClient(newCodexTarget(path), "/new/plumb", false)
 		if changed || len(rows) != 1 || rows[0].status != "already current" {
 			t.Errorf("second pass: got (%+v, %v), want status \"already current\", changed false", rows, changed)
 		}

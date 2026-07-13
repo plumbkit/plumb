@@ -20,11 +20,19 @@ var setupCmd = &cobra.Command{
 Run a subcommand (e.g. ` + "`plumb setup claude-code`" + `) to register a single
 client, or ` + "`plumb setup --all`" + ` to repoint every already-registered client
 at the current plumb binary — the repair after the binary moves or is rebuilt
-elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).`,
+elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).
+
+Add ` + "`--install-missing`" + ` to also register plumb in installed clients that do
+not have it yet (config file present but no plumb entry). Clients with no config
+file at all are left untouched — plumb cannot tell an absent config from an
+uninstalled client, so use the client's named subcommand to create one.`,
 	RunE: runSetupAll,
 }
 
-var setupAllFlag bool
+var (
+	setupAllFlag            bool
+	setupInstallMissingFlag bool
+)
 
 var setupClaudeDesktopCmd = &cobra.Command{
 	Use:   "claude-desktop",
@@ -72,6 +80,8 @@ var setupCodexCmd = &cobra.Command{
 func init() {
 	setupCmd.Flags().BoolVar(&setupAllFlag, "all", false,
 		"Repoint every already-registered client at the current plumb binary")
+	setupCmd.Flags().BoolVar(&setupInstallMissingFlag, "install-missing", false,
+		"Also register plumb in installed clients that don't have it yet (config present but no plumb entry)")
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeNoSkillFlag, "no-skill", false, "Skip installing Claude Code skill files")

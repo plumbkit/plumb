@@ -181,9 +181,11 @@ func runSetupTarget(t setupTarget) error {
 // binary, leaving clients that aren't installed or don't use plumb untouched. It
 // is the bulk repair for a moved or rebuilt binary — the fix `plumb doctor`
 // points at when a client's registered binary no longer matches the running one.
-// Without --all the bare `plumb setup` command just prints help.
+// With --install-missing it also registers plumb in installed-but-unregistered
+// clients (config file present but no plumb entry), covering first-time setup in
+// one command. Either flag triggers the bulk run; bare `plumb setup` prints help.
 func runSetupAll(cmd *cobra.Command, _ []string) error {
-	if !setupAllFlag {
+	if !setupAllFlag && !setupInstallMissingFlag {
 		return cmd.Help()
 	}
 	PrintLogo()
@@ -199,24 +201,42 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 
 	t := render.DottedTableBase(tui.SepStyle, tui.HintStyle).
 		Headers("Client", "Status", "Config")
-	changed := 0
+	changed, unregistered := 0, 0
 	for _, c := range allSetupClients() {
-		rows, didChange := refreshClient(c, plumbBin)
+		rows, didChange := refreshClient(c, plumbBin, setupInstallMissingFlag)
 		if didChange {
 			changed++
 		}
 		for _, r := range rows {
+			if r.status == "not registered" {
+				unregistered++
+			}
 			t.Row(r.name, r.status, r.detail)
 		}
 	}
 	fmt.Println(t.Render())
 
-	if changed == 0 {
-		fmt.Println("\nNo changes — every registered client already points at this binary.")
-	} else {
-		fmt.Printf("\nRepointed %d client(s). Restart them to apply.\n", changed)
-	}
+	printSetupAllSummary(changed, unregistered)
 	return nil
+}
+
+// printSetupAllSummary prints the trailing summary line(s) for `plumb setup
+// --all`. When some clients are installed-but-unregistered and --install-missing
+// was not passed, it points at the flag that would register them — the fix for
+// the "I ran --all and nothing happened" first-time-setup confusion.
+func printSetupAllSummary(changed, unregistered int) {
+	if changed == 0 {
+		if setupInstallMissingFlag {
+			fmt.Println("\nNo changes — every installed client already has this binary registered.")
+		} else {
+			fmt.Println("\nNo changes — every registered client already points at this binary.")
+		}
+	} else {
+		fmt.Printf("\nUpdated %d client(s). Restart them to apply.\n", changed)
+	}
+	if !setupInstallMissingFlag && unregistered > 0 {
+		fmt.Printf("\n%d installed client(s) don't have plumb yet — run `plumb setup --install-missing` to register them.\n", unregistered)
+	}
 }
 
 // clientRow is one row in the `plumb setup --all` table: a client name (blank on
@@ -228,12 +248,14 @@ type clientRow struct {
 	detail string
 }
 
-// refreshClient repoints one client's plumb registration at plumbBin, but only
-// when the client is installed and already references plumb — it never adds plumb
-// to a client that doesn't use it. Returns one table row per managed config path
-// and whether any of them changed. A client with pathsFn set (currently only
-// Claude Desktop) yields one row per resolved path, not just one.
-func refreshClient(c setupTarget, plumbBin string) (rows []clientRow, changed bool) {
+// refreshClient repoints one client's plumb registration at plumbBin. It repoints
+// a client that already references plumb; when installMissing is set it also
+// registers plumb in an installed client whose config file exists but has no plumb
+// entry. It never fabricates a config for a client with no config file at all.
+// Returns one table row per managed config path and whether any of them changed. A
+// client with pathsFn set (currently only Claude Desktop) yields one row per
+// resolved path, not just one.
+func refreshClient(c setupTarget, plumbBin string, installMissing bool) (rows []clientRow, changed bool) {
 	if c.intoFn == nil {
 		return []clientRow{{name: c.name, status: "skipped", detail: "no updater"}}, false
 	}
@@ -243,7 +265,7 @@ func refreshClient(c setupTarget, plumbBin string) (rows []clientRow, changed bo
 	}
 
 	for i, cfgPath := range paths {
-		status, detail, didChange := refreshClientAt(c, cfgPath, plumbBin)
+		status, detail, didChange := refreshClientAt(c, cfgPath, plumbBin, installMissing)
 		if didChange {
 			changed = true
 		}
@@ -271,13 +293,17 @@ func resolveTargetPaths(c setupTarget) ([]string, error) {
 
 // refreshClientAt is refreshClient's single-path body. It returns a short status
 // word plus a detail cell — the contracted config path, or the error text when
-// status is "error".
-func refreshClientAt(c setupTarget, cfgPath, plumbBin string) (status, detail string, changed bool) {
+// status is "error". A config-present client without a plumb entry is only
+// registered ("registered") when installMissing is set; otherwise it is reported
+// "not registered" and left untouched. A repointed existing entry reports
+// "updated".
+func refreshClientAt(c setupTarget, cfgPath, plumbBin string, installMissing bool) (status, detail string, changed bool) {
 	detail = render.ContractPath(cfgPath)
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		return "not installed", detail, false
 	}
-	if !clientHasPlumb(c, cfgPath) {
+	hadPlumb := clientHasPlumb(c, cfgPath)
+	if !hadPlumb && !installMissing {
 		return "not registered", detail, false
 	}
 	added, _, err := c.intoFn(cfgPath, plumbBin)
@@ -287,7 +313,10 @@ func refreshClientAt(c setupTarget, cfgPath, plumbBin string) (status, detail st
 	if !added {
 		return "already current", detail, false
 	}
-	return "updated", detail, true
+	if hadPlumb {
+		return "updated", detail, true
+	}
+	return "registered", detail, true
 }
 
 // clientHasPlumb reports whether cfgPath already registers a plumb server, using

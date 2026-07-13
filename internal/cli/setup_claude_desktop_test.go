@@ -113,7 +113,7 @@ func TestRefreshClient_MultiplePaths(t *testing.T) {
 		extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"),
 	}
 
-	rows, changed := refreshClient(c, "/new/plumb")
+	rows, changed := refreshClient(c, "/new/plumb", false)
 	if !changed {
 		t.Errorf("expected changed=true when one of two paths was stale, got rows %+v", rows)
 	}
@@ -127,7 +127,7 @@ func TestRefreshClient_MultiplePaths(t *testing.T) {
 	}
 
 	// Second pass: both paths now current, no change.
-	rows, changed = refreshClient(c, "/new/plumb")
+	rows, changed = refreshClient(c, "/new/plumb", false)
 	if changed {
 		t.Errorf("expected changed=false on second pass, got rows %+v", rows)
 	}

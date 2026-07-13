@@ -347,6 +347,8 @@ Controls **which tools appear in `tools/list`**, to spare a client that already 
 
 Setup helpers preserve existing MCP servers, back up config first, and resolve locations via OS/user-home helpers — no hardcoded paths. All clients funnel through one format-agnostic merge (`mergeServerEntry`) backed by JSON, TOML, or YAML serialisers; the trio Cursor/Augment/Qwen reuse the plain `mcpServers` shape, the rest carry a client-specific key/entry. (Aider is intentionally absent — it has no native MCP **client**, only third-party servers that wrap it.)
 
+Two bulk flags on the bare `plumb setup` command (`runSetupAll`, `internal/cli/setup_clients.go`): `--all` **repoints** every already-registered client at the current binary — the idempotent repair `plumb doctor` recommends after the binary moves or is rebuilt; it never adds plumb to a client that lacked it. `--install-missing` additionally **registers** plumb in installed-but-unregistered clients (config file present, no plumb entry) — the one-shot first-time setup — but never fabricates a config for a client with no config file (an absent config is indistinguishable from an uninstalled client). Either flag triggers the bulk run; `refreshClientAt` classifies each config path as `not installed` / `not registered` / `already current` / `registered` / `updated`, and a bare `--all` that finds unregistered clients prints a hint pointing at `--install-missing`.
+
 `plumb setup claude-code` also installs two idempotent user-scoped skills into `~/.claude/skills/`: `plumb-explore` (navigation) and `plumb-refactor` (semantic rename, atomic cross-file edits); `--no-skill` skips.
 
 ## Workspace detection

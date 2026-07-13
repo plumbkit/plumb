@@ -79,6 +79,13 @@ plumb setup gemini              # Gemini CLI
 | Codex | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) |
 | Gemini CLI | `~/.gemini/settings.json` |
 
+To register every client already present on the machine in one shot, run
+`plumb setup --install-missing` — it registers plumb in any installed client
+whose config it finds without a plumb entry. (Bare `plumb setup --all` only
+*repoints* clients that already use plumb — the repair after the binary
+moves — so on a fresh machine it reports "no changes"; use `--install-missing`
+for first-time setup.)
+
 > **Claude Desktop:** fully quit and reopen the app (Quit, not just close the
 > window) after running setup so it reloads its MCP config.
 
