@@ -459,6 +459,8 @@ func (p *workspacePool) poolOnStart(e *poolEntry, rootURI string, lspCfg config.
 		if err != nil {
 			return err
 		}
+		// One refresh wiring point for every adapter — see wrapServerRequest.
+		conn.SetRequestHandler(p.wrapServerRequest(e, conn.RequestHandler()))
 		clearEntryPullState(e) // fresh/woken server: drop stale pull result IDs (see helper)
 		requested := resolveRequestedDiagnosticsMode(lspCfg.Diagnostics, e.language)
 		ad.Subscribe(e.inv.Handle)

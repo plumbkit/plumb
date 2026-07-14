@@ -193,12 +193,27 @@ func (a *Adapter) SupportsPullDiagnostics() bool {
 
 // Diagnostic requests diagnostics for a single document via the LSP 3.17 pull
 // model (textDocument/diagnostic). Callers should gate this on
-// SupportsPullDiagnostics; gopls is push-first, so the diagnostics tool never
-// reaches this path for Go in practice. Mirrors the zls adapter.
+// SupportsPullDiagnostics: gopls only advertises (and answers) it when the
+// resolved [lsp.go] diagnostics mode is "pull" (EnablePullDiagnostics); under
+// the default push negotiation this path stays dormant. Mirrors the zls
+// adapter.
 func (a *Adapter) Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
 	var result protocol.DocumentDiagnosticReport
 	if err := a.conn.Call(ctx, protocol.MethodDiagnostic, params, &result); err != nil {
 		return nil, fmt.Errorf("gopls diagnostic: %w", err)
+	}
+	return &result, nil
+}
+
+// WorkspaceDiagnostic requests diagnostics for the whole workspace via
+// workspace/diagnostic (LSP 3.17). Callers must gate on the server advertising
+// DiagnosticOptions.WorkspaceDiagnostics (see ServerCapabilities); a server
+// without it answers -32601, which the pool treats as a downgrade signal. Only
+// reachable when pull diagnostics were negotiated.
+func (a *Adapter) WorkspaceDiagnostic(ctx context.Context, params protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error) {
+	var result protocol.WorkspaceDiagnosticReport
+	if err := a.conn.Call(ctx, protocol.MethodWorkspaceDiagnostic, params, &result); err != nil {
+		return nil, fmt.Errorf("gopls workspace diagnostic: %w", err)
 	}
 	return &result, nil
 }

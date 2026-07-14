@@ -152,12 +152,45 @@ func (c *Conn) SetRequestHandler(fn RequestHandler) {
 	c.reqMu.Unlock()
 }
 
+// RequestHandler returns the currently-registered server-request handler, or
+// nil if none is set. It lets a caller (the pool) layer extra server-request
+// handling — e.g. workspace/diagnostic/refresh — IN FRONT of an adapter's
+// handler by grabbing the adapter's handler, wrapping it, and re-setting the
+// wrapper, so refresh is wired in one place without every adapter threading an
+// extension through its own registration.
+func (c *Conn) RequestHandler() RequestHandler {
+	c.reqMu.RLock()
+	defer c.reqMu.RUnlock()
+	return c.onRequest
+}
+
 // MethodNotFoundError can be returned from a RequestHandler to send the
 // JSON-RPC method-not-found error code (-32601) back to the server.
 type MethodNotFoundError struct{ Method string }
 
 func (e *MethodNotFoundError) Error() string {
 	return fmt.Sprintf("method not found: %s", e.Method)
+}
+
+// IsMethodNotFound reports whether err is, or wraps, a JSON-RPC
+// method-not-found (-32601) error: either a *MethodNotFoundError this process
+// raised, or an error response a server returned with code -32601. Adapters
+// wrap the raw Call error with fmt.Errorf("... %w", err), so the check unwraps.
+// Callers use it to detect that a negotiated pull-diagnostics request is
+// unsupported by the server and downgrade the connection to push.
+func IsMethodNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mnf *MethodNotFoundError
+	if errorsAs(err, &mnf) {
+		return true
+	}
+	var we *wireError
+	if errorsAs(err, &we) {
+		return we.Code == errCodeMethodNotFound
+	}
+	return false
 }
 
 // Call sends a request and blocks until a response arrives or ctx is cancelled.

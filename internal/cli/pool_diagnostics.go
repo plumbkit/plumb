@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 
 	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -116,6 +118,53 @@ func (p *workspacePool) diagnosticsHybridFlip(e *poolEntry) func(string, json.Ra
 func clearEntryPullState(e *poolEntry) {
 	if e.inv != nil {
 		e.inv.ClearPullState()
+	}
+}
+
+// downgradeDiagMode flips an entry to "push" for the rest of the session after a
+// negotiated pull returned method-not-found (-32601): the server advertised the
+// capability at initialize but does not actually answer textDocument/diagnostic,
+// so plumb stops pulling and falls back to the push open-and-wait path. It logs
+// exactly once (only on the transition off a non-push mode) and is a no-op when
+// the entry is already push or absent. Guarded by the pool mutex like
+// resolveDiagMode. The tool re-reads the mode after a failed pull: seeing "push"
+// tells it a downgrade occurred so it falls back rather than surfacing an error.
+func (p *workspacePool) downgradeDiagMode(root, language string) {
+	p.mu.Lock()
+	e, ok := p.entries[poolKey{root, language}]
+	if !ok || (e.diagMode != diagModePull && e.diagMode != diagModeHybrid) {
+		// Only a negotiated pull connection downgrades: push stays push, and
+		// "" / pull-requested-but-unavailable keep their (surfaced) states.
+		p.mu.Unlock()
+		return
+	}
+	prev := e.diagMode
+	e.diagMode = diagModePush
+	p.mu.Unlock()
+	slog.Warn("pool: pull diagnostics returned method-not-found — downgrading to push for this session",
+		"root", root, "language", language, "from", prev)
+}
+
+// wrapServerRequest layers workspace/diagnostic/refresh handling in FRONT of an
+// adapter's own server-request handler (inner). On a refresh request it drops
+// the entry's pull result IDs and snapshots (clearEntryPullState) so the NEXT
+// diagnostics query re-pulls without a stale previousResultId, then answers the
+// request PROMPTLY with a null result. It never performs a blocking workspace
+// pull inside the JSON-RPC read loop — the server would deadlock waiting on a
+// response it is itself blocking. Every other method delegates to inner (the
+// shared register/unregister-capability handling), so per-adapter behaviour is
+// preserved exactly. This is the single wiring point for refresh across ALL
+// adapters (poolOnStart calls it), so no adapter threads an extension itself.
+func (p *workspacePool) wrapServerRequest(e *poolEntry, inner jsonrpc.RequestHandler) jsonrpc.RequestHandler {
+	return func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if method == protocol.MethodWorkspaceDiagnosticRefresh {
+			clearEntryPullState(e) // next query re-pulls; do NOT block the read loop
+			return nil, nil
+		}
+		if inner != nil {
+			return inner(ctx, method, params)
+		}
+		return nil, &jsonrpc.MethodNotFoundError{Method: method}
 	}
 }
 
