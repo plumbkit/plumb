@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/lsp/watcher"
@@ -49,16 +50,7 @@ func New(conn jsonrpc.Caller) *Adapter {
 // client/registerCapability to register file watchers; we accept and record the
 // glob patterns so DidChangeWatchedFiles can filter events.
 func (a *Adapter) handleServerRequest(_ context.Context, method string, params json.RawMessage) (any, error) {
-	switch method {
-	case protocol.MethodRegisterCapability:
-		a.watcher.Register(params)
-		return nil, nil
-	case protocol.MethodUnregisterCapability:
-		a.watcher.Unregister(params)
-		return nil, nil
-	default:
-		return nil, &jsonrpc.MethodNotFoundError{Method: method}
-	}
+	return lsp.HandleServerRequest(&a.watcher, method, params, nil)
 }
 
 // DefaultInitParams returns InitializeParams suitable for rust-analyzer.
