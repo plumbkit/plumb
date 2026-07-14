@@ -33,7 +33,8 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 // TestSchemaDiscoveryOnly pins which clients can only invoke advertised tools.
 // Claude Code is the one flagged true (it builds its tool/ToolSearch list from
 // tools/list, so a lean-hidden tool is unreachable); the other CLI agents and the
-// unknown fallback are false until verified, so they stay eligible for lean.
+// unknown fallback are false; lean eligibility is gated separately on
+// ReliableDeferredToolDiscovery.
 func TestSchemaDiscoveryOnly(t *testing.T) {
 	tests := []struct {
 		client string
