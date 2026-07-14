@@ -24,6 +24,11 @@ type LSPStatus struct {
 	Language string        // attached LSP language; "" or "none" means no server is attached
 	Warming  bool          // the server is attached but its handshake has not completed
 	Elapsed  time.Duration // how long the warm-up has been running; 0 when unknown
+	// DiagnosticsMode is the resolved negotiation mode (push / pull / hybrid /
+	// pull-requested-but-unavailable), or "" when unresolved. Surfaced on the
+	// ready row only when it is a non-default value (anything but push), so a
+	// default push setup stays quiet.
+	DiagnosticsMode string
 }
 
 // daemonInfo returns session and daemon metadata to the calling agent.
@@ -161,12 +166,17 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 }
 
 // formatLSPStatusRow renders the three-state language-server row: ready,
-// warming (with elapsed time when known), or none attached.
+// warming (with elapsed time when known), or none attached. On the ready row a
+// non-default diagnostics mode (anything but push) is appended, so a default
+// push setup stays quiet.
 func formatLSPStatusRow(s LSPStatus) string {
 	if s.Language == "" || s.Language == "none" {
 		return "none attached"
 	}
 	if !s.Warming {
+		if s.DiagnosticsMode != "" && s.DiagnosticsMode != "push" {
+			return fmt.Sprintf("ready (%s, diagnostics: %s)", s.Language, s.DiagnosticsMode)
+		}
 		return fmt.Sprintf("ready (%s)", s.Language)
 	}
 	if d := roundLSPElapsed(s.Elapsed); d > 0 {

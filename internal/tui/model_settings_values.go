@@ -41,6 +41,9 @@ func (m Model) adjustSetting(dir int) (Model, tea.Cmd) {
 // and are only ever reached in Global scope; every project-overridable string
 // cycle (quality mode) flows through the scope-aware setCycle.
 func (m Model) adjustCycle(it settingItem, dir int) (Model, tea.Cmd) {
+	if it.lspLang != "" {
+		return m.setLSPCycle(it, dir), nil
+	}
 	switch it.key {
 	case skLogLevel:
 		return m.setLogLevel(cycleOption(logLevelOptions, m.settingsCfg.LogLevel, dir))
@@ -102,6 +105,18 @@ func (m Model) setCycle(it settingItem, dir int) Model {
 	next := cycleOption(opts, it.value, dir)
 	if m.applyScopedSetting(it.key, next, func(c *config.Config) { set(c, next) }) {
 		m.settingsStatus = m.scopedStatus(it.key, label+" → "+next)
+	}
+	return m
+}
+
+// setLSPCycle cycles a per-language [lsp.<lang>] enum row (currently the
+// diagnostics knob) through its option set and persists it via the scope-aware
+// LSP writer. The current value is read from the focused row, so it reflects the
+// merged effective value in a workspace scope.
+func (m Model) setLSPCycle(it settingItem, dir int) Model {
+	next := cycleOption(it.options, it.value, dir)
+	if m.applyScopedLSP(it, next) {
+		m.settingsStatus = m.scopedStatus(it.key, it.lspLang+" "+it.label+" → "+next)
 	}
 	return m
 }

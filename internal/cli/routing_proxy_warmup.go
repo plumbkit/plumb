@@ -53,6 +53,18 @@ func (r *routingProxy) WarmupStatus(uri string) (warming bool, elapsed time.Dura
 	return r.pool.warmupFor(root, language)
 }
 
+// DiagMode reports the resolved diagnostics mode of the language server that
+// serves uri (or the connection's primary, when uri is empty): one of push /
+// pull / hybrid / pull-requested-but-unavailable, or "" when the target is not
+// pooled or its mode is not yet resolved. Resolution-only, like WarmupStatus.
+func (r *routingProxy) DiagMode(uri string) string {
+	root, language := r.warmupTarget(uri)
+	if root == "" || language == "" || language == LanguageNone {
+		return ""
+	}
+	return r.pool.diagModeFor(root, language)
+}
+
 // warmupTarget resolves the (root, language) WarmupStatus inspects for uri: the
 // connection primary when uri is empty, else the URI's detected root and
 // per-file language (mirroring route()). Falls back to the primary when URI

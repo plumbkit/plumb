@@ -115,21 +115,23 @@ func checkActiveLSPProcesses() []checkResult {
 	var results []checkResult
 	for _, line := range strings.Split(resp, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 6 {
+		if len(f) != 7 {
 			continue
 		}
 		results = append(results, checkResult{
 			name:   f[0] + " (live)",
 			ok:     true,
-			detail: formatActiveLSPDetail(f[1], f[2], f[3], f[4]),
+			detail: formatActiveLSPDetail(f[1], f[2], f[3], f[4], strings.TrimPrefix(f[6], "diag=")),
 		})
 	}
 	return results
 }
 
 // formatActiveLSPDetail renders the detail line for one live server from its
-// raw lsp-status fields (root, state, pid, rss_bytes).
-func formatActiveLSPDetail(root, state, pid, rss string) string {
+// raw lsp-status fields (root, state, pid, rss_bytes, diag mode). The
+// diagnostics mode is shown only when it is a non-default resolved value, so the
+// common push case stays quiet.
+func formatActiveLSPDetail(root, state, pid, rss, diag string) string {
 	detail := root + "  " + state
 	if pid != "" {
 		detail += "  pid " + pid
@@ -138,6 +140,9 @@ func formatActiveLSPDetail(root, state, pid, rss string) string {
 		if n, err := strconv.ParseUint(rss, 10, 64); err == nil {
 			detail += "  " + monitor.FormatBytes(n)
 		}
+	}
+	if diag != "" && diag != "push" {
+		detail += "  diagnostics: " + diag
 	}
 	return detail
 }

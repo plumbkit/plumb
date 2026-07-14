@@ -93,6 +93,7 @@ const (
 	skLSPCommand
 	skLSPArgs
 	skLSPRootMarkers
+	skLSPDiagnostics
 	// [semantics] rows (the Semantics tab).
 	skSemEnabled
 	skSemProvider
@@ -308,16 +309,27 @@ func buildSettingItems(cfg config.Config) []settingItem {
 	}, lspSettingItems(cfg)...), semanticsSettingItems(cfg)...))
 }
 
+// diagnosticsValue formats the [lsp.<lang>] diagnostics knob for display: an
+// empty stored value shows as "auto" (the resolver's implicit default), so the
+// cycle value column lines up with the DiagnosticsModes option set.
+func diagnosticsValue(mode string) string {
+	if mode == "" {
+		return "auto"
+	}
+	return mode
+}
+
 // lspSettingItems builds the per-language [lsp.<lang>] rows (enable + command +
-// args + root_markers), one block per configured language in sorted order. Each
-// row carries its language in lspLang; the field is identified by the key.
+// args + root_markers + diagnostics), one block per configured language in
+// sorted order. Each row carries its language in lspLang; the field is
+// identified by the key.
 func lspSettingItems(cfg config.Config) []settingItem {
 	langs := make([]string, 0, len(cfg.LSP))
 	for l := range cfg.LSP {
 		langs = append(langs, l)
 	}
 	sort.Strings(langs)
-	out := make([]settingItem, 0, len(langs)*4)
+	out := make([]settingItem, 0, len(langs)*5)
 	for _, lang := range langs {
 		e := cfg.LSP[lang]
 		g := capFirst(lang)
@@ -350,6 +362,10 @@ func lspSettingItems(cfg config.Config) []settingItem {
 			settingItem{
 				group: g, label: "root markers", kind: settingList, key: skLSPRootMarkers, lspLang: lang, lspMissing: dormant,
 				value: listSummary(e.RootMarkers), list: e.RootMarkers,
+			},
+			settingItem{
+				group: g, label: "diagnostics", kind: settingCycle, key: skLSPDiagnostics, lspLang: lang, lspMissing: dormant,
+				value: diagnosticsValue(e.Diagnostics), options: config.DiagnosticsModes,
 			},
 		)
 	}
