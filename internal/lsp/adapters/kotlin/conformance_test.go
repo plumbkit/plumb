@@ -18,7 +18,7 @@ import (
 // contract without pretending to validate kotlin-language-server itself. The
 // existing real-binary integration test remains the promotion gate.
 func TestConformance_GradleProjectPush(t *testing.T) {
-	conformance.RunConformance(t, func(c jsonrpc.Caller) lsp.Client { return kotlin.New(c) }, kotlinScenario(t))
+	conformance.RunConformance(t, func(c jsonrpc.Caller) lsp.Client { return kotlin.New(c) }, kotlin.DefaultInitParams, kotlinScenario(t))
 }
 
 func kotlinScenario(t *testing.T) lsptest.Scenario {
