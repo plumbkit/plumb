@@ -48,8 +48,28 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
 	}
 }
 
-// initParamsFor builds the Initialize params for a language.
-func initParamsFor(language, rootURI string) protocol.InitializeParams {
+// initParamsFor builds the Initialize params for a language, negotiated for the
+// requested diagnostics mode. For "push" (the default) the params are the
+// adapter's push-first defaults, unchanged. For "pull" the params are opted into
+// the LSP 3.17 pull model: an adapter with pull-specific initialization options
+// (gopls, via lsp.PullInitializer) customises the params itself; every other
+// adapter gets the generic client-capability swap. ad is the constructed adapter
+// instance the type assertion targets.
+func initParamsFor(ad lsp.Client, language, rootURI, requested string) protocol.InitializeParams {
+	params := defaultInitParamsFor(language, rootURI)
+	if requested != diagModePull {
+		return params
+	}
+	if pi, ok := ad.(lsp.PullInitializer); ok {
+		pi.EnablePullDiagnostics(&params)
+	} else {
+		params.Capabilities = protocol.ClientCapabilitiesFor(true)
+	}
+	return params
+}
+
+// defaultInitParamsFor returns a language's push-first default Initialize params.
+func defaultInitParamsFor(language, rootURI string) protocol.InitializeParams {
 	switch language {
 	case "java":
 		return jdtls.DefaultInitParams(rootURI)

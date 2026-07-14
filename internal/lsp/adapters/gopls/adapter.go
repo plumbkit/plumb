@@ -20,6 +20,11 @@ type goplsOptions struct {
 	StaticCheck   bool            `json:"staticcheck,omitempty"`
 	Hints         map[string]bool `json:"hints,omitempty"`
 	VerboseOutput bool            `json:"verboseOutput,omitempty"`
+	// PullDiagnostics enables gopls's experimental LSP 3.17 pull model
+	// (textDocument/diagnostic). Off by default (gopls is push-first); set only
+	// when the resolved [lsp.go] diagnostics mode is "pull" via
+	// EnablePullDiagnostics.
+	PullDiagnostics bool `json:"pullDiagnostics,omitempty"`
 }
 
 // Adapter implements lsp.Client for gopls.
@@ -55,6 +60,24 @@ func New(conn jsonrpc.Caller) *Adapter {
 // and record the glob patterns so DidChangeWatchedFiles can filter events.
 func (a *Adapter) handleServerRequest(_ context.Context, method string, params json.RawMessage) (any, error) {
 	return lsp.HandleServerRequest(&a.watcher, method, params, nil)
+}
+
+// EnablePullDiagnostics reconfigures params for the LSP 3.17 pull-diagnostics
+// model: it advertises the pull client capability (via
+// protocol.ClientCapabilitiesFor) and sets gopls's experimental
+// "pullDiagnostics" initialization option so gopls answers
+// textDocument/diagnostic. It implements lsp.PullInitializer; the pool calls it
+// only when the resolved diagnostics mode for Go is "pull". Pull is additive:
+// the push capability is preserved, so gopls keeps pushing publishDiagnostics
+// too (the pool records "hybrid" if it does). Safe on any params shape — if
+// InitializationOptions is not the expected goplsOptions, only the client
+// capability is swapped.
+func (a *Adapter) EnablePullDiagnostics(params *protocol.InitializeParams) {
+	params.Capabilities = protocol.ClientCapabilitiesFor(true)
+	if opts, ok := params.InitializationOptions.(goplsOptions); ok {
+		opts.PullDiagnostics = true
+		params.InitializationOptions = opts
+	}
 }
 
 // DefaultInitParams returns InitializeParams suitable for gopls.
