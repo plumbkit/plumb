@@ -113,6 +113,13 @@ type poolEntry struct {
 	// is still nil (handshake incomplete). Guarded by workspacePool.mu.
 	startedAt time.Time
 
+	// diagMode is the resolved per-connection diagnostics mode — one of the four
+	// vocabulary strings (push / pull / hybrid / pull-requested-but-unavailable),
+	// or "" before Initialize resolves it. Set in poolOnStart after Initialize
+	// (see resolveDiagMode) and flipped to "hybrid" when a push is observed while
+	// in pull mode (see diagnosticsHybridFlip). Guarded by workspacePool.mu.
+	diagMode string
+
 	// refs counts the sessions that hold this root as their PINNED primary
 	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
 	// for a non-primary URI) deliberately do NOT pin, so a route target is never
@@ -309,7 +316,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	proxy.touch()
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
-		OnStart: poolOnStart(language, root, rootURI, inv, proxy),
+		OnStart: p.poolOnStart(e, rootURI, lspCfg),
 		// Run the server from the workspace it serves, not from the daemon's cwd
 		// (which is "/"). Skipped when root is not an existing directory, so a root
 		// deleted under a live session degrades to the daemon's cwd rather than
@@ -436,24 +443,34 @@ func (p *workspacePool) warmupFor(root, language string) (warming bool, elapsed 
 }
 
 // poolOnStart builds the supervisor OnStart hook: construct the adapter,
-// subscribe the invalidator BEFORE initialized (so the first publishDiagnostics
-// burst — sent within ms of initialized — is not lost), run the handshake, and
-// publish the ready client into proxy.
-func poolOnStart(language, root, rootURI string, inv *cache.Invalidator, proxy *clientProxy) func(context.Context, *jsonrpc.Conn) error {
+// subscribe the invalidator AND the hybrid-flip watcher BEFORE initialized (so
+// the first publishDiagnostics burst — sent within ms of initialized — is
+// neither lost nor missed by the flip), negotiate the diagnostics mode, run the
+// handshake, and publish the ready client into proxy. Re-run on every wake from
+// hibernation, so the mode is re-resolved against the freshly-negotiated caps.
+//
+// Ordering matters twice over: the invalidator subscription must precede
+// Initialized (the burst is lost otherwise), and diagMode is resolved BEFORE
+// Initialized so the flip watcher sees the correct "pull" mode when the very
+// first push arrives (a server only pushes after it receives initialized).
+func (p *workspacePool) poolOnStart(e *poolEntry, rootURI string, lspCfg config.LSPConfig) func(context.Context, *jsonrpc.Conn) error {
 	return func(startCtx context.Context, conn *jsonrpc.Conn) error {
-		ad, err := newAdapter(language, conn)
+		ad, err := newAdapter(e.language, conn)
 		if err != nil {
 			return err
 		}
-		ad.Subscribe(inv.Handle)
-		if _, err := ad.Initialize(startCtx, initParamsFor(language, rootURI)); err != nil {
+		requested := resolveRequestedDiagnosticsMode(lspCfg.Diagnostics, e.language)
+		ad.Subscribe(e.inv.Handle)
+		ad.Subscribe(p.diagnosticsHybridFlip(e))
+		if _, err := ad.Initialize(startCtx, initParamsFor(ad, e.language, rootURI, requested)); err != nil {
 			return fmt.Errorf("initialize: %w", err)
 		}
+		p.resolveDiagMode(e, ad, requested)
 		if err := ad.Initialized(startCtx); err != nil {
 			return fmt.Errorf("initialized: %w", err)
 		}
-		proxy.set(ad)
-		slog.Info("pool: LS ready", "root", root, "language", language)
+		e.proxy.set(ad)
+		slog.Info("pool: LS ready", "root", e.root, "language", e.language, "diag", p.diagModeFor(e.root, e.language))
 		return nil
 	}
 }

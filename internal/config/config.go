@@ -73,7 +73,22 @@ type LSPConfig struct {
 	// (LRU eviction). 0 means unlimited (the default for every language except
 	// java). Read at pool construction — restart-needed.
 	MaxWorkspaces int `toml:"max_workspaces"`
+	// Diagnostics selects how plumb negotiates this language server's
+	// diagnostics: "auto" (or empty) defers to plumb's per-adapter policy —
+	// push for every adapter today; "push" consumes pushed publishDiagnostics
+	// only; "pull" advertises the LSP 3.17 textDocument/diagnostic client
+	// capability and, when the server advertises diagnosticProvider, negotiates
+	// the pull model (otherwise it degrades to pull-requested-but-unavailable).
+	// Empty is treated as "auto" in the resolver so user configs stay minimal.
+	// Read at pool construction — restart-needed (ReloadNextSession).
+	Diagnostics string `toml:"diagnostics"`
 }
+
+// DiagnosticsModes lists the explicit [lsp.<lang>] diagnostics values a user may
+// set, in display order (for the TUI Settings enum and validation). The empty
+// string is also accepted and resolves to "auto"; it is omitted here because it
+// is the implicit default, not an explicit choice.
+var DiagnosticsModes = []string{"auto", "push", "pull"}
 
 // LSPQueryConfig bounds LSP tool operations so a slow, indexing, or wedged
 // language server cannot hang a request until the MCP client's own timeout

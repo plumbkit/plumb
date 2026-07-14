@@ -40,6 +40,7 @@ func validate(cfg Config) error {
 		func() error { return validateTasks(cfg.Tasks) },
 		func() error { return validateCommands(cfg.Commands) },
 		func() error { return validateTools(cfg.Tools) },
+		func() error { return validateLSP(cfg.LSP) },
 	} {
 		if err := check(); err != nil {
 			return err
@@ -50,9 +51,21 @@ func validate(cfg Config) error {
 	default:
 		return fmt.Errorf("ui.path_style must be compact, truncate-middle, or full; got %q", cfg.UI.PathStyle)
 	}
-	for name, lsp := range cfg.LSP {
-		if lsp.Enabled && lsp.Command == "" {
+	return nil
+}
+
+// validateLSP checks the per-language [lsp.<lang>] tables: an enabled server
+// needs a command, and the diagnostics knob must be one of the accepted enum
+// values (empty resolves to auto).
+func validateLSP(lsp map[string]LSPConfig) error {
+	for name, l := range lsp {
+		if l.Enabled && l.Command == "" {
 			return fmt.Errorf("lsp.%s.command must be set when enabled", name)
+		}
+		switch l.Diagnostics {
+		case "", "auto", "push", "pull":
+		default:
+			return fmt.Errorf("lsp.%s.diagnostics must be auto, push, or pull; got %q", name, l.Diagnostics)
 		}
 	}
 	return nil

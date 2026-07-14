@@ -109,3 +109,17 @@ type Client interface {
 	// The returned function unsubscribes the handler.
 	Subscribe(handler func(string, json.RawMessage)) func()
 }
+
+// PullInitializer is an optional adapter capability. An adapter implements it to
+// customise its InitializeParams for the LSP 3.17 pull-diagnostics model when the
+// connection's resolved diagnostics mode is "pull". The pool type-asserts each
+// adapter to this interface and, when present, calls EnablePullDiagnostics before
+// sending initialize; an adapter with no pull-specific initialization options
+// simply does not implement it, and the pool applies the generic client-capability
+// swap (protocol.ClientCapabilitiesFor(true)) on its own.
+type PullInitializer interface {
+	// EnablePullDiagnostics mutates params in place to opt this server into the
+	// pull model — at minimum advertising the pull client capability, plus any
+	// server-specific initialization option (e.g. gopls's "pullDiagnostics").
+	EnablePullDiagnostics(params *protocol.InitializeParams)
+}

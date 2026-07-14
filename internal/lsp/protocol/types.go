@@ -411,32 +411,51 @@ func (c *ServerCapabilities) PrepareRenameEnabled() bool {
 
 // ─── Client capabilities ──────────────────────────────────────────────────────
 
-// DefaultClientCapabilities returns the capabilities Plumb advertises.
+// ClientCapabilitiesFor returns the capabilities Plumb advertises, negotiated
+// for the connection's resolved diagnostics mode. pull=false returns the
+// push-first default (exactly today's capabilities); pull=true additionally
+// advertises the LSP 3.17 textDocument/diagnostic client capability (with
+// related-document support) so a pull-capable server advertises
+// diagnosticProvider and the pull model is negotiated. Pull is ADDITIVE — every
+// push capability is preserved, so pushed publishDiagnostics keeps flowing in
+// every mode.
 //
-// workspace.didChangeWatchedFiles.dynamicRegistration is true: this tells
-// the server it may use client/registerCapability to register the file
-// globs it wants to watch (gopls registers patterns like **/*.go, **/go.mod
-// once this is declared). The adapter's request handler responds OK to
-// these registrations — we don't track them, but accepting is essential so
-// gopls actually consumes our workspace/didChangeWatchedFiles notifications.
-func DefaultClientCapabilities() ClientCapabilities {
-	return ClientCapabilities{
+// workspace.didChangeWatchedFiles.dynamicRegistration is true in both forms:
+// this tells the server it may use client/registerCapability to register the
+// file globs it wants to watch (gopls registers patterns like **/*.go, **/go.mod
+// once this is declared). The adapter's request handler responds OK to these
+// registrations — we don't track them, but accepting is essential so gopls
+// actually consumes our workspace/didChangeWatchedFiles notifications.
+func ClientCapabilitiesFor(pull bool) ClientCapabilities {
+	caps := ClientCapabilities{
 		TextDocument: TextDocumentClientCapabilities{
 			Synchronization:    &TextDocumentSyncClientCapabilities{DynamicRegistration: false},
 			DocumentSymbol:     &DocumentSymbolClientCapabilities{HierarchicalDocumentSymbolSupport: true},
 			PublishDiagnostics: &PublishDiagnosticsClientCapabilities{RelatedInformation: true},
-			// NB: the pull-diagnostics (textDocument/diagnostic) client capability
-			// is deliberately NOT advertised. plumb's diagnostics tool consumes
-			// only pushed publishDiagnostics; advertising pull support could make a
-			// dual-mode server (e.g. gopls) switch to pull-only and stop pushing.
-			// The pull protocol types and adapter Diagnostic() method exist as
-			// dormant infrastructure for if/when the tool consumes pull directly.
 		},
 		Workspace: WorkspaceClientCapabilities{
 			Symbol:                &WorkspaceSymbolClientCapabilities{},
 			DidChangeWatchedFiles: &DidChangeWatchedFilesClientCapabilities{DynamicRegistration: true},
 		},
 	}
+	if pull {
+		caps.TextDocument.Diagnostic = &DiagnosticClientCapabilities{RelatedDocumentSupport: true}
+	}
+	return caps
+}
+
+// DefaultClientCapabilities returns the safe push-first capabilities Plumb
+// advertises unless the pool has negotiated pull mode for the connection. It is
+// the parameterless wrapper the adapters' DefaultInitParams call; it delegates
+// to ClientCapabilitiesFor(false).
+//
+// The pull-diagnostics (textDocument/diagnostic) client capability is
+// deliberately NOT advertised here: advertising it unconditionally could make a
+// dual-mode server (e.g. gopls) switch to pull-only and stop pushing, so the
+// default stays push. Pull is opted into per-connection via ClientCapabilitiesFor
+// only when the resolved [lsp.<lang>] diagnostics mode is "pull".
+func DefaultClientCapabilities() ClientCapabilities {
+	return ClientCapabilitiesFor(false)
 }
 
 // ClientCapabilities describes what the client supports.

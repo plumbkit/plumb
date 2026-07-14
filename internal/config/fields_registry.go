@@ -303,6 +303,11 @@ var registryData = []Field{
 		Key: "lsp.<lang>.root_markers", Type: FieldList, ReloadTier: ReloadNextSession, PerLanguage: true,
 		Description: "Files that mark a <lang> project root. Enter to edit.",
 	},
+	{
+		Key: "lsp.<lang>.diagnostics", Type: FieldEnum, ReloadTier: ReloadNextSession, PerLanguage: true,
+		AllowedValues: DiagnosticsModes,
+		Description:   "How plumb negotiates <lang> diagnostics: auto (adapter policy — push today) | push (pushed publishDiagnostics only) | pull (LSP 3.17 textDocument/diagnostic when the server advertises it).",
+	},
 
 	// --- Semantics ---
 	{
