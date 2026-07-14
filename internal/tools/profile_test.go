@@ -157,11 +157,12 @@ func TestLeanProfileBudget(t *testing.T) {
 // TestLeanProfileNote_Budget guards the lean ProfileNote sentence — including
 // the folded-in reason clause — against runaway growth: it must stay well
 // under the session_start orientation budget even at a 3-digit hidden count
-// and the longest known reason string.
+// and the longest known reason string ("unverified-deferred-discovery", 29
+// bytes — one longer than "verified-deferred-discovery").
 func TestLeanProfileNote_Budget(t *testing.T) {
 	const budget = 256
 	for _, hidden := range []int{0, 9, 34, 999} {
-		if got := len(ProfileNote("lean", hidden, "verified-deferred-discovery")); got > budget {
+		if got := len(ProfileNote("lean", hidden, "unverified-deferred-discovery")); got > budget {
 			t.Errorf("ProfileNote(lean, %d, ...) = %d bytes, over budget %d", hidden, got, budget)
 		}
 	}

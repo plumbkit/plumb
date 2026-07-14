@@ -923,3 +923,43 @@ func TestSessionStart_EmptyPurposeIsNoOp(t *testing.T) {
 		t.Fatalf("purpose callback must not run when no purpose supplied")
 	}
 }
+
+// TestSessionStart_Idempotent proves the tool's own doc-comment claim
+// ("Idempotent — safe to call multiple times") for a connection that is
+// already pinned: a second Execute call on the same tool, with the same args,
+// must still succeed, must report the same workspace without announcing a
+// spurious re-pin, and must not duplicate the per-call side effects the tool
+// owns — the purpose and external-ID callbacks each fire exactly once per
+// Execute call (twice total across the two calls), not accumulating extra
+// invocations from the earlier call.
+func TestSessionStart_Idempotent(t *testing.T) {
+	ws := t.TempDir()
+	var purposeCalls, externalIDCalls int
+	tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+		WithPurpose(func(string) { purposeCalls++ }).
+		WithExternalID(func(string) string { externalIDCalls++; return "" })
+
+	args := json.RawMessage(`{"purpose":"deploy-fix","session_id":"abc-123"}`)
+
+	out1, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+	out2, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("second Execute: %v", err)
+	}
+
+	if !strings.Contains(out1, "# Workspace: "+ws) || !strings.Contains(out2, "# Workspace: "+ws) {
+		t.Fatalf("both calls should report the same workspace\ncall 1:\n%s\ncall 2:\n%s", out1, out2)
+	}
+	if strings.Contains(out2, "Re-pinned this connection") {
+		t.Errorf("a second call with an unchanged workspace must not announce a re-pin\n%s", out2)
+	}
+	if purposeCalls != 2 {
+		t.Errorf("purpose callback should fire exactly once per Execute call (2 calls total), got %d", purposeCalls)
+	}
+	if externalIDCalls != 2 {
+		t.Errorf("external-ID callback should fire exactly once per Execute call (2 calls total), got %d", externalIDCalls)
+	}
+}
