@@ -443,9 +443,11 @@ type SemanticsConfig struct {
 //
 // Concurrency: read-only after Load returns.
 type ToolsConfig struct {
-	// Profile is the default tool profile: "auto" (resolve from the client's
-	// native capabilities), "lean" (commodity tools hidden), or "full" (every
-	// tool advertised). Default "auto".
+	// Profile is the default tool profile: "auto" (full unless the client's
+	// internal/clientcaps registry entry declares a verified deferred-tool
+	// discovery capability — lean only for verified clients), "lean"
+	// (commodity tools hidden), or "full" (every tool advertised).
+	// Default "auto".
 	Profile string `toml:"profile"`
 	// ClientProfiles overrides Profile per MCP client, keyed by a
 	// case-insensitive clientInfo.name prefix (e.g. "claude-code"); each value is
