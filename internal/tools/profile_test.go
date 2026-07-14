@@ -2,6 +2,8 @@ package tools
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,8 +48,10 @@ func leanToolSet() []describable {
 
 // nonLeanToolSet instantiates every registered tool NOT in the lean set, again
 // with nil/zero dependencies (only the metadata methods are called). Together
-// with leanToolSet it is the full 55-tool registration, so the budget test can
-// measure the real lean-vs-full payload reduction.
+// with leanToolSet it mirrors the full tool registration — TestFullToolSet_Count
+// derives the expected count from registerAllTools itself rather than a
+// hardcoded literal — so the budget test can measure the real lean-vs-full
+// payload reduction.
 func nonLeanToolSet() []describable {
 	return []describable{
 		NewFindSymbol(nil, nil, 0, 0),
@@ -84,6 +88,11 @@ func nonLeanToolSet() []describable {
 		NewTopologyRoutes(nil),
 		NewStructuralQuery(nil, nil),
 		NewWorkspaceSearch(nil, nil),
+		NewRunCommand(nil),
+		NewExecuteShellCommand(nil),
+		NewShareIntent(CollabDeps{}),
+		NewLeaveNote(CollabDeps{}),
+		NewShareFindings(ShareFindingsDeps{}),
 	}
 }
 
@@ -122,23 +131,52 @@ func TestLeanToolSet_MatchesLeanTools(t *testing.T) {
 	}
 }
 
+// registeredToolCount scans internal/cli/conn_register.go for
+// "srv.Register(tools.New...)" lines and returns how many tools it registers —
+// the actual registration count, derived from source rather than a hardcoded
+// literal. This mirrors the source-scan technique
+// TestToolProfileClassification (internal/cli/conn_profile_test.go) uses to
+// keep the lean classification honest; the logic is duplicated here (rather
+// than shared) because internal/tools cannot import internal/cli — cli sits
+// above tools in the layered architecture, the same constraint that made
+// levenshtein get duplicated between internal/mcp and internal/tools.
+func registeredToolCount(t *testing.T) int {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("..", "cli", "conn_register.go"))
+	if err != nil {
+		t.Fatalf("reading ../cli/conn_register.go: %v", err)
+	}
+	n := 0
+	for _, line := range strings.Split(string(src), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "srv.Register(tools.New") {
+			n++
+		}
+	}
+	return n
+}
+
 // TestFullToolSet_Count guards that lean + non-lean is the whole registration.
-// The cli source-guard (TestToolProfileClassification) ties LeanTools to the
-// actual registerAllTools; this ties the two test sets to the documented count.
+// The expected count comes from registeredToolCount (registerAllTools itself)
+// rather than a hardcoded literal, so adding a tool to conn_register.go without
+// updating leanToolSet/nonLeanToolSet fails this test loudly instead of
+// silently skewing TestLeanProfileBudget's ratio. The cli source-guard
+// (TestToolProfileClassification) ties LeanTools to the actual
+// registerAllTools; this ties the two test sets in this file to the same
+// source of truth.
 func TestFullToolSet_Count(t *testing.T) {
-	const registered = 55
+	registered := registeredToolCount(t)
 	full := len(leanToolSet()) + len(nonLeanToolSet())
 	if full != registered {
-		t.Errorf("lean(%d) + non-lean(%d) = %d tools, want %d (AGENTS.md tool count) — update the sets",
+		t.Errorf("lean(%d) + non-lean(%d) = %d tools, want %d (registerAllTools registration count) — update the sets",
 			len(leanToolSet()), len(nonLeanToolSet()), full, registered)
 	}
 }
 
 // TestLeanProfileBudget asserts the lean profile's payload is a substantial
 // reduction over the full list — that IS the feature. The lean set still
-// contains the heavyweight write tools, so the win is hiding the ~33 commodity
-// tools (plus the description diet), not an absolute floor. The ratio cap guards
-// the reduction without pinning brittle absolute byte counts.
+// contains the heavyweight write tools, so the win is hiding the non-lean
+// commodity tools (plus the description diet), not an absolute floor. The
+// ratio cap guards the reduction without pinning brittle absolute byte counts.
 func TestLeanProfileBudget(t *testing.T) {
 	lean := payloadBytes(t, leanToolSet())
 	full := payloadBytes(t, append(leanToolSet(), nonLeanToolSet()...))
@@ -158,7 +196,7 @@ func TestLeanProfileBudget(t *testing.T) {
 // the folded-in reason clause — against runaway growth: it must stay well
 // under the session_start orientation budget even at a 3-digit hidden count
 // and the longest known reason string ("unverified-deferred-discovery", 29
-// bytes — one longer than "verified-deferred-discovery").
+// bytes — two bytes longer than "verified-deferred-discovery", 27 bytes).
 func TestLeanProfileNote_Budget(t *testing.T) {
 	const budget = 256
 	for _, hidden := range []int{0, 9, 34, 999} {

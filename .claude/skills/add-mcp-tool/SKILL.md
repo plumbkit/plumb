@@ -55,6 +55,13 @@ which clients see the tool under the lean profile *and* whether Claude Code pins
 up front instead of deferring it to `ToolSearch`. Don't add a tool to `LeanTools` casually;
 it is a shared, high-stakes list.
 
+**Update `internal/tools/profile_test.go`'s fixture sets, or the test will catch it for
+you.** `leanToolSet`/`nonLeanToolSet` instantiate every registered tool (nil/zero deps) to
+measure the lean-vs-full `tools/list` payload — add your new constructor to whichever set
+matches the decision above. `TestFullToolSet_Count` derives the expected total from
+`registerAllTools` itself (a source scan, not a hardcoded literal), so forgetting this step
+now fails that test loudly instead of silently skewing `TestLeanProfileBudget`'s ratio.
+
 ## 5. Tests
 
 Add `internal/tools/<name>_test.go`; `WriteDeps{}` is the nil-safe zero-value setup for
