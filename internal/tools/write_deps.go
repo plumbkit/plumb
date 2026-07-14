@@ -158,6 +158,12 @@ const longPostWriteDiagWindow = 5 * time.Second
 // source is unset or there is nothing to report). content is the new file
 // content; its line count down-ranks provably-stale, past-EOF diagnostics.
 //
+// Mode-aware: on a pull/hybrid connection the refresh is an on-demand pull of
+// the edited URI (post_write_diag_pull.go) rather than a wait for the next
+// publishDiagnostics push — which, per the Invalidator's waiter contract, a
+// pull would never wake. Push mode (and any client without mode awareness)
+// keeps the wait-based behaviour below unchanged.
+//
 // When awaitFresh is set the wait is extended to longPostWriteDiagWindow so the
 // result is trustworthy, and a clean fresh pass is stated explicitly rather than
 // implied by silence — closing the "I had to shell out to go build to be sure"
@@ -166,6 +172,9 @@ const longPostWriteDiagWindow = 5 * time.Second
 func (d WriteDeps) postWriteDiagnostics(uri, before, content string, awaitFresh bool, baseline *diagBaseline) string {
 	if d.Diag == nil {
 		return ""
+	}
+	if out, handled := d.pullPostWriteDiagnostics(uri, before, content, awaitFresh, baseline); handled {
+		return out
 	}
 	ceiling := d.postWriteDiagWindow()
 	if awaitFresh && ceiling >= 0 && ceiling < longPostWriteDiagWindow {
