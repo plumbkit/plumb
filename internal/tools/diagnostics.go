@@ -40,24 +40,24 @@ type fileOpener interface {
 	DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error
 }
 
-// pullDiagnoser is the optional LSP 3.17 pull-diagnostics capability
+// pullDiagnoser is the LSP 3.17 document-pull capability
 // (textDocument/diagnostic). The diagnostics tool type-asserts its opener to it
-// and, when the server advertised pull support, requests diagnostics directly
-// for a file the push stream never reported on — the model zls and
-// typescript-language-server use instead of pushing publishDiagnostics. Adapters
-// that only push (gopls, pyright) do not implement it, so the pull path stays
-// dormant for them.
+// on two paths:
 //
-// NOTE: this consumption path is routed live through the session proxy
-// (routingProxy implements this interface by delegating to the per-file
-// adapter), so it fires for any installed server that advertises pull support.
-// The pull *client* capability is still deliberately NOT advertised in
-// DefaultClientCapabilities: advertising it risks a dual-mode server (gopls)
-// switching to pull-only and ceasing to push publishDiagnostics, which would
-// regress the validated push path. With it un-advertised, no currently-installed
-// server (gopls, zls) advertises diagnosticProvider, so the live path is dormant
-// in practice until a pull-only server is in use — but it is no longer dormant by
-// construction. See the diagnostics design notes.
+//   - Mode-aware (primary): when the connection's resolved diagnostics mode for
+//     a URI is "pull" or "hybrid" — a negotiated, config-gated outcome of the
+//     [lsp.<lang>] diagnostics knob, never a guess — the tool pulls on demand
+//     and records results in the session cache (see diagnostics_pull.go).
+//   - Legacy structural fallback: for an untracked, push-empty URI on a
+//     connection without a resolved mode, tryPull asks a server that happens to
+//     advertise diagnosticProvider directly (see tryPull).
+//
+// Pull is a first-class negotiated mode, not a server-imposed requirement: no
+// currently-validated server requires it (zls and typescript-language-server
+// push once the publishDiagnostics client capability is advertised, and
+// typescript-language-server answers textDocument/diagnostic with -32601 —
+// the downgrade path). The pull client capability is only advertised when the
+// user configures diagnostics = "pull" for a language.
 type pullDiagnoser interface {
 	SupportsPullDiagnostics() bool
 	Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error)
@@ -151,24 +151,36 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 
 	switch len(a.URIs) {
 	case 0:
-		if ts, ok := t.inv.(timedDiagnosticsSource); ok {
-			return formatDiagnosticsWithTimes(t.inv.AllDiagnostics(), ts.AllDiagnosticTimes()), nil
-		}
-		return formatDiagnostics(t.inv.AllDiagnostics()), nil
+		return t.allFiles(ctx), nil
 	case 1:
 		return t.singleURI(ctx, a.URIs[0]), nil
 	default:
-		return t.multiURI(a.URIs), nil
+		return t.multiURI(ctx, a.URIs), nil
 	}
 }
 
+// singleURI dispatches a single-file query by the connection's resolved
+// diagnostics mode for that URI: pull/hybrid pulls on demand
+// (diagnostics_pull.go); everything else — push, unresolved, or an opener
+// without mode awareness — keeps the historical push behaviour byte for byte.
 func (t *Diagnostics) singleURI(ctx context.Context, uri string) string {
+	if pullModeActive(t.modeFor(uri)) {
+		if _, ok := t.opener.(pullDiagnoser); ok {
+			return t.singleURIPull(ctx, uri)
+		}
+	}
+	return t.singleURIPush(ctx, uri)
+}
+
+func (t *Diagnostics) singleURIPush(ctx context.Context, uri string) string {
 	diags := t.inv.Diagnostics(uri)
 	if len(diags) == 0 {
 		// Distinguish "analysed and clean" from "never reported on".
 		if !t.inv.Tracked(uri) {
-			// A pull-only server (zls / typescript-language-server) never pushes,
-			// so the push cache is empty: ask it directly before opening + waiting.
+			// Legacy structural fallback: a server that advertises pull support
+			// under a push negotiation can be asked directly before opening +
+			// waiting. Dormant for every validated server today (none advertises
+			// diagnosticProvider under push capabilities).
 			if pulled, ok := t.tryPull(ctx, uri); ok {
 				return pulled
 			}
@@ -260,14 +272,6 @@ func languageIDFromURI(uri string) string {
 	default:
 		return "plaintext"
 	}
-}
-
-func (t *Diagnostics) multiURI(uris []string) string {
-	merged := make(map[string][]protocol.Diagnostic, len(uris))
-	for _, uri := range uris {
-		merged[uri] = t.inv.Diagnostics(uri)
-	}
-	return formatDiagnostics(merged)
 }
 
 // FormatDiagnostics renders a URI→diagnostics map as a human-readable string.

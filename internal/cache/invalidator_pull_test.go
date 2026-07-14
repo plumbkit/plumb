@@ -316,6 +316,27 @@ func TestDiagnosticSources(t *testing.T) {
 	}
 }
 
+// AllPullResultIDs returns every recorded (URI, result ID) pair sorted by URI
+// — the previousResultIds payload for a workspace/diagnostic request — and an
+// empty non-nil slice when nothing is recorded.
+func TestAllPullResultIDs(t *testing.T) {
+	inv := newInv(t)
+	if ids := inv.AllPullResultIDs(); ids == nil || len(ids) != 0 {
+		t.Fatalf("empty invalidator: want empty non-nil slice, got %#v", ids)
+	}
+	inv.RecordPullFull("file:///p/z.go", "rz", nil)
+	inv.RecordPullFull("file:///p/a.go", "ra", nil)
+	inv.RecordPullFull("file:///p/noid.go", "", nil) // no result ID: excluded
+	ids := inv.AllPullResultIDs()
+	if len(ids) != 2 {
+		t.Fatalf("want 2 IDs, got %#v", ids)
+	}
+	if ids[0].URI != "file:///p/a.go" || ids[0].Value != "ra" ||
+		ids[1].URI != "file:///p/z.go" || ids[1].Value != "rz" {
+		t.Errorf("want sorted-by-URI pairs, got %#v", ids)
+	}
+}
+
 // ClearPullState drops all pull result IDs and pull snapshots but leaves push
 // diagnostics (which a fresh server re-publishes) untouched.
 func TestClearPullState(t *testing.T) {

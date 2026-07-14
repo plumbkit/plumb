@@ -20,6 +20,14 @@ import (
 //
 // Concurrency: Handle, the RecordPull* methods, and all accessor methods are
 // safe for concurrent use; every field below is guarded by diagsMu.
+//
+// Waiter contract: only push notifications (Handle) wake WaitDiagnostics /
+// WaitNextDiagnostics subscribers. The RecordPull* methods deliberately never
+// signal subs — a pull is a client-initiated request/response, not a
+// server-initiated event, and the post-write path relies on WaitNextDiagnostics
+// meaning strictly "a new publishDiagnostics push arrived". A pull-mode caller
+// reads the recorded snapshot directly (Diagnostics/AllDiagnostics) rather than
+// waiting.
 type Invalidator struct {
 	cache     *Cache
 	diagsMu   sync.RWMutex
@@ -95,9 +103,11 @@ func (inv *Invalidator) WaitDiagnostics(ctx context.Context, uri string) ([]prot
 	ch := make(chan struct{}, 1)
 
 	inv.diagsMu.Lock()
-	if d, ok := inv.diags[uri]; ok {
-		out := make([]protocol.Diagnostic, len(d))
-		copy(out, d)
+	if inv.trackedLocked(uri) {
+		// Already reported on via either channel — serve the deduplicated
+		// push+pull union rather than the push-only snapshot, so a URI a
+		// pull-only server answered (no push ever arrives) is not left blocking.
+		out := inv.mergedLocked(uri)
 		inv.diagsMu.Unlock()
 		return out, nil
 	}
@@ -178,6 +188,12 @@ func (inv *Invalidator) WaitNextDiagnostics(ctx context.Context, uri string) ([]
 func (inv *Invalidator) Tracked(uri string) bool {
 	inv.diagsMu.RLock()
 	defer inv.diagsMu.RUnlock()
+	return inv.trackedLocked(uri)
+}
+
+// trackedLocked reports whether either channel has reported on uri. The caller
+// must hold diagsMu (read or write).
+func (inv *Invalidator) trackedLocked(uri string) bool {
 	if _, ok := inv.diags[uri]; ok {
 		return true
 	}

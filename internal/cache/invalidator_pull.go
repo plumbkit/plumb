@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -36,6 +37,10 @@ const (
 // an empty full is a valid "no issues" result) and stores resultID for future
 // previousResultId use. An empty resultID records the snapshot but no known
 // result ID (the server gave the client nothing to cache against).
+//
+// It does NOT wake WaitDiagnostics/WaitNextDiagnostics subscribers: those waits
+// are push-only by contract (see the Invalidator doc). A pull caller reads the
+// recorded snapshot back directly.
 //
 // The empty-URI boundary check mirrors Handle(): an empty URI is a no-op.
 func (inv *Invalidator) RecordPullFull(uri, resultID string, diags []protocol.Diagnostic) {
@@ -110,6 +115,22 @@ func (inv *Invalidator) PullResultID(uri string) (string, bool) {
 	defer inv.diagsMu.RUnlock()
 	id, ok := inv.pullResultIDs[uri]
 	return id, ok
+}
+
+// AllPullResultIDs returns every (URI, result ID) pair recorded from pull
+// reports, sorted by URI for deterministic request payloads. Callers pass the
+// slice as previousResultIds on a workspace/diagnostic request so the server
+// can answer "unchanged" per document. Returns an empty (non-nil) slice when
+// no result IDs are known.
+func (inv *Invalidator) AllPullResultIDs() []protocol.PreviousResultID {
+	inv.diagsMu.RLock()
+	defer inv.diagsMu.RUnlock()
+	out := make([]protocol.PreviousResultID, 0, len(inv.pullResultIDs))
+	for uri, id := range inv.pullResultIDs {
+		out = append(out, protocol.PreviousResultID{URI: uri, Value: id})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].URI < out[j].URI })
+	return out
 }
 
 // ClearPullState drops every pull snapshot, result ID, and pull timestamp,
