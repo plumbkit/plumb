@@ -131,9 +131,9 @@ restarts them transparently.`,
 }
 
 // renderLSPStatus turns the daemon's tab-separated lsp-status reply
-// (language, root, state, pid, rss_bytes, idle_seconds per line) into an aligned
-// table. Presentation lives here, not in the daemon, so the wire format stays
-// raw values.
+// (language, root, state, pid, rss_bytes, idle_seconds, diag=<mode> per line)
+// into an aligned table. Presentation lives here, not in the daemon, so the wire
+// format stays raw values.
 func renderLSPStatus(resp string) string {
 	resp = strings.TrimRight(resp, "\n")
 	if resp == "" {
@@ -141,13 +141,14 @@ func renderLSPStatus(resp string) string {
 	}
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE")
+	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE\tDIAG")
 	for _, line := range strings.Split(resp, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 6 {
+		if len(f) != 7 {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]))
+		diag := dashIfEmpty(strings.TrimPrefix(f[6], "diag="))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]), diag)
 	}
 	_ = w.Flush()
 	return b.String()

@@ -23,15 +23,18 @@ import (
 // clientProxy.lastUsed (proxy.go).
 
 // lspStatusReport renders one tab-separated line per pooled language server —
-// language, root, lifecycle state, PID, RSS bytes, idle seconds — for the
-// `plumb debug lsp` admin command. Empty PID/RSS fields mean the process is not
-// running (hibernated or warming). The map is snapshotted under p.mu; RSS
-// sampling (which may shell out on macOS) runs after the lock is released.
+// language, root, lifecycle state, PID, RSS bytes, idle seconds, and the
+// resolved diagnostics mode (`diag=<mode>`) — for the `plumb debug lsp` admin
+// command. Empty PID/RSS fields mean the process is not running (hibernated or
+// warming); an empty diag mode (`diag=`) means it is not yet resolved. The map
+// is snapshotted under p.mu; RSS sampling (which may shell out on macOS) runs
+// after the lock is released.
 func (p *workspacePool) lspStatusReport() string {
 	type row struct {
 		lang, root, state string
 		pid               int
 		lastUsed          int64
+		diag              string
 	}
 	p.mu.Lock()
 	rows := make([]row, 0, len(p.entries))
@@ -40,7 +43,7 @@ func (p *workspacePool) lspStatusReport() string {
 		if e.sup != nil {
 			pid = e.sup.PID()
 		}
-		rows = append(rows, row{k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load()})
+		rows = append(rows, row{k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load(), e.diagMode})
 	}
 	p.mu.Unlock()
 	sort.Slice(rows, func(i, j int) bool {
@@ -60,7 +63,7 @@ func (p *workspacePool) lspStatusReport() string {
 			}
 		}
 		idle := (now - r.lastUsed) / int64(time.Second)
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\n", r.lang, r.root, r.state, pidStr, rssStr, idle)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\tdiag=%s\n", r.lang, r.root, r.state, pidStr, rssStr, idle, r.diag)
 	}
 	return b.String()
 }

@@ -91,6 +91,8 @@ func lspFieldName(key settingKey) (string, bool) {
 		return "args", true
 	case skLSPRootMarkers:
 		return "root_markers", true
+	case skLSPDiagnostics:
+		return "diagnostics", true
 	default:
 		return "", false
 	}
@@ -112,6 +114,8 @@ func applyLSPField(c *config.Config, lang string, key settingKey, value any) {
 		e.Args, _ = value.([]string)
 	case skLSPRootMarkers:
 		e.RootMarkers, _ = value.([]string)
+	case skLSPDiagnostics:
+		e.Diagnostics, _ = value.(string)
 	}
 	c.LSP[lang] = e
 }

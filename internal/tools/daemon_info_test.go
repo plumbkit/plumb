@@ -85,6 +85,10 @@ func TestDaemonInfoLSPStatusRow(t *testing.T) {
 		want   string     // "" ⇒ the row must be absent
 	}{
 		{"ready", &LSPStatus{Language: "go"}, "lsp:            ready (go)"},
+		{"ready push mode stays quiet", &LSPStatus{Language: "go", DiagnosticsMode: "push"}, "lsp:            ready (go)"},
+		{"ready pull mode is surfaced", &LSPStatus{Language: "go", DiagnosticsMode: "pull"}, "lsp:            ready (go, diagnostics: pull)"},
+		{"ready hybrid mode is surfaced", &LSPStatus{Language: "go", DiagnosticsMode: "hybrid"}, "lsp:            ready (go, diagnostics: hybrid)"},
+		{"ready pull-unavailable is surfaced", &LSPStatus{Language: "go", DiagnosticsMode: "pull-requested-but-unavailable"}, "lsp:            ready (go, diagnostics: pull-requested-but-unavailable)"},
 		{"warming with elapsed", &LSPStatus{Language: "go", Warming: true, Elapsed: 3200 * time.Millisecond}, "lsp:            warming (go, ~3s elapsed)"},
 		{"warming without elapsed", &LSPStatus{Language: "go", Warming: true}, "lsp:            warming (go)"},
 		{"empty language means none attached", &LSPStatus{}, "lsp:            none attached"},

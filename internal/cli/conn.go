@@ -388,6 +388,18 @@ func (s *connSession) lspWarming() (bool, time.Duration) {
 	return s.sessionProxy.WarmupStatus("")
 }
 
+// lspDiagMode reports the resolved diagnostics mode of this session's primary
+// language server (push / pull / hybrid / pull-requested-but-unavailable), or ""
+// when no server is attached or the mode is not yet resolved. daemon_info and
+// session_start surface it — the mode is authoritative negotiation state, never
+// inferred from cache contents.
+func (s *connSession) lspDiagMode() string {
+	if s.acquiredLanguageName() == "" {
+		return ""
+	}
+	return s.sessionProxy.DiagMode("")
+}
+
 // sessionName returns the current human-readable session name.
 func (s *connSession) sessionName() string {
 	return s.view().sessName

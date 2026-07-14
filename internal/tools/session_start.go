@@ -77,26 +77,27 @@ type RootsResolver func(ctx context.Context) string
 // per-session signal, which is why it may enter via the roots resolver above
 // — always Detect-validated and never persisted as the sticky pin.
 type SessionStart struct {
-	ws           WorkspaceFn
-	diag         diagnosticsSource                                                     // may be nil; diagnostics section skipped when nil
-	roots        RootsResolver                                                         // may be nil; roots/list fallback skipped when nil
-	refuseFn     func() bool                                                           // may be nil; treated as false (no refusal)
-	clientNameFn func() string                                                         // may be nil; returns current MCP client name
-	topo         topologyStoreFn                                                       // may be nil; returns the live topology store, or nil when disabled
-	gitPolicyFn  func() GitPolicy                                                      // may be nil; git policy section skipped when nil
-	lspLangFn    func() string                                                         // may be nil; the LSP language attached to this session ("" when none)
-	lspLangsFn   func() []string                                                       // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
-	externalIDFn func(id string) string                                                // may be nil; links session to external ID, returns inherited name
-	pinConflict  func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
-	repin        func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
-	episodicFn   func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
-	toolProfile  func() (profile string, hidden int, reason string)                    // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
-	lspWarmingFn func() (bool, time.Duration)                                          // may be nil; reports whether the primary LSP is still warming + elapsed
-	purposeFn    func(purpose string)                                                  // may be nil; persists a validated session purpose tag
-	selfSessID   string                                                                // this session's ID, excluded from the peer digest
-	collabFn     func() (peerAwareness bool, hintBudgetBytes int)                      // may be nil; the resolved [collab] snapshot for the peer digest
-	mailboxFn    func() (on bool, store *collab.Store, self string, budgetBytes int)   // may be nil; the phase-2 mailbox delivery snapshot
-	xcodeHintFn  XcodeHintFn                                                           // may be nil; bare-Xcode BSP guidance
+	ws            WorkspaceFn
+	diag          diagnosticsSource                                                     // may be nil; diagnostics section skipped when nil
+	roots         RootsResolver                                                         // may be nil; roots/list fallback skipped when nil
+	refuseFn      func() bool                                                           // may be nil; treated as false (no refusal)
+	clientNameFn  func() string                                                         // may be nil; returns current MCP client name
+	topo          topologyStoreFn                                                       // may be nil; returns the live topology store, or nil when disabled
+	gitPolicyFn   func() GitPolicy                                                      // may be nil; git policy section skipped when nil
+	lspLangFn     func() string                                                         // may be nil; the LSP language attached to this session ("" when none)
+	lspLangsFn    func() []string                                                       // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
+	externalIDFn  func(id string) string                                                // may be nil; links session to external ID, returns inherited name
+	pinConflict   func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
+	repin         func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
+	episodicFn    func(ws string) (string, bool)                                        // may be nil; returns the last episodic summary for the workspace
+	toolProfile   func() (profile string, hidden int, reason string)                    // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
+	lspWarmingFn  func() (bool, time.Duration)                                          // may be nil; reports whether the primary LSP is still warming + elapsed
+	lspDiagModeFn func() string                                                         // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
+	purposeFn     func(purpose string)                                                  // may be nil; persists a validated session purpose tag
+	selfSessID    string                                                                // this session's ID, excluded from the peer digest
+	collabFn      func() (peerAwareness bool, hintBudgetBytes int)                      // may be nil; the resolved [collab] snapshot for the peer digest
+	mailboxFn     func() (on bool, store *collab.Store, self string, budgetBytes int)   // may be nil; the phase-2 mailbox delivery snapshot
+	xcodeHintFn   XcodeHintFn                                                           // may be nil; bare-Xcode BSP guidance
 }
 
 // WithXcodeHint wires side-effect-free build-server guidance into orientation.
@@ -266,6 +267,26 @@ func (t *SessionStart) lspWarming() (bool, time.Duration) {
 		return false, 0
 	}
 	return t.lspWarmingFn()
+}
+
+// WithLSPDiagMode wires an accessor for the resolved diagnostics mode of this
+// session's primary language server (push / pull / hybrid /
+// pull-requested-but-unavailable). session_start surfaces a non-default mode on
+// the "LSP is ready" line so an agent knows the connection negotiated something
+// other than the push default. Nil-safe: unset ⇒ the mode is never shown.
+// Returns the receiver for chaining.
+func (t *SessionStart) WithLSPDiagMode(fn func() string) *SessionStart {
+	t.lspDiagModeFn = fn
+	return t
+}
+
+// lspDiagMode returns the primary LSP's resolved diagnostics mode, or "" when no
+// accessor is wired.
+func (t *SessionStart) lspDiagMode() string {
+	if t.lspDiagModeFn == nil {
+		return ""
+	}
+	return t.lspDiagModeFn()
 }
 
 // NewSessionStart wires the bootstrap tool. refuseHomeRoots is consulted
