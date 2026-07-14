@@ -13,6 +13,49 @@
   `workspace_symbols`, `get_definition`, and `find_references` provide the same
   actionable guidance. Plumb does not execute Xcode tooling automatically.
 
+- **A guaranteed four-tool bootstrap set, and the resolved tool profile plus its
+  reason are now surfaced in orientation.** `session_start`, `git`, `read_file`,
+  and `edit_file` (`tools.BootstrapTools`) are now advertised in every
+  connection's initial `tools/list` no matter which profile resolves — checked
+  before `LeanTools` membership, so a lean-hidden orientation tool can never
+  become undiscoverable. `session_start`'s one-line profile note and
+  `daemon_info` both now name the resolution reason alongside the profile
+  (`client-override`, `explicit-config`, `unknown-deferred-discovery`,
+  `schema-discovery-only-client`, `verified-deferred-discovery`,
+  `unverified-deferred-discovery`), so a caller can tell *why* auto mode chose
+  lean or full, not just which it chose. Guarded by `TestBootstrapToolsAreLean`,
+  `TestBootstrapToolsExactSet`, and `TestSmoke_LeanManifestKeepsBootstrap`.
+
+### Changed
+
+- **The lean tool profile is now opt-in per client, gated on an explicit,
+  verified deferred-tool-discovery capability — Codex and Gemini CLI now
+  resolve to the full profile under `auto` (previously lean).** `autoProfileFor`
+  used to infer lean eligibility from a client's native file/search/shell
+  possession; it now requires `internal/clientcaps`' new
+  `ReliableDeferredToolDiscovery` field to be explicitly `true` — reviewed,
+  evidence-backed proof the client's model can reliably invoke a tool absent
+  from its initial `tools/list`, never an inference from unrelated native
+  tooling. No shipped client carries the flag yet, so `auto` now resolves every
+  client (including Codex and Gemini CLI) to **full**; an explicit `[tools]
+  profile` or per-client override is unaffected. Guarded by `TestAutoProfileFor`,
+  `TestResolveToolProfile`, `TestResolveToolProfile_CodexAutoResolvesFull`, and
+  `TestClientProfileContractMatrix`.
+
+### Fixed
+
+- **`internal/tools/profile_test.go`'s synthetic lean/non-lean tool-set fixtures
+  had drifted from the registry — 55 tools fixtured against 60 actually
+  registered, silently understating the lean-vs-full payload reduction
+  `TestLeanProfileBudget` measures.** `run_command`, `execute_shell_command`,
+  `share_intent`, `leave_note`, and `share_findings` were missing from
+  `nonLeanToolSet`. `TestFullToolSet_Count` no longer compares against a
+  hardcoded literal: it now derives the expected count from `registerAllTools`
+  itself via the same source-scan technique `TestToolProfileClassification`
+  (`internal/cli`) uses, so the next tool added to the registry without a
+  matching fixture update fails this test loudly instead of silently skewing
+  the ratio.
+
 ## 0.11.2 (2026-07-12)
 
 ### Added

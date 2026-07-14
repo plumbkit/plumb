@@ -295,11 +295,26 @@ it needs an embedding endpoint you supply; nothing about it is provisional.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-commodity duplicates. Project-overridable.
+the non-lean remainder (39 tools today). Project-overridable.
+
+**Auto resolution is capability-gated, not a config setting.** `auto` resolves
+to **lean** only when the connecting client's entry in `internal/clientcaps`
+declares `ReliableDeferredToolDiscovery = true` — reviewed, evidence-based proof
+that its model reliably discovers and invokes a tool absent from its initial
+`tools/list` (a ToolSearch-style deferred mechanism). That flag is compiled-in
+registry data, not one of the config keys below and not something a project or
+env var can flip; no shipped client (including Codex and Gemini CLI, despite
+their strong native file/search/shell access) carries it yet, so `auto`
+resolves to **full** for every client today. `session_start` and `daemon_info`
+report which rule decided, via a stable reason string: `client-override`,
+`explicit-config`, `unknown-deferred-discovery`, `schema-discovery-only-client`,
+`verified-deferred-discovery`, or `unverified-deferred-discovery`. A fixed
+four-tool bootstrap set (`session_start`, `git`, `read_file`, `edit_file`) is
+always advertised regardless of the resolved profile.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `profile` | string | `"auto"` | `PLUMB_TOOLS_PROFILE` | `auto` (resolve from the client's native capabilities) \| `lean` (commodity tools hidden) \| `full` (every tool advertised). |
+| `profile` | string | `"auto"` | `PLUMB_TOOLS_PROFILE` | `auto` (capability-gated — lean only for a client with a verified deferred-discovery capability, full otherwise; see above) \| `lean` (non-bootstrap commodity tools hidden) \| `full` (every tool advertised). |
 | `client_profiles` | map | `{}` | — | Per-client override, keyed by a case-insensitive `clientInfo.name` prefix (e.g. `"claude-code"`); each value is `auto`\|`lean`\|`full`. An empty or absent entry falls through to `profile`. |
 
 ## `[lsp.<language>]` — language servers
