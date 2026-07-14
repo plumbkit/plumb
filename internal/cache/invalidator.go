@@ -12,22 +12,37 @@ import (
 // Invalidator subscribes to LSP server notifications, evicts cache entries
 // when a document changes, and stores the latest diagnostics per document.
 //
-// Concurrency: Handle and all accessor methods are safe for concurrent use.
+// It holds two independent per-URI snapshots: the PUSH snapshot (diags,
+// populated by textDocument/publishDiagnostics via Handle) and the PULL snapshot
+// (pullDiags, populated by textDocument/diagnostic reports via RecordPull*, see
+// invalidator_pull.go). The readers below expose the deduplicated union of the
+// two, so a URI reported by either channel — or both — presents as one view.
+//
+// Concurrency: Handle, the RecordPull* methods, and all accessor methods are
+// safe for concurrent use; every field below is guarded by diagsMu.
 type Invalidator struct {
 	cache     *Cache
 	diagsMu   sync.RWMutex
-	diags     map[string][]protocol.Diagnostic // keyed by document URI
+	diags     map[string][]protocol.Diagnostic // push snapshot, keyed by document URI
 	diagTimes map[string]time.Time             // last publishDiagnostics time per URI
 	subs      map[string][]chan struct{}       // WaitDiagnostics subscribers
+
+	// Pull-diagnostics state (see invalidator_pull.go), also guarded by diagsMu.
+	pullDiags     map[string][]protocol.Diagnostic // pull snapshot per URI
+	pullResultIDs map[string]string                // last non-empty result ID per URI
+	pullTimes     map[string]time.Time             // last pull update time per URI
 }
 
 // NewInvalidator creates an Invalidator backed by c.
 // Register its Handle method via adapter.Subscribe to receive notifications.
 func NewInvalidator(c *Cache) *Invalidator {
 	return &Invalidator{
-		cache:     c,
-		diags:     make(map[string][]protocol.Diagnostic),
-		diagTimes: make(map[string]time.Time),
+		cache:         c,
+		diags:         make(map[string][]protocol.Diagnostic),
+		diagTimes:     make(map[string]time.Time),
+		pullDiags:     make(map[string][]protocol.Diagnostic),
+		pullResultIDs: make(map[string]string),
+		pullTimes:     make(map[string]time.Time),
 	}
 }
 
@@ -60,18 +75,13 @@ func (inv *Invalidator) Handle(method string, params json.RawMessage) {
 	inv.diagsMu.Unlock()
 }
 
-// Diagnostics returns a copy of the latest diagnostics for the given URI.
-// Returns nil if no diagnostics have been received for that URI yet.
+// Diagnostics returns a copy of the latest diagnostics for the given URI: the
+// deduplicated union of its push and pull snapshots. Returns nil if neither
+// channel has reported on that URI yet.
 func (inv *Invalidator) Diagnostics(uri string) []protocol.Diagnostic {
 	inv.diagsMu.RLock()
 	defer inv.diagsMu.RUnlock()
-	d := inv.diags[uri]
-	if d == nil {
-		return nil
-	}
-	out := make([]protocol.Diagnostic, len(d))
-	copy(out, d)
-	return out
+	return inv.mergedLocked(uri)
 }
 
 // WaitDiagnostics blocks until the language server publishes diagnostics for
@@ -161,37 +171,52 @@ func (inv *Invalidator) WaitNextDiagnostics(ctx context.Context, uri string) ([]
 	}
 }
 
-// Tracked reports whether the language server has ever published diagnostics
-// for uri. It is cheaper than AllDiagnostics()[uri] for an existence check.
+// Tracked reports whether the language server has ever reported diagnostics for
+// uri via either channel (a pushed publishDiagnostics or a pull report,
+// including an empty full report — a real "no issues" answer). It is cheaper
+// than AllDiagnostics()[uri] for an existence check.
 func (inv *Invalidator) Tracked(uri string) bool {
 	inv.diagsMu.RLock()
 	defer inv.diagsMu.RUnlock()
-	_, ok := inv.diags[uri]
+	if _, ok := inv.diags[uri]; ok {
+		return true
+	}
+	_, ok := inv.pullDiags[uri]
 	return ok
 }
 
-// AllDiagnostics returns a copy of every URI → diagnostics entry received so far.
+// AllDiagnostics returns a copy of every URI → diagnostics entry received so
+// far, each as the deduplicated union of its push and pull snapshots.
 func (inv *Invalidator) AllDiagnostics() map[string][]protocol.Diagnostic {
 	inv.diagsMu.RLock()
 	defer inv.diagsMu.RUnlock()
-	out := make(map[string][]protocol.Diagnostic, len(inv.diags))
-	for uri, d := range inv.diags {
-		cp := make([]protocol.Diagnostic, len(d))
-		copy(cp, d)
-		out[uri] = cp
+	out := make(map[string][]protocol.Diagnostic, len(inv.diags)+len(inv.pullDiags))
+	for uri := range inv.diags {
+		out[uri] = inv.mergedLocked(uri)
+	}
+	for uri := range inv.pullDiags {
+		if _, done := out[uri]; !done {
+			out[uri] = inv.mergedLocked(uri)
+		}
 	}
 	return out
 }
 
 // AllDiagnosticTimes returns a copy of the last-received timestamp for each
-// tracked URI. Use alongside AllDiagnostics to detect entries that may be
-// stale relative to the file's current mtime.
+// tracked URI — the more recent of its push and pull update times. Use
+// alongside AllDiagnostics to detect entries that may be stale relative to the
+// file's current mtime.
 func (inv *Invalidator) AllDiagnosticTimes() map[string]time.Time {
 	inv.diagsMu.RLock()
 	defer inv.diagsMu.RUnlock()
-	out := make(map[string]time.Time, len(inv.diagTimes))
+	out := make(map[string]time.Time, len(inv.diagTimes)+len(inv.pullTimes))
 	for k, v := range inv.diagTimes {
 		out[k] = v
+	}
+	for k, v := range inv.pullTimes {
+		if cur, ok := out[k]; !ok || v.After(cur) {
+			out[k] = v
+		}
 	}
 	return out
 }

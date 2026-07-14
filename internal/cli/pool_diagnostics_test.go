@@ -2,7 +2,9 @@ package cli
 
 import (
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -113,6 +115,33 @@ func TestDiagnosticsHybridFlip(t *testing.T) {
 			t.Errorf("diagMode = %q, want pull (unrelated notification must not flip)", e.diagMode)
 		}
 	})
+}
+
+// clearEntryPullState drops a pool entry's pull-diagnostics result IDs and
+// snapshots (the seam poolOnStart runs when a server process (re)starts), and is
+// nil-safe for an entry that never attached an Invalidator.
+func TestClearEntryPullState(t *testing.T) {
+	c := cache.New(time.Hour)
+	defer c.Close()
+	inv := cache.NewInvalidator(c)
+	uri := "file:///x/a.go"
+	inv.RecordPullFull(uri, "rid-1", []protocol.Diagnostic{{Message: "boom"}})
+	if _, ok := inv.PullResultID(uri); !ok {
+		t.Fatal("precondition: expected a stored pull result ID")
+	}
+
+	e := &poolEntry{root: "/x", language: "go", inv: inv}
+	clearEntryPullState(e)
+
+	if _, ok := inv.PullResultID(uri); ok {
+		t.Error("clearEntryPullState must drop the pull result ID")
+	}
+	if ok := inv.RecordPullUnchanged(uri, "rid-1"); ok {
+		t.Error("after clear, a formerly-known result ID must no longer match")
+	}
+
+	// Nil-safe: an entry with no Invalidator must not panic.
+	clearEntryPullState(&poolEntry{root: "/y", language: "go"})
 }
 
 // diagModeFor reads the resolved mode of a pooled entry under the pool lock,

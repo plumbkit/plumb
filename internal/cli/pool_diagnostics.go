@@ -96,6 +96,29 @@ func (p *workspacePool) diagnosticsHybridFlip(e *poolEntry) func(string, json.Ra
 	}
 }
 
+// clearEntryPullState drops any pull-diagnostics result IDs and pull snapshots
+// held by an entry's Invalidator, so a freshly started — or just-woken — server
+// process never matches a previousResultId it did not issue (a stale ID could
+// elicit a false "unchanged", and with it a false clean, violating the safety
+// invariant). Push diagnostics are left intact: a fresh server re-publishes
+// them.
+//
+// This is the single (re)start seam. It is invoked from poolOnStart, which the
+// supervisor re-runs on BOTH a fresh start and every wake from hibernation
+// (wakeLocked → sup.StartAsync re-runs the captured OnStart), so both cases are
+// covered without taking the Invalidator lock under the pool mutex — keeping the
+// pool→invalidator direction lock-free and preserving the existing lock
+// discipline. A config reload does not restart the server (the [lsp.<lang>]
+// diagnostics knob is ReloadNextSession, so a running server's negotiated mode
+// and its result IDs stay valid), and a re-pin either reuses a live server
+// (whose IDs are valid) or wakes one (covered here); neither needs its own
+// clear. State is per poolEntry, so unrelated roots and languages are untouched.
+func clearEntryPullState(e *poolEntry) {
+	if e.inv != nil {
+		e.inv.ClearPullState()
+	}
+}
+
 // diagModeFor returns the resolved diagnostics mode of the pooled (root,
 // language) entry, or "" when no such entry exists (or its mode is not yet
 // resolved). Read under the pool mutex. Surfacing calls this; it never infers a
