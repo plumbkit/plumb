@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 const tierDTimeout = 60 * time.Second
@@ -176,6 +177,103 @@ func TestSmoke_ToolListParity(t *testing.T) {
 			t.Errorf("tool %q is in the self-test checklist but not registered — stale entry in internal/mcp/selftest_prompt.go", n)
 		}
 	}
+}
+
+// ─── lean manifest ─────────────────────────────────────────────────────────────
+
+// listToolNames fetches tools/list and returns the advertised tool names.
+func listToolNames(t *testing.T, c *mcpClient) map[string]bool {
+	t.Helper()
+	id, err := c.send("tools/list", map[string]any{})
+	if err != nil {
+		t.Fatal("tools/list send:", err)
+	}
+	msg, err := c.recv(id, toolTimeout)
+	if err != nil {
+		t.Fatal("tools/list:", err)
+	}
+	if msg.Error != nil {
+		t.Fatalf("tools/list error: %s", msg.Error.Message)
+	}
+	var result struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(msg.Result, &result); err != nil {
+		t.Fatal("tools/list unmarshal:", err)
+	}
+	names := make(map[string]bool, len(result.Tools))
+	for _, tl := range result.Tools {
+		names[tl.Name] = true
+	}
+	return names
+}
+
+// TestSmoke_LeanManifestKeepsBootstrap drives the live daemon with a client
+// that resolves to the LEAN profile — via a [tools.client_profiles] override
+// keyed to the harness's clientInfo name ("smoke-test", see
+// mcpClient.initialize) written into the workspace's .plumb/config.toml before
+// initialize — and asserts over the wire that the advertised manifest is
+// exactly LeanTools ∪ BootstrapTools (== LeanTools today, bootstrap ⊆ lean)
+// with all four bootstrap tools present. TestSmoke_ToolListParity covers the
+// complementary full/unknown path against the same live tools/list.
+//
+// The project config lands asynchronously (OnInit applies it in a goroutine
+// after the initialize response), so the test polls tools/list until the lean
+// profile takes effect before making the exact-set assertions.
+func TestSmoke_LeanManifestKeepsBootstrap(t *testing.T) {
+	plumbBin := buildPlumb(t)
+	fixture := makeBareFixture(t)
+	cfg := "[tools.client_profiles]\n\"smoke-test\" = \"lean\"\n"
+	if err := os.WriteFile(filepath.Join(fixture, ".plumb", "config.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal("write project config:", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), tierDTimeout)
+	defer cancel()
+
+	c := newMCPClient(t, ctx, plumbBin, mkTmpHome(t), fixture)
+	c.initialize(t, fixture)
+	c.call(t, "session_start", map[string]any{"workspace": fixture}, toolTimeout)
+
+	// Poll until the client-override resolves this connection to lean — the
+	// sentinel is any commodity tool (copy_file) disappearing from the manifest.
+	deadline := time.Now().Add(15 * time.Second)
+	var live map[string]bool
+	for {
+		live = listToolNames(t, c)
+		if !live["copy_file"] {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("lean profile never took effect — copy_file still advertised in the %d-tool manifest: %v", len(live), live)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Exactly LeanTools ∪ BootstrapTools: every expected name advertised, no
+	// stragglers beyond the expected set.
+	for name := range tools.LeanTools {
+		if !live[name] {
+			t.Errorf("lean manifest is missing lean tool %q", name)
+		}
+	}
+	for name := range tools.BootstrapTools {
+		if !live[name] {
+			t.Errorf("lean manifest is missing bootstrap tool %q", name)
+		}
+	}
+	for name := range live {
+		if !tools.IsLean(name) && !tools.IsBootstrap(name) {
+			t.Errorf("lean manifest advertises unexpected tool %q (not in LeanTools ∪ BootstrapTools)", name)
+		}
+	}
+
+	// The orientation packet must name the resolved profile and reason — the
+	// session_start surface Task 3 wired, observed here over the wire.
+	out := c.call(t, "session_start", map[string]any{"workspace": fixture}, toolTimeout)
+	assertContains(t, "session_start profile note", out, "Tool profile: lean")
+	assertContains(t, "session_start profile reason", out, "(reason: client-override)")
 }
 
 // ─── strict mode ─────────────────────────────────────────────────────────────

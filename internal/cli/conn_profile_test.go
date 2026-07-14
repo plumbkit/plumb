@@ -140,6 +140,7 @@ func TestResolveToolProfile(t *testing.T) {
 	}{
 		{"auto + claude-code => full (schema-discovery only)", config.ToolsConfig{Profile: "auto"}, "claude-code", "full", "schema-discovery-only-client"},
 		{"auto + codex => full (unverified deferred discovery)", config.ToolsConfig{Profile: "auto"}, "codex/1.2.3", "full", "unverified-deferred-discovery"},
+		{"auto + gemini => full (unverified deferred discovery)", config.ToolsConfig{Profile: "auto"}, "gemini-cli/1.0.0", "full", "unverified-deferred-discovery"},
 		{"auto + claude-desktop => full", config.ToolsConfig{Profile: "auto"}, "claude-ai", "full", "unverified-deferred-discovery"},
 		{"auto + unknown => full", config.ToolsConfig{Profile: "auto"}, "some-new-agent", "full", "unknown-deferred-discovery"},
 		{"explicit lean wins over desktop", config.ToolsConfig{Profile: "lean"}, "claude-ai", "lean", "explicit-config"},
@@ -194,22 +195,33 @@ func TestToolVisible_LeanHidesCommodityKeepsLean(t *testing.T) {
 // The second half proves the guarantee does NOT merely piggyback on
 // LeanTools membership (today bootstrap ⊂ lean, so a naive check here would
 // pass even without the IsBootstrap fast path in toolVisible). It temporarily
-// removes "read_file" from tools.LeanTools and re-checks: without the fast
-// path toolVisible falls through to tools.IsLean and would report false;
-// with the fast path it stays true regardless of LeanTools membership.
+// removes ALL FOUR bootstrap names from tools.LeanTools and re-checks each:
+// without the fast path toolVisible falls through to tools.IsLean and would
+// report false; with the fast path every one of them stays true regardless of
+// LeanTools membership.
 func TestToolVisible_BootstrapAlwaysVisible(t *testing.T) {
 	s := newProfileSession(t, config.ToolsConfig{Profile: "lean"}, "claude-code")
-	for _, name := range []string{"session_start", "git", "read_file", "edit_file"} {
+	bootstrapNames := []string{"session_start", "git", "read_file", "edit_file"}
+	for _, name := range bootstrapNames {
 		if !s.toolVisible(name) {
 			t.Errorf("bootstrap tool %q must be visible under the lean profile", name)
 		}
 	}
 
-	saved := tools.LeanTools["read_file"]
-	delete(tools.LeanTools, "read_file")
-	defer func() { tools.LeanTools["read_file"] = saved }()
-	if !s.toolVisible("read_file") {
-		t.Error("read_file must stay visible via the IsBootstrap fast path even when absent from LeanTools")
+	saved := make(map[string]bool, len(bootstrapNames))
+	for _, name := range bootstrapNames {
+		saved[name] = tools.LeanTools[name]
+		delete(tools.LeanTools, name)
+	}
+	defer func() {
+		for name, v := range saved {
+			tools.LeanTools[name] = v
+		}
+	}()
+	for _, name := range bootstrapNames {
+		if !s.toolVisible(name) {
+			t.Errorf("%s must stay visible via the IsBootstrap fast path even when absent from LeanTools", name)
+		}
 	}
 }
 
