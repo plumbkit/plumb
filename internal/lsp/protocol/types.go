@@ -224,6 +224,53 @@ type DiagnosticOptions struct {
 	WorkspaceDiagnostics  bool   `json:"workspaceDiagnostics,omitempty"`
 }
 
+// ─── Pull diagnostics (workspace/diagnostic) ─────────────────────────────────
+//
+// workspace/diagnostic lets the client pull diagnostics for the whole
+// workspace in one request/response cycle instead of per document. Only
+// servers that advertise DiagnosticOptions.WorkspaceDiagnostics support it
+// (see ServerCapabilities.DiagnosticOptions). Not yet issued by any caller —
+// these are the wire types Task 3+ builds on.
+
+// PreviousResultID pairs a URI with the resultId the client previously
+// received for it in a workspace/diagnostic response, letting the server
+// reply "unchanged" for that URI instead of recomputing its diagnostics.
+type PreviousResultID struct {
+	URI   string `json:"uri"`
+	Value string `json:"value"`
+}
+
+// WorkspaceDiagnosticParams is the request payload for workspace/diagnostic.
+// PartialResultToken is left untyped (the spec's ProgressToken is
+// `integer | string`); workDoneToken is intentionally not implemented —
+// plumb never issues progress tokens on outgoing requests.
+type WorkspaceDiagnosticParams struct {
+	Identifier         string             `json:"identifier,omitempty"`
+	PreviousResultIDs  []PreviousResultID `json:"previousResultIds"`
+	PartialResultToken any                `json:"partialResultToken,omitempty"`
+}
+
+// WorkspaceDocumentDiagnosticReport is one entry in a WorkspaceDiagnosticReport.
+// It models the union of the spec's WorkspaceFullDocumentDiagnosticReport and
+// WorkspaceUnchangedDocumentDiagnosticReport: a full report carries Items and
+// an optional ResultID; an unchanged report carries a REQUIRED ResultID and
+// no items. Both variants always carry the document's URI and its version
+// (nil when the document is not open, per the spec's `integer | null`).
+type WorkspaceDocumentDiagnosticReport struct {
+	Kind     string       `json:"kind"`
+	ResultID string       `json:"resultId,omitempty"`
+	Items    []Diagnostic `json:"items,omitempty"`
+	URI      string       `json:"uri"`
+	Version  *int32       `json:"version"`
+}
+
+// WorkspaceDiagnosticReport is the result of workspace/diagnostic: a batch of
+// per-document reports, each carrying its own uri/version alongside the
+// familiar full/unchanged report shape.
+type WorkspaceDiagnosticReport struct {
+	Items []WorkspaceDocumentDiagnosticReport `json:"items"`
+}
+
 // ─── Capabilities ────────────────────────────────────────────────────────────
 
 // BoolOrOptions represents an LSP capability field that may be a boolean true
@@ -317,6 +364,27 @@ type ServerCapabilities struct {
 // diagnostics via textDocument/publishDiagnostics instead.
 func (c *ServerCapabilities) PullDiagnosticsEnabled() bool {
 	return c.DiagnosticProvider != nil && c.DiagnosticProvider.Enabled
+}
+
+// DiagnosticOptions reports the server's pull-diagnostics options detail
+// (identifier, interFileDependencies, workspaceDiagnostics) alongside whether
+// pull diagnostics are enabled at all, so callers stop reducing the
+// diagnosticProvider capability to a bool the way PullDiagnosticsEnabled
+// does. The bool-form provider (`"diagnosticProvider":true`) yields a nil
+// options with enabled=true; the options-object form yields the populated
+// struct; an absent or `false` provider yields nil, false.
+func (c *ServerCapabilities) DiagnosticOptions() (*DiagnosticOptions, bool) {
+	if c.DiagnosticProvider == nil || !c.DiagnosticProvider.Enabled {
+		return nil, false
+	}
+	if len(c.DiagnosticProvider.Raw) == 0 {
+		return nil, true
+	}
+	var opts DiagnosticOptions
+	if err := json.Unmarshal(c.DiagnosticProvider.Raw, &opts); err != nil {
+		return nil, true
+	}
+	return &opts, true
 }
 
 // RenameEnabled reports whether the server supports rename.
@@ -415,10 +483,21 @@ type DocumentSymbolClientCapabilities struct {
 type WorkspaceClientCapabilities struct {
 	Symbol                *WorkspaceSymbolClientCapabilities       `json:"symbol,omitempty"`
 	DidChangeWatchedFiles *DidChangeWatchedFilesClientCapabilities `json:"didChangeWatchedFiles,omitempty"`
+	Diagnostics           *DiagnosticWorkspaceClientCapabilities   `json:"diagnostics,omitempty"`
 }
 
 // WorkspaceSymbolClientCapabilities describes workspace symbol client capabilities.
 type WorkspaceSymbolClientCapabilities struct{}
+
+// DiagnosticWorkspaceClientCapabilities declares whether the client
+// implements workspace/diagnostic/refresh — the server-initiated request
+// asking the client to re-pull workspace diagnostics (e.g. after a
+// dependency changed). Declared here as dormant infrastructure: it is not
+// yet set on DefaultClientCapabilities, since nothing handles the refresh
+// request yet.
+type DiagnosticWorkspaceClientCapabilities struct {
+	RefreshSupport bool `json:"refreshSupport,omitempty"`
+}
 
 // DidChangeWatchedFilesClientCapabilities lets the client declare it can
 // receive (and the server can dynamically register) watched-file events.
