@@ -49,11 +49,18 @@ type GetDefinition struct {
 	topo    topologyStoreFn // may be nil; the by-name topology fallback when the LSP is unavailable
 	warmup  LSPWarmupFn     // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 	xcode   XcodeHintFn
+	proof   XcodeProofFn
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
 func (t *GetDefinition) WithXcodeHint(fn XcodeHintFn) *GetDefinition {
 	t.xcode = fn
+	return t
+}
+
+// WithXcodeProof records non-empty SourceKit-LSP definition results.
+func (t *GetDefinition) WithXcodeProof(fn XcodeProofFn) *GetDefinition {
+	t.proof = fn
 	return t
 }
 
@@ -230,6 +237,7 @@ func (t *GetDefinition) executeByPosition(ctx context.Context, uri string, line,
 		return "", queryErr("get_definition", symbolName, err)
 	}
 
+	recordXcodeProof(t.proof, len(locs) > 0)
 	var result string
 	if len(locs) == 0 {
 		result = fmt.Sprintf("No definition found for symbol at %s:%d:%d.",

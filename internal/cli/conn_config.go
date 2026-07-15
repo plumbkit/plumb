@@ -71,10 +71,32 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// The workspace is now known (attach / re-pin / reload all funnel here), so
 	// link the per-(client, workspace) shared write budget. Idempotent.
 	s.bindWriteLimiterParent()
+	// Xcode fields are next-session settings. The first config apply for a root on
+	// this connection starts the pool-owned background flow; hot reloads do not
+	// retroactively execute newly-enabled project tooling in an existing session.
+	s.startXcodeForWorkspace(workspace, projectCfg.Xcode)
 	// A project config may set [tools] profile = "full" (or per-client) — tell the
 	// client to re-list when the resolved profile changed. Runs after the mutate
 	// above has returned, so it holds no lock when it calls view()/mutate().
 	s.maybeNotifyToolProfileChange()
+}
+
+func (s *connSession) startXcodeForWorkspace(workspace string, cfg config.XcodeConfig) {
+	if s.pool == nil || workspace == "" {
+		return
+	}
+	root := canonicalXcodeRoot(workspace)
+	s.xcodeStartedMu.Lock()
+	if s.xcodeStarted == nil {
+		s.xcodeStarted = make(map[string]bool)
+	}
+	if s.xcodeStarted[root] {
+		s.xcodeStartedMu.Unlock()
+		return
+	}
+	s.xcodeStarted[root] = true
+	s.xcodeStartedMu.Unlock()
+	s.pool.ensureXcodeBuildServer(root, cfg)
 }
 
 // maybeNotifyToolProfileChange emits notifications/tools/list_changed when the

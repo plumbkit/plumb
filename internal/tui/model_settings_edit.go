@@ -211,6 +211,8 @@ func stringField(c *config.Config, key settingKey) *string {
 		return &c.Semantics.APIKey
 	case skRastroPath:
 		return &c.Rastro.Path
+	case skXcodeScheme:
+		return &c.Xcode.Scheme
 	default:
 		return nil
 	}

@@ -95,15 +95,25 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		if s.acquiredLanguageName() != "swift" || s.workspace() == "" {
 			return ""
 		}
+		if s.pool != nil {
+			if status := s.pool.xcodeStatus(s.workspace()); status.State != "" {
+				return status.Hint()
+			}
+		}
 		return xcodebsp.Inspect(s.workspace()).Hint()
 	}
+	xcodeProofFn := func() {
+		if s.pool != nil && s.acquiredLanguageName() == "swift" && s.workspace() != "" {
+			s.pool.markXcodeSemanticProven(s.workspace())
+		}
+	}
 	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithXcodeHint(xcodeHintFn))
-	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn))
+	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
+	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
 	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithWorkspace(s.workspace))
 	srv.Register(tools.NewListSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithBoundary(boundary).WithWorkspace(s.workspace))
-	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn))
+	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithWorkspace(s.workspace))
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary).WithWorkspace(s.workspace))

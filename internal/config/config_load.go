@@ -124,6 +124,9 @@ func applyEnv(cfg *Config) {
 	if d, ok := envDuration("PLUMB_LSP_QUERY_TIMEOUT"); ok {
 		cfg.LSPQuery.Timeout = Duration{d}
 	}
+	if v, ok := envBool("PLUMB_XCODE_AUTO_BUILD_SERVER"); ok {
+		cfg.Xcode.AutoBuildServer = v
+	}
 	if v := os.Getenv("PLUMB_TOOLS_PROFILE"); v != "" {
 		cfg.Tools.Profile = v
 	}

@@ -51,7 +51,7 @@ func (m Model) adjustCycle(it settingItem, dir int) (Model, tea.Cmd) {
 		return m.setLogFormat(cycleOption(logFormatOptions, m.settingsCfg.LogFormat, dir)), nil
 	case skPathStyle:
 		return m.setPathStyle(cycleOption(pathStyleOptions, m.settingsCfg.UI.PathStyle, dir)), nil
-	case skCacheTTL, skLSPTimeout, skSemTimeout:
+	case skCacheTTL, skLSPTimeout, skSemTimeout, skXcodeTimeout:
 		return m.setDuration(it.key, dir), nil
 	default:
 		return m.setCycle(it, dir), nil
@@ -317,6 +317,8 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Session.PersistState
 	case skRastroEnabled:
 		return &c.Rastro.Enabled
+	case skXcodeAutoBuildServer:
+		return &c.Xcode.AutoBuildServer
 	default:
 		return boolFieldCollab(c, key)
 	}
@@ -348,6 +350,8 @@ func durField(c *config.Config, key settingKey) (*config.Duration, []string) {
 		return &c.LSPQuery.Timeout, lspTimeoutOptions
 	case skSemTimeout:
 		return &c.Semantics.Timeout, lspTimeoutOptions
+	case skXcodeTimeout:
+		return &c.Xcode.Timeout, xcodeTimeoutOptions
 	default:
 		return nil, nil
 	}
@@ -379,6 +383,8 @@ func durLabel(key settingKey) string {
 		return "lsp query timeout"
 	case skSemTimeout:
 		return "semantics timeout"
+	case skXcodeTimeout:
+		return "xcode timeout"
 	default:
 		return ""
 	}
@@ -480,6 +486,8 @@ func toggleLabelMore(key settingKey) string {
 		return "mailbox"
 	case skCollabKnowledgeHandoff:
 		return "knowledge handoff"
+	case skXcodeAutoBuildServer:
+		return "xcode auto build server"
 	default:
 		return ""
 	}
