@@ -184,10 +184,16 @@ type PublishDiagnosticsParams struct {
 
 // ─── Pull diagnostics (textDocument/diagnostic) ──────────────────────────────
 //
-// Some servers (typescript-language-server ≥ 5.3, zls) do not push
-// textDocument/publishDiagnostics for files outside their open-document set;
-// they expose diagnostics only through the LSP 3.17 pull model, where the
-// client requests textDocument/diagnostic and the server replies with a report.
+// The LSP 3.17 pull model lets the client request diagnostics on demand
+// (textDocument/diagnostic) instead of receiving pushed
+// textDocument/publishDiagnostics. In plumb it is a first-class NEGOTIATED
+// mode, opted into per connection via the [lsp.<lang>] diagnostics knob — never
+// a server-imposed requirement. No currently-validated server requires it:
+// gopls answers pull only when its experimental pullDiagnostics option is set
+// (and keeps pushing — hybrid), typescript-language-server ≥ 5.3 answers
+// textDocument/diagnostic with -32601, and both zls and
+// typescript-language-server push once the publishDiagnostics client capability
+// is advertised. These are the wire types for the pull path.
 
 // DocumentDiagnosticParams is the request payload for textDocument/diagnostic.
 // Identifier and PreviousResultID are optional and used by servers that support
@@ -481,8 +487,11 @@ type PublishDiagnosticsClientCapabilities struct {
 }
 
 // DiagnosticClientCapabilities declares the client supports the pull-diagnostics
-// model (textDocument/diagnostic). Declaring it lets servers that only pull
-// (typescript-language-server ≥ 5.3, zls) advertise diagnosticProvider.
+// model (textDocument/diagnostic). plumb advertises it only when a connection's
+// resolved diagnostics mode is "pull"; a server that implements pull (e.g. gopls
+// with its pullDiagnostics option) then advertises diagnosticProvider in reply.
+// typescript-language-server ≥ 5.3 and zls do NOT — they answer -32601 (or, for
+// zls 0.16, an empty report) and keep pushing publishDiagnostics.
 type DiagnosticClientCapabilities struct {
 	DynamicRegistration    bool `json:"dynamicRegistration,omitempty"`
 	RelatedDocumentSupport bool `json:"relatedDocumentSupport,omitempty"`
