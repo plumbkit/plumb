@@ -457,9 +457,9 @@ func ClientCapabilitiesFor(pull bool) ClientCapabilities {
 //
 // The pull-diagnostics (textDocument/diagnostic) client capability is
 // deliberately NOT advertised here: advertising it unconditionally could make a
-// dual-mode server (e.g. gopls) switch to pull-only and stop pushing, so the
-// default stays push. Pull is opted into per-connection via ClientCapabilitiesFor
-// only when the resolved [lsp.<lang>] diagnostics mode is "pull".
+// dual-mode server switch to pull-only and stop pushing, so the default stays
+// push. Pull is opted into per-connection via ClientCapabilitiesFor only when
+// the resolved [lsp.<lang>] diagnostics mode is "pull".
 func DefaultClientCapabilities() ClientCapabilities {
 	return ClientCapabilitiesFor(false)
 }
