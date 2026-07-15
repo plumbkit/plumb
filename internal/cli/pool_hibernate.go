@@ -148,8 +148,8 @@ func (p *workspacePool) hibernateIdle() {
 		if e.state != poolActive {
 			continue
 		}
-		cfg, ok := p.cfgFor(e.language)
-		if !ok || cfg.IdleTimeout.Duration <= 0 {
+		cfg := e.lspCfg
+		if cfg.IdleTimeout.Duration <= 0 {
 			continue
 		}
 		if now-e.proxy.lastUsed.Load() > int64(cfg.IdleTimeout.Duration) {

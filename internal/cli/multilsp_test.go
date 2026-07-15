@@ -36,7 +36,8 @@ func newTestPoolMulti(langs ...string) *workspacePool {
 func installEntryLang(pool *workspacePool, root, language string, client lsp.Client) *clientProxy {
 	cp := &clientProxy{}
 	cp.set(client)
-	pool.entries[poolKey{root, language}] = &poolEntry{root: root, language: language, proxy: cp}
+	lspCfg, _ := pool.cfgFor(language)
+	pool.entries[poolKey{root, language}] = &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: cp}
 	return cp
 }
 

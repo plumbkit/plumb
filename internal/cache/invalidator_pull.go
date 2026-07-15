@@ -80,31 +80,56 @@ func (inv *Invalidator) RecordPullUnchanged(uri, resultID string) (ok bool) {
 	return true
 }
 
-// RecordPullResult ingests a textDocument/diagnostic report for uri and every
-// related document it carries, routing each document through the SAME
-// full/unchanged path and the SAME empty-URI boundary check the primary URI
-// receives. Related documents are processed one level deep (the spec's flat
-// relatedDocuments map). An unrecognised report kind is ignored — a malformed
-// success report never clears a snapshot, so it can never read as a false clean.
-func (inv *Invalidator) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) {
-	inv.applyReport(uri, report.Kind, report.ResultID, report.Items)
-	for relURI, rel := range report.RelatedDocuments {
-		inv.applyReport(relURI, rel.Kind, rel.ResultID, rel.Items)
+// RecordPullResult ingests a document report and its flat relatedDocuments
+// map. It returns deterministic URI lists describing which reports were applied
+// and which could not be validated. Unknown or mismatched unchanged result IDs,
+// and unrecognised report kinds, mutate nothing and are returned as unresolved.
+// If a malformed response reports the same URI more than once, unresolved wins.
+func (inv *Invalidator) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string) {
+	appliedSet := make(map[string]struct{})
+	unresolvedSet := make(map[string]struct{})
+	record := func(uri, kind, resultID string, items []protocol.Diagnostic) {
+		if uri == "" {
+			return
+		}
+		switch kind {
+		case protocol.DiagnosticReportFull:
+			inv.RecordPullFull(uri, resultID, items)
+			appliedSet[uri] = struct{}{}
+		case protocol.DiagnosticReportUnchanged:
+			if inv.RecordPullUnchanged(uri, resultID) {
+				appliedSet[uri] = struct{}{}
+			} else {
+				unresolvedSet[uri] = struct{}{}
+			}
+		default:
+			unresolvedSet[uri] = struct{}{}
+		}
 	}
+
+	record(uri, report.Kind, report.ResultID, report.Items)
+	related := make([]string, 0, len(report.RelatedDocuments))
+	for relURI := range report.RelatedDocuments {
+		related = append(related, relURI)
+	}
+	sort.Strings(related)
+	for _, relURI := range related {
+		rel := report.RelatedDocuments[relURI]
+		record(relURI, rel.Kind, rel.ResultID, rel.Items)
+	}
+	for unresolvedURI := range unresolvedSet {
+		delete(appliedSet, unresolvedURI)
+	}
+	return sortedPullURIs(appliedSet), sortedPullURIs(unresolvedSet)
 }
 
-// applyReport dispatches one document's report by kind. Each RecordPull* call it
-// makes applies the empty-URI boundary check independently, so a related doc
-// with an empty URI is skipped exactly as the primary would be.
-func (inv *Invalidator) applyReport(uri, kind, resultID string, items []protocol.Diagnostic) {
-	switch kind {
-	case protocol.DiagnosticReportFull:
-		inv.RecordPullFull(uri, resultID, items)
-	case protocol.DiagnosticReportUnchanged:
-		inv.RecordPullUnchanged(uri, resultID)
-	default:
-		// Unknown kind: mutate nothing.
+func sortedPullURIs(set map[string]struct{}) []string {
+	uris := make([]string, 0, len(set))
+	for uri := range set {
+		uris = append(uris, uri)
 	}
+	sort.Strings(uris)
+	return uris
 }
 
 // PullResultID returns the last result ID recorded for uri via a pull report,

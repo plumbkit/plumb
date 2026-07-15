@@ -2,6 +2,7 @@ package cli
 
 import (
 	"path/filepath"
+	"sort"
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -69,17 +70,56 @@ func (r *routingInvProxy) RecordPullUnchanged(uri, resultID string) bool {
 	return inv.RecordPullUnchanged(uri, resultID)
 }
 
-// RecordPullResult ingests a full/unchanged pull report (and its related
-// documents) into the owning workspace's cache. Related documents come from
-// the same language server as the primary URI, so one routing decision covers
-// the whole report. A no-op when the URI cannot be routed.
-func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) {
-	if err := r.checkURI(uri); err != nil {
-		return
+// RecordPullResult routes the primary and every related document
+// independently. Each URI crosses the connection boundary and owning-workspace
+// checks before reaching a cache, so a server response cannot smuggle state
+// across roots. Rejected or unroutable related URIs are intentionally omitted
+// from both returned lists and therefore cannot be rendered to the connection.
+func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string) {
+	appliedSet := make(map[string]struct{})
+	unresolvedSet := make(map[string]struct{})
+	record := func(uri string, report protocol.DocumentDiagnosticReport) {
+		if err := r.checkURI(uri); err != nil {
+			return
+		}
+		inv := r.owningInv(uri)
+		if inv == nil {
+			return
+		}
+		report.RelatedDocuments = nil
+		gotApplied, gotUnresolved := inv.RecordPullResult(uri, report)
+		for _, appliedURI := range gotApplied {
+			appliedSet[appliedURI] = struct{}{}
+		}
+		for _, unresolvedURI := range gotUnresolved {
+			unresolvedSet[unresolvedURI] = struct{}{}
+		}
 	}
-	if inv := r.owningInv(uri); inv != nil {
-		inv.RecordPullResult(uri, report)
+
+	related := make([]string, 0, len(report.RelatedDocuments))
+	for relURI := range report.RelatedDocuments {
+		related = append(related, relURI)
 	}
+	sort.Strings(related)
+	primary := report
+	primary.RelatedDocuments = nil
+	record(uri, primary)
+	for _, relURI := range related {
+		record(relURI, report.RelatedDocuments[relURI])
+	}
+	for unresolvedURI := range unresolvedSet {
+		delete(appliedSet, unresolvedURI)
+	}
+	return sortedRoutingPullURIs(appliedSet), sortedRoutingPullURIs(unresolvedSet)
+}
+
+func sortedRoutingPullURIs(set map[string]struct{}) []string {
+	uris := make([]string, 0, len(set))
+	for uri := range set {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	return uris
 }
 
 // AllPullResultIDs returns the primary workspace's recorded (URI, result ID)
