@@ -202,7 +202,18 @@ func (a *Adapter) Diagnostic(ctx context.Context, params protocol.DocumentDiagno
 	if err := a.conn.Call(ctx, protocol.MethodDiagnostic, params, &result); err != nil {
 		return nil, fmt.Errorf("gopls diagnostic: %w", err)
 	}
+	normaliseDiagnosticReport(&result)
 	return &result, nil
+}
+
+// normaliseDiagnosticReport contains a verified gopls wire quirk at the adapter
+// boundary. gopls v0.23 omits kind on an otherwise-valid clean full report; the
+// generic pull cache intentionally rejects unknown kinds because it cannot
+// safely infer them for arbitrary servers.
+func normaliseDiagnosticReport(result *protocol.DocumentDiagnosticReport) {
+	if result != nil && result.Kind == "" {
+		result.Kind = protocol.DiagnosticReportFull
+	}
 }
 
 // WorkspaceDiagnostic requests diagnostics for the whole workspace via

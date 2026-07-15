@@ -150,8 +150,8 @@ func TestIntegration_ForcedPull_DocumentDiagnostics(t *testing.T) {
 	if cleanRep == nil || len(cleanRep.Items) != 0 {
 		t.Fatalf("expected an empty pull report for the clean file, got %+v", cleanRep)
 	}
-	t.Logf("OBSERVED clean pull: kind=%q resultId=%q items=%d (gopls omits kind on a "+
-		"full report)", cleanRep.Kind, cleanRep.ResultID, len(cleanRep.Items))
+	t.Logf("OBSERVED clean pull: kind=%q resultId=%q items=%d (adapter normalises "+
+		"gopls's omitted kind to full)", cleanRep.Kind, cleanRep.ResultID, len(cleanRep.Items))
 
 	// (f) workspace/diagnostic — RECORDED. gopls advertises workspaceDiagnostics
 	// = false, so a workspace pull is expected to fail with -32601. We assert

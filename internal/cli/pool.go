@@ -44,10 +44,11 @@ type poolKey struct {
 //
 // Concurrency: all methods are safe for concurrent use.
 type workspacePool struct {
-	mu       sync.Mutex
-	entries  map[poolKey]*poolEntry // key: (root, language); one LS per pair
-	langs    []langConfig           // enabled languages, deterministic order
-	cacheTTL time.Duration
+	mu         sync.Mutex
+	entries    map[poolKey]*poolEntry // key: (root, language); one LS per pair
+	langs      []langConfig           // globally enabled languages, deterministic order
+	baseConfig config.Config          // global base for per-workspace LSP overrides
+	cacheTTL   time.Duration
 
 	// idleGrace is how long a pinned entry lingers after its last session
 	// detaches before the language server is torn down. The delay absorbs a
@@ -95,6 +96,7 @@ func (s poolLifecycle) String() string {
 type poolEntry struct {
 	root     string
 	language string
+	lspCfg   config.LSPConfig // resolved global + project config captured at creation
 	proxy    *clientProxy
 	inv      *cache.Invalidator
 	cache    *cache.Cache
@@ -161,12 +163,13 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		return langs[i].name < langs[j].name
 	})
 	return &workspacePool{
-		entries:   make(map[poolKey]*poolEntry),
-		langs:     langs,
-		cacheTTL:  cfg.Cache.TTL.Duration,
-		idleGrace: poolIdleGrace,
-		baseCtx:   baseCtx,
-		xcode:     newPoolXcodeState(),
+		entries:    make(map[poolKey]*poolEntry),
+		langs:      langs,
+		baseConfig: cfg,
+		cacheTTL:   cfg.Cache.TTL.Duration,
+		idleGrace:  poolIdleGrace,
+		baseCtx:    baseCtx,
+		xcode:      newPoolXcodeState(),
 	}
 }
 
@@ -294,9 +297,9 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 		}
 	}
 
-	lspCfg, ok := p.cfgFor(language)
+	lspCfg, ok := p.cfgForWorkspace(root, language)
 	if !ok {
-		return nil, nil, fmt.Errorf("language %q not configured or not enabled", language)
+		return nil, nil, fmt.Errorf("language %q not configured or not enabled for %s", language, root)
 	}
 
 	// LRU eviction: before starting a new server, if this language is at its
@@ -313,7 +316,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	c := cache.New(p.cacheTTL)
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
-	e := &poolEntry{root: root, language: language, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now()}
+	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now()}
 	proxy.touch()
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), envFor(lspCfg), lsp.SupervisorOptions{
@@ -504,15 +507,6 @@ func (p *workspacePool) removeFailed(e *poolEntry) {
 			e.cache.Close()
 		}
 	})
-}
-
-func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
-	for _, l := range p.langs {
-		if l.name == language {
-			return l.cfg, true
-		}
-	}
-	return config.LSPConfig{}, false
 }
 
 // lookup returns the entry for (root, language) if it has already been

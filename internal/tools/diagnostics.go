@@ -40,26 +40,11 @@ type fileOpener interface {
 	DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error
 }
 
-// pullDiagnoser is the LSP 3.17 document-pull capability
-// (textDocument/diagnostic). The diagnostics tool type-asserts its opener to it
-// on two paths:
-//
-//   - Mode-aware (primary): when the connection's resolved diagnostics mode for
-//     a URI is "pull" or "hybrid" — a negotiated, config-gated outcome of the
-//     [lsp.<lang>] diagnostics knob, never a guess — the tool pulls on demand
-//     and records results in the session cache (see diagnostics_pull.go).
-//   - Legacy structural fallback: for an untracked, push-empty URI on a
-//     connection without a resolved mode, tryPull asks a server that happens to
-//     advertise diagnosticProvider directly (see tryPull).
-//
-// Pull is a first-class negotiated mode, not a server-imposed requirement: no
-// currently-validated server requires it (zls and typescript-language-server
-// push once the publishDiagnostics client capability is advertised, and
-// typescript-language-server answers textDocument/diagnostic with -32601 —
-// the downgrade path). The pull client capability is only advertised when the
-// user configures diagnostics = "pull" for a language.
+// pullDiagnoser is the negotiated LSP 3.17 textDocument/diagnostic request
+// surface. The tool only uses it when DiagnosticsMode resolves to pull or
+// hybrid. Push mode never issues a pull request, even if the server happens to
+// advertise diagnosticProvider or a connection was downgraded from pull.
 type pullDiagnoser interface {
-	SupportsPullDiagnostics() bool
 	Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error)
 }
 
@@ -177,13 +162,6 @@ func (t *Diagnostics) singleURIPush(ctx context.Context, uri string) string {
 	if len(diags) == 0 {
 		// Distinguish "analysed and clean" from "never reported on".
 		if !t.inv.Tracked(uri) {
-			// Legacy structural fallback: a server that advertises pull support
-			// under a push negotiation can be asked directly before opening +
-			// waiting. Dormant for every validated server today (none advertises
-			// diagnosticProvider under push capabilities).
-			if pulled, ok := t.tryPull(ctx, uri); ok {
-				return pulled
-			}
 			if t.opener != nil {
 				return t.openAndWait(ctx, uri)
 			}
@@ -194,40 +172,6 @@ func (t *Diagnostics) singleURIPush(ctx context.Context, uri string) string {
 		return "No issues found — file is tracked and clean."
 	}
 	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: diags})
-}
-
-// tryPull requests diagnostics for uri via the LSP 3.17 pull model when the
-// opener implements pullDiagnoser and the server advertised pull support. It
-// folds in any related-document diagnostics the server returns. Returns
-// ok=false when pull is unavailable or errors, so the caller falls back to the
-// push (open-and-wait) path.
-func (t *Diagnostics) tryPull(ctx context.Context, uri string) (string, bool) {
-	if t.opener == nil {
-		return "", false
-	}
-	pd, ok := t.opener.(pullDiagnoser)
-	if !ok || !pd.SupportsPullDiagnostics() {
-		return "", false
-	}
-	rep, err := pd.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-	})
-	if err != nil || rep == nil {
-		return "", false
-	}
-	byURI := map[string][]protocol.Diagnostic{}
-	if len(rep.Items) > 0 {
-		byURI[uri] = rep.Items
-	}
-	for relURI, relRep := range rep.RelatedDocuments {
-		if len(relRep.Items) > 0 {
-			byURI[relURI] = relRep.Items
-		}
-	}
-	if len(byURI) == 0 {
-		return "No issues found — pulled from the language server, file is clean.", true
-	}
-	return formatDiagnostics(byURI) + "\n(source=lsp-pull)", true
 }
 
 // openAndWait sends textDocument/didOpen for uri, waits up to 10 s for gopls

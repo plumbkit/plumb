@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.1 (2026-07-16)
+
+### Fixed
+
+- **Pull diagnostics now preserve evidence across related, workspace, and
+  downgraded sessions.** Related-document reports are boundary-checked and
+  routed per URI, included in deterministic multi-file output, and expose
+  unknown or mismatched result IDs as unverified instead of claiming a clean
+  result. Workspace and post-write pulls apply the same validation rule, while
+  configured push mode — including a session downgraded after method-not-found —
+  never issues a pull request.
+- **Project LSP overrides now reach pooled server startup.** Settings from a
+  workspace's `.plumb/config.toml` — including the explicit diagnostics mode —
+  are resolved before the shared language server starts and remain attached to
+  that pooled entry across hibernation.
+- **Clean gopls pull reports are accepted without weakening generic validation.**
+  The gopls adapter normalises its verified omitted-`kind` wire response to a
+  full report; other adapters and the shared cache continue to reject unknown
+  report kinds as unverified.
+
 ## 0.12.0 (2026-07-16)
 
 ### Added

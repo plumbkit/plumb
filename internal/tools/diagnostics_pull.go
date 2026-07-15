@@ -56,8 +56,7 @@ type workspacePuller interface {
 // implements it with per-URI routing.
 type pullStateSource interface {
 	PullResultID(uri string) (string, bool)
-	RecordPullUnchanged(uri, resultID string) bool
-	RecordPullResult(uri string, report protocol.DocumentDiagnosticReport)
+	RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string)
 	AllPullResultIDs() []protocol.PreviousResultID
 }
 
@@ -82,15 +81,27 @@ type documentPuller interface {
 	Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error)
 }
 
-// pullAndRecord pulls diagnostics for uri (previousResultId from rec), records
-// the outcome through the cache methods, and applies the unknown-result-ID
-// rule: an "unchanged" answer that cannot be validated against the stored
-// result ID mutates nothing and triggers ONE retry without a previousResultId,
-// from which only a full report is trusted. On success it returns the full
-// report that was recorded, or nil when a VALIDATED "unchanged" answer means
-// the cached snapshot is current. rec may be nil (nothing recorded or
-// validated; an "unchanged" answer then takes the retry path).
-func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, uri string) (*protocol.DocumentDiagnosticReport, error) {
+type pullRecordResult struct {
+	applied    []string
+	unresolved []string
+}
+
+func (r pullRecordResult) related(primary string) []string {
+	related := make([]string, 0, len(r.applied))
+	for _, uri := range r.applied {
+		if uri != primary {
+			related = append(related, uri)
+		}
+	}
+	return related
+}
+
+// pullAndRecord pulls diagnostics for uri, records the primary and every related
+// report, and returns the cache's validation outcome. An unknown primary
+// unchanged result retries exactly once without previousResultId. Unresolved
+// related reports do not recurse: they remain explicit and unverified, avoiding
+// unbounded server-controlled pull fan-out.
+func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, uri string) (pullRecordResult, error) {
 	prevID := ""
 	if rec != nil {
 		prevID, _ = rec.PullResultID(uri)
@@ -100,85 +111,90 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 		PreviousResultID: prevID,
 	})
 	if err != nil {
-		return nil, err
+		return pullRecordResult{}, err
 	}
 	if rep == nil {
-		return nil, fmt.Errorf("language server returned an empty diagnostic response")
+		return pullRecordResult{}, fmt.Errorf("language server returned an empty diagnostic response")
 	}
 	switch rep.Kind {
 	case protocol.DiagnosticReportFull:
-		if rec != nil {
-			rec.RecordPullResult(uri, *rep)
-		}
-		return rep, nil
+		return recordPullReport(rec, uri, rep), nil
 	case protocol.DiagnosticReportUnchanged:
-		if rec != nil && rec.RecordPullUnchanged(uri, rep.ResultID) {
-			return nil, nil // cached snapshot is validated current
+		recorded := recordPullReport(rec, uri, rep)
+		if containsURI(recorded.applied, uri) {
+			return recorded, nil
 		}
-		// Unknown or stale result ID (or no cache to validate against): the
-		// snapshot cannot be trusted as "unchanged relative to what we hold".
-		// Retry once WITHOUT a previousResultId; only a full report is
-		// acceptable.
 		rep2, err2 := pd.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err2 != nil {
-			return nil, fmt.Errorf("server answered %q for an unknown result ID and the retry without previousResultId failed: %w", rep.Kind, err2)
+			return pullRecordResult{}, fmt.Errorf("server answered %q for an unknown result ID and the retry without previousResultId failed: %w", rep.Kind, err2)
 		}
 		if rep2 == nil || rep2.Kind != protocol.DiagnosticReportFull {
-			return nil, fmt.Errorf("server answered %q for an unknown result ID and the retry did not return a full report", rep.Kind)
+			return pullRecordResult{}, fmt.Errorf("server answered %q for an unknown result ID and the retry did not return a full report", rep.Kind)
 		}
-		if rec != nil {
-			rec.RecordPullResult(uri, *rep2)
-		}
-		return rep2, nil
+		return recordPullReport(rec, uri, rep2), nil
 	default:
-		return nil, fmt.Errorf("unrecognised diagnostic report kind %q", rep.Kind)
+		return pullRecordResult{}, fmt.Errorf("unrecognised diagnostic report kind %q", rep.Kind)
 	}
 }
 
-// pullDocument pulls diagnostics for uri via the tool's opener, records the
-// outcome, and returns the related-document URIs a full report carried
-// (sorted). A nil error with no related URIs covers both a clean full report
-// and a validated "unchanged".
-func (t *Diagnostics) pullDocument(ctx context.Context, uri string) (related []string, err error) {
+func recordPullReport(rec pullStateSource, uri string, rep *protocol.DocumentDiagnosticReport) pullRecordResult {
+	var result pullRecordResult
+	if rec != nil {
+		result.applied, result.unresolved = rec.RecordPullResult(uri, *rep)
+		return result
+	}
+	if rep.Kind == protocol.DiagnosticReportFull {
+		result.applied = []string{uri}
+	} else {
+		result.unresolved = []string{uri}
+	}
+	for relatedURI := range rep.RelatedDocuments {
+		result.unresolved = append(result.unresolved, relatedURI)
+	}
+	result.applied = uniqueSortedURIs(result.applied)
+	result.unresolved = uniqueSortedURIs(result.unresolved)
+	return result
+}
+
+func containsURI(uris []string, target string) bool {
+	i := sort.SearchStrings(uris, target)
+	return i < len(uris) && uris[i] == target
+}
+
+// pullDocument pulls diagnostics for uri and returns only related URIs that
+// passed this connection's cache/routing boundary, plus any accepted reports
+// whose unchanged result ID could not be validated.
+func (t *Diagnostics) pullDocument(ctx context.Context, uri string) (related, unresolved []string, err error) {
 	pd, ok := t.opener.(pullDiagnoser)
 	if !ok {
-		return nil, fmt.Errorf("pull diagnostics unavailable on this connection")
+		return nil, nil, fmt.Errorf("pull diagnostics unavailable on this connection")
 	}
 	rec, _ := t.inv.(pullStateSource)
-	rep, err := pullAndRecord(ctx, pd, rec, uri)
-	if err != nil || rep == nil {
-		return nil, err
+	result, err := pullAndRecord(ctx, pd, rec, uri)
+	if err != nil {
+		return nil, nil, err
 	}
-	related = make([]string, 0, len(rep.RelatedDocuments))
-	for relURI := range rep.RelatedDocuments {
-		related = append(related, relURI)
-	}
-	sort.Strings(related)
-	return related, nil
+	return result.related(uri), result.unresolved, nil
 }
 
-// singleURIPull is the single-URI path when the resolved mode is pull/hybrid:
-// pull immediately, record, and serve the merged (push+pull) cache view for
-// the URI and any related documents.
+// singleURIPull pulls immediately and serves the merged cache view for the
+// primary plus every accepted related document.
 func (t *Diagnostics) singleURIPull(ctx context.Context, uri string) string {
-	related, err := t.pullDocument(ctx, uri)
+	related, unresolved, err := t.pullDocument(ctx, uri)
 	if err != nil {
 		if t.modeFor(uri) == diagModePush {
-			// The proxy downgraded the connection (-32601 on a negotiated
-			// pull): it is a push connection from here on, so fall back to
-			// the push machinery cleanly.
 			return t.singleURIPush(ctx, uri)
 		}
-		// SAFETY INVARIANT: any other pull failure degrades EXPLICITLY — the
-		// error is surfaced and the cached state is shown clearly labelled,
-		// never re-presented as a fresh "No issues" answer.
 		return t.pullDegraded(uri, err)
 	}
 	byURI := map[string][]protocol.Diagnostic{uri: t.inv.Diagnostics(uri)}
-	for _, rel := range related {
-		byURI[rel] = t.inv.Diagnostics(rel)
+	for _, relatedURI := range related {
+		byURI[relatedURI] = t.inv.Diagnostics(relatedURI)
+	}
+	if len(unresolved) > 0 {
+		return formatPullIncomplete(byURI, nil, unresolved)
 	}
 	total := 0
 	for _, ds := range byURI {
@@ -208,47 +224,40 @@ func (t *Diagnostics) pullDegraded(uri string, err error) string {
 	return sb.String()
 }
 
-// multiURI reports on a specific set of files. Pull/hybrid-mode URIs are
-// pulled first (bounded concurrency, cancellation-safe); push-mode URIs read
-// straight from the cache as before. Output order is deterministic:
-// formatDiagnostics sorts by URI and failure notes follow input order.
+// multiURI reports on requested files plus every accepted related document.
 func (t *Diagnostics) multiURI(ctx context.Context, uris []string) string {
-	notes := t.pullAll(ctx, uris)
-	merged := make(map[string][]protocol.Diagnostic, len(uris))
-	for _, uri := range uris {
+	uris = uniqueSortedURIs(uris)
+	batch := t.pullAll(ctx, uris)
+	allURIs := uniqueSortedURIs(append(append([]string{}, uris...), batch.related...))
+	merged := make(map[string][]protocol.Diagnostic, len(allURIs))
+	for _, uri := range allURIs {
 		merged[uri] = t.inv.Diagnostics(uri)
 	}
-	out := formatDiagnostics(merged)
-	if len(notes) == 0 {
-		return out
+	if len(batch.notes) == 0 && len(batch.unresolved) == 0 {
+		return formatDiagnostics(merged)
 	}
-	total := 0
-	for _, ds := range merged {
-		total += len(ds)
-	}
-	var sb strings.Builder
-	if total == 0 {
-		// Never leave a bare all-clean claim standing over unverified files.
-		fmt.Fprintf(&sb, "No issues found in the %d file(s) that could be checked.", len(uris)-len(notes))
-	} else {
-		sb.WriteString(out)
-	}
-	fmt.Fprintf(&sb, "\n⚠ pull failed for %d file(s) — their state is UNVERIFIED (any cached entries above may be stale):", len(notes))
-	for _, n := range notes {
-		sb.WriteString("\n  " + n)
-	}
-	return sb.String()
+	return formatPullIncomplete(merged, batch.notes, batch.unresolved)
 }
 
-// pullAll pulls every pull/hybrid-mode URI in uris with at most
-// maxConcurrentPulls in flight. Cancellation-safe: a worker still queued when
-// ctx is cancelled records the cancellation instead of pulling. Returns
-// failure notes in input order ("" entries filtered).
-func (t *Diagnostics) pullAll(ctx context.Context, uris []string) []string {
+type pullBatchResult struct {
+	related    []string
+	unresolved []string
+	notes      []string
+}
+
+// pullAll pulls every pull/hybrid URI with at most maxConcurrentPulls in flight.
+// Per-worker results are combined only after all workers finish, keeping the
+// output deterministic and race-free.
+func (t *Diagnostics) pullAll(ctx context.Context, uris []string) pullBatchResult {
 	if _, ok := t.opener.(pullDiagnoser); !ok {
-		return nil
+		return pullBatchResult{}
 	}
-	perURI := make([]string, len(uris))
+	type perPullResult struct {
+		related    []string
+		unresolved []string
+		note       string
+	}
+	perURI := make([]perPullResult, len(uris))
 	sem := make(chan struct{}, maxConcurrentPulls)
 	var wg sync.WaitGroup
 	for i, uri := range uris {
@@ -262,25 +271,82 @@ func (t *Diagnostics) pullAll(ctx context.Context, uris []string) []string {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
-				perURI[i] = fmt.Sprintf("%s: pull cancelled: %v", paths.URIToPath(uri), ctx.Err())
+				perURI[i].note = fmt.Sprintf("%s: pull cancelled: %v", paths.URIToPath(uri), ctx.Err())
 				return
 			}
-			if _, err := t.pullDocument(ctx, uri); err != nil {
+			related, unresolved, err := t.pullDocument(ctx, uri)
+			if err != nil {
 				if t.modeFor(uri) == diagModePush {
-					return // downgraded mid-flight (-32601): the cached read below is the push behaviour
+					return
 				}
-				perURI[i] = fmt.Sprintf("%s: %v", paths.URIToPath(uri), err)
+				perURI[i].note = fmt.Sprintf("%s: %v", paths.URIToPath(uri), err)
+				return
 			}
+			perURI[i].related = related
+			perURI[i].unresolved = unresolved
 		}(i, uri)
 	}
 	wg.Wait()
-	var notes []string
-	for _, n := range perURI {
-		if n != "" {
-			notes = append(notes, n)
+
+	var result pullBatchResult
+	for _, per := range perURI {
+		result.related = append(result.related, per.related...)
+		result.unresolved = append(result.unresolved, per.unresolved...)
+		if per.note != "" {
+			result.notes = append(result.notes, per.note)
 		}
 	}
-	return notes
+	result.related = uniqueSortedURIs(result.related)
+	result.unresolved = uniqueSortedURIs(result.unresolved)
+	return result
+}
+
+func uniqueSortedURIs(uris []string) []string {
+	set := make(map[string]struct{}, len(uris))
+	for _, uri := range uris {
+		if uri != "" {
+			set[uri] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for uri := range set {
+		out = append(out, uri)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func formatPullIncomplete(byURI map[string][]protocol.Diagnostic, notes, unresolved []string) string {
+	total := 0
+	for _, diags := range byURI {
+		total += len(diags)
+	}
+	var sb strings.Builder
+	if total == 0 {
+		sb.WriteString("No verified diagnostic findings were returned for the files that could be checked.")
+	} else {
+		sb.WriteString(formatDiagnostics(byURI))
+	}
+	if len(notes) > 0 {
+		fmt.Fprintf(&sb, "\n⚠ pull failed for %d file(s) — their state is UNVERIFIED (any cached entries above may be stale):", len(notes))
+		for _, note := range notes {
+			sb.WriteString("\n  " + note)
+		}
+	}
+	if len(unresolved) > 0 {
+		sb.WriteString("\n" + unverifiedPullNote(unresolved))
+	}
+	return sb.String()
+}
+
+func unverifiedPullNote(uris []string) string {
+	uris = uniqueSortedURIs(uris)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "⚠ %d diagnostic report(s) could not be validated — state unverified (UNVERIFIED); do not treat these files as clean:", len(uris))
+	for _, uri := range uris {
+		sb.WriteString("\n  " + paths.URIToPath(uri))
+	}
+	return sb.String()
 }
 
 // allFiles is the no-URI (whole-workspace) path.
@@ -319,20 +385,30 @@ func (t *Diagnostics) allFilesPull(ctx context.Context) string {
 	})
 	if err != nil {
 		if t.modeFor("") == diagModePush {
-			return t.allFilesCached() // downgraded (-32601): push behaviour
+			return t.allFilesCached()
 		}
 		return "workspace diagnostics pull failed: " + err.Error() +
 			"\nShowing cached diagnostics — POSSIBLY INCOMPLETE; files not listed are NOT verified.\n" +
 			t.allFilesCached()
 	}
+	if rep == nil {
+		return "workspace diagnostics pull failed: language server returned an empty response" +
+			"\nShowing cached diagnostics — POSSIBLY INCOMPLETE; files not listed are NOT verified.\n" +
+			t.allFilesCached()
+	}
+	var unresolved []string
 	for _, item := range rep.Items {
-		// Workspace items reuse the per-document report shape; unchanged items
-		// with unknown result IDs mutate nothing (cache-level safety).
-		rec.RecordPullResult(item.URI, protocol.DocumentDiagnosticReport{
+		_, itemUnresolved := rec.RecordPullResult(item.URI, protocol.DocumentDiagnosticReport{
 			Kind:     item.Kind,
 			ResultID: item.ResultID,
 			Items:    item.Items,
 		})
+		unresolved = append(unresolved, itemUnresolved...)
+	}
+	unresolved = uniqueSortedURIs(unresolved)
+	if len(unresolved) > 0 {
+		return formatPullIncomplete(t.inv.AllDiagnostics(), nil, unresolved) +
+			"\n(workspace pull incomplete)"
 	}
 	out := t.allFilesCached()
 	if strings.HasPrefix(out, "No diagnostics received yet") {

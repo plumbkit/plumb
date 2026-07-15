@@ -61,7 +61,7 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 	ctx, cancel := context.WithTimeout(context.Background(), ceiling)
 	defer cancel()
 
-	pulled, err := d.pullEdited(ctx, pp, uri)
+	pulled, unresolved, err := d.pullEdited(ctx, pp, uri)
 	if err != nil {
 		if !pullModeActive(pp.DiagnosticsMode(uri)) {
 			// Downgraded (-32601 on a negotiated pull): this is a push
@@ -81,6 +81,9 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 	freshNew, likelyStale := diffFileDiagnostics(pre, pulled, lo, hi, touched)
 	out = formatDifferentialDiagnostics(freshNew, likelyStale, lineCount(content))
 	out += d.pullCrossFileDiagnostics(ctx, uri, baseline)
+	if len(unresolved) > 0 {
+		out += "\n" + unverifiedPullNote(unresolved)
+	}
 	if awaitFresh && out == "" {
 		out = "\n✓ fresh diagnostics pass — this edit introduced no new errors or warnings"
 	}
@@ -92,16 +95,13 @@ func (d WriteDeps) pullPostWriteDiagnostics(uri, before, content string, awaitFr
 // retry rule applied, results — related documents included — recorded) and
 // returns the diagnostics that now apply to it. A validated "unchanged" answer
 // serves the cached snapshot, which the validation just proved current.
-func (d WriteDeps) pullEdited(ctx context.Context, pp postWritePuller, uri string) ([]protocol.Diagnostic, error) {
+func (d WriteDeps) pullEdited(ctx context.Context, pp postWritePuller, uri string) ([]protocol.Diagnostic, []string, error) {
 	rec, _ := d.Diag.(pullStateSource)
-	rep, err := pullAndRecord(ctx, pp, rec, uri)
+	result, err := pullAndRecord(ctx, pp, rec, uri)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if rep == nil {
-		return d.Diag.Diagnostics(uri), nil
-	}
-	return rep.Items, nil
+	return d.Diag.Diagnostics(uri), result.unresolved, nil
 }
 
 // pullCrossFileDiagnostics is the pull-mode cross-file sweep. Gated exactly
@@ -161,12 +161,21 @@ func (d WriteDeps) workspacePullInto(ctx context.Context, wp postWriteWorkspaceP
 	if err != nil {
 		return err
 	}
+	if rep == nil {
+		return fmt.Errorf("language server returned an empty workspace diagnostic response")
+	}
+	var unresolved []string
 	for _, item := range rep.Items {
-		rec.RecordPullResult(item.URI, protocol.DocumentDiagnosticReport{
+		_, itemUnresolved := rec.RecordPullResult(item.URI, protocol.DocumentDiagnosticReport{
 			Kind:     item.Kind,
 			ResultID: item.ResultID,
 			Items:    item.Items,
 		})
+		unresolved = append(unresolved, itemUnresolved...)
+	}
+	unresolved = uniqueSortedURIs(unresolved)
+	if len(unresolved) > 0 {
+		return fmt.Errorf("workspace pull incomplete: %d report(s) remain unverified", len(unresolved))
 	}
 	return nil
 }
