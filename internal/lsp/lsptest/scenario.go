@@ -494,10 +494,10 @@ func (c *Caller) RegisterWatcher(ctx context.Context) error {
 // re-pull". Production wires the actual HANDLING of this one layer above the
 // adapter: internal/cli/pool_diagnostics.go's wrapServerRequest, applied in
 // poolOnStart, wraps every adapter's own server-request handler in front to
-// intercept refresh before it ever reaches the adapter (see
-// internal/lsp/serverreq.go's ServerRequestExtension hook, which stayed
-// unused for refresh precisely because that one conn-level wiring point
-// covers all nine adapters without touching any of them). This harness sits
+// intercept refresh before it ever reaches the adapter — that one conn-level
+// wiring point covers all nine adapters without touching any of them, which is
+// why the shared HandleServerRequest helper needs no per-adapter extension
+// point for refresh. This harness sits
 // at the SAME adapter/conn seam that wrapper decorates, one layer below
 // internal/cli, so it cannot exercise the wrapper itself — calling Refresh
 // through the adapter's own (unmediated) request handler instead proves the

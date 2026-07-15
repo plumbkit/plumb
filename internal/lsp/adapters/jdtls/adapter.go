@@ -67,7 +67,7 @@ func New(conn jsonrpc.Caller) *Adapter {
 // client/registerCapability to register file-watcher patterns; we accept and
 // record the glob patterns so DidChangeWatchedFiles can filter events.
 func (a *Adapter) handleServerRequest(_ context.Context, method string, params json.RawMessage) (any, error) {
-	return lsp.HandleServerRequest(&a.watcher, method, params, nil)
+	return lsp.HandleServerRequest(&a.watcher, method, params)
 }
 
 // DefaultInitParams returns InitializeParams suitable for jdtls.

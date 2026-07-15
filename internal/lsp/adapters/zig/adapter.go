@@ -62,7 +62,7 @@ func New(conn jsonrpc.Caller) *Adapter {
 // client/registerCapability to register file watchers; we accept and record the
 // glob patterns so DidChangeWatchedFiles can filter events.
 func (a *Adapter) handleServerRequest(_ context.Context, method string, params json.RawMessage) (any, error) {
-	return lsp.HandleServerRequest(&a.watcher, method, params, nil)
+	return lsp.HandleServerRequest(&a.watcher, method, params)
 }
 
 // DefaultInitParams returns InitializeParams suitable for zls.
@@ -199,9 +199,13 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 // ── Diagnostics (pull) ─────────────────────────────────────────────────────────
 
 // SupportsPullDiagnostics reports whether zls advertised the
-// textDocument/diagnostic pull model at initialize. zls 0.14+ is pull-first (it
-// does not push publishDiagnostics for externally-changed files in a bare
-// workspace), so the diagnostics tool must pull. Returns false before Initialize.
+// textDocument/diagnostic pull model at initialize. In practice zls (validated
+// on 0.16) does NOT advertise diagnosticProvider — the earlier "zls is pull-first"
+// hypothesis was disproven: zls pushes publishDiagnostics once plumb advertises
+// the publishDiagnostics client capability (see doc.go), so the diagnostics tool
+// stays on the push path for Zig. The method exists so the pool can route pull
+// uniformly across adapters, gated on the advertised capability, never a guess.
+// Returns false before Initialize.
 func (a *Adapter) SupportsPullDiagnostics() bool {
 	a.capsMu.RLock()
 	defer a.capsMu.RUnlock()
