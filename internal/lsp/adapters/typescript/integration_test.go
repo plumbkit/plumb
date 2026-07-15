@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,13 +74,45 @@ func startTSServer(t *testing.T, ws string) *ts.Adapter {
 	ad := ts.New(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if _, err := ad.Initialize(ctx, ts.DefaultInitParams(protocol.FileURI(ws))); err != nil {
+	params := ts.DefaultInitParams(protocol.FileURI(ws))
+	params.InitializationOptions = tsServerInitOptions(t)
+	if _, err := ad.Initialize(ctx, params); err != nil {
+		skipIfNoTSInstall(t, err)
 		t.Fatal("initialize:", err)
 	}
 	if err := ad.Initialized(ctx); err != nil {
 		t.Fatal("initialized:", err)
 	}
 	return ad
+}
+
+// tsServerInitOptions points typescript-language-server at a resolvable
+// `typescript` (tsserver) install when the temp fixture workspace carries none
+// of its own — tsls errors at initialize otherwise. It resolves the global npm
+// typescript lib; returns nil when none is found, in which case the caller skips
+// on the resulting init error via skipIfNoTSInstall.
+func tsServerInitOptions(t *testing.T) any {
+	t.Helper()
+	out, err := exec.Command("npm", "root", "-g").Output()
+	if err != nil {
+		return nil
+	}
+	lib := filepath.Join(strings.TrimSpace(string(out)), "typescript", "lib", "tsserver.js")
+	if _, statErr := os.Stat(lib); statErr != nil {
+		return nil
+	}
+	return map[string]any{"tsserver": map[string]any{"path": lib}}
+}
+
+// skipIfNoTSInstall turns tsls's "Could not find a valid TypeScript
+// installation" init error into a t.Skip — a missing `typescript` package is an
+// environment gap, not an adapter defect, so the skip-if-absent contract covers
+// it too. It is a no-op for any other error.
+func skipIfNoTSInstall(t *testing.T, err error) {
+	t.Helper()
+	if err != nil && strings.Contains(err.Error(), "valid TypeScript installation") {
+		t.Skip("typescript (tsserver) not resolvable — install it with `npm i -g typescript`: " + err.Error())
+	}
 }
 
 func TestIntegration_DocumentSymbols(t *testing.T) {
