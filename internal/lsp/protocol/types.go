@@ -520,9 +520,14 @@ type WorkspaceSymbolClientCapabilities struct{}
 // DiagnosticWorkspaceClientCapabilities declares whether the client
 // implements workspace/diagnostic/refresh — the server-initiated request
 // asking the client to re-pull workspace diagnostics (e.g. after a
-// dependency changed). Declared here as dormant infrastructure: it is not
-// yet set on DefaultClientCapabilities, since nothing handles the refresh
-// request yet.
+// dependency changed). The refresh request itself IS handled today: the
+// pool's wrapServerRequest (internal/cli/pool_diagnostics.go) answers it for
+// every adapter by clearing the pooled entry's pull state so the next query
+// re-pulls rather than reusing a stale previousResultId. RefreshSupport still
+// stays unset on DefaultClientCapabilities regardless — plumb deliberately
+// does not advertise the capability, so a spec-compliant server has no
+// licence to send the request unprompted; the handler above is defensive,
+// covering a server that sends it anyway.
 type DiagnosticWorkspaceClientCapabilities struct {
 	RefreshSupport bool `json:"refreshSupport,omitempty"`
 }

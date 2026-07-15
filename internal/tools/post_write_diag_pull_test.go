@@ -305,3 +305,64 @@ func TestPullPostWrite_CrossFile_WorkspacePullFailureIsExplicit(t *testing.T) {
 		t.Errorf("SAFETY: a failed sweep must say other files were not checked:\n%s", out)
 	}
 }
+
+// TestPullPostWrite_CrossFile_CleanPullEmitsCleanPassNoHedge is the exact
+// composed configuration review finding #1 caught: CrossFileDiag enabled +
+// awaitFresh + gopls-like caps (pull advertised via DiagnosticsMode, but
+// workspaceDiagnostics NOT advertised — gopls, the headline validated pull
+// target, never does) + a clean pull (no new diagnostics anywhere, so the
+// cross-file delta is empty). An empty delta has nothing to hedge — the
+// edited file itself was just verified by this same pull — so the
+// non-exhaustive note must stay silent and the documented ✓ clean-pass line
+// must still appear.
+func TestPullPostWrite_CrossFile_CleanPullEmitsCleanPassNoHedge(t *testing.T) {
+	inv := newPullInv(t)
+	client := &pullModeLSP{mode: "pull", interFile: true, wsPull: false} // gopls-like: no workspaceDiagnostics
+	d := WriteDeps{
+		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
+		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+	}
+
+	baseline := d.capturePreWriteBaseline(pwURI)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	if !strings.Contains(out, "✓ fresh diagnostics pass") {
+		t.Errorf("an empty cross-file delta has nothing to hedge — the documented clean-pass line must still appear:\n%q", out)
+	}
+	if strings.Contains(out, "not exhaustive") {
+		t.Errorf("an empty cross-file delta must not carry the non-exhaustive hedge:\n%q", out)
+	}
+}
+
+// TestPullPostWrite_CrossFile_NonEmptyDeltaKeepsHedgeNote is the companion
+// case: with the same gopls-like caps, a NON-empty cross-file delta must
+// still carry the honest non-exhaustive note verbatim, and must not be
+// reported as a clean pass.
+func TestPullPostWrite_CrossFile_NonEmptyDeltaKeepsHedgeNote(t *testing.T) {
+	inv := newPullInv(t)
+	client := &pullModeLSP{mode: "pull", interFile: true, wsPull: false}
+	otherURI := "file:///ws/other.go"
+	client.respond = func(protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
+		return &protocol.DocumentDiagnosticReport{
+			Kind: protocol.DiagnosticReportFull,
+			RelatedDocuments: map[string]protocol.DocumentDiagnosticReport{
+				otherURI: {
+					Kind:  protocol.DiagnosticReportFull,
+					Items: []protocol.Diagnostic{errAt("related break", 2)},
+				},
+			},
+		}, nil
+	}
+	d := WriteDeps{
+		Client: client, Diag: inv, PostWriteDiagWindow: 50 * time.Millisecond,
+		CrossFileDiag: true, WorkspaceFn: func() string { return "/ws" },
+	}
+
+	baseline := d.capturePreWriteBaseline(pwURI)
+	out := d.postWriteDiagnostics(pwURI, "a", "b", true, baseline)
+	if !strings.Contains(out, "not exhaustive") {
+		t.Errorf("a non-empty cross-file delta must still carry the honest non-exhaustive note:\n%q", out)
+	}
+	if strings.Contains(out, "✓ fresh diagnostics pass") {
+		t.Errorf("a real cross-file break is not a clean pass:\n%q", out)
+	}
+}

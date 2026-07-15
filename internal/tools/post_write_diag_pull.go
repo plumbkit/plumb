@@ -109,7 +109,11 @@ func (d WriteDeps) pullEdited(ctx context.Context, pp postWritePuller, uri strin
 // When the owning server advertises interFileDependencies AND
 // workspaceDiagnostics, a bounded workspace pull refreshes the cache first and
 // the sweep is exhaustive; otherwise the sweep only sees the files this
-// write's pull reported on (related documents), and says so.
+// write's pull reported on (related documents), and says so — but only when
+// there is actually a delta to hedge: an empty result means the sweep found
+// nothing to report, so the non-exhaustive caveat would be pure noise (and
+// would wrongly make the caller's out non-empty, suppressing the
+// awaitFresh ✓ clean-pass line for every gopls-class server).
 func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI string, baseline *diagBaseline) string {
 	if baseline == nil || !d.crossFileEnabled() {
 		return ""
@@ -137,7 +141,7 @@ func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI strin
 	if failNote != "" {
 		return out + failNote
 	}
-	if !exhaustive {
+	if !exhaustive && out != "" {
 		out += "\n(cross-file check limited to files this pull reported on — not exhaustive in pull mode)"
 	}
 	return out
