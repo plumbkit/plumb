@@ -264,6 +264,20 @@ LSP errors, warnings, and hints. **Inputs:** `uris` (array of `file://` URIs —
 omit or pass `[]` for all files with issues; one URI for a single file; many
 URIs to batch). A single call replaces multiple per-file calls.
 
+Mode-aware: on a connection negotiated for `pull`/`hybrid`
+(`[lsp.<lang>] diagnostics = "pull"`, see
+[Configuration](configuration.md#lsplanguage--language-servers)), the tool
+pulls on demand via LSP 3.17 `textDocument/diagnostic` — reusing result IDs
+and unchanged reports, folding in related documents, and pulling multiple
+URIs at bounded concurrency; a `push`-mode connection keeps the existing
+open-and-wait behaviour. A pull that fails never reports a false "No
+issues" — it surfaces the error plus the last-known cached diagnostics,
+explicitly marked stale or unverified. The no-URI (whole-workspace) query
+runs a `workspace/diagnostic` sweep only when the server advertises that
+capability; otherwise it returns the cached view plus an honest note that
+only already-analysed or already-pulled files are covered — pass `uris` to
+check specific files.
+
 ---
 
 ## LSP semantic edits
