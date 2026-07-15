@@ -57,12 +57,22 @@ type Scenario struct {
 
 	// PullReports scripts a sequence of textDocument/diagnostic responses
 	// for DocumentURI: call N is served PullReports[N], clamped to the
-	// final entry once the script is exhausted. Nil synthesises a single
-	// stable full report (ResultID "scenario-1") from AllDiagnostics(),
-	// degrading to "unchanged" ONLY when the incoming
-	// DocumentDiagnosticParams.PreviousResultID matches that exact ID —
-	// proving a caller (or a real server under the same contract) never
-	// fabricates "nothing changed" for a stale or unknown ID.
+	// final entry once the script is exhausted. The script honours the
+	// incoming previousResultId exactly like a real server: a scripted
+	// "unchanged" entry is served ONLY when the incoming
+	// DocumentDiagnosticParams.PreviousResultID matches the PRECEDING
+	// entry's ResultID (the ID a client consuming the script in order
+	// would hold); on a mismatched or omitted previousResultId the fake
+	// substitutes a fresh full report instead — the most recent full
+	// entry at or before that position, falling back to the default
+	// synthesis below when no earlier full entry exists — because a real
+	// server must never claim "nothing changed" to a client whose
+	// baseline it cannot verify. The call counter advances either way.
+	// Full entries are always served as scripted.
+	//
+	// Nil synthesises a single stable full report (ResultID "scenario-1")
+	// from AllDiagnostics(), degrading to "unchanged" under the same
+	// matching rule against that exact ID.
 	PullReports []protocol.DocumentDiagnosticReport
 
 	// RelatedDocuments, when non-nil, decorates every FULL report served
@@ -259,23 +269,15 @@ func (c *Caller) diagnosticProviderCapability() *protocol.BoolOrOptions {
 
 // pullReport computes the textDocument/diagnostic response for one call: it
 // serves the next entry from a declarative PullReports script when one is
-// set, else synthesises a single stable full report that degrades to
-// "unchanged" ONLY when params.PreviousResultID matches exactly what this
-// fake would have handed out — see Scenario.PullReports.
+// set (honouring the incoming previousResultId — see scriptedPullLocked),
+// else synthesises a single stable full report that degrades to "unchanged"
+// ONLY when params.PreviousResultID matches exactly what this fake would
+// have handed out — see Scenario.PullReports.
 func (c *Caller) pullReport(params protocol.DocumentDiagnosticParams) protocol.DocumentDiagnosticReport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.scenario.PullReports) > 0 {
-		idx := c.pullCalls
-		if idx >= len(c.scenario.PullReports) {
-			idx = len(c.scenario.PullReports) - 1
-		}
-		c.pullCalls++
-		report := c.scenario.PullReports[idx]
-		if report.Kind == protocol.DiagnosticReportFull && report.RelatedDocuments == nil {
-			report.RelatedDocuments = c.scenario.RelatedDocuments
-		}
-		return report
+		return c.scriptedPullLocked(params)
 	}
 	const resultID = "scenario-1"
 	if params.PreviousResultID == resultID {
@@ -286,6 +288,55 @@ func (c *Caller) pullReport(params protocol.DocumentDiagnosticParams) protocol.D
 		ResultID:         resultID,
 		Items:            c.scenario.AllDiagnostics(),
 		RelatedDocuments: c.scenario.RelatedDocuments,
+	}
+}
+
+// scriptedPullLocked serves the next PullReports entry, honouring the
+// incoming previousResultId per Scenario.PullReports' contract: an
+// "unchanged" entry requires the incoming ID to match the PRECEDING entry's
+// ResultID; on a mismatched or omitted ID a fresh full report is substituted
+// (lastScriptedFullLocked) — the fake never claims "nothing changed" to a
+// caller whose baseline it cannot verify. Full entries are served as
+// scripted. The call counter advances on every call, matching "call N is
+// served PullReports[N]" (clamped once exhausted). Caller must hold c.mu.
+func (c *Caller) scriptedPullLocked(params protocol.DocumentDiagnosticParams) protocol.DocumentDiagnosticReport {
+	idx := c.pullCalls
+	if idx >= len(c.scenario.PullReports) {
+		idx = len(c.scenario.PullReports) - 1
+	}
+	c.pullCalls++
+	report := c.scenario.PullReports[idx]
+	if report.Kind == protocol.DiagnosticReportUnchanged {
+		prevID := ""
+		if idx > 0 {
+			prevID = c.scenario.PullReports[idx-1].ResultID
+		}
+		if params.PreviousResultID == "" || params.PreviousResultID != prevID {
+			report = c.lastScriptedFullLocked(idx)
+		}
+	}
+	if report.Kind == protocol.DiagnosticReportFull && report.RelatedDocuments == nil {
+		report.RelatedDocuments = c.scenario.RelatedDocuments
+	}
+	return report
+}
+
+// lastScriptedFullLocked returns the most recent full entry at or before idx
+// in the PullReports script — the document state a real server would
+// recompute and send in full when it cannot validate the client's
+// previousResultId. When the script has no full entry at or before idx
+// (pathological: it opens with "unchanged"), it falls back to the default
+// synthesis from AllDiagnostics. Caller must hold c.mu.
+func (c *Caller) lastScriptedFullLocked(idx int) protocol.DocumentDiagnosticReport {
+	for i := idx; i >= 0; i-- {
+		if c.scenario.PullReports[i].Kind == protocol.DiagnosticReportFull {
+			return c.scenario.PullReports[i]
+		}
+	}
+	return protocol.DocumentDiagnosticReport{
+		Kind:     protocol.DiagnosticReportFull,
+		ResultID: "scenario-1",
+		Items:    c.scenario.AllDiagnostics(),
 	}
 }
 

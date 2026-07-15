@@ -91,7 +91,7 @@ func runRelatedDocumentsSubtest(t *testing.T, s lsptest.Scenario, newAdapter ada
 // support workspace pulls at all).
 func runWorkspacePullSubtest(t *testing.T, s lsptest.Scenario, newAdapter adapterFactory) {
 	t.Helper()
-	if s.WorkspaceReports == nil {
+	if len(s.WorkspaceReports) == 0 {
 		t.Skip("scenario has no workspace/diagnostic reports")
 	}
 	adapter, _, ctx := newAdapter(t, s)

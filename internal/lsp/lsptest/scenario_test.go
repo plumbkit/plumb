@@ -68,7 +68,8 @@ func TestCallerPullReportHonoursPreviousResultID(t *testing.T) {
 }
 
 // TestCallerPullReportsScript proves a declarative PullReports sequence is
-// served in order and clamps to its final entry once exhausted.
+// served in order to a client that threads previousResultId correctly, and
+// clamps to its final entry once exhausted.
 func TestCallerPullReportsScript(t *testing.T) {
 	c := NewCaller(Scenario{
 		Mode: Pull,
@@ -79,18 +80,65 @@ func TestCallerPullReportsScript(t *testing.T) {
 		},
 	})
 	ctx := context.Background()
-	wantKinds := []string{
-		protocol.DiagnosticReportFull, protocol.DiagnosticReportUnchanged,
-		protocol.DiagnosticReportFull, protocol.DiagnosticReportFull, // clamped to the last entry
+	steps := []struct {
+		previousResultID string
+		wantKind         string
+		wantResultID     string
+	}{
+		{"", protocol.DiagnosticReportFull, "r1"},        // first pull: no baseline yet
+		{"r1", protocol.DiagnosticReportUnchanged, "r1"}, // echoes r1 ⇒ unchanged honoured
+		{"r1", protocol.DiagnosticReportFull, "r2"},      // full entries served as scripted
+		{"r2", protocol.DiagnosticReportFull, "r2"},      // clamped to the last (full) entry
 	}
-	for i, want := range wantKinds {
+	for i, step := range steps {
 		var report protocol.DocumentDiagnosticReport
-		if err := c.Call(ctx, protocol.MethodDiagnostic, nil, &report); err != nil {
+		params := protocol.DocumentDiagnosticParams{PreviousResultID: step.previousResultID}
+		if err := c.Call(ctx, protocol.MethodDiagnostic, params, &report); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
-		if report.Kind != want {
-			t.Fatalf("call %d: kind = %q, want %q", i, report.Kind, want)
+		if report.Kind != step.wantKind || report.ResultID != step.wantResultID {
+			t.Fatalf("call %d: report = (%q, %q), want (%q, %q)", i, report.Kind, report.ResultID, step.wantKind, step.wantResultID)
 		}
+	}
+}
+
+// TestCallerPullReportsScriptRejectsStaleOrMissingID locks in the scripted
+// branch's safety rule: an "unchanged" script entry is served ONLY to a
+// caller echoing the preceding entry's ResultID; a wrong OR omitted incoming
+// previousResultId gets a fresh full report (the preceding full entry's
+// content) — never a fabricated "nothing changed".
+func TestCallerPullReportsScriptRejectsStaleOrMissingID(t *testing.T) {
+	script := []protocol.DocumentDiagnosticReport{
+		{Kind: protocol.DiagnosticReportFull, ResultID: "r1", Items: []protocol.Diagnostic{{Message: "one"}}},
+		{Kind: protocol.DiagnosticReportUnchanged, ResultID: "r1"},
+	}
+	for name, previousResultID := range map[string]string{"wrong ID": "bogus", "omitted ID": ""} {
+		t.Run(name, func(t *testing.T) {
+			c := NewCaller(Scenario{Mode: Pull, PullReports: script})
+			ctx := context.Background()
+
+			var first protocol.DocumentDiagnosticReport
+			if err := c.Call(ctx, protocol.MethodDiagnostic, protocol.DocumentDiagnosticParams{}, &first); err != nil {
+				t.Fatal(err)
+			}
+			if first.Kind != protocol.DiagnosticReportFull || first.ResultID != "r1" {
+				t.Fatalf("first pull = (%q, %q), want (full, r1)", first.Kind, first.ResultID)
+			}
+
+			var second protocol.DocumentDiagnosticReport
+			params := protocol.DocumentDiagnosticParams{PreviousResultID: previousResultID}
+			if err := c.Call(ctx, protocol.MethodDiagnostic, params, &second); err != nil {
+				t.Fatal(err)
+			}
+			if second.Kind != protocol.DiagnosticReportUnchanged {
+				// The substituted full report carries the preceding full entry's state.
+				if second.Kind != protocol.DiagnosticReportFull || second.ResultID != "r1" || len(second.Items) != 1 || second.Items[0].Message != "one" {
+					t.Fatalf("substituted report = %#v, want the preceding full entry re-served", second)
+				}
+				return
+			}
+			t.Fatalf("second pull with %s = %#v — the script must not serve 'unchanged' to a caller whose baseline it cannot verify", name, second)
+		})
 	}
 }
 
