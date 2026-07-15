@@ -115,6 +115,16 @@ func (c *Cache) InvalidateByPath(uri string) int {
 	return count
 }
 
+// Clear evicts every cached LSP result while keeping the cache usable.
+func (c *Cache) Clear() {
+	for i := range c.shards {
+		s := &c.shards[i]
+		s.mu.Lock()
+		clear(s.entries)
+		s.mu.Unlock()
+	}
+}
+
 // Stats returns a snapshot of hit/miss counters and the current live entry count.
 func (c *Cache) Stats() Stats {
 	now := time.Now()

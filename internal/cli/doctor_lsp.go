@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -57,12 +58,12 @@ func checkLSPs(ws string) []checkResult {
 	}
 	results = append(results, checkActiveLSPProcesses()...)
 	if ws != "" {
-		results = append(results, checkXcodeBuildServer(ws)...)
+		results = append(results, checkXcodeBuildServer(ws, cfg.Xcode)...)
 	}
 	return results
 }
 
-func checkXcodeBuildServer(ws string) []checkResult {
+func checkXcodeBuildServer(ws string, configured ...config.XcodeConfig) []checkResult {
 	i := xcodebsp.Inspect(ws)
 	if !i.IsBareXcode() {
 		return nil
@@ -74,8 +75,28 @@ func checkXcodeBuildServer(ws string) []checkResult {
 			fix:    "regenerate it with: " + i.GenerateCommand(),
 		}}
 	}
+	if status, ok := liveXcodeStatus(ws); ok {
+		if result := checkXcodeLifecycle(status, ws); result != nil {
+			return result
+		}
+	}
 	if i.BuildServerOK {
-		return []checkResult{{name: "Xcode build server", ok: true, detail: contractConfigPath(i.BuildServerPath) + "  (configured)"}}
+		return []checkResult{{
+			name: "Xcode build server", ok: true, warn: true,
+			detail: contractConfigPath(i.BuildServerPath) + "  (configured; semantic readiness not yet proven)",
+			fix:    "build the selected scheme once in Xcode if semantic results are incomplete; Plumb never runs that build automatically",
+		}}
+	}
+	var xcodeCfg config.XcodeConfig
+	if len(configured) > 0 {
+		xcodeCfg = configured[0]
+	}
+	if xcodeCfg.AutoBuildServer && !config.NewTrustStore().IsTrusted(ws) {
+		return []checkResult{{
+			name: "Xcode build server", ok: true, warn: true,
+			detail: "automatic build-server setup is enabled but the workspace is untrusted",
+			fix:    "review the workspace configuration, then run plumb trust in " + contractConfigPath(ws),
+		}}
 	}
 	if i.Ambiguous() {
 		return []checkResult{{
@@ -96,6 +117,51 @@ func checkXcodeBuildServer(ws string) []checkResult {
 		detail: "buildServer.json absent; SourceKit-LSP semantic results may be incomplete",
 		fix:    "run: " + i.GenerateCommand(),
 	}}
+}
+
+func liveXcodeStatus(ws string) (xcodebsp.Status, bool) {
+	resp, err := dialDaemonCtrlFull("xcode-status " + ws)
+	if err != nil || strings.TrimSpace(resp) == "" {
+		return xcodebsp.Status{}, false
+	}
+	var status xcodebsp.Status
+	if err := json.Unmarshal([]byte(resp), &status); err != nil || status.State == "" {
+		return xcodebsp.Status{}, false
+	}
+	return status, true
+}
+
+func checkXcodeLifecycle(status xcodebsp.Status, ws string) []checkResult {
+	detail := status.Detail
+	if detail == "" {
+		detail = string(status.State)
+	}
+	result := checkResult{name: "Xcode build server", ok: true, detail: detail}
+	switch status.State {
+	case xcodebsp.StateSemanticProven:
+		return []checkResult{result}
+	case xcodebsp.StateFailed:
+		result.ok = false
+		result.fix = "inspect the daemon log, correct the Xcode marker or scheme, and retry"
+	case xcodebsp.StateUntrusted:
+		result.warn = true
+		result.fix = "review the workspace configuration, then run plumb trust in " + contractConfigPath(ws)
+	case xcodebsp.StateDisabled:
+		result.warn = true
+		result.fix = "enable [xcode] auto_build_server in a trusted workspace, or configure xcode-build-server manually"
+	case xcodebsp.StateAmbiguous:
+		result.warn = true
+		result.fix = "choose the intended Xcode marker and set [xcode] scheme when more than one scheme exists"
+	case xcodebsp.StateConfigured, xcodebsp.StateConfiguredNeedsBuildData, xcodebsp.StateWarming:
+		result.warn = true
+		result.fix = "build the selected scheme once in Xcode if semantic results are incomplete; Plumb never runs that build automatically"
+	case xcodebsp.StateConfiguring, xcodebsp.StateRestarting:
+		result.warn = true
+		result.fix = "retry after the background Xcode setup completes"
+	default:
+		return nil
+	}
+	return []checkResult{result}
 }
 
 // checkActiveLSPProcesses queries the running daemon for its live language

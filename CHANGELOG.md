@@ -11,7 +11,24 @@
   dependency warning, and prints a deterministic generation command when one
   marker exists (multiple markers require an explicit choice). `session_start` and empty semantic results from
   `workspace_symbols`, `get_definition`, and `find_references` provide the same
-  actionable guidance. Plumb does not execute Xcode tooling automatically.
+  actionable guidance. With automatic setup left at its default-off setting,
+  Plumb executes no Xcode tooling.
+
+- **Trusted, opt-in Xcode build-server auto-configuration.** A new `[xcode]`
+  section (`auto_build_server = false`, optional `scheme`, bounded `timeout`)
+  may generate `buildServer.json` at attach time only after mandatory
+  per-workspace trust, including for a global opt-in. Marker and scheme selection
+  never guesses; execution is argv-only and never builds the project. A
+  canonical-root singleflight coalesces concurrent attaches, then restarts only
+  that root's SourceKit-LSP through the shared hibernate/wake lifecycle while
+  preserving references and rebuilding its watcher. Doctor, session orientation,
+  empty-result guidance, control-socket state, and logs distinguish configuring,
+  untrusted/ambiguous/failed, build-data-required, restarting, warming, and a
+  non-empty semantic query that proves readiness. A checked-in macOS fixture
+  proves cold configuration, the absence of a silent build, an explicit
+  test-only DerivedData build with code signing disabled, restart-required BSP
+  discovery, workspace symbols, definitions, references, and concurrent-attach
+  singleflight.
 
 - **A guaranteed four-tool bootstrap set, and the resolved tool profile plus its
   reason are now surfaced in orientation.** `session_start`, `git`, `read_file`,

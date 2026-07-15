@@ -202,8 +202,10 @@ type connSession struct {
 	hintSeen   map[string]bool
 	hintSeenMu sync.Mutex
 
-	watcherOnce sync.Once
-	unsubscribe func() // removes the store-change listener on close
+	watcherOnce    sync.Once
+	xcodeStartedMu sync.Mutex
+	xcodeStarted   map[string]bool // roots already evaluated for next-session Xcode config
+	unsubscribe    func()          // removes the store-change listener on close
 
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex

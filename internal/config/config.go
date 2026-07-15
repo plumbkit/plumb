@@ -476,6 +476,14 @@ type RastroConfig struct {
 	Path    string `toml:"path"`
 }
 
+// XcodeConfig governs opt-in Xcode Build Server Protocol generation.
+// External tooling still requires per-workspace trust at execution time.
+type XcodeConfig struct {
+	AutoBuildServer bool     `toml:"auto_build_server"`
+	Scheme          string   `toml:"scheme"`
+	Timeout         Duration `toml:"timeout"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
@@ -498,6 +506,7 @@ type Config struct {
 	Memory    MemoryConfig         `toml:"memory"`
 	Collab    CollabConfig         `toml:"collab"`
 	Rastro    RastroConfig         `toml:"rastro"`
+	Xcode     XcodeConfig          `toml:"xcode"`
 	// Tools governs which tools appear in tools/list (lean/full/auto profiles).
 	Tools ToolsConfig `toml:"tools"`
 	// Tasks holds per-language build/lint/test/e2e/verify command templates,

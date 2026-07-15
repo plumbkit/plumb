@@ -36,11 +36,18 @@ type WorkspaceSymbols struct {
 	topo    topologyStoreFn
 	warmup  LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
 	xcode   XcodeHintFn
+	proof   XcodeProofFn
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
 func (t *WorkspaceSymbols) WithXcodeHint(fn XcodeHintFn) *WorkspaceSymbols {
 	t.xcode = fn
+	return t
+}
+
+// WithXcodeProof records non-empty SourceKit-LSP workspace-symbol results.
+func (t *WorkspaceSymbols) WithXcodeProof(fn XcodeProofFn) *WorkspaceSymbols {
+	t.proof = fn
 	return t
 }
 
@@ -129,6 +136,15 @@ func (t *WorkspaceSymbols) topologyFillTreeSitter(ctx context.Context, query str
 	return formatTopologyFill(fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
 }
 
+func hasSwiftWorkspaceSymbol(symbols []protocol.SymbolInformation) bool {
+	for _, symbol := range symbols {
+		if strings.HasSuffix(strings.ToLower(string(symbol.Location.URI)), ".swift") {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var a workspaceSymbolsArgs
 	if err := json.Unmarshal(args, &a); err != nil {
@@ -168,6 +184,7 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		syms = filtered
 	}
 
+	recordXcodeProof(t.proof, hasSwiftWorkspaceSymbol(syms))
 	var result string
 	if len(syms) == 0 {
 		if out, ok := t.topologyFillTreeSitter(ctx, a.Query); ok {

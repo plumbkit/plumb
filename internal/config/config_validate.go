@@ -31,6 +31,9 @@ func validate(cfg Config) error {
 	if cfg.LSPQuery.Timeout.Duration < 0 {
 		return fmt.Errorf("lsp_query.timeout must be non-negative (0 disables)")
 	}
+	if cfg.Xcode.AutoBuildServer && cfg.Xcode.Timeout.Duration <= 0 {
+		return fmt.Errorf("xcode.timeout must be positive")
+	}
 	for _, check := range []func() error{
 		func() error { return validateQuality(cfg.Quality) },
 		func() error { return validateTopology(cfg.Topology) },

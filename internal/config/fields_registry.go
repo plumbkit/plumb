@@ -232,6 +232,20 @@ var registryData = []Field{
 		Description: "Expiry, in minutes, for a new intent or note before it is pruned.",
 	},
 
+	// --- Xcode ---
+	{
+		Key: "xcode.auto_build_server", Type: FieldBool, ReloadTier: ReloadNextSession,
+		Description: "Configure Xcode Build Server Protocol on attach. Off by default; every workspace must be trusted before commands run.",
+	},
+	{
+		Key: "xcode.scheme", Type: FieldString, ReloadTier: ReloadNextSession,
+		Description: "Explicit Xcode scheme. Blank selects only when exactly one scheme is discovered.",
+	},
+	{
+		Key: "xcode.timeout", Type: FieldDuration, ReloadTier: ReloadNextSession,
+		Description: "Bound for Xcode build-server inspection and configuration commands. Default 2m.",
+	},
+
 	// --- Rastro ---
 	{
 		Key: "rastro.enabled", Type: FieldBool, ReloadTier: ReloadNextSession,

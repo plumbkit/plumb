@@ -158,16 +158,30 @@ server.
 ## Swift semantic tools are empty in an Xcode project
 
 SourceKit-LSP needs Build Server Protocol metadata for a bare `.xcodeproj` or
-`.xcworkspace`. Run `plumb doctor --workspace .`; when `buildServer.json` is
-missing, doctor prints the exact `xcode-build-server config` command for a
-single detected marker; multiple markers require an explicit choice. Plumb only provides
-guidance in this release—it does not run project tooling automatically.
+`.xcworkspace`. Run `plumb doctor --workspace .`; it distinguishes missing or
+malformed configuration, workspace trust, generation/restart warm-up, missing
+build data, and a non-empty semantic query that proves readiness.
 
-After generating the file, build the selected scheme once in Xcode so its build
-log contains current compiler flags, then restart the Plumb session. A malformed
-`buildServer.json` is a doctor failure; a missing `xcode-build-server` binary is
-an optional-dependency warning. `session_start`, `workspace_symbols`,
-`get_definition`, and `find_references` repeat this guidance when applicable.
+Manual setup remains available through doctor's exact `xcode-build-server config`
+command. For automatic setup, review the workspace and add:
+
+```toml
+[xcode]
+auto_build_server = true
+# scheme = "MyApp"  # required only when discovery finds several schemes
+```
+
+Then run `plumb trust` in the workspace and start a new session. Plumb validates
+the marker and scheme, generates `buildServer.json` with bounded argv-only
+commands, and restarts only that root's SourceKit-LSP. It never runs a project
+build or a shell. The external `xcode-build-server` program still invokes Xcode
+and may interpolate Xcode-derived values internally, so trust only a workspace you
+have reviewed.
+
+Configuration alone does not provide compiler flags. If doctor reports warming or
+unproven semantics, build the selected scheme once in Xcode; Plumb will not do so
+automatically. `session_start`, `workspace_symbols`, `get_definition`, and
+`find_references` repeat lifecycle-aware guidance when applicable.
 
 ## Too much (or too little) log output
 

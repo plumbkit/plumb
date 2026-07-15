@@ -81,6 +81,10 @@ var defaults = Config{
 		Enabled: false,
 		Path:    "rastro",
 	},
+	Xcode: XcodeConfig{
+		AutoBuildServer: false,
+		Timeout:         Duration{2 * time.Minute},
+	},
 	LSPQuery: LSPQueryConfig{
 		Timeout: Duration{30 * time.Second},
 	},

@@ -58,9 +58,9 @@ type workspacePool struct {
 	// baseCtx is the supervisor lifetime context — the daemon root context, not
 	// any single connection or tool-call context. Language servers are shared
 	// across all sessions, so tying one to a caller's context would let that
-	// caller's disconnect tear it down for everyone. Never nil after
-	// newWorkspacePool (guarded to context.Background()).
+	// caller's disconnect tear it down for everyone. Never nil after newWorkspacePool.
 	baseCtx context.Context
+	xcode   poolXcodeState
 }
 
 type langConfig struct {
@@ -166,6 +166,7 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		cacheTTL:  cfg.Cache.TTL.Duration,
 		idleGrace: poolIdleGrace,
 		baseCtx:   baseCtx,
+		xcode:     newPoolXcodeState(),
 	}
 }
 

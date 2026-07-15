@@ -273,6 +273,9 @@ var settingTOMLPaths = map[settingKey][]string{
 	skCollabIntentTTLMin:        {"collab", "intent_ttl_minutes"},
 	skRastroEnabled:             {"rastro", "enabled"},
 	skRastroPath:                {"rastro", "path"},
+	skXcodeAutoBuildServer:      {"xcode", "auto_build_server"},
+	skXcodeScheme:               {"xcode", "scheme"},
+	skXcodeTimeout:              {"xcode", "timeout"},
 	// agent_config_writes is deliberately ABSENT: it is a global-only safety knob
 	// (LoadProject forces the global value to win), so it never appears in a
 	// workspace scope — a project config cannot enable agent writes.
@@ -344,6 +347,9 @@ var settingDottedKeys = map[settingKey]string{
 	skCollabIntentTTLMin:         "collab.intent_ttl_minutes",
 	skRastroEnabled:              "rastro.enabled",
 	skRastroPath:                 "rastro.path",
+	skXcodeAutoBuildServer:       "xcode.auto_build_server",
+	skXcodeScheme:                "xcode.scheme",
+	skXcodeTimeout:               "xcode.timeout",
 	skAutoAttach:                 "workspace.auto_attach",
 	skAutoAttachPersist:          "workspace.auto_attach_persist",
 	skAllowDependencyReads:       "workspace.allow_dependency_reads",

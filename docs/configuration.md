@@ -35,9 +35,11 @@ Most sections are **hot-reloaded** without a reconnect: an `fsnotify` watch on
 the global `config.toml` (plus the `reload-config` control command and
 `plumb config reload`) re-reads the file and re-merges every live session's
 project view. `[edits]`, `[walk]`, `[git]`, `[topology]`, `[session]`,
-`[memory]`, `[collab]`, and `[semantics]` apply live. The restart-bound exceptions are the
-`[lsp.*]` servers, `[cache]`, and `log_format`; `plumb config show` and
-`daemon_info` flag those as restart-needed.
+`[memory]`, `[collab]`, and `[semantics]` apply live. `[xcode]` is evaluated
+once per workspace on the next session, because enabling it may launch trusted
+project-sensitive tooling. The restart-bound exceptions are the `[lsp.*]`
+servers, `[cache]`, and `log_format`; `plumb config show` and `daemon_info` flag
+those as restart-needed.
 
 ## File locations
 
@@ -283,6 +285,41 @@ it needs an embedding endpoint you supply; nothing about it is provisional.
 | `api_key_env` | string | `""` | Env var holding the key, used when `api_key` is empty; `""` uses the preset default (e.g. `OPENAI_API_KEY`). |
 | `rerank_candidates` | int | `50` | How many FTS5 hits to re-rank. |
 | `timeout` | duration | `"10s"` | Per embedding HTTP call. |
+
+## `[xcode]` — trusted Build Server Protocol setup
+
+Bare `.xcodeproj` and `.xcworkspace` roots need `buildServer.json` plus Xcode
+build data for complete SourceKit-LSP semantics. Automatic setup is deliberately
+off by default and always requires per-workspace trust, even when enabled in the
+global config:
+
+```toml
+[xcode]
+auto_build_server = true
+scheme = "MyApp"
+timeout = "2m"
+```
+
+Review the workspace first, then run `plumb trust` from its root. On the next
+session Plumb safely selects one project/workspace marker, validates the configured
+scheme (or requires exactly one discovered scheme), and runs only bounded argv
+commands for `xcodebuild -list -json` and `xcode-build-server config`. It never
+uses a shell and never builds the project. `xcode-build-server` itself invokes
+Xcode tooling and its current implementation may interpolate Xcode-derived values,
+which is why trust is per workspace rather than implied by a global opt-in. After
+generation Plumb restarts only that root's SourceKit-LSP entry through the shared
+pool.
+
+Configuration, build-data availability, restart/warm-up, and a proven non-empty
+semantic result are separate states in logs, `plumb doctor`, `session_start`,
+and empty-result guidance. If build data is absent, build the selected scheme once
+in Xcode; Plumb will not do that automatically.
+
+| Field | Type | Default | Env | Effect |
+|---|---|---|---|---|
+| `auto_build_server` | bool | `false` | `PLUMB_XCODE_AUTO_BUILD_SERVER` | Opt in to trusted attach-time generation. Per-workspace trust remains mandatory for global and project opt-ins. |
+| `scheme` | string | `""` | — | Explicit scheme, validated against `xcodebuild -list -json`. Empty selects only when exactly one scheme exists. |
+| `timeout` | duration | `"2m"` | — | Per-command bound for scheme discovery and build-server generation. Must be positive while automatic setup is enabled. |
 
 ## `[lsp_query]` — LSP operation timeout (global only)
 

@@ -113,6 +113,10 @@ const (
 	// [rastro] rows
 	skRastroEnabled
 	skRastroPath
+	// [xcode] rows
+	skXcodeAutoBuildServer
+	skXcodeScheme
+	skXcodeTimeout
 )
 
 // dottedKeyFor maps a settings row key to its config-field-registry dotted key.
@@ -185,12 +189,13 @@ type settingItem struct {
 }
 
 var (
-	logLevelOptions    = []string{"debug", "info", "warn", "error"}
-	logFormatOptions   = []string{"text", "json"}
-	cacheTTLOptions    = []string{"1m", "5m", "10m", "30m", "1h"}
-	lspTimeoutOptions  = []string{"0s", "10s", "30s", "1m", "2m"}
-	pathStyleOptions   = []string{"compact", "truncate-middle", "full"}
-	qualityModeOptions = []string{"background", "sync"}
+	logLevelOptions     = []string{"debug", "info", "warn", "error"}
+	logFormatOptions    = []string{"text", "json"}
+	cacheTTLOptions     = []string{"1m", "5m", "10m", "30m", "1h"}
+	lspTimeoutOptions   = []string{"0s", "10s", "30s", "1m", "2m"}
+	xcodeTimeoutOptions = []string{"30s", "1m", "2m", "5m", "10m"}
+	pathStyleOptions    = []string{"compact", "truncate-middle", "full"}
+	qualityModeOptions  = []string{"background", "sync"}
 )
 
 // durValue formats a duration as its matching preset string when one exists,
@@ -294,6 +299,10 @@ func buildSettingItems(cfg config.Config) []settingItem {
 
 		{group: "Rastro", label: "Enabled", kind: settingToggle, key: skRastroEnabled, value: onOff(cfg.Rastro.Enabled)},
 		{group: "Rastro", label: "Path", kind: settingText, key: skRastroPath, value: pathOrDefault(cfg.Rastro.Path)},
+
+		{group: "Xcode", label: "Auto build server", kind: settingToggle, key: skXcodeAutoBuildServer, value: onOff(cfg.Xcode.AutoBuildServer)},
+		{group: "Xcode", label: "Scheme", kind: settingText, key: skXcodeScheme, value: pathOrDefault(cfg.Xcode.Scheme)},
+		{group: "Xcode", label: "Timeout", kind: settingCycle, key: skXcodeTimeout, value: durValue(cfg.Xcode.Timeout, xcodeTimeoutOptions), options: xcodeTimeoutOptions},
 
 		{group: "Workspace", label: "Auto attach", kind: settingToggle, key: skAutoAttach, value: onOff(cfg.Workspace.AutoAttach)},
 		{group: "Workspace", label: "Auto attach persist", kind: settingToggle, key: skAutoAttachPersist, value: onOff(cfg.Workspace.AutoAttachPersist)},

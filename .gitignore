@@ -40,6 +40,9 @@ vendor/
 *.xcodeproj/
 *.xcworkspace/
 xcuserdata/
+# Keep the checked-in real-Xcode integration fixture.
+!testdata/xcode-fixture/PlumbXcodeFixture.xcodeproj/
+!testdata/xcode-fixture/PlumbXcodeFixture.xcodeproj/**
 # Eclipse
 .project
 .classpath

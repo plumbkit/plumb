@@ -57,11 +57,18 @@ type FindReferences struct {
 	timeout time.Duration
 	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 	xcode   XcodeHintFn
+	proof   XcodeProofFn
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
 func (t *FindReferences) WithXcodeHint(fn XcodeHintFn) *FindReferences {
 	t.xcode = fn
+	return t
+}
+
+// WithXcodeProof records non-empty SourceKit-LSP reference results.
+func (t *FindReferences) WithXcodeProof(fn XcodeProofFn) *FindReferences {
+	t.proof = fn
 	return t
 }
 
@@ -192,6 +199,7 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 	if len(locs) == 0 {
 		return appendXcodeHint(fmt.Sprintf("No references found for symbol at %s:%d:%d.", uri, line+1, character+1), uri, t.xcode), nil
 	}
+	recordXcodeProof(t.proof, true)
 
 	byFile := make(map[string][]protocol.Location)
 	for _, loc := range locs {

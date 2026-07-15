@@ -96,6 +96,7 @@ type ctrlHandlers struct {
 	reload        func() error              // reload-config
 	reloadProject func(string)              // reload-project <workspace>
 	lspStatus     func() string             // lsp-status
+	xcodeStatus   func(string) string       // xcode-status <workspace>
 	webStart      func(int) (string, error) // web-start [port] → URL
 	webStatus     func() string             // web-status
 	webStop       func() error              // web-stop
@@ -173,6 +174,12 @@ func handleDebugCommand(conn net.Conn, line string, h ctrlHandlers) bool {
 	if workspace, ok := strings.CutPrefix(line, "diagnostics "); ok {
 		if h.diags != nil {
 			fmt.Fprint(conn, h.diags(workspace))
+		}
+		return true
+	}
+	if workspace, ok := strings.CutPrefix(line, "xcode-status "); ok {
+		if h.xcodeStatus != nil {
+			fmt.Fprint(conn, h.xcodeStatus(workspace))
 		}
 		return true
 	}
