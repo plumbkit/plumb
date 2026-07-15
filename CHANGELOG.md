@@ -26,6 +26,78 @@
   lean or full, not just which it chose. Guarded by `TestBootstrapToolsAreLean`,
   `TestBootstrapToolsExactSet`, and `TestSmoke_LeanManifestKeepsBootstrap`.
 
+- **Per-language pull-diagnostics negotiation via `[lsp.<lang>] diagnostics`.**
+  A new `auto`\|`push`\|`pull` knob (default `auto`; empty is treated the same)
+  lets a language server's diagnostics be negotiated as LSP 3.17 pull
+  (`textDocument/diagnostic`) instead of the historical `publishDiagnostics`
+  push stream. `auto` resolves to `push` for every adapter today
+  (evidence-gated — see below); `pull` advertises the pull client capability
+  (`protocol.ClientCapabilitiesFor`) and, for `gopls`, additionally sets its
+  experimental `pullDiagnostics: true` initialization option. The resolved
+  connection mode — `push`, `pull`, `hybrid` (the server pulls AND keeps
+  pushing), or `pull-requested-but-unavailable` (pull requested but the server
+  never advertised `diagnosticProvider`) — is never inferred from cache
+  contents; it is surfaced in `plumb doctor`, the `lsp-status` control line
+  (`diag=<mode>`), `daemon_info`, and `session_start`. A `-32601` on a
+  negotiated pull connection downgrades it to `push` for the session with one
+  warning log. The TUI Settings LSP tab gained a `diagnostics` row per
+  language. Guarded by `TestClientCapabilitiesFor_PullAddsDiagnostic`,
+  `TestAdapter_EnablePullDiagnostics`, `TestResolveDiagMode_Outcomes`,
+  `TestDiagnosticsHybridFlip`, and `TestLSPStatusReport_DiagModeRoundTrip`.
+
+- **Pull diagnostics are cache-integrated with result IDs and push/pull
+  dedup.** `internal/cache.Invalidator` now records a per-URI pull snapshot,
+  source tag (`lsp-push`/`lsp-pull`), and result ID alongside the existing
+  push snapshot; an `unchanged` report reuses the cached snapshot only when
+  its result ID matches the stored one — an unknown or mismatched ID mutates
+  nothing, so a pull failure can never turn a clean cache into a false "No
+  issues" result. Related documents flow through the same recording path; a
+  mixed push/pull view for one URI is deduped on URI + range + severity +
+  code + source + message, with the newest write winning on an identical
+  key. Pull state is cleared on every server (re)start, including a
+  crash-restart. Guarded by 15 behaviour tests plus 2 race tests in
+  `internal/cache/invalidator_pull_test.go`.
+
+- **The `diagnostics` tool and post-write diagnostics are mode-aware.** A
+  single-URI query on a `pull`/`hybrid` connection pulls immediately (with
+  `previousResultId`; an unknown result ID retries once without it);
+  multi-URI queries pull at bounded concurrency (cap 4); a no-URI query runs
+  `workspace/diagnostic` only when the server advertises
+  `workspaceDiagnostics`, otherwise it returns the cached view plus an
+  explicit note that only already-analysed or already-pulled files are
+  covered. A pull error always surfaces the error plus the last-known cached
+  diagnostics (labelled stale) or an explicit "unverified" notice — never a
+  false clean result. Post-write diagnostics pull the edited URI and its
+  related documents under pull/hybrid, reusing the existing
+  error-count-rose attribution; a cross-file sweep runs a bounded workspace
+  pull only when the server advertises `interFileDependencies &&
+  workspaceDiagnostics`, else it reports the edited file honestly as
+  non-exhaustive. `workspace/diagnostic/refresh` is answered for every
+  adapter by marking pull state stale and responding promptly, without a
+  blocking pull inside the JSON-RPC read loop.
+
+- **The LSP conformance harness now exercises the full pull-diagnostics
+  surface.** `internal/lsp/lsptest.Scenario` gained scripted result-ID
+  sequences, related documents, `workspace/diagnostic` responses,
+  server-initiated `workspace/diagnostic/refresh`, a hybrid mode, and a
+  `MethodNotFound` forcing mechanism; `internal/lsp/conformance` runs
+  pull-only, hybrid, unchanged/result-ID, related-documents, workspace-pull,
+  refresh, and method-not-found-downgrade subtests, routed through each
+  adapter's own `DefaultInitParams` (previously bypassed) so negotiation
+  itself is under test.
+
+- **Real-binary pull-diagnostics validation matrix (macOS arm64).** Forcing
+  pull negotiation against installed binaries found: `gopls` v0.23.0
+  advertises `diagnosticProvider`, answers `textDocument/diagnostic`
+  correctly, and keeps pushing `publishDiagnostics` too (resolves to
+  **hybrid**) — single-document pull is a median ~3ms versus a ~1s
+  push-arrival, though `gopls` does not implement `workspace/diagnostic`;
+  `typescript-language-server` 5.3.0 and `zls` 0.16 do not advertise
+  `diagnosticProvider` under forced pull, exercising the clean
+  `pull-requested-but-unavailable` downgrade path. `auto` stays `push` for
+  every adapter on this evidence; `pull` remains available as an explicit
+  per-language opt-in.
+
 ### Changed
 
 - **The lean tool profile is now opt-in per client, gated on an explicit,
@@ -55,6 +127,18 @@
   (`internal/cli`) uses, so the next tool added to the registry without a
   matching fixture update fails this test loudly instead of silently skewing
   the ratio.
+
+- **Stale "pull-first" claims about zls and typescript-language-server
+  corrected repo-wide.** Comments and docs describing either server as
+  requiring or preferring the LSP pull model were factually wrong — both are
+  push servers that publish `publishDiagnostics` once the client advertises
+  the capability, reconfirmed under the new negotiated-pull evidence above
+  (forcing pull on zls yields an empty report with no `diagnosticProvider`
+  advertised; typescript-language-server returns `-32601`). Corrected in
+  `internal/lsp/protocol/types.go`, `internal/lsp/adapters/zig/adapter.go`,
+  and the retired always-skipped gopls pull test; the zig conformance
+  scenario's pull-only case was re-homed onto a neutral fake server so zig
+  gets a factual push scenario.
 
 ## 0.11.2 (2026-07-12)
 

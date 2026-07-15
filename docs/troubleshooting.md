@@ -98,6 +98,44 @@ The language server may be slower than the post-write wait. Raise
 `[edits] post_write_diagnostics_ms` (e.g. to `1000`). On a cold module cache,
 gopls may emit "not in your go.mod file" — run `go mod tidy`.
 
+## How do I read the resolved diagnostics mode?
+
+`[lsp.<lang>] diagnostics` defaults to `auto` (push for every adapter today);
+setting it to `pull` negotiates the LSP 3.17 `textDocument/diagnostic` model
+when the server supports it (see
+[Configuration → Diagnostics mode](configuration.md#lsplanguage--language-servers)).
+plumb never infers the connection's mode from cache contents — it's the
+recorded negotiation outcome, surfaced in four places:
+
+- `plumb doctor` — the live-server detail line appends `diagnostics: <mode>`
+  only when it isn't the default `push`.
+- `plumb debug lsp` (the `lsp-status` line) — the `diag=<mode>` field on each
+  server row.
+- `daemon_info` — the `lsp:` row appends `, diagnostics: <mode>` for a
+  non-push mode.
+- `session_start` — the same non-default-only annotation on the LSP identity
+  line.
+
+The four resolved values are `push`, `pull`, `hybrid` (the server answers
+pulls AND keeps pushing — e.g. gopls forced into pull), and
+`pull-requested-but-unavailable` (you asked for `pull` but the server never
+advertised `diagnosticProvider` — e.g. typescript-language-server, zls; plumb
+logs one warning and the connection behaves as push).
+
+**The `-32601` downgrade.** If a negotiated `pull`/`hybrid` connection ever
+gets a method-not-found response from a pull request, plumb flips that
+connection to `push` for the rest of the session, logs one warning (`pool:
+pull diagnostics returned method-not-found — downgrading to push for this
+session`), and falls back to the push open-and-wait path. It does not retry
+the pull or flap back.
+
+**Pull failures degrade explicitly, never silently.** A pull request that
+errors for any other reason never reports a false "No issues" — the
+`diagnostics` tool always surfaces the error text plus either the last-known
+cached diagnostics (labelled possibly stale) or, if nothing is cached yet, an
+explicit notice that the file's state is unverified. Retry, or set
+`[lsp.<lang>] diagnostics = "push"` if a server proves unreliable under pull.
+
 ## `rename_symbol` fails with "out of range"
 
 The LSP position index is stale after in-session edits. Recovery options:

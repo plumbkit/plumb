@@ -340,6 +340,7 @@ cost and its markers never enter detection.
 | `enabled` | bool | Whether plumb starts this server and detects this language. |
 | `idle_timeout` | duration | Hibernate the server (stop its process, keep the warm cache) after this long without a tool call; the next call restarts it. `0` disables. Default `0`, except `java` = `20m`. Restart-needed. |
 | `max_workspaces` | int | Cap on concurrently-running servers of this language; the least-recently-used is hibernated before starting another. `0` = unlimited. Default `0`, except `java` = `2`. Restart-needed. |
+| `diagnostics` | string | How plumb negotiates this language's diagnostics: `auto` (default; an absent/empty value is treated the same) defers to plumb's per-adapter policy — **push for every adapter today**; `push` consumes pushed `publishDiagnostics` only; `pull` advertises the LSP 3.17 `textDocument/diagnostic` client capability and negotiates the pull model when the server advertises `diagnosticProvider` (otherwise the connection degrades to `pull-requested-but-unavailable`). See *Diagnostics mode* below. Restart-needed. |
 
 Built-in defaults (all `enabled = true`; the *effective* set is whichever of
 these servers are installed):
@@ -365,6 +366,50 @@ jdtls is heavyweight (~0.8–1.5 GB RSS); it defaults to `idle_timeout = "20m"` 
 If your `jdtls` launcher is not named `jdtls` on `PATH` (e.g. `jdtls.sh`,
 `jdtls.bat`, or an absolute path), set `command` accordingly. Use
 `plumb debug lsp` to see each server's state, PID, RSS, and idle time.
+
+### Diagnostics mode: push vs pull (LSP 3.17)
+
+By default plumb consumes diagnostics the way it always has: the language
+server pushes `publishDiagnostics` notifications as it re-analyses files, and
+plumb's cache holds the latest snapshot per file. Setting
+`[lsp.<lang>] diagnostics = "pull"` additionally advertises the LSP 3.17
+`textDocument/diagnostic` client capability, so a server that implements the
+pull model answers on-demand diagnostic requests — result IDs, unchanged
+reports, and related documents included — instead of (or, commonly, alongside)
+pushing. Pull is additive: the push capability stays advertised too, so a
+dual-mode server keeps pushing if it wants to.
+
+`gopls` needs one extra step to answer pulls at all: pull mode also sets its
+experimental `pullDiagnostics: true` initialization option.
+
+plumb resolves each connection to exactly one of four states, and **never
+infers the mode from cache contents** — it is always the outcome of what was
+requested and what the server advertised:
+
+| Resolved mode | Meaning |
+|---|---|
+| `push` | Requested `push` (or `auto`, which resolves to `push` for every adapter today), or a `pull`/`hybrid` connection that downgraded after a method-not-found response (see below). |
+| `pull` | Requested `pull`, and the server advertised `diagnosticProvider`. |
+| `hybrid` | Requested `pull`, negotiated pull, and the server also kept sending `publishDiagnostics` — e.g. gopls v0.23 forced into pull answers `textDocument/diagnostic` correctly and keeps pushing, so it resolves to hybrid. |
+| `pull-requested-but-unavailable` | Requested `pull`, but the server never advertised `diagnosticProvider` (e.g. typescript-language-server, zls) — plumb logs one warning and the connection behaves as push. |
+
+See [Troubleshooting → diagnostics mode](troubleshooting.md#how-do-i-read-the-resolved-diagnostics-mode)
+for where the resolved mode is surfaced (`plumb doctor`, `lsp-status`,
+`daemon_info`, `session_start`) and what the `-32601` downgrade looks like.
+
+**Evidence-gated `auto` policy.** `auto` resolves to `push` for every adapter
+today. Real-binary testing (gopls v0.23.0, macOS arm64) found that forcing
+pull negotiates cleanly — gopls answers pulls correctly and keeps pushing
+(hybrid) — with a large single-document latency win (median ~3ms per pull vs a
+~1s push-arrival, gopls's own diagnostics debounce). It does not, however,
+implement `workspace/diagnostic`, so a whole-workspace query under pull
+covers only files already analysed or explicitly pulled, whereas push delivers
+workspace-wide diagnostics as gopls analyses the module — so `auto` stays
+`push`. `pull` remains available as an explicit per-language opt-in for the
+low-latency single-file behaviour, with push continuing underneath on a
+hybrid-capable server. typescript-language-server and zls do not currently
+advertise `diagnosticProvider` under pull, so requesting `pull` for either
+degrades to `pull-requested-but-unavailable` and behaves as push.
 
 ### Multiple language servers in one project
 
