@@ -168,13 +168,16 @@ func TestIntegration_ForcedPull_DocumentDiagnostics(t *testing.T) {
 	}
 }
 
-// TestIntegration_ForcedPull_PushContinues records the classification-critical
+// TestIntegration_ForcedPull_PushObservation records the classification-critical
 // observation: after pull is negotiated, does gopls STILL push
 // publishDiagnostics? Empirically (v0.23.0) it does — pull is additive, so the
-// resolved connection mode is "hybrid", not "pull". This is asserted here
-// (a generous deadline, because gopls reliably pushes) so a future gopls that
-// silently drops the push stream under pull caps is caught.
-func TestIntegration_ForcedPull_PushContinues(t *testing.T) {
+// resolved connection mode is "hybrid", not "pull". Like the result-ID and
+// workspace-support items in the neighbouring test, this is OBSERVE-ONLY: gopls
+// makes no contractual promise about push scheduling under pull caps, so either
+// outcome is logged, never failed on (CI installs gopls@latest — a future gopls
+// that reschedules or drops the push stream under pull negotiation is a
+// classification change to record, not a plumb defect).
+func TestIntegration_ForcedPull_PushObservation(t *testing.T) {
 	ad := startGopls(t)
 	ws := goFixtureWS(t)
 	brokenPath := filepath.Join(ws, "broken.go")
@@ -230,9 +233,11 @@ func TestIntegration_ForcedPull_PushContinues(t *testing.T) {
 				return
 			}
 		case <-deadline:
-			t.Fatal("gopls did not push error diagnostics for broken.go under pull " +
-				"caps within the deadline — push may have been suppressed by pull " +
-				"negotiation (would reclassify gopls from hybrid to pull)")
+			t.Logf("OBSERVED push-continues=false — no pushed error diagnostics for " +
+				"broken.go within 15s under pull caps; this gopls build appears to " +
+				"suppress or defer push under pull negotiation ⇒ would classify as " +
+				"PULL rather than hybrid (observation only, not a failure)")
+			return
 		}
 	}
 }
