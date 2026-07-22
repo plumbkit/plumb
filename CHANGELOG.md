@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.12.2 (2026-07-23)
+
+### Added
+
+- **`read_file` gains an in-file search mode.** An optional `pattern` (with
+  `use_regex`, `case_sensitive`, `context_lines`, `max_matches`) greps within
+  one file: matching lines carry their real line numbers, output is bounded and
+  truncation labelled, the search can be restricted to a `start_line`/`end_line`
+  window, and the `# plumb-read` header is preserved so results chain straight
+  into `edit_file`. Files over the output cap stay searchable in one tool. (#24)
+- **`[lsp.<language>] initialization_options`.** A free-form TOML table passed
+  verbatim to the language server at initialize — e.g.
+  `[lsp.zig.initialization_options] enable_build_on_save = true` for real zls
+  compile diagnostics. Opt-in only and absent by default (init params are
+  byte-identical when unconfigured); the documented cost is that zls then runs
+  the project's `zig build` on every save.
+
+### Fixed
+
+- **TUI diagnostics/memories polls are gated to their visible section.** The 2 s
+  polls no longer dial the control socket or walk the memory directory while
+  another section is showing, and switching into Sessions or Memory refreshes
+  immediately — no stale-on-switch window. (#66; the `SplitIdentifier`
+  `NewReplacer` half of that issue was already resolved by the earlier
+  single-pass rewrite.)
+- **`git` tool: staging a path that matches nothing now warns instead of
+  hard-failing the whole add.** Unmatched pathspecs are filtered out before
+  `git add -A --` runs (git would otherwise abort every path in the call), the
+  valid paths still stage, and the warning names each unmatched path.
+- **`plumb serve` heartbeat ids carry a per-proxy random nonce**
+  (`__plumb_hb_<nonce>_<seq>`), so a client-supplied request id can never
+  collide with an in-flight probe and be swallowed as a pong.
+- **Config store notification survives a panicking subscriber.** Each listener
+  is invoked with panic recovery (logged with a stack), so one broken callback
+  cannot abort delivery to later subscribers or stall live config reloading for
+  the daemon's lifetime.
+
+### Changed
+
+- The nested-schema contract test now walks every registered tool's input
+  schema recursively — guarded by a tool-count coverage check, with an explicit
+  allowlist for the deliberately free-form `agent_config.set` — so a future
+  nested object schema missing `additionalProperties:false` fails CI
+  automatically.
+- `mcp.Server.ToolFilter` documents its lock discipline: invoked under
+  `s.mu.RLock`, it must not call back into locking Server methods and must be
+  fast.
+
 ## 0.12.1 (2026-07-16)
 
 ### Fixed
