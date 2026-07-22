@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"os"
@@ -249,5 +251,29 @@ func TestApplyMemoryLimit(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("applyMemoryLimit(%q): limit = %d, want %d", tc.raw, got, tc.want)
 		}
+	}
+}
+
+// TestApplyMemoryLimit_Logs asserts the chosen limit is announced in the daemon
+// log rather than applied silently — the "logged" half of "honoured/logged".
+func TestApplyMemoryLimit_Logs(t *testing.T) {
+	orig := debug.SetMemoryLimit(-1)
+	t.Cleanup(func() { debug.SetMemoryLimit(orig) })
+
+	var buf bytes.Buffer
+	prevLog := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevLog) })
+
+	applyMemoryLimit("512MiB")
+	if line := buf.String(); !strings.Contains(line, "soft memory limit applied") || !strings.Contains(line, "536870912") {
+		t.Errorf("expected the 512MiB (536870912) 'applied' log line; got: %s", line)
+	}
+
+	// An invalid value keeps the default and warns rather than silently ignoring it.
+	buf.Reset()
+	applyMemoryLimit("garbage")
+	if got := buf.String(); !strings.Contains(got, "invalid PLUMB_MEMORY_LIMIT") {
+		t.Errorf("expected a warn line for an invalid value; got: %s", got)
 	}
 }
