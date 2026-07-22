@@ -54,9 +54,10 @@ func newAdapter(language string, conn *jsonrpc.Conn) (lsp.Client, error) {
 // the LSP 3.17 pull model: an adapter with pull-specific initialization options
 // (gopls, via lsp.PullInitializer) customises the params itself; every other
 // adapter gets the generic client-capability swap. ad is the constructed adapter
-// instance the type assertion targets.
-func initParamsFor(ad lsp.Client, language, rootURI, requested string) protocol.InitializeParams {
-	params := defaultInitParamsFor(language, rootURI)
+// instance the type assertion targets. lspCfg supplies the language's optional
+// free-form InitializationOptions, overlaid verbatim by defaultInitParamsFor.
+func initParamsFor(ad lsp.Client, language, rootURI, requested string, lspCfg config.LSPConfig) protocol.InitializeParams {
+	params := defaultInitParamsFor(language, rootURI, lspCfg)
 	if requested != diagModePull {
 		return params
 	}
@@ -68,8 +69,21 @@ func initParamsFor(ad lsp.Client, language, rootURI, requested string) protocol.
 	return params
 }
 
-// defaultInitParamsFor returns a language's push-first default Initialize params.
-func defaultInitParamsFor(language, rootURI string) protocol.InitializeParams {
+// defaultInitParamsFor returns a language's push-first default Initialize params,
+// with any user-configured [lsp.<lang>] initialization_options overlaid verbatim
+// onto InitializationOptions. When unconfigured the params are byte-identical to
+// the adapter's own DefaultInitParams (the overlay is a no-op, so a typed default
+// like gopls's is preserved untouched).
+func defaultInitParamsFor(language, rootURI string, lspCfg config.LSPConfig) protocol.InitializeParams {
+	params := adapterInitParams(language, rootURI)
+	if len(lspCfg.InitializationOptions) > 0 {
+		params.InitializationOptions = lspCfg.InitializationOptions
+	}
+	return params
+}
+
+// adapterInitParams dispatches to each adapter's own push-first default params.
+func adapterInitParams(language, rootURI string) protocol.InitializeParams {
 	switch language {
 	case "java":
 		return jdtls.DefaultInitParams(rootURI)

@@ -469,7 +469,7 @@ func (p *workspacePool) poolOnStart(e *poolEntry, rootURI string, lspCfg config.
 		requested := resolveRequestedDiagnosticsMode(lspCfg.Diagnostics, e.language)
 		ad.Subscribe(e.inv.Handle)
 		ad.Subscribe(p.diagnosticsHybridFlip(e))
-		if _, err := ad.Initialize(startCtx, initParamsFor(ad, e.language, rootURI, requested)); err != nil {
+		if _, err := ad.Initialize(startCtx, initParamsFor(ad, e.language, rootURI, requested, lspCfg)); err != nil {
 			return fmt.Errorf("initialize: %w", err)
 		}
 		p.resolveDiagMode(e, ad, requested)

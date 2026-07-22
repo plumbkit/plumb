@@ -79,6 +79,16 @@ func TestAdapter_Initialize(t *testing.T) {
 	}
 }
 
+// TestDefaultInitParams_NoInitializationOptions pins the byte-identical default
+// at the source: zls surfaces only ast-check syntax diagnostics unless the user
+// opts into build-on-save via [lsp.zig] initialization_options (overlaid by the
+// pool). The adapter itself must send no InitializationOptions.
+func TestDefaultInitParams_NoInitializationOptions(t *testing.T) {
+	if opts := zig.DefaultInitParams("file:///project").InitializationOptions; opts != nil {
+		t.Errorf("DefaultInitParams.InitializationOptions = %#v, want nil", opts)
+	}
+}
+
 func TestAdapter_Initialized(t *testing.T) {
 	ad, mock := newAdapter(t)
 	ctx := context.Background()

@@ -82,6 +82,21 @@ type LSPConfig struct {
 	// Empty is treated as "auto" in the resolver so user configs stay minimal.
 	// Read at pool construction — restart-needed (ReloadNextSession).
 	Diagnostics string `toml:"diagnostics"`
+	// InitializationOptions is a free-form table passed verbatim to the language
+	// server as the LSP `initializationOptions` at initialize. Empty or absent
+	// sends nothing (the default; init params stay byte-identical). An advanced
+	// escape hatch — keys are server-specific and unvalidated by plumb. Read at
+	// pool construction — restart-needed.
+	//
+	// Zig/zls example — surface real compile/semantic diagnostics (not just the
+	// default ast-check syntax errors) by enabling build-on-save. WARNING: this
+	// runs the project's `zig build` on every save — real CPU cost, and it
+	// executes the project's own build.zig logic. Opt-in only:
+	//
+	//	[lsp.zig.initialization_options]
+	//	enable_build_on_save = true
+	//	build_on_save_step   = "check"
+	InitializationOptions map[string]any `toml:"initialization_options"`
 }
 
 // DiagnosticsModes lists the explicit [lsp.<lang>] diagnostics values a user may

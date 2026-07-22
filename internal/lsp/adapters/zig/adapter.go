@@ -67,7 +67,12 @@ func (a *Adapter) handleServerRequest(_ context.Context, method string, params j
 
 // DefaultInitParams returns InitializeParams suitable for zls.
 // rootURI must be a file:// URI pointing to the Zig project root.
-// zls needs no initialization options for plumb's use, so none are sent.
+// The default sends no initializationOptions — zls then surfaces only its
+// ast-check syntax diagnostics. Real compile/semantic diagnostics need
+// build-on-save, which the user opts into via [lsp.zig] initialization_options
+// (e.g. enable_build_on_save); the pool overlays that free-form table onto these
+// params verbatim (see internal/cli/pool_adapters.go's defaultInitParamsFor), so
+// the adapter itself stays option-free by default.
 func DefaultInitParams(rootURI string) protocol.InitializeParams {
 	return protocol.InitializeParams{
 		ProcessID:    protocol.ProcessID(),

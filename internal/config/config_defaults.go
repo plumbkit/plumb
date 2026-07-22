@@ -212,5 +212,6 @@ func cloneLSPConfig(cfg LSPConfig) LSPConfig {
 	out.RootMarkers = slices.Clone(cfg.RootMarkers)
 	out.WeakRootMarkers = slices.Clone(cfg.WeakRootMarkers)
 	out.Env = maps.Clone(cfg.Env)
+	out.InitializationOptions = maps.Clone(cfg.InitializationOptions)
 	return out
 }

@@ -378,6 +378,7 @@ cost and its markers never enter detection.
 | `idle_timeout` | duration | Hibernate the server (stop its process, keep the warm cache) after this long without a tool call; the next call restarts it. `0` disables. Default `0`, except `java` = `20m`. Restart-needed. |
 | `max_workspaces` | int | Cap on concurrently-running servers of this language; the least-recently-used is hibernated before starting another. `0` = unlimited. Default `0`, except `java` = `2`. Restart-needed. |
 | `diagnostics` | string | How plumb negotiates this language's diagnostics: `auto` (default; an absent/empty value is treated the same) defers to plumb's per-adapter policy — **push for every adapter today**; `push` consumes pushed `publishDiagnostics` only; `pull` advertises the LSP 3.17 `textDocument/diagnostic` client capability and negotiates the pull model when the server advertises `diagnosticProvider` (otherwise the connection degrades to `pull-requested-but-unavailable`). See *Diagnostics mode* below. Restart-needed. |
+| `initialization_options` | table | Free-form table sent verbatim as the LSP `initializationOptions` at `initialize`. Absent/empty sends nothing (the default). Advanced escape hatch — keys are server-specific and unvalidated by plumb. See *Server initialization options* below. Restart-needed. |
 
 Built-in defaults (all `enabled = true`; the *effective* set is whichever of
 these servers are installed):
@@ -447,6 +448,32 @@ low-latency single-file behaviour, with push continuing underneath on a
 hybrid-capable server. typescript-language-server and zls do not currently
 advertise `diagnosticProvider` under pull, so requesting `pull` for either
 degrades to `pull-requested-but-unavailable` and behaves as push.
+
+### Server initialization options (advanced)
+
+`[lsp.<lang>].initialization_options` is a free-form table passed **verbatim** to
+the language server as the LSP `initializationOptions` at `initialize`. plumb does
+not validate or interpret the keys — they are whatever the specific server accepts.
+When absent or empty, plumb sends no options, so the init handshake is byte-for-byte
+unchanged from the default. It is a restart-bound, per-language escape hatch for
+server-specific tuning plumb does not model with a dedicated field.
+
+The headline case is **Zig / zls**. By default zls reports only `ast-check` *syntax*
+diagnostics; real compile and semantic errors require build-on-save, which is off
+unless you turn it on:
+
+```toml
+[lsp.zig.initialization_options]
+enable_build_on_save = true
+build_on_save_step   = "check"   # a step defined in your build.zig
+```
+
+> **⚠ Cost & security — opt-in only.** `enable_build_on_save` makes zls run
+> `zig build` on **every save**, which has a real CPU cost and **executes your
+> project's own `build.zig` logic**. Because `[lsp.<lang>]` (like `command`/`args`)
+> can be set in a workspace's `.plumb/config.toml`, enabling this for a repository
+> you do not trust means opening it can run that repository's build script. plumb
+> never turns build-on-save on for you; leave it unset for untrusted code.
 
 ### Multiple language servers in one project
 
