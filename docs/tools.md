@@ -342,6 +342,21 @@ files rejected; output capped at 200 KiB. Emits the `# plumb-read …` header.
 Each content line carries a display-only 1-based line-number gutter (`<n>\t`,
 `cat -n` style) — strip it before reusing a line as an edit `old_string`.
 
+**Search-within-file mode.** Pass `pattern` to search the file instead of
+windowing: each matching line is returned with its 1-based line number (and
+optional context), so an over-cap file stays searchable in one tool. The whole
+file is scanned line-by-line regardless of size; only the *output* is bounded.
+**Search inputs:** `pattern` (literal text by default; a Go RE2 regex when
+`use_regex`), `case_sensitive` (default smart-case — case-insensitive when the
+pattern is all lowercase), `context_lines` (0–10, like `rg -C`; disjoint groups
+get an `--` separator), `max_matches` (1–2000, default 200; output is truncated
+and labelled beyond it). `pattern` may be combined with `start_line`/`end_line`
+(or `offset`) to **restrict the search to that line window**, but not with
+`limit` (rejected — use `max_matches`). A summary line (`# plumb-search: N
+matches for …`) precedes the results; a no-match search returns an explicit
+message, not an error; an invalid regex returns a clean error. Mirrors
+`search_in_files`' literal/smart-case conventions.
+
 ### `read_symbol`
 Read the source body of a named symbol in one call (LSP `documentSymbol` +
 file read). **Inputs:** `path` (required), `name` (required — plain or dotted

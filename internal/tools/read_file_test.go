@@ -545,3 +545,225 @@ func TestReadFile_TruncationSuggestsOutline(t *testing.T) {
 		t.Errorf("truncation note should suggest file_outline, got tail: %q", out[len(out)-200:])
 	}
 }
+
+// --- pattern (in-file search) mode ---------------------------------------
+
+func TestReadFile_Search_MatchesWithLineNumbers(t *testing.T) {
+	content := "alpha\nbeta target here\ngamma\ndelta target again\nepsilon\n"
+	path := writeTextFile(t, content)
+	out, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "target"})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "# plumb-search: 2 matches for \"target\"") {
+		t.Fatalf("expected a 2-match summary, got:\n%s", out)
+	}
+	// Matches carry their real 1-based file line numbers via the gutter.
+	if !strings.Contains(out, "2\tbeta target here") {
+		t.Errorf("expected line 2 with its gutter, got:\n%s", out)
+	}
+	if !strings.Contains(out, "4\tdelta target again") {
+		t.Errorf("expected line 4 with its gutter, got:\n%s", out)
+	}
+	// Non-matching lines are absent (no context requested).
+	if strings.Contains(out, "gamma") {
+		t.Errorf("non-matching line should not appear, got:\n%s", out)
+	}
+}
+
+func TestReadFile_Search_OverCapFileSearchable(t *testing.T) {
+	// Build a file far larger than the 200 KiB read cap, with the needle near the
+	// very end — beyond where a whole-file read would be truncated.
+	var sb strings.Builder
+	for i := 1; i <= 12000; i++ {
+		sb.WriteString("filler padding line to grow the file well past the cap\n")
+	}
+	sb.WriteString("UNIQUENEEDLE lives down here\n")
+	path := writeTextFile(t, sb.String())
+
+	// Sanity: a plain read of this file is truncated at the cap.
+	plain, err := callReadFile(t, map[string]any{"file_path": path})
+	if err != nil {
+		t.Fatalf("read_file (plain): %v", err)
+	}
+	if !strings.Contains(plain, "output truncated") {
+		t.Fatalf("expected the plain read to be over-cap/truncated")
+	}
+	if strings.Contains(plain, "UNIQUENEEDLE") {
+		t.Fatalf("needle should be beyond the read cap in a plain read")
+	}
+
+	// Search finds it regardless of size.
+	out, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "UNIQUENEEDLE"})
+	if err != nil {
+		t.Fatalf("read_file (search): %v", err)
+	}
+	if !strings.Contains(out, "UNIQUENEEDLE lives down here") {
+		t.Fatalf("search should locate the needle in an over-cap file, got tail:\n%s", out[len(out)-200:])
+	}
+	if !strings.Contains(out, "12001\tUNIQUENEEDLE lives down here") {
+		t.Errorf("expected the needle at line 12001 with its gutter, got tail:\n%s", out[len(out)-200:])
+	}
+}
+
+func TestReadFile_Search_ContextLines(t *testing.T) {
+	content := "line1\nline2\nMATCH_A\nline4\nline5\nline6\nMATCH_B\nline8\n"
+	path := writeTextFile(t, content)
+	out, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "MATCH_", "context_lines": 1})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	// One line of context each side of both matches.
+	for _, want := range []string{"2\tline2", "3\tMATCH_A", "4\tline4", "6\tline6", "7\tMATCH_B", "8\tline8"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected context/match line %q, got:\n%s", want, out)
+		}
+	}
+	// The two disjoint groups are separated by an rg-style "--" line.
+	if !strings.Contains(out, "\n--\n") {
+		t.Errorf("expected a -- separator between disjoint groups, got:\n%s", out)
+	}
+	// A line outside either context window is not shown.
+	if strings.Contains(out, "line5") {
+		t.Errorf("line5 is outside both context windows and should be absent, got:\n%s", out)
+	}
+}
+
+func TestReadFile_Search_MaxMatchesTruncationLabelled(t *testing.T) {
+	var sb strings.Builder
+	for i := 0; i < 10; i++ {
+		sb.WriteString("hit line\n")
+	}
+	path := writeTextFile(t, sb.String())
+	out, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "hit", "max_matches": 3})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "search output truncated at 3 matches") {
+		t.Fatalf("expected a truncation label at the match cap, got:\n%s", out)
+	}
+	if !strings.Contains(out, "first 3 matches") {
+		t.Errorf("summary should note only the first 3 matches are shown, got:\n%s", out)
+	}
+	// Exactly the first three matches (lines 1–3) are rendered.
+	if strings.Contains(out, "4\thit line") {
+		t.Errorf("a fourth match should not be rendered past the cap, got:\n%s", out)
+	}
+}
+
+func TestReadFile_Search_WithinLineRange(t *testing.T) {
+	content := "needle up top\nfiller\nfiller\nneedle in the middle\nfiller\nneedle at bottom\n"
+	path := writeTextFile(t, content)
+	out, err := callReadFile(t, map[string]any{
+		"file_path":  path,
+		"pattern":    "needle",
+		"start_line": 2,
+		"end_line":   5,
+	})
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if !strings.Contains(out, "within lines 2–5") {
+		t.Errorf("summary should name the restricted window, got:\n%s", out)
+	}
+	if !strings.Contains(out, "4\tneedle in the middle") {
+		t.Errorf("the in-window match should be found, got:\n%s", out)
+	}
+	// Matches outside the [2,5] window are excluded.
+	if strings.Contains(out, "needle up top") || strings.Contains(out, "needle at bottom") {
+		t.Errorf("out-of-window matches should be excluded, got:\n%s", out)
+	}
+	if !strings.Contains(out, "# plumb-search: 1 match for") {
+		t.Errorf("expected exactly one match within the window, got:\n%s", out)
+	}
+}
+
+func TestReadFile_Search_LimitRejected(t *testing.T) {
+	path := writeTextFile(t, "one match here\n")
+	_, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "match", "limit": 5})
+	if err == nil {
+		t.Fatalf("expected an error combining pattern with limit")
+	}
+	if !strings.Contains(err.Error(), "max_matches") {
+		t.Errorf("error should point to max_matches, got: %v", err)
+	}
+}
+
+func TestReadFile_Search_NoMatch(t *testing.T) {
+	path := writeTextFile(t, "alpha\nbeta\ngamma\n")
+	out, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "zeta"})
+	if err != nil {
+		t.Fatalf("a no-match search is not an error, got: %v", err)
+	}
+	if !strings.Contains(out, "No matches for \"zeta\" in") {
+		t.Fatalf("expected an explicit no-match message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "# plumb-search: no matches") {
+		t.Errorf("expected a no-match summary line, got:\n%s", out)
+	}
+}
+
+func TestReadFile_Search_InvalidRegex(t *testing.T) {
+	path := writeTextFile(t, "anything\n")
+	_, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "foo(", "use_regex": true})
+	if err == nil {
+		t.Fatalf("expected a clean error for an invalid regex")
+	}
+	if !strings.Contains(err.Error(), "invalid regex") {
+		t.Errorf("error should name the invalid regex, got: %v", err)
+	}
+}
+
+func TestReadFile_Search_SmartCaseAndCaseSensitive(t *testing.T) {
+	content := "has Needle here\nhas needle there\n"
+	path := writeTextFile(t, content)
+	tests := []struct {
+		name          string
+		pattern       string
+		caseSensitive *bool
+		wantSummary   string
+	}{
+		{"smartcase lowercase matches both", "needle", nil, "2 matches"},
+		{"mixed-case is case-sensitive", "Needle", nil, "1 match"},
+		{"forced sensitive lowercase", "needle", boolPtr(true), "1 match"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"file_path": path, "pattern": tc.pattern}
+			if tc.caseSensitive != nil {
+				args["case_sensitive"] = *tc.caseSensitive
+			}
+			out, err := callReadFile(t, args)
+			if err != nil {
+				t.Fatalf("read_file: %v", err)
+			}
+			if !strings.Contains(out, tc.wantSummary) {
+				t.Errorf("want summary %q, got:\n%s", tc.wantSummary, out)
+			}
+		})
+	}
+}
+
+func TestReadFile_Search_RegexLiteralVsRegex(t *testing.T) {
+	// 'a.c' should match only the literal "a.c" in literal mode, but "abc" too as a regex.
+	content := "a.c literal\nabc regex-only\n"
+	path := writeTextFile(t, content)
+
+	lit, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "a.c"})
+	if err != nil {
+		t.Fatalf("read_file (literal): %v", err)
+	}
+	if !strings.Contains(lit, "# plumb-search: 1 match for") || strings.Contains(lit, "abc regex-only") {
+		t.Errorf("literal mode should match only the literal a.c, got:\n%s", lit)
+	}
+
+	re, err := callReadFile(t, map[string]any{"file_path": path, "pattern": "a.c", "use_regex": true})
+	if err != nil {
+		t.Fatalf("read_file (regex): %v", err)
+	}
+	if !strings.Contains(re, "# plumb-search: 2 matches for") {
+		t.Errorf("regex mode should match both lines, got:\n%s", re)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
