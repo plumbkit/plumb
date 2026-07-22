@@ -427,11 +427,21 @@ func (m *Model) selectSection(idx int) {
 	m.currentSection = idx
 	m.sectionMenuCursor = idx
 	m.sectionMenuOpen = false
+	if m.currentSection == 1 && prev != 1 {
+		// refreshDiagnostics is now gated on currentSection == 1, so switching in
+		// needs an immediate fetch — otherwise the tab shows whatever was last
+		// polled (possibly from before this section became visible) until the
+		// next 2s tick.
+		m.refreshDiagnostics()
+	}
 	if m.currentSection == 2 && prev != 2 {
 		m.memoryFilter = ""
 		m.memoryFilterActive = false
 		m.resetMemoryFilterView()
 		m.focusPanel = focusSessions
+		// refreshMemories is now gated on currentSection == 2, so switching in
+		// needs an immediate fetch for the same reason as refreshDiagnostics above.
+		m.refreshMemories()
 	}
 	if m.currentSection == 3 && !m.logInitd {
 		m.logEntries, m.logOffset = initLogTail(m.logPath)

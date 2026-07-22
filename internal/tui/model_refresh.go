@@ -83,6 +83,13 @@ func (m *Model) refreshStats() {
 }
 
 func (m *Model) refreshDiagnostics() {
+	// Diagnostics render only in the Sessions section (currentSection == 1, see
+	// sectionMenuItems) — skip the blocking unix-socket round trip otherwise.
+	// selectSection triggers an immediate refresh on switching into the section,
+	// so this never leaves the tab stale-on-switch.
+	if m.currentSection != 1 {
+		return
+	}
 	if m.ctrlPath == "" || len(m.sessions) == 0 {
 		return
 	}

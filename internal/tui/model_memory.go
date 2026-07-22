@@ -312,6 +312,13 @@ func (m *Model) populateMemoryBody() {
 }
 
 func (m *Model) refreshMemories() {
+	// Memories render only in the Memory section (currentSection == 2) — skip the
+	// directory walk and frontmatter parse otherwise. selectSection triggers an
+	// immediate refresh on switching into the section, so this never leaves the
+	// pane stale-on-switch.
+	if m.currentSection != 2 {
+		return
+	}
 	m.memoryWorkspaces = m.collectMemoryWorkspaces()
 	if m.workspaceCursor >= len(m.memoryWorkspaces) {
 		m.workspaceCursor = max(len(m.memoryWorkspaces)-1, 0)
