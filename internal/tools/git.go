@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -135,17 +137,77 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := t.checkBoundary(a); err != nil {
 		return "", err
 	}
+	return t.runGitCommand(ctx, a, tier, switchNote)
+}
+
+// runGitCommand builds argv (filtering unmatched "add" paths, see
+// resolveAddArgv), runs it, and assembles the final output. Split out of
+// Execute purely to keep Execute's own cyclomatic complexity within the
+// project's gocyclo-15 contract — the request-orchestration steps above
+// (parsing, tier classification, gating, boundary checks) stay in Execute;
+// this is the argv-to-output tail.
+//
+// runGit serialises every non-read tier; a read (status/log/diff) must never
+// queue behind a slow commit.
+func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote string) (string, error) {
 	argv, err := buildGitArgv(a)
 	if err != nil {
 		return "", err
 	}
-	// runGit serialises every non-read tier; a read (status/log/diff) must
-	// never queue behind a slow commit.
+	// `git add -A -- <files>` hard-fails the WHOLE command the instant ANY
+	// listed pathspec is unmatched (see resolveAddArgv), so a typo'd path must
+	// be filtered out before staging, not merely warned about after the fact.
+	var warning string
+	if a.Subcommand == "add" {
+		var shortCircuit string
+		var done bool
+		if argv, warning, shortCircuit, done, err = t.resolveAddArgv(ctx, a, argv); err != nil {
+			return "", err
+		}
+		if done {
+			return switchNote + shortCircuit, nil
+		}
+	}
 	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier)
 	if err != nil {
 		return "", err
 	}
-	return switchNote + out, nil
+	return switchNote + out + warning, nil
+}
+
+// resolveAddArgv adjusts argv for the "add" subcommand to exclude any
+// unmatched (typo'd) paths (see partitionAddPaths), and computes the warning
+// to append to the eventual output. `git add -A -- <files>` hard-fails the
+// WHOLE command (exit 128, "did not match any files") the instant ANY listed
+// pathspec matches neither a working-tree entry nor an index entry — even
+// under -A, and even mixed with otherwise-valid paths (verified against git
+// 2.55: unmatched + valid together still aborts with nothing staged at all)
+// — so the unmatched paths must never reach the real git add call.
+//
+// When every requested path is unmatched there is nothing left to stage:
+// done is true and shortCircuit is the complete result to return directly,
+// skipping the git invocation entirely (running `git add -A --` with an
+// empty pathspec list would change meaning completely — it stages the WHOLE
+// working tree, not nothing).
+func (t *Git) resolveAddArgv(ctx context.Context, a gitToolArgs, argv []string) (newArgv []string, warning, shortCircuit string, done bool, err error) {
+	valid, unmatched := t.partitionAddPaths(ctx, a)
+	if len(unmatched) == 0 {
+		return argv, "", "", false, nil
+	}
+	warning = fmt.Sprintf(
+		"\n\nwarning: no working-tree or index entry for: %s (skipped — check for a typo)",
+		strings.Join(unmatched, ", "),
+	)
+	if len(valid) == 0 {
+		return nil, warning, "nothing staged" + warning, true, nil
+	}
+	filtered := a
+	filtered.Files = valid
+	newArgv, err = buildGitArgv(filtered)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	return newArgv, warning, "", false, nil
 }
 
 // defaultRepo resolves the repo argument against the pinned workspace: an empty
@@ -193,6 +255,61 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 		}
 	}
 	return nil
+}
+
+// partitionAddPaths splits a.Files into paths that match a git index entry or
+// a working-tree entry ("valid") and paths that match neither ("unmatched" —
+// almost always a typo). A path counts as matched when it is tracked (`git
+// ls-files` reports index content regardless of working-tree state, so a
+// tracked file deleted from disk but not yet staged as a deletion still
+// counts) or when it exists on disk (os.Stat succeeds — covers new untracked
+// files and existing directories). Only meaningful for the "add" subcommand.
+//
+// Costs at most one extra git invocation: a single batched `git ls-files --
+// <files>` (unlike `add`, ls-files does not hard-fail on an unmatched
+// pathspec — it simply omits it from the output) run with the same cmd.Dir
+// (the resolved repo root) that the real `git add -A -- <files>` call will
+// later use via runGit, so pathspec resolution is identical between the
+// precheck and the real add. Any failure resolving the repo root or running
+// ls-files is treated as "could not precheck" and every path is reported
+// valid — a failed precheck must never cause a path that git would actually
+// have staged to be silently dropped from the real add call.
+func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unmatched []string) {
+	repoRoot, err := findGitRoot(a.Repo)
+	if err != nil {
+		return a.Files, nil
+	}
+	lsArgs := append([]string{"ls-files", "--"}, a.Files...)
+	cmd := exec.CommandContext(ctx, "git", lsArgs...)
+	cmd.Dir = repoRoot
+	out, lsErr := cmd.Output()
+	if lsErr != nil {
+		return a.Files, nil
+	}
+	tracked := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		tracked[filepath.Clean(filepath.Join(repoRoot, line))] = true
+	}
+	for _, f := range a.Files {
+		abs := f
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(a.Repo, f)
+		}
+		abs = filepath.Clean(abs)
+		if tracked[abs] {
+			valid = append(valid, f)
+			continue
+		}
+		if _, statErr := os.Stat(abs); statErr == nil {
+			valid = append(valid, f)
+			continue
+		}
+		unmatched = append(unmatched, f)
+	}
+	return valid, unmatched
 }
 
 func parseGitArgs(raw json.RawMessage) (gitToolArgs, error) {

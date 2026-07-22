@@ -396,6 +396,86 @@ func TestGit_AddAndCommit(t *testing.T) {
 	}
 }
 
+// --- unmatched add pathspec warning (PLAN-16 residual item 2) ---
+
+// TestGit_AddNoWarningForTrackedModifiedFile exercises the ls-files-hit branch
+// of the unmatched-path precheck: a path that is already in the index (here,
+// modified rather than new) must never be reported as unmatched.
+func TestGit_AddNoWarningForTrackedModifiedFile(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	tracked := filepath.Join(dir, "init.txt")
+	if err := os.WriteFile(tracked, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+
+	out, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{tracked}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if !strings.Contains(out, "staged 1 file") {
+		t.Errorf("expected staged summary, got %q", out)
+	}
+	if strings.Contains(out, "warning") {
+		t.Errorf("tracked modified file must not be reported as unmatched, got %q", out)
+	}
+}
+
+// TestGit_AddNoWarningForNewUntrackedFile exercises the os.Stat fallback
+// branch of the precheck (distinct from the ls-files-hit branch above): a
+// brand-new file with no index entry yet must still match via the
+// working-tree stat, not be reported as unmatched.
+func TestGit_AddNoWarningForNewUntrackedFile(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	newFile := filepath.Join(dir, "brand-new.txt")
+	if err := os.WriteFile(newFile, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+
+	out, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{newFile}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if !strings.Contains(out, "staged 1 file") {
+		t.Errorf("expected staged summary, got %q", out)
+	}
+	if strings.Contains(out, "warning") {
+		t.Errorf("new untracked file must not be reported as unmatched, got %q", out)
+	}
+}
+
+// TestGit_AddWarnsOnUnmatchedTypoPath is the core regression test: a pathspec
+// matching neither a working-tree entry nor an index entry (a typo) must not
+// silently no-op — it must stage the other, valid paths and append a warning
+// naming exactly the unmatched path, without failing the call.
+func TestGit_AddWarnsOnUnmatchedTypoPath(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	valid := filepath.Join(dir, "valid.txt")
+	if err := os.WriteFile(valid, []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	typo := filepath.Join(dir, "nope.txt") // never created — no working-tree or index entry
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+
+	out, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{valid, typo}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git add with one typo'd path among valid ones should not hard-fail, got: %v", err)
+	}
+	if !strings.Contains(out, "staged 1 file") {
+		t.Errorf("expected the valid path to be staged, got %q", out)
+	}
+	if !strings.Contains(out, "warning") {
+		t.Errorf("expected a warning about the unmatched path, got %q", out)
+	}
+	if !strings.Contains(out, typo) {
+		t.Errorf("expected the warning to name the exact typo'd path %q, got %q", typo, out)
+	}
+}
+
 // --- path-limited commit: commit only named paths, leaving unrelated staged work ---
 
 func TestGit_PathLimitedCommit(t *testing.T) {
@@ -546,6 +626,12 @@ func TestGit_AddStagesTrackedDeletion(t *testing.T) {
 	}
 	if !strings.Contains(out, "D\t") || !strings.Contains(out, "doomed.txt") {
 		t.Errorf("expected the deletion to be staged (D\tdoomed.txt), got: %q", out)
+	}
+	// Regression guard for the unmatched-path warning (PLAN-16 residual item 2):
+	// a tracked deletion still has an index entry, so it must stage silently,
+	// with no "unmatched path" warning.
+	if strings.Contains(out, "warning") {
+		t.Errorf("tracked deletion must not be reported as an unmatched path, got: %q", out)
 	}
 }
 
