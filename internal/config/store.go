@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"reflect"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,7 +16,9 @@ import (
 // Reload/set, after the Store's listener lock is released, so a Listener may
 // safely call back into Current, Generation, or LoadProject; they are invoked
 // in registration (Subscribe) order. A Listener must not block for long and
-// must not call Reload re-entrantly (it would deadlock on the publish lock).
+// must not call Reload re-entrantly (it would deadlock on the publish lock). A
+// panicking Listener is recovered and logged; it does not stop delivery to the
+// remaining listeners.
 type Listener func(Config)
 
 // Store is the daemon-singleton source of truth for the global base config
@@ -122,8 +126,10 @@ func RestartSensitiveEqual(a, b Config) bool {
 
 // set publishes cfg: swap the pointer, bump the generation, record the time,
 // snapshot the listeners, then notify them outside the listener lock so a
-// listener may re-enter Current/LoadProject. publishMu is held across the whole
-// call so concurrent reloads cannot interleave their generations or deliver
+// listener may re-enter Current/LoadProject. Each listener is invoked via
+// notifyListener, which recovers a panic so one broken subscriber cannot abort
+// notification of the rest. publishMu is held across the whole call so
+// concurrent reloads cannot interleave their generations or deliver
 // notifications out of order.
 func (s *Store) set(cfg Config) {
 	s.publishMu.Lock()
@@ -152,6 +158,21 @@ func (s *Store) set(cfg Config) {
 	s.mu.Unlock()
 
 	for _, fn := range subs {
-		fn(c)
+		notifyListener(fn, c)
 	}
+}
+
+// notifyListener invokes fn with cfg, recovering a panic so one broken
+// listener cannot abort notification of the remaining subscribers or,
+// on the file-watch reload path, permanently stall live config reloading for
+// the rest of the daemon's lifetime.
+func notifyListener(fn Listener, cfg Config) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("config: listener panic — notification continues",
+				"err", r,
+				"stack", string(debug.Stack()))
+		}
+	}()
+	fn(cfg)
 }

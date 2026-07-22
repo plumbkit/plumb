@@ -1,8 +1,11 @@
 package config
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -267,3 +270,99 @@ func TestStore_NotifiesInRegistrationOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestStore_ListenerPanicDoesNotStopOtherListeners asserts that a panicking
+// subscriber cannot abort delivery to the subscribers registered after it —
+// a broken listener degrades to "missed one notification", never "broke
+// notification for everyone downstream". The panicking listener A is
+// registered first (index 0) so the test also proves the notify loop's
+// iteration state survives a mid-loop panic, not merely that unrelated
+// listeners fire independently. A captureHandler asserts the panic is
+// actually logged, matching the internal/cli precedent for this pattern
+// (see daemon_test.go's captureHandler).
+func TestStore_ListenerPanicDoesNotStopOtherListeners(t *testing.T) {
+	var records []string
+	var mu sync.Mutex
+	h := &captureHandler{fn: func(msg string) {
+		mu.Lock()
+		records = append(records, msg)
+		mu.Unlock()
+	}}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	defer slog.SetDefault(prev)
+
+	s := NewStore(Defaults())
+
+	var bCalls, cCalls int
+	s.Subscribe(func(Config) { panic("boom") }) // A
+	s.Subscribe(func(Config) { bCalls++ })      // B
+	s.Subscribe(func(Config) { cCalls++ })      // C
+
+	s.set(Defaults())
+
+	if bCalls != 1 {
+		t.Errorf("listener B fired %d times, want 1 (a panic upstream must not stop it)", bCalls)
+	}
+	if cCalls != 1 {
+		t.Errorf("listener C fired %d times, want 1 (a panic upstream must not stop it)", cCalls)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, r := range records {
+		if strings.Contains(r, "listener panic") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("listener panic was not logged; records = %v", records)
+	}
+}
+
+// TestStore_PanickingListenerLeavesStoreUsable asserts the Store survives a
+// panicking listener and remains fully usable for a subsequent set/notify
+// cycle: the normal listener keeps firing, Current/Generation keep advancing,
+// and neither set call propagates the panic out to the caller.
+func TestStore_PanickingListenerLeavesStoreUsable(t *testing.T) {
+	s := NewStore(Defaults())
+
+	var calls int
+	s.Subscribe(func(Config) { panic("boom") })
+	s.Subscribe(func(Config) { calls++ })
+
+	first := Defaults()
+	first.LogLevel = "warn"
+	s.set(first) // panics internally; must not propagate here
+
+	second := Defaults()
+	second.LogLevel = "debug"
+	s.set(second) // a second cycle must still work cleanly
+
+	if calls != 2 {
+		t.Errorf("normal listener fired %d times across two set cycles, want 2", calls)
+	}
+	if got := s.Current().LogLevel; got != "debug" {
+		t.Errorf("Current().LogLevel = %q after two cycles, want %q", got, "debug")
+	}
+	if got := s.Generation(); got != 3 {
+		t.Errorf("Generation() = %d after two set cycles from a fresh store, want 3", got)
+	}
+}
+
+// captureHandler is a minimal slog.Handler that calls fn with the message of
+// every record; mirrors the equivalent helper in internal/cli/daemon_test.go
+// (unexported there, so duplicated here rather than shared across packages).
+type captureHandler struct {
+	fn func(msg string)
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.fn(r.Message)
+	return nil
+}
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
