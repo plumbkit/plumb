@@ -128,6 +128,11 @@ type reconnectingProxy struct {
 	// result after it is set carries a one-shot reconnect note, then it clears.
 	reconnected atomic.Bool
 
+	// hbNonce is this proxy instance's random per-process suffix folded into
+	// every heartbeat probe id — see heartbeatID / newHeartbeatNonce in
+	// serve_proxy_heartbeat.go. Set once at construction; read-only after.
+	hbNonce string
+
 	pongMu sync.Mutex
 	pongCh map[string]chan struct{}
 
@@ -161,6 +166,7 @@ func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
 		gen:          1,
 		outstanding:  make(map[string]outstandingReq),
 		pongCh:       make(map[string]chan struct{}),
+		hbNonce:      newHeartbeatNonce(),
 	}
 	p.daemonPID.Store(int64(readDaemonPID()))
 	return p

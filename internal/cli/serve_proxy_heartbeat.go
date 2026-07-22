@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,7 +26,37 @@ import (
 // proxy independently recovers onto the fresh daemon. The conservative interval +
 // timeout and the "other traffic seen" guard keep false positives rare.
 
+// pingIDPrefix is the recognisable prefix of every heartbeat probe id (see
+// heartbeatID). It is qualified with a per-proxy-instance random nonce, so an
+// id merely matching this prefix and a sequence number is not enough to
+// coincide with a genuine in-flight probe — see newHeartbeatNonce.
 const pingIDPrefix = "__plumb_hb_"
+
+// newHeartbeatNonce returns a short random hex string, generated once per
+// proxy instance (crypto/rand — same source as newProxySessionID in
+// serve.go), folded into every heartbeat probe id via heartbeatID. Before
+// this, "__plumb_hb_<seq>" reserved its id namespace only by convention: a
+// client request whose id happened to equal an in-flight heartbeat id would
+// have been swallowed as a pong instead of forwarded (deliverPong already
+// only consumes an id it finds outstanding — the gap was the namespace being
+// 100% predictable). The nonce makes that collision astronomically unlikely
+// rather than merely conventionally avoided. A crypto/rand failure
+// (vanishingly rare) yields "" — the safe fallback, matching
+// newProxySessionID.
+func newHeartbeatNonce() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", b[:])
+}
+
+// heartbeatID returns the JSON-RPC id for heartbeat probe seq, qualified
+// with this proxy's per-instance nonce so the id can never coincide with a
+// client-supplied id merely by matching the pingIDPrefix convention.
+func (p *reconnectingProxy) heartbeatID(seq uint64) string {
+	return fmt.Sprintf("%s%s_%d", pingIDPrefix, p.hbNonce, seq)
+}
 
 func (p *reconnectingProxy) runHeartbeat(ctx context.Context) {
 	ticker := time.NewTicker(p.deps.heartbeatInterval)
@@ -48,7 +79,7 @@ func (p *reconnectingProxy) runHeartbeat(ctx context.Context) {
 		// verdict for the old generation can never SIGKILL the freshly-respawned
 		// daemon. Reading the generation after the timeout would lose this guard.
 		_, _, gen := p.current()
-		if p.ping(ctx, fmt.Sprintf("%s%d", pingIDPrefix, seq)) {
+		if p.ping(ctx, p.heartbeatID(seq)) {
 			continue
 		}
 		slog.Warn("serve: daemon heartbeat timed out — assuming hung; killing and reconnecting")
