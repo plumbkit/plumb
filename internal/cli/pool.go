@@ -56,6 +56,13 @@ type workspacePool struct {
 	// re-paying cold start. A field (not a const) so tests can shorten it.
 	idleGrace time.Duration
 
+	// startGrace bounds awaitReady's inline wait for a freshly started server
+	// (see firstStartGrace). A field — not the const directly — so tests can
+	// shorten it to exercise the grace path deterministically. A zero value
+	// means "use firstStartGrace", so pool literals built without a constructor
+	// (tests) keep the production timing unless they opt in.
+	startGrace time.Duration
+
 	// baseCtx is the supervisor lifetime context — the daemon root context, not
 	// any single connection or tool-call context. Language servers are shared
 	// across all sessions, so tying one to a caller's context would let that
@@ -168,6 +175,7 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		baseConfig: cfg,
 		cacheTTL:   cfg.Cache.TTL.Duration,
 		idleGrace:  poolIdleGrace,
+		startGrace: firstStartGrace,
 		baseCtx:    baseCtx,
 		xcode:      newPoolXcodeState(),
 	}
@@ -404,12 +412,28 @@ func (p *workspacePool) reapEntry(e *poolEntry) {
 	e.closeOnce.Do(func() { closeEntry(ctx, e) })
 }
 
-// awaitReady waits up to firstStartGrace for a freshly started entry to become
+// awaitReady waits up to startGrace for a freshly started entry to become
 // ready. A first-start failure (e.g. a missing binary, which the supervisor
 // will not retry) removes the entry so a later call re-spawns, and surfaces the
 // error so attachWorkspace degrades to LanguageNone. On grace or request-context
 // expiry the not-yet-ready entry is returned and the supervisor keeps warming.
+//
+// The failure path splits by timing. A FAST failure (spawn ENOENT, an OnStart
+// that errors inside the grace) is observed here on readyCh and evicted inline.
+// A SLOW failure — an OnStart that errors AFTER the grace, once we have already
+// returned the not-yet-ready entry — would otherwise leave nobody reading
+// readyCh, so removeFailed never runs and the dead entry (proxy.get() == nil)
+// is reused forever with no self-heal. Whenever we bail before observing the
+// outcome (grace or ctx expiry) we therefore hand readyCh to a drain goroutine
+// that evicts the entry if the late outcome is an error. The supervisor
+// guarantees exactly one send on readyCh over its lifetime, and this drain is
+// its sole remaining reader, so the goroutine always terminates and never
+// double-reads (a success delivers nil and the drain simply exits).
 func (p *workspacePool) awaitReady(ctx context.Context, e *poolEntry, readyCh <-chan error) (*poolEntry, error) {
+	grace := p.startGrace
+	if grace <= 0 {
+		grace = firstStartGrace
+	}
 	select {
 	case startErr := <-readyCh:
 		if startErr != nil {
@@ -417,11 +441,32 @@ func (p *workspacePool) awaitReady(ctx context.Context, e *poolEntry, readyCh <-
 			return nil, fmt.Errorf("starting %s for %s: %w", e.language, e.root, startErr)
 		}
 		return e, nil
-	case <-time.After(firstStartGrace):
+	case <-time.After(grace):
+		go p.reapOnLateStartFailure(e, readyCh)
 		return e, nil
 	case <-ctx.Done():
+		go p.reapOnLateStartFailure(e, readyCh)
 		return e, nil
 	}
+}
+
+// reapOnLateStartFailure drains the first-start outcome for an entry awaitReady
+// stopped waiting on (grace or request-ctx expiry), and evicts the entry if
+// that outcome is a failure. It is the self-heal for a first start that fails
+// SLOWLY: without it the supervisor's single readyCh send has no reader once
+// awaitReady returns, so a dead entry lingers in the pool and is reused on every
+// later acquire. A nil outcome (the server became ready after the grace) is the
+// common case and is a no-op. removeFailed is idempotent (map-identity guard +
+// closeOnce), so racing a concurrent reap/close is safe. No retry is started:
+// eviction only lets the NEXT explicit acquire attempt a fresh start.
+func (p *workspacePool) reapOnLateStartFailure(e *poolEntry, readyCh <-chan error) {
+	startErr, ok := <-readyCh
+	if !ok || startErr == nil {
+		return
+	}
+	slog.Warn("pool: first start failed after grace — evicting dead entry so the next acquire retries",
+		"root", e.root, "language", e.language, "err", startErr)
+	p.removeFailed(e)
 }
 
 // warmupFor reports whether the language server for (root, language) is still

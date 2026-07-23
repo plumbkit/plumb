@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"sync/atomic"
 	"testing"
@@ -96,6 +97,49 @@ func TestSupervisor_StartAsync_SpawnFailureNoRetry(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if n := onStartCalls.Load(); n != 0 {
 		t.Fatalf("OnStart called %d times after spawn failure; want 0 (no retry)", n)
+	}
+}
+
+// TestSupervisor_StartAsync_SlowOnStartFailure_SendsToAbandonedChan pins the
+// contract the pool's late-failure drain depends on: when the FIRST OnStart
+// fails AFTER the caller has abandoned readyCh (the pool's awaitReady returned
+// at its grace), the buffered send still lands and is readable, and the loop
+// does not retry. The pool reads exactly this value to evict the dead entry.
+func TestSupervisor_StartAsync_SlowOnStartFailure_SendsToAbandonedChan(t *testing.T) {
+	cmd, args := longLivedCommand(t)
+	release := make(chan struct{})
+	var onStartCalls atomic.Int32
+	sup := NewSupervisor(cmd, args, nil, SupervisorOptions{
+		BackoffBase: 10 * time.Millisecond,
+		OnStart: func(context.Context, *jsonrpc.Conn) error {
+			onStartCalls.Add(1)
+			<-release
+			return errors.New("initialize failed")
+		},
+	})
+
+	readyCh, err := sup.StartAsync(context.Background())
+	if err != nil {
+		t.Fatalf("StartAsync: %v", err)
+	}
+	defer sup.Stop()
+
+	// Simulate the pool abandoning readyCh at its grace, then the OnStart failing
+	// slowly afterwards.
+	close(release)
+	select {
+	case e := <-readyCh:
+		if e == nil {
+			t.Fatal("expected the late OnStart failure on readyCh, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("late OnStart failure was never delivered to the abandoned readyCh")
+	}
+
+	// A first-start failure must not retry: OnStart runs exactly once.
+	time.Sleep(100 * time.Millisecond)
+	if n := onStartCalls.Load(); n != 1 {
+		t.Fatalf("OnStart called %d times after a first-start failure; want 1 (no retry)", n)
 	}
 }
 
