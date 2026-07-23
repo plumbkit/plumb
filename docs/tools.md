@@ -351,9 +351,14 @@ document-symbol tree, falling back to tree-sitter when the server is cold.
 that would change the symbol's package or import path — a different directory, or
 a different Go `package` clause — is **refused** rather than applied
 half-correctly. Also refuses an ambiguous bare name, a missing destination
-without `create_destination`, and out-of-workspace paths. The response carries a
+without `create_destination`, out-of-workspace paths, and — for Go — a
+destination whose `//go:build`/`// +build` constraints differ from the
+source's, since moving a declaration between differently-tagged files would
+silently change what compiles per platform/tag. The response carries a
 unified diff of both files (preview in dry-run, applied change otherwise) unless
-`show_write_diff` is disabled.
+`show_write_diff` is disabled. Undo is per-file: reverting a move takes **two**
+`undo_edit` calls (source, then destination), with a transient intermediate
+state where the declaration is duplicated in both files.
 
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.

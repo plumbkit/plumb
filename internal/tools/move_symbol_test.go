@@ -98,11 +98,46 @@ func TestMoveSymbol_ApplyMovesWithDocComment(t *testing.T) {
 	if !strings.Contains(string(src), "func Bar() int") {
 		t.Errorf("Bar wrongly removed from source:\n%s", src)
 	}
+	// Removing Foo (with its doc comment) leaves a run of 4 consecutive
+	// newlines between "package demo" and "func Bar" — assert it collapsed to
+	// exactly one blank line rather than merely checking containment.
+	wantSrc := "package demo\n\nfunc Bar() int { return 2 }\n"
+	if string(src) != wantSrc {
+		t.Errorf("source not normalised at the removal seam:\ngot:  %q\nwant: %q", src, wantSrc)
+	}
 	dst, _ := os.ReadFile(dstPath)
 	for _, want := range []string{"func Keep() {}", "// Foo does foo.", "func Foo() int { return 1 }"} {
 		if !strings.Contains(string(dst), want) {
 			t.Errorf("destination missing %q:\n%s", want, dst)
 		}
+	}
+}
+
+// TestMoveSymbol_ApplyTrimsTrailingNewlineWhenLastDeclRemoved covers the other
+// half of removal-seam normalisation: removing the file's LAST declaration
+// must not leave a dangling blank line before EOF.
+func TestMoveSymbol_ApplyTrimsTrailingNewlineWhenLastDeclRemoved(t *testing.T) {
+	dir := t.TempDir()
+	srcPath, srcURI := writeInDir(t, dir, "src.go", moveSrc)
+	dstPath := filepath.Join(dir, "new.go")
+	dstURI := "file://" + dstPath
+
+	mock := &mockLSP{docSymbols: fooBarSymbols()}
+	tool := tools.NewMoveSymbol(mock, 0)
+	dryRun := false
+	if _, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":         srcURI,
+		"name_path":          "Bar",
+		"destination_uri":    dstURI,
+		"create_destination": true,
+		"dry_run":            &dryRun,
+	})); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	wantSrc := "package demo\n\n// Foo does foo.\nfunc Foo() int { return 1 }\n"
+	if got, _ := os.ReadFile(srcPath); string(got) != wantSrc {
+		t.Errorf("source not trimmed to a single trailing newline after removing the last declaration:\ngot:  %q\nwant: %q", got, wantSrc)
 	}
 }
 
@@ -216,6 +251,45 @@ func TestMoveSymbol_RefusesCrossPackage(t *testing.T) {
 	}))
 	if err == nil || !strings.Contains(err.Error(), "cross-package") {
 		t.Fatalf("want cross-package refusal, got %v", err)
+	}
+}
+
+func TestMoveSymbol_RefusesDifferingBuildTags(t *testing.T) {
+	dir := t.TempDir()
+	_, srcURI := writeInDir(t, dir, "src.go", "//go:build linux\n\npackage demo\n\nfunc Foo() int { return 1 }\n")
+	_, dstURI := writeInDir(t, dir, "dst.go", "//go:build darwin\n\npackage demo\n\nfunc Keep() {}\n")
+
+	// "Foo" now sits on line 4 (0-based) because of the leading build-tag
+	// comment and blank line.
+	tool := tools.NewMoveSymbol(&mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 4, 4, 27)}}, 0)
+	_, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":      srcURI,
+		"name_path":       "Foo",
+		"destination_uri": dstURI,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "build constraint") {
+		t.Fatalf("want build-constraint refusal, got %v", err)
+	}
+}
+
+func TestMoveSymbol_AllowsMoveWhenNeitherFileHasBuildTags(t *testing.T) {
+	dir := t.TempDir()
+	srcPath, srcURI := writeInDir(t, dir, "src.go", moveSrc)
+	_, dstURI := writeInDir(t, dir, "dst.go", "package demo\n\nfunc Keep() {}\n")
+
+	mock := &mockLSP{docSymbols: fooBarSymbols()}
+	tool := tools.NewMoveSymbol(mock, 0)
+	dryRun := false
+	if _, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":      srcURI,
+		"name_path":       "Foo",
+		"destination_uri": dstURI,
+		"dry_run":         &dryRun,
+	})); err != nil {
+		t.Fatalf("expected move to proceed when neither file has build tags, got: %v", err)
+	}
+	if got, _ := os.ReadFile(srcPath); strings.Contains(string(got), "func Foo() int") {
+		t.Errorf("Foo not removed from source:\n%s", got)
 	}
 }
 

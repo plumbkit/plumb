@@ -98,9 +98,11 @@ The symbol's full source — its declaration and, by default, its contiguous lea
 
 Scope (v1, conservative): source and destination must be in the SAME directory. plumb does NOT rewrite references or imports, so a move that would change a symbol's package or import path — a different directory, or (for Go) a different package clause — is REFUSED rather than applied half-correctly. Move within a package where references resolve unchanged; relocate across packages by hand.
 
-destination_uri must already exist unless create_destination=true (a newly created Go file is seeded with the source file's package clause). Refuses when the symbol is not found, the name is ambiguous (disambiguate with a slash-separated name_path), the destination is missing without create_destination, or either path is outside the workspace.
+destination_uri must already exist unless create_destination=true (a newly created Go file is seeded with the source file's package clause). Refuses when the symbol is not found, the name is ambiguous (disambiguate with a slash-separated name_path), the destination is missing without create_destination, or either path is outside the workspace. For Go, also refuses when source and destination carry different //go:build (or legacy +build) constraints, since moving a declaration between them would silently change what compiles per platform/tag.
 
-Dry-run by default (dry_run=true): previews the unified diff of both files without writing. Set dry_run=false to apply.`
+Dry-run by default (dry_run=true): previews the unified diff of both files without writing. Set dry_run=false to apply.
+
+Undo is per-file: reverting a move takes two undo_edit calls, one for source and one for destination, and the state between them is a transient duplicate of the moved declaration in both files.`
 }
 
 var moveSymbolSchema = json.RawMessage(`{
@@ -312,6 +314,11 @@ func (t *MoveSymbol) buildMovePlans(ctx context.Context, a moveSymbolArgs, src, 
 	if err != nil {
 		return nil, "", "", fmt.Errorf("move_symbol: removing declaration from source: %w", err)
 	}
+	// extractRange above already validated rng.Start, so this offset lookup
+	// cannot fail; it locates the removal seam for normalisation.
+	if seam, ok := offsetForPosition(srcBefore, rng.Start); ok {
+		srcAfter = normalizeRemovalSeam(srcAfter, seam)
+	}
 	srcPlan := movePlan{path: srcPath, before: srcBefore, after: srcAfter, mode: fileModeOr(srcPath, 0o644), existedBefore: true}
 
 	destPlan, err := buildDestPlan(a, srcBefore, srcPath, dstPath, movedText)
@@ -359,6 +366,9 @@ func buildDestPlan(a moveSymbolArgs, srcBefore []byte, srcPath, dstPath, movedTe
 		if err := checkSamePackage(srcPath, dstPath, srcBefore, destBefore); err != nil {
 			return movePlan{}, err
 		}
+		if err := checkGoBuildTags(srcPath, dstPath, srcBefore, destBefore); err != nil {
+			return movePlan{}, err
+		}
 	}
 	seed := ""
 	if !existed {
@@ -375,22 +385,6 @@ func buildDestPlan(a moveSymbolArgs, srcBefore []byte, srcPath, dstPath, movedTe
 		mode:          mode,
 		existedBefore: existed,
 	}, nil
-}
-
-// checkSamePackage refuses a Go move whose source and destination declare
-// different packages (the same-directory _test-package case), which would change
-// reference semantics v1 does not rewrite. A no-op for non-Go files or when
-// either package clause is absent.
-func checkSamePackage(srcPath, dstPath string, srcBefore, destBefore []byte) error {
-	if !isGoFile(srcPath) || !isGoFile(dstPath) {
-		return nil
-	}
-	srcPkg := goPackageClause(srcBefore)
-	dstPkg := goPackageClause(destBefore)
-	if srcPkg != "" && dstPkg != "" && srcPkg != dstPkg {
-		return fmt.Errorf("move_symbol: cross-package move not supported in v1 — source is %q, destination is %q. Moving between packages changes reference/import semantics that v1 does not rewrite", srcPkg, dstPkg)
-	}
-	return nil
 }
 
 // destSeed returns the preamble a newly created destination needs so it is
@@ -423,19 +417,6 @@ func appendDeclaration(dest []byte, decl, seed string, existed bool) []byte {
 	}
 	return []byte(s + body)
 }
-
-// goPackageClause returns the trimmed `package X` line of a Go source file, or
-// "" when none is present.
-func goPackageClause(b []byte) string {
-	for _, line := range strings.Split(string(b), "\n") {
-		if tl := strings.TrimSpace(line); strings.HasPrefix(tl, "package ") {
-			return tl
-		}
-	}
-	return ""
-}
-
-func isGoFile(path string) bool { return strings.HasSuffix(path, ".go") }
 
 // extractRange returns the verbatim source bytes covered by rng, using the same
 // byte-offset resolution as the edit applier (so an LSP or tree-sitter range

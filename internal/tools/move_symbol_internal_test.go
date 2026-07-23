@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +114,108 @@ func TestGoPackageClause(t *testing.T) {
 	}
 	if got := goPackageClause([]byte("func F(){}\n")); got != "" {
 		t.Errorf("want empty for a file with no package clause, got %q", got)
+	}
+}
+
+func TestNormalizeRemovalSeam(t *testing.T) {
+	tests := []struct {
+		name  string
+		after string // the already-deleted text, seam marked by a '|'
+		want  string
+	}{
+		{
+			name:  "collapses 4 newlines at the seam to 2",
+			after: "package demo\n\n|\n\nfunc Bar() int { return 2 }\n",
+			want:  "package demo\n\nfunc Bar() int { return 2 }\n",
+		},
+		{
+			name:  "collapses 3 newlines at the seam to 2",
+			after: "package demo\n\n|\nfunc Bar() int {}\n",
+			want:  "package demo\n\nfunc Bar() int {}\n",
+		},
+		{
+			name:  "leaves a single newline at the seam untouched",
+			after: "package demo\n|func Bar() int {}\n",
+			want:  "package demo\nfunc Bar() int {}\n",
+		},
+		{
+			name:  "leaves two newlines (one blank line) at the seam untouched",
+			after: "package demo\n\n|func Bar() int {}\n",
+			want:  "package demo\n\nfunc Bar() int {}\n",
+		},
+		{
+			name:  "no newlines border the seam",
+			after: "package demo\n\nfunc| Bar() int {}\n",
+			want:  "package demo\n\nfunc Bar() int {}\n",
+		},
+		{
+			name:  "trims to a single trailing newline when the removed decl was last",
+			after: "package demo\n\nfunc Foo() int { return 1 }\n\n|\n",
+			want:  "package demo\n\nfunc Foo() int { return 1 }\n",
+		},
+		{
+			name:  "empty file after removal stays empty",
+			after: "\n\n|",
+			want:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			seam := strings.IndexByte(tc.after, '|')
+			if seam < 0 {
+				t.Fatalf("test fixture missing seam marker '|': %q", tc.after)
+			}
+			after := tc.after[:seam] + tc.after[seam+1:]
+			if got := string(normalizeRemovalSeam([]byte(after), seam)); got != tc.want {
+				t.Errorf("normalizeRemovalSeam(%q, %d) = %q, want %q", after, seam, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGoBuildConstraints(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{"none", "package demo\n\nfunc F(){}\n", nil},
+		{"go:build", "//go:build linux\n\npackage demo\n\nfunc F(){}\n", []string{"//go:build linux"}},
+		{"legacy +build", "// +build linux,amd64\n\npackage demo\n\nfunc F(){}\n", []string{"// +build linux,amd64"}},
+		{"both forms", "//go:build linux\n// +build linux\n\npackage demo\n\nfunc F(){}\n", []string{"//go:build linux", "// +build linux"}},
+		{"ignores a matching comment after package", "package demo\n\n// +build not-a-constraint-here\nfunc F(){}\n", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := goBuildConstraints([]byte(tc.src))
+			if len(got) != len(tc.want) {
+				t.Fatalf("goBuildConstraints(%q) = %v, want %v", tc.src, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("goBuildConstraints(%q)[%d] = %q, want %q", tc.src, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestCheckGoBuildTags(t *testing.T) {
+	src := []byte("//go:build linux\n\npackage demo\n\nfunc Foo(){}\n")
+	sameTags := []byte("//go:build linux\n\npackage demo\n\nfunc Keep(){}\n")
+	diffTags := []byte("//go:build darwin\n\npackage demo\n\nfunc Keep(){}\n")
+	noTags := []byte("package demo\n\nfunc Keep(){}\n")
+
+	if err := checkGoBuildTags("src.go", "dst.go", src, sameTags); err != nil {
+		t.Errorf("identical build tags should pass, got: %v", err)
+	}
+	if err := checkGoBuildTags("src.go", "dst.go", noTags, noTags); err != nil {
+		t.Errorf("both-absent build tags should pass, got: %v", err)
+	}
+	if err := checkGoBuildTags("src.go", "dst.go", src, diffTags); err == nil {
+		t.Error("want refusal for differing build tags, got nil")
+	}
+	if err := checkGoBuildTags("src.txt", "dst.txt", src, diffTags); err != nil {
+		t.Errorf("non-Go files should skip the build-tag check, got: %v", err)
 	}
 }

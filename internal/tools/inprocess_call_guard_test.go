@@ -203,6 +203,15 @@ func reviewedFiles() map[string]bool {
 // pass TestInProcessCompositionsUseCanonicalKeys, rather than silently going
 // unchecked. The scan runs on whatever is on disk, so a composition site
 // added by a concurrent change is caught on the next run, not retroactively.
+//
+// Best-effort by design — known blind spots (review catches what the regex
+// cannot): a composition that marshals a struct literal instead of a map,
+// routes the marshalled args through a helper before Execute, or reassigns
+// with = rather than :=, escapes this scan; and the paren-depth key scan in
+// the static half reads only the first json.Marshal(map…) per file and does
+// not skip string literals, so a stray ')' inside a composed string value
+// would truncate key extraction. Keep compositions in the simple
+// marshal-map-then-Execute shape so the guard sees them.
 func TestInProcessCompositionsDiscoverUnreviewedSites(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
