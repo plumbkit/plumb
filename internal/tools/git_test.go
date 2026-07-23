@@ -476,6 +476,60 @@ func TestGit_AddWarnsOnUnmatchedTypoPath(t *testing.T) {
 	}
 }
 
+// TestGit_AddRelativePathFromSubdirRepo is the regression test for the
+// partitionAddPaths base-mismatch bug: the tracked-map keys are built from
+// filepath.Join(repoRoot, lsFilesLine) (the git toplevel), so a relative input
+// path must resolve against that same repoRoot — not against a.Repo, which may
+// be a subdirectory of the repo. A tracked file at the repo root, added via a
+// ROOT-relative path with the tool's Repo pointed at a subdirectory, must
+// stage cleanly with no unmatched-path warning.
+func TestGit_AddRelativePathFromSubdirRepo(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+
+	// Track a second file at the repo root, committed so the precheck's
+	// ls-files branch (not the os.Stat working-tree fallback) is exercised.
+	rootFile := filepath.Join(dir, "root.txt")
+	if err := os.WriteFile(rootFile, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("add", "root.txt")
+	run("commit", "-m", "add root.txt")
+
+	// Modify the tracked file so there is a change to stage.
+	if err := os.WriteFile(rootFile, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The tool's Repo is a SUBDIRECTORY of the git toplevel.
+	subDir := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+
+	// files is the path RELATIVE TO THE REPO ROOT (not to the subdirectory Repo).
+	out, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{"root.txt"}, "repo": subDir})
+	if err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if !strings.Contains(out, "staged 1 file") {
+		t.Errorf("expected the root-relative tracked path to be staged, got %q", out)
+	}
+	if strings.Contains(out, "warning") {
+		t.Errorf("a valid root-relative tracked path must not be reported as unmatched when Repo is a subdirectory, got %q", out)
+	}
+}
+
 // --- path-limited commit: commit only named paths, leaving unrelated staged work ---
 
 func TestGit_PathLimitedCommit(t *testing.T) {

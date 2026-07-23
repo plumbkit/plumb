@@ -296,7 +296,12 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 	for _, f := range a.Files {
 		abs := f
 		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(a.Repo, f)
+			// Relative inputs must resolve against repoRoot (the git toplevel),
+			// the same base the tracked map above is keyed against — not
+			// a.Repo, which may be a subdirectory of the repo. Joining against
+			// a.Repo here would silently misclassify a valid root-relative
+			// tracked path as unmatched and drop it from the add.
+			abs = filepath.Join(repoRoot, f)
 		}
 		abs = filepath.Clean(abs)
 		if tracked[abs] {

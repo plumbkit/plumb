@@ -75,9 +75,11 @@ func TestLoadProject_LSPInitializationOptions_AbsentIsNil(t *testing.T) {
 	}
 }
 
-// TestCloneLSPConfig_InitializationOptions guards that cloneLSPConfig deep-copies
-// the free-form options map so a cloned config never aliases the source, and
-// preserves nil (so cloneConfig(defaults) stays DeepEqual to defaults).
+// TestCloneLSPConfig_InitializationOptions guards that cloneLSPConfig clones
+// the free-form options map at the top level (maps.Clone — nested sub-table
+// values are shared, which is safe because the map is only ever serialised,
+// never mutated in place; gopls's EnablePullDiagnostics clones before it
+// injects), and preserves nil so cloneConfig(defaults) stays DeepEqual.
 func TestCloneLSPConfig_InitializationOptions(t *testing.T) {
 	src := LSPConfig{
 		Command:               "zls",

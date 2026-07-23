@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 
@@ -69,14 +70,27 @@ func (a *Adapter) handleServerRequest(_ context.Context, method string, params j
 // textDocument/diagnostic. It implements lsp.PullInitializer; the pool calls it
 // only when the resolved diagnostics mode for Go is "pull". Pull is additive:
 // the push capability is preserved, so gopls keeps pushing publishDiagnostics
-// too (the pool records "hybrid" if it does). Safe on any params shape — if
-// InitializationOptions is not the expected goplsOptions, only the client
-// capability is swapped.
+// too (the pool records "hybrid" if it does). Safe on any params shape: the
+// typed goplsOptions default gets the flag set directly; a user-configured
+// [lsp.go] initialization_options map gets the flag injected into a clone
+// (unless the user set the key themselves); anything else only swaps the
+// client capability.
 func (a *Adapter) EnablePullDiagnostics(params *protocol.InitializeParams) {
 	params.Capabilities = protocol.ClientCapabilitiesFor(true)
-	if opts, ok := params.InitializationOptions.(goplsOptions); ok {
+	switch opts := params.InitializationOptions.(type) {
+	case goplsOptions:
 		opts.PullDiagnostics = true
 		params.InitializationOptions = opts
+	case map[string]any:
+		// A user-configured [lsp.go] initialization_options table replaces the
+		// typed defaults, but pull mode still needs gopls's experimental flag —
+		// inject it into a clone (never mutating the user's config map) unless
+		// the user set the key themselves, either way.
+		if _, set := opts["pullDiagnostics"]; !set {
+			merged := maps.Clone(opts)
+			merged["pullDiagnostics"] = true
+			params.InitializationOptions = merged
+		}
 	}
 }
 

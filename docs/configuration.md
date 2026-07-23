@@ -458,6 +458,11 @@ When absent or empty, plumb sends no options, so the init handshake is byte-for-
 unchanged from the default. It is a restart-bound, per-language escape hatch for
 server-specific tuning plumb does not model with a dedicated field.
 
+Interaction with `diagnostics = "pull"` (gopls): a configured options table
+replaces gopls's typed defaults, but pull mode still injects the experimental
+`pullDiagnostics: true` flag into the sent table unless you set that key
+yourself — an explicit user value (either way) always wins.
+
 The headline case is **Zig / zls**. By default zls reports only `ast-check` *syntax*
 diagnostics; real compile and semantic errors require build-on-save, which is off
 unless you turn it on:

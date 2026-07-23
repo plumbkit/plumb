@@ -45,3 +45,42 @@ func TestAdapter_EnablePullDiagnostics(t *testing.T) {
 		t.Errorf("initializationOptions must inject pullDiagnostics:true, got %s", raw)
 	}
 }
+
+// A user-configured [lsp.go] initialization_options table replaces the typed
+// goplsOptions default with a map. Pull mode must still inject the
+// experimental pullDiagnostics flag — into a clone, never the user's map —
+// and must honour an explicit user-set value either way.
+func TestAdapter_EnablePullDiagnostics_UserOptionsMap(t *testing.T) {
+	userOpts := map[string]any{"staticcheck": true}
+	params := gopls.DefaultInitParams("file:///tmp/x")
+	params.InitializationOptions = userOpts
+
+	(&gopls.Adapter{}).EnablePullDiagnostics(&params)
+
+	got, ok := params.InitializationOptions.(map[string]any)
+	if !ok {
+		t.Fatalf("init options type = %T, want map[string]any", params.InitializationOptions)
+	}
+	if got["pullDiagnostics"] != true {
+		t.Errorf("pullDiagnostics = %v, want true", got["pullDiagnostics"])
+	}
+	if got["staticcheck"] != true {
+		t.Errorf("user key staticcheck = %v, want preserved true", got["staticcheck"])
+	}
+	if _, mutated := userOpts["pullDiagnostics"]; mutated {
+		t.Error("user's original options map was mutated — the flag must be injected into a clone")
+	}
+
+	// An explicit user choice wins, even pullDiagnostics = false.
+	optOut := map[string]any{"pullDiagnostics": false}
+	params2 := gopls.DefaultInitParams("file:///tmp/x")
+	params2.InitializationOptions = optOut
+	(&gopls.Adapter{}).EnablePullDiagnostics(&params2)
+	got2, ok := params2.InitializationOptions.(map[string]any)
+	if !ok {
+		t.Fatalf("init options type = %T, want map[string]any", params2.InitializationOptions)
+	}
+	if got2["pullDiagnostics"] != false {
+		t.Errorf("explicit pullDiagnostics=false was overridden: got %v", got2["pullDiagnostics"])
+	}
+}

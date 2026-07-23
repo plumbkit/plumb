@@ -227,7 +227,10 @@ type Server struct {
 	// tools/call (hidden ≠ unregistered). It is consulted per tools/list, so it
 	// may resolve a profile that depends on the (by then known) client identity.
 	// Must be set before Serve.
-	// Invoked under s.mu.RLock; must not call back into s.mu-acquiring methods (deadlock risk) and must be fast.
+	// Runs with the registry lock RELEASED: handleToolsList snapshots the tools
+	// under s.mu.RLock, then filters outside it (see #15), so the filter must
+	// not assume serialisation with Register. Keep it fast — it runs for every
+	// registered tool on each tools/list.
 	ToolFilter func(name string) bool
 
 	// AlwaysLoad, if set, decides which advertised tools are pinned into the

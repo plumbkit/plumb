@@ -352,8 +352,10 @@ pattern is all lowercase), `context_lines` (0–10, like `rg -C`; disjoint group
 get an `--` separator), `max_matches` (1–2000, default 200; output is truncated
 and labelled beyond it). `pattern` may be combined with `start_line`/`end_line`
 (or `offset`) to **restrict the search to that line window**, but not with
-`limit` (rejected — use `max_matches`). A summary line (`# plumb-search: N
-matches for …`) precedes the results; a no-match search returns an explicit
+`limit` (rejected — use `max_matches`). When a `start_line`/`end_line` window is
+set, `context_lines` is clipped to that window too — context never spills
+match lines from outside the restricted range. A summary line (`# plumb-search:
+N matches for …`) precedes the results; a no-match search returns an explicit
 message, not an error; an invalid regex returns a clean error. Mirrors
 `search_in_files`' literal/smart-case conventions.
 
