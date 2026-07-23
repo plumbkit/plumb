@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"strings"
 )
 
@@ -105,6 +106,81 @@ func ParseTaskCommand(s string) ([]string, error) {
 		return nil, fmt.Errorf("task command is empty after trimming")
 	}
 	return argv, nil
+}
+
+// ProjectTaskCommands enumerates the task commands a workspace's project config
+// (<workspace>/.plumb/config.toml) explicitly supplies — every (lang, slot,
+// command) it overrides, and only those (default- and global-config commands
+// need no trust and are not included). It reads the raw project TOML so the set
+// is provenance-filtered by construction and independent of which language is
+// currently detected. This is the command set the trust hash binds to (see
+// TrustStore.SetTrustedForTasks / IsTrustedForTasks).
+func ProjectTaskCommands(root string) ([]TaskCommandSpec, error) {
+	raw, err := LoadProjectRaw(root)
+	if err != nil {
+		return nil, err
+	}
+	tasks, ok := raw["tasks"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	var out []TaskCommandSpec
+	for lang, v := range tasks {
+		slots, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		for slot, cv := range slots {
+			cmd, ok := cv.(string)
+			if !ok {
+				continue
+			}
+			out = append(out, TaskCommandSpec{Lang: lang, Slot: slot, Command: cmd})
+		}
+	}
+	return out, nil
+}
+
+// inlineInterpreters is the set of argv[0] basenames that execute code passed
+// inline (via an inlineCodeFlags flag) rather than from a file. A command whose
+// argv[0] is one of these AND carries an inline-code flag is arbitrary code
+// execution by design — see FlagsInlineInterpreter.
+var inlineInterpreters = map[string]bool{
+	"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true,
+	"python": true, "python2": true, "python3": true,
+	"node": true, "nodejs": true, "deno": true,
+	"perl": true, "ruby": true,
+}
+
+// inlineCodeFlags are the flags that make an interpreter run its argument as
+// code: `-c` (POSIX shells, python), `-e`/`-E` (perl, ruby, node), `--eval`
+// (node, deno), `--command`.
+var inlineCodeFlags = map[string]bool{
+	"-c": true, "-e": true, "-E": true, "--eval": true, "--command": true,
+}
+
+// FlagsInlineInterpreter reports whether argv invokes a known interpreter with an
+// inline-code flag (e.g. `bash -c '…'`, `python -c '…'`, `node -e '…'`,
+// `perl -e '…'`, `ruby -e '…'`) — arbitrary code execution by design, which the
+// no-shell argv contract and the shell-metacharacter denylist do not catch
+// (argv[0] is the interpreter and the code rides in a single quoted argument).
+// It is defence-in-depth signal, not a hard reject: a user may legitimately run
+// such a command from their own global config. `plumb trust` uses it to warn on
+// each project-supplied command matching the pattern so consent is informed.
+// `bash script.sh` and `python script.py` (a file, no inline flag) do not match.
+func FlagsInlineInterpreter(argv []string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+	if !inlineInterpreters[filepath.Base(argv[0])] {
+		return false
+	}
+	for _, a := range argv[1:] {
+		if inlineCodeFlags[a] {
+			return true
+		}
+	}
+	return false
 }
 
 // cloneTasks deep-copies a tasks map so a merged Config never shares the map

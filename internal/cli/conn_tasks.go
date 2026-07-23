@@ -30,10 +30,17 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 		return tools.TaskCommand{Slot: slot}, nil // no command configured; the tool reports it
 	}
 	provenance, fromProject := taskProvenance(ws, lang, slot)
-	if fromProject && !config.NewTrustStore().IsTrusted(ws) {
-		return tools.TaskCommand{}, fmt.Errorf(
-			"run_task: the %s command for %s comes from this project's .plumb/config.toml and is not trusted. "+
-				"review it, then run `plumb trust` in %s to allow this project's task commands", slot, lang, ws)
+	if fromProject {
+		cmds, err := config.ProjectTaskCommands(ws)
+		if err != nil {
+			return tools.TaskCommand{}, fmt.Errorf("run_task: reading project task commands: %w", err)
+		}
+		if !config.NewTrustStore().IsTrustedForTasks(ws, cmds) {
+			return tools.TaskCommand{}, fmt.Errorf(
+				"run_task: the %s command for %s comes from this project's .plumb/config.toml and is not trusted "+
+					"(or the project's task commands changed since `plumb trust` was last run). "+
+					"review them, then run `plumb trust` in %s to allow this project's task commands", slot, lang, ws)
+		}
 	}
 	return tools.TaskCommand{Slot: slot, Steps: steps, Provenance: provenance}, nil
 }
