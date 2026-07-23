@@ -424,3 +424,16 @@ Trust this workspace's project-supplied task commands (those set in its
 `.plumb/config.toml`), so `plumb build`/`test`/… and the `run_task` tool will run
 them. Trust is recorded per workspace **root** in plumb's data directory (never
 in the project itself), so a cloned repository can never mark itself trusted.
+
+Trust is **bound to a hash of the trusted command set**: if a task command is
+later added, removed, or rewritten (including via `agent_config`), the grant no
+longer matches and the command is refused until you re-run `plumb trust` — so an
+agent that changes a trusted command cannot have the new command run without a
+fresh prompt. A `trust.json` written by an older plumb (the legacy boolean
+format) is treated as untrusted and re-confirmed once.
+
+When it records trust, `plumb trust` **prints each command it is about to
+trust** and flags any that invoke an interpreter with inline code (`bash -c`,
+`sh -c`, `python -c`, `node -e`, `perl -e`, `ruby -e`) as arbitrary code
+execution by design — review those before trusting. Default- and global-config
+commands always run and never need trusting.

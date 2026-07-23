@@ -206,7 +206,7 @@ Plumb is pre-1.0. The core — write-safety, the resilient daemon, the topology 
 - **0.16** — stabilisation + cross-platform proving
 - **0.17** — distribution + discoverability (registries)
 - **0.18** — proof + docs
-- **0.19** — release candidate, the last 0.x (freeze + soak)
+- **0.19** — soak + feedback, the last 0.x (rolling patches, not a formal RC)
 - **1.0** — general availability: the stability + validated-core promise
 
 Full detail, rationale, and the post-1.0 items (Windows, tree-sitter cleanup) are in [docs/roadmap.md](docs/roadmap.md).
