@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.12.4 (2026-07-23)
+
+### Added
+
+- **Configurable TUI shortcuts.** A global-only `[ui.keys]` table rebinds
+  twelve actions (navigation, paging, section menu, panel cycling, quit,
+  refresh, help, rename, filter); unknown actions and key conflicts are
+  warned at startup with deterministic resolution, and defaults stay intact
+  when nothing is configured. Overlay/popup keys and the vim aliases stay
+  fixed by design.
+- **`plumb-minimal-change` skill.** A third embedded Claude Code skill:
+  the evidence-first minimal-change ladder — trace the flow, prove reuse
+  with `workspace_search`/`workspace_symbols`, fix root causes via
+  `find_references`, prefer the smallest edit surface (symbol edits over
+  rewrites), verify proportionally with `topology_affected` + `run_task`,
+  and name the ceiling of any simplification.
+
+### Fixed
+
+- **Security: task-command trust is bound to the trusted command set.**
+  `trust.json` now records a SHA-256 of the project-supplied `[tasks.<lang>]`
+  commands; rewriting a trusted command (e.g. via `agent_config`) invalidates
+  trust and re-prompts instead of executing — closing the review's TOCTOU
+  window. Legacy boolean trust entries re-confirm once, and `plumb trust`
+  prints a prominent warning for interpreter-with-inline-code commands
+  (`bash -c`, `python -c`, …). The coarse per-root grant that gates
+  `run_command`/shell/xcode is unchanged. (#84)
+- **Daemon shutdown is provably bounded.** The topology-store closes run
+  concurrently under a budget and the pool's close wait is capped, so the
+  orderly path sums to 9 s against the 10 s watchdog (pinned by test); a
+  genuinely wedged component is abandoned with a warning at its budget
+  instead of tripping the hard-exit watchdog. Idle-time teardown is
+  unchanged.
+- **A wedged server's notify pile-up is now observable.** `Notify`'s
+  background sends carry an in-flight counter with a hysteresis-latched
+  warning — pure observability, no send capped, dropped, or delayed.
+
 ## 0.12.3 (2026-07-23)
 
 ### Added
