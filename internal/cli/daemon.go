@@ -342,6 +342,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			reload:        store.Reload,
 			reloadProject: registry.reloadProject,
 			lspStatus:     pool.lspStatusReport,
+			enableLSP:     pool.enableLanguageCtrl,
 			xcodeStatus:   pool.xcodeStatusJSON,
 			webStart:      webServer.Start,
 			webStatus:     webServer.Status,

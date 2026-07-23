@@ -7,7 +7,7 @@ import (
 )
 
 func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
-	for _, l := range p.langs {
+	for _, l := range p.langsSnapshot() {
 		if l.name == language {
 			return l.cfg, true
 		}

@@ -44,10 +44,21 @@ type poolKey struct {
 //
 // Concurrency: all methods are safe for concurrent use.
 type workspacePool struct {
-	mu         sync.Mutex
-	entries    map[poolKey]*poolEntry // key: (root, language); one LS per pair
-	langs      []langConfig           // globally enabled languages, deterministic order
-	baseConfig config.Config          // global base for per-workspace LSP overrides
+	mu      sync.Mutex
+	entries map[poolKey]*poolEntry // key: (root, language); one LS per pair
+
+	// langs is the effective (enabled + installed) language set — the slice that
+	// workspace detection, per-file routing, and hasActiveLanguage consult. It is
+	// built once by newWorkspacePool and thereafter mutated ONLY by enableLanguage
+	// (live `enable-lsp`), which replaces it wholesale (copy-on-write) rather than
+	// appending in place. Readers on the hot path (Detect, fileLanguage) range a
+	// snapshot taken under langsMu.RLock and never mutate it, so a concurrent
+	// enable never tears a reader's slice. langsMu guards only the slice header;
+	// the backing array of any published slice is immutable.
+	langs   []langConfig
+	langsMu sync.RWMutex
+
+	baseConfig config.Config // global base for per-workspace LSP overrides
 	cacheTTL   time.Duration
 
 	// idleGrace is how long a pinned entry lingers after its last session
@@ -159,16 +170,7 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 			langs = append(langs, langConfig{name: name, cfg: lspCfg})
 		}
 	}
-	// Deterministic order: "go" first for backward compatibility, then alphabetical.
-	sort.Slice(langs, func(i, j int) bool {
-		if langs[i].name == "go" {
-			return true
-		}
-		if langs[j].name == "go" {
-			return false
-		}
-		return langs[i].name < langs[j].name
-	})
+	sortLangs(langs)
 	return &workspacePool{
 		entries:    make(map[poolKey]*poolEntry),
 		langs:      langs,
@@ -179,6 +181,22 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		baseCtx:    baseCtx,
 		xcode:      newPoolXcodeState(),
 	}
+}
+
+// sortLangs orders the effective-language slice deterministically: "go" first
+// (backward compatibility — it is the historical default primary), then the rest
+// alphabetically. Shared by newWorkspacePool and enableLanguage so a
+// live-enabled language lands in the same stable order it would have at startup.
+func sortLangs(langs []langConfig) {
+	sort.Slice(langs, func(i, j int) bool {
+		if langs[i].name == "go" {
+			return true
+		}
+		if langs[j].name == "go" {
+			return false
+		}
+		return langs[i].name < langs[j].name
+	})
 }
 
 // poolIdleGrace is the default delay before a pinned entry whose last session

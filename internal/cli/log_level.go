@@ -92,14 +92,15 @@ func validLogLevelCommand(level string) bool {
 // treats a nil callback as "feature unavailable". Collapsing these into a struct
 // (rather than positional params) keeps adding a new admin command cheap.
 type ctrlHandlers struct {
-	diags         func(string) string       // diagnostics <workspace>
-	reload        func() error              // reload-config
-	reloadProject func(string)              // reload-project <workspace>
-	lspStatus     func() string             // lsp-status
-	xcodeStatus   func(string) string       // xcode-status <workspace>
-	webStart      func(int) (string, error) // web-start [port] → URL
-	webStatus     func() string             // web-status
-	webStop       func() error              // web-stop
+	diags         func(string) string          // diagnostics <workspace>
+	reload        func() error                 // reload-config
+	reloadProject func(string)                 // reload-project <workspace>
+	lspStatus     func() string                // lsp-status
+	enableLSP     func(string) (string, error) // enable-lsp <lang> → status line
+	xcodeStatus   func(string) string          // xcode-status <workspace>
+	webStart      func(int) (string, error)    // web-start [port] → URL
+	webStatus     func() string                // web-status
+	webStop       func() error                 // web-stop
 }
 
 // serveControlSocket accepts admin connections on ln and handles each in its
@@ -130,6 +131,10 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 	}
 
 	if handleWebCommand(conn, line, h) {
+		return
+	}
+
+	if handleLSPCommand(conn, line, h) {
 		return
 	}
 
@@ -199,6 +204,34 @@ func handleDebugCommand(conn net.Conn, line string, h ctrlHandlers) bool {
 	default:
 		return false
 	}
+	return true
+}
+
+// handleLSPCommand dispatches the live language-server admin commands. Today
+// that is enable-lsp <lang> (sent by `plumb enable-lsp`): flip a language on in
+// the running daemon so its server attaches on the next matching file, no
+// restart. It reports whether line matched so handleCtrlConn can stop. A nil
+// handler (test pools without a workspace pool) replies that the feature is
+// unavailable. The reply is a single line: a status message on success, or an
+// "error: …" line the CLI surfaces verbatim (unknown language, server not
+// installed).
+func handleLSPCommand(conn net.Conn, line string, h ctrlHandlers) bool {
+	lang, ok := strings.CutPrefix(line, "enable-lsp ")
+	if !ok {
+		return false
+	}
+	lang = strings.TrimSpace(lang)
+	if h.enableLSP == nil {
+		fmt.Fprint(conn, "error: language enablement unavailable\n")
+		return true
+	}
+	msg, err := h.enableLSP(lang)
+	if err != nil {
+		fmt.Fprintf(conn, "error: %s\n", err.Error())
+		return true
+	}
+	slog.Info("daemon: language enabled via control socket", "lang", lang)
+	fmt.Fprintf(conn, "%s\n", msg)
 	return true
 }
 

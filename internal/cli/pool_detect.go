@@ -113,7 +113,7 @@ func homeFileInfo() os.FileInfo {
 // strongLangAt returns the first active language whose RootMarkers exist
 // directly in dir, or "". Single directory, no ascent.
 func (p *workspacePool) strongLangAt(dir string) string {
-	for _, l := range p.langs {
+	for _, l := range p.langsSnapshot() {
 		for _, marker := range l.cfg.RootMarkers {
 			if markerPresent(dir, marker) {
 				return l.name
@@ -225,7 +225,7 @@ func lessDiscovered(a, b discoveredRoot) bool {
 // language in this pool — the set workspace detection and routing consult. Used
 // to validate a caller-supplied language override before pinning it.
 func (p *workspacePool) hasActiveLanguage(name string) bool {
-	for _, l := range p.langs {
+	for _, l := range p.langsSnapshot() {
 		if l.name == name {
 			return true
 		}
@@ -239,7 +239,7 @@ func (p *workspacePool) hasActiveLanguage(name string) bool {
 // never an ancestor — which is what keeps a stray package.json from capturing
 // an unrelated workspace.
 func (p *workspacePool) weakLangAt(dir string) string {
-	for _, l := range p.langs {
+	for _, l := range p.langsSnapshot() {
 		for _, marker := range l.cfg.WeakRootMarkers {
 			if markerPresent(dir, marker) {
 				return l.name
@@ -273,7 +273,7 @@ const (
 // last resort it is strictly better than LanguageNone and never overrides a
 // strong or weak marker.
 func (p *workspacePool) extLangAt(dir string) string {
-	if len(p.langs) == 0 {
+	if len(p.langsSnapshot()) == 0 {
 		return ""
 	}
 	type item struct {

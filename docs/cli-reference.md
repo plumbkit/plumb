@@ -31,6 +31,7 @@ language `none`.
 | [`plumb stats`](#plumb-stats) | Show tool-call statistics (alias: `status`) |
 | [`plumb diagnostics`](#plumb-diagnostics) | Print LSP diagnostics (alias: `diag`, `diags`) |
 | [`plumb log-level`](#plumb-log-level) | Change the running daemon's log level |
+| [`plumb enable-lsp`](#plumb-enable-lsp) | Enable a language server in the running daemon without a restart |
 | [`plumb debug`](#plumb-debug) | Daemon introspection: memory, heap/stack dumps, LSP state |
 | [`plumb version`](#plumb-version) | Print version information |
 
@@ -339,6 +340,31 @@ The change lasts for the daemon's lifetime only — it does not persist.
 
 To make a level permanent, set `log_level` in `~/.config/plumb/config.toml`.
 Fails clearly if the daemon is not running.
+
+---
+
+## `plumb enable-lsp`
+
+```
+plumb enable-lsp <language>
+```
+
+Enable a configured language (`[lsp.<language>]`) in the **running daemon**, over
+its control socket, **without a restart**. Enabling a language normally requires
+restarting the daemon; this flips it on live: the daemon adds it to its effective
+language set, and its server attaches **lazily** on the next file of that
+language a session opens (no process is spawned eagerly, and existing sessions
+and their servers are untouched).
+
+The change is daemon-lifetime only, like [`plumb log-level`](#plumb-log-level).
+To make it permanent, set `enabled = true` under `[lsp.<language>]` in the config
+file — though installing the server is usually enough, since an installed,
+enabled language activates automatically at startup.
+
+Errors are honest: an unknown language (no `[lsp.<language>]` block), or a server
+binary that is not installed (the message names the binary to install). Enabling
+a language that is already active is a reported no-op. Fails clearly if the
+daemon is not running.
 
 ---
 
