@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **60** structured tools to AI assistants. Every write tool is
+Plumb exposes **61** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -287,6 +287,20 @@ write-tool bookkeeping as filesystem writes: path locks, dirty guards,
 `workspace/didChangeWatchedFiles`, cache invalidation, undo capture, topology
 refresh, quality hooks, and differential post-write diagnostics.
 
+**Prefer these over `edit_file` for whole-declaration changes.**
+`replace_symbol_body` / `insert_before_symbol` / `insert_after_symbol` /
+`safe_delete_symbol` address a declaration by `name_path` (e.g.
+`"ClassName/methodName"`) — no line/character coordinates, no hand-computed
+ranges, no read-modify-write of the surrounding text. Reach for `edit_file`
+when you're changing a fragment *within* a declaration (a few lines, a
+string, a single statement); reach for the symbol-edit family when you're
+replacing, inserting around, or deleting an entire function, method, type,
+or other named declaration. Neither `edit_file` nor `transaction_apply`
+requires raw coordinates by default — both default to `old_string` /
+`new_string` string matching, and `transaction_apply` has no coordinate mode
+at all; `edit_file`'s line/character `range` mode is an optional fallback,
+not the primary path.
+
 ### `rename_symbol`
 Workspace-wide rename via LSP — scope- and type-aware, updates every reference.
 **Inputs:** `uri`, `new_name` (required), either `symbol_name` or `line` +
@@ -321,6 +335,25 @@ Insert text immediately after a symbol's declaration. **Inputs:** `uri`,
 Delete a symbol only if it has no external references (reports them and refuses
 otherwise). **Inputs:** `uri`, `name_path` (required), `include_doc_comment`
 (bool), `dry_run`, `dirty_ok`.
+
+### `move_symbol`
+Relocate a whole top-level declaration (function, method, type, const, or var)
+from one file to another **within the same directory/package**, atomically — the
+declaration is removed from `source_uri` and appended to `destination_uri` in a
+single all-or-nothing write (destination-write failure rolls the source back, so
+the symbol is never duplicated or lost). **Inputs:** `source_uri`, `name_path`,
+`destination_uri` (required), `include_doc_comment` (bool, **default true** — a
+relocated declaration keeps its doc comment), `create_destination` (bool,
+default false; a created Go file is seeded with the source's `package` clause),
+`dry_run` (default true), `dirty_ok`. Locates the symbol via the LSP
+document-symbol tree, falling back to tree-sitter when the server is cold.
+**Conservative v1:** it does **not** rewrite references or imports, so a move
+that would change the symbol's package or import path — a different directory, or
+a different Go `package` clause — is **refused** rather than applied
+half-correctly. Also refuses an ambiguous bare name, a missing destination
+without `create_destination`, and out-of-workspace paths. The response carries a
+unified diff of both files (preview in dry-run, applied change otherwise) unless
+`show_write_diff` is disabled.
 
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.
@@ -429,6 +462,8 @@ have moved, so re-read before further edits. **Inputs:**
 `file_path` (required), `edits` (array of `{old_string, new_string}` — each `old_string` must
 appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
 check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
+Replacing an entire declaration? Prefer `replace_symbol_body` (see *LSP
+semantic edits* above) — addressed by `name_path`, no coordinates needed.
 
 **Anchor-bounded mode (alternative to `edits`).** Instead of an exact
 `old_string`, supply `start_anchor` + `end_anchor` (two unique substrings) and a

@@ -78,6 +78,7 @@ func nonLeanToolSet() []describable {
 		NewInsertAfterSymbol(nil, 0),
 		NewReplaceSymbolBody(nil, 0),
 		NewSafeDeleteSymbol(nil, 0),
+		NewMoveSymbol(nil, 0),
 		NewListMemories(nil),
 		NewReadMemory(nil),
 		NewWriteMemory(nil),

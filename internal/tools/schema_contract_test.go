@@ -111,6 +111,7 @@ func allToolSchemas() map[string]json.RawMessage {
 		(*ListFiles)(nil).Name():            (*ListFiles)(nil).InputSchema(),
 		(*listMemoriesTool)(nil).Name():     (*listMemoriesTool)(nil).InputSchema(),
 		(*ListSymbols)(nil).Name():          (*ListSymbols)(nil).InputSchema(),
+		(*MoveSymbol)(nil).Name():           (*MoveSymbol)(nil).InputSchema(),
 		(*ReadFile)(nil).Name():             (*ReadFile)(nil).InputSchema(),
 		(*readMemoryTool)(nil).Name():       (*readMemoryTool)(nil).InputSchema(),
 		(*ReadMultipleFiles)(nil).Name():    (*ReadMultipleFiles)(nil).InputSchema(),

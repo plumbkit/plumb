@@ -55,7 +55,7 @@ var (
 
 	selftestSymbolEdit = []string{
 		"rename_symbol", "replace_symbol_body", "insert_before_symbol",
-		"insert_after_symbol", "safe_delete_symbol",
+		"insert_after_symbol", "safe_delete_symbol", "move_symbol",
 	}
 
 	// selftestHarnessOnly names tools (and behaviours) that are unsafe or

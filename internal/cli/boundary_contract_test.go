@@ -50,6 +50,7 @@ var knownToolGuarding = map[string]string{
 	"NewGitInit":          "writedeps",
 	"NewTasks":            "writedeps",
 	"NewFindReplace":      "writedeps",
+	"NewMoveSymbol":       "writedeps",
 	// Guarded at the proxy routing layer (setBoundaryGuard on sessionProxy/sessionInv)
 	"NewFindSymbol":         "proxy",
 	"NewWorkspaceSymbols":   "proxy",
