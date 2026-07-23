@@ -140,6 +140,48 @@ func TestReadSymbol_TopologyFallback_ReceiverSegmentNotSubstring(t *testing.T) {
 	}
 }
 
+// TestReadSymbol_TopologyFallback_PointerReceiverMethod pins the PLAN-16 item 11
+// case: when the LSP cannot answer at all (an error, not merely an empty cold
+// answer), read_symbol's tree-sitter fallback must resolve a pointer-receiver
+// method looked up by BARE name (e.g. resolveSessionWorkspace) AND by dotted
+// ReceiverType.Method form — the Go extractor names the node by its bare method
+// name and records "(*SomeType).SomeMethod" as its Qualified, so both forms
+// resolve through the same fallback matcher.
+func TestReadSymbol_TopologyFallback_PointerReceiverMethod(t *testing.T) {
+	ws := t.TempDir()
+	src := "package demo\n\n" +
+		"type SomeType struct{}\n\n" +
+		"func (t *SomeType) SomeMethod() int { return 42 }\n"
+	fpath := filepath.Join(ws, "some.go")
+	if err := os.WriteFile(fpath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	for _, name := range []string{"SomeMethod", "SomeType.SomeMethod"} {
+		t.Run(name, func(t *testing.T) {
+			// brokenLSP errors, so the fallback is the ONLY path that can answer —
+			// exactly the cold/absent-LSP case PLAN-16 item 11 was about.
+			tool := tools.NewReadSymbol(brokenLSP(), nil, 0, 0, tools.NewReadTracker()).
+				WithTopologyFallback(func() *topology.Store { return s })
+			args, _ := json.Marshal(map[string]any{"path": "file://" + fpath, "name": name})
+
+			out, err := tool.Execute(context.Background(), args)
+			if err != nil {
+				t.Fatalf("expected the topology fallback to resolve %q, got: %v", name, err)
+			}
+			if !strings.Contains(out, "SomeMethod") || !strings.Contains(out, "return 42") {
+				t.Errorf("fallback for %q should resolve the method body:\n%s", name, out)
+			}
+		})
+	}
+}
+
 func TestReplaceSymbolBody_TopologyFallback(t *testing.T) {
 	store, fpath, uri := fallbackFixture(t)
 	tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
