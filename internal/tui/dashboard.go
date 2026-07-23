@@ -329,7 +329,7 @@ func (m Model) handleDashboardKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	pageSize := max(m.height-6, 1)
-	switch msg.String() {
+	switch m.keys.normalise(msg.String()) {
 	case "ctrl+q":
 		return m, tea.Quit, true
 	case "ctrl+c":

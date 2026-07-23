@@ -109,7 +109,7 @@ func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeigh
 	// scrolling. Other sections (Memory) reserve nothing.
 	var rightFooter []string
 	if m.currentSection == 1 {
-		rightFooter = sessionsRightFooter()
+		rightFooter = m.sessionsRightFooter()
 	}
 	rightViewH := max(bodyHeight-len(rightFooter), 0)
 
@@ -144,9 +144,9 @@ func (m Model) renderBodySection(allLeftLines, allRightLines []string, bodyHeigh
 // right panel: a blank spacer keeps it clear of the scrolling content above.
 // Both lines are excluded from the scroll viewport, so they stay put while the
 // panel scrolls.
-func sessionsRightFooter() []string {
-	hint := "  " + StatusKeyStyle.Render("r") + StatusStyle.Render(" rename  ·  ") +
-		StatusKeyStyle.Render("a") + StatusStyle.Render(" refresh")
+func (m Model) sessionsRightFooter() []string {
+	hint := "  " + StatusKeyStyle.Render(m.keys.display(actRename)) + StatusStyle.Render(" rename  ·  ") +
+		StatusKeyStyle.Render(m.keys.display(actRefresh)) + StatusStyle.Render(" refresh")
 	return []string{"", hint}
 }
 
@@ -378,40 +378,46 @@ func (m Model) renderHelp(bg string) string {
 		title string
 		items []helpItem
 	}
+	// Rebindable actions render their live key from the resolved keymap, so the
+	// help reflects any [ui.keys] overrides; fixed keys (vim aliases, section
+	// shortcuts, esc/enter, the theme picker) stay literal.
+	nav := fmt.Sprintf("%s/%s  j/k", m.keys.display(actNavUp), m.keys.display(actNavDown))
+	paging := fmt.Sprintf("%s/%s", m.keys.display(actPageUp), m.keys.display(actPageDown))
+	panels := fmt.Sprintf("%s / %s", m.keys.display(actPanelNext), m.keys.display(actPanelPrev))
 	groups := []helpGroup{
 		{
 			title: "Navigation",
 			items: []helpItem{
-				{key: "↑/↓  j/k", desc: "Move through lists and scroll details"},
-				{key: "pgup/pgdown", desc: "Page through lists"},
+				{key: nav, desc: "Move through lists and scroll details"},
+				{key: paging, desc: "Page through lists"},
 			},
 		},
 		{
 			title: "Sections",
 			items: []helpItem{
-				{key: "/", desc: "Open section selector"},
+				{key: m.keys.display(actSectionMenu), desc: "Open section selector"},
 				{key: "ctrl+1-5, alt+1-5", desc: "Jump to Dashboard, Sessions, Memory, Logs, Settings"},
 			},
 		},
 		{
 			title: "Panels",
 			items: []helpItem{
-				{key: "tab / shift+tab", desc: "Switch focus: sessions, details, tools, recent"},
-				{key: "tab (Memory)", desc: "Cycle workspaces → memories → detail"},
+				{key: panels, desc: "Switch focus: sessions, details, tools, recent"},
+				{key: m.keys.display(actPanelNext) + " (Memory)", desc: "Cycle workspaces → memories → detail"},
 				{key: "[  ]", desc: "Resize columns"},
 			},
 		},
 		{
 			title: "Sessions",
 			items: []helpItem{
-				{key: "r", desc: "Rename the selected session"},
-				{key: "a", desc: "Refresh sessions and stats"},
+				{key: m.keys.display(actRename), desc: "Rename the selected session"},
+				{key: m.keys.display(actRefresh), desc: "Refresh sessions and stats"},
 			},
 		},
 		{
 			title: "Memory",
 			items: []helpItem{
-				{key: "f", desc: "Filter the memories list (esc clears)"},
+				{key: m.keys.display(actFilter), desc: "Filter the memories list (esc clears)"},
 				{key: "enter", desc: "Toggle between list and detail"},
 			},
 		},
@@ -429,8 +435,8 @@ func (m Model) renderHelp(bg string) string {
 				{key: "enter", desc: "Open detail or select menu item"},
 				{key: "esc", desc: "Close popup or menu"},
 				{key: "ctrl+t", desc: "Open the theme picker (anywhere)"},
-				{key: "ctrl+h", desc: "Open help"},
-				{key: "ctrl+q", desc: "Quit"},
+				{key: m.keys.display(actHelp), desc: "Open help"},
+				{key: m.keys.display(actQuit), desc: "Quit"},
 			},
 		},
 	}

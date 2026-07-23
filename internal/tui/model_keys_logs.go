@@ -10,7 +10,7 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.logDetailOpen {
 		return m.handleLogDetailKey(msg)
 	}
-	switch msg.String() {
+	switch m.keys.normalise(msg.String()) {
 	case "ctrl+q":
 		return m, tea.Quit
 	case "ctrl+c":
@@ -47,7 +47,7 @@ func (m Model) handleLogSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleLogDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	switch msg.String() {
+	switch m.keys.normalise(msg.String()) {
 	case "ctrl+q":
 		return m, tea.Quit
 	case "ctrl+c":

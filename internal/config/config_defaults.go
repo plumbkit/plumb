@@ -201,6 +201,7 @@ func cloneConfig(cfg Config) Config {
 	// maps.Clone preserves nil vs empty-non-nil so cloneConfig(defaults) stays
 	// reflect.DeepEqual to defaults (see the slice note above).
 	out.Tools.ClientProfiles = maps.Clone(cfg.Tools.ClientProfiles)
+	out.UI.Keys = maps.Clone(cfg.UI.Keys)
 	return out
 }
 

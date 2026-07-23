@@ -63,6 +63,60 @@ those as restart-needed.
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `theme` | string | `"plumb"` | Active colour theme. Set interactively via the TUI **Settings** picker, which persists it here. |
+| `path_style` | string | `"compact"` | How workspace folder paths are abbreviated in the Sessions sidebar: `compact`, `truncate-middle`, or `full`. |
+| `keys` | table | `{}` | Rebinds TUI keyboard shortcuts — an action-name → key-string map. See below. |
+
+### `[ui.keys]` — keyboard shortcuts
+
+Rebind TUI actions by mapping a stable **action name** to a **key string**.
+Global config only, like the rest of `[ui]`; project config is ignored. Any
+action left unset keeps its default, so an empty or absent table changes
+nothing.
+
+```toml
+[ui.keys]
+quit         = "ctrl+w"   # default ctrl+q
+section_menu = "s"        # default /
+refresh      = "R"        # default a
+nav_up       = "w"        # default up  (the vim alias k stays active)
+nav_down     = "s"        # default down (the vim alias j stays active)
+```
+
+**Rebindable actions** (the full set):
+
+| Action | Default | What it does |
+|---|---|---|
+| `quit` | `ctrl+q` | Quit immediately |
+| `nav_up` | `up` | Move selection / scroll up |
+| `nav_down` | `down` | Move selection / scroll down |
+| `page_up` | `pgup` | Page up |
+| `page_down` | `pgdown` | Page down |
+| `section_menu` | `/` | Open the section selector |
+| `panel_next` | `tab` | Cycle focus / tab forward |
+| `panel_prev` | `shift+tab` | Cycle focus / tab backward |
+| `refresh` | `a` | Refresh sessions and stats |
+| `help` | `ctrl+h` | Open the help overlay |
+| `rename` | `r` | Rename the selected session |
+| `filter` | `f` | Filter the memories list |
+
+**Fixed keys** (not rebindable — a binding onto one is reported and ignored):
+`ctrl+c` (interrupt / quit confirmation), `esc`, `enter`, `space`, the vim
+aliases `j`/`k`, the section shortcuts `ctrl+1`–`ctrl+5` / `alt+1`–`alt+5`,
+`ctrl+t` (theme picker), `c` (copy), `G` (jump to latest log), `[` / `]`
+(resize), and `backspace` (filter editing). Rebinding the arrow/named default of
+`nav_up`/`nav_down` moves that key but leaves the `k`/`j` vim aliases active.
+
+**Conflict handling** (all reported to stderr at startup and ignored, defaults
+left intact):
+
+- An **unknown action name** is warned about (listing the valid actions) and skipped.
+- A key that **collides with a fixed key** is warned about (naming the fixed behaviour) and skipped.
+- When **two actions request the same key**, the warning names both and the later one — deterministically, the alphabetically-greater action name — is dropped; the earlier keeps the key.
+- When a binding **shadows another action's default** (e.g. `refresh = "up"` takes the arrow from `nav_up`), the explicit binding wins, the shadowed action is left with no key, and the displacement is reported. The displaced default then dispatches nothing.
+
+The help overlay (`ctrl+h`) and the Sessions footer render the live keys, so
+they always reflect your bindings. Editing `[ui.keys]` from the Settings screen
+is not yet supported — edit the global `config.toml` directly for now.
 
 ## `[web]` — web UI (global only)
 
@@ -522,7 +576,16 @@ an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout
 **Trust gate.** A task command supplied by a *project* `.plumb/config.toml` is
 not run until the workspace is trusted with `plumb trust` (recorded per workspace
 root in `DataDir/trust.json`, never in the project — a cloned repo cannot
-self-trust). Default- and global-config commands always run.
+self-trust). Trust is **bound to a hash of the trusted command set**: if any task
+command is later added, removed, or changed, the grant no longer matches and the
+command is refused until you re-run `plumb trust` — so an agent that rewrites a
+trusted command cannot have the new command run without a re-prompt. A
+`trust.json` written by an older plumb (the legacy boolean format) is treated as
+untrusted and re-confirmed once on the next `plumb trust`. When it records trust,
+`plumb trust` prints each command being trusted and flags any that invoke an
+interpreter with inline code (`bash -c`, `sh -c`, `python -c`, `node -e`,
+`perl -e`, `ruby -e`) — arbitrary code execution by design, so review it before
+trusting. Default- and global-config commands always run.
 
 ## `[[command]]` / `[commands]` — safe command execution
 

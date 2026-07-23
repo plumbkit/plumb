@@ -115,11 +115,14 @@ func (m Model) popupKeyPageUp() Model {
 
 func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.currentSection == 2 && m.memoryFilterActive {
+		// Raw key: the filter edits literal text, so it must see the pressed key,
+		// not the rebound action it may map to.
 		if next, handled := m.handleMemoryFilterKey(msg.String()); handled {
 			return next, nil
 		}
 	}
-	switch msg.String() {
+	key := m.keys.normalise(msg.String())
+	switch key {
 	case "ctrl+q":
 		return m, tea.Quit
 	case "ctrl+c":
@@ -139,7 +142,7 @@ func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "pgup":
 		m = m.mainKeyPageUp()
 	default:
-		m = m.handleMainKeySimple(msg.String())
+		m = m.handleMainKeySimple(key)
 	}
 	return m, nil
 }

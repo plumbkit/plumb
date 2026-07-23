@@ -173,7 +173,8 @@ func (m *Model) syncThemeCursor() {
 }
 
 func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
-	switch msg.String() {
+	key := m.keys.normalise(msg.String())
+	switch key {
 	case "ctrl+q":
 		return m, tea.Quit
 	case "ctrl+c":
@@ -190,15 +191,19 @@ func (m Model) handleSettingsSectionKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// (The section menu opens with "/", not Esc.)
 		m.settingsScopeFocus = true
 	default:
-		return m.handleSettingsNavKey(msg.String())
+		return m.handleSettingsNavKey(key, msg.String())
 	}
 	return m, nil
 }
 
 // handleSettingsNavKey handles the in-list navigation and edit keys, kept
 // separate from the section/global keys to keep each handler simple. When the
-// Scope column is focused it routes to handleScopeNavKey instead.
-func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
+// Scope column is focused it routes to handleScopeNavKey instead. raw is the
+// un-normalised msg.String(), threaded through to the Commands tab: its fixed,
+// non-rebindable shortcuts (e.g. "add command") must match the key the user
+// actually pressed, not the rewrite normalise() applies for the *rebindable*
+// [ui.keys] action set (see handleCommandsListKey).
+func (m Model) handleSettingsNavKey(key, raw string) (Model, tea.Cmd) {
 	switch key { // pane controls work regardless of which pane is focused
 	case "[":
 		return m.adjustScopeWidth(-1), nil
@@ -213,7 +218,7 @@ func (m Model) handleSettingsNavKey(key string) (Model, tea.Cmd) {
 		return m.handleScopeNavKey(key)
 	}
 	if m.settingsTab == settingsTabCommands {
-		return m.handleCommandsKey(key)
+		return m.handleCommandsKey(key, raw)
 	}
 	return m.handleSettingsRowKey(key)
 }

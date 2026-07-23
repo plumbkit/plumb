@@ -306,6 +306,14 @@ type UIConfig struct {
 	// side of the path and keeps the tail. "full" shows the full tilde-home
 	// path and only falls back to ellipsis+last when still over the column width.
 	PathStyle string `toml:"path_style"`
+	// Keys rebinds TUI keyboard shortcuts, mapping a stable action name (e.g.
+	// "quit", "section_menu", "nav_up") to a key string (e.g. "q", "tab"). Only
+	// the actions the TUI declares rebindable are honoured; unknown names and
+	// keys that collide with a fixed or already-bound key are warned about at
+	// startup and ignored, leaving the default binding in place. Global config
+	// only, like the rest of [ui]. Resolution lives in the TUI layer
+	// (internal/tui/keymap.go), the single source of truth for the action set.
+	Keys map[string]string `toml:"keys"`
 }
 
 // WebConfig controls the opt-in loopback web UI served by the daemon. It is a

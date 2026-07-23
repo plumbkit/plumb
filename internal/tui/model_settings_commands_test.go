@@ -42,3 +42,44 @@ func TestShellSplitJoinRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestCommandsAddShortcut_UsesRawKeyNotNormalised is a regression test for the
+// keymap cross-context coupling between the rebindable "refresh" action
+// (default key "a") and the Commands tab's fixed, non-rebindable
+// "add command" shortcut ("a"/"+"). With refresh rebound to "g", the fixed
+// shortcut must still fire on a raw "a" press and must NOT fire on a raw "g"
+// press — even though "g" normalises to "a" (refresh's canonical key) and "a"
+// normalises to "" (its default having been displaced).
+func TestCommandsAddShortcut_UsesRawKeyNotNormalised(t *testing.T) {
+	km, warnings := resolveKeymap(map[string]string{"refresh": "g"})
+	if len(warnings) != 0 {
+		t.Fatalf("resolveKeymap(refresh=g) warnings = %v, want none", warnings)
+	}
+	newModel := func() Model {
+		m := newSettingsModel()
+		m.currentSection = 4 // Settings
+		m.settingsTab = settingsTabCommands
+		m.commandsFocus = cmdFocusList
+		m.keys = km
+		return m
+	}
+
+	// A raw "a" still opens the add-command editor, even though normalise()
+	// rewrites a pressed "a" to "" (refresh's default key, now displaced).
+	m := newModel()
+	m, _ = m.handleSettingsSectionKey(keyPress("a"))
+	if m.settingsTextEditor == nil || m.settingsTextEditor.cmdField != cmdEditAdd {
+		t.Fatalf("raw \"a\" should open the add-command editor; settingsTextEditor = %+v", m.settingsTextEditor)
+	}
+
+	// A raw "g" (the rebound refresh key, which normalises to "a") must NOT
+	// open the add-command editor — it is not this tab's shortcut.
+	m = newModel()
+	m, _ = m.handleSettingsSectionKey(keyPress("g"))
+	if m.settingsTextEditor != nil {
+		t.Fatalf("raw \"g\" (rebound refresh key) should not open the add-command editor; got %+v", m.settingsTextEditor)
+	}
+	if m.commandsFocus != cmdFocusList {
+		t.Fatalf("raw \"g\" should leave the Commands tab focus unchanged, got %v", m.commandsFocus)
+	}
+}

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -174,6 +176,8 @@ type Model struct {
 	dashScroll              int
 	waitingForQuit          bool
 	quitMessageID           int
+	keys                    keymap
+	keyWarnings             []string
 }
 
 func NewModel(logPath, ctrlPath string) Model {
@@ -181,6 +185,7 @@ func NewModel(logPath, ctrlPath string) Model {
 	if err != nil {
 		cfg = config.Defaults()
 	}
+	km, keyWarnings := resolveKeymap(cfg.UI.Keys)
 	m := Model{
 		leftWidth:         defaultLeftWidth,
 		currentSection:    0,
@@ -191,6 +196,8 @@ func NewModel(logPath, ctrlPath string) Model {
 		dashProjectFolder: detectWorkspaceFolder(),
 		scrollBounds:      &scrollBounds{},
 		settingsCfg:       cfg,
+		keys:              km,
+		keyWarnings:       keyWarnings,
 	}
 	m.refresh()
 	return m
@@ -198,7 +205,13 @@ func NewModel(logPath, ctrlPath string) Model {
 
 func Run(logPath, ctrlPath string) error {
 	RebuildStyles()
-	p := tea.NewProgram(NewModel(logPath, ctrlPath))
+	m := NewModel(logPath, ctrlPath)
+	// Surface any [ui.keys] resolution warnings before the alt-screen takes
+	// over; the primary screen is restored on exit, so they remain visible.
+	for _, w := range m.keyWarnings {
+		fmt.Fprintln(os.Stderr, "plumb: "+w)
+	}
+	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
 }

@@ -318,13 +318,14 @@ func cloneCommands(cmds []config.CommandConfig) []config.CommandConfig {
 
 // handleCommandsKey routes a key within the Commands tab's rows pane (the Scope
 // column and pane-width controls are handled upstream). It dispatches to the
-// focused sub-area.
-func (m Model) handleCommandsKey(key string) (Model, tea.Cmd) {
+// focused sub-area. raw is the un-normalised pressed key (see
+// handleSettingsNavKey), needed by the list pane's fixed shortcuts.
+func (m Model) handleCommandsKey(key, raw string) (Model, tea.Cmd) {
 	switch m.commandsFocus {
 	case cmdFocusToggles:
 		return m.handleCommandsTogglesKey(key)
 	case cmdFocusList:
-		return m.handleCommandsListKey(key)
+		return m.handleCommandsListKey(key, raw)
 	case cmdFocusDetail:
 		return m.handleCommandsDetailKey(key)
 	default:
@@ -350,7 +351,17 @@ func (m Model) handleCommandsTogglesKey(key string) (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleCommandsListKey(key string) (Model, tea.Cmd) {
+// handleCommandsListKey routes the list pane. Cursor movement and the
+// open-detail keys use the normalised key, consistent with the rest of the
+// Settings section's generic navigation. The add/rename/delete shortcuts,
+// however, are this tab's own fixed, non-rebindable literals — not entries in
+// the [ui.keys] action set — so they are matched against raw (the pressed
+// key as reported by msg.String(), before normalise rewrites it). Routing
+// them through the normalised key instead is the bug this guards against: "a"
+// is also the default key for the rebindable "refresh" action, so a rebinding
+// of refresh (e.g. to "g") would normalise a physical "a" press to "" (dead)
+// and a physical "g" press to "a" (wrongly adding a command).
+func (m Model) handleCommandsListKey(key, raw string) (Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
 		if m.commandsListCursor > 0 {
@@ -368,6 +379,8 @@ func (m Model) handleCommandsListKey(key string) (Model, tea.Cmd) {
 			m.commandsFocus = cmdFocusDetail
 			m.commandsDetailCursor = 0
 		}
+	}
+	switch raw {
 	case "a", "+":
 		return m.openAddCommandEditor(), nil
 	case "e":
