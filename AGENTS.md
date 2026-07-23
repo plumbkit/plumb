@@ -294,7 +294,7 @@ e2e   = "go test -tags=integration ./..."
 
 Five optional command slots per language, keyed by the `[lsp.<lang>]` id, with shipped defaults (Go fully populated; a slot left empty over guessing an uninstalled tool). A command is a **single argv executed without a shell** (`config.ParseTaskCommand` rejects `&&`/`;`/`|`/`$(`/backtick/redirs); `verify` runs the build slot then the test slot in sequence. Surfaced through the `run_task` MCP tool and the `plumb build|lint|test|e2e|verify` CLI; output and runtime are bounded (100 KiB/200 lines, timeout). The only agent-supplied input that reaches the argv is a shell-safe `{target}` (`^[A-Za-z0-9._/:@-]+$`).
 
-**Trust gate.** A task command the *project's* `.plumb/config.toml` supplies is **not run until trusted** — `plumb trust` records trust per workspace **root** in plumb's data dir (`config.DataDir()/trust.json`, never in the project, so a cloned repo cannot self-trust). Default- and global-config commands always run.
+**Trust gate.** A task command the *project's* `.plumb/config.toml` supplies is **not run until trusted** — `plumb trust` records trust per workspace **root** in plumb's data dir (`config.DataDir()/trust.json`, never in the project, so a cloned repo cannot self-trust). Trust is bound to a hash of the trusted command set, so rewriting a trusted command re-prompts (closes the TOCTOU); a legacy boolean `trust.json` re-confirms once. `plumb trust` warns on any command matching the interpreter-with-inline-code pattern (`bash -c`, `python -c`, …). Default- and global-config commands always run.
 
 ### `agent_config_writes` — agent-writable config (opt-in)
 
@@ -349,7 +349,7 @@ Setup helpers preserve existing MCP servers, back up config first, and resolve l
 
 Two bulk flags on the bare `plumb setup` command (`runSetupAll`, `internal/cli/setup_clients.go`): `--all` **repoints** every already-registered client at the current binary — the idempotent repair `plumb doctor` recommends after the binary moves or is rebuilt; it never adds plumb to a client that lacked it. `--install-missing` additionally **registers** plumb in installed-but-unregistered clients (config file present, no plumb entry) — the one-shot first-time setup — but never fabricates a config for a client with no config file (an absent config is indistinguishable from an uninstalled client). Either flag triggers the bulk run; `refreshClientAt` classifies each config path as `not installed` / `not registered` / `already current` / `registered` / `updated`, and a bare `--all` that finds unregistered clients prints a hint pointing at `--install-missing`.
 
-`plumb setup claude-code` also installs two idempotent user-scoped skills into `~/.claude/skills/`: `plumb-explore` (navigation) and `plumb-refactor` (semantic rename, atomic cross-file edits); `--no-skill` skips.
+`plumb setup claude-code` also installs three idempotent user-scoped skills into `~/.claude/skills/`: `plumb-explore` (navigation), `plumb-refactor` (semantic rename, atomic cross-file edits), and `plumb-minimal-change` (prove reuse and minimality with plumb evidence before writing non-trivial code); `--no-skill` skips.
 
 ## Workspace detection
 

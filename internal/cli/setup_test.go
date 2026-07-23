@@ -502,6 +502,19 @@ func TestClaudeCodeSkills_HaveValidFrontmatter(t *testing.T) {
 	if len(skills) == 0 {
 		t.Fatal("expected at least one embedded skill")
 	}
+
+	// Pin the expected skill set so a new skills/<name>/ directory added
+	// without an embedded SKILL.md — or one accidentally dropped — is
+	// caught here rather than silently missing at install time.
+	wantNames := []string{"plumb-explore", "plumb-minimal-change", "plumb-refactor"}
+	gotNames := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		gotNames = append(gotNames, skill.Name)
+	}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Errorf("skill set: got %v, want %v", gotNames, wantNames)
+	}
+
 	for _, skill := range skills {
 		if skill.Name == "" {
 			t.Error("skill with empty name")
