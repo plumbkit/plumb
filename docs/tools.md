@@ -352,13 +352,19 @@ that would change the symbol's package or import path — a different directory,
 a different Go `package` clause — is **refused** rather than applied
 half-correctly. Also refuses an ambiguous bare name, a missing destination
 without `create_destination`, out-of-workspace paths, and — for Go — a
-destination whose `//go:build`/`// +build` constraints differ from the
-source's, since moving a declaration between differently-tagged files would
-silently change what compiles per platform/tag. The response carries a
-unified diff of both files (preview in dry-run, applied change otherwise) unless
-`show_write_diff` is disabled. Undo is per-file: reverting a move takes **two**
-`undo_edit` calls (source, then destination), with a transient intermediate
-state where the declaration is duplicated in both files.
+destination whose build constraints differ from the source's: **explicit**
+(`//go:build`/`// +build` comments) or **implicit** (the `_GOOS`/`_GOARCH`/
+`_GOOS_GOARCH` and `_test` filename-suffix conventions, e.g.
+`handlers_linux.go` or `foo_test.go`), compared independently — not for
+cross-axis equivalence, so a plain file with `//go:build linux` moved into a
+`_linux.go` file is still refused. Moving a declaration between differently
+constrained files would silently change what compiles per platform/tag, or
+drop it from the production build entirely (the `_test.go` case). The
+response carries a unified diff of both files (preview in dry-run, applied
+change otherwise) unless `show_write_diff` is disabled. Undo is per-file:
+reverting a move takes **two** `undo_edit` calls (source, then destination),
+with a transient intermediate state where the declaration is duplicated in
+both files.
 
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.

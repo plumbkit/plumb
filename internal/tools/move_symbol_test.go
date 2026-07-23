@@ -293,6 +293,83 @@ func TestMoveSymbol_AllowsMoveWhenNeitherFileHasBuildTags(t *testing.T) {
 	}
 }
 
+func TestMoveSymbol_RefusesGOOSFilenameMismatch(t *testing.T) {
+	dir := t.TempDir()
+	_, srcURI := writeInDir(t, dir, "handlers_linux.go", "package demo\n\nfunc Foo() int { return 1 }\n")
+	_, dstURI := writeInDir(t, dir, "handlers_darwin.go", "package demo\n\nfunc Keep() {}\n")
+
+	tool := tools.NewMoveSymbol(&mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 27)}}, 0)
+	_, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":      srcURI,
+		"name_path":       "Foo",
+		"destination_uri": dstURI,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "build constraint") {
+		t.Fatalf("want build-constraint refusal for _linux.go -> _darwin.go, got %v", err)
+	}
+}
+
+func TestMoveSymbol_RefusesMoveIntoTestFile(t *testing.T) {
+	dir := t.TempDir()
+	_, srcURI := writeInDir(t, dir, "foo.go", "package demo\n\nfunc Foo() int { return 1 }\n")
+	_, dstURI := writeInDir(t, dir, "foo_test.go", "package demo\n\nfunc Keep() {}\n")
+
+	tool := tools.NewMoveSymbol(&mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 27)}}, 0)
+	_, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":      srcURI,
+		"name_path":       "Foo",
+		"destination_uri": dstURI,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "build constraint") {
+		t.Fatalf("want build-constraint refusal moving a production declaration into foo_test.go, got %v", err)
+	}
+}
+
+func TestMoveSymbol_AllowsMoveBetweenSameGOOSFiles(t *testing.T) {
+	dir := t.TempDir()
+	srcPath, srcURI := writeInDir(t, dir, "foo_linux.go", "package demo\n\nfunc Foo() int { return 1 }\n")
+	_, dstURI := writeInDir(t, dir, "bar_linux.go", "package demo\n\nfunc Keep() {}\n")
+
+	tool := tools.NewMoveSymbol(&mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 2, 2, 27)}}, 0)
+	dryRun := false
+	if _, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":      srcURI,
+		"name_path":       "Foo",
+		"destination_uri": dstURI,
+		"dry_run":         &dryRun,
+	})); err != nil {
+		t.Fatalf("expected move to proceed between two files sharing the same GOOS suffix, got: %v", err)
+	}
+	if got, _ := os.ReadFile(srcPath); strings.Contains(string(got), "func Foo() int") {
+		t.Errorf("Foo not removed from source:\n%s", got)
+	}
+}
+
+// TestMoveSymbol_RefusesCommentVsFilenameAsymmetry documents the deliberate
+// semantics for the case where one file expresses a build constraint via a
+// //go:build comment and the other via its filename suffix: checkGoBuildTags
+// does NOT attempt to prove the two are equivalent (that would need a general
+// build-expression evaluator), so ANY asymmetry between the comment-derived
+// and filename-derived constraint sets refuses — even when, as here, a human
+// would read them as expressing the same restriction.
+func TestMoveSymbol_RefusesCommentVsFilenameAsymmetry(t *testing.T) {
+	dir := t.TempDir()
+	_, srcURI := writeInDir(t, dir, "foo.go", "//go:build linux\n\npackage demo\n\nfunc Foo() int { return 1 }\n")
+	_, dstURI := writeInDir(t, dir, "foo_linux.go", "package demo\n\nfunc Keep() {}\n")
+
+	// "Foo" sits on line 4 (0-based) in foo.go because of the leading
+	// build-tag comment and blank line.
+	tool := tools.NewMoveSymbol(&mockLSP{docSymbols: []protocol.DocumentSymbol{symbolAt("Foo", 4, 4, 27)}}, 0)
+	_, err := tool.Execute(context.Background(), moveArgs(t, map[string]any{
+		"source_uri":      srcURI,
+		"name_path":       "Foo",
+		"destination_uri": dstURI,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "build constraint") {
+		t.Fatalf("want build-constraint refusal for comment-vs-filename asymmetry, got %v", err)
+	}
+}
+
 func TestMoveSymbol_TreeSitterFallback(t *testing.T) {
 	ws := t.TempDir()
 	src := "package demo\n\nfunc Alpha() int {\n\treturn 1\n}\n\nfunc Beta() int {\n\treturn 2\n}\n"

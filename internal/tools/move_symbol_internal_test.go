@@ -219,3 +219,56 @@ func TestCheckGoBuildTags(t *testing.T) {
 		t.Errorf("non-Go files should skip the build-tag check, got: %v", err)
 	}
 }
+
+func TestFilenameConstraints(t *testing.T) {
+	tests := []struct {
+		name string
+		want filenameSig
+	}{
+		{"plain.go", filenameSig{}},
+		{"linux.go", filenameSig{}}, // the whole name matching a GOOS is NOT a constraint
+		{"amd64.go", filenameSig{}}, // same for GOARCH
+		{"handlers_linux.go", filenameSig{goos: "linux"}},
+		{"handlers_darwin.go", filenameSig{goos: "darwin"}},
+		{"handlers_amd64.go", filenameSig{goarch: "amd64"}},
+		{"handlers_linux_amd64.go", filenameSig{goos: "linux", goarch: "amd64"}},
+		{"foo_test.go", filenameSig{test: true}},
+		{"foo_linux_test.go", filenameSig{goos: "linux", test: true}},
+		{"foo_linux_amd64_test.go", filenameSig{goos: "linux", goarch: "amd64", test: true}},
+		{"linux_test.go", filenameSig{test: true}}, // "linux" alone (after stripping _test) is still the whole name — no GOOS constraint
+		{"foo_notanos.go", filenameSig{}},          // unrecognised component: no constraint
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := filenameConstraints(tc.name); got != tc.want {
+				t.Errorf("filenameConstraints(%q) = %+v, want %+v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckGoBuildTags_FilenameConstraints(t *testing.T) {
+	plain := []byte("package demo\n\nfunc Foo(){}\n")
+
+	if err := checkGoBuildTags("handlers_linux.go", "handlers_darwin.go", plain, plain); err == nil {
+		t.Error("want refusal moving between different GOOS-suffixed files, got nil")
+	}
+	if err := checkGoBuildTags("foo.go", "foo_test.go", plain, plain); err == nil {
+		t.Error("want refusal moving a production declaration into a _test.go file, got nil")
+	}
+	if err := checkGoBuildTags("foo_linux.go", "bar_linux.go", plain, plain); err != nil {
+		t.Errorf("same GOOS suffix on both sides should pass, got: %v", err)
+	}
+	if err := checkGoBuildTags("plain.go", "other.go", plain, plain); err != nil {
+		t.Errorf("neither file GOOS/GOARCH/test-suffixed should pass, got: %v", err)
+	}
+
+	// Comment-vs-filename asymmetry: a plain file carrying an explicit
+	// //go:build constraint moved into a filename-suffixed file expressing an
+	// arguably equivalent restriction. checkGoBuildTags does NOT attempt to
+	// prove that equivalence — see its doc comment — so this refuses.
+	commentOnly := []byte("//go:build linux\n\npackage demo\n\nfunc Foo(){}\n")
+	if err := checkGoBuildTags("foo.go", "foo_linux.go", commentOnly, plain); err == nil {
+		t.Error("want refusal for comment-vs-filename constraint asymmetry (by design — no cross-axis equivalence check), got nil")
+	}
+}
