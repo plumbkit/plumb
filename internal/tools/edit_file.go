@@ -159,7 +159,10 @@ func (*EditFile) Description() string {
 		"check, so you need not thread the fresh mtime each edit returns through the next one (reach for " +
 		"expected_mtime/expected_sha only when a concurrent writer may touch the file). If the call fails " +
 		"with a transport/connection error, the atomic temp+rename guarantees the file is either fully " +
-		"updated or untouched — never partially written; re-read to see which."
+		"updated or untouched — never partially written; re-read to see which. Replacing, inserting " +
+		"around, or deleting an entire named declaration? Prefer replace_symbol_body / " +
+		"insert_before_symbol / insert_after_symbol / safe_delete_symbol — addressed by name_path, " +
+		"no coordinates to compute."
 }
 
 type strEdit struct {

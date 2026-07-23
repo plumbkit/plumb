@@ -53,7 +53,7 @@ func (*SafeDeleteSymbol) Name() string { return "safe_delete_symbol" }
 func (*SafeDeleteSymbol) Description() string {
 	return `Delete a symbol's declaration only if it has no remaining references.
 
-Calls LSP textDocument/references first. If any reference outside the declaration itself is found, the deletion is rejected with the list of referencing locations so the caller can decide what to do. This prevents accidental deletion of code that's still in use.
+Calls LSP textDocument/references first. If any reference outside the declaration itself is found, the deletion is rejected with the list of referencing locations so the caller can decide what to do. This prevents accidental deletion of code that's still in use — prefer this over deleting a declaration's lines by hand in edit_file, which has no reference check.
 
 Set include_doc_comment=true to also delete any contiguous doc comment above the symbol — otherwise the comment is left orphaned, pointing at whatever ends up next in the file.
 

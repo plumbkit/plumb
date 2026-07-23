@@ -223,7 +223,7 @@ func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
 func (*InsertBeforeSymbol) Description() string {
 	return `Insert text immediately before a symbol's declaration.
 
-Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.
+Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting) — prefer this over computing an insertion line in edit_file. Provide the full text to insert in 'content' — include trailing newline if appropriate.
 
 Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.
 
@@ -327,7 +327,7 @@ func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
 func (*InsertAfterSymbol) Description() string {
 	return `Insert text immediately after a symbol's declaration.
 
-Useful for adding a new method to a struct (insert after an existing one), or appending a related helper. Provide the full text to insert in 'content' — include leading newline if appropriate.
+Useful for adding a new method to a struct (insert after an existing one), or appending a related helper — prefer this over computing an insertion line in edit_file. Provide the full text to insert in 'content' — include leading newline if appropriate.
 
 The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
 
@@ -430,7 +430,7 @@ The replacement spans the symbol's full Range as reported by the LSP — for a f
 
 Set include_doc_comment=true to also cover any contiguous doc comment above the symbol — gopls and most LSP servers report the symbol range starting at the declaration keyword, so without this flag the old doc comment is left orphaned. With it on, your 'content' must include the new doc comment too (or the symbol will have none).
 
-Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both.
+Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both — addressed by name_path, no line/character coordinates to compute like edit_file's range mode.
 
 The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
 
