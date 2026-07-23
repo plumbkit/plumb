@@ -1,37 +1,28 @@
 package stats
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // FormatSavings renders a token count as a short human string ("1.2k", "850").
+// The fractional form truncates (9990 → "9.9k"), not rounds, so callers get a
+// stable label as a count climbs.
 func FormatSavings(tokens int) string {
 	if tokens < 1000 {
-		return itoa(tokens)
+		return strconv.Itoa(tokens)
 	}
 	thousands := float64(tokens) / 1000
 	s := strings.Builder{}
 	if thousands < 10 {
 		whole := int(thousands)
 		tenth := int(thousands*10) - whole*10
-		s.WriteString(itoa(whole))
+		s.WriteString(strconv.Itoa(whole))
 		s.WriteByte('.')
-		s.WriteString(itoa(tenth))
+		s.WriteString(strconv.Itoa(tenth))
 	} else {
-		s.WriteString(itoa(int(thousands)))
+		s.WriteString(strconv.Itoa(int(thousands)))
 	}
 	s.WriteByte('k')
 	return s.String()
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

@@ -145,9 +145,7 @@ func detailRow(k, v string) string { return "  " + KeyStyle.Render(k) + ValStyle
 // contractPath formats p for display in a width-limited column.
 // style selects the abbreviation strategy; see config.UIConfig.PathStyle.
 func contractPath(p string, maxW int, style string) string {
-	if h, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, h) {
-		p = "~" + p[len(h):]
-	}
+	p = render.ContractPath(p)
 	switch style {
 	case "truncate-middle":
 		return contractPathTruncateLeft(p, maxW)

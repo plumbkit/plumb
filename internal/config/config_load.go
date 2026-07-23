@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -238,22 +237,11 @@ func normaliseConfig(cfg *Config) {
 	}
 }
 
-// expandPath expands a leading "~/" (or bare "~") to the current user's home
-// directory, then expands environment variables ($HOME, $GOPATH, etc.).
-// Used so LSP command paths in config files are portable across machines.
+// expandPath expands environment variables and a leading "~"/"~/" in an LSP
+// command path so config files stay portable across machines. Thin wrapper over
+// paths.ExpandHome (the shared implementation).
 func expandPath(s string) string {
-	s = os.ExpandEnv(s)
-	switch {
-	case s == "~":
-		if home, err := os.UserHomeDir(); err == nil {
-			return home
-		}
-	case strings.HasPrefix(s, "~/"):
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, s[2:])
-		}
-	}
-	return s
+	return paths.ExpandHome(s)
 }
 
 // ProjectConfigPath returns the conventional location of a workspace's

@@ -211,12 +211,13 @@ func findAllDaemonPIDs() []int {
 		}
 	}
 
-	// 1. PID file.
-	if pid := readDaemonPID(); pid > 0 {
-		add(pid)
+	// 1. PID file — read once, reuse for the stale-file cleanup below.
+	filePID := readDaemonPID()
+	if filePID > 0 {
+		add(filePID)
 	}
 	// Clean up stale PID file if the recorded process is gone.
-	if filePID := readDaemonPID(); filePID > 0 && !seen[filePID] {
+	if filePID > 0 && !seen[filePID] {
 		_ = os.Remove(daemonPIDPath())
 	}
 

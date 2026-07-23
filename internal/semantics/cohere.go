@@ -67,5 +67,10 @@ func (c *cohere) Embed(ctx context.Context, texts []string) ([][]float32, error)
 	if len(er.Embeddings.Float) != len(texts) {
 		return nil, fmt.Errorf("semantics: cohere returned %d vectors for %d inputs", len(er.Embeddings.Float), len(texts))
 	}
+	for i, v := range er.Embeddings.Float {
+		if len(v) == 0 {
+			return nil, fmt.Errorf("semantics: cohere returned no vector for input %d", i)
+		}
+	}
 	return er.Embeddings.Float, nil
 }

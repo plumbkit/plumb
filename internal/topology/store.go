@@ -87,14 +87,34 @@ func (s *Store) Resync() {
 	s.idx.Enqueue("", opResync)
 }
 
+// nodeColumns is the SELECT projection shared by every Node-returning query in
+// this package. It must stay in sync with scanNode's Scan order.
+const nodeColumns = `n.id, n.kind, n.name, n.qualified, n.signature, n.docstring,
+	       n.start_line, n.end_line, n.language, f.path,
+	       n.has_bytes, n.start_byte, n.end_byte, n.start_col, n.end_col, n.doc_start_byte, n.doc_end_byte`
+
+// scanNode reads one topology_nodes row (projected via nodeColumns) into a Node.
+func scanNode(rows *sql.Rows) (Node, error) {
+	var n Node
+	var kind string
+	var hasBytes int
+	if err := rows.Scan(&n.ID, &kind, &n.Name, &n.Qualified, &n.Signature, &n.Docstring,
+		&n.StartLine, &n.EndLine, &n.Language, &n.Path,
+		&hasBytes, &n.StartByte, &n.EndByte, &n.StartCol, &n.EndCol, &n.DocStartByte, &n.DocEndByte); err != nil {
+		return Node{}, err
+	}
+	n.Kind = NodeKind(kind)
+	n.HasBytes = hasBytes != 0
+	return n, nil
+}
+
 // SymbolsInFile returns the indexed symbols for a single file, ordered by start
 // line. path may be absolute, a file:// URI, or workspace-relative. Returns an
 // empty slice (no error) when the file is not in the index.
 func (s *Store) SymbolsInFile(ctx context.Context, path string) ([]Node, error) {
 	rel := s.toRelative(paths.URIToPath(path))
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path,
-		       n.has_bytes, n.start_byte, n.end_byte, n.start_col, n.end_col, n.doc_start_byte, n.doc_end_byte
+		SELECT `+nodeColumns+`
 		FROM topology_nodes n
 		JOIN topology_files f ON f.id = n.file_id
 		WHERE f.path = ?
@@ -105,16 +125,10 @@ func (s *Store) SymbolsInFile(ctx context.Context, path string) ([]Node, error) 
 	defer rows.Close()
 	var out []Node
 	for rows.Next() {
-		var n Node
-		var kind string
-		var hasBytes int
-		if scanErr := rows.Scan(&kind, &n.Name, &n.Qualified, &n.Signature,
-			&n.StartLine, &n.EndLine, &n.Language, &n.Path,
-			&hasBytes, &n.StartByte, &n.EndByte, &n.StartCol, &n.EndCol, &n.DocStartByte, &n.DocEndByte); scanErr != nil {
+		n, scanErr := scanNode(rows)
+		if scanErr != nil {
 			continue
 		}
-		n.Kind = NodeKind(kind)
-		n.HasBytes = hasBytes != 0
 		out = append(out, n)
 	}
 	return out, rows.Err()
@@ -141,8 +155,7 @@ func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) 
 		want[d] = true
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.id, n.kind, n.name, n.qualified, n.signature, n.start_line, n.end_line, n.language, f.path,
-		       n.has_bytes, n.start_byte, n.end_byte, n.start_col, n.end_col, n.doc_start_byte, n.doc_end_byte
+		SELECT `+nodeColumns+`
 		FROM topology_nodes n
 		JOIN topology_files f ON f.id = n.file_id
 		WHERE n.kind = ?`, string(KindTest))
@@ -152,19 +165,13 @@ func (s *Store) TestsInDirs(ctx context.Context, dirs []string) ([]Node, error) 
 	defer rows.Close()
 	var out []Node
 	for rows.Next() {
-		var n Node
-		var kind string
-		var hasBytes int
-		if scanErr := rows.Scan(&n.ID, &kind, &n.Name, &n.Qualified, &n.Signature,
-			&n.StartLine, &n.EndLine, &n.Language, &n.Path,
-			&hasBytes, &n.StartByte, &n.EndByte, &n.StartCol, &n.EndCol, &n.DocStartByte, &n.DocEndByte); scanErr != nil {
+		n, scanErr := scanNode(rows)
+		if scanErr != nil {
 			continue
 		}
 		if !want[filepath.Dir(n.Path)] {
 			continue
 		}
-		n.Kind = NodeKind(kind)
-		n.HasBytes = hasBytes != 0
 		out = append(out, n)
 	}
 	return out, rows.Err()
@@ -190,8 +197,7 @@ func (s *Store) NodesByKind(ctx context.Context, kinds ...NodeKind) ([]Node, err
 	// never interpolated.
 	//nolint:gosec // G202: placeholders are bound-parameter markers, not user data.
 	query := `
-		SELECT n.kind, n.name, n.qualified, n.signature, n.docstring, n.start_line, n.end_line, n.language, f.path,
-		       n.has_bytes, n.start_byte, n.end_byte, n.start_col, n.end_col, n.doc_start_byte, n.doc_end_byte
+		SELECT ` + nodeColumns + `
 		FROM topology_nodes n
 		JOIN topology_files f ON f.id = n.file_id
 		WHERE n.kind IN (` + strings.Join(placeholders, ",") + `)
@@ -203,16 +209,10 @@ func (s *Store) NodesByKind(ctx context.Context, kinds ...NodeKind) ([]Node, err
 	defer rows.Close()
 	var out []Node
 	for rows.Next() {
-		var n Node
-		var kind string
-		var hasBytes int
-		if scanErr := rows.Scan(&kind, &n.Name, &n.Qualified, &n.Signature, &n.Docstring,
-			&n.StartLine, &n.EndLine, &n.Language, &n.Path,
-			&hasBytes, &n.StartByte, &n.EndByte, &n.StartCol, &n.EndCol, &n.DocStartByte, &n.DocEndByte); scanErr != nil {
+		n, scanErr := scanNode(rows)
+		if scanErr != nil {
 			continue
 		}
-		n.Kind = NodeKind(kind)
-		n.HasBytes = hasBytes != 0
 		out = append(out, n)
 	}
 	return out, rows.Err()

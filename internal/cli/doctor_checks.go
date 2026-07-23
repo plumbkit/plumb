@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
 )
@@ -258,16 +259,7 @@ func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
 // binary. plumb always writes an absolute path (os.Executable), so this only
 // matters for a config edited by hand to use ~ or an environment variable.
 func expandRegisteredPath(p string) string {
-	p = os.ExpandEnv(p)
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			if p == "~" {
-				return home
-			}
-			return filepath.Join(home, p[2:])
-		}
-	}
-	return p
+	return paths.ExpandHome(p)
 }
 
 // sameBinary reports whether two paths resolve to the same executable, comparing

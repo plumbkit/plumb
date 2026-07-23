@@ -159,5 +159,11 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	// Count by runes so a multi-byte character is never split mid-encoding
+	// (byte slicing s[:n] could land inside a UTF-8 sequence).
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "…"
 }

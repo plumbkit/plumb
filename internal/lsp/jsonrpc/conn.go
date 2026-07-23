@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -183,11 +184,11 @@ func IsMethodNotFound(err error) bool {
 		return false
 	}
 	var mnf *MethodNotFoundError
-	if errorsAs(err, &mnf) {
+	if errors.As(err, &mnf) {
 		return true
 	}
 	var we *wireError
-	if errorsAs(err, &we) {
+	if errors.As(err, &we) {
 		return we.Code == errCodeMethodNotFound
 	}
 	return false
@@ -447,7 +448,7 @@ func (c *Conn) handleServerRequest(req wireMessage) {
 	if err != nil {
 		code := errCodeInternal
 		var mnf *MethodNotFoundError
-		if errorsAs(err, &mnf) {
+		if errors.As(err, &mnf) {
 			code = errCodeMethodNotFound
 		}
 		resp.Error = &wireError{Code: code, Message: err.Error()}
@@ -468,24 +469,6 @@ func (c *Conn) handleServerRequest(req wireMessage) {
 		// read loop's EOF handler will close c.done shortly.
 		_ = err
 	}
-}
-
-// errorsAs is a tiny indirection so we can avoid importing "errors" in this
-// hot file just for As. Inlined As semantics.
-func errorsAs[T any](err error, target *T) bool {
-	for e := err; e != nil; {
-		if v, ok := e.(T); ok {
-			*target = v
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		if u, ok := e.(unwrapper); ok {
-			e = u.Unwrap()
-			continue
-		}
-		break
-	}
-	return false
 }
 
 // readMessage reads one LSP-framed JSON-RPC message from r.

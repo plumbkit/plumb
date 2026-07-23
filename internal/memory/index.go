@@ -8,10 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/paths"
 
 	_ "modernc.org/sqlite" // register the SQLite driver
 )
@@ -383,36 +384,7 @@ func sha256Hex(b []byte) string {
 // but it is still a derived index that must not be committed (the markdown files
 // are the source of truth). Best-effort; failure is non-fatal.
 func ensureMemoryGitignore(dir string) {
-	const header = "# plumb memory index (durable; rebuilt from memories/*.md; do not commit)"
-	entries := []string{"memory.db", "memory.db-wal", "memory.db-shm"}
-	path := filepath.Join(dir, ".gitignore")
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return
-	}
-	have := make(map[string]bool)
-	for line := range strings.SplitSeq(string(existing), "\n") {
-		have[strings.TrimSpace(line)] = true
-	}
-	var missing []string
-	for _, e := range entries {
-		if !have[e] {
-			missing = append(missing, e)
-		}
-	}
-	if len(missing) == 0 {
-		return
-	}
-	var b strings.Builder
-	b.Write(existing)
-	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
-		b.WriteByte('\n')
-	}
-	if !have[header] {
-		b.WriteString(header + "\n")
-	}
-	for _, e := range missing {
-		b.WriteString(e + "\n")
-	}
-	_ = os.WriteFile(path, []byte(b.String()), 0o644) //nolint:gosec // G306: .gitignore is a normal repo file
+	_ = paths.EnsureGitignoreEntries(dir,
+		"# plumb memory index (durable; rebuilt from memories/*.md; do not commit)",
+		[]string{"memory.db", "memory.db-wal", "memory.db-shm"})
 }

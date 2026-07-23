@@ -255,7 +255,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 
 	if s.OnBeforeTool != nil {
-		s.OnBeforeTool(ctx, params.Name, params.Arguments)
+		runHookSafely("OnBeforeTool", func() { s.OnBeforeTool(ctx, params.Name, params.Arguments) })
 	}
 
 	start := time.Now()
@@ -276,7 +276,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 			// calls.
 			afterText = ""
 		}
-		s.OnAfterTool(ctx, params.Name, params.Arguments, afterText, errMsg, dur, err != nil)
+		runHookSafely("OnAfterTool", func() {
+			s.OnAfterTool(ctx, params.Name, params.Arguments, afterText, errMsg, dur, err != nil)
+		})
 	}
 
 	type content struct {
@@ -298,12 +300,27 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		text = aliasNotice(warnings) + text
 	}
 	if s.EnrichToolOutput != nil {
-		text = s.EnrichToolOutput(ctx, params.Name, params.Arguments, text)
+		runHookSafely("EnrichToolOutput", func() {
+			text = s.EnrichToolOutput(ctx, params.Name, params.Arguments, text)
+		})
 	}
 	return okResp(req.ID, callResult{
 		Content: []content{{Type: "text", Text: text}},
 		IsError: false,
 	})
+}
+
+// runHookSafely runs an observability/enrichment hook, recovering from a panic
+// so a misbehaving hook cannot turn a successful tool call into a client-visible
+// -32603 and drop the real output. The tool's result is preserved unchanged
+// (an EnrichToolOutput panic leaves text at its pre-call value).
+func runHookSafely(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("mcp: tool hook panicked; ignoring", "hook", name, "panic", r)
+		}
+	}()
+	fn()
 }
 
 func readMessageLine(r *bufio.Reader, limit int) ([]byte, bool, error) {

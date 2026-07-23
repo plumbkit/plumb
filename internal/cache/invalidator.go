@@ -111,26 +111,10 @@ func (inv *Invalidator) WaitDiagnostics(ctx context.Context, uri string) ([]prot
 		inv.diagsMu.Unlock()
 		return out, nil
 	}
-	if inv.subs == nil {
-		inv.subs = make(map[string][]chan struct{})
-	}
-	inv.subs[uri] = append(inv.subs[uri], ch)
+	inv.subscribeLocked(uri, ch)
 	inv.diagsMu.Unlock()
 
-	defer func() {
-		inv.diagsMu.Lock()
-		chans := inv.subs[uri]
-		for i, c := range chans {
-			if c == ch {
-				inv.subs[uri] = append(chans[:i], chans[i+1:]...)
-				break
-			}
-		}
-		if len(inv.subs[uri]) == 0 {
-			delete(inv.subs, uri)
-		}
-		inv.diagsMu.Unlock()
-	}()
+	defer inv.unsubscribe(uri, ch)
 
 	select {
 	case <-ctx.Done():
@@ -152,32 +136,42 @@ func (inv *Invalidator) WaitNextDiagnostics(ctx context.Context, uri string) ([]
 	ch := make(chan struct{}, 1)
 
 	inv.diagsMu.Lock()
-	if inv.subs == nil {
-		inv.subs = make(map[string][]chan struct{})
-	}
-	inv.subs[uri] = append(inv.subs[uri], ch)
+	inv.subscribeLocked(uri, ch)
 	inv.diagsMu.Unlock()
 
-	defer func() {
-		inv.diagsMu.Lock()
-		chans := inv.subs[uri]
-		for i, c := range chans {
-			if c == ch {
-				inv.subs[uri] = append(chans[:i], chans[i+1:]...)
-				break
-			}
-		}
-		if len(inv.subs[uri]) == 0 {
-			delete(inv.subs, uri)
-		}
-		inv.diagsMu.Unlock()
-	}()
+	defer inv.unsubscribe(uri, ch)
 
 	select {
 	case <-ctx.Done():
 		return inv.Diagnostics(uri), ctx.Err()
 	case <-ch:
 		return inv.Diagnostics(uri), nil
+	}
+}
+
+// subscribeLocked registers ch as a one-shot waiter for uri's next diagnostics
+// notification. The caller must hold diagsMu.
+func (inv *Invalidator) subscribeLocked(uri string, ch chan struct{}) {
+	if inv.subs == nil {
+		inv.subs = make(map[string][]chan struct{})
+	}
+	inv.subs[uri] = append(inv.subs[uri], ch)
+}
+
+// unsubscribe removes ch from uri's waiter list, dropping the map entry when the
+// last waiter leaves. It acquires diagsMu, so the caller must not hold it.
+func (inv *Invalidator) unsubscribe(uri string, ch chan struct{}) {
+	inv.diagsMu.Lock()
+	defer inv.diagsMu.Unlock()
+	chans := inv.subs[uri]
+	for i, c := range chans {
+		if c == ch {
+			inv.subs[uri] = append(chans[:i], chans[i+1:]...)
+			break
+		}
+	}
+	if len(inv.subs[uri]) == 0 {
+		delete(inv.subs, uri)
 	}
 }
 

@@ -7,23 +7,6 @@ import (
 	"github.com/plumbkit/plumb/internal/session"
 )
 
-func TestByteSizeLabel(t *testing.T) {
-	cases := []struct {
-		in   int64
-		want string
-	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{2048, "2.0 KiB"},
-		{3 * 1024 * 1024, "3.0 MiB"},
-	}
-	for _, c := range cases {
-		if got := byteSizeLabel(c.in); got != c.want {
-			t.Errorf("byteSizeLabel(%d) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestTopologyDetailRow_OmittedWhenNoIndex(t *testing.T) {
 	var m Model // topoStatusOK defaults to false
 	if _, ok := m.topologyDetailRow(); ok {

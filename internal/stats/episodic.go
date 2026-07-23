@@ -1,7 +1,9 @@
 package stats
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -62,8 +64,13 @@ func (d *DB) LatestEpisodic(workspace string) (Episodic, bool, error) {
 		LIMIT 1`, workspace)
 	err := row.Scan(&e.Workspace, &e.SessionID, &e.SessionName, &genMS, &e.Summary,
 		&touched, &e.ReadCount, &e.WriteCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Episodic{}, false, nil // genuinely absent
+	}
 	if err != nil {
-		return Episodic{}, false, nil // no rows or read error → treat as absent
+		// A real read error (schema/driver mismatch, corruption) is not "absent":
+		// surface it so it is diagnosable rather than masquerading as no summary.
+		return Episodic{}, false, fmt.Errorf("stats: latest episodic: %w", err)
 	}
 	e.GeneratedAt = time.UnixMilli(genMS)
 	_ = json.Unmarshal([]byte(touched), &e.TouchedFiles)

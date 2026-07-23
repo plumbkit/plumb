@@ -3,6 +3,7 @@ package stats
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -101,6 +102,9 @@ func (d *DB) Summary(filter Filter) ([]ToolStat, error) {
 		var lastMs int64
 		var totalIn, totalOut int64
 		if err := rows.Scan(&s.Tool, &s.Calls, &s.AvgMs, &totalIn, &totalOut, &s.Errors, &lastMs, &s.CapabilityTokens, &s.EfficiencyTokens, &s.TokensSaved); err != nil {
+			// Dropping a row silently hides a schema/driver mismatch. Warn so it is
+			// visible rather than a whole tool's stats quietly vanishing.
+			slog.Warn("stats: summary row scan failed; skipping tool", "err", err)
 			continue
 		}
 		s.TotalInputKB = float64(totalIn) / 1024

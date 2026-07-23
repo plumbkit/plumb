@@ -192,7 +192,7 @@ func (r *Runner) store(path string, findings []Finding) {
 // format renders findings as a compact code-quality section string.
 // Returns "" when there are no findings.
 func (r *Runner) format(findings []Finding) string {
-	capped := cap(findings, r.cfg.maxPerFile())
+	capped := capFindings(findings, r.cfg.maxPerFile())
 	if len(capped) == 0 {
 		return ""
 	}
@@ -276,10 +276,10 @@ func stale(path string, cachedAt time.Time) bool {
 	return info.ModTime().After(cachedAt)
 }
 
-// cap limits findings to max per file.
-func cap(findings []Finding, max int) []Finding {
-	if max <= 0 || len(findings) <= max {
+// capFindings limits findings to limit per file.
+func capFindings(findings []Finding, limit int) []Finding {
+	if limit <= 0 || len(findings) <= limit {
 		return findings
 	}
-	return findings[:max]
+	return findings[:limit]
 }

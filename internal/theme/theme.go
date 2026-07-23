@@ -10,7 +10,10 @@
 // concurrent use.
 package theme
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // Palette is the full set of colour tokens for one theme, expressed as hex
 // strings. The semantic naming answers "what is this colour FOR?", mirroring
@@ -124,12 +127,17 @@ var palettes = map[string]Palette{
 
 // Get returns the palette for name, falling back to Default when name is empty
 // or unknown. The boolean reports whether name matched a known theme.
+//
+// The returned Cats slice is a copy: the catalogue palettes share package-level
+// backing arrays (catsDark/catsLight), so handing out the alias would let one
+// caller's in-place mutation corrupt the palette for everyone.
 func Get(name string) (Palette, bool) {
 	p, ok := palettes[name]
 	if !ok {
-		return palettes[Default], false
+		p = palettes[Default]
 	}
-	return p, true
+	p.Cats = slices.Clone(p.Cats)
+	return p, ok
 }
 
 // Names returns the sorted catalogue of palette names. It matches the TUI's

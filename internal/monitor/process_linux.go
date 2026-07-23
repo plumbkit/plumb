@@ -4,6 +4,7 @@ package monitor
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,10 @@ func readProcessMetrics(pid int) (processMetrics, error) {
 		return out, err
 	}
 	if err := readLinuxCPUTime(pid, &out); err != nil {
+		// CPU time is best-effort: a parse failure leaves CPUTimeAvailable=false
+		// rather than failing the whole sample. Surface it at debug so a persistent
+		// /proc/<pid>/stat format mismatch is diagnosable instead of silent.
+		slog.Debug("monitor: CPU time unavailable", "pid", pid, "err", err)
 		return out, nil
 	}
 	return out, nil
