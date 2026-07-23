@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.12.3 (2026-07-23)
+
+### Added
+
+- **`move_symbol` — relocate a declaration between files.** Atomically moves a
+  whole top-level declaration (function, method, type, const/var) to another
+  file in the same package: dry-run by default with a both-file preview, the
+  leading doc comment carried by default, and an all-or-nothing two-file write
+  that rolls the source back if the destination write fails. Resolves the
+  symbol via the LSP with a tree-sitter fallback. Honest boundary: a move that
+  would change reference semantics (another directory or Go package) is
+  refused rather than half-done — import/reference fix-up is the deliberate
+  next line. Follow-up polish in the same release: removal-seam whitespace is
+  normalised, same-directory Go files with differing `//go:build` constraint
+  sets refuse the move, and the two-call `undo_edit` revert sequence is
+  documented. Tool count is now 61. (#27)
+- **`plumb enable-lsp <language>` — live-enable a language server without a
+  daemon restart.** A new control-socket command (peer of `log-level`) flips
+  the running daemon's resolved config and refreshes the effective language
+  set (copy-on-write, race-clean), so the server attaches lazily on the next
+  matching file. Existing sessions are untouched — pinned by test. Like
+  `log-level`, the change is daemon-lifetime: persist it in config for
+  restarts. Closes the last open 0.14 roadmap item.
+
+### Fixed
+
+- **A language server whose first start fails slowly now self-heals.** When
+  the failure lands after the warm-up grace, the pool drains the abandoned
+  ready signal and evicts the dead entry, so the next tool call attempts a
+  fresh start instead of forever reusing a broken entry that the structural
+  fallback quietly masked. The same cure applies to `restartSwift` — a woken
+  SourceKit-LSP whose restart fails after the grace is evicted rather than
+  reused.
+
+### Changed
+
+- `edit_file` and the tool docs now steer whole-declaration changes toward the
+  coordinate-free symbol-edit family (`replace_symbol_body`,
+  `insert_before_symbol`/`insert_after_symbol`, `safe_delete_symbol`). (#28)
+- New standing guards: in-process tool→tool `Execute` compositions are pinned
+  to canonical parameter names (the alias engine resolves only at the dispatch
+  boundary), and the `read_symbol` cold-LSP fallback's bare and dotted
+  method-name resolution is pinned by test.
+
+- Low-severity audit housekeeping (#69, 13 of 16 items): shared gitignore/
+  home-path/byte-size helpers, a unified topology row scanner, the errorsAs
+  and itoa reimplementations dropped, a builtin-shadowing `cap` renamed,
+  rune-safe search truncation, and better observability — CPU/stats/episodic
+  errors logged instead of swallowed, MCP tool hooks run under panic
+  recovery, cohere embeddings guard empty vectors, and `theme.Get` returns a
+  defensive copy. The atomic-write and sqlite-open unifications are deferred
+  to their own passes.
+
+### Docs
+
+- The website's review-quote introduction now describes the quotes as curated
+  ("From agent end-of-session feedback, lightly edited for length") instead of
+  implying verbatim publication of private session material.
+
 ## 0.12.2 (2026-07-23)
 
 ### Added
