@@ -2,10 +2,13 @@ package jsonrpc
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -128,6 +131,192 @@ func TestConn_Notify_ContextCancelUnblocks(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Notify did not unblock after context cancel — the send is still synchronous")
+	}
+}
+
+// syncBuffer is a concurrency-safe io.Writer wrapping bytes.Buffer. Handing
+// slog a plain bytes.Buffer is only safe when nothing else touches it
+// concurrently; TestConn_NotifyInFlight_WarnHysteresis reads the buffer from
+// the test goroutine while background send goroutines may still be logging
+// to it, so both sides need to go through the same lock.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitForNotifyInFlight polls conn's notifyInFlight counter until it equals
+// want or the deadline passes. The counter is updated from background send
+// goroutines (see sendCtx's trackNotify parameter), so tests must poll for
+// it rather than assert immediately after a call returns.
+func waitForNotifyInFlight(t *testing.T, conn *Conn, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if n := conn.notifyInFlightCount(); n == want {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("notifyInFlightCount = %d, want %d", n, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestConn_NotifyInFlight_RoundTrip verifies notifyInFlightStart/Done pair up
+// correctly on the ordinary path: the counter rises while a background send
+// is outstanding and settles back to zero once every send completes, across
+// several notifications. This is the everyday case the observability counter
+// must never disturb — Notify's return value and timing are unaffected.
+func TestConn_NotifyInFlight_RoundTrip(t *testing.T) {
+	dr, dw := io.Pipe() // conn's read side; closed at the end so readLoop exits
+	defer dw.Close()
+	cr, cw := io.Pipe() // conn writes here; drained below so each Notify completes promptly
+	conn := NewConn(dr, cw)
+	defer conn.Close()
+
+	const n = 5
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		br := bufio.NewReader(cr)
+		for i := 0; i < n; i++ {
+			if _, err := readMessage(br); err != nil {
+				return
+			}
+		}
+	}()
+
+	if got := conn.notifyInFlightCount(); got != 0 {
+		t.Fatalf("notifyInFlightCount before any Notify = %d, want 0", got)
+	}
+
+	for i := 0; i < n; i++ {
+		if err := conn.Notify(context.Background(), "textDocument/didChange", map[string]int{"i": i}); err != nil {
+			t.Fatalf("Notify %d: %v", i, err)
+		}
+	}
+
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for frames to drain")
+	}
+
+	waitForNotifyInFlight(t, conn, 0)
+}
+
+// TestConn_NotifyInFlight_WarnHysteresis verifies the notifyInFlight
+// observability counter (see sendCtx's trackNotify parameter and the
+// notifyInFlightWarnThreshold doc comment) crosses the threshold and logs
+// exactly one slog.Warn naming the connection, method, and count, then
+// re-arms only once the count has drained back below half the threshold —
+// so a second, independent stall logs a second warning rather than the
+// latch staying silenced forever or spamming on every notification above
+// the line. No send is ever dropped or blocked: every background send this
+// test starts is later drained and completes normally.
+func TestConn_NotifyInFlight_WarnHysteresis(t *testing.T) {
+	// slog's commonHandler serialises concurrent Handle calls internally, but
+	// that only protects slog's own writes — this test also reads the buffer
+	// from the test goroutine while background sends may still be logging, so
+	// the buffer itself needs its own lock too.
+	var logBuf syncBuffer
+	prevLog := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prevLog) })
+
+	dr, dw := io.Pipe() // conn's read side; closed at the end so readLoop exits
+	defer dw.Close()
+	cr, cw := io.Pipe() // conn writes here; nobody reads until draining phases below
+	conn := NewConn(dr, cw)
+	defer conn.Close()
+
+	// fireStalledNotifies issues n concurrent Notify calls with an
+	// already-cancelled context, mirroring TestConn_Notify_ContextCancelUnblocks:
+	// each Notify call returns immediately via the ctx.Done() branch of sendCtx,
+	// while its background send goroutine keeps running and blocks on the
+	// stalled pipe — exactly the wedged-server-plus-sustained-writes scenario
+	// the counter exists to surface.
+	fireStalledNotifies := func(n int) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_ = conn.Notify(ctx, "textDocument/didChange", map[string]int{"i": i})
+			}(i)
+		}
+		wg.Wait()
+	}
+
+	countWarnings := func() int {
+		return strings.Count(logBuf.String(), "many notify sends in flight")
+	}
+
+	// waitForWarnings polls rather than asserting right after
+	// waitForNotifyInFlight: observing the counter hit its target only proves
+	// every goroutine's atomic increment has happened, not that the specific
+	// goroutine whose increment crossed the threshold has gone on to execute
+	// its (sequentially later, same-goroutine) slog.Warn call yet.
+	waitForWarnings := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			if got := countWarnings(); got == want {
+				return
+			} else if time.Now().After(deadline) {
+				t.Fatalf("warnings = %d, want %d (log:\n%s)", got, want, logBuf.String())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	// Phase 1: pile up notifyInFlightWarnThreshold blocked sends and confirm
+	// exactly one warning fires — not zero, not one per notification above
+	// the line.
+	fireStalledNotifies(notifyInFlightWarnThreshold)
+	waitForNotifyInFlight(t, conn, int64(notifyInFlightWarnThreshold))
+	waitForWarnings(1)
+
+	// Drain every pending send by reading its frame off the wire. This
+	// unblocks all notifyInFlightWarnThreshold background sends (each send()
+	// call was holding wrMu or waiting for it; the mutex serialises them one
+	// frame at a time) and drops the counter to zero — well below half the
+	// threshold — so the hysteresis latch re-arms.
+	br := bufio.NewReader(cr)
+	for i := 0; i < notifyInFlightWarnThreshold; i++ {
+		if _, err := readMessage(br); err != nil {
+			t.Fatalf("draining frame %d: %v", i, err)
+		}
+	}
+	waitForNotifyInFlight(t, conn, 0)
+	// Draining must never itself log — only crossing the threshold does.
+	if got := countWarnings(); got != 1 {
+		t.Fatalf("warnings after draining below half = %d, want still 1", got)
+	}
+
+	// Phase 2: stall again — nobody reads cr this time, so the count crosses
+	// the threshold a second time. A second, distinct warning must fire,
+	// proving the latch re-armed rather than staying silenced.
+	fireStalledNotifies(notifyInFlightWarnThreshold)
+	waitForNotifyInFlight(t, conn, int64(notifyInFlightWarnThreshold))
+	waitForWarnings(2)
+
+	if !strings.Contains(logBuf.String(), "textDocument/didChange") {
+		t.Fatalf("warning did not name the method; log:\n%s", logBuf.String())
 	}
 }
 

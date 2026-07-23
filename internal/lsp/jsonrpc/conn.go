@@ -23,6 +23,15 @@ import (
 // which is the most common cause of an LSP tool appearing to hang.
 const slowCallThreshold = 2 * time.Second
 
+// notifyInFlightWarnThreshold is the number of concurrently in-flight
+// background Notify-send goroutines (see Notify and sendCtx's trackNotify
+// parameter) above which the server is presumed wedged and a single
+// slog.Warn is emitted. Ordinary bursts of notifications (e.g. a flurry of
+// didChange calls) stay well under this; only a stalled pipe under
+// sustained write pressure accumulates this many un-drained sends. This is
+// purely observability — no send is ever capped, dropped, or delayed by it.
+const notifyInFlightWarnThreshold = 64
+
 // Caller abstracts the JSON-RPC connection so adapters can be tested with a
 // mock without spawning a real process.
 // Concurrency: all methods must be safe for concurrent use.
@@ -102,6 +111,20 @@ type Conn struct {
 
 	done chan struct{}
 	once sync.Once
+
+	// notifyInFlight counts background send goroutines currently in flight for
+	// Notify (see sendCtx's trackNotify parameter). It exists purely so a
+	// pathological stall — a wedged server plus sustained notification
+	// traffic — is visible via a log line instead of silently accumulating
+	// goroutines with no signal. It never gates or delays a send.
+	notifyInFlight atomic.Int64
+	// notifyWarnArmed latches true once notifyInFlight has crossed
+	// notifyInFlightWarnThreshold and the warning has fired, so repeated
+	// crossings while the stall continues don't spam the log. It re-arms
+	// (resets to false) once notifyInFlight drops back below half the
+	// threshold — hysteresis so a count oscillating right at the threshold
+	// doesn't flap the warning on and off.
+	notifyWarnArmed atomic.Bool
 }
 
 // notifyItem is one server notification queued for in-order delivery.
@@ -225,7 +248,7 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 		ID:      rawID,
 		Method:  method,
 		Params:  encoded,
-	}); err != nil {
+	}, false); err != nil {
 		return err
 	}
 
@@ -264,7 +287,7 @@ func (c *Conn) cancelRequest(id json.RawMessage) {
 	if err != nil {
 		return
 	}
-	_ = c.sendCtx(context.Background(), wireMessage{JSONRPC: "2.0", Method: "$/cancelRequest", Params: params})
+	_ = c.sendCtx(context.Background(), wireMessage{JSONRPC: "2.0", Method: "$/cancelRequest", Params: params}, false)
 }
 
 // Notify sends a notification (no ID, no response expected).
@@ -281,7 +304,7 @@ func (c *Conn) Notify(ctx context.Context, method string, params any) error {
 		return fmt.Errorf("jsonrpc notify %s: marshaling params: %w", method, err)
 	}
 	msg := wireMessage{JSONRPC: "2.0", Method: method, Params: encoded}
-	return c.sendCtx(ctx, msg)
+	return c.sendCtx(ctx, msg, true)
 }
 
 // Close signals the connection to stop. It does not close the underlying
@@ -308,14 +331,28 @@ var writeStallTimeout = 15 * time.Second
 // pool tear it down — rather than leaving the held write lock to wedge every
 // future call (which no ctx deadline could rescue, since acquiring the lock
 // precedes the ctx-aware select).
-func (c *Conn) sendCtx(ctx context.Context, msg wireMessage) error {
+//
+// trackNotify marks the spawned goroutine as one of Notify's background
+// sends for the notifyInFlight observability counter (see the Conn field
+// doc and notifyInFlightStart/Done). Only Notify passes true — Call,
+// cancelRequest, and server-request responses are not counted, matching the
+// pathological scenario the counter targets: a wedged server plus sustained
+// notification traffic. Purely additive bookkeeping; it never changes what
+// this function sends, blocks on, or returns.
+func (c *Conn) sendCtx(ctx context.Context, msg wireMessage, trackNotify bool) error {
 	select {
 	case <-c.done:
 		return fmt.Errorf("jsonrpc: connection closed")
 	default:
 	}
 	errc := make(chan error, 1)
-	go func() { errc <- c.send(msg) }()
+	go func() {
+		if trackNotify {
+			c.notifyInFlightStart(msg.Method)
+			defer c.notifyInFlightDone()
+		}
+		errc <- c.send(msg)
+	}()
 	timer := time.NewTimer(writeStallTimeout)
 	defer timer.Stop()
 	select {
@@ -330,6 +367,41 @@ func (c *Conn) sendCtx(ctx context.Context, msg wireMessage) error {
 		_ = c.Close()
 		return fmt.Errorf("jsonrpc: write stalled after %s, connection closed", writeStallTimeout)
 	}
+}
+
+// notifyInFlightStart records that a background Notify-send goroutine has
+// started and, when the in-flight count crosses notifyInFlightWarnThreshold,
+// logs a single slog.Warn naming this connection and the notification
+// method that tipped it over. notifyWarnArmed provides the hysteresis: once
+// armed, no further warning fires until notifyInFlightDone re-arms it by
+// observing the count drop below half the threshold — so a sustained stall
+// logs once, not once per notification.
+func (c *Conn) notifyInFlightStart(method string) {
+	n := c.notifyInFlight.Add(1)
+	if n >= notifyInFlightWarnThreshold && c.notifyWarnArmed.CompareAndSwap(false, true) {
+		slog.Warn("jsonrpc: many notify sends in flight — server may be wedged",
+			"conn", fmt.Sprintf("%p", c), "method", method, "in_flight", n, "threshold", notifyInFlightWarnThreshold)
+	}
+}
+
+// notifyInFlightDone records that a background Notify-send goroutine has
+// exited (its write finally completed, or the connection closed under it)
+// and re-arms the warning once the count has drained back below half
+// notifyInFlightWarnThreshold.
+func (c *Conn) notifyInFlightDone() {
+	n := c.notifyInFlight.Add(-1)
+	if n < notifyInFlightWarnThreshold/2 {
+		c.notifyWarnArmed.CompareAndSwap(true, false)
+	}
+}
+
+// notifyInFlightCount returns the current number of background Notify sends
+// that have not yet completed. Unexported: nothing in Conn's exported
+// surface exposes runtime stats today, and this exists to let tests observe
+// notifyInFlightStart/Done without a race; add an exported accessor if a
+// real introspection need arises.
+func (c *Conn) notifyInFlightCount() int64 {
+	return c.notifyInFlight.Load()
 }
 
 func (c *Conn) send(msg wireMessage) error {
@@ -464,7 +536,7 @@ func (c *Conn) handleServerRequest(req wireMessage) {
 			}
 		}
 	}
-	if err := c.sendCtx(context.Background(), resp); err != nil {
+	if err := c.sendCtx(context.Background(), resp, false); err != nil {
 		// We can't do anything useful here; the connection is dying. The
 		// read loop's EOF handler will close c.done shortly.
 		_ = err
