@@ -17,10 +17,11 @@ import (
 
 // This file holds the pool's dynamic-resource-manager concern: idle hibernation
 // of heavyweight language servers, LRU eviction, the janitor goroutine, live
-// PID/RSS reporting, and jdtls-data cache pruning. The acquire/release/teardown
-// lifecycle and pool state live in pool.go; the poolLifecycle type and
-// poolEntry.state are declared there, and the activity timestamp on
-// clientProxy.lastUsed (proxy.go).
+// PID/RSS reporting, and jdtls-data cache pruning. The acquire/release/pin
+// paths and pool state live in pool.go; entry teardown (idle-grace reaping,
+// first-start failure eviction, daemon-wide close) lives in pool_lifecycle.go;
+// the poolLifecycle type and poolEntry.state are declared in pool.go, and the
+// activity timestamp on clientProxy.lastUsed (proxy.go).
 
 // lspStatusReport renders one tab-separated line per pooled language server —
 // language, root, lifecycle state, PID, RSS bytes, idle seconds, and the
