@@ -535,14 +535,18 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 }
 
 // TestShutdownHardDeadlineExceedsInnerGraces guards that the shutdown watchdog
-// stays a genuine last resort: it must allow the sequential bounded teardown
-// (connection drain + pool.close handshake) to finish with headroom for the
-// still-unbounded topology/supervisor stops, so it never force-exits — and
-// truncates a topology resync — during a slow-but-normal shutdown.
+// stays a genuine last resort: the sum of every bounded step on the orderly
+// teardown path — the connection drain, the git-write drain, the topology
+// indexer stops, the LSP handshake, and the supervisor stops — must be strictly
+// under the watchdog deadline, so a slow-but-normal shutdown never trips it and
+// truncates a topology resync. Every step is now individually bounded (the
+// topology/supervisor stops were previously unbounded), so this arithmetic is
+// the proof the orderly path is provably under the deadline.
 func TestShutdownHardDeadlineExceedsInnerGraces(t *testing.T) {
-	if shutdownHardDeadline <= acceptDrainGrace+poolCloseGrace {
-		t.Fatalf("shutdownHardDeadline (%s) must exceed acceptDrainGrace+poolCloseGrace (%s) so the watchdog does not trip during a slow-but-normal shutdown",
-			shutdownHardDeadline, acceptDrainGrace+poolCloseGrace)
+	orderly := acceptDrainGrace + gitWriteDrainGrace + topoStopAllGrace + poolCloseGrace + supStopGrace
+	if orderly >= shutdownHardDeadline {
+		t.Fatalf("orderly bounded teardown (%s = acceptDrainGrace+gitWriteDrainGrace+topoStopAllGrace+poolCloseGrace+supStopGrace) must be strictly under shutdownHardDeadline (%s) so the watchdog only ever fires on a genuine wedge",
+			orderly, shutdownHardDeadline)
 	}
 }
 

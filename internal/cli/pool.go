@@ -218,6 +218,16 @@ const firstStartGrace = 2 * time.Second
 // (shutdownHardDeadline) is the outer backstop.
 const poolCloseGrace = 2 * time.Second
 
+// supStopGrace is the extra budget, beyond the poolCloseGrace handshake, that
+// pool.close() allows the per-entry teardown goroutines (whose blocking step is
+// the otherwise-unbounded sup.Stop() — it waits on the supervisor loop goroutine
+// to observe context cancellation and reap the killed process) before it is
+// abandoned via waitWithTimeout. sup.Stop() completes in microseconds for a
+// healthy supervisor; this only ever expires on a wedge. The pool.close() outer
+// wait is therefore poolCloseGrace + supStopGrace, kept well under the shutdown
+// watchdog — see shutdownHardDeadline.
+const supStopGrace = 1 * time.Second
+
 // janitorInterval is how often the hibernation janitor scans for idle servers.
 // Coarse relative to idle_timeout (minutes), so it adds negligible overhead.
 const janitorInterval = 60 * time.Second
@@ -632,7 +642,19 @@ func (p *workspacePool) close() {
 			e.closeOnce.Do(func() { closeEntry(ctx, e) })
 		}()
 	}
-	wg.Wait()
+	// Bound the aggregate wait: the entries close concurrently, so the whole set
+	// finishes within one poolCloseGrace handshake + one supStopGrace supervisor
+	// stop even when several are torn down at once. A wedged entry is abandoned
+	// (and logged) rather than blocking daemon exit until the watchdog forces it —
+	// the process is exiting, so the leaked goroutine and its child are reclaimed
+	// by exit. closeEntry stays unbounded when called from the idle-teardown path
+	// (reapEntry), where the daemon keeps running and must not leak a server.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	waitWithTimeout(done, poolCloseGrace+supStopGrace, "lsp pool")
 }
 
 // closeEntry shuts down a single pool entry: a best-effort bounded LSP

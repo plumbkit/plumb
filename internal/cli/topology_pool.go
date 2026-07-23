@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
@@ -135,17 +136,53 @@ func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 	slog.Info("topology: reconfigured via config reload", "roots", len(p.stores))
 }
 
-// StopAll stops all running indexers. Called by the daemon on shutdown.
+// topoStopAllGrace bounds StopAll's aggregate wait for every topology store to
+// close. Store.Close() -> Indexer.Stop() waits on the background worker to drain
+// its current operation (a resync or a per-file extract), which is otherwise
+// unbounded: a wedged indexer would make the shutdown watchdog the only way out.
+// Stores are closed concurrently, so this one budget covers the whole pool. A
+// healthy indexer stops in microseconds; this only ever expires on a wedge, and
+// then the store is abandoned (WAL-safe) rather than stalling daemon exit. Kept
+// well under the shutdown watchdog — see shutdownHardDeadline.
+const topoStopAllGrace = 2 * time.Second
+
+// StopAll stops all running indexers. Called by the daemon on shutdown. Stores
+// are closed concurrently under a single bounded wait (topoStopAllGrace): a
+// wedged indexer is abandoned — and logged — rather than blocking daemon exit
+// until the watchdog forces it, since the process is exiting and the leaked
+// worker goroutine is reclaimed by exit. The map is snapshotted and cleared
+// under the lock, then Close runs outside it (Close blocks on the indexer drain,
+// which must not be held under p.mu).
 func (p *topologyPool) StopAll() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	stores := make([]*topology.Store, 0, len(p.stores))
 	for root, s := range p.stores {
-		if err := s.Close(); err != nil {
-			slog.Warn("topology: close store", "root", root, "err", err)
-		}
+		stores = append(stores, s)
 		delete(p.stores, root)
 		delete(p.cfgs, root)
 	}
+	p.mu.Unlock()
+
+	if len(stores) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, s := range stores {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.Close(); err != nil {
+				slog.Warn("topology: close store", "err", err)
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	waitWithTimeout(done, topoStopAllGrace, "topology pool")
 }
 
 // extractorCtors maps a language name to its structural-extractor constructor.

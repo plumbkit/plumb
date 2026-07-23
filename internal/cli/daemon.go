@@ -87,15 +87,24 @@ const gitWriteDrainGrace = 2 * time.Second
 // language server or a mid-resync can never leave the daemon hanging and
 // holding the lifetime lock.
 //
-// It is derived from the inner graces so it stays a genuine last resort. The
-// orderly path runs the connection drain and the pool.close handshake
-// sequentially (acceptDrainGrace + poolCloseGrace) and then the still-unbounded
-// topology/supervisor stops. A flat 5s left under 1s of headroom for those
-// unbounded steps, so a slow-but-normal shutdown could trip the watchdog and
-// truncate a topology resync (WAL-safe, but the resync is lost). The added
-// headroom covers the normal unbounded teardown while still bounding a
-// genuinely wedged step. Bounding the topology/supervisor stops outright (so
-// the orderly path is provably under this deadline) is tracked internally.
+// It is derived from the inner graces so it stays a genuine last resort. Every
+// step of the orderly path is now itself bounded, so the total is provably
+// under this deadline (the watchdog only ever fires on a genuine wedge):
+//
+//	acceptDrainGrace   (2s) — connection drain          (accept loop)
+//	gitWriteDrainGrace (2s) — in-flight git write drain  (accept loop)
+//	topoStopAllGrace   (2s) — topology indexer stops     (topologyPool.StopAll)
+//	poolCloseGrace     (2s) — LSP shutdown handshake     (workspacePool.close)
+//	supStopGrace       (1s) — supervisor stops           (workspacePool.close)
+//	                   ----
+//	                    9s  < shutdownHardDeadline (10s) — 1s slack
+//
+// The topology-indexer and LSP-supervisor stops used to be unbounded — a wedged
+// indexer or supervisor made the watchdog the only way out, and a slow-but-normal
+// shutdown could trip it and truncate a topology resync (WAL-safe, but lost).
+// They are now wrapped in waitWithTimeout at their shutdown call sites, so an
+// abandoned-but-logged component at process exit replaces the silent infinite
+// wait. TestShutdownHardDeadlineExceedsInnerGraces pins the sum below.
 const shutdownHardDeadline = acceptDrainGrace + gitWriteDrainGrace + poolCloseGrace + 4*time.Second
 
 // armShutdownWatchdog forces process exit shutdownHardDeadline after ctx is
@@ -127,6 +136,27 @@ func drainConnections(wg *sync.WaitGroup, d time.Duration) bool {
 	case <-done:
 		return true
 	case <-time.After(d):
+		return false
+	}
+}
+
+// waitWithTimeout blocks until done is closed or d elapses, returning true when
+// the component stopped in time and false — after logging a warn that names it —
+// when it did not. It is the bounded-teardown primitive the orderly-shutdown
+// call sites (topologyPool.StopAll, workspacePool.close) wrap around an
+// otherwise-unbounded component stop, so a wedged indexer or supervisor is
+// abandoned at its budget instead of blocking until the shutdown watchdog forces
+// a hard exit. Abandoning is safe only because the process is exiting: the
+// leaked goroutine (and any child process the supervisor still owns) is reclaimed
+// by process exit, which the watchdog guarantees. A healthy component closes done
+// in microseconds, so the warn only ever fires on a genuine wedge — never on a
+// normal stop.
+func waitWithTimeout(done <-chan struct{}, d time.Duration, what string) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		slog.Warn("daemon: shutdown step did not finish within its budget; abandoning it (process is exiting)", "step", what, "budget", d)
 		return false
 	}
 }
