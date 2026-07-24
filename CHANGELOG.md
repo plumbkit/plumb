@@ -2,6 +2,15 @@
 
 ## 0.15.0 (unreleased)
 
+### Fixed
+
+- **`go install`-built binaries now report their real version.** Only
+  GoReleaser/Makefile builds stamp the version via ldflags, so
+  `go install github.com/plumbkit/plumb/cmd/plumb@latest` reported
+  `plumb dev`. The "dev" fallback now upgrades itself with the module
+  version Go embeds in the binary (`debug.ReadBuildInfo`); the ldflags
+  stamp still wins, and source builds (`go run`, workspace) still say dev.
+
 ## 0.14.0 (2026-07-25)
 
 ### Added
