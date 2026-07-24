@@ -29,7 +29,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint check-size verify run clean tidy install install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog
+.PHONY: build web-ui test test-race integration-test build-integration lint check-size verify run clean tidy install install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -173,6 +173,24 @@ ts-wasm:
 # Dev-only — requires `zig`; building/running plumb needs only Go + wazero.
 swift-wasm:
 	bash internal/topology/extractors/wasmts/csrc/build-swift.sh
+
+# demo-gif records docs/demos/daemon-respawn.sh headlessly and renders it to
+# docs/assets/daemon-respawn.gif (the README's crash-resilience demo asset).
+# Dev-only — requires `asciinema` and `agg` (brew install agg / AUR
+# asciinema-agg-bin); the demo itself needs only bash + python3 + the built
+# binary. Deterministic size via --window-size; --speed/--last-frame-duration
+# tune readability. Idempotent — rerun after changing the demo script.
+demo-gif: build
+	@command -v asciinema >/dev/null || { echo "demo-gif: asciinema not installed"; exit 1; }
+	@command -v agg >/dev/null || { echo "demo-gif: agg not installed"; exit 1; }
+	@mkdir -p docs/assets
+	rm -f .testcache/demo.cast
+	PLUMB_BIN=$(CURDIR)/$(BINARY) asciinema rec --window-size 96x28 \
+		--command='./docs/demos/daemon-respawn.sh' .testcache/demo.cast
+	agg --speed 0.35 --last-frame-duration 6 --font-family "JetBrains Mono" \
+		.testcache/demo.cast docs/assets/daemon-respawn.gif
+	@rm -f .testcache/demo.cast
+	@ls -la docs/assets/daemon-respawn.gif
 
 # site (re)generates the landing-page TUI demo videos (light + dark, webm + mp4)
 # from the asciicast at site/plumb_tui.cast into site/. Re-record with `asciinema

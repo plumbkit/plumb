@@ -194,8 +194,8 @@ print("2. Agent edits small.txt: change applied\n")
 pid1 = wait_for_pid()
 if not pid1:
     sys.exit("daemon pid file never appeared; is plumb serve spawning a daemon?")
-print(f"3. The daemon is pid {pid1}. We stop it (SIGTERM, like `plumb stop`) — "
-      "the proxy must recover as if it had crashed.")
+print(f"3. The daemon is pid {pid1}. We stop it (SIGTERM, like `plumb stop`) —")
+print("   the proxy must recover as if it had crashed.")
 # Kill ONLY the demo daemon: targeted SIGTERM of the pid we just read. Never
 # `plumb stop --force` — its system-wide pgrep fallback (stop.go
 # findAllDaemonByArgs) is not scoped to HOME and would stop the user's real
