@@ -1,13 +1,24 @@
 # Changelog
 
-## 0.13.0 (unreleased)
+## 0.13.0 (2026-07-24)
 
 ### Added
 
 - **Runnable crash-resilience demo.** `docs/demos/daemon-respawn.sh` kills the
   daemon mid-session and shows the agent's next edit still succeeding as the
   `plumb serve` proxy respawns it and replays the handshake (pid changes, first
-  edit never re-applied); the README "See it run" line now lists both demos.
+  edit never re-applied); the README "See it run" line now lists both demos,
+  and `make demo-gif` renders the recording committed at
+  `docs/assets/daemon-respawn.gif`.
+
+### Fixed
+
+- **Release pipeline: a brew-tap failure can no longer strand the MCP registry
+  entry.** The `publish-mcp` job used to hard-depend on the GoReleaser job, so
+  a Homebrew tap-push failure (e.g. an expired token) silently skipped the
+  registry publish — the failure mode that left 0.12.4 unpublished until a
+  manual rerun. It now runs unless the workflow was cancelled and gates on the
+  GitHub release actually existing.
 
 ## 0.12.4 (2026-07-23)
 
