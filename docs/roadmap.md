@@ -36,8 +36,9 @@ Themes are buckets, not a strict release order — an item ships when it's ready
 Several **0.13–0.15** theme items (the daemon-robustness hardening, the live
 `enable-lsp`, `move_symbol`, and the symbol-edit steering) landed in **0.12.x**
 patches ahead of their nominal minor, which is why rows can read as delivered
-early. **0.13.0 was tagged 2026-07-24**, closing the daemon-robustness theme;
-the **0.14** line is open, with `minimal_diff_review` already landed on it.
+early. **0.13.0 was tagged 2026-07-24**, closing the daemon-robustness theme,
+and **0.14.0 on 2026-07-25**, formalising the agent-ergonomics theme with
+`minimal_diff_review` as its headline addition.
 
 ## Shipped outside any themed row
 

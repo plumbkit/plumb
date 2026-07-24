@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.0 (unreleased)
+## 0.14.0 (2026-07-25)
 
 ### Added
 
@@ -15,7 +15,23 @@
   never block a write; verification-gap findings recommend concrete
   `topology_affected` + `run_task` calls. Untracked new files are synthesised
   into the review (git diff omits them); output is bounded. Tool count is now
-  62. Pairs with the `plumb-minimal-change` skill from 0.12.4.
+  62. Pairs with the `plumb-minimal-change` skill from 0.12.4. Hardened by an
+  independent pre-release review: comment/whitespace-only edits no longer
+  trigger the verification-gap warning, a byte-truncated diff skips that check
+  with an explicit disclosure instead of claiming high confidence from an
+  incomplete diff, and git-quoted paths (spaces, non-ASCII) are decoded.
+
+### Fixed
+
+- **Safety: a multi-file `diagnostics` call can no longer report a
+  mid-batch-downgraded file as clean.** When a pull request hit the `-32601`
+  downgrade (or any error after a shared-server peer's downgrade) during a
+  multi-URI batch, the URI was silently dropped and an otherwise-clean batch
+  rendered "No issues found — all tracked files are clean" for a file that was
+  never verified — violating the pull-diagnostics safety invariant. The
+  downgraded file is now surfaced as UNVERIFIED for that call (the single-URI
+  path keeps its push open-and-wait fallback), pinned by a regression test;
+  `docs/troubleshooting.md` states the exact single- vs multi-URI behaviour.
 
 ## 0.13.0 (2026-07-24)
 
