@@ -113,23 +113,27 @@ type Deps struct {
 
 // Options tune the analysis and its output bound.
 type Options struct {
-	// MaxFindings caps the returned findings; excess is dropped and Truncated is
-	// set. Zero means the package default.
+	// MaxFindings is a caller tunable: it caps the returned findings; excess is
+	// dropped and Truncated is set. Zero means the package default.
 	MaxFindings int
-	// IncludeSuggestions controls whether Finding.Alternative is populated.
+	// IncludeSuggestions is a caller tunable controlling whether
+	// Finding.Alternative is populated.
 	IncludeSuggestions bool
-	// DiffTruncated is true when the caller cut the diff text at a byte cap
-	// before parsing. The verification-gap check is skipped in that case — the
-	// cut may have removed the test change that would keep it quiet — and the
-	// skip is recorded in NotChecked.
+	// DiffTruncated is a fact about the diff's provenance, not a caller
+	// preference — true when the caller cut the diff text at a byte cap before
+	// parsing. It only affects NotChecked messaging: the verification-gap check
+	// is skipped in that case (the cut may have removed the test change that
+	// would keep it quiet), and the skip is recorded in NotChecked.
 	DiffTruncated bool
-	// ScopedToFiles is true when the caller restricted the diff to an explicit
-	// file set; when false the report notes it reviewed the whole working-tree
-	// diff (which may include unrelated peer-agent edits).
+	// ScopedToFiles is a fact about the diff's provenance, not a caller
+	// preference — true when the caller restricted the diff to an explicit file
+	// set. It only affects NotChecked messaging: when false, the report notes it
+	// reviewed the whole working-tree diff (which may include unrelated
+	// peer-agent edits).
 	ScopedToFiles bool
 }
 
-// Report is the structured result of Analyze.
+// Report is the structured result of Analyse.
 type Report struct {
 	// Findings, ordered warnings-first then by file and line.
 	Findings []Finding
@@ -148,9 +152,9 @@ const (
 	maxMaxFindings     = 100
 )
 
-// Analyze runs every check over diff and returns a bounded, ordered report. It
+// Analyse runs every check over diff and returns a bounded, ordered report. It
 // is a thin orchestrator: each check is an independently-testable function.
-func Analyze(ctx context.Context, diff *Diff, deps Deps, opts Options) Report {
+func Analyse(ctx context.Context, diff *Diff, deps Deps, opts Options) Report {
 	if opts.MaxFindings <= 0 {
 		opts.MaxFindings = defaultMaxFindings
 	}

@@ -164,6 +164,51 @@ deleted file mode 100644
 	}
 }
 
+func TestParseUnifiedDiff_RenameWithModification(t *testing.T) {
+	// FileDiff.OldPath is documented as differing from Path on a rename; a
+	// rename that also carries a content hunk must decode the similarity/rename
+	// extended headers without corrupting the paths or the hunk that follows.
+	raw := `diff --git a/old.go b/new.go
+similarity index 88%
+rename from old.go
+rename to new.go
+index 1111111..2222222 100644
+--- a/old.go
++++ b/new.go
+@@ -1,2 +1,3 @@
+ package pkg
++// renamed
+ func Foo() {}
+`
+	d := ParseUnifiedDiff(raw)
+	if len(d.Files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(d.Files))
+	}
+	f := d.Files[0]
+	if f.Path != "new.go" {
+		t.Errorf("Path = %q, want new.go", f.Path)
+	}
+	if f.OldPath != "old.go" {
+		t.Errorf("OldPath = %q, want old.go", f.OldPath)
+	}
+	if len(f.Hunks) != 1 {
+		t.Fatalf("want 1 hunk, got %d", len(f.Hunks))
+	}
+	lines := f.Hunks[0].Lines
+	if len(lines) != 3 {
+		t.Fatalf("want 3 hunk lines, got %d: %+v", len(lines), lines)
+	}
+	if lines[0].Kind != Context || lines[0].Text != "package pkg" {
+		t.Errorf("line 0 = %+v, want context %q", lines[0], "package pkg")
+	}
+	if lines[1].Kind != Added || lines[1].Text != "// renamed" {
+		t.Errorf("line 1 = %+v, want added %q", lines[1], "// renamed")
+	}
+	if lines[2].Kind != Context || lines[2].Text != "func Foo() {}" {
+		t.Errorf("line 2 = %+v, want context %q", lines[2], "func Foo() {}")
+	}
+}
+
 func addedLines(h Hunk) []Line {
 	var out []Line
 	for _, l := range h.Lines {

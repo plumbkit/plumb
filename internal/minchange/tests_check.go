@@ -2,6 +2,7 @@ package minchange
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 )
@@ -65,27 +66,30 @@ func verificationGapFindings(diff *Diff, opts Options) []Finding {
 	return []Finding{f}
 }
 
-// isTestFile reports whether path is a test/spec file across the common
+// isTestFile reports whether p is a test/spec file across the common
 // conventions (Go _test.go, JS/TS .test./.spec., Python test_*, Rust tests/…).
-func isTestFile(path string) bool {
-	base := pathBase(path)
+func isTestFile(p string) bool {
+	base := path.Base(p)
+	ext := strings.ToLower(path.Ext(base))
 	switch {
-	case isGoTestFile(path):
+	case isGoTestFile(p):
 		return true
 	case strings.Contains(base, ".test.") || strings.Contains(base, ".spec."):
 		return true
-	case strings.HasPrefix(base, "test_") || strings.HasSuffix(strings.TrimSuffix(base, extOf(base)), "_test"):
+	case strings.HasPrefix(base, "test_") || strings.HasSuffix(strings.TrimSuffix(base, ext), "_test"):
 		return true
-	case strings.Contains(path, "/tests/") || strings.HasPrefix(path, "tests/"):
+	case strings.Contains(p, "/tests/") || strings.HasPrefix(p, "tests/"):
 		return true
 	default:
 		return false
 	}
 }
 
-// isCodeFile reports whether path is a source file whose logic changes warrant a
+// isCodeFile reports whether p is a source file whose logic changes warrant a
 // test.
-func isCodeFile(path string) bool { return codeExtensions[extOf(pathBase(path))] }
+func isCodeFile(p string) bool {
+	return codeExtensions[strings.ToLower(path.Ext(path.Base(p)))]
+}
 
 // hasLogicChange reports whether the file diff adds or removes a line that
 // plausibly carries logic. Blank and comment-only lines are ignored, so a
@@ -96,11 +100,10 @@ func isCodeFile(path string) bool { return codeExtensions[extOf(pathBase(path))]
 // directions of the heuristic lean towards silence, which is the safe side for
 // an advisory warning, and the residual blind spot is disclosed in NotChecked.
 func hasLogicChange(f *FileDiff) bool {
-	for h := range f.Hunks {
-		for _, ln := range f.Hunks[h].Lines {
-			if (ln.Kind == Added || ln.Kind == Removed) && !isCommentOrBlank(ln.Text) {
-				return true
-			}
+	changed := append(f.linesOfKind(Added), f.linesOfKind(Removed)...)
+	for _, ln := range changed {
+		if !isCommentOrBlank(ln.Text) {
+			return true
 		}
 	}
 	return false
@@ -121,14 +124,6 @@ func isCommentOrBlank(text string) bool {
 	default:
 		return false
 	}
-}
-
-// extOf returns the lowercase extension of a base name, including the dot.
-func extOf(base string) string {
-	if i := strings.LastIndexByte(base, '.'); i >= 0 {
-		return strings.ToLower(base[i:])
-	}
-	return ""
 }
 
 // cap10 caps a slice at ten entries, appending an ellipsis marker when longer,

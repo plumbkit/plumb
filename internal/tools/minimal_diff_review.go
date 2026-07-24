@@ -82,7 +82,7 @@ func (t *MinimalDiffReview) WithBoundary(guard BoundaryGuard) *MinimalDiffReview
 func (*MinimalDiffReview) Name() string                 { return "minimal_diff_review" }
 func (*MinimalDiffReview) InputSchema() json.RawMessage { return minimalDiffReviewSchema }
 func (*MinimalDiffReview) Description() string {
-	return "Advisory review of a diff for signs of over-building — findings NEVER block a write, they are hints. " +
+	return "Reviews a diff for signs of over-building — findings NEVER block a write, they are hints. " +
 		"Deterministic, no LLM: it flags a single-use abstraction, a thin forwarding wrapper, a new dependency with a well-known stdlib equivalent, a possible duplicate helper, and a logic change with no accompanying test change. " +
 		"Evidence is asymmetric: a check stays silent unless it can point at concrete evidence and (where defensible) a smaller alternative, so silence is NOT proof a change is minimal. " +
 		"Findings are labelled by confidence: high = proven from the diff text; low = leans on the topology index, which is approximate (its call graph is intra-file — unlike find_references' exact cross-file lookup) and may be a few edits stale. " +
@@ -112,22 +112,36 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 	if ws == "" {
 		return "", UnattachedWorkspaceError{Path: "minimal_diff_review"}
 	}
-	for _, f := range a.Files {
-		if err := t.guard.check(resolvePath(f, t.ws)); err != nil {
+	// Resolve each files entry once here — gitDiff and untrackedDiffs both need
+	// it as a git pathspec, and re-resolving per call site risked drifting out
+	// of sync. Doing the boundary check in this same pass also guarantees a
+	// files entry outside the workspace is rejected before any git invocation.
+	resolvedFiles := make([]string, len(a.Files))
+	for i, f := range a.Files {
+		resolved := resolvePath(f, t.ws)
+		if err := t.guard.check(resolved); err != nil {
 			return "", fmt.Errorf("minimal_diff_review: %w", err)
 		}
+		resolvedFiles[i] = resolved
 	}
 	repoRoot, gitErr := findGitRoot(ws)
 	if gitErr != nil {
-		return "minimal_diff_review: not a git repository — this tool reviews a git diff, so it has nothing to analyse here.\n" +
-			"Run it inside a git working tree (init one with git_init if you intend to track this project).", nil
+		return notAGitRepoMessage(), nil
 	}
-	diffText, err := t.gitDiff(ctx, repoRoot, ws, a)
+	diffText, err := t.gitDiff(ctx, repoRoot, ws, a, resolvedFiles)
 	if err != nil {
 		return "", err
 	}
 	report := t.review(ctx, diffText, a)
 	return formatReview(report, a, len(diffText) >= maxReviewDiffBytes), nil
+}
+
+// notAGitRepoMessage renders the degrade-cleanly response for a workspace that
+// is not inside a git working tree, split out (mirroring formatReview /
+// writeFinding's small-helper style) instead of an inline literal in Execute.
+func notAGitRepoMessage() string {
+	return "minimal_diff_review: not a git repository — this tool reviews a git diff, so it has nothing to analyse here.\n" +
+		"Run it inside a git working tree (init one with git_init if you intend to track this project)."
 }
 
 func parseMinimalDiffReviewArgs(raw json.RawMessage) (minimalDiffReviewArgs, error) {
@@ -153,6 +167,14 @@ func (a *minimalDiffReviewArgs) validate() error {
 	// base_ref sits before the "--" pathspec separator in the git argv, so a
 	// dash-leading value would be parsed as a git option (e.g. --output writes
 	// a file, --ext-diff runs a command) rather than a revision.
+	//
+	// This deliberately does not also call git_classify.go's
+	// checkGitGlobalFlags/dangerousGitGlobalFlags: every entry in that denylist
+	// is itself dash-prefixed, so nothing reaching this point (already past the
+	// check below) could ever match it — it would be dead code here. base_ref is
+	// also the only free-form token that lands before "--" in the argv (Files
+	// goes through resolvePath and the boundary guard, not raw into argv), so a
+	// bare leading-dash rejection is sufficient on its own.
 	if strings.HasPrefix(a.BaseRef, "-") {
 		return fmt.Errorf("minimal_diff_review: base_ref must be a revision, not an option (got %q)", a.BaseRef)
 	}
@@ -163,19 +185,21 @@ func (a *minimalDiffReviewArgs) validate() error {
 // bounded to maxReviewDiffBytes. Pathspecs are limited to the requested files,
 // or to the workspace root when none are given, so the review never reaches
 // changes outside the pinned workspace even when the repo root is an ancestor.
-func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a minimalDiffReviewArgs) (string, error) {
+func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a minimalDiffReviewArgs, resolvedFiles []string) (string, error) {
 	argv := []string{"--no-pager", "diff", "--no-color", "-U3"}
 	if a.Mode == "staged" {
 		argv = append(argv, "--cached")
 	}
 	argv = append(argv, a.BaseRef, "--")
-	if len(a.Files) > 0 {
-		for _, f := range a.Files {
-			argv = append(argv, resolvePath(f, t.ws))
-		}
+	if len(resolvedFiles) > 0 {
+		argv = append(argv, resolvedFiles...)
 	} else {
 		argv = append(argv, ws)
 	}
+	// Hand-rolled exec rather than the shared runGit path (git_exec.go): this
+	// needs the raw, byte-exact diff text for minchange.ParseUnifiedDiff, and
+	// runGit's postProcessGit step plus its write-tier serialisation machinery
+	// are built for the git tool's read-tier command output, not that.
 	cmd := exec.CommandContext(ctx, "git", argv...)
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
@@ -195,7 +219,7 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 	// each untracked file in scope (changed mode only — untracked files are by
 	// definition not staged).
 	if a.Mode == "changed" && len(text) < maxReviewDiffBytes {
-		text += t.untrackedDiffs(ctx, repoRoot, ws, a, maxReviewDiffBytes-len(text))
+		text += t.untrackedDiffs(ctx, repoRoot, ws, resolvedFiles, maxReviewDiffBytes-len(text))
 	}
 	if len(text) > maxReviewDiffBytes {
 		text = text[:maxReviewDiffBytes]
@@ -207,12 +231,10 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 // non-ignored file in scope, up to budget bytes. It reads each file directly
 // (read-only — it never touches the index), so a newly-created but unstaged file
 // is still reviewed. Binary and oversized files are skipped.
-func (t *MinimalDiffReview) untrackedDiffs(ctx context.Context, repoRoot, ws string, a minimalDiffReviewArgs, budget int) string {
+func (t *MinimalDiffReview) untrackedDiffs(ctx context.Context, repoRoot, ws string, resolvedFiles []string, budget int) string {
 	argv := []string{"-C", repoRoot, "ls-files", "--others", "--exclude-standard", "-z", "--"}
-	if len(a.Files) > 0 {
-		for _, f := range a.Files {
-			argv = append(argv, resolvePath(f, t.ws))
-		}
+	if len(resolvedFiles) > 0 {
+		argv = append(argv, resolvedFiles...)
 	} else {
 		argv = append(argv, ws)
 	}
@@ -246,11 +268,18 @@ func synthesiseNewFileDiff(repoRoot, rel string) string {
 	if err != nil || len(content) > maxUntrackedFileBytes || isProbablyBinary(content) {
 		return ""
 	}
-	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "diff --git a/%s b/%s\n", rel, rel)
 	sb.WriteString("new file mode 100644\n")
+	if len(content) == 0 {
+		// A genuinely empty file has zero lines to add. Real `git diff` emits
+		// only this file-creation header with no hunk for an empty added file —
+		// mirror that instead of synthesising a phantom "@@ -0,0 +1,1 @@" header
+		// with one blank "+" line for a line that does not exist.
+		return sb.String()
+	}
 	fmt.Fprintf(&sb, "--- /dev/null\n+++ b/%s\n", rel)
+	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 	fmt.Fprintf(&sb, "@@ -0,0 +1,%d @@\n", len(lines))
 	for _, ln := range lines {
 		sb.WriteString("+" + ln + "\n")
@@ -286,7 +315,7 @@ func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minim
 		deps.CallerCount = t.callerCount
 		deps.SimilarSymbols = t.similarSymbols
 	}
-	return minchange.Analyze(ctx, diff, deps, minchange.Options{
+	return minchange.Analyse(ctx, diff, deps, minchange.Options{
 		MaxFindings:        a.MaxFindings,
 		IncludeSuggestions: include,
 		ScopedToFiles:      len(a.Files) > 0,

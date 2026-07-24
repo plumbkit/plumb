@@ -2,23 +2,29 @@ package minchange
 
 import (
 	"fmt"
+	"path"
+	"strconv"
 	"strings"
 )
 
-// stdlibEquivalent maps a dependency (by module path or npm package name) to a
-// well-known standard-library alternative. The list is deliberately tiny and
-// conservative: every entry is a dependency whose common use is genuinely
-// covered by the stdlib of its language, so the resulting Info finding is
-// defensible rather than opinionated. It is NOT a claim the dependency is
-// unjustified — only a prompt to consider the stdlib path.
-var stdlibEquivalent = map[string]string{
-	// Go
+// goStdlibEquivalent maps a Go module path to a well-known standard-library
+// alternative. The list is deliberately tiny and conservative: every entry is
+// a dependency whose common use is genuinely covered by the stdlib, so the
+// resulting Info finding is defensible rather than opinionated. It is NOT a
+// claim the dependency is unjustified — only a prompt to consider the stdlib
+// path.
+var goStdlibEquivalent = map[string]string{
 	"github.com/pkg/errors":      "the standard library's error wrapping — fmt.Errorf(\"…: %w\", err) with errors.Is/errors.As (Go 1.13+)",
 	"github.com/sirupsen/logrus": "log/slog, the standard structured logger (Go 1.21+)",
 	"go.uber.org/zap":            "log/slog, the standard structured logger (Go 1.21+)",
 	"github.com/golang/protobuf": "google.golang.org/protobuf (the current module); the old one is deprecated",
 	"github.com/ghodss/yaml":     "a maintained YAML module; ghodss/yaml is archived",
-	// npm
+}
+
+// npmStdlibEquivalent maps an npm package name to a well-known JavaScript/
+// TypeScript built-in alternative, on the same conservative terms as
+// goStdlibEquivalent above.
+var npmStdlibEquivalent = map[string]string{
 	"left-pad":  "String.prototype.padStart",
 	"is-odd":    "a one-line `n % 2 !== 0` check",
 	"is-even":   "a one-line `n % 2 === 0` check",
@@ -37,12 +43,12 @@ func dependencyFindings(diff *Diff, opts Options) []Finding {
 		if f.IsBinary || f.IsDelete {
 			continue
 		}
-		base := pathBase(f.Path)
+		base := path.Base(f.Path)
 		switch base {
 		case "go.mod":
-			out = append(out, moduleFindings(f, goModAddedModules(f), opts)...)
+			out = append(out, moduleFindings(f, goModAddedModules(f), goStdlibEquivalent, opts)...)
 		case "package.json":
-			out = append(out, moduleFindings(f, packageJSONAddedDeps(f), opts)...)
+			out = append(out, moduleFindings(f, packageJSONAddedDeps(f), npmStdlibEquivalent, opts)...)
 		}
 	}
 	return out
@@ -55,12 +61,12 @@ type depAdd struct {
 	text string
 }
 
-// moduleFindings turns each added dependency that has a stdlib equivalent into a
-// finding.
-func moduleFindings(f *FileDiff, adds []depAdd, opts Options) []Finding {
+// moduleFindings turns each added dependency that has a stdlib equivalent in
+// equiv (the ecosystem-appropriate map the caller selected) into a finding.
+func moduleFindings(f *FileDiff, adds []depAdd, equiv map[string]string, opts Options) []Finding {
 	var out []Finding
 	for _, a := range adds {
-		alt, ok := stdlibEquivalent[a.name]
+		alt, ok := equiv[a.name]
 		if !ok {
 			continue
 		}
@@ -87,22 +93,17 @@ func moduleFindings(f *FileDiff, adds []depAdd, opts Options) []Finding {
 func goModAddedModules(f *FileDiff) []depAdd {
 	removed := removedModulePaths(f)
 	var out []depAdd
-	for h := range f.Hunks {
-		for _, ln := range f.Hunks[h].Lines {
-			if ln.Kind != Added {
-				continue
-			}
-			// An "// indirect" require was added by go mod tidy, not chosen by
-			// the author — not a deliberate dependency decision to review.
-			if strings.Contains(ln.Text, "// indirect") {
-				continue
-			}
-			mod := requireModulePath(ln.Text)
-			if mod == "" || removed[mod] {
-				continue
-			}
-			out = append(out, depAdd{name: mod, line: ln.NewLineNo, text: ln.Text})
+	for _, ln := range f.linesOfKind(Added) {
+		// An "// indirect" require was added by go mod tidy, not chosen by
+		// the author — not a deliberate dependency decision to review.
+		if strings.Contains(ln.Text, "// indirect") {
+			continue
 		}
+		mod := requireModulePath(ln.Text)
+		if mod == "" || removed[mod] {
+			continue
+		}
+		out = append(out, depAdd{name: mod, line: ln.NewLineNo, text: ln.Text})
 	}
 	return out
 }
@@ -112,14 +113,9 @@ func goModAddedModules(f *FileDiff) []depAdd {
 // new dependency.
 func removedModulePaths(f *FileDiff) map[string]bool {
 	out := map[string]bool{}
-	for h := range f.Hunks {
-		for _, ln := range f.Hunks[h].Lines {
-			if ln.Kind != Removed {
-				continue
-			}
-			if mod := requireModulePath(ln.Text); mod != "" {
-				out[mod] = true
-			}
+	for _, ln := range f.linesOfKind(Removed) {
+		if mod := requireModulePath(ln.Text); mod != "" {
+			out[mod] = true
 		}
 	}
 	return out
@@ -153,17 +149,12 @@ func requireModulePath(text string) string {
 func packageJSONAddedDeps(f *FileDiff) []depAdd {
 	removed := removedJSONKeys(f)
 	var out []depAdd
-	for h := range f.Hunks {
-		for _, ln := range f.Hunks[h].Lines {
-			if ln.Kind != Added {
-				continue
-			}
-			name := jsonDepKey(ln.Text)
-			if name == "" || removed[name] {
-				continue
-			}
-			out = append(out, depAdd{name: name, line: ln.NewLineNo, text: ln.Text})
+	for _, ln := range f.linesOfKind(Added) {
+		name := jsonDepKey(ln.Text)
+		if name == "" || removed[name] {
+			continue
 		}
+		out = append(out, depAdd{name: name, line: ln.NewLineNo, text: ln.Text})
 	}
 	return out
 }
@@ -171,14 +162,9 @@ func packageJSONAddedDeps(f *FileDiff) []depAdd {
 // removedJSONKeys collects dependency keys on removed lines (version bumps).
 func removedJSONKeys(f *FileDiff) map[string]bool {
 	out := map[string]bool{}
-	for h := range f.Hunks {
-		for _, ln := range f.Hunks[h].Lines {
-			if ln.Kind != Removed {
-				continue
-			}
-			if k := jsonDepKey(ln.Text); k != "" {
-				out[k] = true
-			}
+	for _, ln := range f.linesOfKind(Removed) {
+		if k := jsonDepKey(ln.Text); k != "" {
+			out[k] = true
 		}
 	}
 	return out
@@ -206,17 +192,30 @@ func jsonDepKey(text string) string {
 	return key
 }
 
-// quotedString reads a leading "…" token, returning its contents and the
-// remaining text.
+// quotedString reads a leading "…" token, returning its decoded contents and
+// the remaining text. The closing quote is found by scanning for an
+// unescaped ", not the first raw " byte — a naive scan would stop at an
+// escaped \" inside the value and silently truncate it. The matched span
+// (including the surrounding quotes) is decoded with strconv.Unquote, the
+// same pattern headerPath (diff.go) uses to decode a quoted diff path, so \"
+// and other Go/JSON-compatible escapes resolve to their literal characters.
 func quotedString(s string) (val, rest string, ok bool) {
 	if len(s) == 0 || s[0] != '"' {
 		return "", "", false
 	}
-	end := strings.IndexByte(s[1:], '"')
-	if end < 0 {
-		return "", "", false
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++ // skip the escaped character; it can't close the string
+		case '"':
+			unquoted, err := strconv.Unquote(s[:i+1])
+			if err != nil {
+				return "", "", false
+			}
+			return unquoted, s[i+1:], true
+		}
 	}
-	return s[1 : 1+end], s[2+end:], true
+	return "", "", false
 }
 
 // looksLikeVersion reports whether v resembles an npm version spec (a digit,
@@ -231,12 +230,4 @@ func looksLikeVersion(v string) bool {
 		return true
 	}
 	return v[0] >= '0' && v[0] <= '9'
-}
-
-// pathBase returns the final path element of a slash-separated path.
-func pathBase(p string) string {
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		return p[i+1:]
-	}
-	return p
 }

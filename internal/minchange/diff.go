@@ -52,6 +52,22 @@ type Line struct {
 	NewLineNo int
 }
 
+// linesOfKind returns every hunk line of the given kind across the file's
+// hunks, in file order. It collapses the "for h := range f.Hunks { for _, ln
+// := range f.Hunks[h].Lines {...} }" walk that would otherwise be repeated in
+// every check that scans added or removed lines.
+func (f *FileDiff) linesOfKind(kind LineKind) []Line {
+	var out []Line
+	for h := range f.Hunks {
+		for _, ln := range f.Hunks[h].Lines {
+			if ln.Kind == kind {
+				out = append(out, ln)
+			}
+		}
+	}
+	return out
+}
+
 // ParseUnifiedDiff parses git's unified-diff text. It is tolerant of the
 // surrounding metadata git emits (index, mode, similarity, rename lines) and of
 // binary-file markers, extracting only what the checks need: per-file paths,

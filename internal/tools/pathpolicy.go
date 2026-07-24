@@ -115,13 +115,9 @@ func (p *PathPolicy) OutsideWorkspaceLabel(path string) string {
 	return r.Label
 }
 
-// ReadGuard and WriteGuard derive BoundaryGuard closures from the policy. The
-// daemon prefers live per-call closures (the policy is rebuilt on re-pin), but
-// these are convenient for tests and static wiring.
-func (p *PathPolicy) ReadGuard() BoundaryGuard {
-	return func(path string) error { _, err := p.Check(path, AccessRead); return err }
-}
-
+// WriteGuard derives a BoundaryGuard closure from the policy. The daemon
+// prefers live per-call closures (the policy is rebuilt on re-pin), but this
+// is convenient for tests and static wiring.
 func (p *PathPolicy) WriteGuard() BoundaryGuard {
 	return func(path string) error { _, err := p.Check(path, AccessReadWrite); return err }
 }

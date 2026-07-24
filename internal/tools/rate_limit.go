@@ -2,8 +2,6 @@ package tools
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -176,28 +174,6 @@ func (r *RateLimiter) Snapshot() (count int, limit int, window time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.stamps), r.limit, r.window
-}
-
-// defaultWriteRateLimit returns the rate-limit configuration from environment:
-//
-//	PLUMB_WRITE_RATE_LIMIT — integer, ops per minute. 0 disables. Default 120.
-func defaultWriteRateLimit() int {
-	const defaultLimit = 120
-	v := os.Getenv("PLUMB_WRITE_RATE_LIMIT")
-	if v == "" {
-		return defaultLimit
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return defaultLimit
-	}
-	return n
-}
-
-// NewDefaultRateLimiter constructs the limiter the daemon installs on each
-// session. Reads PLUMB_WRITE_RATE_LIMIT from env.
-func NewDefaultRateLimiter() *RateLimiter {
-	return NewRateLimiter(defaultWriteRateLimit(), time.Minute)
 }
 
 // rateLimitError wraps editLogicErr semantically (don't retry) but with a

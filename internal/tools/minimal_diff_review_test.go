@@ -9,6 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/topology"
+	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
 )
 
 // newReviewTool builds the tool pinned to ws with no topology store (a nil
@@ -222,5 +227,156 @@ func TestMinimalDiffReview_IncludeSuggestionsFalse(t *testing.T) {
 	}
 	if strings.Contains(out, "smaller alternative:") {
 		t.Errorf("suggestions were disabled but an alternative was printed:\n%s", out)
+	}
+}
+
+// --- B12: path-scoping and boundary enforcement ---
+
+func TestMinimalDiffReview_ScopedToRequestedFile(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	writeFileT(t, dir, "wrap_one.go", "package pkg\n\nfunc WrapOne(a int) int {\n\treturn TargetOne(a)\n}\n")
+	writeFileT(t, dir, "wrap_two.go", "package pkg\n\nfunc WrapTwo(a int) int {\n\treturn TargetTwo(a)\n}\n")
+	tool := newReviewTool(dir)
+	out, err := callReview(t, tool, map[string]any{"files": []string{"wrap_one.go"}})
+	if err != nil {
+		t.Fatalf("review error: %v", err)
+	}
+	if !strings.Contains(out, "wrap_one.go") {
+		t.Errorf("expected the scoped file's finding, got:\n%s", out)
+	}
+	if strings.Contains(out, "wrap_two.go") {
+		t.Errorf("files scoping leaked the unscoped file's finding, got:\n%s", out)
+	}
+}
+
+func TestMinimalDiffReview_BoundaryRejectsFileOutsideWorkspace(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	if err := os.WriteFile(outside, []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := newReviewTool(dir).WithBoundary(testBoundaryGuard(dir))
+	_, err := callReview(t, tool, map[string]any{"files": []string{outside}})
+	if err == nil {
+		t.Fatalf("want a boundary error for a files entry outside the workspace")
+	}
+	if !IsWorkspaceBoundaryError(err) {
+		t.Fatalf("want a WorkspaceBoundaryError (rejected before any git invocation), got: %v", err)
+	}
+}
+
+// --- B13: topology-backed checks over a real indexed store ---
+
+func TestMinimalDiffReview_SingleUseFinding_RealTopologyStore(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	// worker.go is a brand-new untracked file: a caller and a single-use helper
+	// it alone calls. The caller's body has two statements so it is not itself
+	// mistaken for a thin forwarding wrapper — this isolates the single-use
+	// finding under test.
+	src := "package pkg\n\n" +
+		"func CallHelper() int {\n\tx := helperOnce()\n\treturn x + 1\n}\n\n" +
+		"func helperOnce() int {\n\treturn 42\n}\n"
+	writeFileT(t, dir, "worker.go", src)
+
+	store, err := topology.Open(dir, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024}, []topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	uri := "file://" + filepath.Join(dir, "worker.go")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if nodes, _ := store.SymbolsInFile(context.Background(), uri); len(nodes) >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("topology did not index worker.go within 5s")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := NewMinimalDiffReview(func() *topology.Store { return store }).WithWorkspace(func() string { return dir })
+	out, err := callReview(t, tool, nil)
+	if err != nil {
+		t.Fatalf("review error: %v", err)
+	}
+	if !strings.Contains(out, "single-use-abstraction") {
+		t.Errorf("expected a single-use-abstraction finding via the real topology store, got:\n%s", out)
+	}
+	if !strings.Contains(out, "helperOnce") {
+		t.Errorf("expected the finding to name helperOnce, got:\n%s", out)
+	}
+}
+
+// --- B14b: untracked binary file alongside a real change ---
+
+func TestMinimalDiffReview_UntrackedBinaryFile_SkippedNoCrash(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	// Binary content (contains NUL bytes), named like a generated image asset.
+	binContent := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x00, 0x03}
+	if err := os.WriteFile(filepath.Join(dir, "image.png"), binContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFileT(t, dir, "wrap.go", "package pkg\n\nfunc Wrap(a int) int {\n\treturn Target(a)\n}\n")
+	tool := newReviewTool(dir)
+	out, err := callReview(t, tool, nil)
+	if err != nil {
+		t.Fatalf("review error (binary file should not crash the review): %v", err)
+	}
+	if !strings.Contains(out, "thin-wrapper") {
+		t.Errorf("the Go change should still be reviewed alongside a binary file, got:\n%s", out)
+	}
+	if strings.Contains(out, "image.png") {
+		t.Errorf("the binary file should be skipped, not referenced in findings, got:\n%s", out)
+	}
+}
+
+// --- B16: a nonexistent base_ref reports a clean error ---
+
+func TestMinimalDiffReview_BadBaseRef_CleanError(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	tool := newReviewTool(dir)
+	_, err := callReview(t, tool, map[string]any{"base_ref": "no-such-ref"})
+	if err == nil {
+		t.Fatalf("want an error for a nonexistent base_ref")
+	}
+	if !strings.Contains(err.Error(), "no-such-ref") {
+		t.Errorf("error should mention the bad ref, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "minimal_diff_review: git diff:") {
+		t.Errorf("error should come from the clean git-diff stderr branch, not a raw Go error dump; got: %v", err)
+	}
+}
+
+// --- B1: a zero-byte untracked file produces no phantom diff/finding ---
+
+func TestSynthesiseNewFileDiff_EmptyFile_NoPhantomHunk(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := synthesiseNewFileDiff(dir, "empty.txt")
+	if !strings.Contains(out, "diff --git a/empty.txt b/empty.txt") || !strings.Contains(out, "new file mode 100644") {
+		t.Errorf("expected the file-creation header, got: %q", out)
+	}
+	if strings.Contains(out, "@@") {
+		t.Errorf("an empty file has no lines to add — expected no hunk header, got: %q", out)
+	}
+	if strings.Contains(out, "\n+") {
+		t.Errorf("an empty file must not synthesise a phantom added line, got: %q", out)
+	}
+}
+
+func TestMinimalDiffReview_UntrackedEmptyFile_NoCrashGoChangeStillReviewed(t *testing.T) {
+	dir, _ := setupReviewRepo(t)
+	writeFileT(t, dir, "empty.txt", "")
+	writeFileT(t, dir, "wrap.go", "package pkg\n\nfunc Wrap(a int) int {\n\treturn Target(a)\n}\n")
+	tool := newReviewTool(dir)
+	out, err := callReview(t, tool, nil)
+	if err != nil {
+		t.Fatalf("review error (empty untracked file should not crash the review): %v", err)
+	}
+	if !strings.Contains(out, "thin-wrapper") {
+		t.Errorf("the Go change should still be reviewed alongside an empty untracked file, got:\n%s", out)
 	}
 }
