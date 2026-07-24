@@ -69,11 +69,12 @@ first edit is never silently re-applied.
 
 1. One agent session is up against the daemon (over a `plumb serve` proxy).
 2. The agent edits `small.txt`; the change applies.
-3. The daemon's pid is noted, then killed with `plumb stop --force`.
-4. The agent's next edit is still in flight. The first attempt(s) may see a
-   transient retriable error while the proxy reconnects; once it has, the edit
-   applies — as if the daemon had never died.
-5. The recovery daemon's pid differs from the one killed.
+3. The daemon's pid is noted, then stopped with a targeted SIGTERM scoped to
+   the demo's isolated HOME — it never touches the user's real plumb daemon.
+4. The agent's next edit is the first thing it does after the crash. The first
+   attempt(s) may see a transient retriable error while the proxy reconnects;
+   once it has, the edit applies — as if the daemon had never died.
+5. The recovery daemon's pid differs from the one stopped.
 6. The final file shows both edits intact.
 
 The same behaviour is pinned by the test suite: `cmd/smoke/reconnect_test.go`
@@ -99,11 +100,12 @@ available, then falls back to `plumb` on PATH. It takes a few seconds; a hard
 1. One agent session is up against the plumb daemon (over a `plumb serve` proxy).
 2. Agent edits small.txt: change applied
 
-3. The daemon is pid 179425. We kill it (plumb stop --force) — simulating a crash.
-4. The agent's next edit is still in flight. The proxy dials-or-spawns…
+3. The daemon is pid 210462. We stop it (SIGTERM, like `plumb stop`) — the proxy must recover as if it had crashed.
+4. The agent's next edit is the first thing it does after the crash.
+   The proxy must dial-or-spawn a fresh daemon to serve it…
    edit applied — the agent never noticed the daemon died.
 
-5. Recovery daemon is pid 179461 (was 179425) — a brand-new process.
+5. Recovery daemon is pid 210484 (was 210462) — a brand-new process.
 
 6. Final file — both edits intact, the first edit was never re-applied:
    | alpha (kept)

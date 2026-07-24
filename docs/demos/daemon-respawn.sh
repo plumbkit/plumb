@@ -45,7 +45,22 @@ demo_env() {
 }
 
 cleanup() {
-  demo_env "$PLUMB" stop --force >/dev/null 2>&1 || true
+  # Stop ONLY the demo daemon: targeted SIGTERM of the pid in the isolated
+  # cache dir. `plumb stop --force` also runs a system-wide `pgrep -f "plumb
+  # daemon"` fallback (internal/cli/stop.go findAllDaemonByArgs) that is not
+  # scoped to HOME, so it would stop the user's real plumb daemon too.
+  local pidfile pid
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    pidfile="$DEMO_HOME/Library/Caches/plumb/plumb.pid"
+  else
+    pidfile="$DEMO_HOME/.cache/plumb/plumb.pid"
+  fi
+  if [[ -f "$pidfile" ]]; then
+    pid="$(tr -dc '0-9' < "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  fi
   rm -rf "$DEMO_TMP"
 }
 trap cleanup EXIT
@@ -179,15 +194,24 @@ print("2. Agent edits small.txt: change applied\n")
 pid1 = wait_for_pid()
 if not pid1:
     sys.exit("daemon pid file never appeared; is plumb serve spawning a daemon?")
-print(f"3. The daemon is pid {pid1}. We kill it (plumb stop --force) — simulating a crash.")
-subprocess.run([PLUMB, "stop", "--force"],
-               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+print(f"3. The daemon is pid {pid1}. We stop it (SIGTERM, like `plumb stop`) — "
+      "the proxy must recover as if it had crashed.")
+# Kill ONLY the demo daemon: targeted SIGTERM of the pid we just read. Never
+# `plumb stop --force` — its system-wide pgrep fallback (stop.go
+# findAllDaemonByArgs) is not scoped to HOME and would stop the user's real
+# plumb daemon too.
+try:
+    os.kill(int(pid1), signal.SIGTERM)
+except (ProcessLookupError, ValueError):
+    pass
 time.sleep(1)  # let the proxy notice the dead backend
 
-# 4. The agent's next edit is still in flight. The proxy must dial-or-spawn and
-#    replay the handshake. The first attempt(s) may see the synthesised
-#    retryable error (-32000) while reconnect is in flight, so we retry.
-print("4. The agent's next edit is still in flight. The proxy dials-or-spawns…")
+# 4. The agent's next edit is the first thing it does after the crash. The
+#    proxy must dial-or-spawn and replay the handshake. The first attempt(s)
+#    may see the synthesised retryable error (-32000) while reconnect is in
+#    flight, so we retry.
+print("4. The agent's next edit is the first thing it does after the crash.")
+print("   The proxy must dial-or-spawn a fresh daemon to serve it…")
 deadline = time.time() + 45
 text, ok = a.call("edit_file", {"file_path": small, "edits": [
     {"old_string": "beta", "new_string": "beta (kept)"}]})
@@ -215,7 +239,10 @@ print(indent(file_body(final)))
 print("""
 When the daemon crashed in step 3, the proxy kept the agent's stdio connection
 open, spawned a fresh daemon, and replayed the captured MCP handshake — so the
-edit in flight in step 4 simply succeeded. The same resilience is pinned by the
+agent's next edit in step 4 simply succeeded. The same resilience is pinned by the
 test suite: cmd/smoke/reconnect_test.go kills the daemon mid-session and asserts
 the next call succeeds with a changed pid.""")
+
+a.proc.stdin.close()
+a.proc.terminate()
 PYEOF
