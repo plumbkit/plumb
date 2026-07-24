@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.0 (unreleased)
+
+### Added
+
+- **Runnable crash-resilience demo.** `docs/demos/daemon-respawn.sh` kills the
+  daemon mid-session and shows the agent's next edit still succeeding as the
+  `plumb serve` proxy respawns it and replays the handshake (pid changes, first
+  edit never re-applied); the README "See it run" line now lists both demos.
+
 ## 0.12.4 (2026-07-23)
 
 ### Added
