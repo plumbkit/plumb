@@ -209,6 +209,40 @@ func TestDependency_QuietOnUncuratedModule(t *testing.T) {
 	}
 }
 
+func TestVerificationGap_QuietOnCommentOnlyChange(t *testing.T) {
+	// A doc-comment or licence-header edit is not "source logic changed" — the
+	// tool's strongest warning must not fire on it.
+	raw := "diff --git a/internal/x/logic.go b/internal/x/logic.go\n" +
+		"--- a/internal/x/logic.go\n+++ b/internal/x/logic.go\n" +
+		"@@ -1,2 +1,4 @@\n package x\n+// Package x resolves widgets.\n+\n func F() {}\n"
+	r := Analyze(context.Background(), ParseUnifiedDiff(raw), Deps{}, Options{})
+	if kinds(r)[KindVerificationGap] != 0 {
+		t.Errorf("comment-only change wrongly flagged as unverified: %+v", r.Findings)
+	}
+}
+
+func TestVerificationGap_SkippedOnTruncatedDiff(t *testing.T) {
+	// A byte-truncated diff may have cut off the test change that would keep
+	// this check quiet: it must not claim High-confidence "unverified", and
+	// the skip must be disclosed.
+	diff := ParseUnifiedDiff(modifiedDiff("internal/x/logic.go",
+		"\tif newCondition {",
+		"\tif oldCondition {"))
+	r := Analyze(context.Background(), diff, Deps{}, Options{DiffTruncated: true})
+	if kinds(r)[KindVerificationGap] != 0 {
+		t.Errorf("truncated diff must not produce a verification-gap finding: %+v", r.Findings)
+	}
+	disclosed := false
+	for _, n := range r.NotChecked {
+		if strings.Contains(n, "truncated") {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Errorf("the truncation skip must be disclosed in NotChecked, got %v", r.NotChecked)
+	}
+}
+
 func TestDependency_QuietOnIndirectRequire(t *testing.T) {
 	// An "// indirect" require is added by go mod tidy, not chosen by the
 	// author — never a dependency decision to review.

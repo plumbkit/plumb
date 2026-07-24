@@ -118,6 +118,11 @@ type Options struct {
 	MaxFindings int
 	// IncludeSuggestions controls whether Finding.Alternative is populated.
 	IncludeSuggestions bool
+	// DiffTruncated is true when the caller cut the diff text at a byte cap
+	// before parsing. The verification-gap check is skipped in that case — the
+	// cut may have removed the test change that would keep it quiet — and the
+	// skip is recorded in NotChecked.
+	DiffTruncated bool
 	// ScopedToFiles is true when the caller restricted the diff to an explicit
 	// file set; when false the report notes it reviewed the whole working-tree
 	// diff (which may include unrelated peer-agent edits).
@@ -215,6 +220,11 @@ func notCheckedList(diff *Diff, deps Deps, opts Options) []string {
 		out = append(out, "duplicate-helper: topology index unavailable — name-similarity not checked")
 	}
 	out = append(out, "stdlib-candidate: flags only a curated set of modules with a well-known stdlib equivalent; it does not analyse how the dependency is actually used")
+	if opts.DiffTruncated {
+		out = append(out, "verification-gap: the diff was truncated at the byte cap, so a test change beyond the cut is invisible — this check did not run")
+	} else {
+		out = append(out, "verification-gap: blank and comment-looking lines are ignored via a line-local heuristic — block-comment interiors may be misread, in the direction of staying silent")
+	}
 	if !opts.ScopedToFiles {
 		out = append(out, "scope: reviewed the entire working-tree diff — pass `files` to scope the review to your change and exclude unrelated peer-agent edits")
 	}

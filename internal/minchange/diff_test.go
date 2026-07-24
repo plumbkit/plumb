@@ -84,6 +84,35 @@ func TestParseUnifiedDiff_HunkBodyDashPrefixesStayContent(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiff_QuotedPathIsUnquoted(t *testing.T) {
+	// git quotes paths with spaces (and octal-escapes non-ASCII under
+	// core.quotePath); the stored path must be the decoded one or every
+	// extension-based check silently skips the file.
+	raw := "diff --git \"a/pkg/x y.go\" \"b/pkg/x y.go\"\n" +
+		"--- \"a/pkg/x y.go\"\n" +
+		"+++ \"b/pkg/x y.go\"\n" +
+		"@@ -1,1 +1,2 @@\n package pkg\n+func F() {}\n"
+	d := ParseUnifiedDiff(raw)
+	if len(d.Files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(d.Files))
+	}
+	if got := d.Files[0].Path; got != "pkg/x y.go" {
+		t.Errorf("Path = %q, want the unquoted pkg/x y.go", got)
+	}
+}
+
+func TestParseUnifiedDiff_NoPhantomTrailingContextLine(t *testing.T) {
+	// The trailing newline's empty split element must not become a phantom
+	// empty context line in the last hunk.
+	raw := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n" +
+		"@@ -1,1 +1,2 @@\n context\n+added\n"
+	d := ParseUnifiedDiff(raw)
+	lines := d.Files[0].Hunks[0].Lines
+	if n := len(lines); n != 2 {
+		t.Fatalf("want 2 hunk lines (context+added), got %d: %+v", n, lines)
+	}
+}
+
 func TestParseUnifiedDiff_ContextAdvancesNewSide(t *testing.T) {
 	raw := `diff --git a/x.go b/x.go
 --- a/x.go

@@ -22,6 +22,12 @@ var codeExtensions = map[string]bool{
 // Warning. When at least one test file changed, the check stays silent — it does
 // not attempt to judge whether the right tests changed.
 func verificationGapFindings(diff *Diff, opts Options) []Finding {
+	// A truncated diff may have cut off the very test change that would keep
+	// this check quiet, and a High-confidence "unverified" claim from an
+	// incomplete diff would be dishonest — the skip is disclosed in NotChecked.
+	if opts.DiffTruncated {
+		return nil
+	}
 	var sourceFiles []string
 	testChanged := false
 	for i := range diff.Files {
@@ -30,12 +36,12 @@ func verificationGapFindings(diff *Diff, opts Options) []Finding {
 			continue
 		}
 		if isTestFile(f.Path) {
-			if hasContentChange(f) {
+			if hasLogicChange(f) {
 				testChanged = true
 			}
 			continue
 		}
-		if isCodeFile(f.Path) && hasContentChange(f) {
+		if isCodeFile(f.Path) && hasLogicChange(f) {
 			sourceFiles = append(sourceFiles, f.Path)
 		}
 	}
@@ -81,17 +87,40 @@ func isTestFile(path string) bool {
 // test.
 func isCodeFile(path string) bool { return codeExtensions[extOf(pathBase(path))] }
 
-// hasContentChange reports whether the file diff has any added or removed line —
-// i.e. a real content change rather than a pure rename/mode change.
-func hasContentChange(f *FileDiff) bool {
+// hasLogicChange reports whether the file diff adds or removes a line that
+// plausibly carries logic. Blank and comment-only lines are ignored, so a
+// gofmt pass, a doc comment, or a licence header does not trigger the
+// verification-gap warning. The comment test is a line-local heuristic — it
+// cannot see block-comment context, so an interior line starting with `*` (or
+// a pointer-deref statement) may be misclassified as a comment. Both error
+// directions of the heuristic lean towards silence, which is the safe side for
+// an advisory warning, and the residual blind spot is disclosed in NotChecked.
+func hasLogicChange(f *FileDiff) bool {
 	for h := range f.Hunks {
 		for _, ln := range f.Hunks[h].Lines {
-			if ln.Kind == Added || ln.Kind == Removed {
+			if (ln.Kind == Added || ln.Kind == Removed) && !isCommentOrBlank(ln.Text) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// isCommentOrBlank reports whether a diff line is blank or starts like a
+// comment in the common source languages (Go/C-family //, /* … */ interiors,
+// Python/Ruby/shell #).
+func isCommentOrBlank(text string) bool {
+	t := strings.TrimSpace(text)
+	switch {
+	case t == "":
+		return true
+	case strings.HasPrefix(t, "//"), strings.HasPrefix(t, "#"):
+		return true
+	case strings.HasPrefix(t, "/*"), strings.HasPrefix(t, "*"):
+		return true
+	default:
+		return false
+	}
 }
 
 // extOf returns the lowercase extension of a base name, including the dot.

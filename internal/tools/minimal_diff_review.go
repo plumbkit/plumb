@@ -290,6 +290,7 @@ func (t *MinimalDiffReview) review(ctx context.Context, diffText string, a minim
 		MaxFindings:        a.MaxFindings,
 		IncludeSuggestions: include,
 		ScopedToFiles:      len(a.Files) > 0,
+		DiffTruncated:      len(diffText) >= maxReviewDiffBytes,
 	})
 }
 

@@ -1,6 +1,9 @@
 package minchange
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Diff is a parsed unified diff: the output of `git diff` (with or without
 // --cached), split into per-file changes.
@@ -56,7 +59,14 @@ type Line struct {
 // noise is ignored rather than fatal — this is an advisory tool.
 func ParseUnifiedDiff(raw string) *Diff {
 	p := &diffParser{d: &Diff{}}
-	for _, line := range strings.Split(raw, "\n") {
+	lines := strings.Split(raw, "\n")
+	// Drop the empty element a trailing newline produces: git never emits a
+	// bare "" inside a hunk (blank lines carry a prefix), and feeding it would
+	// append a phantom empty context line to the last hunk.
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	for _, line := range lines {
 		p.feed(line)
 	}
 	p.flushFile()
@@ -178,12 +188,20 @@ func parseDiffGitHeader(line string) (aPath, bPath string, ok bool) {
 }
 
 // headerPath extracts the path from a --- / +++ header value, returning "" for
-// /dev/null (which signals a file creation or deletion).
+// /dev/null (which signals a file creation or deletion). git quotes paths with
+// spaces or non-ASCII bytes (core.quotePath), so a leading quote is decoded —
+// otherwise the stored path keeps its quotes and every extension-based check
+// silently skips the file.
 func headerPath(v string) string {
 	v = strings.TrimSpace(v)
 	// git appends a tab + timestamp on some configs; keep only the path field.
 	if i := strings.IndexByte(v, '\t'); i >= 0 {
 		v = v[:i]
+	}
+	if strings.HasPrefix(v, "\"") {
+		if unquoted, err := strconv.Unquote(v); err == nil {
+			v = unquoted
+		}
 	}
 	if v == "/dev/null" {
 		return ""
