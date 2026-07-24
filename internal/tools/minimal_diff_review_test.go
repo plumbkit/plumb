@@ -74,7 +74,18 @@ func TestMinimalDiffReview_UnattachedWorkspace(t *testing.T) {
 }
 
 func TestMinimalDiffReview_DegradesOutsideGitRepo(t *testing.T) {
-	tool := newReviewTool(t.TempDir()) // a bare temp dir, not a git repo
+	// CI redirects test temp dirs into the checkout's .testcache/, which IS
+	// inside a git repo — so "a bare temp dir" alone does not guarantee the
+	// not-a-repo premise. A ceiling at the temp dir's parent stops git's
+	// upward discovery regardless of where the runner puts TMPDIR. The path
+	// is symlink-resolved first (macOS /var → /private/var): git compares
+	// ceiling entries textually against resolved paths.
+	dir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	tool := newReviewTool(dir)
 	out, err := callReview(t, tool, nil)
 	if err != nil {
 		t.Fatalf("outside a git repo should degrade cleanly, got error: %v", err)
