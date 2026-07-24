@@ -57,3 +57,71 @@ hard 3-minute alarm guarantees it can never hang your terminal.
 
 5. Agent A checks workspace_sessions: active sessions: 2 (including you)
 ```
+
+## daemon-respawn.sh
+
+One MCP session works against a plumb daemon. It applies an edit, then the
+daemon is killed out from under the live `plumb serve` proxy (a simulated
+crash). The agent's very next edit still succeeds — the proxy dials-or-spawns a
+fresh daemon and transparently replays the MCP handshake, so the agent never
+notices. The recovery is a genuinely new process (its pid changes), and the
+first edit is never silently re-applied.
+
+1. One agent session is up against the daemon (over a `plumb serve` proxy).
+2. The agent edits `small.txt`; the change applies.
+3. The daemon's pid is noted, then killed with `plumb stop --force`.
+4. The agent's next edit is still in flight. The first attempt(s) may see a
+   transient retriable error while the proxy reconnects; once it has, the edit
+   applies — as if the daemon had never died.
+5. The recovery daemon's pid differs from the one killed.
+6. The final file shows both edits intact.
+
+The same behaviour is pinned by the test suite: `cmd/smoke/reconnect_test.go`
+(`//go:build integration`) kills the daemon mid-session and asserts the next
+call succeeds with a changed pid.
+
+### Run it
+
+```sh
+./docs/demos/daemon-respawn.sh
+```
+
+Requirements: `bash`, `python3` (stdlib only), and a plumb binary. The script
+looks for `$PLUMB_BIN`, then builds from the repo if a Go toolchain is
+available, then falls back to `plumb` on PATH. It takes a few seconds; a hard
+3-minute alarm guarantees it can never hang your terminal.
+
+### Expected output (abridged)
+
+```text
+== crash-resilient daemon ==
+
+1. One agent session is up against the plumb daemon (over a `plumb serve` proxy).
+2. Agent edits small.txt: change applied
+
+3. The daemon is pid 179425. We kill it (plumb stop --force) — simulating a crash.
+4. The agent's next edit is still in flight. The proxy dials-or-spawns…
+   edit applied — the agent never noticed the daemon died.
+
+5. Recovery daemon is pid 179461 (was 179425) — a brand-new process.
+
+6. Final file — both edits intact, the first edit was never re-applied:
+   | alpha (kept)
+   | beta (kept)
+```
+
+## Recording a GIF
+
+These scripts are the source for any demo GIF — render one when you need a
+visual for the README or the site. The simplest portable path is
+[asciinema](https://asciinema.org) + [agg](https://github.com/asciinema/agg):
+
+```sh
+asciinema rec --command='./docs/demos/daemon-respawn.sh' demo.cast
+mkdir -p docs/assets
+agg --rows=24 --font-family="JetBrains Mono" demo.cast docs/assets/daemon-respawn.gif
+```
+
+([`vhs`](https://github.com/charmbracelet/vhs) works too, via a `.tape` file
+that runs the script.) Drop the GIF under `docs/assets/` and link it from the
+README's "See it run" line.
