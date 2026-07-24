@@ -478,6 +478,32 @@ func TestDiagnosticsPull_MultiURI_Safety_PartialFailure(t *testing.T) {
 	}
 }
 
+// A mid-batch -32601 downgrade must not let the downgraded URI vanish into an
+// all-clean report: the single-URI path falls back to push open-and-wait, but
+// a batch entry is surfaced as UNVERIFIED for the call instead (the safety
+// invariant — an unpulled, uncached file is never reported clean).
+func TestDiagnosticsPull_MultiURI_DowngradeNeverFalseClean(t *testing.T) {
+	inv := newTestInvalidator(t)
+	downURI := "file:///p/downgrades.go"
+	cleanURI := "file:///p/clean.go"
+	opener := &modeOpener{defaultMode: "pull"}
+	opener.respond = func(params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
+		if params.TextDocument.URI == downURI {
+			opener.setMode(downURI, "push") // the routing proxy flipped the entry
+			return nil, errors.New("jsonrpc error -32601: method not found")
+		}
+		return &protocol.DocumentDiagnosticReport{Kind: protocol.DiagnosticReportFull}, nil
+	}
+	tool := tools.NewDiagnosticsWithOpener(inv, opener)
+	out := execDiagnostics(t, tool, map[string]any{"uris": []string{downURI, cleanURI}})
+	if strings.Contains(out, "all tracked files are clean") {
+		t.Fatalf("SAFETY: the downgraded URI vanished into an all-clean report:\n%s", out)
+	}
+	if !strings.Contains(out, "UNVERIFIED") || !strings.Contains(out, "downgrades.go") {
+		t.Errorf("the downgraded file must be surfaced as unverified:\n%s", out)
+	}
+}
+
 func TestDiagnosticsPull_MultiURI_CancelledContext(t *testing.T) {
 	inv := newTestInvalidator(t)
 	opener := &modeOpener{defaultMode: "pull"}

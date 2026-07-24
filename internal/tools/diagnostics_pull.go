@@ -277,6 +277,12 @@ func (t *Diagnostics) pullAll(ctx context.Context, uris []string) pullBatchResul
 			related, unresolved, err := t.pullDocument(ctx, uri)
 			if err != nil {
 				if t.modeFor(uri) == diagModePush {
+					// The error downgraded this URI to push mid-batch (or a
+					// shared-server peer's -32601 did). The single-URI path
+					// re-verifies via open-and-wait; a batch entry must still
+					// never vanish into an all-clean report, so it is surfaced
+					// as unverified instead (safety invariant above).
+					perURI[i].note = fmt.Sprintf("%s: pull downgraded to push mid-batch (%v) — not re-verified in this call", paths.URIToPath(uri), err)
 					return
 				}
 				perURI[i].note = fmt.Sprintf("%s: %v", paths.URIToPath(uri), err)
