@@ -4,6 +4,20 @@
 
 ### Fixed
 
+- **Pull-diagnostics hardening — the three tracked follow-ups from the 0.14.0
+  review.** (1) A multi-file `diagnostics` call now open-and-waits untracked
+  push-mode files exactly like the single-file path (and a mid-batch `-32601`
+  downgrade is re-verified inline rather than only marked UNVERIFIED — the
+  note remains only when verification itself fails); batches over many
+  never-analysed files pay the same bounded open-and-wait cost as N
+  single-file calls (≤4 concurrent). (2) The `-32601` downgrade is now sticky
+  across a hibernation wake — no more one-wasted-pull-and-warning per wake;
+  an explicit server restart still re-negotiates from config. (3) A pull
+  completing just after a server restart cleared the pull state can no longer
+  re-seed a stale result ID: pull records carry a generation stamped before
+  the request and a mismatched report is dropped with its files surfaced as
+  UNVERIFIED, never clean.
+
 - **`go install`-built binaries now report their real version.** Only
   GoReleaser/Makefile builds stamp the version via ldflags, so
   `go install github.com/plumbkit/plumb/cmd/plumb@latest` reported

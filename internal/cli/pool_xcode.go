@@ -186,6 +186,10 @@ func (p *workspacePool) restartSwift(root string) error {
 	if e.inv != nil {
 		e.inv.ClearPullState()
 	}
+	// An explicit restart is a genuine re-negotiation point (possibly a new server
+	// build): drop any sticky -32601 downgrade so resolveDiagMode resolves from
+	// config again, unlike a hibernation wake which preserves it.
+	e.diagDowngraded = false
 	ready, err := p.wakeLocked(e)
 	p.mu.Unlock()
 	if err != nil {

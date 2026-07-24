@@ -493,6 +493,111 @@ func TestRace_PushAndPullOnOneURI(t *testing.T) {
 	wg.Wait()
 }
 
+// RecordPullResultAt drops a report whose captured generation no longer matches
+// (ClearPullState ran between the pull starting and the record landing): the
+// stale result ID is NOT re-seeded and every URI it covered is surfaced as
+// unresolved so the tool never renders it clean. A fresh pull under the current
+// generation records normally.
+func TestRecordPullResultAt_StaleGenerationDropped(t *testing.T) {
+	inv := newInv(t)
+	uri := "file:///p/a.go"
+	relURI := "file:///p/rel.go"
+
+	gen := inv.PullGeneration(uri) // captured before the pull
+	inv.ClearPullState()           // server (re)start / refresh landed mid-flight
+
+	applied, unresolved := inv.RecordPullResultAt(uri, protocol.DocumentDiagnosticReport{
+		Kind:     protocol.DiagnosticReportFull,
+		ResultID: "stale-rid",
+		Items:    []protocol.Diagnostic{diag(1, protocol.SevError, "E1", "gopls", "stale")},
+		RelatedDocuments: map[string]protocol.DocumentDiagnosticReport{
+			relURI: {Kind: protocol.DiagnosticReportFull, ResultID: "stale-rel"},
+		},
+	}, gen)
+
+	if len(applied) != 0 {
+		t.Errorf("stale-generation record must apply nothing, got applied=%v", applied)
+	}
+	// The stale result ID must NOT be re-seeded (the whole point of the guard).
+	if id, ok := inv.PullResultID(uri); ok {
+		t.Errorf("stale result ID re-seeded for primary: %q", id)
+	}
+	if inv.Tracked(uri) {
+		t.Error("a dropped report must not create pull state for the primary URI")
+	}
+	// Every covered URI is surfaced as unresolved, never silently clean.
+	wantUnresolved := map[string]bool{uri: true, relURI: true}
+	for _, u := range unresolved {
+		if !wantUnresolved[u] {
+			t.Errorf("unexpected unresolved URI %q", u)
+		}
+		delete(wantUnresolved, u)
+	}
+	if len(wantUnresolved) != 0 {
+		t.Errorf("dropped report must surface all covered URIs as unresolved, missing %v", wantUnresolved)
+	}
+
+	// A fresh pull under the current generation proceeds normally.
+	gen2 := inv.PullGeneration(uri)
+	applied2, unresolved2 := inv.RecordPullResultAt(uri, protocol.DocumentDiagnosticReport{
+		Kind:     protocol.DiagnosticReportFull,
+		ResultID: "fresh-rid",
+		Items:    []protocol.Diagnostic{diag(1, protocol.SevError, "E1", "gopls", "fresh")},
+	}, gen2)
+	if len(applied2) != 1 || applied2[0] != uri || len(unresolved2) != 0 {
+		t.Fatalf("fresh pull must apply cleanly, got applied=%v unresolved=%v", applied2, unresolved2)
+	}
+	if id, ok := inv.PullResultID(uri); !ok || id != "fresh-rid" {
+		t.Errorf("fresh result ID must be recorded, got (%q,%v)", id, ok)
+	}
+	if got := inv.Diagnostics(uri); len(got) != 1 || got[0].Message != "fresh" {
+		t.Errorf("fresh pull findings must be recorded, got %v", got)
+	}
+}
+
+// RecordPullResultAt with the current generation behaves exactly like
+// RecordPullResult (the guard is a no-op when nothing was cleared).
+func TestRecordPullResultAt_MatchingGenerationRecords(t *testing.T) {
+	inv := newInv(t)
+	uri := "file:///p/a.go"
+	gen := inv.PullGeneration(uri)
+	applied, unresolved := inv.RecordPullResultAt(uri, protocol.DocumentDiagnosticReport{
+		Kind:     protocol.DiagnosticReportFull,
+		ResultID: "rid-1",
+		Items:    []protocol.Diagnostic{diag(1, protocol.SevError, "E1", "gopls", "boom")},
+	}, gen)
+	if len(applied) != 1 || applied[0] != uri || len(unresolved) != 0 {
+		t.Fatalf("matching-generation record must apply, got applied=%v unresolved=%v", applied, unresolved)
+	}
+	if id, ok := inv.PullResultID(uri); !ok || id != "rid-1" {
+		t.Errorf("result ID must be recorded, got (%q,%v)", id, ok)
+	}
+}
+
+// -race: ClearPullState (which bumps the generation) concurrent with a
+// generation-checked record and readers must be data-race free.
+func TestRace_ClearPullStateConcurrentWithRecordAt(t *testing.T) {
+	inv := newInv(t)
+	uri := "file:///p/race.go"
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(4)
+		go func() {
+			defer wg.Done()
+			gen := inv.PullGeneration(uri)
+			inv.RecordPullResultAt(uri, protocol.DocumentDiagnosticReport{
+				Kind: protocol.DiagnosticReportFull, ResultID: "rid",
+				Items: []protocol.Diagnostic{diag(1, protocol.SevError, "E1", "gopls", "pull")},
+			}, gen)
+		}()
+		go func() { defer wg.Done(); inv.ClearPullState() }()
+		go func() { defer wg.Done(); _ = inv.PullGeneration(uri) }()
+		go func() { defer wg.Done(); _ = inv.Diagnostics(uri) }()
+	}
+	wg.Wait()
+}
+
 // -race: ClearPullState concurrent with readers and writers.
 func TestRace_ClearPullStateConcurrent(t *testing.T) {
 	inv := newInv(t)

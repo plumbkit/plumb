@@ -70,15 +70,46 @@ func (r *routingInvProxy) RecordPullUnchanged(uri, resultID string) bool {
 	return inv.RecordPullUnchanged(uri, resultID)
 }
 
+// PullGeneration returns the pull-state generation of the workspace owning uri,
+// captured before a pull and passed to RecordPullResultAt so a report computed
+// against a since-cleared generation is dropped. Returns 0 for an out-of-bounds
+// or unroutable URI — which simply mismatches a real generation and drops the
+// record (the safe direction), and cannot smuggle state across roots.
+func (r *routingInvProxy) PullGeneration(uri string) uint64 {
+	if err := r.checkURI(uri); err != nil {
+		return 0
+	}
+	inv := r.owningInv(uri)
+	if inv == nil {
+		return 0
+	}
+	return inv.PullGeneration(uri)
+}
+
 // RecordPullResult routes the primary and every related document
 // independently. Each URI crosses the connection boundary and owning-workspace
 // checks before reaching a cache, so a server response cannot smuggle state
 // across roots. Rejected or unroutable related URIs are intentionally omitted
 // from both returned lists and therefore cannot be rendered to the connection.
 func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string) {
+	return r.recordPullResult(uri, report, false, 0)
+}
+
+// RecordPullResultAt is RecordPullResult with the primary URI's record guarded
+// by the generation captured before the pull (see PullGeneration): if the
+// primary's owning workspace was cleared mid-flight the primary report is
+// dropped and surfaced as unresolved rather than re-seeded. Related documents
+// route to their own workspaces — a different generation counter each — so they
+// keep the best-effort plain record; the primary URI (the file the query is
+// about, the one that would render clean) is what the guard protects.
+func (r *routingInvProxy) RecordPullResultAt(uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string) {
+	return r.recordPullResult(uri, report, true, gen)
+}
+
+func (r *routingInvProxy) recordPullResult(uri string, report protocol.DocumentDiagnosticReport, checkGen bool, gen uint64) (applied, unresolved []string) {
 	appliedSet := make(map[string]struct{})
 	unresolvedSet := make(map[string]struct{})
-	record := func(uri string, report protocol.DocumentDiagnosticReport) {
+	record := func(uri string, report protocol.DocumentDiagnosticReport, guard bool) {
 		if err := r.checkURI(uri); err != nil {
 			return
 		}
@@ -87,7 +118,12 @@ func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentD
 			return
 		}
 		report.RelatedDocuments = nil
-		gotApplied, gotUnresolved := inv.RecordPullResult(uri, report)
+		var gotApplied, gotUnresolved []string
+		if guard && checkGen {
+			gotApplied, gotUnresolved = inv.RecordPullResultAt(uri, report, gen)
+		} else {
+			gotApplied, gotUnresolved = inv.RecordPullResult(uri, report)
+		}
 		for _, appliedURI := range gotApplied {
 			appliedSet[appliedURI] = struct{}{}
 		}
@@ -103,9 +139,9 @@ func (r *routingInvProxy) RecordPullResult(uri string, report protocol.DocumentD
 	sort.Strings(related)
 	primary := report
 	primary.RelatedDocuments = nil
-	record(uri, primary)
+	record(uri, primary, true)
 	for _, relURI := range related {
-		record(relURI, report.RelatedDocuments[relURI])
+		record(relURI, report.RelatedDocuments[relURI], false)
 	}
 	for unresolvedURI := range unresolvedSet {
 		delete(appliedSet, unresolvedURI)

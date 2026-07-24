@@ -10,6 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -42,9 +44,21 @@ type modeOpener struct {
 	wsPull    bool
 	wsRespond func(params protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error)
 	wsCalls   []protocol.WorkspaceDiagnosticParams
+
+	// onDidOpen, when set, is invoked on DidOpen so a test can simulate the server
+	// pushing publishDiagnostics in response to the open (the push-mode verify path).
+	onDidOpen func(protocol.DidOpenTextDocumentParams)
 }
 
-func (m *modeOpener) DidOpen(context.Context, protocol.DidOpenTextDocumentParams) error   { return nil }
+func (m *modeOpener) DidOpen(_ context.Context, params protocol.DidOpenTextDocumentParams) error {
+	m.mu.Lock()
+	hook := m.onDidOpen
+	m.mu.Unlock()
+	if hook != nil {
+		hook(params)
+	}
+	return nil
+}
 func (m *modeOpener) DidClose(context.Context, protocol.DidCloseTextDocumentParams) error { return nil }
 func (m *modeOpener) SupportsPullDiagnostics() bool                                       { return true }
 
@@ -479,9 +493,11 @@ func TestDiagnosticsPull_MultiURI_Safety_PartialFailure(t *testing.T) {
 }
 
 // A mid-batch -32601 downgrade must not let the downgraded URI vanish into an
-// all-clean report: the single-URI path falls back to push open-and-wait, but
-// a batch entry is surfaced as UNVERIFIED for the call instead (the safety
-// invariant — an unpulled, uncached file is never reported clean).
+// all-clean report. The batch now re-verifies it inline via push open-and-wait
+// (like the single-URI path); here the downgraded file does not exist on disk,
+// so that verification fails and the URI is surfaced as UNVERIFIED — never
+// silently clean. A SUCCESSFUL re-verification is covered by
+// TestDiagnosticsPull_MultiURI_DowngradeReVerifiesViaPush.
 func TestDiagnosticsPull_MultiURI_DowngradeNeverFalseClean(t *testing.T) {
 	inv := newTestInvalidator(t)
 	downURI := "file:///p/downgrades.go"
@@ -501,6 +517,95 @@ func TestDiagnosticsPull_MultiURI_DowngradeNeverFalseClean(t *testing.T) {
 	}
 	if !strings.Contains(out, "UNVERIFIED") || !strings.Contains(out, "downgrades.go") {
 		t.Errorf("the downgraded file must be surfaced as unverified:\n%s", out)
+	}
+}
+
+// A push-mode URI that is untracked with an empty cache must be actively
+// verified in a batch — not rendered clean without a check. Here its file does
+// not exist on disk, so open-and-wait fails and it is surfaced as UNVERIFIED
+// (before this fix the batch silently reported it clean).
+func TestDiagnosticsPull_MultiURI_PushMode_UntrackedMissingFile_Unverified(t *testing.T) {
+	inv := newTestInvalidator(t)
+	missingURI := "file:///p/missing.go" // never written to disk, untracked
+	cleanURI := "file:///p/clean.go"
+	pushDiagnostics(t, inv, cleanURI, []protocol.Diagnostic{}) // tracked-clean push
+	opener := &modeOpener{defaultMode: "push"}
+	tool := tools.NewDiagnosticsWithOpener(inv, opener)
+	out := execDiagnostics(t, tool, map[string]any{"uris": []string{missingURI, cleanURI}})
+	if strings.Contains(out, "all tracked files are clean") {
+		t.Fatalf("SAFETY: an untracked push file must not vanish into an all-clean report:\n%s", out)
+	}
+	if !strings.Contains(out, "UNVERIFIED") || !strings.Contains(out, "missing.go") {
+		t.Errorf("the untracked push file must be surfaced as UNVERIFIED via a failed open-and-wait:\n%s", out)
+	}
+}
+
+// A push-mode untracked URI whose file exists is verified via open-and-wait: the
+// simulated push lands in the cache and its findings are folded into the batch
+// output, exactly as the single-URI push path would.
+func TestDiagnosticsPull_MultiURI_PushMode_UntrackedVerifiedViaOpen(t *testing.T) {
+	inv := newTestInvalidator(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "verify.go")
+	if err := os.WriteFile(path, []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	verifyURI := protocol.FileURI(path)
+	cleanURI := "file:///p/clean.go"
+	pushDiagnostics(t, inv, cleanURI, []protocol.Diagnostic{}) // tracked-clean push
+	opener := &modeOpener{defaultMode: "push"}
+	opener.onDidOpen = func(params protocol.DidOpenTextDocumentParams) {
+		if params.TextDocument.URI == verifyURI {
+			p := protocol.PublishDiagnosticsParams{URI: verifyURI, Diagnostics: []protocol.Diagnostic{{Severity: protocol.SevError, Message: "verified finding"}}}
+			b, _ := json.Marshal(p)
+			inv.Handle(protocol.MethodPublishDiagnostics, b)
+		}
+	}
+	tool := tools.NewDiagnosticsWithOpener(inv, opener)
+	out := execDiagnostics(t, tool, map[string]any{"uris": []string{verifyURI, cleanURI}})
+	if !strings.Contains(out, "verified finding") {
+		t.Errorf("expected the untracked push file verified via open-and-wait with findings folded in:\n%s", out)
+	}
+	if strings.Contains(out, "UNVERIFIED") {
+		t.Errorf("a successfully verified file must not be UNVERIFIED:\n%s", out)
+	}
+}
+
+// A mid-batch -32601 downgrade whose file exists is RE-VERIFIED inline via push
+// open-and-wait (the strict upgrade over the old UNVERIFIED-note behaviour): the
+// pushed findings are folded into the batch output, and the file is not reported
+// as unverified.
+func TestDiagnosticsPull_MultiURI_DowngradeReVerifiesViaPush(t *testing.T) {
+	inv := newTestInvalidator(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "downgrades.go")
+	if err := os.WriteFile(path, []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	downURI := protocol.FileURI(path)
+	cleanURI := "file:///p/clean.go"
+	opener := &modeOpener{defaultMode: "pull"}
+	opener.respond = func(params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
+		if params.TextDocument.URI == downURI {
+			opener.setMode(downURI, "push") // the routing proxy flipped the entry
+			return nil, errors.New("jsonrpc error -32601: method not found")
+		}
+		return &protocol.DocumentDiagnosticReport{Kind: protocol.DiagnosticReportFull}, nil
+	}
+	opener.onDidOpen = func(params protocol.DidOpenTextDocumentParams) {
+		if params.TextDocument.URI == downURI {
+			p := protocol.PublishDiagnosticsParams{URI: downURI, Diagnostics: []protocol.Diagnostic{{Severity: protocol.SevError, Message: "reverified boom"}}}
+			b, _ := json.Marshal(p)
+			inv.Handle(protocol.MethodPublishDiagnostics, b)
+		}
+	}
+	tool := tools.NewDiagnosticsWithOpener(inv, opener)
+	out := execDiagnostics(t, tool, map[string]any{"uris": []string{downURI, cleanURI}})
+	if !strings.Contains(out, "reverified boom") {
+		t.Errorf("a mid-batch downgrade must be re-verified inline via open-and-wait:\n%s", out)
+	}
+	if strings.Contains(out, "UNVERIFIED") {
+		t.Errorf("a successfully re-verified downgrade must not be UNVERIFIED:\n%s", out)
 	}
 }
 

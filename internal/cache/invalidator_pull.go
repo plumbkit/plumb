@@ -49,6 +49,12 @@ func (inv *Invalidator) RecordPullFull(uri, resultID string, diags []protocol.Di
 	}
 	inv.diagsMu.Lock()
 	defer inv.diagsMu.Unlock()
+	inv.recordPullFullLocked(uri, resultID, diags)
+}
+
+// recordPullFullLocked is the write body of RecordPullFull. The caller must hold
+// diagsMu (write) and must have already rejected an empty uri.
+func (inv *Invalidator) recordPullFullLocked(uri, resultID string, diags []protocol.Diagnostic) {
 	inv.pullDiags[uri] = cloneDiags(diags)
 	inv.pullTimes[uri] = time.Now()
 	if resultID != "" {
@@ -72,6 +78,12 @@ func (inv *Invalidator) RecordPullUnchanged(uri, resultID string) (ok bool) {
 	}
 	inv.diagsMu.Lock()
 	defer inv.diagsMu.Unlock()
+	return inv.recordPullUnchangedLocked(uri, resultID)
+}
+
+// recordPullUnchangedLocked is the write body of RecordPullUnchanged. The caller
+// must hold diagsMu (write) and must have already rejected an empty uri.
+func (inv *Invalidator) recordPullUnchangedLocked(uri, resultID string) bool {
 	stored, known := inv.pullResultIDs[uri]
 	if !known || stored != resultID {
 		return false
@@ -86,6 +98,36 @@ func (inv *Invalidator) RecordPullUnchanged(uri, resultID string) (ok bool) {
 // and unrecognised report kinds, mutate nothing and are returned as unresolved.
 // If a malformed response reports the same URI more than once, unresolved wins.
 func (inv *Invalidator) RecordPullResult(uri string, report protocol.DocumentDiagnosticReport) (applied, unresolved []string) {
+	return inv.recordPullResult(uri, report, false, 0)
+}
+
+// RecordPullResultAt is RecordPullResult guarded by the pull-state generation
+// the caller captured (PullGeneration) BEFORE issuing the pull. If ClearPullState
+// has since bumped the generation — a server (re)start or a
+// workspace/diagnostic/refresh landed while this pull was in flight — the whole
+// report is DROPPED: nothing is applied and every URI it covered is returned as
+// unresolved. This closes the window where an in-flight pull completing just
+// after a clear re-seeds a stale result ID from the previous server generation
+// (a stale ID could later elicit a false "unchanged", and with it a false clean).
+// The URIs are returned unresolved rather than silently swallowed so a caller
+// never renders a dropped file as clean.
+func (inv *Invalidator) RecordPullResultAt(uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string) {
+	return inv.recordPullResult(uri, report, true, gen)
+}
+
+// recordPullResult records a document report and its related documents under a
+// single diagsMu write hold, so the generation check and the writes are atomic
+// with respect to ClearPullState. When checkGen is set and gen no longer matches
+// the current generation, the report is dropped and every URI it covered is
+// surfaced as unresolved.
+func (inv *Invalidator) recordPullResult(uri string, report protocol.DocumentDiagnosticReport, checkGen bool, gen uint64) (applied, unresolved []string) {
+	inv.diagsMu.Lock()
+	defer inv.diagsMu.Unlock()
+
+	if checkGen && gen != inv.pullGen {
+		return nil, droppedReportURIs(uri, report)
+	}
+
 	appliedSet := make(map[string]struct{})
 	unresolvedSet := make(map[string]struct{})
 	record := func(uri, kind, resultID string, items []protocol.Diagnostic) {
@@ -94,10 +136,10 @@ func (inv *Invalidator) RecordPullResult(uri string, report protocol.DocumentDia
 		}
 		switch kind {
 		case protocol.DiagnosticReportFull:
-			inv.RecordPullFull(uri, resultID, items)
+			inv.recordPullFullLocked(uri, resultID, items)
 			appliedSet[uri] = struct{}{}
 		case protocol.DiagnosticReportUnchanged:
-			if inv.RecordPullUnchanged(uri, resultID) {
+			if inv.recordPullUnchangedLocked(uri, resultID) {
 				appliedSet[uri] = struct{}{}
 			} else {
 				unresolvedSet[uri] = struct{}{}
@@ -121,6 +163,33 @@ func (inv *Invalidator) RecordPullResult(uri string, report protocol.DocumentDia
 		delete(appliedSet, unresolvedURI)
 	}
 	return sortedPullURIs(appliedSet), sortedPullURIs(unresolvedSet)
+}
+
+// droppedReportURIs returns every non-empty URI a dropped (stale-generation)
+// report covered — the primary plus its related documents — so the caller
+// surfaces them as unresolved rather than clean.
+func droppedReportURIs(uri string, report protocol.DocumentDiagnosticReport) []string {
+	set := make(map[string]struct{}, 1+len(report.RelatedDocuments))
+	if uri != "" {
+		set[uri] = struct{}{}
+	}
+	for relURI := range report.RelatedDocuments {
+		if relURI != "" {
+			set[relURI] = struct{}{}
+		}
+	}
+	return sortedPullURIs(set)
+}
+
+// PullGeneration returns the current pull-state generation. A pull caller
+// captures it before issuing the request and passes it to RecordPullResultAt so
+// a report computed against a since-cleared generation is dropped. The uri
+// argument is accepted for interface uniformity with the session routing proxy
+// (which routes per URI); the cache's generation is invalidator-global.
+func (inv *Invalidator) PullGeneration(string) uint64 {
+	inv.diagsMu.RLock()
+	defer inv.diagsMu.RUnlock()
+	return inv.pullGen
 }
 
 func sortedPullURIs(set map[string]struct{}) []string {
@@ -170,6 +239,7 @@ func (inv *Invalidator) ClearPullState() {
 	inv.pullDiags = make(map[string][]protocol.Diagnostic)
 	inv.pullResultIDs = make(map[string]string)
 	inv.pullTimes = make(map[string]time.Time)
+	inv.pullGen++
 }
 
 // DiagnosticSources reports which acquisition channels have contributed

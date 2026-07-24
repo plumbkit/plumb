@@ -58,6 +58,22 @@ func resolveRequestedDiagnosticsMode(configured, language string) string {
 // like state/startedAt. The "hybrid" transition happens later, in
 // diagnosticsHybridFlip, when a push is observed while in pull mode.
 func (p *workspacePool) resolveDiagMode(e *poolEntry, ad lsp.Client, requested string) {
+	// A prior -32601 downgrade is sticky for the life of this pool entry, which
+	// survives hibernate/wake. poolOnStart re-runs this negotiation on every wake;
+	// without this guard a downgraded server would resolve back to pull, re-pull,
+	// fail with -32601 again, and re-warn once per wake. A genuine restart builds a
+	// fresh entry (or clears the flag — see restartSwift), re-negotiating from
+	// config. No warning is emitted here: the downgrade already warned once.
+	p.mu.Lock()
+	downgraded := e.diagDowngraded
+	p.mu.Unlock()
+	if downgraded {
+		p.mu.Lock()
+		e.diagMode = diagModePush
+		p.mu.Unlock()
+		return
+	}
+
 	mode := diagModePush
 	if requested == diagModePull {
 		caps := ad.Capabilities()
@@ -140,6 +156,7 @@ func (p *workspacePool) downgradeDiagMode(root, language string) {
 	}
 	prev := e.diagMode
 	e.diagMode = diagModePush
+	e.diagDowngraded = true // sticky across hibernate/wake (see resolveDiagMode)
 	p.mu.Unlock()
 	slog.Warn("pool: pull diagnostics returned method-not-found — downgrading to push for this session",
 		"root", root, "language", language, "from", prev)

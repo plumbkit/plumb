@@ -177,10 +177,29 @@ func (t *Diagnostics) singleURIPush(ctx context.Context, uri string) string {
 // openAndWait sends textDocument/didOpen for uri, waits up to 10 s for gopls
 // to push publishDiagnostics, then sends didClose and returns the result.
 func (t *Diagnostics) openAndWait(ctx context.Context, uri string) string {
+	if err := t.openAndWaitVerify(ctx, uri); err != nil {
+		return err.Error()
+	}
+	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: t.inv.Diagnostics(uri)})
+}
+
+// openAndWaitVerify is the side-effect-only core of openAndWait: it sends
+// textDocument/didOpen for uri to trigger analysis, waits up to 10 s for the
+// resulting publishDiagnostics to land in the cache, then sends didClose. It
+// returns nil once the file has been verified (the cache now holds its snapshot,
+// clean or not) so a caller can read it back, and a non-nil error when
+// verification could not complete (unreadable file, DidOpen failure, or timeout)
+// so the caller can surface the file as UNVERIFIED rather than clean. The
+// multi-URI batch path uses this so an untracked push-mode file is verified the
+// same way the single-URI path is, never rendered clean without a check.
+func (t *Diagnostics) openAndWaitVerify(ctx context.Context, uri string) error {
 	path := paths.URIToPath(uri)
+	if t.opener == nil {
+		return fmt.Errorf("no language-server client is available to verify %s", path)
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Sprintf("cannot read %s: %v", path, err)
+		return fmt.Errorf("cannot read %s: %v", path, err)
 	}
 	if openErr := t.opener.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -190,18 +209,18 @@ func (t *Diagnostics) openAndWait(ctx context.Context, uri string) string {
 			Text:       string(content),
 		},
 	}); openErr != nil {
-		return fmt.Sprintf("DidOpen failed for %s: %v", path, openErr)
+		return fmt.Errorf("DidOpen failed for %s: %v", path, openErr)
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	diags, waitErr := t.inv.WaitDiagnostics(waitCtx, uri)
+	_, waitErr := t.inv.WaitDiagnostics(waitCtx, uri)
 	_ = t.opener.DidClose(ctx, protocol.DidCloseTextDocumentParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if waitErr != nil {
-		return fmt.Sprintf("timed out waiting for diagnostics for %s (gopls may still be indexing)", path)
+		return fmt.Errorf("timed out waiting for diagnostics for %s (gopls may still be indexing)", path)
 	}
-	return formatDiagnostics(map[string][]protocol.Diagnostic{uri: diags})
+	return nil
 }
 
 func languageIDFromURI(uri string) string {

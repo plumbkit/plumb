@@ -80,6 +80,51 @@ func TestResolveDiagMode_Outcomes(t *testing.T) {
 	}
 }
 
+// A -32601 downgrade is sticky across a hibernation wake: poolOnStart re-runs
+// resolveDiagMode on every wake with the same surviving poolEntry, and the
+// downgrade must keep it in push mode rather than resolving back to pull,
+// re-pulling, failing with -32601 again, and re-warning once per wake. A genuine
+// restart builds a fresh entry, which re-negotiates from config.
+func TestResolveDiagMode_DowngradeStickyAcrossWake(t *testing.T) {
+	p := &workspacePool{entries: make(map[poolKey]*poolEntry)}
+	root, lang := "/x", "go"
+	e := &poolEntry{root: root, language: lang}
+	p.entries[poolKey{root, lang}] = e
+	ad := &capsClient{stubClient: &stubClient{}, caps: pullCaps()}
+
+	// Initial negotiation: pull requested + server advertises provider → pull.
+	p.resolveDiagMode(e, ad, diagModePull)
+	if e.diagMode != diagModePull {
+		t.Fatalf("initial diagMode = %q, want pull", e.diagMode)
+	}
+
+	// A pull returns -32601 → sticky downgrade to push.
+	p.downgradeDiagMode(root, lang)
+	if e.diagMode != diagModePush || !e.diagDowngraded {
+		t.Fatalf("after downgrade: diagMode=%q downgraded=%v, want push/true", e.diagMode, e.diagDowngraded)
+	}
+
+	// Simulate a hibernation wake: poolOnStart re-runs resolveDiagMode with the
+	// same (surviving) entry and the same config-derived pull request. It must
+	// stay push and NOT resolve back to pull.
+	p.resolveDiagMode(e, ad, diagModePull)
+	if e.diagMode != diagModePush {
+		t.Errorf("after wake: diagMode = %q, want push (downgrade must be sticky)", e.diagMode)
+	}
+	if !e.diagDowngraded {
+		t.Errorf("the sticky-downgrade flag must survive a wake")
+	}
+
+	// A genuine restart builds a fresh poolEntry (daemon restart / reap+reacquire,
+	// or an explicit server restart that clears the flag): negotiation resolves
+	// pull again from config.
+	fresh := &poolEntry{root: root, language: lang}
+	p.resolveDiagMode(fresh, ad, diagModePull)
+	if fresh.diagMode != diagModePull {
+		t.Errorf("fresh entry diagMode = %q, want pull (a genuine restart re-negotiates)", fresh.diagMode)
+	}
+}
+
 // diagnosticsHybridFlip flips a "pull" connection to "hybrid" the first time a
 // pushed publishDiagnostics is observed, and leaves every other mode untouched.
 func TestDiagnosticsHybridFlip(t *testing.T) {

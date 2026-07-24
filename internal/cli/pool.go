@@ -142,6 +142,16 @@ type poolEntry struct {
 	// in pull mode (see diagnosticsHybridFlip). Guarded by workspacePool.mu.
 	diagMode string
 
+	// diagDowngraded records that a negotiated pull returned method-not-found
+	// (-32601) and permanently downgraded this entry to push (downgradeDiagMode).
+	// It makes the downgrade a SESSION fact: it survives a hibernation wake — where
+	// poolOnStart re-runs resolveDiagMode on the same surviving entry, which would
+	// otherwise resolve back to pull, re-pull, fail with -32601 again, and re-warn
+	// once per wake — but not a daemon restart or an explicit server restart (both
+	// build/clear a fresh entry), so a genuine restart still re-negotiates from
+	// config. Guarded by workspacePool.mu.
+	diagDowngraded bool
+
 	// refs counts the sessions that hold this root as their PINNED primary
 	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
 	// for a non-primary URI) deliberately do NOT pin, so a route target is never

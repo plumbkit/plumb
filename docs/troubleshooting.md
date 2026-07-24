@@ -126,10 +126,15 @@ logs one warning and the connection behaves as push).
 gets a method-not-found response from a pull request, plumb flips that
 connection to `push` for the rest of the session, logs one warning (`pool:
 pull diagnostics returned method-not-found — downgrading to push for this
-session`), and does not retry the pull or flap back. A single-URI
-`diagnostics` call then falls back to the push open-and-wait path; in a
-multi-URI call the downgraded file is reported as UNVERIFIED for that call
-rather than re-verified inline — never silently dropped.
+session`), and does not retry the pull or flap back. The downgrade is sticky
+for the life of the pool entry: it survives a hibernation wake (which re-runs
+negotiation) rather than re-pulling and re-warning once per wake, and is
+re-negotiated only on a genuine restart (a fresh entry / explicit server
+restart). A single-URI `diagnostics` call falls back to the push open-and-wait
+path; a multi-URI call now re-verifies the downgraded file inline the same way
+— open-and-wait — surfacing it as UNVERIFIED only if that verification itself
+cannot complete (an unreadable file or an indexing timeout), never silently
+dropped or silently clean.
 
 **Pull failures degrade explicitly, never silently.** A pull request that
 errors for any other reason never reports a false "No issues" — the

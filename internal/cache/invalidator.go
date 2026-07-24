@@ -39,6 +39,15 @@ type Invalidator struct {
 	pullDiags     map[string][]protocol.Diagnostic // pull snapshot per URI
 	pullResultIDs map[string]string                // last non-empty result ID per URI
 	pullTimes     map[string]time.Time             // last pull update time per URI
+
+	// pullGen is the pull-state generation counter. ClearPullState bumps it (a
+	// server (re)start or workspace/diagnostic/refresh invalidates every result
+	// ID this process issued). A pull caller captures the generation BEFORE the
+	// request and passes it to RecordPullResultAt; a report whose generation no
+	// longer matches is dropped rather than re-seeded, closing the window where an
+	// in-flight pull completing just after a clear re-seeds a stale result ID from
+	// the previous server generation.
+	pullGen uint64
 }
 
 // NewInvalidator creates an Invalidator backed by c.

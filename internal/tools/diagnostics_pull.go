@@ -60,6 +60,17 @@ type pullStateSource interface {
 	AllPullResultIDs() []protocol.PreviousResultID
 }
 
+// generationalPullStateSource is the optional generation-guarded record surface.
+// The real sources (*cache.Invalidator, the session routingInvProxy) implement
+// it; pullAndRecord captures the generation before the request and records under
+// it, so a report whose pull state was cleared mid-flight (a server (re)start or
+// workspace/diagnostic/refresh) is dropped rather than re-seeding a stale result
+// ID. A source without it degrades to the plain RecordPullResult path.
+type generationalPullStateSource interface {
+	PullGeneration(uri string) uint64
+	RecordPullResultAt(uri string, report protocol.DocumentDiagnosticReport, gen uint64) (applied, unresolved []string)
+}
+
 // modeFor returns the resolved diagnostics mode for uri, or "" when the opener
 // cannot report one (push behaviour).
 func (t *Diagnostics) modeFor(uri string) string {
@@ -103,8 +114,16 @@ func (r pullRecordResult) related(primary string) []string {
 // unbounded server-controlled pull fan-out.
 func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, uri string) (pullRecordResult, error) {
 	prevID := ""
+	gen, genOK := uint64(0), false
 	if rec != nil {
 		prevID, _ = rec.PullResultID(uri)
+		// Capture the pull-state generation BEFORE the request round-trip, so a
+		// clear that lands while the pull is in flight makes the record drop rather
+		// than re-seed a stale result ID (the whole operation belongs to one server
+		// generation; the retry below reuses the same captured value on purpose).
+		if g, ok := rec.(generationalPullStateSource); ok {
+			gen, genOK = g.PullGeneration(uri), true
+		}
 	}
 	rep, err := pd.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
 		TextDocument:     protocol.TextDocumentIdentifier{URI: uri},
@@ -118,9 +137,9 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 	}
 	switch rep.Kind {
 	case protocol.DiagnosticReportFull:
-		return recordPullReport(rec, uri, rep), nil
+		return recordPullReport(rec, uri, rep, gen, genOK), nil
 	case protocol.DiagnosticReportUnchanged:
-		recorded := recordPullReport(rec, uri, rep)
+		recorded := recordPullReport(rec, uri, rep, gen, genOK)
 		if containsURI(recorded.applied, uri) {
 			return recorded, nil
 		}
@@ -133,16 +152,20 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 		if rep2 == nil || rep2.Kind != protocol.DiagnosticReportFull {
 			return pullRecordResult{}, fmt.Errorf("server answered %q for an unknown result ID and the retry did not return a full report", rep.Kind)
 		}
-		return recordPullReport(rec, uri, rep2), nil
+		return recordPullReport(rec, uri, rep2, gen, genOK), nil
 	default:
 		return pullRecordResult{}, fmt.Errorf("unrecognised diagnostic report kind %q", rep.Kind)
 	}
 }
 
-func recordPullReport(rec pullStateSource, uri string, rep *protocol.DocumentDiagnosticReport) pullRecordResult {
+func recordPullReport(rec pullStateSource, uri string, rep *protocol.DocumentDiagnosticReport, gen uint64, genOK bool) pullRecordResult {
 	var result pullRecordResult
 	if rec != nil {
-		result.applied, result.unresolved = rec.RecordPullResult(uri, *rep)
+		if g, ok := rec.(generationalPullStateSource); ok && genOK {
+			result.applied, result.unresolved = g.RecordPullResultAt(uri, *rep, gen)
+		} else {
+			result.applied, result.unresolved = rec.RecordPullResult(uri, *rep)
+		}
 		return result
 	}
 	if rep.Kind == protocol.DiagnosticReportFull {
@@ -249,9 +272,12 @@ type pullBatchResult struct {
 // Per-worker results are combined only after all workers finish, keeping the
 // output deterministic and race-free.
 func (t *Diagnostics) pullAll(ctx context.Context, uris []string) pullBatchResult {
-	if _, ok := t.opener.(pullDiagnoser); !ok {
+	// Verification needs at least a file opener; the pull request surface is
+	// additionally required for pull/hybrid URIs (checked per-URI below).
+	if t.opener == nil {
 		return pullBatchResult{}
 	}
+	_, canPull := t.opener.(pullDiagnoser)
 	type perPullResult struct {
 		related    []string
 		unresolved []string
@@ -261,11 +287,18 @@ func (t *Diagnostics) pullAll(ctx context.Context, uris []string) pullBatchResul
 	sem := make(chan struct{}, maxConcurrentPulls)
 	var wg sync.WaitGroup
 	for i, uri := range uris {
-		if !pullModeActive(t.modeFor(uri)) {
+		pull := canPull && pullModeActive(t.modeFor(uri))
+		// A push-mode URI still needs active verification when its cache is empty
+		// and the server has never reported on it — otherwise it renders clean in
+		// the merged batch view without ever being checked, unlike the single-URI
+		// push path (singleURIPush → openAndWait). A tracked push URI is left to the
+		// cache read in multiURI, keeping the common path fast.
+		pushVerify := !pull && t.needsPushVerification(uri)
+		if !pull && !pushVerify {
 			continue
 		}
 		wg.Add(1)
-		go func(i int, uri string) {
+		go func(i int, uri string, pull bool) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -274,23 +307,8 @@ func (t *Diagnostics) pullAll(ctx context.Context, uris []string) pullBatchResul
 				perURI[i].note = fmt.Sprintf("%s: pull cancelled: %v", paths.URIToPath(uri), ctx.Err())
 				return
 			}
-			related, unresolved, err := t.pullDocument(ctx, uri)
-			if err != nil {
-				if t.modeFor(uri) == diagModePush {
-					// The error downgraded this URI to push mid-batch (or a
-					// shared-server peer's -32601 did). The single-URI path
-					// re-verifies via open-and-wait; a batch entry must still
-					// never vanish into an all-clean report, so it is surfaced
-					// as unverified instead (safety invariant above).
-					perURI[i].note = fmt.Sprintf("%s: pull downgraded to push mid-batch (%v) — not re-verified in this call", paths.URIToPath(uri), err)
-					return
-				}
-				perURI[i].note = fmt.Sprintf("%s: %v", paths.URIToPath(uri), err)
-				return
-			}
-			perURI[i].related = related
-			perURI[i].unresolved = unresolved
-		}(i, uri)
+			perURI[i].related, perURI[i].unresolved, perURI[i].note = t.pullOrVerify(ctx, uri, pull)
+		}(i, uri, pull)
 	}
 	wg.Wait()
 
@@ -305,6 +323,47 @@ func (t *Diagnostics) pullAll(ctx context.Context, uris []string) pullBatchResul
 	result.related = uniqueSortedURIs(result.related)
 	result.unresolved = uniqueSortedURIs(result.unresolved)
 	return result
+}
+
+// pullOrVerify runs one batch entry's work (already inside the concurrency
+// semaphore): a pull for a pull/hybrid URI, or an open-and-wait verification for
+// an untracked push-mode URI. It returns the accepted related and unresolved
+// URIs and, when the entry could not be verified, a single UNVERIFIED note.
+func (t *Diagnostics) pullOrVerify(ctx context.Context, uri string, pull bool) (related, unresolved []string, note string) {
+	path := paths.URIToPath(uri)
+	if !pull {
+		// Push-mode untracked URI: verify via the same open-and-wait the single-URI
+		// path uses. Success populates the cache (read back in multiURI); a failure
+		// is surfaced as UNVERIFIED, never silent-clean.
+		if verr := t.openAndWaitVerify(ctx, uri); verr != nil {
+			note = fmt.Sprintf("%s: %v", path, verr)
+		}
+		return nil, nil, note
+	}
+	related, unresolved, err := t.pullDocument(ctx, uri)
+	if err == nil {
+		return related, unresolved, ""
+	}
+	if t.modeFor(uri) == diagModePush {
+		// The error downgraded this URI to push mid-batch (or a shared-server peer's
+		// -32601 did). Re-verify via the same open-and-wait the single-URI path uses
+		// instead of only marking it unverified; keep the UNVERIFIED note only when
+		// that verification itself cannot complete (safety invariant above).
+		if verr := t.openAndWaitVerify(ctx, uri); verr != nil {
+			return nil, nil, fmt.Sprintf("%s: pull downgraded to push mid-batch (%v); re-verification failed: %v", path, err, verr)
+		}
+		return nil, nil, ""
+	}
+	return nil, nil, fmt.Sprintf("%s: %v", path, err)
+}
+
+// needsPushVerification reports whether a push-mode URI must be actively
+// verified before the batch can speak to its state: it has no cached diagnostics
+// AND the language server has never reported on it. It mirrors the singleURIPush
+// "not tracked" gate so a batch treats an untracked push file exactly as the
+// single-URI path does — via open-and-wait, never a silent clean.
+func (t *Diagnostics) needsPushVerification(uri string) bool {
+	return len(t.inv.Diagnostics(uri)) == 0 && !t.inv.Tracked(uri)
 }
 
 func uniqueSortedURIs(uris []string) []string {
