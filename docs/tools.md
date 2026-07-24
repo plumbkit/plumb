@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **61** structured tools to AI assistants. Every write tool is
+Plumb exposes **62** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -693,6 +693,25 @@ summary beyond that.
 
 ### `file_diff`
 Unified diff between two files (system `diff -U`). **Inputs:** two file paths.
+
+### `minimal_diff_review`
+**Advisory** review of a git diff for signs of over-building — findings **never
+block a write**, they are hints. Deterministic (no LLM): it flags a **single-use
+abstraction**, a **thin forwarding wrapper**, a **new dependency with a
+well-known stdlib equivalent**, a **possible duplicate helper**, and a **logic
+change with no accompanying test change**. Evidence is *asymmetric* — a check
+stays silent unless it can point at concrete evidence and (where defensible) a
+smaller alternative, so **silence is not proof a change is minimal**. Every
+finding is confidence-labelled: `high` = proven from the diff text; `low` =
+leans on the topology index, which is *approximate* (its call graph is
+intra-file — unlike `find_references`' exact cross-file lookup — and may be a few
+edits stale). Reviews the working-tree diff vs `base_ref`; scope it with `files`
+in a shared worktree so unrelated peer-agent edits are excluded. Degrades cleanly
+outside a git repository, and each response carries a *not analysed / limits*
+section listing the review's blind spots. **Inputs:** `base_ref` (default
+`HEAD`), `files` (array, optional scope), `mode` (`changed` (default) = working
+tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
+20, max 100), `include_suggestions` (default true).
 
 ### `version`
 Plumb version, Go runtime, OS/arch. **Inputs:** none.

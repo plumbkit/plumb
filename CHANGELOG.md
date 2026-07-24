@@ -2,6 +2,21 @@
 
 ## 0.14.0 (unreleased)
 
+### Added
+
+- **`minimal_diff_review` — advisory review of the working diff for overbuilt
+  changes.** A deterministic, read-only analysis (new `internal/minchange`
+  package, no LLM, no new dependencies) of the changed/staged diff that flags
+  possible single-use abstractions, thin forwarding wrappers, new dependencies
+  with well-known stdlib equivalents, near-duplicate helper names, and source
+  changes with no accompanying test change — each finding carrying severity,
+  confidence, concrete evidence, and (optionally) a smaller alternative, with
+  an always-present "not analysed / limits" section. Findings are advisory and
+  never block a write; verification-gap findings recommend concrete
+  `topology_affected` + `run_task` calls. Untracked new files are synthesised
+  into the review (git diff omits them); output is bounded. Tool count is now
+  62. Pairs with the `plumb-minimal-change` skill from 0.12.4.
+
 ## 0.13.0 (2026-07-24)
 
 ### Added

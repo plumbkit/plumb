@@ -33,7 +33,7 @@ var (
 	selftestTopology = []string{
 		"topology_status", "topology_search", "topology_explore",
 		"topology_impact", "topology_affected", "topology_routes",
-		"structural_query", "workspace_search",
+		"structural_query", "workspace_search", "minimal_diff_review",
 	}
 
 	selftestMemoryRead = []string{

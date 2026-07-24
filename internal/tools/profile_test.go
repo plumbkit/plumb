@@ -61,6 +61,7 @@ func nonLeanToolSet() []describable {
 		NewTypeHierarchy(nil, 0),
 		NewListFiles(nil),
 		NewListDirectory(nil),
+		NewMinimalDiffReview(nil),
 		NewReadMultipleFiles(),
 		NewFileStatus(nil),
 		NewSearchInFiles(nil, nil, nil, 0),

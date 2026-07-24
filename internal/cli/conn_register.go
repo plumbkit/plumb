@@ -253,6 +253,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewTopologyRoutes(topoFn))
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspace))
 	srv.Register(tools.NewWorkspaceSearch(s.workspace, topoFn).WithMemoryIndex(s.memoryIndexLive))
+	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspace).WithBoundary(boundary))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.
