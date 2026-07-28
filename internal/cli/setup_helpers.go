@@ -50,6 +50,17 @@ func QwenConfigPath() (string, error) {
 	return homeRelConfigPath(".qwen", "settings.json")
 }
 
+// KimiCodeConfigPath returns the Kimi Code MCP config path (~/.kimi-code/mcp.json),
+// the plain mcpServers JSON shape Kimi Code shares with Claude Desktop. Kimi
+// Desktop reads the same file, so a single registration covers both products.
+// KIMI_CODE_HOME overrides the config directory, mirroring Codex's CODEX_HOME.
+func KimiCodeConfigPath() (string, error) {
+	if home := os.Getenv("KIMI_CODE_HOME"); home != "" {
+		return filepath.Join(home, "mcp.json"), nil
+	}
+	return homeRelConfigPath(".kimi-code", "mcp.json")
+}
+
 // OpenCodeConfigPath returns the OpenCode global config
 // (~/.config/opencode/opencode.json).
 func OpenCodeConfigPath() (string, error) {

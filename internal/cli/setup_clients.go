@@ -41,13 +41,14 @@ type setupTarget struct {
 var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")
 
 // extraSetupTargets are the command-line MCP-client agents that consume external
-// MCP servers and therefore make sense as `plumb setup` targets. The first three
+// MCP servers and therefore make sense as `plumb setup` targets. The first four
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
 // key, entry shape, or serialisation (see each setup*Into helper).
 var extraSetupTargets = []setupTarget{
 	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "opencode", name: "OpenCode", pathFn: OpenCodeConfigPath, intoFn: setupOpenCodeInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},

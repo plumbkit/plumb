@@ -338,6 +338,7 @@ Controls **which tools appear in `tools/list`**, to spare a client that already 
 | Cursor | `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
 | Augment Code | `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
 | Qwen Code | `plumb setup qwen` | `~/.qwen/settings.json` |
+| Kimi Code | `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json`, or `~/.kimi-code/mcp.json` when unset (`mcpServers` key; Kimi Desktop reads the same file, so one registration covers both) |
 | Antigravity CLI | `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (the shared `{"mcpServers": {...}}` config Antigravity reads for both CLI and IDE; also repoints existing per-surface `~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/mcp_config.json`) |
 | Antigravity Desktop | `plumb setup antigravity-desktop` | same shared `~/.gemini/config/mcp_config.json` (Antigravity regenerates the per-server `mcp/` dirs from it) |
 | OpenCode | `plumb setup opencode` | `~/.config/opencode/opencode.json` (`mcp` key; `type:"local"`, command array) |
@@ -345,7 +346,7 @@ Controls **which tools appear in `tools/list`**, to spare a client that already 
 | Goose | `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |
 | Hermes | `plumb setup hermes` | `~/.hermes/config.yaml` (`mcp_servers` key; YAML) |
 
-Setup helpers preserve existing MCP servers, back up config first, and resolve locations via OS/user-home helpers — no hardcoded paths. All clients funnel through one format-agnostic merge (`mergeServerEntry`) backed by JSON, TOML, or YAML serialisers; the trio Cursor/Augment/Qwen reuse the plain `mcpServers` shape, the rest carry a client-specific key/entry. (Aider is intentionally absent — it has no native MCP **client**, only third-party servers that wrap it.)
+Setup helpers preserve existing MCP servers, back up config first, and resolve locations via OS/user-home helpers — no hardcoded paths. All clients funnel through one format-agnostic merge (`mergeServerEntry`) backed by JSON, TOML, or YAML serialisers; Cursor/Augment/Qwen/Kimi Code reuse the plain `mcpServers` shape, the rest carry a client-specific key/entry. (Aider is intentionally absent — it has no native MCP **client**, only third-party servers that wrap it.)
 
 Two bulk flags on the bare `plumb setup` command (`runSetupAll`, `internal/cli/setup_clients.go`): `--all` **repoints** every already-registered client at the current binary — the idempotent repair `plumb doctor` recommends after the binary moves or is rebuilt; it never adds plumb to a client that lacked it. `--install-missing` additionally **registers** plumb in installed-but-unregistered clients (config file present, no plumb entry) — the one-shot first-time setup — but never fabricates a config for a client with no config file (an absent config is indistinguishable from an uninstalled client). Either flag triggers the bulk run; `refreshClientAt` classifies each config path as `not installed` / `not registered` / `already current` / `registered` / `updated`, and a bare `--all` that finds unregistered clients prints a hint pointing at `--install-missing`.
 

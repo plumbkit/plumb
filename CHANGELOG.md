@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.15.0 (unreleased)
+## 0.15.1 (2026-07-28)
+
+### Added
+
+- **Kimi Code as a `plumb setup` target.** `plumb setup kimi-code` registers
+  plumb in Kimi Code's MCP config (`$KIMI_CODE_HOME/mcp.json`, or
+  `~/.kimi-code/mcp.json` when unset) under the standard `mcpServers` key — the
+  same plain-JSON shape Cursor, Augment, and Qwen already use — so the shared
+  merge helper covers it. Kimi Desktop reads the same file, so the single
+  registration covers both products. `plumb setup --all` / `--install-missing`,
+  `plumb doctor`, and the `config show` client table pick it up automatically via
+  `allSetupClients`; the supported-client count moves 13 → 14, trued up across
+  `site/index.html`, `docs/cli-reference.md`, and `AGENTS.md` (pinned by
+  `TestLanguageAndClientSourceCountsPinned`).
 
 ### Fixed
 

@@ -193,6 +193,7 @@ before modifying it.
 | `plumb setup cursor` | `~/.cursor/mcp.json` |
 | `plumb setup augment` | `~/.augment/settings.json` |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
+| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`) |
 | `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads) |
 | `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config) |
 | `plumb setup opencode` | `~/.config/opencode/opencode.json` |
