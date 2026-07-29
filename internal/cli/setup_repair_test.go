@@ -281,10 +281,109 @@ func testRefreshClientStaleBinaryRepointed(t *testing.T) {
 	requireClientRow(t, rows, changed, "already current", false)
 }
 
+// newRefreshKimiTarget builds a Kimi Code setupTarget pointed at cfgPath with a
+// controllable install detector, for the absent-config scenarios below. Kimi
+// Code's mcp.json only exists once an MCP server is configured, so detection
+// rides installedFn rather than the config file's presence.
+func newRefreshKimiTarget(cfgPath string, installed bool) setupTarget {
+	return setupTarget{
+		use:         "kimi-code",
+		name:        "Kimi Code",
+		pathFn:      func() (string, error) { return cfgPath, nil },
+		installedFn: func() bool { return installed },
+		intoFn:      setupClaudeDesktopInto,
+		extractFn:   claudeDesktopCommandExtractor,
+	}
+}
+
+func testRefreshClientKimiDetectedButUnregistered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json") // never created
+	rows, changed := refreshClient(newRefreshKimiTarget(path, true), "/new/plumb", false)
+	requireClientRow(t, rows, changed, "not registered", false)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("bare --all must not create a config for an unregistered client")
+	}
+}
+
+func testRefreshClientKimiInstallMissingCreatesConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json") // never created
+	rows, changed := refreshClient(newRefreshKimiTarget(path, true), "/new/plumb", true)
+	requireClientRow(t, rows, changed, "registered", true)
+
+	bin, ok, err := claudeDesktopCommandExtractor(path)
+	if err != nil || !ok || bin != "/new/plumb" {
+		t.Errorf("plumb not registered in created config: got %q ok=%v (err %v)", bin, ok, err)
+	}
+
+	// Second pass is a no-op.
+	rows, changed = refreshClient(newRefreshKimiTarget(path, true), "/new/plumb", true)
+	requireClientRow(t, rows, changed, "already current", false)
+}
+
+func testRefreshClientKimiDetectorNegative(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json") // never created
+	rows, changed := refreshClient(newRefreshKimiTarget(path, false), "/new/plumb", true)
+	requireClientRow(t, rows, changed, "not installed", false)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("install-missing must not fabricate a config when the detector says not installed")
+	}
+}
+
 func TestRefreshClient(t *testing.T) {
 	t.Run("not installed is skipped", testRefreshClientNotInstalled)
 	t.Run("not installed stays untouched even with install-missing", testRefreshClientNotInstalledInstallMissing)
 	t.Run("plumb not registered is skipped without install-missing", testRefreshClientNotRegistered)
 	t.Run("install-missing registers a config-present client", testRefreshClientInstallMissingRegisters)
 	t.Run("stale binary is repointed", testRefreshClientStaleBinaryRepointed)
+	t.Run("kimi detected via data dir reports not registered without install-missing", testRefreshClientKimiDetectedButUnregistered)
+	t.Run("kimi install-missing creates the absent config", testRefreshClientKimiInstallMissingCreatesConfig)
+	t.Run("kimi detector negative stays not installed", testRefreshClientKimiDetectorNegative)
+}
+
+func TestKimiCodeInstalled(t *testing.T) {
+	t.Run("data dir present", func(t *testing.T) {
+		t.Setenv("KIMI_CODE_HOME", t.TempDir())
+		if !kimiCodeInstalled() {
+			t.Error("expected installed=true when the data dir exists")
+		}
+	})
+	t.Run("data dir absent", func(t *testing.T) {
+		t.Setenv("KIMI_CODE_HOME", filepath.Join(t.TempDir(), "nope"))
+		if kimiCodeInstalled() {
+			t.Error("expected installed=false when the data dir does not exist")
+		}
+	})
+	t.Run("data path is a file", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "kimi-code")
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("KIMI_CODE_HOME", f)
+		if kimiCodeInstalled() {
+			t.Error("expected installed=false when the data path is a file, not a dir")
+		}
+	})
+}
+
+// TestCheckOneClientKimiInstalledNoConfig pins the doctor side of the Kimi Code
+// detection: an absent mcp.json with the data dir present is "not registered"
+// with a setup fix, not "not installed".
+func TestCheckOneClientKimiInstalledNoConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json") // never created
+	c := newRefreshKimiTarget(path, true)
+	res := checkOneClient(c, "")
+	if res.ok {
+		t.Error("expected ok=false for an installed-but-unregistered client")
+	}
+	if res.detail != "installed, but plumb is not registered (no config yet)" {
+		t.Errorf("unexpected detail: %q", res.detail)
+	}
+	if res.fix != "run `plumb setup kimi-code`" {
+		t.Errorf("unexpected fix: %q", res.fix)
+	}
+
+	res = checkOneClient(newRefreshKimiTarget(path, false), "")
+	if res.ok || res.detail != "not installed or config not found" {
+		t.Errorf("detector-negative client should report not installed: got %+v", res)
+	}
 }

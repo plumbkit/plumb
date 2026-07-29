@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.2 (unreleased)
+
+### Fixed
+
+- **`plumb setup --all` / `--install-missing` and `plumb doctor` no longer
+  misreport an installed Kimi Code as "not installed".** Kimi Code's
+  `~/.kimi-code/mcp.json` only appears once an MCP server is configured, so the
+  config-file-exists heuristic could not tell "installed, no MCP servers yet"
+  from "not installed" — the bulk flags skipped it and doctor's fix hint said
+  to install it. A new optional per-target install detector
+  (`setupTarget.installedFn`) detects Kimi Code via its data dir
+  (`$KIMI_CODE_HOME`, or `~/.kimi-code`): bare `--all` reports it "not
+  registered" (counted in the `--install-missing` hint), `--install-missing`
+  creates the config fresh, and doctor points at `plumb setup kimi-code`.
+  Every other client keeps the never-fabricate-a-config rule.
+
 ## 0.15.1 (2026-07-28)
 
 ### Added

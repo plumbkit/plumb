@@ -25,14 +25,20 @@ import (
 // resolving every config path to manage instead of just one — currently only
 // Claude Desktop sets it, for its heuristic sibling-profile discovery
 // (claudeDesktopConfigPaths). pathFn stays the single source of truth for
-// `plumb doctor`'s canonical-path check.
+// `plumb doctor`'s canonical-path check. installedFn is optional too: when the
+// config file is absent it decides whether the client itself is installed —
+// Kimi Code sets it because its mcp.json only appears once an MCP server is
+// configured, so an absent file does not imply an absent client. When it
+// reports installed, the bulk paths and doctor treat the client as
+// installed-but-unregistered (and --install-missing may create the config).
 type setupTarget struct {
-	use       string
-	name      string
-	pathFn    func() (string, error)
-	pathsFn   func() ([]string, error)
-	intoFn    func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
-	extractFn func(cfgPath string) (binPath string, registered bool, err error)
+	use         string
+	name        string
+	pathFn      func() (string, error)
+	pathsFn     func() ([]string, error)
+	installedFn func() bool
+	intoFn      func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
+	extractFn   func(cfgPath string) (binPath string, registered bool, err error)
 }
 
 // claudeDesktopCommandExtractor reads the plumb launch binary back from a
@@ -48,7 +54,7 @@ var extraSetupTargets = []setupTarget{
 	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-	{use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "opencode", name: "OpenCode", pathFn: OpenCodeConfigPath, intoFn: setupOpenCodeInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
@@ -252,7 +258,10 @@ type clientRow struct {
 // refreshClient repoints one client's plumb registration at plumbBin. It repoints
 // a client that already references plumb; when installMissing is set it also
 // registers plumb in an installed client whose config file exists but has no plumb
-// entry. It never fabricates a config for a client with no config file at all.
+// entry. It never fabricates a config for a client with no config file at all —
+// unless the target's installedFn vouches that the client is installed anyway
+// (Kimi Code's mcp.json only exists once an MCP server is configured), in which
+// case installMissing creates the config fresh.
 // Returns one table row per managed config path and whether any of them changed. A
 // client with pathsFn set (currently only Claude Desktop) yields one row per
 // resolved path, not just one.
@@ -297,11 +306,17 @@ func resolveTargetPaths(c setupTarget) ([]string, error) {
 // status is "error". A config-present client without a plumb entry is only
 // registered ("registered") when installMissing is set; otherwise it is reported
 // "not registered" and left untouched. A repointed existing entry reports
-// "updated".
+// "updated". An absent config means "not installed" — unless the target's
+// installedFn detects the client anyway, in which case it is treated as
+// installed-but-unregistered (and installMissing creates the config).
 func refreshClientAt(c setupTarget, cfgPath, plumbBin string, installMissing bool) (status, detail string, changed bool) {
 	detail = render.ContractPath(cfgPath)
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		return "not installed", detail, false
+		if c.installedFn == nil || !c.installedFn() {
+			return "not installed", detail, false
+		}
+		// Installed client whose config does not exist yet (Kimi Code) — fall
+		// through as installed-but-unregistered.
 	}
 	hadPlumb := clientHasPlumb(c, cfgPath)
 	if !hadPlumb && !installMissing {

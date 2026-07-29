@@ -61,6 +61,29 @@ func KimiCodeConfigPath() (string, error) {
 	return homeRelConfigPath(".kimi-code", "mcp.json")
 }
 
+// kimiCodeInstalled reports whether Kimi Code looks installed: its data dir
+// ($KIMI_CODE_HOME, or ~/.kimi-code when unset) exists. Kimi Code creates that
+// dir on first run, but mcp.json only appears once an MCP server is configured,
+// so config-file presence alone cannot tell "installed, no MCP servers yet"
+// from "not installed" — the bulk setup paths and doctor use this to tell them
+// apart.
+func kimiCodeInstalled() bool {
+	if home := os.Getenv("KIMI_CODE_HOME"); home != "" {
+		return dirExists(home)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return dirExists(filepath.Join(home, ".kimi-code"))
+}
+
+// dirExists reports whether path exists and is a directory.
+func dirExists(path string) bool {
+	info, err := os.Stat(path) //nolint:gosec // G703: path comes from OS-native config-dir helpers (UserHomeDir, KIMI_CODE_HOME), not user input
+	return err == nil && info.IsDir()
+}
+
 // OpenCodeConfigPath returns the OpenCode global config
 // (~/.config/opencode/opencode.json).
 func OpenCodeConfigPath() (string, error) {

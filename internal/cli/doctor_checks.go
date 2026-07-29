@@ -198,6 +198,17 @@ func checkOneClient(c setupTarget, selfPath string) checkResult {
 		return checkResult{name: c.name, ok: false, detail: "cannot locate config: " + err.Error()}
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if c.installedFn != nil && c.installedFn() {
+			// The client is installed but has never materialised its MCP config
+			// (Kimi Code's mcp.json only appears once a server is configured), so
+			// an absent file is "not registered", not "not installed".
+			return checkResult{
+				name:   c.name,
+				ok:     false,
+				detail: "installed, but plumb is not registered (no config yet)",
+				fix:    fmt.Sprintf("run `plumb setup %s`", c.use),
+			}
+		}
 		return checkResult{
 			name:   c.name,
 			ok:     false,

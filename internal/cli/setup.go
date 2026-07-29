@@ -25,7 +25,10 @@ elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).
 Add ` + "`--install-missing`" + ` to also register plumb in installed clients that do
 not have it yet (config file present but no plumb entry). Clients with no config
 file at all are left untouched — plumb cannot tell an absent config from an
-uninstalled client, so use the client's named subcommand to create one.`,
+uninstalled client, so use the client's named subcommand to create one. The one
+exception is Kimi Code, detected via its data dir ($KIMI_CODE_HOME, or
+~/.kimi-code): its mcp.json only exists once an MCP server is configured, so
+--install-missing creates it fresh.`,
 	RunE: runSetupAll,
 }
 
