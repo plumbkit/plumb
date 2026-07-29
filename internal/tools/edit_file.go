@@ -152,7 +152,8 @@ func (*EditFile) Description() string {
 		"EXACTLY ONCE and end_anchor must follow start_anchor; include_anchors=false (default) keeps the " +
 		"anchors and rewrites only the text between them, include_anchors=true replaces the whole inclusive " +
 		"span. Ideal for rewriting a block whose interior changes but whose stable boundary lines do not. " +
-		"CRLF is tolerated; edits apply sequentially in memory then write atomically (temp + rename) under " +
+		"CRLF is tolerated; edits apply sequentially in memory then write atomically and crash-durably " +
+		"(temp file fsynced + rename + parent-dir fsync) under " +
 		"a per-path lock. Pass expected_mtime (from a read_file header) to guarantee the file is unchanged " +
 		"since you read it. For a SOLE agent doing a burst of sequential edits to one file, OMITTING " +
 		"expected_mtime is the blessed fast path: the EXACTLY-ONCE old_string match is itself the safety " +

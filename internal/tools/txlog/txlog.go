@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/fsync"
 )
 
 const (
@@ -274,7 +276,7 @@ func atomicWriteManifest(path string, data []byte) error {
 		_ = f.Close()
 		return fmt.Errorf("txlog: writing temp manifest: %w", err)
 	}
-	if err := f.Sync(); err != nil {
+	if err := fsync.SyncFile(f); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("txlog: syncing temp manifest: %w", err)
 	}
@@ -283,6 +285,11 @@ func atomicWriteManifest(path string, data []byte) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("txlog: renaming manifest into place: %w", err)
+	}
+	// Best-effort: without the directory fsync a crash can resurrect a stale
+	// (or no) manifest even though the file data was synced above.
+	if err := fsync.SyncDir(filepath.Dir(path)); err != nil {
+		slog.Warn("txlog: directory fsync failed after manifest write", "path", path, "err", err)
 	}
 	return nil
 }

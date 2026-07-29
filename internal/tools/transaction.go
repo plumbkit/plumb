@@ -96,6 +96,8 @@ func (*TransactionApply) Description() string {
 		"validated against the on-disk content first; if any old_string is missing or " +
 		"ambiguous, NO files are written. If writes start succeeding but one fails partway, " +
 		"the already-written files are rolled back to their pre-transaction content. " +
+		"Writes are crash-durable: each temp file is fsynced before its rename and every " +
+		"touched parent directory is fsynced before the call returns. " +
 		"Per-path locks prevent interleaving with other write tools. Use for refactors " +
 		"that must land as one unit (cross-file rename of a string, coordinated config + " +
 		"caller updates, etc.). Up to 50 operations per call. The response lists each " +
@@ -387,6 +389,16 @@ func (t *TransactionApply) txPhase2Write(prepared []txPrepared) ([]txPrepared, e
 		written = append(written, p)
 	}
 	txl.Commit()
+	// safeWrite already fsyncs each file's parent dir per write; sync the
+	// deduped set once more at the end so the whole transaction is durable
+	// before it is acknowledged (cheap, and covers the rollback path too).
+	dirs := make(map[string]bool, len(written))
+	for _, p := range written {
+		if d := filepath.Dir(p.path); !dirs[d] {
+			dirs[d] = true
+			syncDirBestEffort("transaction_apply", d)
+		}
+	}
 	return written, nil
 }
 

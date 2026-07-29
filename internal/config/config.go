@@ -221,6 +221,14 @@ type EditsConfig struct {
 	// prompt for dirty_ok), for a workflow that iterates on uncommitted WIP.
 	// Re-editing a file plumb wrote this session is never blocked either way.
 	BlockDirtyWrites bool `toml:"block_dirty_writes"`
+	// Fsync controls the fsync-before-ack durability contract on the write
+	// tools and plumb's own state files: the staged temp file is fsynced
+	// before the atomic rename and the parent directory after it, so an
+	// acknowledged write survives a hard crash or power cut. Defaults to
+	// true. Set false (or PLUMB_FSYNC=0) to skip BOTH fsyncs, restoring the
+	// pre-contract behaviour — useful for write-heavy benchmarks and exotic
+	// filesystems that refuse fsync.
+	Fsync bool `toml:"fsync"`
 	// PostWriteCrossFile enables the cross-file post-write diagnostics sweep:
 	// after a write, plumb compares workspace diagnostics against a pre-write
 	// baseline and, when the edit INTRODUCED new errors in files OTHER than the
@@ -358,9 +366,10 @@ type SessionConfig struct {
 	// force-closes an idle connection. 0 disables eviction. Default 60.
 	EvictionTTLMinutes int `toml:"eviction_ttl_minutes"`
 	// PersistState: when true, per-connection state that must survive a daemon
-	// restart (strict-mode read-tracking and the pinned workspace) is persisted to
-	// session_state.db and rehydrated when the resilient proxy reconnects under the
-	// same proxy session ID. Default true. Env: PLUMB_PERSIST_SESSION_STATE.
+	// restart (strict-mode read-tracking, the pinned workspace, and the session
+	// name) is persisted to session_state.db and rehydrated when the resilient
+	// proxy reconnects under the same proxy session ID. Default true. Env:
+	// PLUMB_PERSIST_SESSION_STATE.
 	PersistState bool `toml:"persist_state"`
 	// PersistStateTTLMinutes is how long persisted per-connection state lingers
 	// before the daemon prunes it, reclaiming rows left by a serve proxy that died

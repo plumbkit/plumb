@@ -17,10 +17,16 @@ package tools
 //     EXDEV), we fall back to a sibling .plumb.tmp next to the target, which is
 //     guaranteed same-filesystem. The temp file is always cleaned up on failure.
 //
-//  4. Permissions preserved: if the target already exists, its mode bits are
+//  4. Crash-durable (fsync-before-ack): the staged temp file is fsynced before
+//     the rename, and the parent directory is fsynced after it, so a successful
+//     call means the data AND the directory entry survive a hard crash. The
+//     directory fsync is best-effort (some filesystems refuse it); the temp
+//     fsync is fatal. [edits] fsync = false restores the old no-fsync behaviour.
+//
+//  5. Permissions preserved: if the target already exists, its mode bits are
 //     copied to the temp file so the final file keeps the same permissions.
 //
-//  5. Concurrent-write detection (edit_file): before writing, we record the
+//  6. Concurrent-write detection (edit_file): before writing, we record the
 //     target's mtime. After the rename, we re-stat the file and compare mtimes.
 //     Because we just wrote the file, the mtime should be >= our pre-write
 //     snapshot. If the file is newer than our temp (i.e. a third party wrote it
@@ -34,6 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,10 +51,52 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/fsync"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
+
+// SetFsyncFunc installs the function consulted for the [edits] fsync knob
+// (default true). safeWrite and the other write primitives are free functions,
+// so the WriteDeps Fn-closure pattern cannot reach them — this package-level
+// setter is called once from the daemon's write-deps assembly instead. When
+// the knob is off, BOTH the temp-file fsync and the post-rename directory
+// fsync are skipped, restoring the pre-fix behaviour for benchmarks and
+// exotic filesystems.
+func SetFsyncFunc(fn func() bool) { fsync.SetEnabledFunc(fn) }
+
+// syncFileHook and syncDirHook are the fsync-before-ack seams. Production
+// wires them to the fsync package (which applies the [edits] fsync knob);
+// tests stub them to assert the write paths actually invoke the syncs.
+var (
+	syncFileHook = fsync.SyncFile
+	syncDirHook  = fsync.SyncDir
+)
+
+// syncTempFile fsyncs a staged temp file before its rename. Fatal on error
+// (the caller aborts the write); skipped entirely when the fsync knob is off.
+func syncTempFile(f *os.File) error {
+	if !fsync.Enabled() {
+		return nil
+	}
+	return syncFileHook(f)
+}
+
+// syncDirBestEffort fsyncs dir after a rename or remove so the directory
+// entry reaches stable storage before the call is acknowledged. Skipped when
+// the fsync knob is off. A failure is NON-fatal — some filesystems (FUSE,
+// some network mounts) refuse directory fsyncs with EINVAL; refusing the
+// write after it already landed would be worse than logging the degraded
+// durability.
+func syncDirBestEffort(op, dir string) {
+	if !fsync.Enabled() {
+		return
+	}
+	if err := syncDirHook(dir); err != nil {
+		slog.Warn(op+": directory fsync failed — write acknowledged but not crash-durable", "dir", dir, "err", err)
+	}
+}
 
 // fileSHA256 computes the hex-encoded SHA-256 of the named file's full
 // content. Used by read_file (header output) and edit_file / transaction_apply
@@ -260,7 +309,7 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 		_ = os.Remove(tmpPath)
 		return res, fmt.Errorf("writing temp file: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := syncTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return res, fmt.Errorf("syncing temp file: %w", err)
@@ -283,17 +332,39 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 		return res, fmt.Errorf("renaming temp to target: %w", err)
 	}
 
+	// Fsync the parent directory so the rename's directory entry is durable
+	// before we acknowledge the write (see the safety model at the top).
+	syncDirBestEffort("write", filepath.Dir(path))
+
 	return res, nil
 }
 
 // safeWriteSibling is the cross-device fallback: write a .plumb.tmp sibling
-// of the target (guaranteed same filesystem), then rename.
+// of the target (guaranteed same filesystem), fsync it, then rename. This is
+// the path taken whenever os.TempDir() and the target are on different
+// filesystems — e.g. /tmp on tmpfs — so it must carry the full
+// fsync-before-ack contract, not skip it.
 func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore time.Time) (writeResult, error) {
 	res := writeResult{modTimeBeforeWrite: modTimeBefore}
 
 	sibling := path + ".plumb.tmp"
-	if err := os.WriteFile(sibling, data, perm); err != nil { //nolint:gosec // G703: path is validated and locked by the safeWrite contract before reaching this function
+	f, err := os.OpenFile(sibling, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm) //nolint:gosec // G703: path is validated and locked by the safeWrite contract before reaching this function
+	if err != nil {
 		return res, fmt.Errorf("writing sibling temp file: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(sibling)
+		return res, fmt.Errorf("writing sibling temp file: %w", err)
+	}
+	if err := syncTempFile(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(sibling)
+		return res, fmt.Errorf("syncing sibling temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(sibling)
+		return res, fmt.Errorf("closing sibling temp file: %w", err)
 	}
 	res.tempWrittenAt = time.Now()
 
@@ -301,6 +372,7 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 		_ = os.Remove(sibling)
 		return res, fmt.Errorf("renaming sibling temp to target: %w", err)
 	}
+	syncDirBestEffort("write", filepath.Dir(path))
 	return res, nil
 }
 

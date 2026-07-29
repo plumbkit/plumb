@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
@@ -88,6 +89,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		if err := os.Remove(path); err != nil {
 			return "", fmt.Errorf("delete_file: %w (directory must be empty)", err)
 		}
+		syncDirBestEffort("delete_file", filepath.Dir(path))
 		t.deps.notifyTopology(path)
 		return fmt.Sprintf("deleted directory %s", path), nil
 	}
@@ -105,6 +107,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := os.Remove(path); err != nil {
 		return "", fmt.Errorf("delete_file: %w", err)
 	}
+	syncDirBestEffort("delete_file", filepath.Dir(path))
 
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileDeleted); err != nil {
 		slog.Warn("delete_file: LSP notification failed", "path", path, "err", err)

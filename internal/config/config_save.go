@@ -3,10 +3,13 @@ package config
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/plumbkit/plumb/internal/fsync"
 )
 
 // Print writes cfg as TOML to w.
@@ -91,7 +94,9 @@ func writeConfigAtomic(path string, cfg Config) error {
 // basename ignores the staging writes and reacts only to the final rename.
 // Existing file permissions are preserved; a new file is created 0o644. Shared
 // by the global Save (a Config struct) and the per-project sparse writers (a
-// map[string]any) — see project_write.go.
+// map[string]any) — see project_write.go. The temp file is fsynced before the
+// rename and the directory after it (best-effort), so a crash cannot silently
+// resurrect the previous config.
 func writeTOMLAtomic(path string, v any) error {
 	dir := filepath.Dir(path)
 	mode := os.FileMode(0o644)
@@ -108,6 +113,10 @@ func writeTOMLAtomic(path string, v any) error {
 		tmp.Close()
 		return fmt.Errorf("encoding config: %w", err)
 	}
+	if err := fsync.SyncFile(tmp); err != nil {
+		tmp.Close()
+		return fmt.Errorf("syncing config: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("flushing config: %w", err)
 	}
@@ -116,6 +125,9 @@ func writeTOMLAtomic(path string, v any) error {
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("renaming config into place: %w", err)
+	}
+	if err := fsync.SyncDir(dir); err != nil {
+		slog.Warn("config: directory fsync failed after config write", "path", path, "err", err)
 	}
 	return nil
 }

@@ -55,6 +55,10 @@ var registryData = []Field{
 		Description: "Refuse a destructive write to a pre-existing dirty file unless dirty_ok. Set false to disable.",
 	},
 	{
+		Key: "edits.fsync", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Fsync temp file + parent directory before acknowledging a write (crash durability). Set false to disable.",
+	},
+	{
 		Key: "edits.rate_limit_per_minute", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
 		Description: "Max write ops per session per minute. 0 disables limiting.",
 	},
@@ -165,7 +169,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "session.persist_state", Type: FieldBool, ReloadTier: ReloadNextSession,
-		Description: "Persist read-tracking + pinned workspace so they survive a daemon restart (rehydrated on proxy reconnect).",
+		Description: "Persist read-tracking + pinned workspace + session name so they survive a daemon restart (rehydrated on proxy reconnect).",
 	},
 	{
 		Key: "session.persist_state_ttl_minutes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,

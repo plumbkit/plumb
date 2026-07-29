@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/fsync"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -140,7 +142,9 @@ func withSessionDirLock(dir string, fn func() error) error {
 // writeSessionFileAtomic marshals info and writes it to path atomically (temp
 // file + rename) so a concurrent reader — in this or another process — never
 // observes a partially-written file. The temp file is dotfile-prefixed and ends
-// in .tmp, so List and FindEnded (which match *.json) ignore it.
+// in .tmp, so List and FindEnded (which match *.json) ignore it. The temp file
+// is fsynced before the rename and the directory after it, so a crash cannot
+// resurrect a stale session file (the directory fsync is best-effort).
 func writeSessionFileAtomic(path string, info Info) error {
 	out, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
@@ -157,6 +161,11 @@ func writeSessionFileAtomic(path string, info Info) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
+	if err := fsync.SyncFile(tmp); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
@@ -164,6 +173,9 @@ func writeSessionFileAtomic(path string, info Info) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
+	}
+	if err := fsync.SyncDir(filepath.Dir(path)); err != nil {
+		slog.Warn("session: directory fsync failed after session-file write", "path", path, "err", err)
 	}
 	return nil
 }

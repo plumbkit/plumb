@@ -104,6 +104,13 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
+	// Fsync both parent directories so the move survives a hard crash: the
+	// source dir loses an entry, the destination dir gains one (they differ
+	// whenever the move crosses directories).
+	syncDirBestEffort("rename_file", filepath.Dir(from))
+	if filepath.Dir(to) != filepath.Dir(from) {
+		syncDirBestEffort("rename_file", filepath.Dir(to))
+	}
 	t.renameFilePostRename(ctx, from, to)
 	return fmt.Sprintf("renamed %s → %s", from, to), nil
 }

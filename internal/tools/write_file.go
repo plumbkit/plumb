@@ -73,8 +73,9 @@ func NewWriteFile(deps WriteDeps) *WriteFile { return &WriteFile{deps: deps} }
 func (*WriteFile) Name() string                 { return "write_file" }
 func (*WriteFile) InputSchema() json.RawMessage { return writeFileSchema }
 func (*WriteFile) Description() string {
-	return "Create or overwrite a file with the given content. The write is atomic (staged in a temp file " +
-		"then renamed — never partially written); parent directories are created automatically and the LSP " +
+	return "Create or overwrite a file with the given content. The write is atomic and crash-durable (temp file " +
+		"fsynced, renamed, parent directory fsynced before the call returns — never partially written); parent " +
+		"directories are created automatically and the LSP " +
 		"server is notified so diagnostics and symbols update immediately. " +
 		"Pass expected_mtime or expected_sha (from a read_file header) to reject the write if the file changed " +
 		"since you read it, so a full-content overwrite never silently clobbers a concurrent change. " +

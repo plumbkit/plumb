@@ -41,6 +41,7 @@ const (
 	skStrict
 	skShowWriteDiff
 	skBlockDirtyWrites
+	skFsync
 	skRateLimit
 	skPostWriteDiagMs
 	skPostWriteCrossFile
@@ -249,6 +250,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict)},
 		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
 		{group: "Editing", label: "Block dirty writes", kind: settingToggle, key: skBlockDirtyWrites, value: onOff(cfg.Edits.BlockDirtyWrites)},
+		{group: "Editing", label: "Fsync before ack", kind: settingToggle, key: skFsync, value: onOff(cfg.Edits.Fsync)},
 		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute)},
 		{group: "Editing", label: "Post-write diag (ms)", kind: settingNumber, key: skPostWriteDiagMs, value: itoa(cfg.Edits.PostWriteDiagnosticsMs)},
 		{group: "Editing", label: "Cross-file diag", kind: settingToggle, key: skPostWriteCrossFile, value: onOff(cfg.Edits.PostWriteCrossFile)},

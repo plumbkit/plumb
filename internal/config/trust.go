@@ -5,12 +5,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/plumbkit/plumb/internal/fsync"
 )
 
 // trust.go records, per absolute workspace root, whether the user has trusted
@@ -220,6 +223,8 @@ func canonRoot(root string) string {
 
 // writeJSONAtomic marshals v to JSON and writes it atomically (temp file in the
 // target dir + rename). Shared by the trust store and the provenance sidecar.
+// The temp file is fsynced before the rename and the directory after it
+// (best-effort), so a crash cannot silently drop a trust grant or revocation.
 func writeJSONAtomic(path string, v any) error {
 	dir := filepath.Dir(path)
 	data, err := json.MarshalIndent(v, "", "  ")
@@ -236,11 +241,18 @@ func writeJSONAtomic(path string, v any) error {
 		tmp.Close()
 		return fmt.Errorf("writing temp file: %w", err)
 	}
+	if err := fsync.SyncFile(tmp); err != nil {
+		tmp.Close()
+		return fmt.Errorf("syncing temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("flushing temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("renaming into place: %w", err)
+	}
+	if err := fsync.SyncDir(dir); err != nil {
+		slog.Warn("config: directory fsync failed after json write", "path", path, "err", err)
 	}
 	return nil
 }

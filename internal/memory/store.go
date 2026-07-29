@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/fsync"
 )
 
 var nameRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -179,10 +181,34 @@ func WriteWithOptions(workspace, name, content string, opts WriteOptions) error 
 		content = sb.String()
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return fmt.Errorf("writing memory: %w", err)
 	}
-	return os.Rename(tmp, path)
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing memory: %w", err)
+	}
+	if err := fsync.SyncFile(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("syncing memory: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing memory: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming memory into place: %w", err)
+	}
+	// Best-effort: without the directory fsync a crash can resurrect the
+	// pre-rename directory entry and silently drop the memory.
+	if err := fsync.SyncDir(filepath.Dir(path)); err != nil {
+		slog.Warn("memory: directory fsync failed after memory write", "path", path, "err", err)
+	}
+	return nil
 }
 
 func frontmatterScalar(s string) string {

@@ -22,6 +22,7 @@ var defaults = Config{
 		ConcurrentWriteSkewMs:      100,
 		ShowWriteDiff:              true,
 		BlockDirtyWrites:           true,
+		Fsync:                      true,
 		PostWriteCrossFile:         true,
 		PostWriteCrossFileSettleMs: 200,
 	},
