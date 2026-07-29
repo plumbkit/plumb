@@ -52,9 +52,9 @@ func TestPublishSchema_RecursesIntoArrayItems(t *testing.T) {
 	// operations is an array-OF-OBJECTS, so it is dropped from the published
 	// top-level required (the daemon can rebuild it from misplaced top-level keys —
 	// the wrap recovery). Its nested required is still relaxed: file_path is an
-	// alias target (dropped), while the inner `edits` is an array of SCALARS (no
+	// alias target (dropped), while the inner `payload` is an array of SCALARS (no
 	// object items), so it is not wrappable and stays required.
-	in := json.RawMessage(`{"type":"object","properties":{"operations":{"type":"array","items":{"type":"object","properties":{"file_path":{"type":"string"},"edits":{"type":"array"}},"required":["file_path","edits"],"additionalProperties":false}}},"required":["operations"]}`)
+	in := json.RawMessage(`{"type":"object","properties":{"operations":{"type":"array","items":{"type":"object","properties":{"file_path":{"type":"string"},"payload":{"type":"array"}},"required":["file_path","payload"],"additionalProperties":false}}},"required":["operations"]}`)
 	got := parseSchema(t, publishSchema(in))
 
 	if len(got.Required) != 0 {
@@ -67,7 +67,7 @@ func TestPublishSchema_RecursesIntoArrayItems(t *testing.T) {
 	}
 	opsItems := parseSchema(t, props["operations"])
 	items := parseSchema(t, opsItems.Items)
-	if want := []string{"edits"}; !reflect.DeepEqual(items.Required, want) {
+	if want := []string{"payload"}; !reflect.DeepEqual(items.Required, want) {
 		t.Errorf("items required = %v, want %v (file_path is an alias target)", items.Required, want)
 	}
 	if !bytes.Equal(bytes.TrimSpace(items.AdditionalProperties), []byte("true")) {

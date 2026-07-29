@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -16,7 +17,8 @@ import (
 // mutated, so it is safe to read concurrently.
 type shape struct {
 	props       map[string]struct{}
-	order       []string // declaration order, for deterministic messages
+	order       []string          // declaration order, for deterministic messages
+	types       map[string]string // property → declared JSON Schema type ("integer", "boolean", "array", …)
 	required    []string
 	rejectExtra bool              // only when the schema sets additionalProperties:false
 	children    map[string]*shape // property → nested object shape (arrays use their element shape)
@@ -47,6 +49,7 @@ func parseObjectShape(schema json.RawMessage) (*shape, bool) {
 	sh := &shape{
 		props:       make(map[string]struct{}, len(order)),
 		order:       order,
+		types:       make(map[string]string, len(order)),
 		required:    raw.Required,
 		rejectExtra: bytes.Equal(bytes.TrimSpace(raw.AdditionalProperties), []byte("false")),
 		children:    map[string]*shape{},
@@ -54,12 +57,26 @@ func parseObjectShape(schema json.RawMessage) (*shape, bool) {
 	}
 	for _, k := range order {
 		sh.props[k] = struct{}{}
+		sh.types[k] = schemaType(propSchemas[k])
 		if child, isArray, ok := childShape(propSchemas[k]); ok {
 			sh.children[k] = child
 			sh.arrays[k] = isArray
 		}
 	}
 	return sh, true
+}
+
+// schemaType extracts the declared "type" of a property schema ("" when absent
+// or unparseable). It drives type coercion (coerceTypes) and the wrapScalar
+// alias transform, both of which need to know a parameter's scalar kind.
+func schemaType(propSchema json.RawMessage) string {
+	var raw struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(propSchema, &raw); err != nil {
+		return ""
+	}
+	return raw.Type
 }
 
 // childShape returns the object shape to descend into for a property: the
@@ -145,6 +162,12 @@ func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessa
 	if relocateMisplaced(sh, obj, &warnings) {
 		changed = true
 	}
+	// Then coerce string values that plainly mean the declared scalar type
+	// ("15" → 15 for an integer parameter, "true" → true for a boolean one) —
+	// tools decode with plain json.Unmarshal, which rejects these outright.
+	if coerceTypes(sh, obj, "", &warnings) {
+		changed = true
+	}
 	if err := validateObject(sh, obj, "", toolName); err != nil {
 		return raw, nil, err
 	}
@@ -186,19 +209,20 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 	changed := false
 	type rename struct {
 		from, to string
+		xf       transform
 		fuzzy    bool
 	}
 	var renames []rename
 	targets := map[string]bool{} // canonical names already claimed this level
 	claimed := map[string]bool{} // unknown keys already given a rename
-	// Pass 1: curated/exact alias resolution (unchanged behaviour).
+	// Pass 1: curated/exact alias resolution, including value-transform aliases.
 	for key := range obj {
 		if _, ok := sh.props[key]; ok {
 			continue
 		}
-		if canon, ok := canonicalFor(key, sh, obj); ok {
-			renames = append(renames, rename{from: key, to: canon})
-			targets[canon] = true
+		if cand, ok := canonicalFor(key, sh, obj); ok {
+			renames = append(renames, rename{from: key, to: cand.name, xf: cand.xf})
+			targets[cand.name] = true
 			claimed[key] = true
 		}
 	}
@@ -218,13 +242,17 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 	}
 	sort.Slice(renames, func(i, j int) bool { return renames[i].from < renames[j].from })
 	for _, r := range renames {
-		obj[r.to] = obj[r.from]
+		v := obj[r.from]
+		if r.xf != noTransform {
+			v = r.xf.apply(sh, r.to, v)
+		}
+		obj[r.to] = v
 		delete(obj, r.from)
-		*warnings = append(*warnings, renameWarning(joinPath(path, r.from), r.to, r.fuzzy))
+		*warnings = append(*warnings, renameWarning(joinPath(path, r.from), r.to, r.fuzzy, r.xf))
 		changed = true
 	}
 	for key, child := range sh.children {
-		if v, ok := obj[key]; ok && descend(child, v, joinPath(path, key), warnings) {
+		if v, ok := obj[key]; ok && descend(child, v, joinPath(path, key), warnings, rewriteObject) {
 			changed = true
 		}
 	}
@@ -233,30 +261,76 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 
 // renameWarning describes one applied key rewrite. A fuzzy (edit-distance)
 // correction is flagged as an assumed typo so the caller can see it was a guess,
-// not a curated alias.
-func renameWarning(from, to string, fuzzy bool) string {
+// not a curated alias; a value transform says what it did to the value.
+func renameWarning(from, to string, fuzzy bool, xf transform) string {
 	if fuzzy {
 		return fmt.Sprintf("corrected likely typo %q to %q", from, to)
+	}
+	if d := xf.describe(); d != "" {
+		return fmt.Sprintf("interpreted %q as %q (%s)", from, to, d)
 	}
 	return fmt.Sprintf("interpreted %q as %q", from, to)
 }
 
-// descend applies child to a property value: an object, or each object element
-// of an array. Returns true if any nested key was renamed.
-func descend(child *shape, v any, path string, warnings *[]string) bool {
+// descend applies fn to a property value: the object itself, or each object
+// element of an array. Returns true if fn changed anything.
+func descend(child *shape, v any, path string, warnings *[]string, fn func(*shape, map[string]any, string, *[]string) bool) bool {
 	switch t := v.(type) {
 	case map[string]any:
-		return rewriteObject(child, t, path, warnings)
+		return fn(child, t, path, warnings)
 	case []any:
 		changed := false
 		for _, e := range t {
-			if m, ok := e.(map[string]any); ok && rewriteObject(child, m, path+"[]", warnings) {
+			if m, ok := e.(map[string]any); ok && fn(child, m, path+"[]", warnings) {
 				changed = true
 			}
 		}
 		return changed
 	}
 	return false
+}
+
+// coerceTypes rewrites string values that plainly mean the declared scalar
+// type: a string that parses as an integer under an integer-typed parameter
+// ("15" → 15), and "true"/"false" (any case) under a boolean-typed one.
+// Nothing else — no float-to-int, no trimming — and a string that does not
+// parse is left untouched for the tool's own decoder to reject. Tools decode
+// with plain json.Unmarshal, which fails the whole call on these; the schema
+// tells us exactly which rewrites are safe.
+func coerceTypes(sh *shape, obj map[string]any, path string, warnings *[]string) bool {
+	changed := false
+	for _, key := range sh.order {
+		s, ok := obj[key].(string)
+		if !ok {
+			continue
+		}
+		switch sh.types[key] {
+		case "integer":
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				continue
+			}
+			// Re-encode via FormatInt so non-JSON forms like "015" or "+15"
+			// come out as a valid JSON number.
+			obj[key] = json.Number(strconv.FormatInt(n, 10))
+			*warnings = append(*warnings, fmt.Sprintf("coerced %q from string to integer", joinPath(path, key)))
+			changed = true
+		case "boolean":
+			b, ok := boolValue(s)
+			if !ok {
+				continue
+			}
+			obj[key] = b
+			*warnings = append(*warnings, fmt.Sprintf("coerced %q from string to boolean", joinPath(path, key)))
+			changed = true
+		}
+	}
+	for key, child := range sh.children {
+		if v, ok := obj[key]; ok && descend(child, v, joinPath(path, key), warnings, coerceTypes) {
+			changed = true
+		}
+	}
+	return changed
 }
 
 // validateObject checks one object level: no undeclared properties (when this

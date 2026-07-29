@@ -7,7 +7,8 @@ import (
 )
 
 // aliasTargetSet is the set of canonical parameter names that some entry in
-// paramAliases can stand in for (the union of the table's values). Computed once.
+// paramAliases can stand in for (the union of the table's target names).
+// Computed once.
 //
 // A field that is an alias target may legitimately arrive under a different name,
 // so the schema PUBLISHED to clients must not mark it `required`. A host that
@@ -19,7 +20,7 @@ var aliasTargetSet = sync.OnceValue(func() map[string]struct{} {
 	out := make(map[string]struct{})
 	for _, canons := range paramAliases {
 		for _, c := range canons {
-			out[c] = struct{}{}
+			out[c.name] = struct{}{}
 		}
 	}
 	return out

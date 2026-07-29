@@ -2,6 +2,36 @@ package mcp
 
 import "strings"
 
+// aliasTarget is one canonical parameter an alias key may stand in for. Most
+// entries are a plain rename (xf == noTransform). A transform additionally
+// rewrites the VALUE as the rename is applied, for the few aliases whose name
+// states a semantics rather than just naming a parameter:
+//   - invertBool: a value-inverting flag (-i / ignore_case → case_sensitive
+//     with the value negated);
+//   - constTrue: a constant flag (preview → dry_run:true, regex →
+//     use_regex:true) — the value is forced, and the candidate only FITS a
+//     truthy value, so `preview:false` is left for validation rather than
+//     silently flipped;
+//   - wrapScalar: a scalar wrapped into a one-element array when the
+//     canonical is array-typed (kind → kinds, path → uris).
+//
+// Transforms are allowed only for intent-explicit flags: the caller explicitly
+// named the flag, so the transform IS the semantics the name states — applying
+// it honours the caller's stated intent rather than guessing it.
+// (safetyCriticalParams keeps FUZZY typo promotion away from the guarded
+// canonical names; curated transforms are deliberate, not fuzzy.)
+type aliasTarget struct {
+	name string
+	xf   transform
+}
+
+// Plain / transform-carrying aliasTarget constructors, keeping the table rows
+// one-liners.
+func plain(name string) aliasTarget    { return aliasTarget{name: name} }
+func invert(name string) aliasTarget   { return aliasTarget{name: name, xf: invertBool} }
+func constant(name string) aliasTarget { return aliasTarget{name: name, xf: constTrue} }
+func wrap(name string) aliasTarget     { return aliasTarget{name: name, xf: wrapScalar} }
+
 // paramAliases maps a normalised parameter name (see normaliseKey) to the
 // canonical name(s) it may stand in for, most-preferred first. The resolver
 // only applies a mapping when the canonical name is an actual parameter of the
@@ -15,61 +45,105 @@ import "strings"
 // reach the same parameters without a failed call.
 //
 // Candidate order is most-preferred-first; the first one that is a real,
-// unset parameter of the called tool wins, so a single alias serves tools with
-// different shapes (e.g. "path" → uri on get_definition, → root on list_files,
-// and stays canonical on search_in_files where "path" is the real parameter).
-// New entries are empirically driven (the parameter names agents actually send,
-// mined from the stats DB) and must be unambiguous — never a semantic flip
+// unset parameter of the called tool whose transform (if any) fits the given
+// value wins, so a single alias serves tools with different shapes (e.g.
+// "path" → uri on get_definition, → root on list_files, and stays canonical on
+// search_in_files where "path" is the real parameter). New entries are
+// empirically driven (the parameter names agents actually send, mined from
+// the stats DB) and must be unambiguous — never a semantic flip
 // (include≠exclude) or a safety-critical guess (no git subcommand/confirm).
-var paramAliases = map[string][]string{
+// Value transforms (aliasTarget.xf) are the narrow, deliberate exception:
+// permitted only where the alias name itself states the semantics (an
+// intent-explicit flag like -i or preview).
+var paramAliases = map[string][]aliasTarget{
 	// File / directory location. Note keys are matched post-normalisation (see
 	// normaliseKey), so "filepath" already covers a literal `file_path` argument —
 	// hence no separate "file_path" entry. "uri" is the reciprocal that lets the
 	// LSP tools' `uri` cross-accept onto the file/dir tools' file_path/path/root
-	// (read_file({uri: …}) previously errored because no "uri" key existed).
-	"path":      {"file_path", "uri", "root"},
-	"uri":       {"file_path", "path", "root"},
-	"filepath":  {"file_path", "path", "uri"},
-	"filename":  {"file_path", "uri"},
-	"file":      {"file_path", "path", "uri"},
-	"filepaths": {"paths", "file_path"},
-	"dir":       {"path", "root"},
-	"directory": {"path", "root"},
-	"folder":    {"path", "root"},
-	"root":      {"path"},
+	// (read_file({uri: …}) previously errored because no "uri" key existed). The
+	// trailing wrap candidate lets a scalar stand in for the array-typed `uris`
+	// (diagnostics) wherever no scalar location parameter exists.
+	"path":      {plain("file_path"), plain("uri"), plain("root"), wrap("uris"), plain("uris")},
+	"uri":       {plain("file_path"), plain("path"), plain("root")},
+	"filepath":  {plain("file_path"), plain("path"), plain("uri")},
+	"filename":  {plain("file_path"), plain("uri")},
+	"file":      {plain("file_path"), plain("path"), plain("uri"), wrap("uris"), plain("uris")},
+	"filepaths": {plain("paths"), plain("file_path")},
+	"dir":       {plain("path"), plain("root")},
+	"directory": {plain("path"), plain("root")},
+	"folder":    {plain("path"), plain("root")},
+	"root":      {plain("path")},
 	// Edit content.
-	"oldstr":  {"old_string"},
-	"newstr":  {"new_string"},
-	"find":    {"pattern"},
-	"replace": {"replacement"},
-	// Search / symbol query.
-	"regex":       {"pattern"},
-	"query":       {"pattern", "name"},
-	"pattern":     {"query"},
-	"name":        {"query", "symbol_name"},
-	"newname":     {"name"},
-	"symbol":      {"name", "symbol_name", "query"},
-	"isregex":     {"use_regex"},
-	"filepattern": {"glob"},
+	"oldstr":  {plain("old_string")},
+	"newstr":  {plain("new_string")},
+	"find":    {plain("pattern")},
+	"replace": {plain("replacement")},
+	// Search / symbol query. "regex" is two intents sharing a name: a string
+	// value is the pattern itself (the long-standing behaviour); a truthy bool
+	// is the intent-explicit "treat the pattern as a regex" flag, so only then
+	// does it rewrite to use_regex:true.
+	"regex":       {constant("use_regex"), plain("pattern")},
+	"query":       {plain("pattern"), plain("name")},
+	"pattern":     {plain("query")},
+	"name":        {plain("query"), plain("symbol_name")},
+	"newname":     {plain("name")},
+	"symbol":      {plain("name"), plain("symbol_name"), plain("query")},
+	"isregex":     {plain("use_regex")},
+	"filepattern": {plain("glob")},
+	// Case sensitivity: grep-style value-inverting flags (-i normalises to "i").
+	"i":          {invert("case_sensitive")},
+	"ignorecase": {invert("case_sensitive")},
+	// Preview / dry-run.
+	"preview": {constant("dry_run")},
+	// Array-typed filters: wrap the scalar into a one-element array. The plain
+	// fallback covers a value that is already an array.
+	"kind": {wrap("kinds"), plain("kinds")},
 	// Move / copy.
-	"source":      {"from"},
-	"destination": {"to"},
+	"source":      {plain("from")},
+	"destination": {plain("to")},
 	// File content (write_file / write_memory).
-	"text":     {"content"},
-	"contents": {"content"},
-	"body":     {"content"},
-	// Read window.
-	"start": {"start_line"},
-	"end":   {"end_line"},
+	"text":     {plain("content")},
+	"contents": {plain("content")},
+	"body":     {plain("content")},
+	"data":     {plain("content")},
+	// Edit batches (edit_file).
+	"changes":      {plain("edits")},
+	"replacements": {plain("edits")},
+	// Read window / result caps. The n-lines synonyms serve every capped tool
+	// (read_file's limit, search's max_results/max_matches, workspace_sessions'
+	// recent_limit — first eligible wins); "limit" itself crosses only to tools
+	// WITHOUT a limit parameter (eligibility skips it where limit is declared),
+	// where the same cap goes by a different name.
+	"start":      {plain("start_line")},
+	"end":        {plain("end_line")},
+	"nlines":     {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"numlines":   {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"maxlines":   {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"linecount":  {plain("limit"), plain("max_results"), plain("recent_limit"), plain("max_matches")},
+	"limit":      {plain("max_results"), plain("max_matches"), plain("recent_limit")},
+	"maxmatches": {plain("max_matches"), plain("max_results")},
+	"maxcount":   {plain("max_matches"), plain("max_results")},
+	// Traversal depth: list_files/find_files call it max_depth, the topology
+	// tools call it depth — both directions.
+	"depth":    {plain("max_depth")},
+	"maxdepth": {plain("depth")},
+	// Find/filter.
+	"ext": {plain("extension")},
+	// Hidden files.
+	"hidden": {plain("include_hidden")},
+	// Directory listing order.
+	"sort":    {plain("sort_by")},
+	"orderby": {plain("sort_by")},
 	// Tasks.
-	"task": {"slot"},
+	"task": {plain("slot")},
 	// Git.
-	"msg":           {"message"},
-	"commitmessage": {"message"},
-	"repository":    {"repo"},
-	"subcmd":        {"subcommand"},
+	"msg":           {plain("message")},
+	"commitmessage": {plain("message")},
+	"repository":    {plain("repo")},
+	"subcmd":        {plain("subcommand")},
+	"command":       {plain("subcommand")},
 	// Workspace pin.
-	"workspacepath": {"workspace"},
+	"workspacepath": {plain("workspace")},
 }
 
 // safetyCriticalParams names canonical parameters a fuzzy (edit-distance) match
@@ -77,7 +151,9 @@ var paramAliases = map[string][]string{
 // guard, so an ambiguous typo is surfaced as a rejection ("did you mean") rather
 // than silently applied. The curated paramAliases table and the case/separator-
 // insensitive match are still allowed for these names — only edit-distance
-// guessing is gated, because those two are exact, not approximate.
+// guessing is gated, because those two are exact, not approximate. The curated
+// value transforms (aliasTarget.xf) may likewise target these names: they are
+// deliberate, intent-explicit rewrites, not guesses.
 var safetyCriticalParams = map[string]bool{
 	"confirm":           true,
 	"use_regex":         true,
@@ -135,16 +211,17 @@ func aliasNotice(warnings []string) string {
 }
 
 // canonicalFor resolves an unknown key to a canonical parameter of sh, or
-// returns ("", false). It tries the curated alias table first, then a
-// case/separator-insensitive match against the level's declared parameters. It
-// never guesses by edit distance — that approximate path lives in the separately
-// gated fuzzyCanonical (rewriteObject's second pass), so the curated resolution
-// here stays exact.
-func canonicalFor(key string, sh *shape, obj map[string]any) (string, bool) {
+// returns the zero aliasTarget and false. It tries the curated alias table
+// first (skipping candidates whose transform does not fit the given value),
+// then a case/separator-insensitive match against the level's declared
+// parameters. It never guesses by edit distance — that approximate path lives
+// in the separately gated fuzzyCanonical (rewriteObject's second pass), so the
+// curated resolution here stays exact.
+func canonicalFor(key string, sh *shape, obj map[string]any) (aliasTarget, bool) {
 	nk := normaliseKey(key)
-	for _, canon := range paramAliases[nk] {
-		if eligible(canon, sh, obj) {
-			return canon, true
+	for _, cand := range paramAliases[nk] {
+		if eligible(cand.name, sh, obj) && cand.xf.fits(obj[key]) {
+			return cand, true
 		}
 	}
 	match, count := "", 0
@@ -154,9 +231,9 @@ func canonicalFor(key string, sh *shape, obj map[string]any) (string, bool) {
 		}
 	}
 	if count == 1 && eligible(match, sh, obj) {
-		return match, true
+		return aliasTarget{name: match}, true
 	}
-	return "", false
+	return aliasTarget{}, false
 }
 
 // eligible reports whether canon is a real parameter at this level that the
@@ -205,6 +282,90 @@ func closest(key string, candidates []string) string {
 		return best
 	}
 	return ""
+}
+
+// transform identifies the optional value rewrite an aliasTarget applies as
+// the rename happens. See aliasTarget for the policy (intent-explicit flags
+// only).
+type transform int
+
+const (
+	noTransform transform = iota
+	invertBool            // bool → its negation (value-inverting flag: -i → case_sensitive)
+	constTrue             // force true; fits only a truthy value (constant flag: preview → dry_run:true)
+	wrapScalar            // scalar → one-element array when the canonical is array-typed
+)
+
+// fits reports whether the transform suits the value the caller gave. A
+// candidate whose transform does not fit is skipped, so the next candidate (or
+// validation's "did you mean") sees the key — a transform never fires on a
+// value it cannot honour.
+func (t transform) fits(v any) bool {
+	switch t {
+	case invertBool:
+		_, ok := boolValue(v)
+		return ok
+	case constTrue:
+		b, ok := boolValue(v)
+		return ok && b
+	case wrapScalar:
+		// Only a scalar needs wrapping; an already-array value falls through
+		// to the plain-rename candidate for the same canonical.
+		_, isArray := v.([]any)
+		return !isArray
+	}
+	return true
+}
+
+// apply rewrites the value for the renamed key. sh/to identify the canonical
+// parameter (wrapScalar consults its declared type); by the time apply runs a
+// bool transform always fits.
+func (t transform) apply(sh *shape, to string, v any) any {
+	switch t {
+	case invertBool:
+		b, _ := boolValue(v)
+		return !b
+	case constTrue:
+		return true
+	case wrapScalar:
+		if sh.types[to] == "array" {
+			if _, isArray := v.([]any); !isArray {
+				return []any{v}
+			}
+		}
+	}
+	return v
+}
+
+// describe is the short parenthetical added to the alias notice when a
+// transform fired ("" for a plain rename).
+func (t transform) describe() string {
+	switch t {
+	case invertBool:
+		return "inverted value"
+	case constTrue:
+		return "forced true"
+	case wrapScalar:
+		return "wrapped in a single-element array"
+	}
+	return ""
+}
+
+// boolValue reads a JSON bool, or the strings "true"/"false" (any case), as a
+// bool. ok is false for anything else.
+func boolValue(v any) (b, ok bool) {
+	switch t := v.(type) {
+	case bool:
+		return t, true
+	case string:
+		switch strings.ToLower(t) {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // levenshtein is the classic two-row edit distance.

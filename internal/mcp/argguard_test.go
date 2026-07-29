@@ -363,3 +363,131 @@ func TestLevenshtein(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveArgs_TypeCoercion covers the schema-guided string→scalar
+// coercions: a string that parses as an integer under an integer-typed
+// parameter, and "true"/"false" (any case) under a boolean-typed one.
+// Anything else is left untouched for the tool's own decoder to reject.
+func TestResolveArgs_TypeCoercion(t *testing.T) {
+	const intsSchema = `{"type":"object","properties":{"offset":{"type":"integer"},"limit":{"type":"integer"},"pattern":{"type":"string"}},"additionalProperties":false}`
+	const boolsSchema = `{"type":"object","properties":{"pattern":{"type":"string"},"dry_run":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}`
+	const nestedIntsSchema = `{"type":"object","properties":{"edits":{"type":"array","items":{"type":"object","properties":{"new_string":{"type":"string"},"start_line":{"type":"integer"}},"required":["new_string"]}}},"required":["edits"],"additionalProperties":false}`
+
+	tests := []struct {
+		name        string
+		schema      string
+		args        string
+		wantWarn    string   // "" => expect no coercion warning
+		wantArgsSub []string // substrings expected in the (possibly rewritten) args
+	}{
+		{
+			name:        `offset "15" → 15`,
+			schema:      intsSchema,
+			args:        `{"offset":"15"}`,
+			wantWarn:    `coerced "offset" from string to integer`,
+			wantArgsSub: []string{`"offset":15`},
+		},
+		{
+			name:        `negative integer string`,
+			schema:      intsSchema,
+			args:        `{"offset":"-3"}`,
+			wantWarn:    `coerced "offset" from string to integer`,
+			wantArgsSub: []string{`"offset":-3`},
+		},
+		{
+			name:        `non-JSON form "015" re-encodes as a valid JSON number`,
+			schema:      intsSchema,
+			args:        `{"offset":"015"}`,
+			wantWarn:    `coerced "offset" from string to integer`,
+			wantArgsSub: []string{`"offset":15`},
+		},
+		{
+			name:        `dry_run "true" → true`,
+			schema:      boolsSchema,
+			args:        `{"pattern":"x","dry_run":"true"}`,
+			wantWarn:    `coerced "dry_run" from string to boolean`,
+			wantArgsSub: []string{`"dry_run":true`},
+		},
+		{
+			name:        `dry_run "FALSE" → false (case-insensitive)`,
+			schema:      boolsSchema,
+			args:        `{"pattern":"x","dry_run":"FALSE"}`,
+			wantWarn:    `coerced "dry_run" from string to boolean`,
+			wantArgsSub: []string{`"dry_run":false`},
+		},
+		{
+			name:        "nested array element is coerced too",
+			schema:      nestedIntsSchema,
+			args:        `{"edits":[{"new_string":"x","start_line":"2"}]}`,
+			wantWarn:    `coerced "edits[].start_line" from string to integer`,
+			wantArgsSub: []string{`"start_line":2`},
+		},
+		// Rejection cases: left exactly as sent, no warning — the tool's own
+		// decoder produces the error.
+		{
+			name:        `offset "abc" is left for the tool's decoder`,
+			schema:      intsSchema,
+			args:        `{"offset":"abc"}`,
+			wantWarn:    "",
+			wantArgsSub: []string{`"offset":"abc"`},
+		},
+		{
+			name:        `offset "1.5" is not truncated to an int`,
+			schema:      intsSchema,
+			args:        `{"offset":"1.5"}`,
+			wantWarn:    "",
+			wantArgsSub: []string{`"offset":"1.5"`},
+		},
+		{
+			name:        `dry_run "yes" is not a boolean`,
+			schema:      boolsSchema,
+			args:        `{"pattern":"x","dry_run":"yes"}`,
+			wantWarn:    "",
+			wantArgsSub: []string{`"dry_run":"yes"`},
+		},
+		{
+			name:        `dry_run " true " is not trimmed`,
+			schema:      boolsSchema,
+			args:        `{"pattern":"x","dry_run":" true "}`,
+			wantWarn:    "",
+			wantArgsSub: []string{`"dry_run":" true "`},
+		},
+		{
+			name:        "a numeric string under a string-typed parameter stays a string",
+			schema:      intsSchema,
+			args:        `{"pattern":"15"}`,
+			wantWarn:    "",
+			wantArgsSub: []string{`"pattern":"15"`},
+		},
+		{
+			name:        "a real number needs no coercion",
+			schema:      intsSchema,
+			args:        `{"offset":15}`,
+			wantWarn:    "",
+			wantArgsSub: []string{`"offset":15`},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sh := mustShape(t, tc.schema)
+			out, warnings, err := resolveArgs(sh, json.RawMessage(tc.args), "tool")
+			if err != nil {
+				t.Fatalf("resolveArgs error: %v", err)
+			}
+			joined := strings.Join(warnings, "; ")
+			if tc.wantWarn == "" {
+				if len(warnings) != 0 {
+					t.Errorf("expected no coercion, got warnings: %s", joined)
+				}
+			} else if !strings.Contains(joined, tc.wantWarn) {
+				t.Errorf("warnings = %q, want substring %q", joined, tc.wantWarn)
+			}
+			for _, sub := range tc.wantArgsSub {
+				if !strings.Contains(string(out), sub) {
+					t.Errorf("args = %s, want substring %q", out, sub)
+				}
+			}
+		})
+	}
+}
