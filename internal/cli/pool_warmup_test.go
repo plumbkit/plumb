@@ -33,11 +33,15 @@ func TestWarmupFor(t *testing.T) {
 }
 
 // TestWarmingErr checks the warm-up error folds in elapsed time, the routed
-// root, and a pointer to the tools that answer immediately.
+// root, and a pointer to the tools that answer immediately — including the
+// tree-sitter topology backup.
 func TestWarmingErr(t *testing.T) {
 	zero := warmingErr(0, "").Error()
 	if !strings.Contains(zero, "not yet ready") || !strings.Contains(zero, "topology_search") {
 		t.Fatalf("zero-elapsed message unexpected: %q", zero)
+	}
+	if !strings.Contains(zero, "tree-sitter") {
+		t.Fatalf("zero-elapsed message must name the tree-sitter backup: %q", zero)
 	}
 
 	got := warmingErr(3400*time.Millisecond, "/proj").Error()
@@ -46,6 +50,23 @@ func TestWarmingErr(t *testing.T) {
 	}
 	if !strings.Contains(got, "3s elapsed") {
 		t.Fatalf("expected rounded elapsed in message: %q", got)
+	}
+	if !strings.Contains(got, "tree-sitter") || !strings.Contains(got, "move_symbol") {
+		t.Fatalf("warming message must name the tree-sitter symbol-edit backup: %q", got)
+	}
+}
+
+// TestGetOrErrCarriesGuidance pins the killed bare error: the hibernation-race
+// path through clientProxy.getOrErr must route through warmingErr, so no code
+// path emits a guidance-less "not yet ready".
+func TestGetOrErrCarriesGuidance(t *testing.T) {
+	_, err := (&clientProxy{}).getOrErr()
+	if err == nil {
+		t.Fatal("expected a not-ready error from an empty proxy")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "not yet ready") || !strings.Contains(msg, "tree-sitter") {
+		t.Fatalf("getOrErr must carry the cold-LSP guidance, got: %q", msg)
 	}
 }
 

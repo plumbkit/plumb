@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,7 +58,9 @@ func (p *clientProxy) clear() {
 func (p *clientProxy) getOrErr() (lsp.Client, error) {
 	c := p.get()
 	if c == nil {
-		return nil, fmt.Errorf("LSP server not yet ready")
+		// Never bare: route through warmingErr so the hibernation-race path
+		// carries the same cold-LSP guidance as the routing proxy.
+		return nil, warmingErr(0, "")
 	}
 	return c, nil
 }

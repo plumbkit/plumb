@@ -39,6 +39,7 @@ type RenameSymbol struct {
 	client   lsp.Client
 	timeout  time.Duration
 	guard    BoundaryGuard
+	warmup   LSPWarmupFn  // optional; folds warming state into the LSP-failure guidance
 	ws       WorkspaceFn  // may be nil; anchors a workspace-relative input uri to the pinned root
 	cache    *cache.Cache // may be nil; evicted per modified file after a successful apply
 	fallback *findReplaceTool
@@ -49,6 +50,14 @@ type RenameSymbol struct {
 
 func NewRenameSymbol(client lsp.Client, timeout time.Duration) *RenameSymbol {
 	return &RenameSymbol{client: client, timeout: timeout}
+}
+
+// WithLSPWarmup wires the warm-up probe so the LSP-failure guidance mentions
+// the warming state (and daemon_info) when the server is still starting.
+// Nil-safe.
+func (t *RenameSymbol) WithLSPWarmup(fn LSPWarmupFn) *RenameSymbol {
+	t.warmup = fn
+	return t
 }
 
 // WithCache wires the session symbol cache so a successful rename evicts every

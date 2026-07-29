@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // Warm-up surfacing for the routing proxy: the not-ready error formatting and
@@ -25,10 +26,10 @@ func warmingErr(elapsed time.Duration, root string) error {
 	}
 	if elapsed <= 0 {
 		return fmt.Errorf("LSP server not yet ready%s — it is still starting up; retry shortly "+
-			"(topology_search / find_symbol / file_outline answer now)", loc)
+			"(%s)", loc, tools.ColdLSPToolsHint)
 	}
 	return fmt.Errorf("LSP server still warming%s (%s elapsed) — retry shortly "+
-		"(topology_search / find_symbol / file_outline answer now)", loc, roundWarmElapsed(elapsed))
+		"(%s)", loc, roundWarmElapsed(elapsed), tools.ColdLSPToolsHint)
 }
 
 // roundWarmElapsed rounds a warm-up duration to a human-friendly precision:

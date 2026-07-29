@@ -55,9 +55,18 @@ type FindReferences struct {
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
+	warmup  LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
 	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 	xcode   XcodeHintFn
 	proof   XcodeProofFn
+}
+
+// WithLSPWarmup wires the warm-up probe so a failure against a still-warming
+// server says so (and names what answers now) instead of showing the 0-based
+// coordinate hint, which would mislead there. Nil-safe.
+func (t *FindReferences) WithLSPWarmup(fn LSPWarmupFn) *FindReferences {
+	t.warmup = fn
+	return t
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
@@ -143,6 +152,9 @@ func (t *FindReferences) executeByName(ctx context.Context, uri, name string, in
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		})
 		if err != nil {
+			if werr := coldLSPWarmingErr("find_references", t.warmup, uri); werr != nil {
+				return "", werr
+			}
 			return "", lspTimeoutErr("find_references", t.timeout, fmt.Errorf("resolving symbol %q: %w", name, err))
 		}
 		if t.cache != nil {
@@ -191,6 +203,11 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 		Context:      protocol.ReferenceContext{IncludeDeclaration: includeDecl},
 	})
 	if err != nil {
+		// A still-warming server rewrites the failure into a retry advisory —
+		// neither the snap retry nor the 0-based coordinate hint helps there.
+		if werr := coldLSPWarmingErr("find_references", t.warmup, uri); werr != nil {
+			return "", werr
+		}
 		if allowSnap && isPositionMissErr(err) {
 			return t.snapReferences(ctx, uri, line, character, includeDecl)
 		}

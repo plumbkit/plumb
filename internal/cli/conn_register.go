@@ -52,6 +52,11 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 			store.Enqueue(path)
 		}
 	}
+	// safeWrite and the other fsync-before-ack primitives are free functions,
+	// so the WriteDeps closure pattern cannot reach them; install the [edits]
+	// fsync knob package-wide. Idempotent — every connection installs the same
+	// resolved-config read.
+	tools.SetFsyncFunc(func() bool { return s.editsConfig().Fsync })
 	return tools.WriteDeps{
 		Client:                s.sessionProxy,
 		Cache:                 s.sessionCache,
@@ -110,12 +115,12 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
 	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
-	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithWorkspace(s.workspace))
+	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewListSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewFileOutline(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithBoundary(boundary).WithWorkspace(s.workspace))
-	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
-	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithWorkspace(s.workspace))
+	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
+	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
+	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary).WithWorkspace(s.workspace))
 	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewListDirectory(s.workspace).WithBoundary(boundary))
@@ -228,11 +233,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return ""
 		}))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
-	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithBoundary(writeBoundary).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
 	srv.Register(tools.NewInsertAfterSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
 	srv.Register(tools.NewReplaceSymbolBody(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
-	srv.Register(tools.NewSafeDeleteSymbol(s.sessionProxy, lspTimeout).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
+	srv.Register(tools.NewSafeDeleteSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
 	srv.Register(tools.NewMoveSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd))
 	srv.Register(tools.NewListMemories(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewReadMemory(s.workspace).WithIndex(s.memoryIndexLive).WithBoundary(boundary).WithTopology(topoFn))

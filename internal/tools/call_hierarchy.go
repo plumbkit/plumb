@@ -49,6 +49,7 @@ type CallHierarchy struct {
 	client  lsp.Client
 	timeout time.Duration
 	topo    topologyStoreFn // optional; topology call-graph fallback when the server has no call hierarchy
+	warmup  LSPWarmupFn     // optional; distinguishes a still-warming server from a genuine failure
 	ws      WorkspaceFn     // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
@@ -62,6 +63,14 @@ func NewCallHierarchy(client lsp.Client, timeout time.Duration) *CallHierarchy {
 // zls does not implement textDocument/prepareCallHierarchy). Nil-safe.
 func (t *CallHierarchy) WithTopologyFallback(fn topologyStoreFn) *CallHierarchy {
 	t.topo = fn
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so a cold-LSP failure says the server
+// is still warming (and names what answers now) instead of reading as a hard
+// failure. Nil-safe.
+func (t *CallHierarchy) WithLSPWarmup(fn LSPWarmupFn) *CallHierarchy {
+	t.warmup = fn
 	return t
 }
 
@@ -149,6 +158,9 @@ func (t *CallHierarchy) executeByName(ctx context.Context, uri, name, direction 
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	})
 	if err != nil {
+		if werr := coldLSPWarmingErr("call_hierarchy", t.warmup, uri); werr != nil {
+			return "", werr
+		}
 		return "", lspTimeoutErr("call_hierarchy", t.timeout, fmt.Errorf("resolving symbol %q: %w", name, err))
 	}
 	matches := resolveSymbolsByName(syms, name)

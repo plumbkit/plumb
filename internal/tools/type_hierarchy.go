@@ -40,12 +40,21 @@ var typeHierarchySchema = json.RawMessage(`{
 type TypeHierarchy struct {
 	client  lsp.Client
 	timeout time.Duration
+	warmup  LSPWarmupFn // optional; rewrites a cold-LSP failure into a still-warming advisory
 	ws      WorkspaceFn // may be nil; anchors a workspace-relative uri to the pinned root
 }
 
 // NewTypeHierarchy creates a TypeHierarchy tool.
 func NewTypeHierarchy(client lsp.Client, timeout time.Duration) *TypeHierarchy {
 	return &TypeHierarchy{client: client, timeout: timeout}
+}
+
+// WithLSPWarmup wires the warm-up probe so a failure against a still-warming
+// server says so (and names what answers now) instead of showing the 0-based
+// coordinate hint, which would mislead there. Nil-safe.
+func (t *TypeHierarchy) WithLSPWarmup(fn LSPWarmupFn) *TypeHierarchy {
+	t.warmup = fn
+	return t
 }
 
 // WithWorkspace anchors a relative uri to the pinned workspace root. Nil-safe.
@@ -98,6 +107,9 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 		Position:     protocol.Position{Line: a.Line, Character: a.Character},
 	})
 	if err != nil {
+		if werr := coldLSPWarmingErr("type_hierarchy", t.warmup, a.URI); werr != nil {
+			return "", werr
+		}
 		return "", positionErr("type_hierarchy", err)
 	}
 	if len(items) == 0 {

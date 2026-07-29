@@ -22,8 +22,10 @@ func (t *SessionStart) leanProfile() bool {
 
 // writeClaudeCodeGuidance leads with topology (the Map) for discovery / structure
 // / impact when the index is active, then the LSP-semantic tools (the GPS) for
-// precise navigation. When topology is off it falls back to the LSP-led form
-// with a one-line pointer to enabling the index.
+// precise navigation, and closes with the cold-LSP ladder (what still works via
+// tree-sitter while the server warms, what needs a ready one). When topology is
+// off it falls back to the LSP-led form with a one-line pointer to enabling the
+// index.
 func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("## Tool guidance (Claude Code)\n\n")
 	sb.WriteString(nativeEditLaneWarning)
@@ -53,6 +55,11 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			sb.WriteString("- **call_hierarchy** / **type_hierarchy** — callers/callees, super/subtypes.\n")
 		}
 		sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
+		if !t.leanProfile() {
+			sb.WriteString("Cold LSP: the symbol-edit tools (insert_before/after_symbol, replace_symbol_body, move_symbol) " +
+				"still work via the tree-sitter index while the language server warms; " +
+				"find_references / explain_symbol / type_hierarchy need a ready server — retry shortly (see daemon_info).\n\n")
+		}
 		return
 	}
 	sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")

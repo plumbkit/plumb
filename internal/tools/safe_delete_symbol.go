@@ -18,6 +18,7 @@ import (
 type SafeDeleteSymbol struct {
 	client   lsp.Client
 	timeout  time.Duration
+	warmup   LSPWarmupFn  // optional; rewrites a cold-LSP failure into a still-warming advisory
 	ws       WorkspaceFn  // may be nil; anchors a workspace-relative uri to the pinned root
 	cache    *cache.Cache // may be nil; evicted after a successful apply so the next query sees fresh symbols
 	showDiff func() bool  // may be nil; resolves the show_write_diff toggle (defaults on)
@@ -27,6 +28,13 @@ type SafeDeleteSymbol struct {
 
 func NewSafeDeleteSymbol(client lsp.Client, timeout time.Duration) *SafeDeleteSymbol {
 	return &SafeDeleteSymbol{client: client, timeout: timeout}
+}
+
+// WithLSPWarmup wires the warm-up probe so a failure against a still-warming
+// server says so (and points at daemon_info). Nil-safe.
+func (t *SafeDeleteSymbol) WithLSPWarmup(fn LSPWarmupFn) *SafeDeleteSymbol {
+	t.warmup = fn
+	return t
 }
 
 // WithCache wires the session symbol cache so a successful apply evicts uri's
@@ -84,6 +92,9 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "delete", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
 		sym, err := resolveSymbol(ctx, t.client, a.URI, a.NamePath)
 		if err != nil {
+			if werr := coldLSPWarmingErr("safe_delete_symbol", t.warmup, a.URI); werr != nil {
+				return protocol.TextEdit{}, nil, "", werr
+			}
 			return protocol.TextEdit{}, nil, "", err
 		}
 
@@ -96,6 +107,9 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 			Context:      protocol.ReferenceContext{IncludeDeclaration: false},
 		})
 		if err != nil {
+			if werr := coldLSPWarmingErr("safe_delete_symbol", t.warmup, a.URI); werr != nil {
+				return protocol.TextEdit{}, nil, "", werr
+			}
 			return protocol.TextEdit{}, nil, "", lspTimeoutErr("safe_delete_symbol", t.timeout, fmt.Errorf("references: %w", err))
 		}
 		external := 0

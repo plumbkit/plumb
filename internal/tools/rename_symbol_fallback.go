@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -24,7 +25,8 @@ func (t *RenameSymbol) onRenameUnavailable(ctx context.Context, a renameSymbolAr
 		return t.structuralFallback(ctx, a, reason)
 	}
 	oldName := t.oldNameForFailure(a)
-	return "", fmt.Errorf("%w%s", baseErr, renameLSPFailureHint(oldName, a.NewName, t.fallback != nil))
+	warming, elapsed := lspWarmup(t.warmup, a.URI)
+	return "", fmt.Errorf("%w%s", baseErr, renameLSPFailureHint(oldName, a.NewName, t.fallback != nil, warming, elapsed))
 }
 
 // onRenameEmpty handles an empty edit set: an opt-in structural fallback, or the
@@ -34,8 +36,9 @@ func (t *RenameSymbol) onRenameEmpty(ctx context.Context, a renameSymbolArgs) (s
 		return t.structuralFallback(ctx, a, "the language server returned an empty edit set")
 	}
 	oldName := t.oldNameForFailure(a)
+	warming, elapsed := lspWarmup(t.warmup, a.URI)
 	return "No changes — rename returned an empty edit set (symbol may not be renameable here)." +
-		renameLSPFailureHint(oldName, a.NewName, t.fallback != nil), nil
+		renameLSPFailureHint(oldName, a.NewName, t.fallback != nil, warming, elapsed), nil
 }
 
 func (t *RenameSymbol) oldNameForFailure(a renameSymbolArgs) string {
@@ -114,12 +117,18 @@ func structuralFallbackBanner(oldName, newName, reason, glob string) string {
 
 // renameLSPFailureHint returns actionable recovery guidance for a rename the
 // language server could not compute. hasFallback gates the structural_fallback
-// suggestion so it is only offered when the fallback is actually wired.
-func renameLSPFailureHint(oldName, newName string, hasFallback bool) string {
+// suggestion so it is only offered when the fallback is actually wired. When
+// warming is set, the guidance leads with the warm-up state — rename has no
+// topology fallback, so the right move is to wait for a ready server.
+func renameLSPFailureHint(oldName, newName string, hasFallback bool, warming bool, elapsed time.Duration) string {
 	var b strings.Builder
 	b.WriteString("\n\nThe language server could not compute this rename. This is common when the project's ")
 	b.WriteString("build graph is not fully resolved (e.g. sourcekit-lsp before a successful build, or mid-edit).\n")
 	b.WriteString("Recovery options:\n")
+	if warming {
+		fmt.Fprintf(&b, "  - The language server is still warming%s — rename_symbol requires a ready server "+
+			"(no tree-sitter fallback); retry shortly once it is ready (see daemon_info).\n", warmupElapsedSuffix(elapsed))
+	}
 	b.WriteString("  - Ensure the project builds (resolve dependencies / run a build), then retry rename_symbol.\n")
 	if hasFallback {
 		if oldName != "" {

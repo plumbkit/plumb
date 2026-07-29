@@ -44,11 +44,33 @@ func queryErr(tool, symbolName string, err error) error {
 	return positionErr(tool, err)
 }
 
+// ColdLSPToolsHint names what answers while a language server is cold: the
+// topology-backed query tools plus the tree-sitter-backed symbol-edit tools.
+// Shared so the routing proxy's warm-up error, the timeout guidance, and the
+// cold-LSP tool failures all name the same ladder.
+const ColdLSPToolsHint = "topology_search / find_symbol / file_outline answer now; " +
+	"the tree-sitter topology index also backs the symbol-edit tools " +
+	"(insert_before/after_symbol, replace_symbol_body, move_symbol)"
+
+// coldLSPWarmingErr reports a hard failure against a language server that is
+// still warming: this tool has no topology fallback, so the guidance names what
+// answers now, says a ready server is required, and points at daemon_info.
+// Returns nil when the probe does not report warming (or is unwired), so the
+// caller falls through to the ordinary error flavour.
+func coldLSPWarmingErr(tool string, fn LSPWarmupFn, uri string) error {
+	warming, elapsed := lspWarmup(fn, uri)
+	if !warming {
+		return nil
+	}
+	return fmt.Errorf("%s: language server still warming%s — this tool needs a ready server; "+
+		"retry shortly (%s; see daemon_info)", tool, warmupElapsedSuffix(elapsed), ColdLSPToolsHint)
+}
+
 // lspTimeout returns a timeout error when err is a deadline overrun, else nil.
 func lspTimeout(tool string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: language server did not respond in time "+
-			"(it may still be indexing the workspace — retry shortly)", tool)
+			"(it may still be indexing the workspace — retry shortly; %s)", tool, ColdLSPToolsHint)
 	}
 	return nil
 }
