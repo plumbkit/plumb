@@ -24,7 +24,58 @@
   HCL, SQL, Dockerfile, TOML, YAML, Markdown, HTML) picks up 27 releases of
   parser fixes for free.
 
+- **Cold-LSP guidance is now uniform: every not-ready, timeout, or cold-failure
+  message names the tree-sitter/topology backup.** Previously only the routing
+  proxy's warm-up error pointed at `topology_search` / `find_symbol` /
+  `file_outline`; the shared timeout guidance named no alternative,
+  `clientProxy.getOrErr` emitted a bare `LSP server not yet ready` on the
+  hibernation-race path, and a still-warming server surfaced through the
+  position-addressed tools as the misleading "line and character are 0-based"
+  hint. Now the timeout builders (`lspTimeout`/`lspTimeoutErr`) and
+  `warmingErr` also name the tree-sitter-backed symbol-edit tools
+  (`insert_before/after_symbol`, `replace_symbol_body`, `move_symbol`); the
+  bare error is routed through `warmingErr`; `find_references`,
+  `explain_symbol`, `type_hierarchy`, and `call_hierarchy`'s by-name resolution
+  rewrite a cold-LSP failure into a still-warming advisory (elapsed time plus a
+  `daemon_info` pointer) when `WarmupStatus` reports warming — suppressing the
+  coordinate hint there but keeping it for genuine position errors on a ready
+  server; `safe_delete_symbol` and `rename_symbol` (no topology fallback by
+  design) mention the warming state and `daemon_info` in their failure
+  guidance; and the `session_start` client guidance states the cold-LSP ladder
+  outright. Guarded by the new `lsp_cold_guidance_test.go` /
+  `lsp_cold_guidance_split_test.go` suites, `TestGetOrErrCarriesGuidance`, and
+  an extended `TestWarmingErr`.
+
 ### Fixed
+
+- **`daemon_info` uptime now spans system suspend — the monotonic clock reading
+  is stripped at capture.** `daemonStartedAt` was captured with `time.Now()`'s
+  monotonic reading, so `time.Since` excluded suspend time (`CLOCK_MONOTONIC`
+  stops while the machine is asleep): a daemon started 22 hours earlier
+  reported "uptime 5h 7m" after overnight suspend cycles, contradicting the
+  `started at` line printed directly above it (proven against journalctl —
+  16h35m of suspend across three cycles explained the gap to the minute). The
+  capture site (`internal/cli/daemon.go`) and the `daemon_info` constructor now
+  strip the monotonic reading (`Round(0)`), so uptime is wall-clock and matches
+  `ps`; the TUI/web uptime widgets share the fix through the same anchor.
+  Pinned by `TestDaemonInfo_UptimeSpansSuspend` and `TestFormatUptime`.
+
+- **Write durability: every acknowledged write is now fsynced before the call
+  returns ("fsync-before-ack").** A real incident proved the gap: an
+  `edit_file` reported success, the machine hard-rebooted seconds later, and
+  the edit was gone. The audit found two holes. First, no write path fsynced
+  the parent directory after the atomic rename, so the directory entry linking
+  path→inode could sit in the page cache across a crash. Second — the incident
+  path — the EXDEV fallback taken whenever `/tmp` is tmpfs (i.e. every write on
+  a typical Linux box) used a bare `os.WriteFile` with no fsync at all. Now the
+  staged temp file is fsynced before the rename and the parent directory after
+  it (directory-fsync failure is a logged warning, not a failed write — FUSE
+  and some network mounts refuse it), across `write_file`, `edit_file`,
+  `rename_file`, `delete_file`, `transaction_apply`, and plumb's own state
+  files (session registry, config saves, trust store, memories, txlog
+  manifest). The new `[edits] fsync` knob (default true, `PLUMB_FSYNC=0` to
+  disable) skips both fsyncs and restores the old behaviour for benchmarks and
+  exotic filesystems.
 
 - **`plumb setup --all` / `--install-missing` and `plumb doctor` no longer
   misreport an installed Kimi Code as "not installed".** Kimi Code's
@@ -37,6 +88,46 @@
   registered" (counted in the `--install-missing` hint), `--install-missing`
   creates the config fresh, and doctor points at `plumb setup kimi-code`.
   Every other client keeps the never-fabricate-a-config rule.
+
+- **Session names now survive a daemon restart.** Every reconnected MCP
+  connection used to get a fresh random name, which orphaned `leave_note`
+  mailbox notes (delivery matches on the session-name string) and made the TUI
+  session list churn on every restart or idle-eviction reconnect. With
+  `[session] persist_state` on (the default), the name is now recorded in
+  `session_state.db` under the stable proxy session ID — the same key
+  read-tracking and the pinned workspace already use — and restored through the
+  normal `rename_session` pipeline when the resilient proxy replays the
+  handshake, so the first `session_start` after a restart already answers under
+  the previous name. A `rename_session` (or a name inherited via
+  `session_start`'s `session_id`) is persisted too, so the reconnect restores
+  the renamed name. The store's schema moves to v3 (new `session_names`
+  table); existing databases migrate on open, and expired name rows are pruned
+  with the rest of the persisted state.
+
+- **Smart aliases phase 2: more synonyms, value-transform aliases, and
+  string→scalar coercion — three observed agent-facing hard failures closed.**
+  First, the curated alias table gains the synonyms agents actually send:
+  `n_lines`/`num_lines`/`max_lines`/`line_count` → the tool's cap (`limit`,
+  `max_results`, `recent_limit`, `max_matches` — first eligible wins),
+  `limit` itself cross-mapping where a tool names the cap differently, `depth`
+  ↔ `max_depth`, `ext` → `extension`, `command` → `subcommand`,
+  `sort`/`order_by` → `sort_by`, `hidden` → `include_hidden`,
+  `max_matches`/`max_count` cross-mapping, `data` → `content`, and
+  `changes`/`replacements` → `edits` — so `read_file({n_lines: 20})` no longer
+  dies with `unknown parameter … did you mean end_line`. Second, a new
+  value-transform mechanism rewrites the VALUE alongside the key, but only for
+  intent-explicit flags where the name states the semantics: grep-style
+  `-i`/`ignore_case` inverts into `case_sensitive`, `preview` forces
+  `dry_run:true`, a truthy `regex` forces `use_regex:true` (a string `regex`
+  still renames to `pattern` as before), and a scalar `kind`/`path` wraps into
+  the array-typed `kinds`/`uris`. A transform never fires when the canonical
+  parameter is explicitly set, and every applied transform is surfaced in the
+  same `note:` as plain aliases. Third, schema-guided type coercion accepts a
+  JSON string that parses as an integer for an integer-typed parameter
+  (`offset: "15"` → `15`) and `"true"`/`"false"` (any case) for a
+  boolean-typed one — nothing else, no trimming, no float-to-int — so these
+  stop dying on the tools' plain `json.Unmarshal`. Unparseable strings
+  (`offset: "abc"`) still fail with the tool's own decode error.
 
 ## 0.15.1 (2026-07-28)
 

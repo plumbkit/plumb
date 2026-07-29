@@ -148,6 +148,7 @@ config. `plumb web --port` overrides it for a single launch.
 | `concurrent_write_skew_ms` | int | `100` | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | Clock-skew allowance for `edit_file`'s concurrent-write detector. Raise on slow/network filesystems. |
 | `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
 | `block_dirty_writes` | bool | `true` | `PLUMB_BLOCK_DIRTY_WRITES` | Refuse a destructive write (`write_file`, `edit_file`, `delete_file`, `find_replace`, `rename_file`, `copy_file`, `transaction_apply`) to a file with uncommitted git changes that plumb did not write this session, unless `dirty_ok: true`. Set false to disable the guard — for a workflow that iterates on uncommitted WIP. Re-editing a file plumb wrote this session is never blocked either way. |
+| `fsync` | bool | `true` | `PLUMB_FSYNC` | Fsync-before-ack: fsync the staged temp file before the atomic rename and the parent directory after it, so an acknowledged write (and plumb's own state files) survive a hard crash or power cut. Set false to skip both fsyncs — restores the old behaviour for benchmarks and exotic filesystems that refuse fsync. |
 
 ### Strict mode and `rename_symbol`
 
@@ -249,7 +250,7 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 |---|---|---|---|---|
 | `idle_threshold_minutes` | int | `30` | — | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
 | `eviction_ttl_minutes` | int | `60` | — | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
-| `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. |
+| `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking, session name) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. |
 | `persist_state_ttl_minutes` | int | `1440` | — | How long persisted session state is honoured on restart before it's treated as stale and discarded. |
 
 Global or per-project; no environment override except `persist_state`. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
@@ -690,6 +691,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | `edits.concurrent_write_skew_ms` |
 | `PLUMB_SHOW_WRITE_DIFF` | `edits.show_write_diff` |
 | `PLUMB_BLOCK_DIRTY_WRITES` | `edits.block_dirty_writes` |
+| `PLUMB_FSYNC` | `edits.fsync` |
 | `PLUMB_REFUSE_HOME_ROOTS` | `walk.refuse_home_roots` |
 | `PLUMB_GIT_ALLOW_WRITES` | `git.allow_writes` |
 | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | `git.allow_destructive` |
@@ -778,7 +780,7 @@ watch                   = true              # OS-level file watching: re-index o
 [session]
 idle_threshold_minutes    = 30              # TUI idle marker threshold (cosmetic)
 eviction_ttl_minutes      = 60              # daemon force-closes a connection idle this long; 0 disables
-persist_state             = true            # persist read-tracking + pinned workspace across a daemon restart (env PLUMB_PERSIST_SESSION_STATE)
+persist_state             = true            # persist read-tracking + pinned workspace + session name across a daemon restart (env PLUMB_PERSIST_SESSION_STATE)
 persist_state_ttl_minutes = 1440            # how long persisted per-connection state lingers before pruning; 0 disables pruning
 
 [lsp_query]

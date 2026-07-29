@@ -58,6 +58,13 @@ These apply across many tools:
   transport/connection error (`Connection closed`) the file on disk is either
   fully written or untouched — **never partially written**. Re-read to see
   which side of the rename it landed on rather than assuming corruption.
+- **Crash durability (fsync-before-ack).** Before a write is acknowledged, the
+  staged temp file is fsynced and so is the parent directory after the rename,
+  so a successful call survives a hard crash or power cut — the data and the
+  directory entry are both on stable storage. Directory-fsync failures are
+  logged but never fail an already-landed write (some filesystems refuse
+  them). Disable with `[edits] fsync = false` (or `PLUMB_FSYNC=0`) for
+  benchmarks or exotic filesystems.
 - **Automatic staleness guard.** Even without `expected_mtime`, if this session
   read a file and it then changed on disk before your write, `write_file`
   **refuses** (pass `overwrite_changed: true` to override) and `edit_file`

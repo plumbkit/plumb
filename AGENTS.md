@@ -119,6 +119,7 @@ strict = false                # require read_file (matching mtime) before edit_f
 rate_limit_per_minute = 120   # sliding-window cap per session; 0 disables. A shared parent budget (keyed by (client, workspace)) caps combined rate across connections from the same client to one project
 show_write_diff = true        # append a unified diff to the content-modifying tools' responses: edit_file/write_file/undo_edit, the semantic symbol edits (replace_symbol_body, insert_before/after_symbol, safe_delete_symbol — preview + applied), and transaction_apply
 block_dirty_writes = true     # refuse a destructive write to a file with uncommitted git changes plumb did not write this session, unless dirty_ok; set false to disable the guard entirely (iterate on uncommitted WIP without dirty_ok). Re-editing a file plumb wrote this session is never blocked either way
+fsync = true                  # fsync-before-ack: fsync the staged temp file before the atomic rename and the parent directory after it, so an acknowledged write survives a hard crash; set false to skip both fsyncs (benchmarks, exotic filesystems)
 post_write_diagnostics_ms = 300 # ceiling on the wait for the LSP to re-publish diagnostics after a write; adapts down to observed latency; 0 disables
 post_write_cross_file = true  # after a write, compare workspace diagnostics against a pre-write baseline and flag NEW errors the edit introduced in OTHER files (the "edit A silently breaks B" case); the single-file block keeps priority
 post_write_cross_file_settle_ms = 200 # bounded grace the cross-file sweep waits, after the edited file's own diagnostics land, for dependent-file re-publishes; 0 compares immediately
@@ -126,7 +127,7 @@ post_write_cross_file_settle_ms = 200 # bounded grace the cross-file sweep waits
 
 The cross-file sweep is honest by construction: it only reports a file whose error count ROSE versus the pre-write baseline AND that the language server re-published after the write, so pre-existing errors and untouched files are never mis-attributed; the edited file's own block is unaffected and returned first, and the heads-up hedges the mid-series case rather than claiming "the build is broken".
 
-Env: `PLUMB_STRICT_EDITS`, `PLUMB_WRITE_RATE_LIMIT`, `PLUMB_SHOW_WRITE_DIFF`, `PLUMB_BLOCK_DIRTY_WRITES`, `PLUMB_POST_WRITE_DIAG_MS`, `PLUMB_POST_WRITE_CROSS_FILE`, `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS`.
+Env: `PLUMB_STRICT_EDITS`, `PLUMB_WRITE_RATE_LIMIT`, `PLUMB_SHOW_WRITE_DIFF`, `PLUMB_BLOCK_DIRTY_WRITES`, `PLUMB_FSYNC`, `PLUMB_POST_WRITE_DIAG_MS`, `PLUMB_POST_WRITE_CROSS_FILE`, `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS`.
 
 ### `[workspace]` — root detection fallback + path-access roots
 
@@ -207,13 +208,13 @@ Enabled by default. On first attach the index is created at `<workspace>/.plumb/
 [session]
 idle_threshold_minutes    = 30    # mark a session idle in the TUI after this long with no tool call
 eviction_ttl_minutes      = 60    # daemon force-closes a connection idle this long; 0 disables eviction
-persist_state             = true  # persist read-tracking + pinned workspace so they survive a daemon restart
+persist_state             = true  # persist read-tracking + pinned workspace + session name so they survive a daemon restart
 persist_state_ttl_minutes = 1440  # how long persisted per-connection state lingers before pruning; 0 disables pruning
 ```
 
 Global or per-project. `idle_threshold_minutes` is cosmetic (a `~` marker in the TUI). `eviction_ttl_minutes` has teeth: a daemon-side reaper (5-min tick) cancels a connection whose last tool call was longer ago than the TTL, reclaiming a `plumb serve` whose agent silently disconnected. Read live; `0` disables. The activity signal is a tool call (`LastSeenAt` = session file mtime).
 
-`persist_state` (default on; env `PLUMB_PERSIST_SESSION_STATE`) makes a **daemon restart transparent to a connected agent**: strict-mode read-tracking and the pinned workspace are written to `session_state.db` (in the data dir, beside `stats.db`), keyed by a stable proxy session ID that `plumb serve` injects into the `initialize` handshake `_meta` and replays on every reconnect. On reconnect the fresh daemon rehydrates that state, so a strict-mode `edit_file` of a file read before the restart is not refused, and a client that reports no roots (e.g. Claude Desktop) comes back pinned without an explicit `session_start`. Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads. `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers; it is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate).
+`persist_state` (default on; env `PLUMB_PERSIST_SESSION_STATE`) makes a **daemon restart transparent to a connected agent**: strict-mode read-tracking, the pinned workspace, and the session name are written to `session_state.db` (in the data dir, beside `stats.db`), keyed by a stable proxy session ID that `plumb serve` injects into the `initialize` handshake `_meta` and replays on every reconnect. On reconnect the fresh daemon rehydrates that state, so a strict-mode `edit_file` of a file read before the restart is not refused, a client that reports no roots (e.g. Claude Desktop) comes back pinned without an explicit `session_start`, and the connection keeps its session name (mailbox notes are addressed by name, so a fresh random name on every reconnect would orphan them). Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads. `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers; it is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate).
 
 ### `[memory]` — Advanced Memory Engine
 
