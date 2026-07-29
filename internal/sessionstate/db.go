@@ -8,12 +8,14 @@
 // every replay, which lets the fresh daemon recognise the reconnected connection
 // as a continuation of the previous one and rehydrate its state.
 //
-// Two pieces of state are persisted, keyed by that proxy session ID:
+// Three pieces of state are persisted, keyed by that proxy session ID:
 //
 //   - read-tracking records (path → mtime + content SHA), scoped by workspace, so
 //     strict-mode "must read before edit" survives a restart;
 //   - the pinned workspace root, so a client that does not report roots/list
-//     (e.g. Claude Desktop) comes back pinned without an explicit session_start.
+//     (e.g. Claude Desktop) comes back pinned without an explicit session_start;
+//   - the session name, so a reconnect keeps the same name and mailbox notes
+//     addressed to it (delivery matches on the name string) stay deliverable.
 //
 // This is deliberately a separate SQLite database from stats.db: stats is
 // append-only metrics whose writer drops on overflow by design, which would
@@ -77,7 +79,8 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //
 //	1 — initial schema: read_tracking + pinned_workspace
 //	2 — pinned_workspace.source: why the workspace was pinned
-const SchemaVersion = 2
+//	3 — session_names: the session name recorded under a proxy session ID
+const SchemaVersion = 3
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -187,6 +190,19 @@ func migrate(db *sql.DB, from int) error {
 		const addSource = `ALTER TABLE pinned_workspace ADD COLUMN source TEXT NOT NULL DEFAULT ''`
 		if _, err := db.Exec(addSource); err != nil {
 			return fmt.Errorf("sessionstate: migrate v2 (pinned_workspace.source): %w", err)
+		}
+	}
+	if from < 3 {
+		// A dedicated table, not a column on pinned_workspace: a pin row only
+		// exists once a workspace is pinned, but the name must be recorded for
+		// every identified proxy session, pinned or not.
+		const addNames = `CREATE TABLE IF NOT EXISTS session_names (
+    proxy_session_id TEXT    PRIMARY KEY,
+    name             TEXT    NOT NULL,
+    updated_at       INTEGER NOT NULL
+)`
+		if _, err := db.Exec(addNames); err != nil {
+			return fmt.Errorf("sessionstate: migrate v3 (session_names): %w", err)
 		}
 	}
 	return nil
@@ -313,6 +329,50 @@ func (s *Store) LoadPin(proxySessionID string) (workspace, language string, sour
 	}
 }
 
+// SaveName records the session name under a proxy session ID, so a reconnect
+// after a daemon restart comes back under the same name. nil-safe; a no-op when
+// proxySessionID or name is empty.
+func (s *Store) SaveName(proxySessionID, name string) error {
+	if s == nil || proxySessionID == "" || name == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO session_names (proxy_session_id, name, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(proxy_session_id)
+		 DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at`,
+		proxySessionID, name, time.Now().UnixMilli(),
+	)
+	if err != nil {
+		return fmt.Errorf("sessionstate: save name: %w", err)
+	}
+	return nil
+}
+
+// LoadName returns the session name recorded under proxySessionID. ok is false
+// when no name is recorded. nil-safe (returns ok=false).
+func (s *Store) LoadName(proxySessionID string) (name string, ok bool, err error) {
+	if s == nil || proxySessionID == "" {
+		return "", false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row := s.db.QueryRow(
+		`SELECT name FROM session_names WHERE proxy_session_id=?`,
+		proxySessionID,
+	)
+	switch err := row.Scan(&name); err {
+	case nil:
+		return name, true, nil
+	case sql.ErrNoRows:
+		return "", false, nil
+	default:
+		return "", false, fmt.Errorf("sessionstate: load name: %w", err)
+	}
+}
+
 // Prune deletes all persisted state last updated before olderThan, reclaiming
 // rows left behind by a `plumb serve` that died without reconnecting. nil-safe.
 func (s *Store) Prune(olderThan time.Time) error {
@@ -327,6 +387,9 @@ func (s *Store) Prune(olderThan time.Time) error {
 	}
 	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE updated_at < ?`, cutoff); err != nil {
 		return fmt.Errorf("sessionstate: prune pins: %w", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM session_names WHERE updated_at < ?`, cutoff); err != nil {
+		return fmt.Errorf("sessionstate: prune names: %w", err)
 	}
 	return nil
 }

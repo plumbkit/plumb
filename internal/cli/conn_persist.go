@@ -6,13 +6,15 @@ package cli
 // connected and replays the captured initialize handshake, which carries the
 // proxy's stable session ID (onProxySession). The fresh daemon uses that ID to
 // recognise the reconnected connection as a continuation of the previous one and
-// rehydrate the state that would otherwise be lost: strict-mode read tracking
-// and (for clients that do not report roots) the pinned workspace.
+// rehydrate the state that would otherwise be lost: strict-mode read tracking,
+// (for clients that do not report roots) the pinned workspace, and the session
+// name (mailbox notes are addressed by name, so a rename on every reconnect
+// would orphan them).
 //
-// Everything here is gated on [session].persist_state, a non-nil store, a
-// non-empty proxy session ID, and a pinned workspace; any of those missing makes
-// the call a no-op, so a non-serve client or a disabled feature behaves exactly
-// as before.
+// Everything here is gated on [session].persist_state, a non-nil store, and a
+// non-empty proxy session ID (reads and pins additionally need a pinned
+// workspace); any of those missing makes the call a no-op, so a non-serve
+// client or a disabled feature behaves exactly as before.
 
 import (
 	"context"
@@ -25,12 +27,60 @@ import (
 // onProxySession records the stable proxy session ID transported in the
 // initialize params' _meta. It fires synchronously during the initialize
 // exchange, before OnInit attaches the workspace, so the ID is present when
-// attachWorkspace rehydrates.
+// attachWorkspace rehydrates. It also restores the persisted session name here
+// — the name is workspace-independent, so it needs none of the attach state —
+// which means the first session_start already answers under the restored name.
 func (s *connSession) onProxySession(id string) {
 	if id == "" {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.proxySessionID = id })
+	s.restoreName(id)
+}
+
+// restoreName applies the name persisted under this proxy session ID, so a
+// reconnect after a daemon restart keeps the same session name. The gate is
+// namePersistEnabled — deliberately persistEnabled minus the workspace
+// requirement, since restoreName runs during initialize, before any workspace
+// is known. A first-seen proxy ID records the freshly generated name so the
+// NEXT reconnect can restore it. Applying the name goes through renameSession,
+// keeping the session file, view, and stats store consistent (and re-saving
+// the name, which refreshes its TTL).
+func (s *connSession) restoreName(id string) {
+	v := s.view()
+	if !s.namePersistEnabled(v) {
+		return
+	}
+	name, ok, err := s.sessionState.LoadName(id)
+	if err != nil {
+		s.log().Debug("daemon: load session name failed", "err", err)
+		return
+	}
+	if !ok {
+		s.persistName(v.sessName)
+		return
+	}
+	if _, err := s.renameSession(name); err != nil {
+		s.log().Debug("daemon: restore session name failed", "name", name, "err", err)
+	}
+}
+
+// persistName records the session's current name under its proxy session ID.
+func (s *connSession) persistName(name string) {
+	v := s.view()
+	if !s.namePersistEnabled(v) || name == "" {
+		return
+	}
+	if err := s.sessionState.SaveName(v.proxySessionID, name); err != nil {
+		s.log().Debug("daemon: persist session name failed", "err", err)
+	}
+}
+
+// namePersistEnabled is persistEnabled without the workspace requirement: the
+// session name is workspace-independent, so it can be loaded and saved during
+// the initialize exchange, before a workspace is known.
+func (s *connSession) namePersistEnabled(v sessionView) bool {
+	return s.sessionState != nil && v.session.PersistState && v.proxySessionID != ""
 }
 
 // persistRead is the ReadTracker sink: it mirrors a recorded read to the durable

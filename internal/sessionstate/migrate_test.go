@@ -33,6 +33,33 @@ PRAGMA user_version = 1;
 	}
 }
 
+// openV2 hand-builds a database in the v2 shape — pinned_workspace WITH the
+// source column but no session_names table, user_version=2 — so the v3
+// migration is exercised against a real pre-existing file.
+func openV2(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open v2: %v", err)
+	}
+	defer db.Close()
+	const v2 = `
+CREATE TABLE IF NOT EXISTS pinned_workspace (
+    proxy_session_id TEXT    PRIMARY KEY,
+    workspace        TEXT    NOT NULL,
+    language         TEXT    NOT NULL DEFAULT '',
+    source           TEXT    NOT NULL DEFAULT '',
+    updated_at       INTEGER NOT NULL
+);
+INSERT INTO pinned_workspace (proxy_session_id, workspace, language, source, updated_at)
+VALUES ('legacy', '/tmp/legacy-root', 'go', 'roots', 1);
+PRAGMA user_version = 2;
+`
+	if _, err := db.Exec(v2); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+}
+
 func pinColumns(t *testing.T, s *Store) map[string]bool {
 	t.Helper()
 	rows, err := s.db.Query("PRAGMA table_info(pinned_workspace)")
@@ -61,6 +88,17 @@ func userVersion(t *testing.T, s *Store) int {
 		t.Fatalf("read user_version: %v", err)
 	}
 	return v
+}
+
+func tableExists(t *testing.T, s *Store, table string) bool {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table,
+	).Scan(&n); err != nil {
+		t.Fatalf("lookup table %s: %v", table, err)
+	}
+	return n == 1
 }
 
 func TestMigration_V1ToV2AddsSourceColumn(t *testing.T) {
@@ -95,13 +133,41 @@ func TestMigration_V1ToV2AddsSourceColumn(t *testing.T) {
 	}
 }
 
-func TestMigration_FreshDBIsV2(t *testing.T) {
+func TestMigration_V2ToV3AddsSessionNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session_state.db")
+	openV2(t, path)
+
+	s, err := openAt(path)
+	if err != nil {
+		t.Fatalf("openAt on a v2 database: %v", err)
+	}
+	defer s.Close()
+
+	if !tableExists(t, s, "session_names") {
+		t.Fatal("migration did not add the session_names table")
+	}
+	if got := userVersion(t, s); got != SchemaVersion {
+		t.Fatalf("user_version = %d, want %d", got, SchemaVersion)
+	}
+
+	// Pre-existing pins must survive the migration untouched.
+	ws, _, _, ok, err := s.LoadPin("legacy")
+	if err != nil || !ok || ws != "/tmp/legacy-root" {
+		t.Fatalf("legacy pin lost: ws=%q ok=%v err=%v", ws, ok, err)
+	}
+}
+
+func TestMigration_FreshDBIsCurrent(t *testing.T) {
 	// A fresh database starts at user_version=0, so it passes through the same
-	// migration as a v1 file. This is why the baseline schema must NOT declare
-	// the column: it would make the ALTER fail with "duplicate column name".
+	// migrations as a v1 file. This is why the baseline schema must NOT declare
+	// the migrated shapes: it would make the v2 ALTER fail with "duplicate
+	// column name" and the v3 CREATE a no-op hiding version drift.
 	s := newTestStore(t)
 	if !pinColumns(t, s)["source"] {
 		t.Fatal("fresh database has no pinned_workspace.source")
+	}
+	if !tableExists(t, s, "session_names") {
+		t.Fatal("fresh database has no session_names table")
 	}
 	if got := userVersion(t, s); got != SchemaVersion {
 		t.Fatalf("user_version = %d, want %d", got, SchemaVersion)
@@ -109,14 +175,24 @@ func TestMigration_FreshDBIsV2(t *testing.T) {
 }
 
 func TestMigration_Idempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session_state.db")
-	openV1(t, path)
-	for i := range 3 {
-		s, err := openAt(path)
-		if err != nil {
-			t.Fatalf("openAt #%d: %v", i+1, err)
-		}
-		s.Close()
+	for _, seed := range []struct {
+		name string
+		open func(t *testing.T, path string)
+	}{
+		{"v1", openV1},
+		{"v2", openV2},
+	} {
+		t.Run(seed.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session_state.db")
+			seed.open(t, path)
+			for i := range 3 {
+				s, err := openAt(path)
+				if err != nil {
+					t.Fatalf("openAt #%d: %v", i+1, err)
+				}
+				s.Close()
+			}
+		})
 	}
 }
 

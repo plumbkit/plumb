@@ -163,6 +163,53 @@ func TestPersist_ReadTrackingSurvivesRestart(t *testing.T) {
 	}
 }
 
+// TestPersist_NameSurvivesReconnect: a reconnected connection (same proxy
+// session ID, fresh connSession — a daemon restart) comes back under the SAME
+// session name instead of a freshly generated one, so mailbox notes addressed
+// to it stay deliverable.
+func TestPersist_NameSurvivesReconnect(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	before := newPersistSession(t, store, ss, "proxyX")
+	name := before.sessionName()
+	before.close()
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	if got := after.sessionName(); got != name {
+		t.Fatalf("reconnect renamed the session to %q, want the persisted %q", got, name)
+	}
+}
+
+// TestPersist_RenamedNameSurvivesReconnect: a rename_session (or an inherited
+// name) is persisted, so the reconnect restores the RENAMED name, not the
+// originally generated one.
+func TestPersist_RenamedNameSurvivesReconnect(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	before := newPersistSession(t, store, ss, "proxyX")
+	if _, err := before.renameSession("steady-otter"); err != nil {
+		t.Fatalf("renameSession: %v", err)
+	}
+	before.close()
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	if got := after.sessionName(); got != "steady-otter" {
+		t.Fatalf("reconnect restored %q, want the renamed steady-otter", got)
+	}
+}
+
 func TestPersist_PerSessionIsolation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
@@ -270,6 +317,9 @@ func TestPersist_DisabledWritesNothing(t *testing.T) {
 	}
 	if len(recs) != 0 {
 		t.Fatalf("persist_state=false wrote %d rows, want 0", len(recs))
+	}
+	if _, ok, err := ss.LoadName("proxyX"); err != nil || ok {
+		t.Fatalf("persist_state=false recorded a session name: ok=%v err=%v", ok, err)
 	}
 }
 

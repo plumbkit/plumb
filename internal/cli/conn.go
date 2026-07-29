@@ -421,7 +421,8 @@ func (s *connSession) setPurpose(purpose string) {
 }
 
 // renameSession renames the session, persisting the new name in the session
-// file and stats store.
+// file and stats store, and — when per-connection persistence is on — under the
+// proxy session ID, so a daemon restart comes back under the same name.
 func (s *connSession) renameSession(name string) (string, error) {
 	name, err := session.Rename(s.sessID, name)
 	if err != nil {
@@ -429,6 +430,7 @@ func (s *connSession) renameSession(name string) (string, error) {
 	}
 	s.mutate(func(v *sessionView) { v.sessName = name })
 	s.statsStore.RenameSession(s.sessID, name)
+	s.persistName(name)
 	return name, nil
 }
 

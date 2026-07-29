@@ -176,6 +176,48 @@ func TestLoadPinMissing(t *testing.T) {
 	}
 }
 
+func TestNameRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveName("p", "swift-falcon"); err != nil {
+		t.Fatalf("SaveName: %v", err)
+	}
+	name, ok, err := s.LoadName("p")
+	if err != nil {
+		t.Fatalf("LoadName: %v", err)
+	}
+	if !ok || name != "swift-falcon" {
+		t.Fatalf("LoadName = (%q,%v), want (swift-falcon, true)", name, ok)
+	}
+}
+
+func TestNameUpsertOverwrites(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveName("p", "old-name"); err != nil {
+		t.Fatalf("SaveName 1: %v", err)
+	}
+	if err := s.SaveName("p", "new-name"); err != nil {
+		t.Fatalf("SaveName 2: %v", err)
+	}
+	name, ok, err := s.LoadName("p")
+	if err != nil {
+		t.Fatalf("LoadName: %v", err)
+	}
+	if !ok || name != "new-name" {
+		t.Fatalf("LoadName = (%q,%v), want (new-name, true)", name, ok)
+	}
+}
+
+func TestLoadNameMissing(t *testing.T) {
+	s := newTestStore(t)
+	_, ok, err := s.LoadName("nope")
+	if err != nil {
+		t.Fatalf("LoadName: %v", err)
+	}
+	if ok {
+		t.Fatalf("LoadName ok = true for an unrecorded proxy, want false")
+	}
+}
+
 func TestPruneByTTL(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.UpsertRead("p", "/ws", "/ws/a.go", time.Unix(1, 0), ""); err != nil {
@@ -184,13 +226,19 @@ func TestPruneByTTL(t *testing.T) {
 	if err := s.UpsertPin("p", "/ws", "go", PinSourceRoots); err != nil {
 		t.Fatalf("UpsertPin: %v", err)
 	}
-	// Backdate both rows so the prune cutoff (now) is strictly after them.
+	if err := s.SaveName("p", "swift-falcon"); err != nil {
+		t.Fatalf("SaveName: %v", err)
+	}
+	// Backdate all rows so the prune cutoff (now) is strictly after them.
 	old := time.Now().Add(-48 * time.Hour).UnixMilli()
 	if _, err := s.db.Exec(`UPDATE read_tracking SET updated_at=?`, old); err != nil {
 		t.Fatalf("backdate reads: %v", err)
 	}
 	if _, err := s.db.Exec(`UPDATE pinned_workspace SET updated_at=?`, old); err != nil {
 		t.Fatalf("backdate pin: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE session_names SET updated_at=?`, old); err != nil {
+		t.Fatalf("backdate name: %v", err)
 	}
 
 	if err := s.Prune(time.Now().Add(-24 * time.Hour)); err != nil {
@@ -205,6 +253,9 @@ func TestPruneByTTL(t *testing.T) {
 	}
 	if _, _, _, ok, _ := s.LoadPin("p"); ok {
 		t.Fatalf("pin survived prune")
+	}
+	if _, ok, _ := s.LoadName("p"); ok {
+		t.Fatalf("name survived prune")
 	}
 }
 
@@ -238,6 +289,12 @@ func TestNilStoreMethodsAreSafe(t *testing.T) {
 	}
 	if _, _, _, ok, err := s.LoadPin("p"); err != nil || ok {
 		t.Fatalf("nil LoadPin: ok=%v err=%v", ok, err)
+	}
+	if err := s.SaveName("p", "swift-falcon"); err != nil {
+		t.Fatalf("nil SaveName: %v", err)
+	}
+	if _, ok, err := s.LoadName("p"); err != nil || ok {
+		t.Fatalf("nil LoadName: ok=%v err=%v", ok, err)
 	}
 	if err := s.Prune(time.Now()); err != nil {
 		t.Fatalf("nil Prune: %v", err)
