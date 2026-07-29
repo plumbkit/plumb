@@ -2,6 +2,28 @@
 
 ## 0.15.2 (unreleased)
 
+### Changed
+
+- **gotreesitter bumped v0.20.1 → v0.47.1 — the Swift IUO workaround is retired.**
+  Upstream's GLR engine was heavily reworked across those 27 releases and now
+  parses every construct that ever forced plumb onto workarounds: Swift
+  implicitly-unwrapped optional types (`var x: T!`), TS/TSX typed arrow
+  parameters (`(a: number) => a`), default-valued arrow params (`(a = 5) => a`),
+  and Swift force-unwrap-then-call (`optional!.method()`) — all verified against
+  upstream main (2026-07-29). The `recoverIUOBangs`/`collectErrorBangs`
+  byte-blanking recovery in the pure-Go Swift extractor is deleted (the pinned
+  grammar parses IUO natively), and the `TestSwift_IUO_GotreesitterStillBroken`
+  tripwire — which did its job and fired on the bump — is inverted into a
+  positive regression guard (`TestSwift_IUO_GotreesitterParsesCleanly`). Swift
+  and TS/TSX stay on the WASM canonical-grammar path for now: a 492-file
+  real-corpus differential sweep (swift-algorithms, zod, zustand) found ~8% of
+  files still fail to parse on gotreesitter (TS variance annotations `out`/`in`
+  type params, overloaded call-signature object types, and others — being
+  reported upstream), so the WASM retirement gate stays closed until those are
+  fixed. Every other pure-Go grammar (JS, Python, Rust, Zig, Kotlin, Java, Bash,
+  HCL, SQL, Dockerfile, TOML, YAML, Markdown, HTML) picks up 27 releases of
+  parser fixes for free.
+
 ### Fixed
 
 - **`plumb setup --all` / `--install-missing` and `plumb doctor` no longer

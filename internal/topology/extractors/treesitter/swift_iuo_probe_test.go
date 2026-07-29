@@ -7,18 +7,16 @@ import (
 	"github.com/odvcencio/gotreesitter/grammars"
 )
 
-// TestSwift_IUO_GotreesitterStillBroken is a tripwire. Swift is now extracted via
-// the canonical grammar compiled to WASM (internal/topology/extractors/wasmts);
-// the gotreesitter Swift extractor in this package — and its recoverIUOBangs
-// byte-blanking workaround — survive ONLY as the wasm init-failure fallback.
-//
-// This probe parses an implicitly-unwrapped optional type directly through the
-// pure-Go gotreesitter grammar with NO recovery. It asserts the bug is STILL
-// present (the parse errors / the class collapses). When a future gotreesitter
-// release fixes it, this assertion flips and fails — the signal that the
-// recoverIUOBangs workaround AND this gotreesitter Swift fallback can be removed.
-// See the internal tree-sitter design notes and follow-ups.
-func TestSwift_IUO_GotreesitterStillBroken(t *testing.T) {
+// TestSwift_IUO_GotreesitterParsesCleanly is the inverted successor of the old
+// TestSwift_IUO_GotreesitterStillBroken tripwire. The tripwire asserted the
+// implicitly-unwrapped-optional (`var x: T!`) parse collapse was still present
+// so the recoverIUOBangs byte-blanking workaround could not be dropped by
+// mistake; gotreesitter v0.47.x fixed the underlying GLR bug, the workaround
+// was retired, and this guard now pins the FIXED behaviour: the pinned grammar
+// must parse an IUO property cleanly and keep the enclosing class intact. If a
+// future gotreesitter change reintroduces the collapse, this fails loudly —
+// the pure-Go fallback has no recovery shim any more.
+func TestSwift_IUO_GotreesitterParsesCleanly(t *testing.T) {
 	src := []byte("class VC {\n    var manager: Manager!\n    func go() {}\n}\n")
 	lang := grammars.SwiftLanguage()
 	tree, err := tsg.NewParser(lang).Parse(src)
@@ -28,8 +26,7 @@ func TestSwift_IUO_GotreesitterStillBroken(t *testing.T) {
 	defer tree.Release()
 	root := tree.RootNode()
 
-	if !root.HasError() {
-		t.Errorf("gotreesitter now parses `var x: T!` without error — drop recoverIUOBangs "+
-			"and the gotreesitter Swift fallback; sexp: %s", root.SExpr(lang))
+	if root.HasError() {
+		t.Errorf("gotreesitter regressed on `var x: T!` — the IUO collapse is back; sexp: %s", root.SExpr(lang))
 	}
 }

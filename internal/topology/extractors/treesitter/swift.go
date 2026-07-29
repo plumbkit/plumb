@@ -12,10 +12,12 @@ import (
 
 // SwiftExtractor extracts Swift symbols using the gotreesitter Swift grammar.
 //
-// As of 0.9.17 Swift is extracted via the canonical grammar compiled to WASM
-// (internal/topology/extractors/wasmts); this pure-Go extractor — and its
-// recoverIUOBangs workaround below — survive only as the wasm init-failure
-// fallback. See the todo.md follow-ups to retire both once WASM is proven.
+// Swift is extracted via the canonical grammar compiled to WASM
+// (internal/topology/extractors/wasmts); this pure-Go extractor survives as
+// the wasm init-failure fallback. The recoverIUOBangs workaround for the
+// implicitly-unwrapped-optional (`var x: T!`) parse collapse was retired when
+// gotreesitter v0.47.x fixed the underlying GLR bug — the pinned grammar now
+// parses IUO types natively (guarded by TestSwift_IUO_GotreesitterParsesCleanly).
 //
 // Concurrency: stateless after construction and safe for concurrent use; a
 // fresh parser is created per Extract call because gotreesitter parsers are not
@@ -49,83 +51,11 @@ func (e *SwiftExtractor) Extract(_ context.Context, relPath string, src []byte) 
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	// The pinned gotreesitter Swift grammar cannot parse an implicitly-unwrapped
-	// optional type (`var x: T!`): it emits an ERROR that cascades up and
-	// collapses the enclosing class/struct declaration, so the whole type and all
-	// its members are dropped from the outline. `T!` is pervasive in AppKit/UIKit
-	// (`@IBOutlet var label: NSTextField!`, `var manager: Manager!`). When the
-	// parse errors, blank just the offending `!` bytes — preserving every other
-	// byte, so line/column offsets stay exact — and reparse the recovered source.
-	if tree.RootNode().HasError() {
-		if patched := recoverIUOBangs(lang, src); patched != nil {
-			if t2, e2 := tsg.NewParser(lang).Parse(patched); e2 == nil && t2 != nil {
-				tree.Release()
-				tree, src = t2, patched
-			}
-		}
-	}
 	defer tree.Release()
 	w := &swiftWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
 	w.walk(tree.RootNode(), -1, false, false)
 	w.callEdges(tree.RootNode())
 	return w.nodes, w.edges, nil
-}
-
-// recoverIUOBangs works around the grammar's inability to parse implicitly-
-// unwrapped optional types. While the parse still has ERROR nodes that are a
-// lone `!` (the grammar's failure marker for `T!`), it blanks those `!` bytes
-// and reparses, bounded to a few passes so a pathological file cannot loop.
-// Blanking is byte-for-byte (one `!` → one space), so node offsets and line
-// numbers are identical to the original source. Returns nil when there is no
-// such error to recover (a non-IUO parse error, or a clean file), leaving the
-// original tree untouched.
-func recoverIUOBangs(lang *tsg.Language, src []byte) []byte {
-	const maxPasses = 5
-	cur := src
-	patched := false
-	for pass := 0; pass < maxPasses; pass++ {
-		tree, err := tsg.NewParser(lang).Parse(cur)
-		if err != nil || tree == nil {
-			break
-		}
-		var ranges [][2]uint32
-		if tree.RootNode().HasError() {
-			collectErrorBangs(tree.RootNode(), cur, &ranges)
-		}
-		tree.Release()
-		if len(ranges) == 0 {
-			break
-		}
-		if !patched {
-			cur = append([]byte(nil), cur...)
-			patched = true
-		}
-		for _, r := range ranges {
-			for i := r[0]; i < r[1] && int(i) < len(cur); i++ {
-				if cur[i] == '!' {
-					cur[i] = ' '
-				}
-			}
-		}
-	}
-	if !patched {
-		return nil
-	}
-	return cur
-}
-
-// collectErrorBangs records the byte ranges of ERROR nodes whose text is a lone
-// `!` — the grammar's marker for an implicitly-unwrapped optional type it could
-// not parse. Force-unwrap and `!=` in valid code parse cleanly, so they are not
-// ERROR nodes and are never touched.
-func collectErrorBangs(n *tsg.Node, src []byte, out *[][2]uint32) {
-	if n.IsError() && strings.TrimSpace(n.Text(src)) == "!" {
-		*out = append(*out, [2]uint32{n.StartByte(), n.EndByte()})
-		return
-	}
-	for _, c := range n.Children() {
-		collectErrorBangs(c, src, out)
-	}
 }
 
 type swiftWalk struct {
