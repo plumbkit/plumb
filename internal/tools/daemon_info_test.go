@@ -9,6 +9,34 @@ import (
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
+// TestDaemonInfo_UptimeSpansSuspend pins the monotonic strip: startedAt must
+// not carry a monotonic clock reading, or time.Since would exclude
+// system-suspend time (CLOCK_MONOTONIC stops while suspended) and uptime
+// would underreport wall-clock elapsed. time.Time's == compares the monotonic
+// reading, so equality with its own Round(0) proves none is present.
+func TestDaemonInfo_UptimeSpansSuspend(t *testing.T) {
+	d := NewDaemonInfoFunc("sess-1", func() string { return "swift-falcon" }, "0.15.x", time.Now())
+	if d.startedAt != d.startedAt.Round(0) {
+		t.Errorf("startedAt carries a monotonic reading; uptime would exclude suspend time")
+	}
+}
+
+func TestFormatUptime(t *testing.T) {
+	tests := []struct {
+		up   time.Duration
+		want string
+	}{
+		{26*time.Hour + 3*time.Minute + 42*time.Second, "26h 3m"},
+		{5*time.Minute + 7*time.Second, "5m 7s"},
+		{42 * time.Second, "42s"},
+	}
+	for _, tt := range tests {
+		if got := formatUptime(tt.up); got != tt.want {
+			t.Errorf("formatUptime(%s) = %q, want %q", tt.up, got, tt.want)
+		}
+	}
+}
+
 func TestDaemonInfo_OmitsConfigStatusWhenUnset(t *testing.T) {
 	d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now())
 	out, err := d.Execute(context.Background(), nil)

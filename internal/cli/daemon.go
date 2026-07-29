@@ -340,7 +340,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// the per-workspace config reload at the sessions on that workspace.
 	registry := newConnRegistry()
 
-	daemonStartedAt := time.Now()
+	// Round(0) strips the monotonic clock reading: uptime consumers
+	// (daemon_info, the TUI/web widgets via the metrics snapshot, txlog
+	// recovery) diff against this timestamp, and a monotonic reading would
+	// exclude system-suspend time (CLOCK_MONOTONIC stops while suspended),
+	// underreporting uptime. Wall-clock semantics match `ps`.
+	daemonStartedAt := time.Now().Round(0)
 
 	// The web UI server is constructed unbound: it does not listen until a
 	// `plumb web` invocation sends "web-start" over the control socket. It reuses

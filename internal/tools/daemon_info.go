@@ -91,7 +91,11 @@ func NewDaemonInfoFunc(sessID string, name func() string, daemonVersion string, 
 		sessID:        sessID,
 		name:          name,
 		daemonVersion: daemonVersion,
-		startedAt:     startedAt,
+		// Round(0) strips any monotonic clock reading so the uptime diff
+		// uses wall-clock semantics and spans system suspend (the daemon
+		// already strips it at capture; this keeps the tool correct for
+		// any other caller).
+		startedAt: startedAt.Round(0),
 	}
 }
 
@@ -111,27 +115,30 @@ func (t *daemonInfo) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 }
 
-func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, error) {
-	up := time.Since(t.startedAt)
+// formatUptime renders a daemon uptime as "Nh Nm", "Nm Ns", or "Ns"
+// depending on magnitude.
+func formatUptime(up time.Duration) string {
 	h := int(up.Hours())
 	m := int(up.Minutes()) % 60
 	s := int(up.Seconds()) % 60
-	var upStr string
 	switch {
 	case h > 0:
-		upStr = fmt.Sprintf("%dh %dm", h, m)
+		return fmt.Sprintf("%dh %dm", h, m)
 	case m > 0:
-		upStr = fmt.Sprintf("%dm %ds", m, s)
+		return fmt.Sprintf("%dm %ds", m, s)
 	default:
-		upStr = fmt.Sprintf("%ds", s)
+		return fmt.Sprintf("%ds", s)
 	}
+}
+
+func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, error) {
 	out := fmt.Sprintf(
 		"session name:   %s\nsession id:     %s\ndaemon version: %s\nstarted at:     %s\nuptime:         %s",
 		t.name(),
 		t.sessID,
 		t.daemonVersion,
 		t.startedAt.Format(time.RFC3339),
-		upStr,
+		formatUptime(time.Since(t.startedAt)),
 	)
 	if t.purpose != nil {
 		if p := t.purpose(); p != "" {
