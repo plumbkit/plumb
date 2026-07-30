@@ -114,10 +114,20 @@ func (r *routingInvProxy) routeLang(path, detectLang string) string {
 	return detectLang
 }
 
-func (r *routingInvProxy) Tracked(uri string) bool {
-	if err := r.checkURI(uri); err != nil {
-		return false
-	}
+// resolveInv returns the invalidator that owns uri, or nil when no acquired
+// workspace does.
+//
+// This is the single copy of the routing decision that Tracked, Diagnostics,
+// WaitDiagnostics and WaitNextDiagnostics all need: resolve the file's language
+// (extension first, then the detected root's primary), and if that (root,
+// language) pair is not the connection's primary, look for an already-acquired
+// pool entry for it. Each of those four methods used to carry its own copy, so a
+// routing fix had to be made four times — and a fix applied to three of them
+// would present as diagnostics that resolve correctly but never settle.
+//
+// An empty uri is the workspace-aggregate request (see checkURI) and always
+// resolves to the primary, without consulting Detect.
+func (r *routingInvProxy) resolveInv(uri string) *cache.Invalidator {
 	r.mu.RLock()
 	primaryRoot := r.primaryRoot
 	primaryLang := r.primaryLang
@@ -125,49 +135,44 @@ func (r *routingInvProxy) Tracked(uri string) bool {
 	r.mu.RUnlock()
 
 	if uri == "" || primary == nil {
-		return false
+		return primary
 	}
 	path := paths.URIToPath(uri)
 	root, language, err := r.pool.Detect(filepath.Dir(path))
 	targetLang := r.routeLang(path, language)
 	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
-		return primary.Tracked(uri)
+		return primary
 	}
 	if e := r.pool.lookup(root, targetLang); e != nil {
-		return e.inv.Tracked(uri)
+		return e.inv
 	}
-	return false
+	return nil
+}
+
+func (r *routingInvProxy) Tracked(uri string) bool {
+	if err := r.checkURI(uri); err != nil {
+		return false
+	}
+	// Tracked asks about one file, so the aggregate form has no answer.
+	if uri == "" {
+		return false
+	}
+	inv := r.resolveInv(uri)
+	if inv == nil {
+		return false
+	}
+	return inv.Tracked(uri)
 }
 
 func (r *routingInvProxy) Diagnostics(uri string) []protocol.Diagnostic {
 	if err := r.checkURI(uri); err != nil {
 		return nil
 	}
-	r.mu.RLock()
-	primaryRoot := r.primaryRoot
-	primaryLang := r.primaryLang
-	primary := r.primary
-	r.mu.RUnlock()
-
-	if uri == "" {
-		if primary == nil {
-			return nil
-		}
-		return primary.Diagnostics(uri)
+	inv := r.resolveInv(uri)
+	if inv == nil {
+		return nil
 	}
-	path := paths.URIToPath(uri)
-	root, language, err := r.pool.Detect(filepath.Dir(path))
-	targetLang := r.routeLang(path, language)
-	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
-		if primary == nil {
-			return nil
-		}
-		return primary.Diagnostics(uri)
-	}
-	if e := r.pool.lookup(root, targetLang); e != nil {
-		return e.inv.Diagnostics(uri)
-	}
-	return nil
+	return inv.Diagnostics(uri)
 }
 
 func (r *routingInvProxy) AllDiagnostics() map[string][]protocol.Diagnostic {
@@ -238,48 +243,20 @@ func (r *routingInvProxy) WaitDiagnostics(ctx context.Context, uri string) ([]pr
 	if err := r.checkURI(uri); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	primaryRoot := r.primaryRoot
-	primaryLang := r.primaryLang
-	primary := r.primary
-	r.mu.RUnlock()
-
-	if primary == nil {
+	inv := r.resolveInv(uri)
+	if inv == nil {
 		return nil, nil
 	}
-	path := paths.URIToPath(uri)
-	root, language, err := r.pool.Detect(filepath.Dir(path))
-	targetLang := r.routeLang(path, language)
-	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
-		return primary.WaitDiagnostics(ctx, uri)
-	}
-	if e := r.pool.lookup(root, targetLang); e != nil {
-		return e.inv.WaitDiagnostics(ctx, uri)
-	}
-	return nil, nil
+	return inv.WaitDiagnostics(ctx, uri)
 }
 
 func (r *routingInvProxy) WaitNextDiagnostics(ctx context.Context, uri string) ([]protocol.Diagnostic, error) {
 	if err := r.checkURI(uri); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	primaryRoot := r.primaryRoot
-	primaryLang := r.primaryLang
-	primary := r.primary
-	r.mu.RUnlock()
-
-	if primary == nil {
+	inv := r.resolveInv(uri)
+	if inv == nil {
 		return nil, nil
 	}
-	path := paths.URIToPath(uri)
-	root, language, err := r.pool.Detect(filepath.Dir(path))
-	targetLang := r.routeLang(path, language)
-	if err != nil || (root == primaryRoot && targetLang == primaryLang) {
-		return primary.WaitNextDiagnostics(ctx, uri)
-	}
-	if e := r.pool.lookup(root, targetLang); e != nil {
-		return e.inv.WaitNextDiagnostics(ctx, uri)
-	}
-	return nil, nil
+	return inv.WaitNextDiagnostics(ctx, uri)
 }
