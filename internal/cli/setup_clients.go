@@ -63,19 +63,27 @@ var extraSetupTargets = []setupTarget{
 	{use: "hermes", name: "Hermes", pathFn: HermesConfigPath, intoFn: setupHermesInto, extractFn: mapCommandExtractor(readOrInitYAMLConfig, "mcp_servers", "command")},
 }
 
+// The four original setup targets, named so that both the bespoke commands in
+// setup.go and the bulk paths here drive them from one description.
+//
+// claudeCodeTarget and claudeDesktopTarget still have hand-written command
+// bodies: Claude Code adds --project scoping and skill installation, and Claude
+// Desktop writes several config paths (its sibling-profile heuristic) with
+// per-path reporting. geminiTarget and codexTarget do not — their commands were
+// line-for-line copies of runSetupTarget and now call it directly.
+var (
+	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor}
+	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
+	geminiTarget        = setupTarget{use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
+	codexTarget         = setupTarget{use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto, extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")}
+)
+
 // allSetupClients lists every client `plumb setup` supports, for the `config show`
-// MCP table, `plumb doctor`, and `plumb setup --all`. The first four are the
-// originals; their intoFn/extractFn are wired here (the bespoke setup commands
-// call the same intoFns directly) so the bulk repair and doctor checks can drive
-// every client uniformly. The rest come from extraSetupTargets.
+// MCP table, `plumb doctor`, and `plumb setup --all`. Order is display order and
+// is deliberate: the four originals first, then extraSetupTargets.
 func allSetupClients() []setupTarget {
 	clients := make([]setupTarget, 0, 4+len(extraSetupTargets))
-	clients = append(clients,
-		setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor},
-		setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-		setupTarget{use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-		setupTarget{use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto, extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")},
-	)
+	clients = append(clients, claudeCodeTarget, claudeDesktopTarget, geminiTarget, codexTarget)
 	return append(clients, extraSetupTargets...)
 }
 
@@ -149,7 +157,9 @@ func init() {
 	}
 }
 
-// runSetupTarget is the shared command body for every extraSetupTargets entry.
+// runSetupTarget is the shared command body for every target whose registration
+// is a plain single-config merge — all of extraSetupTargets, plus geminiTarget
+// and codexTarget.
 func runSetupTarget(t setupTarget) error {
 	PrintLogo()
 	cfgPath, err := t.pathFn()

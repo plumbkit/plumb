@@ -68,16 +68,20 @@ directory instead, scoping plumb to that project only.`,
 	RunE: runSetupClaudeCode,
 }
 
+// Gemini CLI and Codex register through the shared runSetupTarget body (see
+// setup_clients.go). Their own command functions used to be line-for-line copies
+// of it, which meant a fix to the registration flow had to be made in three
+// places; the two clients differ only in the target description.
 var setupGeminiCmd = &cobra.Command{
 	Use:   "gemini",
 	Short: "Register plumb as an MCP server in Gemini CLI's config",
-	RunE:  runSetupGemini,
+	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(geminiTarget) },
 }
 
 var setupCodexCmd = &cobra.Command{
 	Use:   "codex",
 	Short: "Register plumb as an MCP server in Codex's config",
-	RunE:  runSetupCodex,
+	RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(codexTarget) },
 }
 
 func init() {
@@ -115,11 +119,11 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 			continue
 		}
 		if !added {
-			lines = append(lines, fmt.Sprintf("%s: already current", render.ContractPath(cfgPath)))
+			lines = append(lines, render.ContractPath(cfgPath)+": already current")
 			continue
 		}
 		changed++
-		lines = append(lines, fmt.Sprintf("%s: registered", render.ContractPath(cfgPath)))
+		lines = append(lines, render.ContractPath(cfgPath)+": registered")
 		preservedAny = append(preservedAny, preserved...)
 	}
 
@@ -140,74 +144,6 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Println("\nRestart Claude Desktop to apply the change.")
-	return nil
-}
-
-func runSetupGemini(_ *cobra.Command, _ []string) error {
-	PrintLogo()
-	cfgPath, err := GeminiConfigPath()
-	if err != nil {
-		return fmt.Errorf("locating Gemini CLI config: %w", err)
-	}
-
-	plumbBin, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolving plumb binary path: %w", err)
-	}
-
-	added, preserved, err := setupClaudeDesktopInto(cfgPath, plumbBin)
-	if err != nil {
-		return err
-	}
-
-	if !added {
-		fmt.Println("plumb is already registered in Gemini CLI — no changes made.")
-		fmt.Printf("Config: %s\n", cfgPath)
-		return nil
-	}
-
-	ctxStr := fmt.Sprintf("Registered in %s\nBinary: %s", cfgPath, plumbBin)
-	if len(preserved) > 0 {
-		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
-	}
-
-	tui.RebuildStyles()
-	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
-	fmt.Println("\nRestart Gemini CLI to apply the change.")
-	return nil
-}
-
-func runSetupCodex(_ *cobra.Command, _ []string) error {
-	PrintLogo()
-	cfgPath, err := CodexConfigPath()
-	if err != nil {
-		return fmt.Errorf("locating Codex config: %w", err)
-	}
-
-	plumbBin, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolving plumb binary path: %w", err)
-	}
-
-	added, preserved, err := setupCodexInto(cfgPath, plumbBin)
-	if err != nil {
-		return err
-	}
-
-	if !added {
-		fmt.Println("plumb is already registered in Codex — no changes made.")
-		fmt.Printf("Config: %s\n", cfgPath)
-		return nil
-	}
-
-	ctxStr := fmt.Sprintf("Registered in Codex\nConfig: %s\nBinary: %s", cfgPath, plumbBin)
-	if len(preserved) > 0 {
-		ctxStr += fmt.Sprintf("\nPreserved existing MCP servers: %v", preserved)
-	}
-
-	tui.RebuildStyles()
-	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
-	fmt.Println("\nRestart Codex to apply the change.")
 	return nil
 }
 
