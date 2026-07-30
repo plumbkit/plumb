@@ -320,7 +320,7 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 	sibling := path + ".plumb.tmp"
 	f, err := os.OpenFile(sibling, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm) //nolint:gosec // G703: path is validated and locked by the safeWrite contract before reaching this function
 	if err != nil {
-		return res, fmt.Errorf("writing sibling temp file: %w", err)
+		return res, fmt.Errorf("creating sibling temp file: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
