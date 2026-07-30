@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // notFoundError builds the "old_string not found" error. It tiers its message on
@@ -24,8 +26,8 @@ import (
 func (t *EditFile) notFoundError(i int, path, sent, searched, content string, preReadMtime time.Time) error {
 	recorded := t.deps.Reads.Mtime(path)
 
-	sentSnippet := truncateSnippet(sent)
-	searchedSnippet := truncateSnippet(searched)
+	sentSnippet := textfmt.Ellipsis(sent, snippetBudget)
+	searchedSnippet := textfmt.Ellipsis(searched, snippetBudget)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "edit_file: edit[%d]: old_string not found in %q", i, path)
@@ -72,8 +74,8 @@ func (t *EditFile) notFoundError(i int, path, sent, searched, content string, pr
 // ReadTracker here — we only surface the post-normalisation form when it
 // differs from what the agent sent.
 func ambiguousError(i, count int, path, sent, searched string) error {
-	sentSnippet := truncateSnippet(sent)
-	searchedSnippet := truncateSnippet(searched)
+	sentSnippet := textfmt.Ellipsis(sent, snippetBudget)
+	searchedSnippet := textfmt.Ellipsis(searched, snippetBudget)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "edit_file: edit[%d]: old_string appears %d times in %q — must be unique", i, count, path)
@@ -85,14 +87,13 @@ func ambiguousError(i, count int, path, sent, searched string) error {
 	return errors.New(b.String())
 }
 
-// truncateSnippet caps s at 60 characters with an ellipsis. Used to keep
-// edit-error messages compact for callers that surface them in chat.
-func truncateSnippet(s string) string {
-	if len(s) <= 60 {
-		return s
-	}
-	return s[:60] + "…"
-}
+// snippetBudget caps the old_string/searched excerpts quoted back in edit
+// errors, keeping them compact for callers that surface them in chat.
+//
+// Counted in runes by textfmt.Ellipsis, not bytes: this used to slice s[:60],
+// which emitted a replacement character whenever byte 60 landed inside a
+// multi-byte sequence — routine for any non-ASCII source file.
+const snippetBudget = 60
 
 // matchLineEndings normalises s so its newline style matches that of ref.
 // If ref contains CRLF and s only LF, all LF in s are upgraded to CRLF (and

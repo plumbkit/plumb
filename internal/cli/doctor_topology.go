@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/config"
-	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -110,7 +110,7 @@ func topologyIndexHealth(st topology.Status) checkResult {
 		}
 	default:
 		detail := fmt.Sprintf("%d files, %d nodes, %d edges, %s",
-			st.IndexedFiles, st.TotalNodes, st.TotalEdges, render.HumanBytes(st.DBSizeBytes))
+			st.IndexedFiles, st.TotalNodes, st.TotalEdges, textfmt.HumanBytes(st.DBSizeBytes))
 		if len(st.Languages) > 0 {
 			detail += "  [" + strings.Join(st.Languages, ", ") + "]"
 		}

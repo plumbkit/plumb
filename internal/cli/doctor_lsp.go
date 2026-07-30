@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
-	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/xcodebsp"
 )
 
@@ -204,7 +204,7 @@ func formatActiveLSPDetail(root, state, pid, rss, diag string) string {
 	}
 	if rss != "" {
 		if n, err := strconv.ParseUint(rss, 10, 64); err == nil {
-			detail += "  " + monitor.FormatBytes(n)
+			detail += "  " + textfmt.HumanBytesCompact(n)
 		}
 	}
 	if diag != "" && diag != "push" {

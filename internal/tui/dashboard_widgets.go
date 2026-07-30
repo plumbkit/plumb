@@ -11,8 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 func (m Model) dashStatsRow(width int) []string {
@@ -72,12 +72,12 @@ func (m Model) dashDaemonWidget(inner int) []string {
 		d := m.daemonMetrics
 		pidStr = strconv.Itoa(d.PID)
 		if d.RSSAvailable {
-			memStr = monitor.FormatBytes(d.RSSBytes)
+			memStr = textfmt.HumanBytesCompact(d.RSSBytes)
 		}
-		allocStr = monitor.FormatBytes(d.HeapAllocBytes)
-		inuseStr = monitor.FormatBytes(d.HeapInuseBytes)
-		sysStr = monitor.FormatBytes(d.HeapSysBytes)
-		relStr = monitor.FormatBytes(d.HeapReleasedBytes)
+		allocStr = textfmt.HumanBytesCompact(d.HeapAllocBytes)
+		inuseStr = textfmt.HumanBytesCompact(d.HeapInuseBytes)
+		sysStr = textfmt.HumanBytesCompact(d.HeapSysBytes)
+		relStr = textfmt.HumanBytesCompact(d.HeapReleasedBytes)
 		gcStr = fmt.Sprintf("%d cycles", d.NumGC)
 		gorStr = strconv.Itoa(d.Goroutines)
 	}
@@ -309,7 +309,7 @@ func dashCompactTopToolsTable(width int, tools []stats.ToolStat, kind dashTopToo
 		if kind == dashTopToolsUptime && t.Errors > 0 {
 			metric = WarnStyle.Render(strconv.FormatInt(t.Errors, 10))
 		}
-		line := KeyStyle.Width(toolW).Render(truncate(t.Tool, toolW-1)) +
+		line := KeyStyle.Width(toolW).Render(textfmt.Ellipsis(t.Tool, toolW-1)) +
 			DetailStyle.Width(callsW).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
 			lipgloss.NewStyle().Width(metricW).Align(lipgloss.Right).Render(metric)
 		content = append(content, line)
@@ -366,7 +366,7 @@ func dashTopToolsTable(title string, width int, tools []stats.ToolStat) []string
 		if eff := t.CapabilityTokens + t.EfficiencyTokens; eff > 0 {
 			tokStr = DetailStyle.Render("~" + stats.FormatSavings(int(eff)))
 		}
-		line := KeyStyle.Width(cTool).Render(truncate(t.Tool, cTool-1)) +
+		line := KeyStyle.Width(cTool).Render(textfmt.Ellipsis(t.Tool, cTool-1)) +
 			DetailStyle.Width(cCalls).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
 			DetailStyle.Width(cAvg).Align(lipgloss.Right).Render(fmt.Sprintf("%.0f", t.AvgMs)) +
 			DetailStyle.Width(cP95).Align(lipgloss.Right).Render(strconv.FormatInt(t.P95Ms, 10)) +

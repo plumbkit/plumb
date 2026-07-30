@@ -11,6 +11,7 @@ import (
 	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // writeToolNames is the set of mutating MCP tool names used by the
@@ -287,7 +288,7 @@ func writeCollabIntents(sb *strings.Builder, selfSessID string, intents []collab
 		if r.AuthorID == selfSessID {
 			who += " (you)"
 		}
-		fmt.Fprintf(sb, "  %s — \"%s\"", who, clampToBytes(r.Body, collabNoteBodyCap))
+		fmt.Fprintf(sb, "  %s — \"%s\"", who, textfmt.ClampBytes(r.Body, collabNoteBodyCap))
 		if len(r.PathGlobs) > 0 {
 			fmt.Fprintf(sb, " [%s]", strings.Join(r.PathGlobs, ", "))
 		}
@@ -304,7 +305,7 @@ func writeCollabNotes(sb *strings.Builder, notes []collab.Row, now time.Time) {
 	sb.WriteString("\nnotes for you (from peers; delivered at session_start too):\n")
 	for _, r := range notes {
 		fmt.Fprintf(sb, "  from %s — \"%s\"  (%s ago)\n",
-			r.AuthorSession, clampToBytes(r.Body, collabNoteBodyCap), humaniseAge(now.Sub(r.CreatedAt)))
+			r.AuthorSession, textfmt.ClampBytes(r.Body, collabNoteBodyCap), humaniseAge(now.Sub(r.CreatedAt)))
 	}
 }
 

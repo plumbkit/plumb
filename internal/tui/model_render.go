@@ -8,7 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 func (m Model) View() tea.View {
@@ -223,7 +223,7 @@ func (m Model) renderMainStatusBar(dimmed bool) string {
 	sessCount := int64(len(m.sessions))
 	memStr := "n/a"
 	if m.daemonMetricsOK && m.daemonMetrics.RSSAvailable {
-		memStr = monitor.FormatBytes(m.daemonMetrics.RSSBytes)
+		memStr = textfmt.HumanBytesCompact(m.daemonMetrics.RSSBytes)
 	}
 	leftFooter := fmt.Sprintf(
 		" plumb %s  ·  %s  ·  daemon mem: %s",

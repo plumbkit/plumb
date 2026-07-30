@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // Search performs a ranked FTS5 search over the topology index.
@@ -151,20 +153,7 @@ func buildSnippet(name, tokens, sig string) string {
 		return tokens
 	}
 	if sig != "" {
-		return truncate(sig, 80)
+		return textfmt.Ellipsis(sig, 80)
 	}
 	return ""
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	// Count by runes so a multi-byte character is never split mid-encoding
-	// (byte slicing s[:n] could land inside a UTF-8 sequence).
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n]) + "…"
 }

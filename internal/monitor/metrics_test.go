@@ -43,23 +43,6 @@ func TestCPUPercent(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	for _, tt := range []struct {
-		n    uint64
-		want string
-	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{1024, "1 KB"},
-		{42 * 1024 * 1024, "42 MB"},
-		{1536 * 1024 * 1024, "1.5 GB"},
-	} {
-		if got := FormatBytes(tt.n); got != tt.want {
-			t.Fatalf("FormatBytes(%d) = %q, want %q", tt.n, got, tt.want)
-		}
-	}
-}
-
 func TestFormatCPU(t *testing.T) {
 	for _, tt := range []struct {
 		percent float64

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // --- in-file search (pattern mode) ---------------------------------------
@@ -247,20 +249,20 @@ func (t *ReadFile) formatSearchOutput(fpath string, mtime time.Time, sha string,
 		rangeNote = " within lines " + searchRangeLabel(start, end)
 	}
 	if matchCount == 0 {
-		fmt.Fprintf(&sb, "# plumb-search: no matches for %q (scanned %d %s%s)\n\n", a.Pattern, scanned, plural(scanned, "line", "lines"), rangeNote)
+		fmt.Fprintf(&sb, "# plumb-search: no matches for %q (scanned %d %s%s)\n\n", a.Pattern, scanned, textfmt.Plural(scanned, "line", "lines"), rangeNote)
 		fmt.Fprintf(&sb, "No matches for %q in %s%s.", a.Pattern, filepath.Base(fpath), rangeNote)
 		sb.WriteString(readFileLiteralHint(a.Pattern, a.UseRegex))
 		return sb.String()
 	}
 
-	countPhrase := fmt.Sprintf("%d %s", matchCount, plural(matchCount, "match", "matches"))
+	countPhrase := fmt.Sprintf("%d %s", matchCount, textfmt.Plural(matchCount, "match", "matches"))
 	if truncated {
 		countPhrase = "first " + countPhrase
 	}
-	fmt.Fprintf(&sb, "# plumb-search: %s for %q (scanned %d %s%s)\n\n", countPhrase, a.Pattern, scanned, plural(scanned, "line", "lines"), rangeNote)
+	fmt.Fprintf(&sb, "# plumb-search: %s for %q (scanned %d %s%s)\n\n", countPhrase, a.Pattern, scanned, textfmt.Plural(scanned, "line", "lines"), rangeNote)
 	sb.WriteString(body)
 	if truncated {
-		fmt.Fprintf(&sb, "\n… (search output truncated at %d %s — narrow the pattern, or restrict the scan with start_line/end_line)", matchCount, plural(matchCount, "match", "matches"))
+		fmt.Fprintf(&sb, "\n… (search output truncated at %d %s — narrow the pattern, or restrict the scan with start_line/end_line)", matchCount, textfmt.Plural(matchCount, "match", "matches"))
 	}
 	return sb.String()
 }

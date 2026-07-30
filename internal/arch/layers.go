@@ -88,6 +88,7 @@ var Layers = map[string]Layer{
 	"internal/paths":                LayerFoundation,
 	"internal/fsync":                LayerFoundation,
 	"internal/tokenise":             LayerFoundation,
+	"internal/textfmt":              LayerFoundation, // stdlib-only text primitives, no lipgloss
 	"internal/redact":               LayerFoundation,
 	"internal/theme":                LayerFoundation, // UI-agnostic hex palettes, no lipgloss
 	"internal/render":               LayerFoundation, // pure presentation helpers

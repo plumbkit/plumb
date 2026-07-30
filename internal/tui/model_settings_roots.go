@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // storeBackedWorkspaceKey reports whether a settings key is a per-workspace root
@@ -81,5 +82,5 @@ func (m *Model) writeWorkspaceRoots(key settingKey, entries []string) bool {
 // workspaceRootsStatus is the transient status shown after a store-backed roots
 // edit — worded as a workspace grant, distinct from a project-config override.
 func workspaceRootsStatus(key settingKey, n int) string {
-	return fmt.Sprintf("%s → %d entr%s · workspace grant", listLabel(key), n, plural(n))
+	return fmt.Sprintf("%s → %d entr%s · workspace grant", listLabel(key), n, textfmt.Plural(n, "y", "ies"))
 }

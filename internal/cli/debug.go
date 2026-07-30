@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 func init() {
@@ -169,7 +169,7 @@ func formatRSSField(s string) string {
 	if err != nil {
 		return "-"
 	}
-	return monitor.FormatBytes(n)
+	return textfmt.HumanBytesCompact(n)
 }
 
 func formatIdleField(s string) string {

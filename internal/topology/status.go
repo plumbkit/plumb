@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // statusReadDSN opens the topology index read-only with busy_timeout applied via
@@ -104,7 +106,7 @@ func FormatStatus(s Status, workspace string) string {
 	fmt.Fprintf(&sb, "  skipped files: %d\n", s.SkippedFiles)
 	fmt.Fprintf(&sb, "  total nodes:   %d\n", s.TotalNodes)
 	fmt.Fprintf(&sb, "  total edges:   %d\n", s.TotalEdges)
-	fmt.Fprintf(&sb, "  db size:       %s\n", formatBytes(s.DBSizeBytes))
+	fmt.Fprintf(&sb, "  db size:       %s\n", textfmt.HumanBytes(s.DBSizeBytes))
 	if !s.LastSync.IsZero() {
 		fmt.Fprintf(&sb, "  last sync:     %s\n", s.LastSync.Format(time.RFC3339))
 	}
@@ -115,15 +117,4 @@ func FormatStatus(s Status, workspace string) string {
 		fmt.Fprintf(&sb, "  last error:    %s\n", s.LastError)
 	}
 	return sb.String()
-}
-
-func formatBytes(b int64) string {
-	switch {
-	case b >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
-	case b >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(b)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", b)
-	}
 }

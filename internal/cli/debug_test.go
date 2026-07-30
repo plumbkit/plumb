@@ -39,7 +39,7 @@ func TestRenderLSPStatus(t *testing.T) {
 	// java: hibernated with empty pid/rss (idle 1500s = 25m0s), push mode.
 	resp := "go\t/x\tactive\t1234\t566231040\t12\tdiag=pull\njava\t/y\thibernated\t\t\t1500\tdiag=push\n"
 	out := renderLSPStatus(resp)
-	for _, want := range []string{"LANGUAGE", "DIAG", "go", "/x", "active", "1234", "540 MB", "12s", "pull", "java", "hibernated", "25m0s", "push"} {
+	for _, want := range []string{"LANGUAGE", "DIAG", "go", "/x", "active", "1234", "540 MiB", "12s", "pull", "java", "hibernated", "25m0s", "push"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

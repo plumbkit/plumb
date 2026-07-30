@@ -7,6 +7,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // sessionAdapterRow renders the active-LSP detail row: every language server
@@ -192,7 +193,7 @@ func (m Model) topologyDetailRow() (string, bool) {
 		return "", false
 	}
 	st := m.topoStatus
-	info := fmt.Sprintf("%d nodes · %d files · %s", st.TotalNodes, st.IndexedFiles, render.HumanBytes(st.DBSizeBytes))
+	info := fmt.Sprintf("%d nodes · %d files · %s", st.TotalNodes, st.IndexedFiles, textfmt.HumanBytes(st.DBSizeBytes))
 	if len(st.Languages) > 0 {
 		info += " · " + strings.Join(st.Languages, ",")
 	}
@@ -220,7 +221,7 @@ func (m *Model) rightLinesTools(rw int) []string {
 	m.statsTableBodyRow = 2 // tab bar + blank = 2 rows before this content
 	for i, ts := range m.toolStats {
 		sel := m.focusPanel == focusToolStats && i == m.toolStatsCursor
-		tn := render.PadRight(truncate(ts.Tool, c1w-2), c1w-2)
+		tn := render.PadRight(textfmt.Ellipsis(ts.Tool, c1w-2), c1w-2)
 		if sel {
 			pc, pa, pe := render.PadLeft(strconv.FormatInt(ts.Calls, 10), c2w), render.PadLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), render.PadLeft("", c4w)
 			if ts.Errors > 0 {
@@ -260,8 +261,8 @@ func (m *Model) rightLinesHistory(rw int) []string {
 	m.recentTableBodyRow = 2 // tab bar + blank = 2 rows before this content
 	for i, c := range m.recentCalls {
 		sel := m.focusPanel == focusStats && i == m.statsCursor
-		tn := render.PadRight(truncate(c.Tool, rc1w-2), rc1w-2)
-		sn := render.PadRight(truncate(c.SessionName, c5w), c5w)
+		tn := render.PadRight(textfmt.Ellipsis(c.Tool, rc1w-2), rc1w-2)
+		sn := render.PadRight(textfmt.Ellipsis(c.SessionName, c5w), c5w)
 		if sel {
 			pd, pw, pe := render.PadLeft(fmt.Sprintf("%dms", c.DurationMs), c2w), render.PadLeft(render.HumanAge(c.CalledAt), c3w), render.PadLeft("", c4w)
 			if !c.Success {
@@ -277,7 +278,7 @@ func (m *Model) rightLinesHistory(rw int) []string {
 			if !c.Success {
 				c4 = render.PadLeft(WarnStyle.Render("✗"), c4w)
 			}
-			c5 := render.PadRight(MutedStyle.Render(truncate(c.SessionName, c5w)), c5w)
+			c5 := render.PadRight(MutedStyle.Render(textfmt.Ellipsis(c.SessionName, c5w)), c5w)
 			lines = append(lines, "  "+mk+tn+s3+c2+s3+c3+s3+c4+s3+c5)
 		}
 	}

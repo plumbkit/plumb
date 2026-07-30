@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // resolveAnchorEdit reads the current file bytes and lowers the anchor-bounded
@@ -88,9 +90,9 @@ func anchorMatchError(field, sent, searched string, count int) error {
 	switch {
 	case count == 0:
 		var b strings.Builder
-		fmt.Fprintf(&b, "edit_file: %s not found in the file: %q", field, truncateSnippet(sent))
+		fmt.Fprintf(&b, "edit_file: %s not found in the file: %q", field, textfmt.Ellipsis(sent, snippetBudget))
 		if searched != sent {
-			fmt.Fprintf(&b, "\n  searched (after newline normalisation): %q", truncateSnippet(searched))
+			fmt.Fprintf(&b, "\n  searched (after newline normalisation): %q", textfmt.Ellipsis(searched, snippetBudget))
 		}
 		if looksGuttered(searched) {
 			b.WriteString("\n  Hint: the anchor appears to include the display-only line-number gutter " +
@@ -100,7 +102,7 @@ func anchorMatchError(field, sent, searched string, count int) error {
 	case count > 1:
 		return &editLogicErr{fmt.Errorf(
 			"edit_file: %s appears %d times in the file — must be unique; add more surrounding context: %q",
-			field, count, truncateSnippet(sent),
+			field, count, textfmt.Ellipsis(sent, snippetBudget),
 		)}
 	}
 	return nil

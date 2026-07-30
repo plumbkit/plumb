@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // activateSetting handles enter/space: opens the theme picker for the popup row
@@ -96,7 +97,7 @@ func (m Model) commitListEditor() Model {
 	entries := append([]string(nil), ed.entries...)
 	if ed.lspLang != "" {
 		if m.applyScopedLSP(settingItem{key: ed.key, lspLang: ed.lspLang}, entries) {
-			m.settingsStatus = m.scopedStatus(ed.key, fmt.Sprintf("%s → %d entr%s", ed.title, len(entries), plural(len(entries))))
+			m.settingsStatus = m.scopedStatus(ed.key, fmt.Sprintf("%s → %d entr%s", ed.title, len(entries), textfmt.Plural(len(entries), "y", "ies")))
 		}
 		return m
 	}
@@ -114,7 +115,7 @@ func (m Model) commitListEditor() Model {
 		}
 	}
 	if m.applyScopedSetting(ed.key, entries, apply) {
-		m.settingsStatus = m.scopedStatus(ed.key, fmt.Sprintf("%s → %d entr%s", listLabel(ed.key), len(entries), plural(len(entries))))
+		m.settingsStatus = m.scopedStatus(ed.key, fmt.Sprintf("%s → %d entr%s", listLabel(ed.key), len(entries), textfmt.Plural(len(entries), "y", "ies")))
 	}
 	return m
 }
@@ -281,11 +282,4 @@ func listLabel(key settingKey) string {
 	default:
 		return ""
 	}
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return "y"
-	}
-	return "ies"
 }

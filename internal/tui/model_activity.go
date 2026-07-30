@@ -11,6 +11,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 func (m Model) renderTopMenu(width int, dimmed bool) []string {
@@ -410,12 +411,5 @@ func formatActiveSessionCount(n int64) string {
 }
 
 func formatToolCallCount(n int64) string {
-	return fmt.Sprintf("%d %s", n, pluralWord(n, "tool call", "tool calls"))
-}
-
-func pluralWord(n int64, singular, plural string) string {
-	if n == 1 {
-		return singular
-	}
-	return plural
+	return fmt.Sprintf("%d %s", n, textfmt.Plural(n, "tool call", "tool calls"))
 }

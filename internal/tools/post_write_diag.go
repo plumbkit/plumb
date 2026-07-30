@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // defaultPostWriteDiagWindow is the fallback window used when WriteDeps.PostWriteDiagWindow
@@ -309,7 +310,7 @@ func formatStandingPreExistingNote(n int) string {
 	if n <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("\n(%d pre-existing %s in this file not shown — call diagnostics() for full state)", n, plural(n, "issue", "issues"))
+	return fmt.Sprintf("\n(%d pre-existing %s in this file not shown — call diagnostics() for full state)", n, textfmt.Plural(n, "issue", "issues"))
 }
 
 // formatDifferentialDiagnostics renders the differential result as a compact

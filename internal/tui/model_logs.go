@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // filteredLogEntries returns log entries that match the current filter string
@@ -39,7 +40,7 @@ func (m Model) renderLogEntry(e logEntry, width int, selected bool) string {
 	}
 	if e.Msg == "" {
 		// Plain text line — just show raw content.
-		line := prefixMark + " " + MutedStyle.Render(truncate(e.Raw, width-2))
+		line := prefixMark + " " + MutedStyle.Render(textfmt.Ellipsis(e.Raw, width-2))
 		if selected {
 			line = LogSelectedStyle.Render(ansi.Strip(line))
 		}

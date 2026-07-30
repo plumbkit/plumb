@@ -196,20 +196,6 @@ func ProcessRSS(pid int) (uint64, bool) {
 	return processChildRSS(pid)
 }
 
-func FormatBytes(n uint64) string {
-	const unit = 1024
-	switch {
-	case n >= unit*unit*unit:
-		return fmt.Sprintf("%.1f GB", float64(n)/(unit*unit*unit))
-	case n >= unit*unit:
-		return fmt.Sprintf("%.0f MB", float64(n)/(unit*unit))
-	case n >= unit:
-		return fmt.Sprintf("%.0f KB", float64(n)/unit)
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
-}
-
 func FormatCPU(percent float64) string {
 	if percent < 0 {
 		percent = 0

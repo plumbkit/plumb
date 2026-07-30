@@ -197,12 +197,12 @@ func TestDashDaemonWidgetUsesMemoryRows(t *testing.T) {
 		}
 	}
 	// RSS is the current sample, not a peak — the label must not claim otherwise.
-	assertRow(2, "RSS", "33 MB")
+	assertRow(2, "RSS", "33 MiB")
 	if strings.Contains(plain[2], "Peak") {
 		t.Fatalf("daemon RSS row = %q, should not be labelled Peak (it is the current sample)", plain[2])
 	}
-	assertRow(4, "Heap In Use", "9 MB")
-	assertRow(5, "Heap Sys", "15 MB")
+	assertRow(4, "Heap In Use", "9 MiB")
+	assertRow(5, "Heap Sys", "15 MiB")
 	assertRow(6, "Heap Released", "0 B")
 	assertRow(7, "GC", "20 cycles")
 }

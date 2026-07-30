@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // session_start_mailbox.go delivers the phase-2 minimal mailbox ([collab]
@@ -57,7 +58,7 @@ func formatDeliveredNotes(notes []collab.Row, budget int, now time.Time) string 
 	for _, r := range shown {
 		body := r.Body
 		if budget > 0 {
-			body = clampToBytes(body, budget)
+			body = textfmt.ClampBytes(body, budget)
 		}
 		fmt.Fprintf(&sb, "- from %s", r.AuthorSession)
 		if r.Addressee == collab.AddresseeNext {
