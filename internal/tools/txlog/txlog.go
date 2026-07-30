@@ -266,30 +266,11 @@ func (l *Log) writeManifest() error {
 // written files (silent corruption). The POSIX-atomic rename guarantees a reader
 // always sees a complete manifest — the old one or the new one, never a torn one.
 func atomicWriteManifest(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".manifest-*.tmp")
-	if err != nil {
-		return fmt.Errorf("txlog: creating temp manifest: %w", err)
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }() // no-op once the rename below succeeds
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("txlog: writing temp manifest: %w", err)
-	}
-	if err := fsync.SyncFile(f); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("txlog: syncing temp manifest: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("txlog: closing temp manifest: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("txlog: renaming manifest into place: %w", err)
-	}
-	// Best-effort: without the directory fsync a crash can resurrect a stale
-	// (or no) manifest even though the file data was synced above.
-	if err := fsync.SyncDir(filepath.Dir(path)); err != nil {
-		slog.Warn("txlog: directory fsync failed after manifest write", "path", path, "err", err)
+	if err := fsync.AtomicWrite(path, data, fsync.Options{
+		TempPattern: ".manifest-*.tmp",
+		Label:       "txlog",
+	}); err != nil {
+		return fmt.Errorf("txlog: writing manifest: %w", err)
 	}
 	return nil
 }

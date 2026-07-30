@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -226,33 +225,12 @@ func canonRoot(root string) string {
 // The temp file is fsynced before the rename and the directory after it
 // (best-effort), so a crash cannot silently drop a trust grant or revocation.
 func writeJSONAtomic(path string, v any) error {
-	dir := filepath.Dir(path)
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding json: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".plumb-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := fsync.SyncFile(tmp); err != nil {
-		tmp.Close()
-		return fmt.Errorf("syncing temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("flushing temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("renaming into place: %w", err)
-	}
-	if err := fsync.SyncDir(dir); err != nil {
-		slog.Warn("config: directory fsync failed after json write", "path", path, "err", err)
-	}
-	return nil
+	return fsync.AtomicWrite(path, data, fsync.Options{
+		TempPattern: ".plumb-*.json.tmp",
+		Label:       "config",
+	})
 }

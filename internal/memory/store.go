@@ -180,33 +180,16 @@ func WriteWithOptions(workspace, name, content string, opts WriteOptions) error 
 		sb.Write(body)
 		content = sb.String()
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
+	// This used to stage into a FIXED "<path>.tmp" with no lock around it, so
+	// two concurrent writes of the same memory shared one staging file: the
+	// second writer's O_TRUNC clobbered the first mid-write, and either
+	// failure path removed the other's file. os.CreateTemp gives each writer
+	// its own.
+	if err := fsync.AtomicWrite(path, []byte(content), fsync.Options{
+		TempPattern: ".memory-*.md.tmp",
+		Label:       "memory",
+	}); err != nil {
 		return fmt.Errorf("writing memory: %w", err)
-	}
-	if _, err := f.WriteString(content); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("writing memory: %w", err)
-	}
-	if err := fsync.SyncFile(f); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("syncing memory: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("writing memory: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("renaming memory into place: %w", err)
-	}
-	// Best-effort: without the directory fsync a crash can resurrect the
-	// pre-rename directory entry and silently drop the memory.
-	if err := fsync.SyncDir(filepath.Dir(path)); err != nil {
-		slog.Warn("memory: directory fsync failed after memory write", "path", path, "err", err)
 	}
 	return nil
 }

@@ -83,3 +83,38 @@ var PrimitiveRules = []PrimitiveRule{
 		Allowed: map[string]string{},
 	},
 }
+
+// CallRule pins a standard-library call that must not be scattered across the
+// tree, because the correct way to use it is several lines long and getting it
+// subtly wrong is invisible.
+//
+// Where PrimitiveRule catches a helper being re-declared, this catches the
+// pattern being open-coded without a helper at all — which is how the atomic
+// write spread in the first place: nobody wrote a second AtomicWrite, they
+// wrote a fifth CreateTemp/Write/Rename sequence inline.
+type CallRule struct {
+	// Call is the qualified selector as written in source, e.g. "os.Rename".
+	Call string
+
+	// Why explains, in the failure message, what to use instead.
+	Why string
+
+	// Allowed maps "<package>.<func>" to the reason that function may make the
+	// call directly. Methods are keyed by their name alone ("Execute"), since
+	// that is what the AST gives without type resolution.
+	Allowed map[string]string
+}
+
+// CallRules is the full set.
+var CallRules = []CallRule{
+	{
+		Call: "os.Rename",
+		Why:  "a staged temp→rename write belongs in fsync.AtomicWrite, which fsyncs the staging file before the rename and the directory after it, preserves an existing file's mode, and cleans up on every failure path",
+		Allowed: map[string]string{
+			"internal/fsync.AtomicWriteFunc":  "the shared implementation itself",
+			"internal/tools.safeWrite":        "a separate primitive: stages in os.TempDir with a memoised cross-device verdict, resolves symlinks so the rename writes THROUGH a link, and returns the mtime/timing that edit_file's concurrent-write detection needs",
+			"internal/tools.safeWriteSibling": "safeWrite's EXDEV fallback, staging next to the target when os.TempDir is on another filesystem",
+			"internal/tools.Execute":          "rename_file: a user-facing move of a real file, not a staged write",
+		},
+	},
+}
