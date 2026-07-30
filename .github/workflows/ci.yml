@@ -48,6 +48,53 @@ jobs:
       - name: make verify
         run: make verify
 
+      # go.mod/go.sum drift is invisible locally (the build keeps working) but
+      # breaks a fresh clone and quietly widens the dependency surface. `make
+      # tidy` existed; nothing checked it had been run.
+      - name: go.mod / go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum || {
+            echo "::error::go.mod/go.sum are not tidy — run 'make tidy' and commit the result"
+            exit 1
+          }
+
+  # ── Dependency vulnerabilities. Fast, and the only job that can fail because
+  #    of something nobody in this repo changed — so it runs on its own. ──
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: govulncheck
+        run: make vuln
+
+  # ── Coverage floor. ubuntu only: internal/fsguard is Darwin-only and its
+  #    statements are unreachable elsewhere, so the total is not comparable
+  #    across OSes. Enforcing on one platform keeps the number meaningful. ──
+  coverage:
+    name: coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: make cover
+        run: make cover
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: .testcache/coverage.out
+          if-no-files-found: warn
+
   # ── Race detector — ubuntu only (slow; one OS is enough to catch data races). ──
   race:
     name: test-race

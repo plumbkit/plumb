@@ -1,0 +1,72 @@
+# Dependabot keeps the dependency surface current without anyone having to
+# remember to look. plumb embeds a WASM runtime, SQLite, and tree-sitter
+# grammars, so a stale module graph is a real exposure — govulncheck (see
+# ci.yml) tells us when something is *known* bad; this reduces how long we sit
+# on anything at all.
+#
+# Grouping policy: one PR per ecosystem per week, not one PR per module. A
+# scattering of single-module PRs is noise nobody reviews, and every one of them
+# costs a full CI matrix run.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      # Matches the repo's commit convention (see AGENTS.md § Commit conventions).
+      prefix: "chore(deps)"
+    groups:
+      # Charm owns bubbletea/bubbles/lipgloss plus the x/ helpers; they move
+      # together and a partial bump routinely fails to compile.
+      charm:
+        patterns:
+          - charm.land/*
+          - github.com/charmbracelet/*
+      # Everything else that is not a major bump: one reviewable PR.
+      minor-and-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - charm.land/*
+          - github.com/charmbracelet/*
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # gotreesitter ships the embedded grammars and is pinned deliberately —
+      # a bump changes parse output and needs the fidelity tests run by hand.
+      # See AGENTS.md on the treesitter extractors.
+      - dependency-name: github.com/odvcencio/gotreesitter
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The embedded Svelte SPA (built by `make web-ui`, //go:embed'd into the
+  # binary) has its own lockfile.
+  - package-ecosystem: npm
+    directory: /internal/web/ui
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

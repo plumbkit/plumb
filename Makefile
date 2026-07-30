@@ -29,7 +29,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint check-size verify run clean tidy install install-hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui test test-race integration-test build-integration lint check-size cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -132,11 +132,35 @@ docker-cleanroom:
 lint:
 	golangci-lint run
 
-# check-size fails if any non-test Go file exceeds the ~600-line rule (with a
-# grandfather baseline for files still awaiting a split). Keeps the standard
-# from regressing — see scripts/check-file-size.sh.
+# check-size fails if any Go file exceeds its line rule — 600 for source, 900 for
+# tests (with a grandfather baseline for files still awaiting a split). Keeps the
+# standard from regressing — see scripts/check-file-size.sh.
 check-size:
 	./scripts/check-file-size.sh
+
+# cover measures statement coverage and fails below the floor in
+# scripts/check-coverage.sh. Not in `verify` — it re-runs the whole suite with
+# instrumentation, so it would roughly double the local edit loop; CI runs it on
+# every push. Use `make cover-report` locally to see where the gaps are.
+cover:
+	./scripts/check-coverage.sh
+
+cover-report:
+	./scripts/check-coverage.sh --report
+
+# vuln scans the module graph against the Go vulnerability database. Pinned to
+# @latest deliberately: the value is knowing about a CVE published this morning,
+# and the tool's own version is not part of the build.
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+# tidy-check asserts go.mod/go.sum are already tidy, without leaving the tree
+# modified on failure. Mirrors the CI step so the failure is reproducible here.
+tidy-check:
+	@go mod tidy
+	@git diff --exit-code -- go.mod go.sum \
+		|| { echo "go.mod/go.sum not tidy — 'make tidy' changed them; commit the result"; exit 1; }
+	@echo "tidy-check: OK (go.mod/go.sum unchanged by go mod tidy)"
 
 run:
 	go run $(CMD)
@@ -207,8 +231,15 @@ blog:
 	python3 scripts/build-blog.py
 
 # verify is the definition of "ready to commit": build + test + lint + an
-# integration-tag compile pass (build-integration) + the file-size guard.
-verify: build test lint build-integration build-clients check-size
+# integration-tag compile pass (build-integration) + the file-size guard +
+# go.mod tidiness. Coverage (`make cover`) and vulnerabilities (`make vuln`) are
+# deliberately NOT here — the first doubles the suite runtime, the second needs
+# the network; CI runs both on every push.
+verify: build test lint build-integration build-clients check-size tidy-check
+
+# hooks is an alias for install-hooks — the ops-root Makefile uses `hooks-ops`
+# for its own hook, and the asymmetry is a recurring stumble.
+hooks: install-hooks
 
 install-hooks:
 	@hooks="$$(git rev-parse --git-path hooks)"; \
