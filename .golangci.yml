@@ -112,6 +112,17 @@ linters:
           - usetesting
         path: internal/paths/paths_test\.go
 
+      # sandbox_darwin_test.go compiles only on Darwin, so a Linux lint run
+      # never sees it — CI's macOS job does. Its os.MkdirTemp is deliberate in
+      # a different way from the GOTMPDIR cases above: the write-jail test's
+      # "outside" dir must sit directly under $HOME, not $TMPDIR, because the
+      # sandbox profile deliberately allows $TMPDIR — a t.TempDir() location
+      # would be writable inside the jail and the denial assertion would test
+      # nothing.
+      - linters:
+          - usetesting
+        path: internal/tools/sandbox_darwin_test\.go
+
       # The closures passed to runIsolated are test BODIES (testing.InternalTest.F
       # run through testing.RunTests), not helpers — thelper reads them as helpers
       # only because their parameter is correctly named t. Calling t.Helper() in a

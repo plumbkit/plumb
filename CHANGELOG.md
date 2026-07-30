@@ -160,6 +160,19 @@
 
 ### Fixed
 
+- **CI: the widened linter set is now trialled against the Darwin tree too,
+  and the toolchain is past four stdlib CVEs.** `usetesting` fired only in
+  CI's macOS job — its one hit (`sandbox_darwin_test.go`) is a deliberate
+  `os.MkdirTemp` (the write-jail test's "outside" dir must sit under `$HOME`,
+  not `$TMPDIR`, because the sandbox profile allows `$TMPDIR`) and is now a
+  path-scoped exclusion stating that reason; a `GOOS=darwin` lint sweep
+  confirms the rest of the Darwin-only tree is clean. Separately, govulncheck
+  flagged GO-2026-5856 (`crypto/tls`), GO-2026-5039 (`net/textproto`),
+  GO-2026-5037 (`crypto/x509`) and GO-2026-4971 (`net`), all published after
+  the gate first ran clean and all reachable from plumb's own web/TLS/dial
+  paths — so suppression was never the answer: `toolchain` bumps
+  go1.26.2 → go1.26.5, the release that fixes all four.
+
 - **A deliberate stop of a still-warming language server is no longer
   misreported as a start failure.** `Supervisor.Stop` now cancels the loop's
   lifetime context with a dedicated cause, and a first start cut short by it
