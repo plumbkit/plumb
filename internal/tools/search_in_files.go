@@ -65,7 +65,7 @@ var searchInFilesSchema = json.RawMessage(`{
     },
     "case_sensitive": {
       "type": "boolean",
-      "description": "Force case-sensitive matching. Default: smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise."
+      "description": "Force case-sensitive matching. Default (omitted): smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise. Pass false to force case-INSENSITIVE matching even for an uppercase pattern."
     },
     "context_lines": {
       "type": "integer",
@@ -280,11 +280,18 @@ func literalMetacharHint(a searchInFilesArgs) string {
 }
 
 func compileSearchRegex(a searchInFilesArgs) (*regexp.Regexp, error) {
-	// Smart-case: case-sensitive when the pattern contains any uppercase letter
-	// or when the caller forces it; case-insensitive otherwise.
-	caseSensitive := a.CaseSensitive != nil && *a.CaseSensitive
-	if !caseSensitive && !allLower(a.Pattern) {
-		caseSensitive = true
+	// Smart-case applies only when the caller said nothing: case-sensitive when
+	// the pattern contains an uppercase letter, insensitive otherwise. An EXPLICIT
+	// case_sensitive wins either way — including false, which forces
+	// insensitivity for an uppercase pattern. That is why the field is a *bool:
+	// collapsing nil and false made `case_sensitive: false` a silent no-op, so a
+	// deliberate case-insensitive search for an uppercase pattern (and the
+	// -i / ignore_case alias that rewrites to exactly this) ran case-SENSITIVE and
+	// answered "No matches". find_replace and search_memories always honoured the
+	// explicit value; these two did not.
+	caseSensitive := !allLower(a.Pattern)
+	if a.CaseSensitive != nil {
+		caseSensitive = *a.CaseSensitive
 	}
 	flags := ""
 	if !caseSensitive {

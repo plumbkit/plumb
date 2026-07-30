@@ -53,7 +53,7 @@ var readFileSchema = json.RawMessage(`{
     },
     "case_sensitive": {
       "type": "boolean",
-      "description": "Force case-sensitive matching for pattern. Default: smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise. Only consulted when pattern is set."
+      "description": "Force case-sensitive matching for pattern. Default (omitted): smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise. Pass false to force case-INSENSITIVE matching even for an uppercase pattern. Only consulted when pattern is set."
     },
     "context_lines": {
       "type": "integer",

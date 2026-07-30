@@ -57,6 +57,24 @@
 
 ### Fixed
 
+- **`case_sensitive: false` is no longer a silent no-op on `search_in_files` and
+  `read_file` — an explicit "ignore case" was overridden by smart-case.** Both
+  tools computed `caseSensitive := arg != nil && *arg` and then re-applied
+  smart-case, collapsing "unset" and "explicitly false" into the same thing —
+  which defeats the point of the field being a `*bool`. So for any pattern
+  containing an uppercase letter, `case_sensitive: false` was ignored and the
+  search ran case-SENSITIVE: `search_in_files({pattern: "FSYNC-BEFORE-ACK",
+  case_sensitive: false})` returned a confident "No matches" against a file
+  containing `fsync-before-ack`. The smart-case alias work in this release makes
+  it worse than a footgun: `-i` / `ignore_case` rewrites to exactly
+  `case_sensitive: false`, so an agent explicitly asking to ignore case got a
+  case-sensitive search *and* a note cheerfully confirming the inversion had
+  been applied. Both tools now apply smart-case only when the parameter is
+  omitted and honour an explicit value either way — which is what `find_replace`
+  and `search_memories` already did, so the four are consistent again. Guarded
+  by `case_sensitive_explicit_test.go`, which pins all four tools on the same
+  contract (unset → smart-case; explicit true/false → obeyed).
+
 - **`daemon_info` uptime now spans system suspend — the monotonic clock reading
   is stripped at capture.** `daemonStartedAt` was captured with `time.Now()`'s
   monotonic reading, so `time.Since` excluded suspend time (`CLOCK_MONOTONIC`

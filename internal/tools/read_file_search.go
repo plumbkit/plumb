@@ -87,13 +87,14 @@ func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.F
 }
 
 // compileReadFilePattern builds the matcher for search mode: literal text by
-// default (metacharacters quoted), Go RE2 regex when useRegex. Smart-case —
-// case-insensitive when the pattern is all lowercase and the caller did not
-// force case_sensitive. Identical semantics to search_in_files.
+// default (metacharacters quoted), Go RE2 regex when useRegex. Smart-case
+// applies only when caseSensitive is nil — an explicit value wins, including
+// false, which forces case-insensitivity for an uppercase pattern. Identical
+// semantics to search_in_files, find_replace, and search_memories.
 func compileReadFilePattern(pattern string, useRegex bool, caseSensitive *bool) (*regexp.Regexp, error) {
-	cs := caseSensitive != nil && *caseSensitive
-	if !cs && !allLower(pattern) {
-		cs = true
+	cs := !allLower(pattern)
+	if caseSensitive != nil {
+		cs = *caseSensitive
 	}
 	flags := ""
 	if !cs {
