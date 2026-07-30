@@ -196,7 +196,7 @@ func TestLeftPanelDoesNotShrinkBelowFullSessionRowWidth(t *testing.T) {
 	}
 }
 
-func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) { //nolint:gocyclo
+func TestRenderTopMenuUsesRailAndActivityBox(t *testing.T) {
 	RebuildStyles()
 	m := Model{
 		currentSection: 1,

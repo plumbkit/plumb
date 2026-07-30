@@ -48,16 +48,9 @@ jobs:
       - name: make verify
         run: make verify
 
-      # go.mod/go.sum drift is invisible locally (the build keeps working) but
-      # breaks a fresh clone and quietly widens the dependency surface. `make
-      # tidy` existed; nothing checked it had been run.
-      - name: go.mod / go.sum are tidy
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum || {
-            echo "::error::go.mod/go.sum are not tidy — run 'make tidy' and commit the result"
-            exit 1
-          }
+      # go.mod/go.sum tidiness is asserted inside `make verify` (tidy-check) on
+      # both OSes — drift is invisible locally (the build keeps working) but
+      # breaks a fresh clone, so it gates here rather than relying on memory.
 
   # ── Dependency vulnerabilities. Fast, and the only job that can fail because
   #    of something nobody in this repo changed — so it runs on its own. ──

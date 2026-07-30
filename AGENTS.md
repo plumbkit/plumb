@@ -30,7 +30,8 @@ The architectural commitments are:
 Strict layered architecture — lower layers must never import higher ones. **This is enforced, not merely documented:** `internal/arch` declares the layer of every first-party package and its tests fail on a violation, on a package with no layer assigned, and on a stale entry. Adding a package therefore forces a deliberate answer to "which layer is this?" — which is cheaper than discovering it later from a dependency cycle.
 
 ```
-Transport (MCP/LSP) → Domain (symbols, edits, capabilities)
+Foundation (paths, durable writes, tokenisation, redaction, colour data)
+→ Transport (MCP/LSP) → Domain (symbols, edits, capabilities)
                     → Intelligence (topology)
                     → Application (composite tools, caching, rate-limiting)
                     → Presentation (TUI, CLI)
@@ -453,8 +454,8 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - The MCP parameter-alias engine (`internal/mcp/argguard.go`) resolves alias names only at the dispatch boundary, so an internal tool→tool `Execute` call (e.g. `read_multiple_files` composing args for `read_file`) must use the target's canonical parameter names — guarded by `internal/tools/inprocess_call_guard_test.go`.
 - Do not chase TUI coverage.
 - Integration tests requiring external binaries (gopls, pyright) must be gated with `//go:build integration`.
-- **Coverage is measured, not assumed.** `make cover` enforces a whole-tree statement floor (`scripts/check-coverage.sh`); CI runs it on ubuntu only, because `internal/fsguard` is Darwin-only and its statements are unreachable elsewhere, so the total is not comparable across OSes. Use `make cover-report` to see where the gaps are before adding tests.
-- **Linter selection is deliberate, not maximal.** `.golangci.yml` carries a "considered and REJECTED" list naming the linters whose hits were reviewed and found to be noise at this codebase's conventions (`nilerr`, `misspell`, `exhaustive`, `noctx`, …). Do not enable one of those without re-reviewing the hits, and record the reasoning if you do. Path-scoped exclusions each state why the excluded code is correct as written.
+- **Coverage is measured, not assumed.** `make cover` enforces a whole-tree statement floor — currently **71.5%**, canonical in `scripts/check-coverage.sh` — instrumenting every package with `-coverpkg=./...`, so an untested package counts against the total instead of escaping it. CI runs it on ubuntu only, because `internal/fsguard` is Darwin-only and its statements are unreachable elsewhere, so the total is not comparable across OSes. Use `make cover-report` to see where the gaps are before adding tests.
+- **Linter selection is deliberate, not maximal.** `.golangci.yml` carries a "considered and REJECTED" list naming the linters whose hits were reviewed and found to be noise at this codebase's conventions (`nilerr`, `misspell`, `exhaustive`, `noctx`, …). Do not enable one of those without re-reviewing the hits, and record the reasoning if you do. Path-scoped exclusions each state why the excluded code is correct as written. **Every `//nolint` directive carries an inline justification** (gosec and errcheck are at 100%) — write the reason when adding one, and prefer a justified path-scoped exclusion over a bare directive when a whole file or pattern is legitimately exempt.
 
 ## Versioning
 
@@ -481,7 +482,7 @@ make test-race   # go test -race ./...
 make lint        # golangci-lint run
 make check-size  # file-size rule: 600 lines source, 900 test
 make tidy-check  # assert go.mod/go.sum are already tidy
-make verify      # build + test + lint + tag-compile + check-size + tidy-check — "ready to commit"
+make verify      # build + test + lint + integration/clients tag-compile + check-size + tidy-check — "ready to commit"
 make cover       # statement coverage, failing under the floor in scripts/check-coverage.sh
 make cover-report # same, plus the 20 least-covered packages
 make vuln        # govulncheck over the module graph

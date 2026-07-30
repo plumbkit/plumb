@@ -77,6 +77,11 @@ func (l Layer) String() string {
 // decision about where it sits. That failure is the point — it is cheaper to
 // answer "which layer is this?" while writing the package than to discover the
 // answer later from a cycle.
+//
+// One caveat: the package walk reads only non-test files, so a test-only
+// package (cmd/clientsmoke — every file is a build-tagged _test.go) is
+// invisible to it. Such an entry is kept honest by the directory-existence
+// check, not by import analysis.
 var Layers = map[string]Layer{
 	// ── Foundation ──
 	"internal/arch":                 LayerFoundation, // this package: the rules themselves

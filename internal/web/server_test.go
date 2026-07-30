@@ -146,7 +146,7 @@ func TestStartStop_BindsLoopback(t *testing.T) {
 
 	// A real request with the minted token succeeds.
 	tok := strings.TrimPrefix(url, "http://127.0.0.1:38871/?t=")
-	resp, err := http.Get("http://127.0.0.1:38871/api/theme?t=" + tok) //nolint:noctx,bodyclose
+	resp, err := http.Get("http://127.0.0.1:38871/api/theme?t=" + tok) //nolint:noctx,bodyclose // test-only loopback GET: no ctx to thread; resp.Body is closed below, just not via the defer bodyclose looks for
 	if err != nil {
 		t.Fatal(err)
 	}

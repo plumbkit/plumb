@@ -84,8 +84,11 @@ func (e *wireError) Error() string {
 // ─── pending ─────────────────────────────────────────────────────────────────
 
 type pending struct {
-	ch  chan wireMessage
-	ctx context.Context //nolint:containedctx
+	ch chan wireMessage
+	//nolint:containedctx // a pending request's lifetime IS its caller's ctx:
+	// the read pump selects on p.ctx.Done() to abandon a delivery the caller
+	// stopped waiting for — storing it is the design, not a shortcut.
+	ctx context.Context
 }
 
 // ─── Conn ────────────────────────────────────────────────────────────────────

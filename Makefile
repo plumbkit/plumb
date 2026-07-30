@@ -154,8 +154,9 @@ cover-report:
 vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-# tidy-check asserts go.mod/go.sum are already tidy, without leaving the tree
-# modified on failure. Mirrors the CI step so the failure is reproducible here.
+# tidy-check asserts go.mod/go.sum are already tidy. Note that `go mod tidy`
+# mutates in place: on failure the tidied files are left in the working tree —
+# deliberate, so the fix is to review and commit them.
 tidy-check:
 	@go mod tidy
 	@git diff --exit-code -- go.mod go.sum \

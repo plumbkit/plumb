@@ -39,6 +39,29 @@
 
 ### Changed
 
+- **The coverage floor now counts every package.** `make cover`
+  (`scripts/check-coverage.sh`) instruments the whole module with
+  `-coverpkg=./...` instead of only the packages a test binary touches —
+  closing two holes: a package with no tests never entered the profile (so
+  adding untested code did not drag the total), and deleting a package's only
+  test file could *raise* the measured total. The measurement moves from 71.2%
+  to 72.8% (cross-package attribution outweighs the newly visible 0% packages)
+  and the floor re-baselines 70.0 → 71.5, keeping the same ~1.3pp headroom —
+  a ratchet with the margin preserved, not a loosening.
+
+- **Review follow-ups: docs and CI hygiene.** `AGENTS.md`'s architecture
+  diagram gains the foundation rung the `internal/arch` tests enforce (six
+  layers, not five), the `make verify` line names the clients tag-compile it
+  runs, the coverage floor value is stated where the gate is described, and
+  the nolint-must-be-justified discipline is written down. The duplicated
+  go.mod-tidiness step in CI is gone (`make verify` already includes
+  `tidy-check` on both OSes), and the `tidy-check` comment no longer claims
+  the tree is left untouched on failure — `go mod tidy` mutates in place, and
+  the tidied files are left deliberately, to be committed. The last
+  unjustified `//nolint` directives gained their reasons, and two redundant
+  `nolint:gocyclo` suppressions on test files (gocyclo has been excluded on
+  tests) are removed outright.
+
 - **Duplicated logic removed from three places where a fix had to be made more
   than once.** `routingInvProxy`'s four diagnostics methods (`Tracked`,
   `Diagnostics`, `WaitDiagnostics`, `WaitNextDiagnostics`) each carried their own
@@ -136,6 +159,20 @@
   `TestGetOrErrCarriesGuidance`, and an extended `TestWarmingErr`.
 
 ### Fixed
+
+- **A deliberate stop of a still-warming language server is no longer
+  misreported as a start failure.** `Supervisor.Stop` now cancels the loop's
+  lifetime context with a dedicated cause, and a first start cut short by it
+  reports nil on the readiness channel rather than an error — the server did
+  not fail, it was stopped. The pool's self-heal drain
+  (`reapOnLateStartFailure`) previously read that as a dead server and evicted
+  the very entry hibernation is designed to keep; when the eviction landed
+  between hibernate and wake, the wake silently built a fresh entry. This was
+  the load-dependent flake in `TestPool_HibernateAndWakeRestartsServer`, and a
+  real (if rarer) production hazard: the janitor hibernating a still-warming
+  server could evict it outright. External cancellation (daemon shutdown, a
+  `Start` caller's own ctx) still reports the failure as before, and two tests
+  pin the discrimination.
 
 - **A missing `golangci-lint` no longer silently disables the post-write
   `[quality]` Go findings — and is now findable when `go install` put it in

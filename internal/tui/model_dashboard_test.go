@@ -282,7 +282,7 @@ func TestDashTokensWidgetUsesLargeTwoColumnLayout(t *testing.T) {
 	}
 }
 
-func TestDashTopToolsTablesRenderWidgets(t *testing.T) { //nolint:gocyclo
+func TestDashTopToolsTablesRenderWidgets(t *testing.T) {
 	RebuildStyles()
 	m := Model{
 		dashLifetimeTopTools: []stats.ToolStat{
