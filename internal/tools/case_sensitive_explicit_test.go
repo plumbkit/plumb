@@ -26,20 +26,32 @@ func TestSmartCase_ExplicitFalseForcesInsensitive_SearchInFiles(t *testing.T) {
 	}
 }
 
+// The full matrix: pattern case × parameter state × haystack case. Each row
+// carries its own haystack, so the smart-case DEFAULT is exercised in both
+// directions — a lowercase pattern matching an uppercase haystack (insensitive)
+// and an uppercase pattern failing against a lowercase one (sensitive).
 func TestSmartCase_SearchInFilesMatrix(t *testing.T) {
-	const lowerHay = "the fsync-before-ack contract"
 	tests := []struct {
 		name      string
 		pattern   string
+		haystack  string
 		cs        *bool
 		wantMatch bool
 	}{
-		{"unset + lowercase pattern → insensitive (smart-case)", "FSYNC", nil, false},
-		{"unset + lowercase pattern matches lowercase", "fsync", nil, true},
-		{"unset + uppercase pattern → sensitive (smart-case)", "FSYNC", nil, false},
-		{"explicit false + uppercase pattern → insensitive", "FSYNC", boolPtr(false), true},
-		{"explicit true + lowercase pattern → sensitive", "fsync", boolPtr(true), true},
-		{"explicit true + uppercase pattern → sensitive, no match", "FSYNC", boolPtr(true), false},
+		// Unset → smart-case. All-lowercase pattern is case-INSENSITIVE, so it
+		// matches an uppercase haystack.
+		{"unset + lowercase pattern → insensitive, matches UPPER haystack", "fsync", "FSYNC ENABLED", nil, true},
+		{"unset + lowercase pattern matches lowercase haystack", "fsync", "fsync enabled", nil, true},
+		// Unset + uppercase pattern → case-SENSITIVE.
+		{"unset + uppercase pattern → sensitive, no match on lower", "FSYNC", "fsync enabled", nil, false},
+		{"unset + uppercase pattern matches UPPER haystack", "FSYNC", "FSYNC ENABLED", nil, true},
+		// Explicit false → insensitive regardless of pattern case (the fix).
+		{"explicit false + uppercase pattern → insensitive", "FSYNC", "fsync enabled", boolPtr(false), true},
+		{"explicit false + lowercase pattern → insensitive", "fsync", "FSYNC ENABLED", boolPtr(false), true},
+		// Explicit true → sensitive regardless of pattern case.
+		{"explicit true + lowercase pattern → sensitive", "fsync", "fsync enabled", boolPtr(true), true},
+		{"explicit true + lowercase pattern → sensitive, no match on UPPER", "fsync", "FSYNC ENABLED", boolPtr(true), false},
+		{"explicit true + uppercase pattern → sensitive, no match on lower", "FSYNC", "fsync enabled", boolPtr(true), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,8 +59,8 @@ func TestSmartCase_SearchInFilesMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compileSearchRegex: %v", err)
 			}
-			if got := re.MatchString(lowerHay); got != tt.wantMatch {
-				t.Errorf("match = %v, want %v (pattern %q)", got, tt.wantMatch, tt.pattern)
+			if got := re.MatchString(tt.haystack); got != tt.wantMatch {
+				t.Errorf("match(%q, %q) = %v, want %v", tt.pattern, tt.haystack, got, tt.wantMatch)
 			}
 		})
 	}

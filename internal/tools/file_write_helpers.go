@@ -255,7 +255,7 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 	// os.TempDir() first would write the data, fsync it, fail the rename with
 	// EXDEV and throw it all away — per write, on the very common Linux setup
 	// where /tmp is tmpfs.
-	if _, known := crossDeviceDirs.Load(dir); known {
+	if crossDeviceKnown(dir) {
 		return safeWriteSibling(path, data, perm, res.modTimeBeforeWrite)
 	}
 
@@ -294,7 +294,7 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 			// Cross-device: fall back to a sibling .plumb.tmp next to the target,
 			// and remember the verdict so the next write to this directory skips
 			// the doomed staging entirely.
-			crossDeviceDirs.Store(dir, struct{}{})
+			rememberCrossDevice(dir)
 			_ = os.Remove(tmpPath)
 			return safeWriteSibling(path, data, perm, res.modTimeBeforeWrite)
 		}
@@ -348,11 +348,40 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 
 // crossDeviceDirs remembers target directories that live on a different
 // filesystem from os.TempDir(), so safeWrite stops paying for a staging write it
-// knows will fail with EXDEV. Keyed by directory; one small entry per directory
-// written on such a filesystem, which is the same order as the per-path lock
-// table. A stale entry is harmless: the sibling path is always correct, just
-// marginally less isolated than a tmpdir staging.
-var crossDeviceDirs sync.Map // dir string → struct{}
+// knows will fail with EXDEV.
+//
+// BOUNDED, unlike the per-path lock table (which has an LRU sweep): on the
+// common Linux setup where /tmp is tmpfs, EVERY directory the daemon writes is
+// cross-device, so an unbounded map would be a slow leak for the life of the
+// process. On overflow the whole set is dropped rather than evicted one by one
+// — the only cost of forgetting is one wasted staging write per directory
+// afterwards, and the entries are pure optimisation. A stale entry is equally
+// harmless: the sibling path is always correct, just marginally less isolated
+// than a tmpdir staging.
+const crossDeviceCacheCap = 4096
+
+var crossDeviceDirs = struct {
+	mu   sync.Mutex
+	dirs map[string]struct{}
+}{dirs: make(map[string]struct{})}
+
+// crossDeviceKnown reports whether a previous write to dir hit EXDEV.
+func crossDeviceKnown(dir string) bool {
+	crossDeviceDirs.mu.Lock()
+	defer crossDeviceDirs.mu.Unlock()
+	_, ok := crossDeviceDirs.dirs[dir]
+	return ok
+}
+
+// rememberCrossDevice records that dir is on another filesystem from the tmpdir.
+func rememberCrossDevice(dir string) {
+	crossDeviceDirs.mu.Lock()
+	defer crossDeviceDirs.mu.Unlock()
+	if len(crossDeviceDirs.dirs) >= crossDeviceCacheCap {
+		crossDeviceDirs.dirs = make(map[string]struct{}, crossDeviceCacheCap)
+	}
+	crossDeviceDirs.dirs[dir] = struct{}{}
+}
 
 // isCrossDevice reports whether err is a cross-device rename failure (EXDEV).
 func isCrossDevice(err error) bool {
