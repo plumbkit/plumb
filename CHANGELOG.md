@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`make lint-cross` — lint the other OS's tree before CI does.** golangci-lint
+  only analyses files matching the current `GOOS`, so a Linux `make lint` never
+  sees `sandbox_darwin*.go` or `process_darwin*.go`, and a macOS run never sees
+  the `_linux` files. That blind spot has already cost a red build: the widened
+  linter set was trialled on Linux, passed clean, and then failed CI's macOS leg
+  on a single `usetesting` hit behind a build tag. The new target lints **and**
+  vets the opposite platform's tree — static analysis only, it never runs the
+  other platform's tests — and picks the target automatically, so it is symmetric
+  for contributors on either OS. Deliberately not in `verify`: it roughly doubles
+  lint time to cover nine files, and CI's two-OS matrix remains the backstop.
+  Windows is not a target — plumb does not support it (`internal/session`'s flock
+  has no Windows implementation), so a `GOOS=windows` pass would only report
+  known, intentional breakage.
+
 - **The layered architecture is now enforced by a test, not just documented.**
   `internal/arch` declares the layer of every first-party package
   (`foundation < transport < domain < intelligence < application <

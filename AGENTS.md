@@ -456,6 +456,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - Integration tests requiring external binaries (gopls, pyright) must be gated with `//go:build integration`.
 - **Coverage is measured, not assumed.** `make cover` enforces a whole-tree statement floor — currently **71.5%**, canonical in `scripts/check-coverage.sh` — instrumenting every package with `-coverpkg=./...`, so an untested package counts against the total instead of escaping it. CI runs it on ubuntu only, because `internal/fsguard` is Darwin-only and its statements are unreachable elsewhere, so the total is not comparable across OSes. Use `make cover-report` to see where the gaps are before adding tests.
 - **Linter selection is deliberate, not maximal.** `.golangci.yml` carries a "considered and REJECTED" list naming the linters whose hits were reviewed and found to be noise at this codebase's conventions (`nilerr`, `misspell`, `exhaustive`, `noctx`, …). Do not enable one of those without re-reviewing the hits, and record the reasoning if you do. Path-scoped exclusions each state why the excluded code is correct as written. **Every `//nolint` directive carries an inline justification** (gosec and errcheck are at 100%) — write the reason when adding one, and prefer a justified path-scoped exclusion over a bare directive when a whole file or pattern is legitimately exempt.
+- **Lint the other platform before you push.** golangci-lint only analyses files matching the current `GOOS`, so a Linux `make lint` never sees `sandbox_darwin*.go` / `process_darwin*.go`, and a macOS run never sees the `_linux` files. Run **`make lint-cross`** after changing `.golangci.yml` or touching platform-constrained code — it lints and vets the other OS's tree statically, without running that platform's tests. This is not hypothetical: the widened linter set was trialled on Linux only and passed clean, then failed CI's macOS leg on the one `usetesting` hit hiding behind a build tag. CI's two-OS matrix is the backstop, not the first line. Windows is out of scope (`internal/session`'s flock has no Windows implementation), so `lint-cross` never targets it.
 
 ## Versioning
 
@@ -479,7 +480,8 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `ci`, `chore`. Prefer one comm
 make build       # compile to ./plumb, version stamped from git/VERSION
 make test        # go test ./...
 make test-race   # go test -race ./...
-make lint        # golangci-lint run
+make lint        # golangci-lint run (current GOOS only)
+make lint-cross  # lint + vet the OTHER OS's tree (Linux ↔ macOS); static analysis, runs no tests
 make check-size  # file-size rule: 600 lines source, 900 test
 make tidy-check  # assert go.mod/go.sum are already tidy
 make verify      # build + test + lint + integration/clients tag-compile + check-size + tidy-check — "ready to commit"

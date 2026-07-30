@@ -29,7 +29,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint check-size cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui test test-race integration-test build-integration lint lint-cross check-size cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -131,6 +131,23 @@ docker-cleanroom:
 
 lint:
 	golangci-lint run
+
+# lint-cross lints the OTHER supported OS's tree. golangci-lint only analyses
+# files that match the current GOOS, so a Linux `make lint` never sees
+# sandbox_darwin*.go or process_darwin*.go (and vice versa) — a real blind spot:
+# a linter change validated on one platform can pass locally and fail CI's other
+# matrix leg. Static analysis only; it never runs the other platform's tests.
+#
+# Run it after changing .golangci.yml or touching platform-constrained code.
+# Not in `verify` — it roughly doubles lint time to cover nine files, and CI's
+# two-OS matrix is the backstop. Windows is deliberately absent: plumb does not
+# support it (internal/session's flock has no Windows implementation), so a
+# GOOS=windows pass would report known, intentional breakage.
+lint-cross:
+	@other=$$(if [ "$$(go env GOOS)" = "darwin" ]; then echo linux; else echo darwin; fi); \
+		echo "lint-cross: linting the $$other tree (current GOOS=$$(go env GOOS))"; \
+		GOOS=$$other golangci-lint run && GOOS=$$other go vet ./... && \
+		echo "lint-cross: OK ($$other tree clean)"
 
 # check-size fails if any Go file exceeds its line rule — 600 for source, 900 for
 # tests (with a grandfather baseline for files still awaiting a split). Keeps the
