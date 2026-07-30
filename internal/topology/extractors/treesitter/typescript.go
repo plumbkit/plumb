@@ -59,18 +59,15 @@ func (e *TypeScriptExtractor) Extensions() []string { return e.exts }
 // Returns (nil, nil, nil) when src cannot be parsed.
 func (e *TypeScriptExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	tree, err := tsg.NewParser(lang).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &tsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
-	for _, n := range tree.RootNode().Children() {
-		w.dispatch(n)
-	}
-	w.scanTests(tree.RootNode())
-	w.callEdges(tree.RootNode())
-	return w.nodes, w.edges, nil
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &tsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+		for _, n := range root.Children() {
+			w.dispatch(n)
+		}
+		w.scanTests(root)
+		w.callEdges(root)
+		return w.nodes, w.edges
+	})
 }
 
 type tsWalk struct {
@@ -431,17 +428,14 @@ func (w *tsWalk) maybeTest(call *tsg.Node) {
 // callEdges emits EdgeCalls between functions defined in the file (0.8/heuristic).
 func (w *tsWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
-	var rec func(n *tsg.Node, curFunc int64)
-	rec = func(n *tsg.Node, curFunc int64) {
-		curFunc = w.enclosingFunc(n, curFunc)
-		if n.Type(w.lang) == "call_expression" {
-			w.maybeCallEdge(n, curFunc, seen)
-		}
-		for _, c := range n.Children() {
-			rec(c, curFunc)
-		}
-	}
-	rec(root, -1)
+	// As in JavaScript, a scope can be opened by an arrow function bound to a
+	// const, so enclosingFunc replaces scopeByType here.
+	walkCallSites(root, w.enclosingFunc,
+		func(n *tsg.Node, curFunc int64) {
+			if n.Type(w.lang) == "call_expression" {
+				w.maybeCallEdge(n, curFunc, seen)
+			}
+		})
 }
 
 func (w *tsWalk) enclosingFunc(n *tsg.Node, curFunc int64) int64 {

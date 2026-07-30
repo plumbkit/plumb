@@ -34,14 +34,12 @@ func (e *MarkdownExtractor) Extensions() []string { return []string{".md", ".mar
 // (an `## H2` under an `# H1`). Returns (nil, nil, nil) when src cannot be
 // parsed.
 func (e *MarkdownExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &mdWalk{lang: e.lang.get(), src: src, path: relPath}
-	w.walk(tree.RootNode(), -1)
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &mdWalk{lang: lang, src: src, path: relPath}
+		w.walk(root, -1)
+		return w.nodes, w.edges
+	})
 }
 
 type mdWalk struct {

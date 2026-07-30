@@ -34,22 +34,20 @@ func (e *RustExtractor) Extensions() []string { return []string{".rs"} }
 // so are heuristic (0.8), as are intra-file call edges. Returns (nil, nil, nil)
 // when src cannot be parsed.
 func (e *RustExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &rustWalk{
-		lang:    e.lang.get(),
-		src:     src,
-		path:    relPath,
-		funcIdx: map[string]int64{},
-		typeIdx: map[string]int64{},
-	}
-	w.walk(tree.RootNode(), -1, false)
-	w.resolveImplContains()
-	w.callEdges(tree.RootNode())
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &rustWalk{
+			lang:    lang,
+			src:     src,
+			path:    relPath,
+			funcIdx: map[string]int64{},
+			typeIdx: map[string]int64{},
+		}
+		w.walk(root, -1, false)
+		w.resolveImplContains()
+		w.callEdges(root)
+		return w.nodes, w.edges
+	})
 }
 
 type rustWalk struct {
@@ -427,21 +425,14 @@ func (w *rustWalk) attrIsTest(item *tsg.Node) bool {
 func (w *rustWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
 	w.nameCounts = callableNameCounts(w.nodes)
-	var rec func(n *tsg.Node, curFunc int64)
-	rec = func(n *tsg.Node, curFunc int64) {
-		switch n.Type(w.lang) {
-		case "function_item", "function_signature_item":
-			if idx, ok := w.funcIdx[w.fieldText(n, "name")]; ok {
-				curFunc = idx
+	declName := func(n *tsg.Node) string { return w.fieldText(n, "name") }
+	walkCallSites(root,
+		scopeByType(w.lang, w.funcIdx, declName, "function_item", "function_signature_item"),
+		func(n *tsg.Node, curFunc int64) {
+			if n.Type(w.lang) == "call_expression" {
+				w.maybeCallEdge(n, curFunc, seen)
 			}
-		case "call_expression":
-			w.maybeCallEdge(n, curFunc, seen)
-		}
-		for _, c := range n.Children() {
-			rec(c, curFunc)
-		}
-	}
-	rec(root, -1)
+		})
 }
 
 func (w *rustWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64]bool) {

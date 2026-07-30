@@ -34,14 +34,12 @@ func (e *SQLExtractor) Extensions() []string { return []string{".sql"} }
 // statements as types, with each table's columns as fields linked by a certain
 // (1.0) containment edge. Returns (nil, nil, nil) when src cannot be parsed.
 func (e *SQLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &sqlWalk{lang: e.lang.get(), src: src, path: relPath}
-	w.walk(tree.RootNode())
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &sqlWalk{lang: lang, src: src, path: relPath}
+		w.walk(root)
+		return w.nodes, w.edges
+	})
 }
 
 type sqlWalk struct {

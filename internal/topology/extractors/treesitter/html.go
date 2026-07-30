@@ -45,14 +45,12 @@ func (e *HTMLExtractor) Extensions() []string { return []string{".html", ".htm"}
 // with DOM-nesting containment edges between them. Returns (nil, nil, nil) when
 // src cannot be parsed.
 func (e *HTMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &htmlWalk{lang: e.lang.get(), src: src, path: relPath}
-	w.walk(tree.RootNode(), -1)
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &htmlWalk{lang: lang, src: src, path: relPath}
+		w.walk(root, -1)
+		return w.nodes, w.edges
+	})
 }
 
 type htmlWalk struct {

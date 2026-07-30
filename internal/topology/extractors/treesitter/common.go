@@ -9,6 +9,86 @@ import (
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
+// extractWith is the parse envelope every extractor in this package shares:
+// parse src, treat an unparseable file as "nothing to index" rather than an
+// error, hand the root to walk, and — crucially — release the parse arena back
+// to gotreesitter's pool on the way out.
+//
+// That last step is the reason this exists. The package's memory discipline
+// depends on every extractor deferring tree.Release(); a new extractor that
+// forgets leaks an arena per file indexed, which shows up as unbounded daemon
+// growth on a large resync rather than as a test failure. Sixteen hand-written
+// copies of the envelope made that a matter of remembering. One copy makes it
+// structural: an extractor written against extractWith cannot forget, because it
+// never holds the tree.
+//
+// walk returns the nodes and edges it collected; a nil edge slice is fine for a
+// language that emits none.
+func extractWith(
+	lang *tsg.Language,
+	src []byte,
+	walk func(root *tsg.Node) ([]topology.Node, []topology.Edge),
+) ([]topology.Node, []topology.Edge, error) {
+	tree, err := tsg.NewParser(lang).Parse(src)
+	if err != nil || tree == nil {
+		return nil, nil, nil
+	}
+	defer tree.Release()
+	nodes, edges := walk(tree.RootNode())
+	return nodes, edges, nil
+}
+
+// walkCallSites drives the second pass shared by every extractor that emits
+// intra-file call edges: a pre-order descent that threads the innermost
+// enclosing callable's node index down through the children.
+//
+// enclosing is given each node and the current enclosing index, and returns the
+// index in scope for that node's subtree — the current one unchanged for a node
+// that opens no callable scope. visit is then called for every node with the
+// resolved scope; a call-site handler tests the node type itself.
+//
+// The traversal is what is worth sharing: the descent must seed with -1 ("no
+// enclosing callable"), must resolve the scope BEFORE visiting so a call in a
+// function body attributes to that function, and must pass the resolved index to
+// children rather than the parent's. Each of the nine extractors carried its own
+// copy of that; a language whose copy seeded or ordered it differently would
+// silently emit no call edges at all — an absence no test notices, since a
+// missing heuristic edge is indistinguishable from a file with no calls.
+func walkCallSites(root *tsg.Node, enclosing func(n *tsg.Node, cur int64) int64, visit func(n *tsg.Node, cur int64)) {
+	var rec func(n *tsg.Node, cur int64)
+	rec = func(n *tsg.Node, cur int64) {
+		cur = enclosing(n, cur)
+		visit(n, cur)
+		for _, c := range n.Children() {
+			rec(c, cur)
+		}
+	}
+	rec(root, -1)
+}
+
+// scopeByType builds an `enclosing` function for the common case: a language
+// whose callable scopes are a flat set of node types, each carrying its name
+// where nameOf can read it. funcIdx maps that name to the emitted node index.
+//
+// Languages whose scopes are not a flat type switch (JavaScript and TypeScript,
+// where an arrow function bound to a const opens a scope) pass their own
+// enclosing function to walkCallSites instead.
+func scopeByType(lang *tsg.Language, funcIdx map[string]int64, nameOf func(n *tsg.Node) string, types ...string) func(*tsg.Node, int64) int64 {
+	return func(n *tsg.Node, cur int64) int64 {
+		typ := n.Type(lang)
+		for _, t := range types {
+			if typ != t {
+				continue
+			}
+			if idx, ok := funcIdx[nameOf(n)]; ok {
+				return idx
+			}
+			break
+		}
+		return cur
+	}
+}
+
 // span returns the byte-precise declaration span (0-based byte offsets) and the
 // 0-based start/end columns of n, ready to assign onto a topology.Node. The
 // gotreesitter Point columns are already 0-based, matching topology.Node's

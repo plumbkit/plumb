@@ -34,15 +34,13 @@ func (e *ZigExtractor) Extensions() []string { return []string{".zig"} }
 // therefore certain (1.0); intra-file call edges are name-resolved heuristics
 // (0.8). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *ZigExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &zigWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
-	w.walk(tree.RootNode(), -1, false)
-	w.callEdges(tree.RootNode())
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &zigWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+		w.walk(root, -1, false)
+		w.callEdges(root)
+		return w.nodes, w.edges
+	})
 }
 
 type zigWalk struct {
@@ -324,23 +322,19 @@ func (w *zigWalk) addTest(n *tsg.Node) {
 func (w *zigWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
 	w.nameCounts = callableNameCounts(w.nodes)
-	var rec func(n *tsg.Node, curFunc int64)
-	rec = func(n *tsg.Node, curFunc int64) {
-		switch n.Type(w.lang) {
-		case "function_declaration":
-			if id := n.ChildByFieldName("name", w.lang); id != nil {
-				if idx, ok := w.funcIdx[id.Text(w.src)]; ok {
-					curFunc = idx
-				}
-			}
-		case "call_expression":
-			w.maybeCallEdge(n, curFunc, seen)
+	declName := func(n *tsg.Node) string {
+		if id := n.ChildByFieldName("name", w.lang); id != nil {
+			return id.Text(w.src)
 		}
-		for _, c := range n.Children() {
-			rec(c, curFunc)
-		}
+		return ""
 	}
-	rec(root, -1)
+	walkCallSites(root,
+		scopeByType(w.lang, w.funcIdx, declName, "function_declaration"),
+		func(n *tsg.Node, curFunc int64) {
+			if n.Type(w.lang) == "call_expression" {
+				w.maybeCallEdge(n, curFunc, seen)
+			}
+		})
 }
 
 func (w *zigWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64]bool) {

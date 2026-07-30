@@ -33,15 +33,13 @@ func (e *BashExtractor) Extensions() []string { return []string{".sh", ".bash"} 
 // callee is resolved by name within the file, so call edges are heuristic
 // (0.8). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *BashExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &bashWalk{lang: e.lang.get(), src: src, path: relPath, funcIdx: map[string]int64{}}
-	w.walk(tree.RootNode())
-	w.callEdges(tree.RootNode())
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &bashWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+		w.walk(root)
+		w.callEdges(root)
+		return w.nodes, w.edges
+	})
 }
 
 type bashWalk struct {
@@ -185,21 +183,13 @@ func (w *bashWalk) importTarget(cmd *tsg.Node) string {
 func (w *bashWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
 	w.nameCounts = callableNameCounts(w.nodes)
-	var rec func(n *tsg.Node, curFunc int64)
-	rec = func(n *tsg.Node, curFunc int64) {
-		switch n.Type(w.lang) {
-		case "function_definition":
-			if idx, ok := w.funcIdx[w.funcName(n)]; ok {
-				curFunc = idx
+	walkCallSites(root,
+		scopeByType(w.lang, w.funcIdx, w.funcName, "function_definition"),
+		func(n *tsg.Node, curFunc int64) {
+			if n.Type(w.lang) == "command" {
+				w.maybeCallEdge(n, curFunc, seen)
 			}
-		case "command":
-			w.maybeCallEdge(n, curFunc, seen)
-		}
-		for _, c := range n.Children() {
-			rec(c, curFunc)
-		}
-	}
-	rec(root, -1)
+		})
 }
 
 func (w *bashWalk) maybeCallEdge(cmd *tsg.Node, curFunc int64, seen map[[2]int64]bool) {

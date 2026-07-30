@@ -34,14 +34,12 @@ func (e *HCLExtractor) Extensions() []string { return []string{".tf", ".tfvars",
 // HCL declarations are flat, so no containment edges are emitted. Returns
 // (nil, nil, nil) when src cannot be parsed.
 func (e *HCLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &hclWalk{lang: e.lang.get(), src: src, path: relPath}
-	w.walk(tree.RootNode())
-	return w.nodes, nil, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &hclWalk{lang: lang, src: src, path: relPath}
+		w.walk(root)
+		return w.nodes, nil
+	})
 }
 
 type hclWalk struct {

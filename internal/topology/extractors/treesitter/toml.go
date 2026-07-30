@@ -33,14 +33,12 @@ func (e *TOMLExtractor) Extensions() []string { return []string{".toml"} }
 // pair inside a table as a field, with table→field links as certain (1.0)
 // containment edges. Returns (nil, nil, nil) when src cannot be parsed.
 func (e *TOMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang.get()).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &tomlWalk{lang: e.lang.get(), src: src, path: relPath}
-	w.walk(tree.RootNode())
-	return w.nodes, w.edges, nil
+	lang := e.lang.get()
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &tomlWalk{lang: lang, src: src, path: relPath}
+		w.walk(root)
+		return w.nodes, w.edges
+	})
 }
 
 type tomlWalk struct {

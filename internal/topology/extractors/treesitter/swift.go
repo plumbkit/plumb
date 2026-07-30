@@ -47,15 +47,12 @@ func (e *SwiftExtractor) Extensions() []string { return []string{".swift"} }
 // when src cannot be parsed.
 func (e *SwiftExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	tree, err := tsg.NewParser(lang).Parse(src)
-	if err != nil || tree == nil {
-		return nil, nil, nil
-	}
-	defer tree.Release()
-	w := &swiftWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
-	w.walk(tree.RootNode(), -1, false, false)
-	w.callEdges(tree.RootNode())
-	return w.nodes, w.edges, nil
+	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &swiftWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}, conf: map[int64]string{}}
+		w.walk(root, -1, false, false)
+		w.callEdges(root)
+		return w.nodes, w.edges
+	})
 }
 
 type swiftWalk struct {
@@ -387,21 +384,13 @@ func (w *swiftWalk) typeConformance(n *tsg.Node) string {
 func (w *swiftWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
 	w.nameCounts = callableNameCounts(w.nodes)
-	var rec func(n *tsg.Node, curFunc int64)
-	rec = func(n *tsg.Node, curFunc int64) {
-		switch n.Type(w.lang) {
-		case "function_declaration", "protocol_function_declaration":
-			if idx, ok := w.funcIdx[w.funcName(n)]; ok {
-				curFunc = idx
+	walkCallSites(root,
+		scopeByType(w.lang, w.funcIdx, w.funcName, "function_declaration", "protocol_function_declaration"),
+		func(n *tsg.Node, curFunc int64) {
+			if n.Type(w.lang) == "call_expression" {
+				w.maybeCallEdge(n, curFunc, seen)
 			}
-		case "call_expression":
-			w.maybeCallEdge(n, curFunc, seen)
-		}
-		for _, c := range n.Children() {
-			rec(c, curFunc)
-		}
-	}
-	rec(root, -1)
+		})
 }
 
 func (w *swiftWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64]bool) {
