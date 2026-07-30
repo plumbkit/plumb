@@ -2,7 +2,87 @@
 
 ## 0.15.2 (unreleased)
 
+### Added
+
+- **The layered architecture is now enforced by a test, not just documented.**
+  `internal/arch` declares the layer of every first-party package
+  (`foundation < transport < domain < intelligence < application <
+  presentation`) and four tests hold it: no package may import a higher layer,
+  every package on disk must have a layer assigned, no entry may name a package
+  that no longer exists, and the foundation layer must stay self-contained. The
+  rule held before this — the import graph was clean — but nothing stopped it
+  drifting, and an inverted import is invisible in review: it compiles, it
+  passes, and it is only felt later as a dependency cycle. The
+  every-package-must-be-classified test is the load-bearing half: without it a
+  new package silently escapes the rule while the others keep passing.
+
+- **Coverage and dependency vulnerabilities are now measured on every push.**
+  `make cover` (`scripts/check-coverage.sh`) enforces a whole-tree statement
+  floor and `make vuln` runs govulncheck; both are new CI jobs, plus a step
+  asserting `go.mod`/`go.sum` are already tidy. Neither coverage nor a vuln scan
+  existed anywhere before, while the testing policy already *required*
+  "meaningful coverage" for `internal/lsp`, `internal/cache` and
+  `internal/tools` — a requirement with no instrument. Dependabot now proposes
+  weekly grouped updates for Go modules, Actions, and the web-UI npm lockfile
+  (gotreesitter is pinned out: a bump changes parse output and needs the
+  fidelity sweep run by hand).
+
+- **A cross-package guard for the theme catalogues.** `internal/theme` (hex
+  palettes for the web UI) and `internal/tui/theme.go` (lipgloss Themes, some
+  values terminal-palette indices with no fixed hex) both promised in prose to
+  offer the same theme set and mirror each other's chroma style. Nothing checked
+  it, and the failure was silent: add a theme to the TUI picker only and
+  `theme.Get` falls back to the default, so the web UI renders the wrong colours
+  with no error anywhere. Four tests now pin key-set parity, chroma-style
+  parity, exact resolution, and agreement between the three places that name a
+  default theme.
+
 ### Changed
+
+- **Duplicated logic removed from three places where a fix had to be made more
+  than once.** `routingInvProxy`'s four diagnostics methods (`Tracked`,
+  `Diagnostics`, `WaitDiagnostics`, `WaitNextDiagnostics`) each carried their own
+  copy of the same routing decision — resolve the file's language, compare
+  against the connection's primary, look up an acquired pool entry — so a
+  routing fix had to land four times, and a fix applied to three of them would
+  present as diagnostics that resolve correctly but never settle; they now share
+  one `resolveInv`. `plumb setup gemini` and `plumb setup codex` were
+  line-for-line copies of the `runSetupTarget` body that ten other clients
+  already used, and now call it (Gemini's context box gains the client name and
+  a `Config:` label it was missing). In the tree-sitter extractors, sixteen
+  copies of the parse envelope collapse into `extractWith` and nine copies of
+  the call-edge traversal into `walkCallSites` — the envelope matters most,
+  because it owns the `defer tree.Release()` that returns the parse arena to
+  gotreesitter's pool: an extractor written against it cannot forget, where
+  sixteen hand-written copies made that a matter of remembering.
+
+- **The linter set is wider, and its exclusions are now argued rather than
+  assumed.** Nineteen linters were added after trialling them against the whole
+  tree — correctness (`errorlint`, `nilnesserr`, `makezero`, `recvcheck`,
+  `durationcheck`, `predeclared`, `reassign`, `asasalint`, `unconvert`,
+  `wastedassign`), modern-Go idiom (`copyloopvar`, `intrange`, `usetesting`),
+  performance (`perfsprint`), duplication and cognitive load (`dupl`,
+  `gocognit`, `nestif`), and test hygiene (`thelper`, `tparallel`). Roughly a
+  hundred findings were fixed, including two latent traps: a slice in
+  `topology/explore.go` that aliased its caller's backing array before being
+  appended to, and `%v`-formatted errors in two rollback paths that dropped the
+  underlying error from the chain. `.golangci.yml` also gained a "considered and
+  REJECTED" list — `nilerr` (21 hits, every one a deliberate
+  degrade-gracefully path), `misspell` (flags "Darcula", the real JetBrains
+  product name), `exhaustive`, `noctx` and others — so a future reviewer does
+  not re-litigate them, and every path-scoped exclusion states why the excluded
+  code is correct as written.
+
+- **`_test.go` files are now capped at 900 lines** (`make check-size`, in
+  `verify` and the pre-commit hook), a rule the 600-line source cap previously
+  skipped entirely. `internal/tui/model_test.go` (1495 lines) split by
+  responsibility into log-view rendering and dashboard-widget files, and
+  `internal/tools/session_start_test.go` (965) split out its cold-cache
+  diagnostics tests; all 81 test functions preserved. An oversized test file is
+  a merge-conflict magnet when several agents edit one package at once — the
+  same problem the source cap exists to solve. Every `nolint:errcheck` now
+  carries a justification too, matching the discipline `nolint:gosec` already
+  had (55 of 57); it is 34 of 34 and 57 of 57 now.
 
 - **gotreesitter bumped v0.20.1 → v0.47.1 — the Swift IUO workaround is retired.**
   Upstream's GLR engine was heavily reworked across those 27 releases and now

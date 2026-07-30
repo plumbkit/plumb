@@ -27,7 +27,7 @@ The architectural commitments are:
 
 ## Architecture
 
-Strict layered architecture — lower layers must never import higher ones:
+Strict layered architecture — lower layers must never import higher ones. **This is enforced, not merely documented:** `internal/arch` declares the layer of every first-party package and its tests fail on a violation, on a package with no layer assigned, and on a stale entry. Adding a package therefore forces a deliberate answer to "which layer is this?" — which is cheaper than discovering it later from a dependency cycle.
 
 ```
 Transport (MCP/LSP) → Domain (symbols, edits, capabilities)
@@ -62,6 +62,7 @@ Key packages:
 | `internal/fsguard/` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs |
 | `internal/monitor/` | Process resource-usage snapshots (CPU %, memory) plus daemon start time, feeding the TUI daemon metrics |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |
+| `internal/arch/` | The layered architecture as data (`arch.Layers`) plus the tests that enforce it. No runtime code depends on it |
 
 ## Daemon architecture
 
@@ -441,7 +442,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - **Concurrency contract** stated in doc comments on every type.
 - **No `init()` doing real work.** Wire dependencies in constructors.
 - **No globals** except package-level style vars in `internal/tui/styles.go` and the `pathLocks` map in `internal/tools/file_write_helpers.go` (process-global by design).
-- **Max ~600 lines per file.** Split if it grows. Exception allowlist: `internal/lsp/protocol/types.go`. No other file qualifies without explicit justification added here.
+- **Max ~600 lines per non-test file, ~900 per `_test.go`.** Split if it grows — `make check-size` (in `verify` and the pre-commit hook) enforces both. Tests get the looser cap because table data and fixtures do not decompose the way production code does, but the cap is not absent: an oversized test file is a merge-conflict magnet when several agents edit one package at once. Exception allowlist: `internal/lsp/protocol/types.go`. Anything else needs a line in `scripts/.filesize-baseline` with justification (goal: empty).
 - **Comments only when the WHY is non-obvious.** No what-comments.
 - **Gocyclo-15 contract.** No first-party non-test function may exceed cyclomatic complexity 15. CI enforces.
 
@@ -452,6 +453,8 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 - The MCP parameter-alias engine (`internal/mcp/argguard.go`) resolves alias names only at the dispatch boundary, so an internal tool→tool `Execute` call (e.g. `read_multiple_files` composing args for `read_file`) must use the target's canonical parameter names — guarded by `internal/tools/inprocess_call_guard_test.go`.
 - Do not chase TUI coverage.
 - Integration tests requiring external binaries (gopls, pyright) must be gated with `//go:build integration`.
+- **Coverage is measured, not assumed.** `make cover` enforces a whole-tree statement floor (`scripts/check-coverage.sh`); CI runs it on ubuntu only, because `internal/fsguard` is Darwin-only and its statements are unreachable elsewhere, so the total is not comparable across OSes. Use `make cover-report` to see where the gaps are before adding tests.
+- **Linter selection is deliberate, not maximal.** `.golangci.yml` carries a "considered and REJECTED" list naming the linters whose hits were reviewed and found to be noise at this codebase's conventions (`nilerr`, `misspell`, `exhaustive`, `noctx`, …). Do not enable one of those without re-reviewing the hits, and record the reasoning if you do. Path-scoped exclusions each state why the excluded code is correct as written.
 
 ## Versioning
 
@@ -476,16 +479,23 @@ make build       # compile to ./plumb, version stamped from git/VERSION
 make test        # go test ./...
 make test-race   # go test -race ./...
 make lint        # golangci-lint run
-make verify      # build + test + lint — definition of "ready to commit"
+make check-size  # file-size rule: 600 lines source, 900 test
+make tidy-check  # assert go.mod/go.sum are already tidy
+make verify      # build + test + lint + tag-compile + check-size + tidy-check — "ready to commit"
+make cover       # statement coverage, failing under the floor in scripts/check-coverage.sh
+make cover-report # same, plus the 20 least-covered packages
+make vuln        # govulncheck over the module graph
 make tidy        # go mod tidy
 make clean       # remove ./plumb
-make install-hooks  # install pre-commit hook (required after every fresh clone)
+make install-hooks  # install pre-commit hook (required after every fresh clone; `make hooks` is an alias)
 make install-clients     # install the MCP client CLIs (gemini, codex, qwen, …) the clientsmoke harness drives
 make clients-test        # on-demand: each installed client CLI completes an MCP handshake with plumb (no API keys)
 make clients-test-auth   # on-demand: drive each client headless to force a real plumb tool call (needs API keys)
 ```
 
 The two `clients-test*` targets are on-demand (own build tags, never in `make verify` beyond a compile check) and drive real client CLIs non-interactively.
+
+**`cover` and `vuln` are deliberately NOT in `verify`** — coverage re-runs the whole suite with instrumentation (roughly doubling the local edit loop) and govulncheck needs the network. CI runs both on every push, as their own jobs, alongside `verify` (2-OS matrix), `test-race`, and the real-binary `integration` job. The coverage floor is a ratchet: raise it when the tree sits comfortably above, never lower it to make a red build green.
 
 **`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`. The hook resolves that binary on `PATH` first and then in the Go tool bin dir (`$GOBIN`, else `$GOPATH/bin`, else `~/go/bin`), because hooks inherit the environment of whatever invoked git — an editor, a GUI client, an agent daemon — which often lacks `~/go/bin` even when your terminal has it; without the fallback the hook would fail on every commit. If it resolves nowhere the hook fails loudly with install guidance rather than skipping the lint silently. **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
 
