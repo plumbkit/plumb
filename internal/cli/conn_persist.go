@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -60,9 +61,35 @@ func (s *connSession) restoreName(id string) {
 		s.persistName(v.sessName)
 		return
 	}
+	// A proxy reconnect can overlap its predecessor (the proxy reconnected but the
+	// previous connSession is still registered), and session.Rename enforces no
+	// uniqueness. Two live sessions under one name would make leave_note delivery
+	// — which matches on the name string — ambiguous, so keep the generated name
+	// this time and leave the stored one for the next reconnect.
+	if nameHeldByOtherLiveSession(name, s.sessID) {
+		s.log().Debug("daemon: persisted session name still held by a live session; keeping the generated name",
+			"persisted", name, "using", v.sessName)
+		return
+	}
 	if _, err := s.renameSession(name); err != nil {
 		s.log().Debug("daemon: restore session name failed", "name", name, "err", err)
 	}
+}
+
+// nameHeldByOtherLiveSession reports whether a live session other than selfID
+// already answers to name. Best-effort: an unreadable session directory reports
+// false, so a restore is never blocked by a transient listing failure.
+func nameHeldByOtherLiveSession(name, selfID string) bool {
+	infos, err := session.List()
+	if err != nil {
+		return false
+	}
+	for _, info := range infos {
+		if info.Name == name && info.ID != selfID {
+			return true
+		}
+	}
+	return false
 }
 
 // persistName records the session's current name under its proxy session ID.

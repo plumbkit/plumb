@@ -15,26 +15,46 @@
 // Both steps are gated on the [edits] fsync knob (PLUMB_FSYNC env override),
 // installed via SetEnabledFunc. Disabling the knob restores the pre-fix
 // behaviour — no fsyncs at all — for benchmarks and exotic filesystems.
+//
+// The knob is DAEMON-GLOBAL, not per-connection: the write primitives it gates
+// (safeWrite and friends) are free functions shared by every session, so there
+// is one process-wide setting. The daemon installs it once at startup from the
+// GLOBAL config store — a per-project `.plumb/config.toml` override of
+// [edits] fsync is deliberately ignored, because honouring it would mean the
+// last connection to attach silently sets the durability contract for every
+// other session on every other workspace.
 package fsync
 
-import "os"
+import (
+	"os"
+	"sync/atomic"
+)
 
 // enabledFn returns whether fsync-before-ack is active. The daemon installs a
-// closure reading the resolved [edits] fsync config; nil (tests, headless
-// tools, one-shot CLI commands) means the safe default: on.
-var enabledFn func() bool
+// closure reading the daemon-global [edits] fsync config; unset (tests,
+// headless tools, one-shot CLI commands) means the safe default: on. Held in an
+// atomic because the install happens on the daemon's startup goroutine while
+// every session's write path reads it concurrently.
+var enabledFn atomic.Pointer[func() bool]
 
 // SetEnabledFunc installs the function consulted by Enabled. Called once from
-// the daemon's write-deps assembly. Passing nil restores the default (on).
-func SetEnabledFunc(fn func() bool) { enabledFn = fn }
+// the daemon startup path. Passing nil restores the default (on).
+func SetEnabledFunc(fn func() bool) {
+	if fn == nil {
+		enabledFn.Store(nil)
+		return
+	}
+	enabledFn.Store(&fn)
+}
 
 // Enabled reports whether fsync-before-ack is active. Defaults to true when
 // no function has been installed.
 func Enabled() bool {
-	if enabledFn == nil {
+	fn := enabledFn.Load()
+	if fn == nil {
 		return true
 	}
-	return enabledFn()
+	return (*fn)()
 }
 
 // SyncFile fsyncs f (flushing its data and metadata to stable storage) when

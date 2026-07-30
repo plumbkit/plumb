@@ -42,9 +42,18 @@
   server; `safe_delete_symbol` and `rename_symbol` (no topology fallback by
   design) mention the warming state and `daemon_info` in their failure
   guidance; and the `session_start` client guidance states the cold-LSP ladder
-  outright. Guarded by the new `lsp_cold_guidance_test.go` /
-  `lsp_cold_guidance_split_test.go` suites, `TestGetOrErrCarriesGuidance`, and
-  an extended `TestWarmingErr`.
+  outright. A warming server does not only *fail*, though — sourcekit-lsp and
+  jdtls answer with an EMPTY result until indexing completes — so the confident
+  negatives are caveated too: `find_references`' "No references found",
+  `call_hierarchy`' and `type_hierarchy`'s "no item at the given position" now
+  add "this empty result is NOT evidence of absence" while the server is warming
+  (an agent otherwise reads "no references" as proof a symbol is unused and
+  deletes it), and `diagnostics` — which neither fails nor says "not found", it
+  reports CLEAN — labels any report taken mid-handshake INCOMPLETE, so a clean
+  result then is never mistaken for "my change compiles". Guarded by the new
+  `lsp_cold_guidance_test.go` / `lsp_cold_guidance_split_test.go` /
+  `lsp_cold_empty_test.go` / `lsp_cold_empty_tools_test.go` suites,
+  `TestGetOrErrCarriesGuidance`, and an extended `TestWarmingErr`.
 
 ### Fixed
 
@@ -57,8 +66,14 @@
   16h35m of suspend across three cycles explained the gap to the minute). The
   capture site (`internal/cli/daemon.go`) and the `daemon_info` constructor now
   strip the monotonic reading (`Round(0)`), so uptime is wall-clock and matches
-  `ps`; the TUI/web uptime widgets share the fix through the same anchor.
-  Pinned by `TestDaemonInfo_UptimeSpansSuspend` and `TestFormatUptime`.
+  `ps`; the TUI/web uptime widgets share the fix through the same anchor. The
+  capture is now the named `daemonStartTime` helper so the strip is pinned where
+  it happens (the web dashboard's `uptimeSeconds` reads that timestamp
+  in-process, so nothing else would strip it), and `formatUptime` clamps a
+  negative duration to `0s` — wall-clock uptime can go backwards on an NTP
+  correction, and "-3m -20s" is worse than "0s". Pinned by
+  `TestDaemonInfo_UptimeSpansSuspend`, `TestDaemonStartTime_HasNoMonotonicReading`,
+  and `TestFormatUptime`.
 
 - **Write durability: every acknowledged write is now fsynced before the call
   returns ("fsync-before-ack").** A real incident proved the gap: an
@@ -73,9 +88,17 @@
   and some network mounts refuse it), across `write_file`, `edit_file`,
   `rename_file`, `delete_file`, `transaction_apply`, and plumb's own state
   files (session registry, config saves, trust store, memories, txlog
-  manifest). The new `[edits] fsync` knob (default true, `PLUMB_FSYNC=0` to
-  disable) skips both fsyncs and restores the old behaviour for benchmarks and
-  exotic filesystems.
+  manifest). Directories plumb had to CREATE for the write are fsynced too (the
+  entry for a new `a/b` lives in `a`, so without it a crash could lose the whole
+  fresh subtree the acknowledged write sits in). The new `[edits] fsync` knob
+  (default true, `PLUMB_FSYNC=0` to disable) skips both fsyncs and restores the
+  old behaviour for benchmarks and exotic filesystems; it is **daemon-global**
+  — resolved once from global config, because it gates write primitives shared
+  by every session, and a per-connection install would let the last workspace to
+  attach set the durability contract for every other live session. On a
+  cross-device target (the tmpfs `/tmp` case) the verdict is now remembered per
+  directory, so subsequent writes skip the staging write that EXDEV would throw
+  away.
 
 - **`plumb setup --all` / `--install-missing` and `plumb doctor` no longer
   misreport an installed Kimi Code as "not installed".** Kimi Code's
@@ -102,7 +125,16 @@
   `session_start`'s `session_id`) is persisted too, so the reconnect restores
   the renamed name. The store's schema moves to v3 (new `session_names`
   table); existing databases migrate on open, and expired name rows are pruned
-  with the rest of the persisted state.
+  with the rest of the persisted state — except for sessions that are still
+  connected, which are now exempt from the TTL sweep entirely: read rows are
+  refreshed as a session works, but the pin and the name are written once at
+  `initialize`, so any conversation older than `persist_state_ttl_minutes`
+  (24 h by default) would otherwise have them reclaimed mid-flight and come back
+  unpinned and renamed on its next reconnect. A restore is also skipped when
+  another LIVE session already answers to the stored name (a proxy reconnect can
+  overlap its predecessor, and `session.Rename` enforces no uniqueness), since
+  two live sessions under one name make mailbox delivery ambiguous; the stored
+  name is left intact for the next reconnect.
 
 - **Smart aliases phase 2: more synonyms, value-transform aliases, and
   string→scalar coercion — three observed agent-facing hard failures closed.**
@@ -125,9 +157,18 @@
   same `note:` as plain aliases. Third, schema-guided type coercion accepts a
   JSON string that parses as an integer for an integer-typed parameter
   (`offset: "15"` → `15`) and `"true"`/`"false"` (any case) for a
-  boolean-typed one — nothing else, no trimming, no float-to-int — so these
-  stop dying on the tools' plain `json.Unmarshal`. Unparseable strings
-  (`offset: "abc"`) still fail with the tool's own decode error.
+  boolean-typed one, a string that parses as a float for a number-typed one, and
+  a lone scalar under a scalar-element ARRAY parameter (`diagnostics({uris:
+  "/a.go"})` → `["/a.go"]` — the courtesy the `wrapScalar` transform already gave
+  when the caller reached the parameter by an alias, extended to the canonical
+  name) — nothing else, no trimming, no float-to-int — so these stop dying on the
+  tools' plain `json.Unmarshal`. Unparseable strings (`offset: "abc"`) still fail
+  with the tool's own decode error. Two aliases of ONE canonical can never both
+  rewrite to it: the first claimant (chosen in sorted order, so the outcome is
+  deterministic) wins and the loser falls through to validation's explicit
+  rejection, because silently dropping one of two values the caller supplied is
+  worse than an error — `write_file({text: "A", body: "B"})` wrote one of them and
+  claimed both had been interpreted as `content`.
 
 ## 0.15.1 (2026-07-28)
 

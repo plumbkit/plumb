@@ -215,7 +215,8 @@ func (t *CallHierarchy) executeByPosition(ctx context.Context, q callHierarchyQu
 			}
 			return "", queryErr("call_hierarchy", q.symbolName, err)
 		}
-		return "No call hierarchy item found at the given position.", nil
+		return "No call hierarchy item found at the given position." +
+			coldLSPEmptyNote(t.warmup, q.uri), nil
 	}
 	return t.renderLSP(ctx, q, items[0])
 }

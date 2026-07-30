@@ -214,7 +214,10 @@ func (t *FindReferences) queryReferences(ctx context.Context, uri string, line, 
 		return "", queryErr("find_references", symbolName, err)
 	}
 	if len(locs) == 0 {
-		return appendXcodeHint(fmt.Sprintf("No references found for symbol at %s:%d:%d.", uri, line+1, character+1), uri, t.xcode), nil
+		// A warming server answers empty before it has indexed, and "no
+		// references" is the one result an agent acts on destructively.
+		out := appendXcodeHint(fmt.Sprintf("No references found for symbol at %s:%d:%d.", uri, line+1, character+1), uri, t.xcode)
+		return out + coldLSPEmptyNote(t.warmup, uri), nil
 	}
 	recordXcodeProof(t.proof, true)
 

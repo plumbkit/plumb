@@ -113,7 +113,8 @@ func (t *TypeHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 		return "", positionErr("type_hierarchy", err)
 	}
 	if len(items) == 0 {
-		return "No type hierarchy item found at the given position.", nil
+		return "No type hierarchy item found at the given position." +
+			coldLSPEmptyNote(t.warmup, a.URI), nil
 	}
 
 	item := items[0]

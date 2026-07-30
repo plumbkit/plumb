@@ -389,16 +389,10 @@ func (t *TransactionApply) txPhase2Write(prepared []txPrepared) ([]txPrepared, e
 		written = append(written, p)
 	}
 	txl.Commit()
-	// safeWrite already fsyncs each file's parent dir per write; sync the
-	// deduped set once more at the end so the whole transaction is durable
-	// before it is acknowledged (cheap, and covers the rollback path too).
-	dirs := make(map[string]bool, len(written))
-	for _, p := range written {
-		if d := filepath.Dir(p.path); !dirs[d] {
-			dirs[d] = true
-			syncDirBestEffort("transaction_apply", d)
-		}
-	}
+	// No extra directory fsync here: every write above went through safeWrite,
+	// which fsyncs the staged temp file before its rename and the file's parent
+	// directory after it. That covers the rollback path too, since rollback()
+	// restores content through the same safeWrite.
 	return written, nil
 }
 

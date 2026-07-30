@@ -3,6 +3,7 @@ package fsync
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -46,6 +47,32 @@ func TestSyncDir_DisabledSkipsError(t *testing.T) {
 	if err := SyncDir(missing); err == nil {
 		t.Error("knob on: SyncDir on missing dir = nil, want error")
 	}
+}
+
+// TestSetEnabledFunc_RaceFreeWithEnabled: the daemon installs the knob on its
+// startup goroutine while every session's write path reads it, so the holder
+// must be atomic. Fails under -race with a plain package var.
+func TestSetEnabledFunc_RaceFreeWithEnabled(t *testing.T) {
+	t.Cleanup(func() { SetEnabledFunc(nil) })
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 500 {
+				_ = Enabled()
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range 500 {
+			on := i%2 == 0
+			SetEnabledFunc(func() bool { return on })
+		}
+	}()
+	wg.Wait()
 }
 
 func TestSyncDir_RealDirSucceeds(t *testing.T) {

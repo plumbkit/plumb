@@ -29,6 +29,13 @@ func TestFormatUptime(t *testing.T) {
 		{26*time.Hour + 3*time.Minute + 42*time.Second, "26h 3m"},
 		{5*time.Minute + 7*time.Second, "5m 7s"},
 		{42 * time.Second, "42s"},
+		// Boundaries and the clock-went-backwards case: wall-clock uptime can go
+		// negative on an NTP correction, and a "-3m -20s" uptime is nonsense.
+		{time.Hour, "1h 0m"},
+		{time.Minute, "1m 0s"},
+		{0, "0s"},
+		{-3*time.Minute - 20*time.Second, "0s"},
+		{-2 * time.Hour, "0s"},
 	}
 	for _, tt := range tests {
 		if got := formatUptime(tt.up); got != tt.want {

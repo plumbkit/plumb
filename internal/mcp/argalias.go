@@ -212,15 +212,23 @@ func aliasNotice(warnings []string) string {
 
 // canonicalFor resolves an unknown key to a canonical parameter of sh, or
 // returns the zero aliasTarget and false. It tries the curated alias table
-// first (skipping candidates whose transform does not fit the given value),
-// then a case/separator-insensitive match against the level's declared
-// parameters. It never guesses by edit distance — that approximate path lives
-// in the separately gated fuzzyCanonical (rewriteObject's second pass), so the
-// curated resolution here stays exact.
-func canonicalFor(key string, sh *shape, obj map[string]any) (aliasTarget, bool) {
+// first (skipping candidates whose transform does not fit the given value, and
+// candidates another key in the same pass already claimed), then a
+// case/separator-insensitive match against the level's declared parameters. It
+// never guesses by edit distance — that approximate path lives in the
+// separately gated fuzzyCanonical (rewriteObject's second pass), so the curated
+// resolution here stays exact.
+//
+// claimed carries the canonicals already taken by earlier keys of the same
+// call, so two aliases of one canonical (write_file given both `text` and
+// `body`; read_file given both `path` and `file`) can never both rewrite to it
+// — the second key tries its remaining candidates and, failing those, is left
+// for validation's explicit "unknown parameter" rejection. Silently dropping
+// one of two supplied values would be far worse than the error.
+func canonicalFor(key string, sh *shape, obj map[string]any, claimed map[string]bool) (aliasTarget, bool) {
 	nk := normaliseKey(key)
 	for _, cand := range paramAliases[nk] {
-		if eligible(cand.name, sh, obj) && cand.xf.fits(obj[key]) {
+		if eligible(cand.name, sh, obj) && !claimed[cand.name] && cand.xf.fits(sh, cand.name, obj[key]) {
 			return cand, true
 		}
 	}
@@ -230,7 +238,7 @@ func canonicalFor(key string, sh *shape, obj map[string]any) (aliasTarget, bool)
 			match, count = p, count+1
 		}
 	}
-	if count == 1 && eligible(match, sh, obj) {
+	if count == 1 && eligible(match, sh, obj) && !claimed[match] {
 		return aliasTarget{name: match}, true
 	}
 	return aliasTarget{}, false
@@ -296,11 +304,11 @@ const (
 	wrapScalar            // scalar → one-element array when the canonical is array-typed
 )
 
-// fits reports whether the transform suits the value the caller gave. A
-// candidate whose transform does not fit is skipped, so the next candidate (or
-// validation's "did you mean") sees the key — a transform never fires on a
-// value it cannot honour.
-func (t transform) fits(v any) bool {
+// fits reports whether the transform suits the value the caller gave AND the
+// canonical it would write to. A candidate whose transform does not fit is
+// skipped, so the next candidate (or validation's "did you mean") sees the key
+// — a transform never fires on a value it cannot honour.
+func (t transform) fits(sh *shape, to string, v any) bool {
 	switch t {
 	case invertBool:
 		_, ok := boolValue(v)
@@ -309,8 +317,13 @@ func (t transform) fits(v any) bool {
 		b, ok := boolValue(v)
 		return ok && b
 	case wrapScalar:
-		// Only a scalar needs wrapping; an already-array value falls through
-		// to the plain-rename candidate for the same canonical.
+		// Only a scalar needs wrapping, and only into an array-typed canonical:
+		// an already-array value falls through to the plain-rename candidate for
+		// the same canonical, and a non-array target would report "wrapped in a
+		// single-element array" for what apply() leaves as a plain rename.
+		if sh.types[to] != "array" {
+			return false
+		}
 		_, isArray := v.([]any)
 		return !isArray
 	}

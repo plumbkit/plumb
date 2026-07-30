@@ -210,6 +210,38 @@ func TestPersist_RenamedNameSurvivesReconnect(t *testing.T) {
 	}
 }
 
+// TestPersist_NameNotRestoredOntoOverlappingSession: a proxy reconnect can
+// overlap its predecessor (the proxy reconnected, the previous connSession is
+// still registered). session.Rename enforces no uniqueness, so restoring the
+// name there would leave TWO live sessions answering to it — and leave_note
+// delivery matches on the name string. The reconnect must keep its generated
+// name instead, leaving the persisted one for a later, non-overlapping attempt.
+func TestPersist_NameNotRestoredOntoOverlappingSession(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store := config.NewStore(config.Defaults())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	defer ss.Close()
+
+	// The predecessor stays LIVE (deliberately not closed).
+	before := newPersistSession(t, store, ss, "proxyX")
+	if _, err := before.renameSession("steady-otter"); err != nil {
+		t.Fatalf("renameSession: %v", err)
+	}
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	if got := after.sessionName(); got == "steady-otter" {
+		t.Error("restored a name still held by a live session — leave_note delivery would be ambiguous")
+	}
+	// The stored mapping is untouched, so the next (non-overlapping) reconnect
+	// still restores it.
+	if name, ok, _ := ss.LoadName("proxyX"); !ok || name != "steady-otter" {
+		t.Errorf("stored name = (%q,%v), want the persisted steady-otter left intact", name, ok)
+	}
+}
+
 func TestPersist_PerSessionIsolation(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())

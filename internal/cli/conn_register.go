@@ -52,11 +52,11 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 			store.Enqueue(path)
 		}
 	}
-	// safeWrite and the other fsync-before-ack primitives are free functions,
-	// so the WriteDeps closure pattern cannot reach them; install the [edits]
-	// fsync knob package-wide. Idempotent — every connection installs the same
-	// resolved-config read.
-	tools.SetFsyncFunc(func() bool { return s.editsConfig().Fsync })
+	// NOTE: the [edits] fsync knob is deliberately NOT installed here. It gates
+	// free functions (safeWrite and friends) shared by every session, so it is
+	// daemon-global: installing it per connection would make the last connection
+	// to attach set the durability contract for every other session on every
+	// other workspace. runDaemon installs it once from the global config store.
 	return tools.WriteDeps{
 		Client:                s.sessionProxy,
 		Cache:                 s.sessionCache,
@@ -121,7 +121,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewFindReferences(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
 	srv.Register(tools.NewCallHierarchy(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewTypeHierarchy(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
-	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary).WithWorkspace(s.workspace))
+	srv.Register(tools.NewDiagnosticsWithOpener(s.sessionInv, s.sessionProxy).WithBoundary(boundary).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewListFiles(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewListDirectory(s.workspace).WithBoundary(boundary))
 	srv.Register(tools.NewReadFile(s.readTracker).WithBoundary(boundary).WithClient(s.clientNameStr).WithOutsideLabel(s.outsideWorkspaceLabel).WithWrites(s.writeTracker).WithOutlineHint(hasStructuralEngine).WithWorkspace(s.workspace))

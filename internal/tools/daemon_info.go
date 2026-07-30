@@ -116,8 +116,14 @@ func (t *daemonInfo) InputSchema() json.RawMessage {
 }
 
 // formatUptime renders a daemon uptime as "Nh Nm", "Nm Ns", or "Ns"
-// depending on magnitude.
+// depending on magnitude. A negative duration is clamped to zero: uptime is now
+// wall-clock (the monotonic reading is stripped so it spans suspend), which
+// means a backwards clock step — an NTP correction — can put startedAt in the
+// future, and "-3m -20s" is worse than "0s".
 func formatUptime(up time.Duration) string {
+	if up < 0 {
+		up = 0
+	}
 	h := int(up.Hours())
 	m := int(up.Minutes()) % 60
 	s := int(up.Seconds()) % 60

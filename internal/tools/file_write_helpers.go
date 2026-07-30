@@ -40,7 +40,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,52 +50,10 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
-	"github.com/plumbkit/plumb/internal/fsync"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
-
-// SetFsyncFunc installs the function consulted for the [edits] fsync knob
-// (default true). safeWrite and the other write primitives are free functions,
-// so the WriteDeps Fn-closure pattern cannot reach them — this package-level
-// setter is called once from the daemon's write-deps assembly instead. When
-// the knob is off, BOTH the temp-file fsync and the post-rename directory
-// fsync are skipped, restoring the pre-fix behaviour for benchmarks and
-// exotic filesystems.
-func SetFsyncFunc(fn func() bool) { fsync.SetEnabledFunc(fn) }
-
-// syncFileHook and syncDirHook are the fsync-before-ack seams. Production
-// wires them to the fsync package (which applies the [edits] fsync knob);
-// tests stub them to assert the write paths actually invoke the syncs.
-var (
-	syncFileHook = fsync.SyncFile
-	syncDirHook  = fsync.SyncDir
-)
-
-// syncTempFile fsyncs a staged temp file before its rename. Fatal on error
-// (the caller aborts the write); skipped entirely when the fsync knob is off.
-func syncTempFile(f *os.File) error {
-	if !fsync.Enabled() {
-		return nil
-	}
-	return syncFileHook(f)
-}
-
-// syncDirBestEffort fsyncs dir after a rename or remove so the directory
-// entry reaches stable storage before the call is acknowledged. Skipped when
-// the fsync knob is off. A failure is NON-fatal — some filesystems (FUSE,
-// some network mounts) refuse directory fsyncs with EINVAL; refusing the
-// write after it already landed would be worse than logging the degraded
-// durability.
-func syncDirBestEffort(op, dir string) {
-	if !fsync.Enabled() {
-		return
-	}
-	if err := syncDirHook(dir); err != nil {
-		slog.Warn(op+": directory fsync failed — write acknowledged but not crash-durable", "dir", dir, "err", err)
-	}
-}
 
 // fileSHA256 computes the hex-encoded SHA-256 of the named file's full
 // content. Used by read_file (header output) and edit_file / transaction_apply
@@ -287,9 +244,19 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 		perm = info.Mode().Perm() // preserve existing permissions
 	}
 
-	// Ensure parent directories exist.
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// Ensure parent directories exist — and are themselves durable, so a crash
+	// cannot lose a freshly created tree the acknowledged write lives in.
+	dir := filepath.Dir(path)
+	if err := mkdirAllSynced("write", dir); err != nil {
 		return res, fmt.Errorf("creating parent directories: %w", err)
+	}
+
+	// Known cross-device target: skip straight to the sibling path. Staging in
+	// os.TempDir() first would write the data, fsync it, fail the rename with
+	// EXDEV and throw it all away — per write, on the very common Linux setup
+	// where /tmp is tmpfs.
+	if _, known := crossDeviceDirs.Load(dir); known {
+		return safeWriteSibling(path, data, perm, res.modTimeBeforeWrite)
 	}
 
 	// Write to a temp file in os.TempDir() first.
@@ -324,7 +291,10 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 	// Attempt rename from tmpdir → target.
 	if err := os.Rename(tmpPath, path); err != nil {
 		if isCrossDevice(err) {
-			// Cross-device: fall back to a sibling .plumb.tmp next to the target.
+			// Cross-device: fall back to a sibling .plumb.tmp next to the target,
+			// and remember the verdict so the next write to this directory skips
+			// the doomed staging entirely.
+			crossDeviceDirs.Store(dir, struct{}{})
 			_ = os.Remove(tmpPath)
 			return safeWriteSibling(path, data, perm, res.modTimeBeforeWrite)
 		}
@@ -375,6 +345,14 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 	syncDirBestEffort("write", filepath.Dir(path))
 	return res, nil
 }
+
+// crossDeviceDirs remembers target directories that live on a different
+// filesystem from os.TempDir(), so safeWrite stops paying for a staging write it
+// knows will fail with EXDEV. Keyed by directory; one small entry per directory
+// written on such a filesystem, which is the same order as the per-path lock
+// table. A stale entry is harmless: the sibling path is always correct, just
+// marginally less isolated than a tmpdir staging.
+var crossDeviceDirs sync.Map // dir string → struct{}
 
 // isCrossDevice reports whether err is a cross-device rename failure (EXDEV).
 func isCrossDevice(err error) bool {

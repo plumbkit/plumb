@@ -56,7 +56,7 @@ var registryData = []Field{
 	},
 	{
 		Key: "edits.fsync", Type: FieldBool, ReloadTier: ReloadLive,
-		Description: "Fsync temp file + parent directory before acknowledging a write (crash durability). Set false to disable.",
+		Description: "Fsync temp file + parent directory before acknowledging a write (crash durability). Set false to disable. Daemon-global: resolved from global config, a per-project override is ignored.",
 	},
 	{
 		Key: "edits.rate_limit_per_minute", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,

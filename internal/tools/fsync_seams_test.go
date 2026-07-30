@@ -79,6 +79,40 @@ func TestWriteFile_InvokesSyncSeams(t *testing.T) {
 	}
 }
 
+// TestWriteFile_NewDirectoryTree_SyncsCreatedDirs closes the one-level-up hole:
+// fsyncing the file and its immediate parent is not enough when that parent was
+// itself just created — the new directory's entry sits in its own parent, so a
+// crash could lose the whole subtree despite the acknowledgement.
+func TestWriteFile_NewDirectoryTree_SyncsCreatedDirs(t *testing.T) {
+	r := stubSyncSeams(t)
+	root := t.TempDir()
+	a := filepath.Join(root, "a")
+	b := filepath.Join(a, "b")
+	path := filepath.Join(b, "f.txt")
+	if _, err := callWriteFile(t, map[string]any{"file_path": path, "content": "x"}); err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+	// root holds the new entry "a"; a holds the new entry "b"; b holds the file.
+	for _, dir := range []string{root, a, b} {
+		if !r.dirSynced(dir) {
+			t.Errorf("write_file into a fresh tree never fsynced %s (got %v)", dir, r.dirSyncs)
+		}
+	}
+}
+
+// An existing parent must not cost any extra directory syncs beyond the single
+// post-rename one — the fresh-tree walk is for new directories only.
+func TestWriteFile_ExistingDirectory_SyncsOnlyOnce(t *testing.T) {
+	r := stubSyncSeams(t)
+	dir := t.TempDir()
+	if _, err := callWriteFile(t, map[string]any{"file_path": filepath.Join(dir, "f.txt"), "content": "x"}); err != nil {
+		t.Fatalf("write_file: %v", err)
+	}
+	if got := r.dirSyncCount(); got != 1 {
+		t.Errorf("write_file into an existing dir fired %d directory syncs, want 1: %v", got, r.dirSyncs)
+	}
+}
+
 func TestEditFile_InvokesSyncSeams(t *testing.T) {
 	r := stubSyncSeams(t)
 	path := filepath.Join(t.TempDir(), "f.txt")

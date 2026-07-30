@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -215,12 +216,17 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 	var renames []rename
 	targets := map[string]bool{} // canonical names already claimed this level
 	claimed := map[string]bool{} // unknown keys already given a rename
+	// Both passes walk the unknown keys in sorted order, never Go's randomised
+	// map order: with one canonical reachable from two supplied aliases only the
+	// first claimant may take it, so the iteration order decides the outcome and
+	// must be stable across runs.
+	unknown := unknownKeysSorted(sh, obj)
 	// Pass 1: curated/exact alias resolution, including value-transform aliases.
-	for key := range obj {
-		if _, ok := sh.props[key]; ok {
-			continue
-		}
-		if cand, ok := canonicalFor(key, sh, obj); ok {
+	// targets doubles as the claimed-canonical set handed to canonicalFor, so a
+	// second alias of an already-taken canonical falls through to validation
+	// rather than silently overwriting the first one's value.
+	for _, key := range unknown {
+		if cand, ok := canonicalFor(key, sh, obj, targets); ok {
 			renames = append(renames, rename{from: key, to: cand.name, xf: cand.xf})
 			targets[cand.name] = true
 			claimed[key] = true
@@ -228,10 +234,7 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 	}
 	// Pass 2: high-confidence typo correction for any key no alias claimed, never
 	// stealing a target an alias already took.
-	for key := range obj {
-		if _, ok := sh.props[key]; ok {
-			continue
-		}
+	for _, key := range unknown {
 		if claimed[key] {
 			continue
 		}
@@ -257,6 +260,20 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 		}
 	}
 	return changed
+}
+
+// unknownKeysSorted returns obj's keys that are not declared at this level, in
+// sorted order, so alias resolution is deterministic when two keys compete for
+// one canonical.
+func unknownKeysSorted(sh *shape, obj map[string]any) []string {
+	out := make([]string, 0, len(obj))
+	for key := range obj {
+		if _, ok := sh.props[key]; !ok {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // renameWarning describes one applied key rewrite. A fuzzy (edit-distance)
@@ -290,40 +307,45 @@ func descend(child *shape, v any, path string, warnings *[]string, fn func(*shap
 	return false
 }
 
-// coerceTypes rewrites string values that plainly mean the declared scalar
-// type: a string that parses as an integer under an integer-typed parameter
-// ("15" → 15), and "true"/"false" (any case) under a boolean-typed one.
-// Nothing else — no float-to-int, no trimming — and a string that does not
-// parse is left untouched for the tool's own decoder to reject. Tools decode
-// with plain json.Unmarshal, which fails the whole call on these; the schema
-// tells us exactly which rewrites are safe.
+// coerceTypes rewrites values that plainly mean the declared type: a string
+// that parses as a number under an integer- or number-typed parameter ("15" →
+// 15), "true"/"false" (any case) under a boolean-typed one, and a lone scalar
+// under a scalar-element array parameter (uris: "/a.go" → ["/a.go"] — the same
+// courtesy the wrapScalar alias transform gives when the caller reaches the
+// parameter by an alias, extended to the canonical name). Nothing else — no
+// float-to-int, no trimming — and a string that does not parse is left untouched
+// for the tool's own decoder to reject. Tools decode with plain json.Unmarshal,
+// which fails the whole call on these; the schema tells us exactly which
+// rewrites are safe.
 func coerceTypes(sh *shape, obj map[string]any, path string, warnings *[]string) bool {
 	changed := false
 	for _, key := range sh.order {
-		s, ok := obj[key].(string)
+		v, present := obj[key]
+		if !present {
+			continue
+		}
+		declared := sh.types[key]
+		// Array parameters take any scalar; the rest need a string to work from.
+		if declared == "array" {
+			if !wrappableScalar(sh, key, v) {
+				continue
+			}
+			obj[key] = []any{v}
+			*warnings = append(*warnings, fmt.Sprintf("wrapped %q in a single-element array", joinPath(path, key)))
+			changed = true
+			continue
+		}
+		s, ok := v.(string)
 		if !ok {
 			continue
 		}
-		switch sh.types[key] {
-		case "integer":
-			n, err := strconv.ParseInt(s, 10, 64)
-			if err != nil {
-				continue
-			}
-			// Re-encode via FormatInt so non-JSON forms like "015" or "+15"
-			// come out as a valid JSON number.
-			obj[key] = json.Number(strconv.FormatInt(n, 10))
-			*warnings = append(*warnings, fmt.Sprintf("coerced %q from string to integer", joinPath(path, key)))
-			changed = true
-		case "boolean":
-			b, ok := boolValue(s)
-			if !ok {
-				continue
-			}
-			obj[key] = b
-			*warnings = append(*warnings, fmt.Sprintf("coerced %q from string to boolean", joinPath(path, key)))
-			changed = true
+		coerced, kind, ok := coerceScalar(declared, s)
+		if !ok {
+			continue
 		}
+		obj[key] = coerced
+		*warnings = append(*warnings, fmt.Sprintf("coerced %q from string to %s", joinPath(path, key), kind))
+		changed = true
 	}
 	for key, child := range sh.children {
 		if v, ok := obj[key]; ok && descend(child, v, joinPath(path, key), warnings, coerceTypes) {
@@ -331,6 +353,55 @@ func coerceTypes(sh *shape, obj map[string]any, path string, warnings *[]string)
 		}
 	}
 	return changed
+}
+
+// coerceScalar converts a string that plainly means the declared scalar type,
+// returning the converted value and the type name for the warning. ok is false
+// when the declared type takes no coercion or the string does not parse cleanly
+// — the value is then left for the tool's own decoder to reject ("abc" for an
+// integer, "1.5" for an integer, Inf/NaN for a number).
+func coerceScalar(declared, s string) (value any, kind string, ok bool) {
+	switch declared {
+	case "integer":
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil, "", false
+		}
+		// Re-encode via FormatInt so non-JSON forms like "015" or "+15" come out
+		// as a valid JSON number.
+		return json.Number(strconv.FormatInt(n, 10)), "integer", true
+	case "number":
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+			return nil, "", false
+		}
+		// 'g' with -1 precision round-trips the shortest exact form, and emits
+		// nothing JSON rejects.
+		return json.Number(strconv.FormatFloat(f, 'g', -1, 64)), "number", true
+	case "boolean":
+		b, ok := boolValue(s)
+		if !ok {
+			return nil, "", false
+		}
+		return b, "boolean", true
+	}
+	return nil, "", false
+}
+
+// wrappableScalar reports whether v is a lone scalar that may be wrapped into
+// the array-typed parameter key. Arrays are already correct; an array OF OBJECTS
+// is excluded because a scalar there is nonsense, not a missing pair of brackets
+// (relocateMisplaced handles the real misplacement case for those), and so is a
+// nested object.
+func wrappableScalar(sh *shape, key string, v any) bool {
+	if sh.children[key] != nil { // array of objects
+		return false
+	}
+	switch v.(type) {
+	case []any, map[string]any, nil:
+		return false
+	}
+	return true
 }
 
 // validateObject checks one object level: no undeclared properties (when this

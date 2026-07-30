@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -119,5 +120,33 @@ func TestAliasTargetSet_CoversCanonicals(t *testing.T) {
 		if _, ok := targets[want]; !ok {
 			t.Errorf("aliasTargetSet missing %q", want)
 		}
+	}
+}
+
+// TestAliasTargetSet_ExactMembership pins the WHOLE set, because membership has
+// a side effect that is easy to add by accident: publishSchema drops every alias
+// target from the schema's `required` list, so adding one table row silently
+// stops advertising a parameter as required to clients (the daemon still
+// enforces it internally — see resolveArgs — but a host that pre-validates loses
+// the hint). Adding an alias is fine; doing it knowingly is the point. If this
+// fails, update the list and confirm you are happy for the named canonicals to
+// be published as optional.
+func TestAliasTargetSet_ExactMembership(t *testing.T) {
+	want := []string{
+		"case_sensitive", "content", "depth", "dry_run", "edits", "end_line",
+		"extension", "file_path", "from", "glob", "include_hidden", "kinds",
+		"limit", "max_depth", "max_matches", "max_results", "message", "name",
+		"new_string", "old_string", "path", "paths", "pattern", "query",
+		"recent_limit", "replacement", "repo", "root", "slot", "sort_by",
+		"start_line", "subcommand", "symbol_name", "to", "uri", "uris",
+		"use_regex", "workspace",
+	}
+	got := make([]string, 0, len(aliasTargetSet()))
+	for name := range aliasTargetSet() {
+		got = append(got, name)
+	}
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("alias target set changed — these canonicals are published as NOT required:\ngot:  %v\nwant: %v", got, want)
 	}
 }

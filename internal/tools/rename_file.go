@@ -146,7 +146,9 @@ func renameFilePreconditions(ctx context.Context, deps WriteDeps, from, to strin
 			return fmt.Errorf("rename_file: destination %q exists (pass overwrite=true to replace)", to)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+	// Synced: a newly created destination tree must be as durable as the move
+	// itself, or a crash can lose both despite the acknowledgement.
+	if err := mkdirAllSynced("rename_file", filepath.Dir(to)); err != nil {
 		return fmt.Errorf("rename_file: creating parent dirs: %w", err)
 	}
 	return nil

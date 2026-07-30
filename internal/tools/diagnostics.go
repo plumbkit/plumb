@@ -77,6 +77,7 @@ type Diagnostics struct {
 	inv    waitableDiagnosticsSource
 	opener fileOpener // nil when no LSP client is available
 	guard  BoundaryGuard
+	warmup LSPWarmupFn // optional; flags a report taken while the server is still warming
 	ws     WorkspaceFn // may be nil; anchors workspace-relative uris to the pinned root
 }
 
@@ -90,6 +91,16 @@ func NewDiagnosticsWithOpener(inv waitableDiagnosticsSource, opener fileOpener) 
 
 func (t *Diagnostics) WithBoundary(guard BoundaryGuard) *Diagnostics {
 	t.guard = guard
+	return t
+}
+
+// WithLSPWarmup wires the warm-up probe so a report taken while the language
+// server is still completing its handshake is labelled INCOMPLETE. This matters
+// more here than on any other cold-LSP path: the other tools fail or say "not
+// found", but a cold diagnostics query returns a confident CLEAN report, which
+// an agent reads as "my change compiles". Nil-safe.
+func (t *Diagnostics) WithLSPWarmup(fn LSPWarmupFn) *Diagnostics {
+	t.warmup = fn
 	return t
 }
 
@@ -108,7 +119,8 @@ func (t *Diagnostics) Description() string {
 		"Pass uris (a list of file:// URIs) to check specific files — omit or pass [] to query all files. " +
 		"A single call with multiple URIs replaces multiple single-file calls. " +
 		"Results are pushed by the language server as it analyses code; they may be empty " +
-		"if the server has not yet sent any diagnostics."
+		"if the server has not yet sent any diagnostics — a report taken while the server is " +
+		"still warming is labelled INCOMPLETE, so a clean result then is not proof the code compiles."
 }
 
 func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -134,13 +146,18 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 		}
 	}
 
+	// The warm-up caveat is appended to EVERY outcome, not just an empty one: a
+	// report from a server mid-handshake is incomplete whichever way it reads —
+	// clean means "nothing published yet", and a non-empty set may still be
+	// missing the errors the server has not reached.
 	switch len(a.URIs) {
 	case 0:
-		return t.allFiles(ctx), nil
+		// Whole-workspace query: probe the connection's primary server (uri "").
+		return t.allFiles(ctx) + coldLSPIncompleteNote(t.warmup, ""), nil
 	case 1:
-		return t.singleURI(ctx, a.URIs[0]), nil
+		return t.singleURI(ctx, a.URIs[0]) + coldLSPIncompleteNote(t.warmup, a.URIs[0]), nil
 	default:
-		return t.multiURI(ctx, a.URIs), nil
+		return t.multiURI(ctx, a.URIs) + coldLSPIncompleteNote(t.warmup, a.URIs[0]), nil
 	}
 }
 

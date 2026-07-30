@@ -259,6 +259,58 @@ func TestPruneByTTL(t *testing.T) {
 	}
 }
 
+// TestPruneExemptsLiveSessions: a conversation that is still connected keeps
+// its state however old the rows are. Reads are refreshed as the session works,
+// but the pin and the name are written once at initialize, so a TTL sweep would
+// otherwise reclaim them mid-session and the next reconnect would come back
+// unpinned and renamed — the churn persistence exists to prevent.
+func TestPruneExemptsLiveSessions(t *testing.T) {
+	s := newTestStore(t)
+	for _, id := range []string{"live", "dead"} {
+		if err := s.UpsertRead(id, "/ws", "/ws/a.go", time.Unix(1, 0), ""); err != nil {
+			t.Fatalf("UpsertRead(%s): %v", id, err)
+		}
+		if err := s.UpsertPin(id, "/ws", "go", PinSourceRoots); err != nil {
+			t.Fatalf("UpsertPin(%s): %v", id, err)
+		}
+		if err := s.SaveName(id, "swift-falcon-"+id); err != nil {
+			t.Fatalf("SaveName(%s): %v", id, err)
+		}
+	}
+	// Backdate everything well past the cutoff.
+	old := time.Now().Add(-48 * time.Hour).UnixMilli()
+	for _, tbl := range []string{"read_tracking", "pinned_workspace", "session_names"} {
+		if _, err := s.db.Exec(`UPDATE `+tbl+` SET updated_at=?`, old); err != nil {
+			t.Fatalf("backdate %s: %v", tbl, err)
+		}
+	}
+
+	if err := s.Prune(time.Now().Add(-24*time.Hour), "live"); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	// The live session keeps everything.
+	if recs, _ := s.LoadReads("live", "/ws"); len(recs) != 1 {
+		t.Errorf("live session lost its read rows: %d", len(recs))
+	}
+	if _, _, _, ok, _ := s.LoadPin("live"); !ok {
+		t.Error("live session lost its pin")
+	}
+	if _, ok, _ := s.LoadName("live"); !ok {
+		t.Error("live session lost its name")
+	}
+	// The abandoned one is still reclaimed.
+	if recs, _ := s.LoadReads("dead", "/ws"); len(recs) != 0 {
+		t.Errorf("dead session's reads survived: %d", len(recs))
+	}
+	if _, _, _, ok, _ := s.LoadPin("dead"); ok {
+		t.Error("dead session's pin survived")
+	}
+	if _, ok, _ := s.LoadName("dead"); ok {
+		t.Error("dead session's name survived")
+	}
+}
+
 func TestPruneKeepsFreshRows(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.UpsertRead("p", "/ws", "/ws/a.go", time.Unix(1, 0), ""); err != nil {

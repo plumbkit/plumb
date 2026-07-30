@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -373,22 +374,55 @@ func (s *Store) LoadName(proxySessionID string) (name string, ok bool, err error
 	}
 }
 
+// liveExemption builds the "AND proxy_session_id NOT IN (?, ?, …)" tail that
+// spares live sessions from the TTL sweep, plus the full argument list for the
+// DELETE (cutoff first). Returns an empty tail when no session is live, so the
+// statement stays exactly as it was.
+func liveExemption(cutoff int64, live []string) (string, []any) {
+	args := make([]any, 0, 1+len(live))
+	args = append(args, cutoff)
+	if len(live) == 0 {
+		return "", args
+	}
+	var b strings.Builder
+	b.WriteString(" AND proxy_session_id NOT IN (")
+	for i, id := range live {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("?")
+		args = append(args, id)
+	}
+	b.WriteString(")")
+	return b.String(), args
+}
+
 // Prune deletes all persisted state last updated before olderThan, reclaiming
 // rows left behind by a `plumb serve` that died without reconnecting. nil-safe.
-func (s *Store) Prune(olderThan time.Time) error {
+//
+// Rows belonging to a proxy session in live are kept regardless of age. Without
+// that exemption the sweep reclaims state from sessions that are still
+// connected: read rows are refreshed as the session works, but the pin and the
+// name are written once at initialize, so any conversation older than the TTL
+// (24 h by default) loses them mid-flight and its next reconnect comes back
+// unpinned and renamed — the very churn persistence exists to prevent.
+func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	if s == nil {
 		return nil
 	}
 	cutoff := olderThan.UnixMilli()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.db.Exec(`DELETE FROM read_tracking WHERE updated_at < ?`, cutoff); err != nil {
+	// keep is built only from "?" placeholders (liveExemption), never from a
+	// caller-supplied string; the proxy session IDs travel as bound arguments.
+	keep, args := liveExemption(cutoff, live)
+	if _, err := s.db.Exec(`DELETE FROM read_tracking WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune reads: %w", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE updated_at < ?`, cutoff); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM pinned_workspace WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune pins: %w", err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM session_names WHERE updated_at < ?`, cutoff); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM session_names WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune names: %w", err)
 	}
 	return nil

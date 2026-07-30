@@ -16,9 +16,13 @@ import (
 // (idle reaper / shutdown), and the session's workspace + project-config reload
 // hook (the reload-project control command).
 type connHandle struct {
-	cancel        context.CancelFunc
-	workspace     func() string
-	reloadProject func()
+	cancel    context.CancelFunc
+	workspace func() string
+	// proxySessionID returns the stable proxy session ID this connection was
+	// identified by ("" for a non-serve client), so the session-state TTL sweep
+	// can spare rows belonging to a session that is still connected.
+	proxySessionID func() string
+	reloadProject  func()
 	// summarise generates this session's episodic summary; invoked by the idle
 	// reaper once per idle spell. nil when episodic summaries are unavailable.
 	summarise func()
@@ -40,6 +44,25 @@ func newConnRegistry() *connRegistry {
 		conns:        make(map[string]connHandle),
 		summarisedAt: make(map[string]time.Time),
 	}
+}
+
+// liveProxyIDs returns the non-empty proxy session IDs of every live
+// connection. Handed to pruneSessionState so the TTL sweep never reclaims the
+// pin or name of a conversation that is still running (they are written once at
+// initialize, so age alone does not mean abandoned).
+func (r *connRegistry) liveProxyIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.conns))
+	for _, h := range r.conns {
+		if h.proxySessionID == nil {
+			continue
+		}
+		if id := h.proxySessionID(); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (r *connRegistry) add(sessID string, h connHandle) {
@@ -187,7 +210,7 @@ func runIdleReaper(ctx context.Context, store *config.Store, registry *connRegis
 				return
 			}
 			cur := store.Current()
-			pruneSessionState(sessState, cur.Session.PersistStateTTLMinutes)
+			pruneSessionState(sessState, cur.Session.PersistStateTTLMinutes, registry.liveProxyIDs()...)
 			pruneCollab(ctx, collabPool)
 			// Always run summariseIdle (no global gate): the per-session closure
 			// re-checks the project [memory] config, so a per-project episodic

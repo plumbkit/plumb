@@ -340,12 +340,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// the per-workspace config reload at the sessions on that workspace.
 	registry := newConnRegistry()
 
-	// Round(0) strips the monotonic clock reading: uptime consumers
-	// (daemon_info, the TUI/web widgets via the metrics snapshot, txlog
-	// recovery) diff against this timestamp, and a monotonic reading would
-	// exclude system-suspend time (CLOCK_MONOTONIC stops while suspended),
-	// underreporting uptime. Wall-clock semantics match `ps`.
-	daemonStartedAt := time.Now().Round(0)
+	daemonStartedAt := daemonStartTime()
 
 	// The web UI server is constructed unbound: it does not listen until a
 	// `plumb web` invocation sends "web-start" over the control socket. It reuses
@@ -389,6 +384,14 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 
 	tools.Version = Version
 
+	// The fsync-before-ack knob gates free functions (safeWrite and friends)
+	// shared by every session, so it is daemon-global and installed exactly once,
+	// here, from the GLOBAL config store — store.Current() is re-read per write,
+	// so a global config reload still takes effect live. A per-project override
+	// of [edits] fsync is intentionally ignored: honouring it would let the last
+	// workspace to attach set the durability contract for every other session.
+	tools.SetFsyncFunc(func() bool { return store.Current().Edits.Fsync })
+
 	// Start the background LRU sweep for per-path write locks. Runs for the
 	// daemon's lifetime; ctx cancellation stops the sweep goroutine cleanly.
 	tools.StartPathLockSweep(ctx)
@@ -409,15 +412,29 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
+// daemonStartTime captures the daemon's start timestamp in WALL-CLOCK terms.
+//
+// Round(0) strips the monotonic clock reading: every uptime consumer diffs
+// against this one timestamp — daemon_info, the web dashboard's uptimeSeconds
+// (which reads it in-process via web.Deps, so nothing else strips it for us),
+// the TUI widgets via the metrics snapshot, and txlog orphan recovery — and a
+// monotonic reading excludes system-suspend time (CLOCK_MONOTONIC stops while
+// suspended), so a 22 h-old daemon reported 5 h of uptime. Wall-clock semantics
+// match `ps`. Extracted from runDaemon so the strip is pinned by a test.
+func daemonStartTime() time.Time { return time.Now().Round(0) }
+
 // pruneSessionState reclaims persisted per-connection state older than the TTL,
 // dropping rows left by a serve proxy that died without reconnecting. A TTL of 0
 // disables pruning (state lingers until the next daemon restart with a positive
 // TTL). Best-effort and nil-safe.
-func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int) {
+func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int, live ...string) {
 	if sessState == nil || ttlMinutes <= 0 {
 		return
 	}
-	if err := sessState.Prune(time.Now().Add(-time.Duration(ttlMinutes) * time.Minute)); err != nil {
+	// live sessions are exempt: their pin and name are written once at
+	// initialize, so a conversation older than the TTL would otherwise have them
+	// reclaimed while it is still connected.
+	if err := sessState.Prune(time.Now().Add(-time.Duration(ttlMinutes)*time.Minute), live...); err != nil {
 		slog.Debug("daemon: session-state prune failed", "err", err)
 	}
 }
@@ -530,10 +547,11 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	s.collabPool = collabPool
 	s.daemonStartedAt = daemonStartedAt
 	registry.add(s.sessID, connHandle{
-		cancel:        s.cancel,
-		workspace:     s.workspace,
-		reloadProject: func() { s.applyProjectConfig(s.workspace()) },
-		summarise:     s.generateEpisodicSummary,
+		cancel:         s.cancel,
+		workspace:      s.workspace,
+		proxySessionID: func() string { return s.view().proxySessionID },
+		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
+		summarise:      s.generateEpisodicSummary,
 	})
 	defer registry.remove(s.sessID)
 	defer s.close()

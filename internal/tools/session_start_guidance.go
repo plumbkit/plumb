@@ -55,10 +55,17 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			sb.WriteString("- **call_hierarchy** / **type_hierarchy** — callers/callees, super/subtypes.\n")
 		}
 		sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
+		// Lean hides these tools from tools/list, so the orientation packet does
+		// not advertise them. Error messages DO name them (ColdLSPToolsHint) even
+		// under lean: that is reactive — the agent has already hit a cold server
+		// and needs the ladder — and a lean client can still reach a hidden tool
+		// through deferred schema discovery.
 		if !t.leanProfile() {
 			sb.WriteString("Cold LSP: the symbol-edit tools (insert_before/after_symbol, replace_symbol_body, move_symbol) " +
 				"still work via the tree-sitter index while the language server warms; " +
-				"find_references / explain_symbol / type_hierarchy need a ready server — retry shortly (see daemon_info).\n\n")
+				"find_references / explain_symbol / call_hierarchy / type_hierarchy / safe_delete_symbol / rename_symbol " +
+				"need a ready server — retry shortly (see daemon_info). While it warms, diagnostics is labelled " +
+				"INCOMPLETE and an empty result from the query tools is not evidence of absence.\n\n")
 		}
 		return
 	}

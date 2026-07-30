@@ -48,6 +48,13 @@ func queryErr(tool, symbolName string, err error) error {
 // topology-backed query tools plus the tree-sitter-backed symbol-edit tools.
 // Shared so the routing proxy's warm-up error, the timeout guidance, and the
 // cold-LSP tool failures all name the same ladder.
+//
+// It names these tools regardless of the connection's tool profile, unlike
+// session_start's guidance line, which is suppressed under lean. The split is
+// deliberate: session_start would be ADVERTISING tools lean hides from
+// tools/list, whereas this hint is reactive — the agent has just hit a cold
+// server, and a lean client can still reach a hidden tool through deferred
+// schema discovery, which is exactly what the lean profile assumes.
 const ColdLSPToolsHint = "topology_search / find_symbol / file_outline answer now; " +
 	"the tree-sitter topology index also backs the symbol-edit tools " +
 	"(insert_before/after_symbol, replace_symbol_body, move_symbol)"
@@ -64,6 +71,37 @@ func coldLSPWarmingErr(tool string, fn LSPWarmupFn, uri string) error {
 	}
 	return fmt.Errorf("%s: language server still warming%s — this tool needs a ready server; "+
 		"retry shortly (%s; see daemon_info)", tool, warmupElapsedSuffix(elapsed), ColdLSPToolsHint)
+}
+
+// coldLSPEmptyNote is the caveat appended to an EMPTY but otherwise successful
+// result when the language server is still warming. A cold server does not only
+// fail — sourcekit-lsp and jdtls routinely answer with an empty result before
+// indexing completes — and a confident negative ("no references found", "no
+// call hierarchy item") is the most dangerous thing plumb can say there: an
+// agent reads it as proof of absence and deletes the symbol. Returns "" when the
+// server is ready or the probe is unwired, leaving the plain negative intact.
+func coldLSPEmptyNote(fn LSPWarmupFn, uri string) string {
+	warming, elapsed := lspWarmup(fn, uri)
+	if !warming {
+		return ""
+	}
+	return fmt.Sprintf("\n\nNote: the language server is still warming%s, so this empty result is "+
+		"NOT evidence of absence — re-run once it is ready (see daemon_info). Meanwhile %s.",
+		warmupElapsedSuffix(elapsed), ColdLSPToolsHint)
+}
+
+// coldLSPIncompleteNote is the diagnostics flavour of coldLSPEmptyNote: while a
+// server is warming, ANY report is incomplete — an empty one is "nothing
+// published yet" rather than clean, and a non-empty one may be missing what the
+// server has not analysed. Returns "" for a ready server or an unwired probe.
+func coldLSPIncompleteNote(fn LSPWarmupFn, uri string) string {
+	warming, elapsed := lspWarmup(fn, uri)
+	if !warming {
+		return ""
+	}
+	return fmt.Sprintf("\n\nNote: the language server is still warming%s, so this report is "+
+		"INCOMPLETE — a clean result here is NOT proof the code compiles. Re-run once it is "+
+		"ready (see daemon_info).", warmupElapsedSuffix(elapsed))
 }
 
 // lspTimeout returns a timeout error when err is a deadline overrun, else nil.
