@@ -5,8 +5,6 @@ import (
 
 	tsg "github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
-
-	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // TestLazyGrammarMemoisesAndDefers proves lazyGrammar defers its load until the
@@ -37,11 +35,11 @@ func TestExtractorConstructionDecodesNoGrammar(t *testing.T) {
 		t.Fatalf("grammar cache not empty after purge: %d", loaded)
 	}
 
-	// Mirrors buildExtractors: one extractor per tree-sitter language.
-	_ = []topology.Extractor{
-		NewPython(), NewJavaScript(), NewRust(), NewZig(), NewKotlin(),
-		NewSwift(), NewJava(), NewBash(), NewHCL(), NewSQL(),
-		NewDockerfile(), NewTOML(), NewYAML(), NewMarkdown(), NewHTML(),
+	// Every extractor in the package, from the shared enumeration — the list that
+	// used to live here went stale and omitted TS/TSX, which then shipped decoding
+	// both grammars eagerly with this guard still green.
+	for _, c := range allExtractorCases() {
+		_ = c.ctor()
 	}
 
 	if loaded, _ := grammars.EmbeddedLanguageCacheStats(); loaded != 0 {

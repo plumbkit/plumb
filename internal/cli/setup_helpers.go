@@ -80,7 +80,7 @@ func kimiCodeInstalled() bool {
 
 // dirExists reports whether path exists and is a directory.
 func dirExists(path string) bool {
-	info, err := os.Stat(path) //nolint:gosec // G703: path comes from OS-native config-dir helpers (UserHomeDir, KIMI_CODE_HOME), not user input
+	info, err := os.Stat(path) //nolint:gosec // G703: stats a config dir the user themself points at ($KIMI_CODE_HOME) or ~/.kimi-code, as the invoking user — no privilege boundary crossed and no file contents read
 	return err == nil && info.IsDir()
 }
 

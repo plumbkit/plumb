@@ -216,6 +216,9 @@ func TestTypeScript_LanguageAndPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(nodes) == 0 {
+		t.Fatal("no nodes extracted — the per-node assertions below would pass vacuously")
+	}
 	for _, n := range nodes {
 		if n.Language != "typescript" {
 			t.Errorf("node %q language=%q, want typescript", n.Name, n.Language)
@@ -309,6 +312,133 @@ export interface After { x: number }
 	for _, n := range nodes {
 		if n.Language != "typescript" {
 			t.Errorf("TSX node %q language=%q, want typescript (tsx aliases to typescript)", n.Name, n.Language)
+		}
+	}
+}
+
+// TestTypeScript_NoFunctionLocals pins the suppression invariant: only top-level
+// (and namespace-level) declarations are symbols, so locals declared inside a
+// function body must NOT reach the index — they would swamp topology_search with
+// noise. wasmts asserts the same thing for the WASM path; without this test the
+// pure-Go extractor could start walking bodies and every presence-only
+// assertion in this file would stay green.
+func TestTypeScript_NoFunctionLocals(t *testing.T) {
+	src := []byte(`export function outer(): number {
+  const localc = 3;
+  let lv = 4;
+  function inner(): number { return localc + lv; }
+  return inner();
+}
+`)
+	nodes, _, err := NewTypeScript().Extract(context.Background(), "o.ts", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(names(nodes, topology.KindFunction), "outer") {
+		t.Fatalf("top-level function outer missing; funcs=%v", names(nodes, topology.KindFunction))
+	}
+	for _, n := range nodes {
+		switch n.Name {
+		case "localc", "lv":
+			t.Errorf("in-function local %q leaked into the index as %s", n.Name, n.Kind)
+		case "inner":
+			t.Errorf("nested function %q leaked into the index as %s (only top-level declarations are symbols)", n.Name, n.Kind)
+		}
+	}
+}
+
+// TestTypeScript_NoDuplicateEmission guards against double-counting: dispatch,
+// scanTests, and callEdges each walk the tree, so a symbol reachable by two of
+// them would be emitted twice. Every presence-only assertion in this file passes
+// happily on duplicated nodes, so count them explicitly.
+func TestTypeScript_NoDuplicateEmission(t *testing.T) {
+	src := []byte(`export class Widget {
+  render(): string { return "x"; }
+}
+
+export function build(): Widget { return new Widget(); }
+
+describe('widget suite', () => {
+  it('renders', () => { expect(build()).toBeTruthy(); });
+});
+`)
+	nodes, _, err := NewTypeScript().Extract(context.Background(), "w.ts", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, n := range nodes {
+		seen[string(n.Kind)+"|"+n.Name]++
+	}
+	for key, count := range seen {
+		if count > 1 {
+			t.Errorf("%s emitted %d times, want once", key, count)
+		}
+	}
+	for _, want := range []string{"class|Widget", "method|render", "function|build", "test|widget suite", "test|renders"} {
+		if seen[want] != 1 {
+			t.Errorf("%s emitted %d times, want exactly 1; got %v", want, seen[want], seen)
+		}
+	}
+}
+
+// TestTypeScript_RequireImportAndEnumValues covers the two declaration shapes no
+// other test reaches: a CommonJS `require(...)` binding (classified as an import,
+// not a constant) and enum members with explicit values (enum_assignment rather
+// than a bare property_identifier).
+func TestTypeScript_RequireImportAndEnumValues(t *testing.T) {
+	src := []byte(`const fs = require('fs');
+const p = require('path');
+
+export enum Status {
+  Active = 'active',
+  Done = 'done',
+}
+`)
+	nodes, _, err := NewTypeScript().Extract(context.Background(), "r.ts", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"fs", "path"} {
+		if !slices.Contains(names(nodes, topology.KindImport), want) {
+			t.Errorf("require(%q) should be an import; imports=%v", want, names(nodes, topology.KindImport))
+		}
+	}
+	if slices.Contains(names(nodes, topology.KindConstant), "fs") {
+		t.Error("a require binding must not also be recorded as a constant")
+	}
+	if !slices.Contains(names(nodes, topology.KindType), "Status") {
+		t.Errorf("enum Status missing; types=%v", names(nodes, topology.KindType))
+	}
+	for _, want := range []string{"Active", "Done"} {
+		if !slices.Contains(names(nodes, topology.KindConstant), want) {
+			t.Errorf("valued enum member %q missing; consts=%v", want, names(nodes, topology.KindConstant))
+		}
+	}
+}
+
+// TestTSX_JSXFileExtracts exercises .jsx, which Extensions() claims but no other
+// test feeds in: plain JSX with no type annotations must extract through the TSX
+// grammar and still be labelled "typescript".
+func TestTSX_JSXFileExtracts(t *testing.T) {
+	src := []byte(`export const Btn = ({ label }) => <button>{label}</button>;
+
+export default function Bar() {
+  return <Btn label="go" />;
+}
+`)
+	nodes, _, err := NewTSX().Extract(context.Background(), "src/Btn.jsx", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Btn", "Bar"} {
+		if !slices.Contains(names(nodes, topology.KindFunction), want) {
+			t.Errorf("component %q missing from a .jsx file; funcs=%v", want, names(nodes, topology.KindFunction))
+		}
+	}
+	for _, n := range nodes {
+		if n.Language != "typescript" || n.Path != "src/Btn.jsx" {
+			t.Errorf("node %q language=%q path=%q, want typescript/src/Btn.jsx", n.Name, n.Language, n.Path)
 		}
 	}
 }

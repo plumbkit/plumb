@@ -11,13 +11,18 @@ import (
 )
 
 // TypeScriptExtractor extracts TypeScript/TSX symbols using the gotreesitter
-// TypeScript and TSX grammars. It replaces the WASM path (extractors/wasmts):
-// gotreesitter v0.20.x cascaded ERROR nodes on typed arrow parameters
-// (`(a: number) => a`), implicitly-unwrapped Swift-style edge cases, and
-// default-valued arrow params (`(a = 5) => a`), which forced TS/TSX extraction
-// onto the canonical grammar compiled to WASM. All of these parse cleanly on
-// gotreesitter v0.47.x (verified 2026-07-29 against upstream main; see the
-// probe matrix in the ops repo), so the pure-Go path is primary again.
+// TypeScript and TSX grammars.
+//
+// NOT WIRED: the canonical grammar compiled to WASM (extractors/wasmts) remains
+// the primary TS/TSX path — extractorCtors builds wasmts.NewTypeScript and
+// wasmts.NewTSX, not this extractor. gotreesitter v0.20.x cascaded ERROR nodes
+// on typed arrow parameters (`(a: number) => a`) and default-valued arrow
+// params (`(a = 5) => a`), which is what forced TS/TSX onto WASM; both parse
+// cleanly on v0.47.x (verified 2026-07-29), so this extractor is kept
+// flip-ready. The flip itself is gated: a 492-file corpus sweep still found
+// ~8% of real-world files failing on gotreesitter (upstream issues #539-#544),
+// so it waits on those fixes plus a release. See PLAN-1 in the ops repo and
+// extractors/parity_sweep_test.go.
 //
 // TSX nodes are labelled language "typescript" (not "tsx") so .ts and .tsx
 // symbols search together under one language, matching the langsupport
@@ -27,19 +32,19 @@ import (
 // fresh parser is created per Extract call because gotreesitter parsers are not
 // safe for concurrent reuse.
 type TypeScriptExtractor struct {
-	lang *tsg.Language
+	lang lazyGrammar
 	exts []string
 }
 
 // NewTypeScript returns a tree-sitter-backed TypeScript (.ts) extractor.
 func NewTypeScript() *TypeScriptExtractor {
-	return &TypeScriptExtractor{lang: grammars.TypescriptLanguage(), exts: []string{".ts"}}
+	return &TypeScriptExtractor{lang: lazyGrammar{load: grammars.TypescriptLanguage}, exts: []string{".ts"}}
 }
 
 // NewTSX returns a tree-sitter-backed TSX/JSX (.tsx/.jsx) extractor. Its nodes
 // are labelled language "typescript" (see the type comment).
 func NewTSX() *TypeScriptExtractor {
-	return &TypeScriptExtractor{lang: grammars.TsxLanguage(), exts: []string{".tsx", ".jsx"}}
+	return &TypeScriptExtractor{lang: lazyGrammar{load: grammars.TsxLanguage}, exts: []string{".tsx", ".jsx"}}
 }
 
 func (e *TypeScriptExtractor) Language() string     { return "typescript" }
@@ -53,11 +58,13 @@ func (e *TypeScriptExtractor) Extensions() []string { return e.exts }
 // (1.0/extractor); intra-file call edges are name-resolved heuristics (0.8).
 // Returns (nil, nil, nil) when src cannot be parsed.
 func (e *TypeScriptExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(e.lang).Parse(src)
+	lang := e.lang.get()
+	tree, err := tsg.NewParser(lang).Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
-	w := &tsWalk{lang: e.lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	defer tree.Release()
+	w := &tsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 	for _, n := range tree.RootNode().Children() {
 		w.dispatch(n)
 	}
