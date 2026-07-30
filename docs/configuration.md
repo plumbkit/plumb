@@ -231,6 +231,15 @@ e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 | `timeout_ms` | int | `2000` | Per-analyser run cap. |
 | `max_findings_per_file` | int | `5` | Cap on findings appended per file. |
 
+The `golangci-lint` analyser needs the binary itself. plumb looks for it on
+`PATH` first, then in the Go tool bin directory — `$GOBIN`, else `$GOPATH/bin`,
+else `~/go/bin` — because the daemon inherits the environment of whichever
+`plumb serve` proxy started it, which frequently lacks `~/go/bin` even when your
+shell has it. If it is found nowhere, writes still succeed, findings are simply
+absent, and the daemon log says so **once** (`quality: golangci-lint not found`)
+rather than leaving you to wonder. `plumb doctor`'s **Dev Tools** section
+reports the resolved path, or warns with a fix hint when there is none.
+
 ## `[topology]` — semantic index
 
 | Field | Type | Default | Effect |

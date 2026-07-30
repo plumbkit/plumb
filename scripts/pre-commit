@@ -3,8 +3,35 @@
 # For the full sweep (including tests) run: make verify
 set -e
 go build ./...
+
+# Resolve golangci-lint: PATH first, then the Go tool bin dir ($GOBIN, else
+# $GOPATH/bin, else ~/go/bin).
+#
+# Hooks do NOT run with your interactive PATH. They inherit the environment of
+# whatever invoked git — an editor, a GUI client, an agent daemon — and that
+# environment routinely lacks ~/go/bin, which is exactly where `go install`
+# puts golangci-lint. Without this fallback, `make install-hooks` could produce
+# a hook that fails on every single commit while `golangci-lint` worked fine in
+# the terminal. Same search order as internal/quality/golangcilint.LookBinary,
+# so the hook and the daemon's post-write analyser agree on the binary.
+GOLANGCI_LINT="$(command -v golangci-lint 2>/dev/null || true)"
+if [ -z "$GOLANGCI_LINT" ]; then
+	for dir in "$GOBIN" "${GOPATH:-$HOME/go}/bin" "$HOME/go/bin"; do
+		if [ -n "$dir" ] && [ -x "$dir/golangci-lint" ]; then
+			GOLANGCI_LINT="$dir/golangci-lint"
+			break
+		fi
+	done
+fi
+if [ -z "$GOLANGCI_LINT" ]; then
+	echo "pre-commit: golangci-lint not found on PATH, in \$GOBIN, or in \$GOPATH/bin." >&2
+	echo "  install it (https://golangci-lint.run/welcome/install/), or set GOBIN," >&2
+	echo "  or commit with --no-verify if you must and run 'make verify' before pushing." >&2
+	exit 1
+fi
+
 # Use golangci-lint's embedded gofumpt, not the standalone binary.
 # The two can pin different versions and produce phantom diffs.
-golangci-lint run --fix ./...
+"$GOLANGCI_LINT" run --fix ./...
 # Enforce the ~600-line file-size rule (grandfather baseline in scripts/).
 scripts/check-file-size.sh

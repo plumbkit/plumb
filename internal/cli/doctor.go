@@ -62,21 +62,8 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
 	PrintLogo()
 
-	sections := []struct {
-		title string
-		run   func() []checkResult
-	}{
-		{"Daemon", checkDaemon},
-		{"Language Servers", func() []checkResult { return checkLSPs(ws) }},
-		{"MCP Clients", checkMCPClients},
-		{"Configuration", func() []checkResult { return checkConfigs(ws) }},
-		{"Integrations", func() []checkResult { return checkRastro(ws) }},
-		{"Data", func() []checkResult { return checkStatsDB(ws) }},
-		{"Indexing", func() []checkResult { return checkTopology(ws) }},
-	}
-
 	failures, warnings := 0, 0
-	for _, s := range sections {
+	for _, s := range doctorSections(ws) {
 		checks := runSection(s.title, s.run)
 		for _, c := range checks {
 			switch {
@@ -101,6 +88,32 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	return silentExitError{}
 }
 
+// doctorSection is one titled group of checks.
+type doctorSection struct {
+	title string
+	run   func() []checkResult
+}
+
+// doctorSections is the SINGLE source of truth for which checks run and in what
+// order. Both the human and the --json path consume it, so a new section cannot
+// appear in one and be silently missing from the other — the two lists used to
+// be declared separately, and the "Dev Tools" section added with this change
+// would have been reported by `plumb doctor` but absent from `plumb doctor
+// --json`, which is exactly the kind of drift no one notices until a script
+// disagrees with the terminal.
+func doctorSections(ws string) []doctorSection {
+	return []doctorSection{
+		{"Daemon", checkDaemon},
+		{"Language Servers", func() []checkResult { return checkLSPs(ws) }},
+		{"MCP Clients", checkMCPClients},
+		{"Configuration", func() []checkResult { return checkConfigs(ws) }},
+		{"Dev Tools", checkDevTools},
+		{"Integrations", func() []checkResult { return checkRastro(ws) }},
+		{"Data", func() []checkResult { return checkStatsDB(ws) }},
+		{"Indexing", func() []checkResult { return checkTopology(ws) }},
+	}
+}
+
 // jsonCheckResult is the JSON serialisation shape for a single doctor check.
 type jsonCheckResult struct {
 	Name   string `json:"name"`
@@ -114,18 +127,10 @@ type jsonCheckResult struct {
 // stdout. Working indicators and section headers are suppressed. Exit code
 // behaviour is unchanged: returns a non-nil error when any check fails.
 func runDoctorJSON(ws string) error {
-	runs := []func() []checkResult{
-		checkDaemon,
-		func() []checkResult { return checkLSPs(ws) },
-		checkMCPClients,
-		func() []checkResult { return checkConfigs(ws) },
-		func() []checkResult { return checkRastro(ws) },
-		func() []checkResult { return checkStatsDB(ws) },
-		func() []checkResult { return checkTopology(ws) },
-	}
-	all := make([]checkResult, 0, len(runs)*3)
-	for _, run := range runs {
-		all = append(all, run()...)
+	sections := doctorSections(ws)
+	all := make([]checkResult, 0, len(sections)*3)
+	for _, s := range sections {
+		all = append(all, s.run()...)
 	}
 
 	out := make([]jsonCheckResult, len(all))

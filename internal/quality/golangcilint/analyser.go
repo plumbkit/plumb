@@ -1,6 +1,10 @@
 // Package golangcilint implements a quality.Analyser that shells out to
-// golangci-lint. If golangci-lint is not on PATH the analyser silently returns
-// no findings rather than erroring — the write still succeeds.
+// golangci-lint. If golangci-lint cannot be found the analyser returns no
+// findings rather than erroring — the write still succeeds — but it says so in
+// the log exactly once, because a silently disabled feature is worse than a
+// noisy one (this bit us: golangci-lint was installed in ~/go/bin, the daemon's
+// PATH did not include it, and the post-write quality findings simply never
+// appeared, with nothing anywhere to explain why).
 package golangcilint
 
 import (
@@ -8,9 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/plumbkit/plumb/internal/quality"
 )
@@ -37,9 +43,10 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 	if len(files) == 0 {
 		return nil, nil
 	}
-	bin, err := exec.LookPath("golangci-lint")
-	if err != nil {
-		return nil, nil // binary absent — silent skip
+	bin, ok := LookBinary()
+	if !ok {
+		logUnavailableOnce(ctx)
+		return nil, nil // binary absent — skip, but not silently (logged once)
 	}
 
 	// --output.json.path=stdout is the golangci-lint v2 spelling; the v1
@@ -71,6 +78,67 @@ func (a *Analyser) Analyse(ctx context.Context, files []string) ([]quality.Findi
 		return nil, nil
 	}
 	return parseOutput(stdout.Bytes(), a.Name())
+}
+
+// lookPath is the PATH lookup seam (tests substitute it).
+var lookPath = exec.LookPath
+
+// LookBinary resolves the golangci-lint executable: PATH first, then the Go
+// tool bin directory ($GOBIN, else $GOPATH/bin, else ~/go/bin).
+//
+// The fallback matters because the daemon does NOT run with the user's
+// interactive PATH: it inherits the environment of whichever `plumb serve`
+// proxy spawned it, which is captured when that agent session starts and
+// routinely lacks ~/go/bin. `go install`-ed tools land exactly there, so PATH
+// alone silently disables this analyser on a perfectly well set-up machine.
+//
+// Exported so `plumb doctor` reports the same binary the analyser will actually
+// run — a doctor check that resolved differently would be worse than none.
+func LookBinary() (string, bool) {
+	if bin, err := lookPath("golangci-lint"); err == nil {
+		return bin, true
+	}
+	for _, dir := range goToolBinDirs() {
+		candidate := filepath.Join(dir, "golangci-lint")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// goToolBinDirs lists the directories `go install` writes to, most specific
+// first. Read from the environment rather than shelling out to `go env`, which
+// would spawn a process on a write path that must stay cheap.
+func goToolBinDirs() []string {
+	var dirs []string
+	if gobin := os.Getenv("GOBIN"); gobin != "" {
+		dirs = append(dirs, gobin)
+	}
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		// GOPATH may be a list; only the first element receives installs.
+		first := strings.Split(gopath, string(os.PathListSeparator))[0]
+		if first != "" {
+			dirs = append(dirs, filepath.Join(first, "bin"))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "go", "bin"))
+	}
+	return dirs
+}
+
+// unavailableOnce bounds the "not found" log to one line per daemon lifetime:
+// the analyser runs on every Go write, so an unconditional warning would flood
+// the log, and that is precisely how a warning ends up being ignored.
+var unavailableOnce sync.Once
+
+func logUnavailableOnce(ctx context.Context) {
+	unavailableOnce.Do(func() {
+		slog.InfoContext(ctx, "quality: golangci-lint not found — post-write Go quality findings are disabled",
+			"searched", append([]string{"PATH"}, goToolBinDirs()...),
+			"hint", "install golangci-lint, or put its directory on the PATH the daemon inherits")
+	})
 }
 
 // stderrTail returns the trailing portion of stderr, bounded, for diagnostics.

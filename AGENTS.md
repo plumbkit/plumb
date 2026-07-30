@@ -487,7 +487,7 @@ make clients-test-auth   # on-demand: drive each client headless to force a real
 
 The two `clients-test*` targets are on-demand (own build tags, never in `make verify` beyond a compile check) and drive real client CLIs non-interactively.
 
-**`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`. **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
+**`make install-hooks` is required after every fresh clone** — the pre-commit hook runs `golangci-lint run --fix ./...`. The hook resolves that binary on `PATH` first and then in the Go tool bin dir (`$GOBIN`, else `$GOPATH/bin`, else `~/go/bin`), because hooks inherit the environment of whatever invoked git — an editor, a GUI client, an agent daemon — which often lacks `~/go/bin` even when your terminal has it; without the fallback the hook would fail on every commit. If it resolves nowhere the hook fails loudly with install guidance rather than skipping the lint silently. **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the standalone `gofumpt -w` binary — the two can pin different versions and produce phantom lint failures.
 
 ## Known limitations and pending work
 

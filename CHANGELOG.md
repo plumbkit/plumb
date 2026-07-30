@@ -57,6 +57,37 @@
 
 ### Fixed
 
+- **A missing `golangci-lint` no longer silently disables the post-write
+  `[quality]` Go findings — and is now findable when `go install` put it in
+  `~/go/bin`.** The analyser resolved the binary with `exec.LookPath` alone and
+  returned "no findings" when that failed, with nothing logged. The daemon does
+  not run with your interactive PATH — it inherits the environment of whichever
+  `plumb serve` proxy spawned it, captured when that agent session started — so
+  on a machine where golangci-lint sat in `~/go/bin` (exactly where `go install`
+  puts it) the feature was simply off, invisibly, with a correct-looking config.
+  Three changes: `LookBinary` now falls back to the Go tool bin dir (`$GOBIN`,
+  else the first `$GOPATH` element's `bin`, else `~/go/bin`) after PATH, keeping
+  PATH's answer authoritative so a system package still wins over a stale
+  `go install` build; an unresolvable binary is logged **once** per daemon
+  lifetime (`quality: golangci-lint not found`, listing every directory searched)
+  instead of never; and `plumb doctor` gained a **Dev Tools** section reporting
+  the resolved path — or a warning with a fix hint — using the very same resolver,
+  so doctor can never claim a binary the analyser would fail to find. The repo's
+  `scripts/pre-commit` gained the same search order, since hooks inherit the
+  environment of whatever invoked git and a PATH-only lookup made
+  `make install-hooks` capable of producing a hook that failed on every commit;
+  it now fails loudly with install guidance rather than skipping the lint
+  silently. Guarded by `internal/quality/golangcilint/lookbinary_test.go`
+  (PATH-wins, each fallback, multi-element `GOPATH`, directory and
+  non-executable rejection) and `internal/cli/doctor_devtools_test.go`.
+
+- **`plumb doctor` and `plumb doctor --json` can no longer disagree about which
+  checks exist.** The two paths each declared their own section list, so a new
+  section had to be added twice or it would appear in the terminal and be absent
+  from the JSON (or vice versa) — drift nobody notices until a script and a human
+  read the same machine differently. Both now consume one `doctorSections(ws)`
+  list. Pinned by `TestDoctorSections_SingleSourceOfTruthIncludesDevTools`.
+
 - **`case_sensitive: false` is no longer a silent no-op on `search_in_files` and
   `read_file` — an explicit "ignore case" was overridden by smart-case.** Both
   tools computed `caseSensitive := arg != nil && *arg` and then re-applied

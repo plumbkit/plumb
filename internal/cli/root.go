@@ -41,7 +41,7 @@ func init() {
 	// idempotent, so the help/error paths never double-print.
 	rootCmd.Annotations = map[string]string{annoSkipLogo: "true"}
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
-		if cmd.Annotations[annoSkipLogo] == "true" {
+		if suppressLogo(cmd) {
 			return
 		}
 		printLogoIfNeeded(os.Stdout)
