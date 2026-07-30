@@ -12,6 +12,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // register the SQLite driver
+
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // minTTL is the floor applied to an intent/note TTL. A non-positive or tiny TTL
@@ -43,13 +45,6 @@ CREATE INDEX IF NOT EXISTS idx_collab_author  ON collab_rows(author_id);
 // must migrate additively rather than dropping the table. v1 is the initial
 // shape; there is nothing to migrate yet.
 const schemaVersion = 1
-
-// dbDSNParams configures every pooled connection at open time: WAL, a busy
-// timeout for writer contention, and foreign-key enforcement. Per-connection
-// pragmas must travel in the DSN so they apply to every connection the pool
-// opens, not just the one a one-off Exec would hit (see the topology store for
-// the same reasoning).
-const dbDSNParams = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
 
 // Store is the per-workspace collab.db handle.
 //
@@ -87,15 +82,14 @@ func Open(workspace string) (*Store, error) {
 		return nil, errors.New("collab: empty workspace")
 	}
 	path := DBPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("collab: create db dir: %w", err)
+	// Open first: sqlitex creates the .plumb/ directory, which ensureGitignore
+	// then writes into.
+	db, err := sqlitex.Open(path, sqlitex.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("collab: open db: %w", err)
 	}
 	if err := ensureGitignore(filepath.Dir(path)); err != nil {
 		slog.Warn("collab: ensure .gitignore", "dir", filepath.Dir(path), "err", err)
-	}
-	db, err := sql.Open("sqlite", path+dbDSNParams)
-	if err != nil {
-		return nil, fmt.Errorf("collab: open db: %w", err)
 	}
 	if err := initDB(db); err != nil {
 		db.Close()
@@ -108,10 +102,9 @@ func initDB(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("collab: apply schema: %w", err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
-		return fmt.Errorf("collab: stamping user_version: %w", err)
-	}
-	return nil
+	// The schema has had one version and no migrations, so the stamp is
+	// unconditional: it records what wrote the file rather than gating anything.
+	return sqlitex.StampVersion(db, schemaVersion)
 }
 
 // Close releases the database handle.

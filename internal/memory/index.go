@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 
 	_ "modernc.org/sqlite" // register the SQLite driver
 )
@@ -127,15 +128,13 @@ func IndexDBPath(workspace string) string {
 // OpenIndex opens or creates the memory index for workspace.
 func OpenIndex(workspace string) (*Index, error) {
 	path := IndexDBPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("memory: create db dir: %w", err)
-	}
-	ensureMemoryGitignore(filepath.Dir(path))
-	db, err := sql.Open("sqlite", path)
+	// The index is written by one goroutine at a time behind ix.mu, so a single
+	// connection keeps SQLite's own locking out of the picture entirely.
+	db, err := sqlitex.Open(path, sqlitex.Options{MaxOpenConns: 1})
 	if err != nil {
 		return nil, fmt.Errorf("memory: open db: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	ensureMemoryGitignore(filepath.Dir(path))
 	if err := initMemoryDB(db); err != nil {
 		db.Close()
 		return nil, err
@@ -143,21 +142,18 @@ func OpenIndex(workspace string) (*Index, error) {
 	return &Index{db: db, workspace: workspace}, nil
 }
 
+// initMemoryDB applies the schema and stamps the version. The connection
+// pragmas that used to be Exec'd here now travel in the DSN via sqlitex: the
+// Exec form only ever configured the one connection that served it, which was
+// safe here purely because of the single-connection cap above and would have
+// become a bug the moment that cap was lifted.
 func initMemoryDB(db *sql.DB) error {
-	for _, pragma := range []string{
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA busy_timeout = 5000`,
-		`PRAGMA foreign_keys = ON`,
-		fmt.Sprintf(`PRAGMA user_version = %d`, memorySchemaVersion),
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			return fmt.Errorf("memory: pragma %q: %w", pragma, err)
-		}
-	}
 	if _, err := db.Exec(memorySchema); err != nil {
 		return fmt.Errorf("memory: apply schema: %w", err)
 	}
-	return nil
+	// The index is a derived cache with no migrations — it is rebuilt from the
+	// markdown on disk — so the stamp records the writer rather than gating one.
+	return sqlitex.StampVersion(db, memorySchemaVersion)
 }
 
 // Workspace returns the workspace this index belongs to.

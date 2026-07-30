@@ -53,6 +53,32 @@
 
 ### Changed
 
+- **One home each for byte formatting, pluralisation and truncation.** The new
+  stdlib-only `internal/textfmt` replaces sixteen scattered helpers: four byte
+  formatters (`render.HumanBytes`, `topology.formatBytes`, `tools.formatSize`,
+  `monitor.FormatBytes`), four pluralisers, and eight truncate/clamp helpers
+  including two byte-identical pairs. It is its own Foundation package rather
+  than a move into `internal/render` because render imports lipgloss, and
+  `internal/memory`, `internal/topology` and `internal/tools` all want these
+  helpers without dragging a terminal rendering library into their dependency
+  graph. **Byte sizes now read KiB/MiB/GiB everywhere.** Every copy already
+  divided by 1024; two of them labelled the result "KB", stating a different
+  number than they computed. Visible in `plumb debug`, the TUI daemon rows,
+  `plumb doctor` and `list_directory` file sizes.
+
+- **One home for atomic writes, and one for opening SQLite.** A staged
+  temp→rename write is now `fsync.AtomicWrite`, replacing twelve open-coded
+  copies across eight files; `sqlitex.Open`/`OpenReadOnly` build every SQLite
+  DSN, replacing seven hand-written ones. Both consolidations are held by tests
+  in `internal/arch` (`TestSharedPrimitives`, `TestPinnedCalls`) that fail when
+  the pattern is reimplemented or the underlying call is made directly — the
+  atomic write had already regrown from five copies to twelve since the
+  cleanup was first filed, precisely because nothing failed in between.
+  SQLite pragma delivery is normalised too: `foreign_keys` is on for every
+  database (it was off for two), `synchronous` is now an explicit per-caller
+  decision rather than an accident, and connection pragmas travel in the DSN so
+  they reach every pooled connection rather than only the one an `Exec` hit.
+
 - **The coverage floor now counts every package.** `make cover`
   (`scripts/check-coverage.sh`) instruments the whole module with
   `-coverpkg=./...` instead of only the packages a test binary touches —
@@ -198,6 +224,40 @@
   connection, and both `daemon_info` and `session_start` report it as a separate
   fact: `lsp: none attached (primary); routed: go`, with the recommended first
   step naming the LSP tools that do work instead of steering away from them.
+
+- **A "read-only" SQLite handle was never actually read-only.** `mode=ro` is
+  honoured only when the DSN is a `file:` URI; appended to a bare path the
+  modernc driver ignores it and opens the database read-WRITE. Both
+  `stats.OpenReadOnly` and `topology.StatusForWorkspace` documented themselves
+  as side-effect-free inspections and neither was one. This is the same class of
+  silent-DSN-defect as the `_busy_timeout=` bug fixed earlier, and it is why
+  `internal/sqlitex` now builds every DSN by construction. `cmd/clientsmoke`
+  additionally still used the ignored `_busy_timeout=` spelling, leaving its
+  stats reader at `busy_timeout=0`. Note the consequence: a genuinely read-only
+  reader of a WAL database *does* create transient `-wal`/`-shm` sidecars (it
+  needs a WAL index), which the previous non-read-only handle had no reason to.
+
+- **Concurrent writes to one memory could fail.** `memory.Write` staged into a
+  fixed `<path>.tmp` with no lock, so simultaneous writes of the same memory
+  shared a single staging file: whichever renamed first moved it out from under
+  the others. Replaying the old algorithm with eight writers fails four or five
+  of them every run. `fsync.AtomicWrite` gives each writer its own staging file.
+
+- **`plumb setup` silently tightened third-party config permissions.** The
+  setup writers edit files belonging to other tools (`~/.codex`, the Claude
+  config, Gemini trees) and staged through `os.CreateTemp`, which always creates
+  0600, without ever restoring the original mode — so the first run over a
+  user's existing 0644 config quietly made it private. Rewriting an existing
+  file now preserves its permissions.
+
+- **The daemon metrics snapshot never fsynced.** It was the one staged-rename
+  writer in the tree opting out of the fsync-before-ack contract the rest of the
+  daemon keeps. It now honours it, still gated by the `[edits] fsync` knob.
+
+- **Edit-error snippets could emit mojibake.** `truncateSnippet` sliced at byte
+  60, producing a replacement character whenever that offset landed inside a
+  multi-byte sequence — routine for any non-ASCII source file. Truncation is
+  now rune-safe.
 
 - **CI: the widened linter set is now trialled against the Darwin tree too,
   and the toolchain is past four stdlib CVEs.** `usetesting` fired only in

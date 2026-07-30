@@ -106,7 +106,19 @@ type CallRule struct {
 }
 
 // CallRules is the full set.
+//
+// These are checked against production files only. A test that hand-builds a
+// deliberately old-schema database, or stages a torn file to prove a recovery
+// path, is doing the forbidden thing on purpose.
 var CallRules = []CallRule{
+	{
+		Call: "sql.Open",
+		Why:  "a SQLite handle belongs to sqlitex.Open / sqlitex.OpenReadOnly, which build the DSN as a file: URI with the `_pragma=` spelling — the modernc driver silently ignores both the mattn-style `_busy_timeout=` form AND `mode=ro` on a bare path, so a hand-written DSN can leave busy_timeout at 0 and a 'read-only' handle writable",
+		Allowed: map[string]string{
+			"internal/sqlitex.Open":         "the shared implementation itself",
+			"internal/sqlitex.OpenReadOnly": "the shared read-only implementation itself",
+		},
+	},
 	{
 		Call: "os.Rename",
 		Why:  "a staged temp→rename write belongs in fsync.AtomicWrite, which fsyncs the staging file before the rename and the directory after it, preserves an existing file's mode, and cleans up on every failure path",

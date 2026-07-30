@@ -30,7 +30,6 @@ package sessionstate
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -39,6 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // schema is the v1 baseline shape, deliberately FROZEN. read_tracking is scoped
@@ -133,22 +133,11 @@ func Open() (*Store, error) {
 // openAt opens (or creates) the session-state database at an explicit path. Open
 // delegates here; tests open at a temp path.
 func openAt(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("sessionstate: mkdir: %w", err)
-	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// SyncNormal: this is derived session bookkeeping, cheap to lose and
+	// rewritten constantly, so a per-commit fsync is not worth its cost.
+	db, err := sqlitex.Open(path, sqlitex.Options{Sync: sqlitex.SyncNormal, MaxOpenConns: 1})
 	if err != nil {
 		return nil, fmt.Errorf("sessionstate: open %s: %w", path, err)
-	}
-	db.SetMaxOpenConns(1)
-	// synchronous=NORMAL is corruption-safe under WAL and avoids an fsync per
-	// commit. WAL + busy_timeout come from the DSN via the `_pragma=` form — the
-	// modernc driver SILENTLY IGNORES the mattn-style `_busy_timeout=`/
-	// `_journal_mode=` params — and synchronous is asserted here since it is
-	// per-connection.
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sessionstate: synchronous: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -173,11 +162,7 @@ func openAt(path string) (*Store, error) {
 // readVersion reads the on-disk schema version. A database this process just
 // created reads 0; one written by an older plumb reads its own version.
 func readVersion(db *sql.DB) (int, error) {
-	var current int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
-		return 0, fmt.Errorf("sessionstate: reading user_version: %w", err)
-	}
-	return current, nil
+	return sqlitex.Version(db)
 }
 
 // migrate brings a database at version `from` up to SchemaVersion. Each step is
@@ -215,10 +200,7 @@ func stampVersion(db *sql.DB, current int) error {
 	if current >= SchemaVersion {
 		return nil
 	}
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
-		return fmt.Errorf("sessionstate: stamping user_version: %w", err)
-	}
-	return nil
+	return sqlitex.StampVersion(db, SchemaVersion)
 }
 
 // Close closes the database. nil-safe.

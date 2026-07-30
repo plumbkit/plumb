@@ -4,10 +4,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 
 	_ "modernc.org/sqlite" // register the SQLite driver
 )
@@ -122,29 +122,23 @@ func DBPath(workspace string) string {
 	return filepath.Join(workspace, ".plumb", "topology.db")
 }
 
-// dbDSNParams configures EVERY pooled connection at open time. busy_timeout and
-// foreign_keys are per-connection SQLite pragmas, so they must travel in the DSN:
-// a one-off db.Exec sets them on only the single connection that served it,
-// leaving every other pooled connection with foreign_keys OFF (ON DELETE CASCADE
-// silently no-ops, so orphan topology_edges accumulate on every re-index/prune)
-// and busy_timeout 0 (recoverable writer contention becomes an immediate
-// "database is locked"). The modernc driver applies _pragma= params on each new
-// connection.
-const dbDSNParams = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)"
-
-// openDB opens or creates the topology SQLite database at path with WAL mode,
-// busy timeout, and foreign-key enforcement set per-connection via the DSN, then
-// applies the schema. Returns a ready-to-use *sql.DB.
+// openDB opens or creates the topology SQLite database at path and applies the
+// schema. Returns a ready-to-use *sql.DB.
+//
+// The index is left multi-connection: it is read far more than written, and
+// with the pragmas carried in the DSN by sqlitex every pooled connection is
+// configured identically. foreign_keys in particular must reach all of them —
+// topology_edges declares ON DELETE CASCADE, which silently no-ops on any
+// connection where the pragma is off, orphaning rows on every re-index.
 func openDB(path string) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("topology: create db dir: %w", err)
+	// Open first: sqlitex creates the .plumb/ directory, which ensureGitignore
+	// then writes into.
+	db, err := sqlitex.Open(path, sqlitex.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("topology: open db: %w", err)
 	}
 	if err := ensureGitignore(filepath.Dir(path)); err != nil {
 		slog.Warn("topology: ensure .gitignore", "dir", filepath.Dir(path), "err", err)
-	}
-	db, err := sql.Open("sqlite", path+dbDSNParams)
-	if err != nil {
-		return nil, fmt.Errorf("topology: open db: %w", err)
 	}
 	if err := initDB(db); err != nil {
 		db.Close()
@@ -165,8 +159,6 @@ func ensureGitignore(dir string) error {
 }
 
 func initDB(db *sql.DB) error {
-	// WAL / busy_timeout / foreign_keys are set per-connection via dbDSNParams so
-	// they apply to every pooled connection, not just the one a db.Exec would hit.
 	if err := ensureSchemaVersion(db); err != nil {
 		return err
 	}
@@ -184,9 +176,9 @@ func initDB(db *sql.DB) error {
 // schema, because CREATE TABLE IF NOT EXISTS never alters a table that already
 // has the old column set — an INSERT naming the new columns would then fail.
 func ensureSchemaVersion(db *sql.DB) error {
-	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
-		return fmt.Errorf("topology: reading user_version: %w", err)
+	version, err := sqlitex.Version(db)
+	if err != nil {
+		return err
 	}
 	if version >= SchemaVersion {
 		return nil
@@ -198,10 +190,7 @@ func ensureSchemaVersion(db *sql.DB) error {
 			}
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, SchemaVersion)); err != nil {
-		return fmt.Errorf("topology: stamping user_version: %w", err)
-	}
-	return nil
+	return sqlitex.StampVersion(db, SchemaVersion)
 }
 
 // hasNodesTable reports whether a topology_nodes table already exists, used to
