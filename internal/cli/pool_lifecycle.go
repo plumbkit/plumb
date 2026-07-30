@@ -51,7 +51,10 @@ func (p *workspacePool) reapEntry(e *poolEntry) {
 // that evicts the entry if the late outcome is an error. The supervisor
 // guarantees exactly one send on readyCh over its lifetime, and this drain is
 // its sole remaining reader, so the goroutine always terminates and never
-// double-reads (a success delivers nil and the drain simply exits).
+// double-reads (a success delivers nil and the drain simply exits). A
+// deliberate Stop mid-warm-up — hibernateEntry racing a slow first start —
+// also delivers nil rather than an error (see Supervisor.StartAsync), so
+// hibernation can never evict the entry it is designed to keep.
 func (p *workspacePool) awaitReady(ctx context.Context, e *poolEntry, readyCh <-chan error) (*poolEntry, error) {
 	grace := p.startGrace
 	if grace <= 0 {

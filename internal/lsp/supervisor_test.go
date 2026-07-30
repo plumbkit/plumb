@@ -209,6 +209,73 @@ func TestSupervisor_Start_Sync(t *testing.T) {
 	}
 }
 
+// TestSupervisor_StartAsync_StopDuringFirstStartReportsNonFailure pins the
+// contract the pool's hibernate/wake cycle relies on: a supervisor Stopped
+// while its first OnStart is still blocked has not FAILED — the start was
+// deliberately abandoned — so readyCh delivers nil, not an error, and the
+// pool's self-heal leaves the entry alone (a reported failure would evict it).
+func TestSupervisor_StartAsync_StopDuringFirstStartReportsNonFailure(t *testing.T) {
+	cmd, args := longLivedCommand(t)
+	onStartEntered := make(chan struct{})
+	sup := NewSupervisor(cmd, args, nil, SupervisorOptions{
+		OnStart: func(ctx context.Context, _ *jsonrpc.Conn) error {
+			close(onStartEntered)
+			<-ctx.Done() // block until the supervisor's lifetime ends, like a handshake that never completes
+			return ctx.Err()
+		},
+	})
+
+	readyCh, err := sup.StartAsync(context.Background())
+	if err != nil {
+		t.Fatalf("StartAsync: %v", err)
+	}
+	<-onStartEntered
+	sup.Stop()
+
+	select {
+	case e := <-readyCh:
+		if e != nil {
+			t.Fatalf("deliberate stop reported as a start failure: %v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("readyCh never delivered — the exactly-one-send contract broke")
+	}
+}
+
+// TestSupervisor_StartAsync_ExternalCancelDuringFirstStartStillFails is the
+// other half of that discrimination: cancellation that is NOT a deliberate
+// Stop (daemon shutdown, a caller's own ctx) keeps reporting the failure, so
+// the self-heal still evicts a server that died on its own.
+func TestSupervisor_StartAsync_ExternalCancelDuringFirstStartStillFails(t *testing.T) {
+	cmd, args := longLivedCommand(t)
+	onStartEntered := make(chan struct{})
+	sup := NewSupervisor(cmd, args, nil, SupervisorOptions{
+		OnStart: func(ctx context.Context, _ *jsonrpc.Conn) error {
+			close(onStartEntered)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	readyCh, err := sup.StartAsync(ctx)
+	if err != nil {
+		t.Fatalf("StartAsync: %v", err)
+	}
+	<-onStartEntered
+	cancel()
+	defer sup.Stop()
+
+	select {
+	case e := <-readyCh:
+		if e == nil {
+			t.Fatal("external cancellation reported as a clean start; the self-heal would never evict a dead server")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("readyCh never delivered — the exactly-one-send contract broke")
+	}
+}
+
 func TestSupervisor_Start_Sync_Failure(t *testing.T) {
 	sup := NewSupervisor(missingCommand, nil, nil, SupervisorOptions{
 		BackoffBase: 10 * time.Millisecond,

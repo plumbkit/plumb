@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -56,6 +57,12 @@ type SupervisorOptions struct {
 	Dir string
 }
 
+// errSupervisorStop is the cancellation cause Stop() sets on the loop's
+// lifetime context, letting the loop tell a deliberate stop apart from an
+// external cancellation (daemon shutdown, a Start caller's own ctx). Only the
+// latter is reported as a first-start failure.
+var errSupervisorStop = errors.New("supervisor: stopped")
+
 // Supervisor manages the lifecycle of an LSP server subprocess.
 // It monitors the process and restarts it with exponential backoff on crash.
 //
@@ -71,7 +78,7 @@ type Supervisor struct {
 	conn  *jsonrpc.Conn
 	proc  *exec.Cmd
 
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 	wg     sync.WaitGroup
 }
 
@@ -97,19 +104,24 @@ func NewSupervisor(command string, args, env []string, opts SupervisorOptions) *
 // immediately without waiting for the first OnStart to complete. The returned
 // channel receives exactly one value: nil once the process is running and the
 // first OnStart has succeeded, or a non-nil error if the first spawn/OnStart
-// fails (the loop does not retry a first-start failure). The channel is
-// buffered (cap 1) so the loop's single send never blocks even if the caller
-// stops reading; callers may abandon the channel at any time.
+// fails (the loop does not retry a first-start failure). A first start cut
+// short by a deliberate Stop delivers nil, not an error: the server did not
+// fail — it was stopped — so there is no dead entry for a caller's self-heal
+// to evict (the pool's hibernate/wake cycle depends on this: hibernation Stops
+// a still-warming supervisor and must not lose the entry it is designed to
+// keep). The channel is buffered (cap 1) so the loop's single send never
+// blocks even if the caller stops reading; callers may abandon the channel at
+// any time.
 //
 // ctx is the supervisor's lifetime and must outlive any single request — pass
 // the daemon root context, never a per-tool-call context. Cancelling ctx (or
 // calling Stop) stops the loop.
 func (s *Supervisor) StartAsync(ctx context.Context) (<-chan error, error) {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 	s.mu.Lock()
 	if s.state != StateStopped {
 		s.mu.Unlock()
-		cancel()
+		cancel(nil)
 		return nil, fmt.Errorf("supervisor: already running (state=%s)", s.state)
 	}
 	s.cancel = cancel
@@ -138,7 +150,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		if cancel != nil {
-			cancel()
+			cancel(nil)
 		}
 		return ctx.Err()
 	}
@@ -151,7 +163,7 @@ func (s *Supervisor) Stop() {
 	cancel := s.cancel
 	s.mu.RUnlock()
 	if cancel != nil {
-		cancel()
+		cancel(errSupervisorStop)
 	}
 	s.wg.Wait()
 
@@ -188,6 +200,18 @@ func (s *Supervisor) PID() int {
 	return s.proc.Process.Pid
 }
 
+// firstStartOutcome decides what an aborted first start reports on readyCh.
+// A deliberate Stop (the loop's own cancel cause) reports nil — the server did
+// not fail, it was stopped, so there is nothing for the pool's self-heal to
+// evict. Anything else, including external cancellation of the supervisor's
+// lifetime context, reports the error as before.
+func firstStartOutcome(ctx context.Context, err error) error {
+	if errors.Is(context.Cause(ctx), errSupervisorStop) {
+		return nil
+	}
+	return err
+}
+
 // retryAfterStartFailure decides what happens after a failed start — either the
 // spawn itself or OnStart. On the FIRST attempt the error is handed to readyCh
 // (Start is still blocked on it) and supervision gives up, because a server that
@@ -201,7 +225,7 @@ func (s *Supervisor) retryAfterStartFailure(
 	ctx context.Context, readyCh chan<- error, first bool, backoff time.Duration, err error,
 ) (time.Duration, bool) {
 	if first {
-		readyCh <- err
+		readyCh <- firstStartOutcome(ctx, err)
 		return backoff, false
 	}
 	s.setState(StateRestarting)
@@ -221,7 +245,7 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 	for {
 		if ctx.Err() != nil {
 			if first {
-				readyCh <- ctx.Err()
+				readyCh <- firstStartOutcome(ctx, ctx.Err())
 			}
 			return
 		}
