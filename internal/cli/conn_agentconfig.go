@@ -6,6 +6,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ func agentDescribe() []tools.AgentConfigField {
 func (s *connSession) applyAgentConfig(_ context.Context, pairs map[string]any) (string, error) {
 	ws := s.workspace()
 	if ws == "" {
-		return "", fmt.Errorf("no workspace attached")
+		return "", errors.New("no workspace attached")
 	}
 	for k := range pairs {
 		if !config.IsAgentWritable(k) {

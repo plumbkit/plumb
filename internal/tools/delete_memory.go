@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/plumbkit/plumb/internal/memory"
@@ -56,7 +57,7 @@ func (t *deleteMemoryTool) Execute(_ context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Name == "" {
-		return "", fmt.Errorf("`name` is required")
+		return "", errors.New("`name` is required")
 	}
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {

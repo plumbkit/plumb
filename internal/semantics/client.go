@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -38,10 +39,10 @@ type Embedder interface {
 // for keyless local endpoints.
 func NewEmbedder(provider, baseURL, model, apiKey string, timeout time.Duration) (Embedder, error) {
 	if baseURL == "" {
-		return nil, fmt.Errorf("semantics: base_url is empty (set [semantics].base_url or pick a non-custom provider)")
+		return nil, errors.New("semantics: base_url is empty (set [semantics].base_url or pick a non-custom provider)")
 	}
 	if model == "" {
-		return nil, fmt.Errorf("semantics: model is empty")
+		return nil, errors.New("semantics: model is empty")
 	}
 	if timeout <= 0 {
 		timeout = 10 * time.Second

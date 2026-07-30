@@ -56,10 +56,10 @@ func parseLogLine(line string) logEntry {
 		}
 	}
 	if v, ok := m["level"]; ok {
-		json.Unmarshal(v, &e.Level) //nolint:errcheck
+		json.Unmarshal(v, &e.Level) //nolint:errcheck // a field of unexpected shape stays empty and renders as such
 	}
 	if v, ok := m["msg"]; ok {
-		json.Unmarshal(v, &e.Msg) //nolint:errcheck
+		json.Unmarshal(v, &e.Msg) //nolint:errcheck // a field of unexpected shape stays empty and renders as such
 	}
 	e.Attrs = make(map[string]string)
 	for k, v := range m {

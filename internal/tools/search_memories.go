@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -70,7 +71,7 @@ func parseSearchMemoriesArgs(args json.RawMessage) (searchMemoriesArgs, error) {
 		return a, fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Pattern == "" {
-		return a, fmt.Errorf("`pattern` is required")
+		return a, errors.New("`pattern` is required")
 	}
 	a.Mode = strings.ToLower(strings.TrimSpace(a.Mode))
 	return a, nil

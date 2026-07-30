@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -83,7 +84,7 @@ func (idx *Indexer) readAndHash(absPath, relPath string) (src []byte, ex Extract
 		return nil, nil, "", "", err
 	}
 	h := sha256.Sum256(src)
-	return src, ex, ex.Language(), fmt.Sprintf("%x", h), nil
+	return src, ex, ex.Language(), hex.EncodeToString(h[:]), nil
 }
 
 // extractFile runs the extractor for a file that isStale has confirmed needs

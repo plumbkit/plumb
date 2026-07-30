@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -88,7 +89,7 @@ func resolveWorkspace(explicit string, fallback WorkspaceFn) string {
 }
 
 func noWorkspaceError() error {
-	return fmt.Errorf("no workspace resolved for this connection; call session_start (optionally with an absolute `workspace`) to attach. " +
+	return errors.New("no workspace resolved for this connection; call session_start (optionally with an absolute `workspace`) to attach. " +
 		"If this session was working a moment ago, the daemon may have restarted (e.g. after a rebuild or upgrade), which clears the per-connection workspace pin — re-run session_start to re-attach. " +
 		"You can also pass `workspace` explicitly, or call any path-bearing tool first to resolve it from a file URI")
 }

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -216,7 +217,7 @@ func (t *StructuralQuery) queryUnusedContext(ctx context.Context, store *topolog
 		root = t.ws()
 	}
 	if root == "" {
-		return nil, fmt.Errorf("structural_query: unused-context needs a resolved workspace to read function bodies")
+		return nil, errors.New("structural_query: unused-context needs a resolved workspace to read function bodies")
 	}
 	nodes, err := store.NodesByKind(ctx, topology.KindFunction, topology.KindMethod)
 	if err != nil {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,10 +22,10 @@ import (
 // the sorted list of changed keys.
 func AgentApplyBatch(base Config, workspace string, pairs map[string]any, prov ProvenanceEntry) ([]string, error) {
 	if workspace == "" {
-		return nil, fmt.Errorf("agent config: no workspace")
+		return nil, errors.New("agent config: no workspace")
 	}
 	if len(pairs) == 0 {
-		return nil, fmt.Errorf("agent config: empty batch")
+		return nil, errors.New("agent config: empty batch")
 	}
 	keys := sortedKeys(pairs)
 	// Fail closed before touching anything: every key must be on the allowlist.

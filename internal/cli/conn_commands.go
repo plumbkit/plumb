@@ -10,6 +10,7 @@ package cli
 // here, where the resolver can consult the trust store.
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -23,14 +24,14 @@ import (
 func (s *connSession) commandResolver(name, target string) (tools.ResolvedCommand, error) {
 	ws := s.workspace()
 	if ws == "" {
-		return tools.ResolvedCommand{}, fmt.Errorf("run_command: no workspace is attached")
+		return tools.ResolvedCommand{}, errors.New("run_command: no workspace is attached")
 	}
 	v := s.view()
 	cmd, ok := config.FindCommand(v.commands, name)
 	if !ok {
 		avail := config.CommandNames(v.commands)
 		if len(avail) == 0 {
-			return tools.ResolvedCommand{}, fmt.Errorf("run_command: no commands are configured for this workspace; add a [[command]] entry to your global config or .plumb/config.toml")
+			return tools.ResolvedCommand{}, errors.New("run_command: no commands are configured for this workspace; add a [[command]] entry to your global config or .plumb/config.toml")
 		}
 		return tools.ResolvedCommand{}, fmt.Errorf("run_command: unknown command %q; available: %s", name, strings.Join(avail, ", "))
 	}
@@ -68,7 +69,7 @@ func (s *connSession) commandResolver(name, target string) (tools.ResolvedComman
 func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 	ws := s.workspace()
 	if ws == "" {
-		return tools.ResolvedShell{}, fmt.Errorf("execute_shell_command: no workspace is attached")
+		return tools.ResolvedShell{}, errors.New("execute_shell_command: no workspace is attached")
 	}
 	base := s.store.Current()
 	v := s.view()
@@ -80,9 +81,8 @@ func (s *connSession) shellResolver() (tools.ResolvedShell, error) {
 				"execute_shell_command: this project's .plumb/config.toml enables shell execution, but the workspace is not trusted. "+
 					"review it, then run `plumb trust` in %s", ws)
 		}
-		return tools.ResolvedShell{}, fmt.Errorf(
-			"execute_shell_command is disabled. enable it with [commands] allow_shell = true in your global config, " +
-				"or in this project's .plumb/config.toml plus `plumb trust`")
+		return tools.ResolvedShell{}, errors.New("execute_shell_command is disabled. enable it with [commands] allow_shell = true in your global config, " +
+			"or in this project's .plumb/config.toml plus `plumb trust`")
 	}
 	return tools.ResolvedShell{
 		WorkingDir: ws,

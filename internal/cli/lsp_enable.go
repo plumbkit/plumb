@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -35,7 +36,7 @@ activates automatically at startup).`,
 func runEnableLSP(_ *cobra.Command, args []string) error {
 	lang := strings.TrimSpace(args[0])
 	if lang == "" {
-		return fmt.Errorf("no language given")
+		return errors.New("no language given")
 	}
 	resp, err := dialDaemonCtrl("enable-lsp " + lang)
 	if err != nil {
@@ -170,14 +171,14 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 // back to `plumb enable-lsp`. Wired into ctrlHandlers.enableLSP in daemon.go.
 func (p *workspacePool) enableLanguageCtrl(lang string) (string, error) {
 	if lang == "" {
-		return "", fmt.Errorf("no language given")
+		return "", errors.New("no language given")
 	}
 	already, err := p.enableLanguage(lang)
 	if err != nil {
 		return "", err
 	}
 	if already {
-		return fmt.Sprintf("%s is already enabled", lang), nil
+		return lang + " is already enabled", nil
 	}
 	return fmt.Sprintf("enabled %s — its server attaches on the next matching file", lang), nil
 }

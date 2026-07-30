@@ -178,7 +178,7 @@ func TestAwaitReady_DrainNoGoroutineLeak(t *testing.T) {
 	base := runtime.NumGoroutine()
 
 	const n = 30
-	for i := 0; i < n; i++ {
+	for i := range n {
 		root := fmt.Sprintf("/tmp/plumb-drain-leak-%d", i)
 		e := insertWarming(pool, root)
 		readyCh := make(chan error, 1)

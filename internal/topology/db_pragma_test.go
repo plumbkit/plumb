@@ -26,7 +26,7 @@ func TestOpenDB_PragmasApplyToEveryPooledConnection(t *testing.T) {
 
 	// Hold several connections at once to force the pool to open distinct ones.
 	conns := make([]*sql.Conn, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		c, err := db.Conn(ctx)
 		if err != nil {
 			t.Fatal(err)

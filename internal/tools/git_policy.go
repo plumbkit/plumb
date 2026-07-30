@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -26,27 +27,27 @@ func gateGit(tier gitTier, p GitPolicy, confirm bool) error {
 		return nil
 	case tierWrite:
 		if !p.AllowWrites {
-			return fmt.Errorf("git: write operations are disabled; set [git] allow_writes = true to enable")
+			return errors.New("git: write operations are disabled; set [git] allow_writes = true to enable")
 		}
 		return nil
 	case tierDestructive:
 		if !p.AllowDestructive {
-			return fmt.Errorf("git: destructive operations are disabled; set [git] allow_destructive = true to enable")
+			return errors.New("git: destructive operations are disabled; set [git] allow_destructive = true to enable")
 		}
 		if !confirm {
-			return fmt.Errorf("git: this destructive operation requires confirm: true")
+			return errors.New("git: this destructive operation requires confirm: true")
 		}
 		return nil
 	case tierNetwork:
 		if !p.AllowPush {
-			return fmt.Errorf("git: network operations (push/fetch/pull) are disabled; set [git] allow_push = true to enable")
+			return errors.New("git: network operations (push/fetch/pull) are disabled; set [git] allow_push = true to enable")
 		}
 		if !confirm {
-			return fmt.Errorf("git: this network operation requires confirm: true")
+			return errors.New("git: this network operation requires confirm: true")
 		}
 		return nil
 	default:
-		return fmt.Errorf("git: subcommand is not permitted")
+		return errors.New("git: subcommand is not permitted")
 	}
 }
 
@@ -87,7 +88,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	// a protected branch. Refuse it (safe-bias) when any branch is protected,
 	// rather than let a possible protected-branch force-push slip through.
 	if len(p.ProtectedBranches) > 0 && forcePushTargetsCurrentBranch(a.Args) {
-		return fmt.Errorf("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`")
+		return errors.New("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`")
 	}
 	return nil
 }

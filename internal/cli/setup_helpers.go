@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -167,7 +168,7 @@ func claudeDesktopConfigBaseDir() (string, error) {
 	case "windows":
 		appData := os.Getenv("APPDATA")
 		if appData == "" {
-			return "", fmt.Errorf("APPDATA environment variable not set")
+			return "", errors.New("APPDATA environment variable not set")
 		}
 		return appData, nil
 	default:

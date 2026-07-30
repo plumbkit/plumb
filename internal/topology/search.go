@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -13,7 +14,7 @@ func Search(ctx context.Context, db *sql.DB, query string, opts SearchOpts) ([]S
 		opts.Limit = 20
 	}
 	if query == "" {
-		return nil, fmt.Errorf("topology: search query is empty")
+		return nil, errors.New("topology: search query is empty")
 	}
 	ftsQuery := buildFTSQuery(query)
 	sqlStr, args := buildSearchSQL(ftsQuery, opts)

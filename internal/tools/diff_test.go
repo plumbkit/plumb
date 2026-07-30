@@ -12,9 +12,9 @@ func TestUnifiedDiff_NoChange(t *testing.T) {
 }
 
 func TestUnifiedDiff_SingleLineReplacement(t *testing.T) {
-	old := "a\nb\nc\n"
-	new := "a\nx\nc\n"
-	d := unifiedDiff("f.go", old, new)
+	oldText := "a\nb\nc\n"
+	newText := "a\nx\nc\n"
+	d := unifiedDiff("f.go", oldText, newText)
 	if !strings.Contains(d, "-b") {
 		t.Errorf("diff missing -b line:\n%s", d)
 	}
@@ -82,15 +82,15 @@ func TestUnifiedDiff_Truncation(t *testing.T) {
 		sb.WriteString("old line\n")
 		_ = i
 	}
-	old := sb.String()
+	oldText := sb.String()
 	sb.Reset()
 	for i := range maxDiffLines + 10 {
 		sb.WriteString("new line\n")
 		_ = i
 	}
-	new := sb.String()
+	newText := sb.String()
 
-	d := unifiedDiff("big.go", old, new)
+	d := unifiedDiff("big.go", oldText, newText)
 	lines := strings.Split(d, "\n")
 	if len(lines) > maxDiffLines+5 {
 		t.Fatalf("diff has %d lines, expected ≤ %d+5", len(lines), maxDiffLines)
@@ -103,9 +103,9 @@ func TestUnifiedDiff_Truncation(t *testing.T) {
 // TestUnifiedDiff_NonContiguousChanges validates that two separated hunks
 // each appear in the diff output with their own @@ header.
 func TestUnifiedDiff_NonContiguousChanges(t *testing.T) {
-	old := "a\nb\nc\nd\ne\nf\ng\nh\n"
-	new := "a\nX\nc\nd\ne\nf\nY\nh\n" // changed b→X and g→Y, separated by 4 common lines
-	d := unifiedDiff("f.go", old, new)
+	oldText := "a\nb\nc\nd\ne\nf\ng\nh\n"
+	newText := "a\nX\nc\nd\ne\nf\nY\nh\n" // changed b→X and g→Y, separated by 4 common lines
+	d := unifiedDiff("f.go", oldText, newText)
 
 	hunks := strings.Count(d, "@@")
 	if hunks < 2 {

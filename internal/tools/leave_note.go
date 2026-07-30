@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -69,7 +70,7 @@ func parseLeaveNoteArgs(raw json.RawMessage) (leaveNoteArgs, error) {
 		return a, fmt.Errorf("leave_note: %w", err)
 	}
 	if strings.TrimSpace(a.Body) == "" {
-		return a, fmt.Errorf("leave_note: body is required")
+		return a, errors.New("leave_note: body is required")
 	}
 	a.To = strings.TrimSpace(a.To)
 	if a.To == "" {
@@ -94,7 +95,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	store := t.deps.Store()
 	if store == nil {
-		return "", fmt.Errorf("leave_note: cross-agent store unavailable for this workspace")
+		return "", errors.New("leave_note: cross-agent store unavailable for this workspace")
 	}
 	return t.run(ctx, store, policy, args)
 }

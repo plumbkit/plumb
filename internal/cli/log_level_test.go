@@ -3,7 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -165,7 +165,7 @@ func TestHandleCtrlConn_ReloadConfig(t *testing.T) {
 
 func TestHandleCtrlConn_ReloadConfigError(t *testing.T) {
 	ln := testCtrlListener(t)
-	reloadFn := func() error { return fmt.Errorf("boom") }
+	reloadFn := func() error { return errors.New("boom") }
 	go serveControlSocket(ln, "info", "text", ctrlHandlers{reload: reloadFn})
 
 	resp := sendCtrl(t, ln, "reload-config")

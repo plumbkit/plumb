@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -190,7 +191,7 @@ func parseTransactionArgs(raw json.RawMessage) (transactionApplyArgs, error) {
 		return a, fmt.Errorf("transaction_apply: invalid arguments: %w", err)
 	}
 	if len(a.Operations) == 0 {
-		return a, fmt.Errorf("transaction_apply: at least one operation required")
+		return a, errors.New("transaction_apply: at least one operation required")
 	}
 	if len(a.Operations) > 50 {
 		return a, fmt.Errorf("transaction_apply: at most 50 operations per call, got %d", len(a.Operations))

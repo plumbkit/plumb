@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,7 +63,7 @@ func LoadProvenance(workspace string) (Provenance, error) {
 func RecordAgentWrite(workspace, key string, entry ProvenanceEntry) error {
 	path := provenancePath(workspace)
 	if path == "" {
-		return fmt.Errorf("provenance: no workspace path")
+		return errors.New("provenance: no workspace path")
 	}
 	m, err := LoadProvenance(workspace)
 	if err != nil {

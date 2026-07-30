@@ -190,7 +190,7 @@ func TestConn_NotifyInFlight_RoundTrip(t *testing.T) {
 	go func() {
 		defer close(drained)
 		br := bufio.NewReader(cr)
-		for i := 0; i < n; i++ {
+		for range n {
 			if _, err := readMessage(br); err != nil {
 				return
 			}
@@ -201,7 +201,7 @@ func TestConn_NotifyInFlight_RoundTrip(t *testing.T) {
 		t.Fatalf("notifyInFlightCount before any Notify = %d, want 0", got)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := conn.Notify(context.Background(), "textDocument/didChange", map[string]int{"i": i}); err != nil {
 			t.Fatalf("Notify %d: %v", i, err)
 		}
@@ -252,7 +252,7 @@ func TestConn_NotifyInFlight_WarnHysteresis(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		var wg sync.WaitGroup
-		for i := 0; i < n; i++ {
+		for i := range n {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
@@ -297,7 +297,7 @@ func TestConn_NotifyInFlight_WarnHysteresis(t *testing.T) {
 	// frame at a time) and drops the counter to zero — well below half the
 	// threshold — so the hysteresis latch re-arms.
 	br := bufio.NewReader(cr)
-	for i := 0; i < notifyInFlightWarnThreshold; i++ {
+	for i := range notifyInFlightWarnThreshold {
 		if _, err := readMessage(br); err != nil {
 			t.Fatalf("draining frame %d: %v", i, err)
 		}

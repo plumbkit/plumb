@@ -203,15 +203,15 @@ func TestRollbackWorkspaceEdit_ReportsUnrestorableFiles(t *testing.T) {
 // twice and deadlock while holding it.
 func TestLockPaths_DedupsAliasedPaths(t *testing.T) {
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real")
-	if err := os.Mkdir(real, 0o755); err != nil {
+	realDir := filepath.Join(dir, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realDir, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	f := filepath.Join(real, "a.txt")
+	f := filepath.Join(realDir, "a.txt")
 	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

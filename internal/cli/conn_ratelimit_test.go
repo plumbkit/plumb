@@ -44,7 +44,7 @@ func TestBindWriteLimiterParent_DifferentWorkspacesIsolated(t *testing.T) {
 	b.bindWriteLimiterParent()
 
 	// Exhaust A's budget (its local window and the shared /repoA budget).
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if !a.writeLimiter.Allow() {
 			t.Fatalf("write %d on session A should be allowed", i+1)
 		}
@@ -70,7 +70,7 @@ func TestBindWriteLimiterParent_SameWorkspaceShared(t *testing.T) {
 	c.bindWriteLimiterParent()
 
 	// A exhausts the shared (client, workspace) budget.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if !a.writeLimiter.Allow() {
 			t.Fatalf("write %d on session A should be allowed", i+1)
 		}

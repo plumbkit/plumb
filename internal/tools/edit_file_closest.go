@@ -154,7 +154,7 @@ func lineWindowSimilarity(a, b []string) float64 {
 	}
 	n := min(len(a), len(b))
 	total := 0.0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		total += lineSim(a[i], b[i])
 	}
 	return total / float64(max(len(a), len(b)))

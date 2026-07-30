@@ -61,12 +61,12 @@ func TestIndexer_ProcessUpsert_Insert(t *testing.T) {
 	}
 
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if count == 0 {
 		t.Error("expected nodes after upsert, got 0")
 	}
 	var fileCount int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE path = 'main.go'`).Scan(&fileCount) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE path = 'main.go'`).Scan(&fileCount) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if fileCount != 1 {
 		t.Errorf("expected 1 file record, got %d", fileCount)
 	}
@@ -93,7 +93,7 @@ func TestIndexer_PopulatesLanguageInStatus(t *testing.T) {
 	}
 
 	var lang string
-	db.QueryRow(`SELECT language FROM topology_files WHERE path = 'main.go'`).Scan(&lang) //nolint:errcheck
+	db.QueryRow(`SELECT language FROM topology_files WHERE path = 'main.go'`).Scan(&lang) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if lang != "go" {
 		t.Errorf("topology_files.language = %q, want \"go\" (indexer must record the file language)", lang)
 	}
@@ -121,7 +121,7 @@ func TestIndexer_ProcessUpsert_UpdateOnChange(t *testing.T) {
 	}
 
 	var id1 int64
-	db.QueryRow(`SELECT id FROM topology_files WHERE path = 'a.go'`).Scan(&id1) //nolint:errcheck
+	db.QueryRow(`SELECT id FROM topology_files WHERE path = 'a.go'`).Scan(&id1) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 
 	// Modify the file so mtime changes.
 	time.Sleep(10 * time.Millisecond)
@@ -139,7 +139,7 @@ func TestIndexer_ProcessUpsert_UpdateOnChange(t *testing.T) {
 	}
 
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	// Both Alpha and Beta should be present after the update.
 	if count < 2 {
 		t.Errorf("expected ≥2 nodes after update, got %d", count)
@@ -165,7 +165,7 @@ func TestIndexer_ProcessUpsert_NotExistRoutesToDelete(t *testing.T) {
 	}
 
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if count != 0 {
 		t.Errorf("expected 0 nodes after delete-via-upsert, got %d", count)
 	}
@@ -286,8 +286,8 @@ func TestIndexer_ReindexDropsStaleFTS(t *testing.T) {
 
 	// No FTS row may outlive its node row: counts must agree exactly.
 	var nodes, ftsRows int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes WHERE file_id = (SELECT id FROM topology_files WHERE path = 'r.go')`).Scan(&nodes) //nolint:errcheck
-	db.QueryRow(`SELECT COUNT(*) FROM topology_fts`).Scan(&ftsRows)                                                                     //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_nodes WHERE file_id = (SELECT id FROM topology_files WHERE path = 'r.go')`).Scan(&nodes) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
+	db.QueryRow(`SELECT COUNT(*) FROM topology_fts`).Scan(&ftsRows)                                                                     //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if nodes != ftsRows {
 		t.Errorf("FTS/node row mismatch after re-index: %d nodes, %d FTS rows", nodes, ftsRows)
 	}
@@ -336,7 +336,7 @@ func TestIndexer_IsStale_UnchangedFile(t *testing.T) {
 	}
 	info, _ := os.Stat(goFile)
 	// Insert a file record with the same mtime.
-	db.Exec( //nolint:errcheck
+	db.Exec( //nolint:errcheck // fixture insert; a failure surfaces as the assertion below reading no rows
 		`INSERT INTO topology_files(path, mtime_ns, content_hash, indexed_at, error_msg)
          VALUES (?, ?, '', 0, '')`, "u.go", info.ModTime().UnixNano())
 
@@ -395,7 +395,7 @@ func TestIndexer_RecordFileError(t *testing.T) {
 	}
 
 	var errMsg string
-	db.QueryRow(`SELECT error_msg FROM topology_files WHERE path = 'bad.go'`).Scan(&errMsg) //nolint:errcheck
+	db.QueryRow(`SELECT error_msg FROM topology_files WHERE path = 'bad.go'`).Scan(&errMsg) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if errMsg == "" {
 		t.Error("expected error_msg to be set after recordFileError")
 	}
@@ -446,7 +446,7 @@ func TestIndexer_PruneDeleted_RemovesStale(t *testing.T) {
 	}
 
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_files`).Scan(&count) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_files`).Scan(&count) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if count != 0 {
 		t.Errorf("expected 0 file records after prune, got %d", count)
 	}
@@ -470,12 +470,12 @@ func TestIndexer_PruneDeleted_KeepsPresent(t *testing.T) {
 	}
 
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_files`).Scan(&count) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_files`).Scan(&count) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if count != 1 {
 		t.Errorf("expected 1 remaining file record, got %d", count)
 	}
 	var path string
-	db.QueryRow(`SELECT path FROM topology_files`).Scan(&path) //nolint:errcheck
+	db.QueryRow(`SELECT path FROM topology_files`).Scan(&path) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if path != "keep.go" {
 		t.Errorf("remaining file = %q, want keep.go", path)
 	}
@@ -496,7 +496,7 @@ func TestFTSPathInvariant_AfterDelete(t *testing.T) {
 
 	// Verify FTS row exists before delete.
 	var ftsCount int
-	db.QueryRow(`SELECT COUNT(*) FROM topology_fts WHERE path = 'sync.go'`).Scan(&ftsCount) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_fts WHERE path = 'sync.go'`).Scan(&ftsCount) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if ftsCount == 0 {
 		t.Fatal("FTS row missing before delete")
 	}
@@ -507,7 +507,7 @@ func TestFTSPathInvariant_AfterDelete(t *testing.T) {
 	}
 
 	// FTS row must be gone after delete.
-	db.QueryRow(`SELECT COUNT(*) FROM topology_fts WHERE path = 'sync.go'`).Scan(&ftsCount) //nolint:errcheck
+	db.QueryRow(`SELECT COUNT(*) FROM topology_fts WHERE path = 'sync.go'`).Scan(&ftsCount) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 	if ftsCount != 0 {
 		t.Errorf("FTS row still present after processDelete: got %d", ftsCount)
 	}

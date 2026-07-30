@@ -42,7 +42,7 @@ func TestConn_NotificationsDeliveredInOrder(t *testing.T) {
 	})
 
 	go func() {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			frameNotification(dw, fmt.Sprintf("m%03d", i))
 		}
 	}()
@@ -54,7 +54,7 @@ func TestConn_NotificationsDeliveredInOrder(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if want := fmt.Sprintf("m%03d", i); got[i] != want {
 			t.Fatalf("notification %d out of order: got %q, want %q", i, got[i], want)
 		}

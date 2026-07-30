@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -138,7 +139,7 @@ func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
 		return a, fmt.Errorf("file_outline: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return a, fmt.Errorf("file_outline: uri is required")
+		return a, errors.New("file_outline: uri is required")
 	}
 	return a, nil
 }
@@ -356,13 +357,14 @@ func signatureAt(lines []string, start int) string {
 	if idx < 0 || idx >= len(lines) {
 		return ""
 	}
-	sig := strings.TrimSpace(lines[idx])
-	open := parenBalance(sig)
+	parts := []string{strings.TrimSpace(lines[idx])}
+	open := parenBalance(parts[0])
 	for n := 1; open > 0 && idx+n < len(lines) && n < 4; n++ {
 		next := strings.TrimSpace(lines[idx+n])
-		sig += " " + next
+		parts = append(parts, next)
 		open += parenBalance(next)
 	}
+	sig := strings.Join(parts, " ")
 	if i := strings.IndexByte(sig, '{'); i >= 0 {
 		sig = strings.TrimSpace(sig[:i])
 	}

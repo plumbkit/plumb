@@ -561,7 +561,7 @@ func (s *Server) handle(ctx context.Context, raw []byte) (mcpResponse, bool) {
 	case "prompts/get":
 		return s.handlePromptsGet(ctx, req), true
 	default:
-		return errResp(req.ID, codeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method)), true
+		return errResp(req.ID, codeMethodNotFound, "method not found: "+req.Method), true
 	}
 }
 

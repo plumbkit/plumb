@@ -34,7 +34,7 @@ func (n node) child(i int) node {
 func (n node) children() []node {
 	cc := n.childCount()
 	out := make([]node, 0, cc)
-	for i := 0; i < cc; i++ {
+	for i := range cc {
 		out = append(out, n.child(i))
 	}
 	return out
@@ -53,7 +53,7 @@ func (n node) firstNamedChild() node {
 
 // childByType returns the first child whose grammar type equals typ, or null.
 func (n node) childByType(typ string) node {
-	for i := 0; i < n.childCount(); i++ {
+	for i := range n.childCount() {
 		if c := n.child(i); c.kind() == typ {
 			return c
 		}

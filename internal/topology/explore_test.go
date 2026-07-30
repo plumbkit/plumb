@@ -238,7 +238,7 @@ func TestExplore_MaxNodesSemantics(t *testing.T) {
 
 	fileID := insertTestFile(t, db, "s.go")
 	centre := insertTestNode(t, db, fileID, "s.go", Node{Kind: KindPackage, Name: "root", Language: "go"})
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		child := insertTestNode(t, db, fileID, "s.go", Node{Kind: KindFunction, Name: "fn", Language: "go"})
 		insertTestEdge(t, db, centre, child, string(EdgeContains))
 	}

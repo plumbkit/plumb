@@ -1,14 +1,70 @@
+# Linter selection is deliberate, not maximal. Every linter here was trialled
+# against the whole tree and kept only because its hits were real. The
+# "considered and rejected" list at the bottom records the ones that were not,
+# so a future reviewer does not re-litigate them.
 version: "2"
 linters:
   enable:
+    # ── Complexity + API hygiene (the original set). ──
     - gocyclo
     - gosec
     - prealloc
     - revive
     - unparam
+
+    # ── Correctness / bug risk. ──
+    - errorlint # %v on an error where %w (or errors.Is) is meant
+    - nilnesserr # returns a nil error after a non-nil-err check
+    - makezero # append to a make()'d slice with non-zero length
+    - recvcheck # mixed pointer/value receivers on one type
+    - unconvert # redundant type conversion
+    - wastedassign
+    - durationcheck # accidental time.Duration multiplication
+    - predeclared # shadowing a predeclared identifier
+    - reassign # reassigning another package's variable
+    - asasalint # passing []any to a variadic ...any
+
+    # ── Modern-Go idiom (go 1.22+ / 1.24+). ──
+    - copyloopvar # the pre-1.22 `x := x` loop-var copy is now redundant
+    - intrange # `for i := range n` over the three-clause loop
+    - usetesting # t.TempDir()/t.Setenv()/t.Context() over manual equivalents
+
+    # ── Performance. ──
+    - perfsprint # fmt.Sprintf where a cheaper conversion exists
+
+    # ── Duplication + cognitive load. These hold the line the codebase has
+    #    already earned; see also scripts/check-file-size.sh. ──
+    - dupl
+    - gocognit
+    - nestif
+
+    # ── Test hygiene. ──
+    - thelper # test helpers must call t.Helper()
+    - tparallel # t.Parallel() misuse between parent and subtests
+
+  # ── Considered and REJECTED — do not enable without re-reviewing the hits. ──
+  # nilerr      21 hits, every one a deliberate degrade-gracefully path
+  #             (filepath.Walk error tolerance, "not a git repo" → message).
+  # misspell    Flags "Darcula" — the real JetBrains product name.
+  # exhaustive  50 hits, overwhelmingly TUI switches with sane defaults; the
+  #             testing policy explicitly exempts the TUI.
+  # noctx       Flags the daemon's own net.Listen calls, which have no ctx to
+  #             thread and must not take one.
+  # contextcheck / godot / funlen / wrapcheck
+  #             Noise at this codebase's conventions.
   settings:
     gocyclo:
       min-complexity: 15
+    gocognit:
+      # Cognitive complexity is the readability twin of gocyclo's control-flow
+      # count. 30 is where the tree already sits — only Supervisor.loop is at it.
+      min-complexity: 30
+    nestif:
+      min-complexity: 6
+    dupl:
+      # 120 tokens ≈ a 20-line clone. Lower finds declarative struct literals
+      # (theme palettes, config tables) that are data, not duplicated logic.
+      threshold: 120
     revive:
       rules:
         - name: exported
@@ -25,6 +81,52 @@ linters:
           - gosec
           - unparam
         path: _test\.go
+      # Tests legitimately repeat setup/assert shapes, run long, and nest; the
+      # structural linters only make sense against non-test code.
+      - linters:
+          - dupl
+          - gocognit
+          - nestif
+          - gocyclo
+        path: _test\.go
+      # Theme catalogues are declarative colour data: eight struct literals with
+      # one commented value per field. dupl sees clones; a reader sees a table.
+      # Field completeness is guarded by TestTheme_AllFieldsSet instead, and
+      # cross-package parity by TestThemeCatalogues_KeySetsMatch.
+      - linters:
+          - dupl
+        path: internal/(tui|theme)/theme\.go
+
+      # These tests deliberately do NOT use t.TempDir(). Under `make verify`
+      # GOTMPDIR points into the repo's own .testcache/, so a t.TempDir() path is
+      # INSIDE the plumb workspace and git repo — which is precisely what these
+      # tests must avoid: workspace Detect() would walk up and find plumb's own
+      # go.mod, pathIsDirty would find plumb's own .git, and a unix socket path
+      # would overrun sun_path (~104 bytes). Each site carries the reason inline.
+      - linters:
+          - usetesting
+        path: internal/(cli/(pool|stats)_test|tools/file_write_helpers_test|tui/model_refresh_test)\.go
+      # unsetEnv restores the previous value from a t.Cleanup, where t.Setenv is
+      # not usable (it panics once the test has finished).
+      - linters:
+          - usetesting
+        path: internal/paths/paths_test\.go
+
+      # The closures passed to runIsolated are test BODIES (testing.InternalTest.F
+      # run through testing.RunTests), not helpers — thelper reads them as helpers
+      # only because their parameter is correctly named t. Calling t.Helper() in a
+      # test body would be meaningless.
+      - linters:
+          - thelper
+        path: internal/lsp/conformance/conformance_test\.go
+
+      # Bubble Tea's Model convention IS a mixed receiver set: value receivers for
+      # the pure View/render half, pointers for the Update/mutate half. Model has
+      # ~200 value methods; "make them consistent" would mean fighting the
+      # framework, not fixing a bug.
+      - linters:
+          - recvcheck
+        path: internal/tui/
     paths:
       - third_party$
       - builtin$

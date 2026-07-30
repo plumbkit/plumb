@@ -6,6 +6,7 @@ package cli
 // closure pattern (config adapted into a plain tools type at the cli seam).
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -20,7 +21,7 @@ func (s *connSession) taskResolver(slot, target string) (tools.TaskCommand, erro
 	ws := s.workspace()
 	lang := s.view().acquiredLanguage
 	if ws == "" || lang == "" || lang == "none" {
-		return tools.TaskCommand{}, fmt.Errorf("run_task: no language detected for this workspace; configure [tasks.<lang>] and attach a language")
+		return tools.TaskCommand{}, errors.New("run_task: no language detected for this workspace; configure [tasks.<lang>] and attach a language")
 	}
 	steps, err := buildTaskSteps(s.view().tasks[lang], slot, target)
 	if err != nil {
@@ -93,7 +94,7 @@ func substituteTarget(argv []string, target string) ([]string, error) {
 		if a == "{target}" {
 			found = true
 			if target == "" {
-				return nil, fmt.Errorf("this command needs a target ({target} placeholder)")
+				return nil, errors.New("this command needs a target ({target} placeholder)")
 			}
 			out = append(out, target)
 			continue
@@ -101,7 +102,7 @@ func substituteTarget(argv []string, target string) ([]string, error) {
 		out = append(out, a)
 	}
 	if target != "" && !found {
-		return nil, fmt.Errorf("a target was given but the command has no {target} placeholder")
+		return nil, errors.New("a target was given but the command has no {target} placeholder")
 	}
 	return out, nil
 }

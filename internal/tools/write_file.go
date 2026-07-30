@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -145,7 +146,7 @@ func parseWriteFileArgs(raw json.RawMessage) (writeFileArgs, error) {
 		return a, fmt.Errorf("write_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("write_file: file_path is required")
+		return a, errors.New("write_file: file_path is required")
 	}
 	// content is schema-required; the MCP layer rejects missing keys.
 	// An explicit empty string is allowed (e.g. truncating a file).

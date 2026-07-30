@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -83,7 +84,7 @@ type runCommandArgs struct {
 
 func (a runCommandArgs) validate() error {
 	if strings.TrimSpace(a.Name) == "" {
-		return fmt.Errorf("run_command: name is required (the name of a [[command]] allow-list entry)")
+		return errors.New("run_command: name is required (the name of a [[command]] allow-list entry)")
 	}
 	if a.Target != "" && !targetPattern.MatchString(a.Target) {
 		return fmt.Errorf("run_command: target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.Target)
@@ -100,7 +101,7 @@ func (t *RunCommand) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", err
 	}
 	if t.resolve == nil {
-		return "", fmt.Errorf("run_command: command execution is not available for this session")
+		return "", errors.New("run_command: command execution is not available for this session")
 	}
 	rc, err := t.resolve(a.Name, a.Target)
 	if err != nil {

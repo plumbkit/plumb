@@ -151,7 +151,7 @@ func parseFindReplaceArgs(raw json.RawMessage) (findReplaceArgs, error) {
 		return a, fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Path == "" || a.Pattern == "" {
-		return a, fmt.Errorf("`path` and `pattern` are required")
+		return a, errors.New("`path` and `pattern` are required")
 	}
 	return a, nil
 }
@@ -259,7 +259,9 @@ func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp, want
 	if err != nil {
 		return 0, nil, nil
 	}
-	data := append(head, rest...)
+	// head was resliced to head[:n] above, so this append fills its spare capacity
+	// rather than leaving zero bytes in front — the pattern makezero warns about.
+	data := append(head, rest...) //nolint:makezero // head is resliced to its actual read length before the append
 	count, newData = applyFindReplace(data, a, re)
 	if count == 0 {
 		return 0, nil, nil

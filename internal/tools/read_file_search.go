@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -43,7 +44,7 @@ type matchLine struct {
 // the bounded, labelled result.
 func (t *ReadFile) searchWithinFile(ctx context.Context, fpath string, info os.FileInfo, mtime time.Time, concurrentNote string, a readFileArgs) (string, error) {
 	if a.Limit != nil {
-		return "", fmt.Errorf("read_file: pattern cannot be combined with limit — use max_matches to bound search output, and start_line/end_line to restrict the searched range")
+		return "", errors.New("read_file: pattern cannot be combined with limit — use max_matches to bound search output, and start_line/end_line to restrict the searched range")
 	}
 	if a.ContextLines < 0 || a.ContextLines > readSearchMaxContextLines {
 		return "", fmt.Errorf("read_file: context_lines must be between 0 and %d", readSearchMaxContextLines)

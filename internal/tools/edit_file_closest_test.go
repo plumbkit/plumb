@@ -111,8 +111,8 @@ func TestClosestCandidateStarts(t *testing.T) {
 
 func TestClosestCandidateStarts_Capped(t *testing.T) {
 	old := []string{"dup"}
-	var content []string
-	for i := 0; i < maxClosestCandidates*2; i++ {
+	content := make([]string, 0, maxClosestCandidates*2)
+	for range maxClosestCandidates * 2 {
 		content = append(content, "dup")
 	}
 	if got := len(closestCandidateStarts(old, content)); got > maxClosestCandidates {

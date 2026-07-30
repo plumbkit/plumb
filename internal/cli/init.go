@@ -62,7 +62,7 @@ func runInit(_ *cobra.Command, args []string) error {
 	plumbDir := filepath.Join(dir, ".plumb")
 	if _, err := os.Stat(plumbDir); err == nil {
 		tui.RebuildStyles()
-		ctxStr := fmt.Sprintf(".plumb already exists at:\n↳ %s", plumbDir)
+		ctxStr := ".plumb already exists at:\n↳ " + plumbDir
 		fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 		fmt.Println()
 		return nil
@@ -92,20 +92,20 @@ func runInit(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("writing context.md: %w", err)
 	}
 
-	ctxStr := fmt.Sprintf("Initialised .plumb at %s", plumbDir)
+	ctxStr := "Initialised .plumb at " + plumbDir
 	if disc != nil {
 		ctxStr += "\n\nDiscovered:"
 		if len(disc.Languages) > 0 {
-			ctxStr += fmt.Sprintf("\n  Languages:    %s", strings.Join(disc.Languages, ", "))
+			ctxStr += "\n  Languages:    " + strings.Join(disc.Languages, ", ")
 		}
 		if len(disc.BuildSystems) > 0 {
-			ctxStr += fmt.Sprintf("\n  Build:        %s", strings.Join(disc.BuildSystems, ", "))
+			ctxStr += "\n  Build:        " + strings.Join(disc.BuildSystems, ", ")
 		}
 		if len(disc.EntryPoints) > 0 {
 			ctxStr += fmt.Sprintf("\n  Entry points: %d", len(disc.EntryPoints))
 		}
 		if len(disc.TestDirs) > 0 {
-			ctxStr += fmt.Sprintf("\n  Test layout:  %s", strings.Join(disc.TestDirs, ", "))
+			ctxStr += "\n  Test layout:  " + strings.Join(disc.TestDirs, ", ")
 		}
 		ctxStr += "\n\nSeeded .plumb/context.md from discovery — review and edit it."
 	} else {

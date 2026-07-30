@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,7 +222,7 @@ func rateLimitValue(n int) string {
 	if n <= 0 {
 		return "off"
 	}
-	return fmt.Sprintf("%d", n)
+	return strconv.Itoa(n)
 }
 
 func pathStyleValue(s string) string {
@@ -236,7 +237,7 @@ func pathStyleValue(s string) string {
 // everything else comes from the supplied config snapshot. Each row carries a
 // one-line help string shown on the status bar's second line when focused.
 func buildSettingItems(cfg config.Config) []settingItem {
-	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
+	itoa := func(n int) string { return strconv.Itoa(n) }
 	return stampHelp(append(append([]settingItem{
 		{group: "Appearance", label: "Theme", kind: settingPopup, key: skTheme, value: ActiveThemeName},
 		{group: "Appearance", label: "Path style", kind: settingCycle, key: skPathStyle, value: pathStyleValue(cfg.UI.PathStyle), options: pathStyleOptions},
@@ -390,7 +391,7 @@ func lspSettingItems(cfg config.Config) []settingItem {
 // API-backed semantic re-rank for topology_search. The api key row is masked.
 func semanticsSettingItems(cfg config.Config) []settingItem {
 	sem := cfg.Semantics
-	itoa := func(n int) string { return fmt.Sprintf("%d", n) }
+	itoa := func(n int) string { return strconv.Itoa(n) }
 	out := []settingItem{
 		{group: "Semantics", label: "enabled", kind: settingToggle, key: skSemEnabled, value: onOff(sem.Enabled)},
 		{group: "Semantics", label: "provider", kind: settingCycle, key: skSemProvider, value: semProviderValue(sem.Provider), options: config.SemanticsProviders},

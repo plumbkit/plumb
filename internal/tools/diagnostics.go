@@ -239,7 +239,7 @@ func (t *Diagnostics) openAndWaitVerify(ctx context.Context, uri string) error {
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("cannot read %s: %v", path, err)
+		return fmt.Errorf("cannot read %s: %w", path, err)
 	}
 	if openErr := t.opener.DidOpen(ctx, protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -249,7 +249,7 @@ func (t *Diagnostics) openAndWaitVerify(ctx context.Context, uri string) error {
 			Text:       string(content),
 		},
 	}); openErr != nil {
-		return fmt.Errorf("DidOpen failed for %s: %v", path, openErr)
+		return fmt.Errorf("DidOpen failed for %s: %w", path, openErr)
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

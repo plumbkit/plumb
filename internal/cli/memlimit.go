@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -76,7 +77,7 @@ func formatLimit(n int64) string {
 	if n < 0 {
 		return "unlimited"
 	}
-	return fmt.Sprintf("%d", n)
+	return strconv.FormatInt(n, 10)
 }
 
 // parseByteSize parses a human byte size: a bare number is bytes, or a number
@@ -86,7 +87,7 @@ func formatLimit(n int64) string {
 func parseByteSize(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return 0, fmt.Errorf("empty size")
+		return 0, errors.New("empty size")
 	}
 	upper := strings.ToUpper(s)
 	mult := int64(1)

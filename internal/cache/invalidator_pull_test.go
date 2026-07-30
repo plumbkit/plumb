@@ -476,7 +476,7 @@ func TestRace_PushAndPullOnOneURI(t *testing.T) {
 	inv.RecordPullFull(uri, "rid-seed", []protocol.Diagnostic{diag(1, protocol.SevError, "E1", "gopls", "seed")})
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(5)
 		go func() {
 			defer wg.Done()
@@ -581,7 +581,7 @@ func TestRace_ClearPullStateConcurrentWithRecordAt(t *testing.T) {
 	uri := "file:///p/race.go"
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(4)
 		go func() {
 			defer wg.Done()
@@ -604,7 +604,7 @@ func TestRace_ClearPullStateConcurrent(t *testing.T) {
 	uri := "file:///p/race.go"
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(4)
 		go func() {
 			defer wg.Done()

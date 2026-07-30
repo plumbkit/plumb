@@ -631,7 +631,7 @@ func TestReadFile_Search_ContextLines(t *testing.T) {
 
 func TestReadFile_Search_MaxMatchesTruncationLabelled(t *testing.T) {
 	var sb strings.Builder
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		sb.WriteString("hit line\n")
 	}
 	path := writeTextFile(t, sb.String())

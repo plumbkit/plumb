@@ -32,13 +32,13 @@ func TestEpisodic_ConcurrentReadDuringWrite(t *testing.T) {
 
 	go func() { // writer — takes d.mu
 		defer wg.Done()
-		for i := 0; i < iters; i++ {
+		for i := range iters {
 			_ = db.recordEpisodic(Episodic{Workspace: "/ws", SessionID: "s1", GeneratedAt: now.Add(time.Duration(i) * time.Millisecond), Summary: "w"})
 		}
 	}()
 	go func() { // reader — LatestEpisodic, no mutex
 		defer wg.Done()
-		for i := 0; i < iters; i++ {
+		for range iters {
 			if _, _, err := db.LatestEpisodic("/ws"); err != nil {
 				t.Errorf("LatestEpisodic: %v", err)
 				return
@@ -47,7 +47,7 @@ func TestEpisodic_ConcurrentReadDuringWrite(t *testing.T) {
 	}()
 	go func() { // reader — ToolCallsForSession, no mutex
 		defer wg.Done()
-		for i := 0; i < iters; i++ {
+		for range iters {
 			if _, err := db.ToolCallsForSession("/ws", "s1", now.Add(-time.Hour)); err != nil {
 				t.Errorf("ToolCallsForSession: %v", err)
 				return

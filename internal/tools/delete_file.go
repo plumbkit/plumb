@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -68,7 +69,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", fmt.Errorf("delete_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return "", fmt.Errorf("delete_file: file_path is required")
+		return "", errors.New("delete_file: file_path is required")
 	}
 	path := t.deps.resolvePath(a.Path)
 	if err := t.deps.checkBoundary(path); err != nil {
@@ -91,7 +92,7 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		}
 		syncDirBestEffort("delete_file", filepath.Dir(path))
 		t.deps.notifyTopology(path)
-		return fmt.Sprintf("deleted directory %s", path), nil
+		return "deleted directory " + path, nil
 	}
 
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {

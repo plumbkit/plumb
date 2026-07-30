@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -84,7 +85,7 @@ func parseTypeHierarchyArgs(raw json.RawMessage) (typeHierarchyArgs, error) {
 		return a, fmt.Errorf("type_hierarchy: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return a, fmt.Errorf("type_hierarchy: uri must not be empty")
+		return a, errors.New("type_hierarchy: uri must not be empty")
 	}
 	if a.Direction == "" {
 		a.Direction = "both"

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -97,7 +98,7 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 		return "", err
 	}
 	if t.resolve == nil {
-		return "", fmt.Errorf("run_task: task commands are not available for this session")
+		return "", errors.New("run_task: task commands are not available for this session")
 	}
 	cmd, err := t.resolve(a.Slot, a.Target)
 	if err != nil {

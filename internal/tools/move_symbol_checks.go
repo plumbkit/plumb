@@ -242,7 +242,7 @@ func normalizeRemovalSeam(after []byte, seam int) []byte {
 	}
 	out := make([]byte, 0, len(prefix)+nlCount+len(suffix))
 	out = append(out, prefix...)
-	for k := 0; k < nlCount; k++ {
+	for range nlCount {
 		out = append(out, '\n')
 	}
 	out = append(out, suffix...)

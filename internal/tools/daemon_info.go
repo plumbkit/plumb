@@ -148,11 +148,11 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	)
 	if t.purpose != nil {
 		if p := t.purpose(); p != "" {
-			out += fmt.Sprintf("\npurpose:        %s", p)
+			out += "\npurpose:        " + p
 		}
 	}
 	if t.lspStatus != nil {
-		out += fmt.Sprintf("\nlsp:            %s", formatLSPStatusRow(t.lspStatus()))
+		out += "\nlsp:            " + formatLSPStatusRow(t.lspStatus())
 	}
 	if t.configStatus != nil {
 		cs := t.configStatus()

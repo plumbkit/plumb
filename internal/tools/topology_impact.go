@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -139,7 +140,7 @@ func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
 
 func (a *topologyImpactArgs) validate() error {
 	if a.Name == "" {
-		return fmt.Errorf("topology_impact: name is required")
+		return errors.New("topology_impact: name is required")
 	}
 	return nil
 }

@@ -80,8 +80,8 @@ func TestWriteCrossFileCallers_LabelAndCap(t *testing.T) {
 		t.Errorf("expected no output for no callers, got %q", none.String())
 	}
 
-	var callers []CallerSite
-	for i := 0; i < maxCrossFileCallerSites+5; i++ {
+	callers := make([]CallerSite, 0, maxCrossFileCallerSites+5)
+	for i := range maxCrossFileCallerSites + 5 {
 		callers = append(callers, CallerSite{Path: "x.go", Line: i + 1})
 	}
 	var sb strings.Builder

@@ -56,10 +56,10 @@ func TestIndexedLanguages(t *testing.T) {
 	defer db.Close()
 
 	// Insert files with different languages.
-	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('a.go', 'go', 0, '')`)     //nolint:errcheck
-	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('b.py', 'python', 0, '')`) //nolint:errcheck
-	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('c.go', 'go', 0, '')`)     //nolint:errcheck
-	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('err.go', '', 0, 'oops')`) //nolint:errcheck
+	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('a.go', 'go', 0, '')`)     //nolint:errcheck // fixture insert; a failure surfaces as the assertion below reading no rows
+	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('b.py', 'python', 0, '')`) //nolint:errcheck // fixture insert; a failure surfaces as the assertion below reading no rows
+	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('c.go', 'go', 0, '')`)     //nolint:errcheck // fixture insert; a failure surfaces as the assertion below reading no rows
+	db.Exec(`INSERT INTO topology_files(path, language, mtime_ns, error_msg) VALUES ('err.go', '', 0, 'oops')`) //nolint:errcheck // fixture insert; a failure surfaces as the assertion below reading no rows
 
 	langs := indexedLanguages(db)
 	langSet := map[string]bool{}

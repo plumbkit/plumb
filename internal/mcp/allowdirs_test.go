@@ -29,6 +29,7 @@ func TestAllowDirsFromParams(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			got := allowDirsFromParams(json.RawMessage(c.params))
 			if len(got) != len(c.want) {
 				t.Fatalf("got %v want %v", got, c.want)

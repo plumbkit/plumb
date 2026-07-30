@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -77,10 +78,10 @@ func (t *ExecuteShellCommand) Execute(ctx context.Context, raw json.RawMessage) 
 		return "", fmt.Errorf("execute_shell_command: invalid arguments: %w", err)
 	}
 	if strings.TrimSpace(a.Command) == "" {
-		return "", fmt.Errorf("execute_shell_command: command is required")
+		return "", errors.New("execute_shell_command: command is required")
 	}
 	if t.resolve == nil {
-		return "", fmt.Errorf("execute_shell_command: shell execution is not available for this session")
+		return "", errors.New("execute_shell_command: shell execution is not available for this session")
 	}
 	rs, err := t.resolve()
 	if err != nil {

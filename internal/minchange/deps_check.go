@@ -76,8 +76,8 @@ func moduleFindings(f *FileDiff, adds []depAdd, equiv map[string]string, opts Op
 			Confidence: Low,
 			File:       f.Path,
 			Line:       a.line,
-			Rationale:  fmt.Sprintf("%s was added as a dependency, but its common use is covered by the standard library", a.name),
-			Evidence:   fmt.Sprintf("added: %s", strings.TrimSpace(a.text)),
+			Rationale:  a.name + " was added as a dependency, but its common use is covered by the standard library",
+			Evidence:   "added: " + strings.TrimSpace(a.text),
 		}
 		if opts.IncludeSuggestions {
 			fnd.Alternative = fmt.Sprintf("consider %s (keep the dependency if you rely on features the stdlib lacks)", alt)

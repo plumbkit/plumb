@@ -118,7 +118,7 @@ func objectProps(obj json.RawMessage) ([]string, map[string]json.RawMessage, err
 		return nil, nil, err
 	}
 	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return nil, nil, fmt.Errorf("properties is not an object")
+		return nil, nil, errors.New("properties is not an object")
 	}
 	var order []string
 	for dec.More() {
@@ -128,7 +128,7 @@ func objectProps(obj json.RawMessage) ([]string, map[string]json.RawMessage, err
 		}
 		key, ok := keyTok.(string)
 		if !ok {
-			return nil, nil, fmt.Errorf("non-string property key")
+			return nil, nil, errors.New("non-string property key")
 		}
 		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
@@ -194,11 +194,11 @@ func decodeArgsObject(raw json.RawMessage) (map[string]any, error) {
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
-		return nil, fmt.Errorf("arguments must be a JSON object")
+		return nil, errors.New("arguments must be a JSON object")
 	}
 	obj, ok := v.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("arguments must be a JSON object")
+		return nil, errors.New("arguments must be a JSON object")
 	}
 	return obj, nil
 }

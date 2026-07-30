@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -201,15 +202,15 @@ func (a editFileArgs) anchorMode() bool {
 func (a editFileArgs) validateMode() error {
 	if a.anchorMode() {
 		if len(a.Edits) > 0 {
-			return fmt.Errorf("edit_file: provide either edits or start_anchor/end_anchor, not both")
+			return errors.New("edit_file: provide either edits or start_anchor/end_anchor, not both")
 		}
 		if a.StartAnchor == "" || a.EndAnchor == "" {
-			return fmt.Errorf("edit_file: anchor mode requires both start_anchor and end_anchor")
+			return errors.New("edit_file: anchor mode requires both start_anchor and end_anchor")
 		}
 		return nil
 	}
 	if len(a.Edits) == 0 {
-		return fmt.Errorf("edit_file: at least one edit is required (or pass start_anchor/end_anchor)")
+		return errors.New("edit_file: at least one edit is required (or pass start_anchor/end_anchor)")
 	}
 	return nil
 }
@@ -302,7 +303,7 @@ func parseEditFileArgs(raw json.RawMessage) (editFileArgs, error) {
 		}
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("edit_file: file_path is required")
+		return a, errors.New("edit_file: file_path is required")
 	}
 	if err := a.validateMode(); err != nil {
 		return a, err

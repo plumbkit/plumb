@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,7 +114,7 @@ func parseListDirectoryArgs(raw json.RawMessage) (listDirectoryArgs, error) {
 		return a, fmt.Errorf("list_directory: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("list_directory: path is required")
+		return a, errors.New("list_directory: path is required")
 	}
 	return a, nil
 }

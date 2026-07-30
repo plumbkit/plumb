@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -83,7 +84,7 @@ func (t *ExplainSymbol) Execute(ctx context.Context, args json.RawMessage) (stri
 		return "", fmt.Errorf("explain_symbol: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return "", fmt.Errorf("explain_symbol: uri must not be empty")
+		return "", errors.New("explain_symbol: uri must not be empty")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 

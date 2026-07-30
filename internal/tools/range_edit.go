@@ -18,7 +18,7 @@ func lineOffsets(content string) []int {
 	offsets := []int{0}
 	// Record the start of each line that follows a \n, but not for a \n that
 	// is the very last byte (trailing newline terminates, not starts, a line).
-	for i := 0; i < len(content)-1; i++ {
+	for i := range len(content) - 1 {
 		if content[i] == '\n' {
 			offsets = append(offsets, i+1)
 		}

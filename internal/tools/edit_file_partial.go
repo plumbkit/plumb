@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -55,27 +56,35 @@ func countApplied(results []partialEditResult) int {
 }
 
 func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error) string {
-	var sb strings.Builder
-	if writeErr != nil {
-		fmt.Fprintf(&sb, "partial apply: write failed after %d successful edit(s): %v\n\n", applied, writeErr)
-	} else if applied == 0 {
-		sb.WriteString("partial apply: all edits failed — file not modified\n\n")
-	} else {
-		fmt.Fprintf(&sb, "partial apply: applied %d of %d edit(s) to %s (%d bytes)\n",
-			applied, total, path, len(content))
-		if info, err := os.Stat(path); err == nil {
-			fmt.Fprintf(&sb, "mtime: %s\n", info.ModTime().Format(time.RFC3339Nano))
-		}
-		if s := summariseLineChanges(original, content); s != "" {
-			fmt.Fprintf(&sb, "%s\n", s)
-		}
-		if t.deps.showWriteDiff() {
-			if d := unifiedDiff(path, original, content); d != "" {
-				sb.WriteString(d)
-			}
-		}
-		sb.WriteString("\n")
+	switch {
+	case writeErr != nil:
+		return fmt.Sprintf("partial apply: write failed after %d successful edit(s): %v\n\n", applied, writeErr)
+	case applied == 0:
+		return "partial apply: all edits failed — file not modified\n\n"
+	default:
+		return t.formatPartialAppliedHeader(path, original, content, applied, total)
 	}
+}
+
+// formatPartialAppliedHeader renders the header for the case where at least one
+// edit landed and the write succeeded: the count, the fresh mtime, a line-change
+// summary, and (when enabled) the diff.
+func (t *EditFile) formatPartialAppliedHeader(path, original, content string, applied, total int) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "partial apply: applied %d of %d edit(s) to %s (%d bytes)\n",
+		applied, total, path, len(content))
+	if info, err := os.Stat(path); err == nil {
+		fmt.Fprintf(&sb, "mtime: %s\n", info.ModTime().Format(time.RFC3339Nano))
+	}
+	if s := summariseLineChanges(original, content); s != "" {
+		fmt.Fprintf(&sb, "%s\n", s)
+	}
+	if t.deps.showWriteDiff() {
+		if d := unifiedDiff(path, original, content); d != "" {
+			sb.WriteString(d)
+		}
+	}
+	sb.WriteString("\n")
 	return sb.String()
 }
 
@@ -126,7 +135,7 @@ func (t *EditFile) applyPartialEdit(content string, edit strEdit, i int, path st
 		return updated, partialEditResult{index: i, applied: true, lineRange: summariseLineChanges(content, updated)}
 	}
 	if edit.OldStr == "" {
-		return content, partialEditResult{index: i, err: fmt.Errorf("old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range")}
+		return content, partialEditResult{index: i, err: errors.New("old_string must not be empty — use write_file to replace the entire file or start_line to replace by line range")}
 	}
 	oldStr, newStr, count, stripped := resolveStrMatch(content, edit)
 	if count == 0 {

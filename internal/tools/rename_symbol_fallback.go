@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,7 +62,7 @@ func (t *RenameSymbol) structuralFallback(ctx context.Context, a renameSymbolArg
 	oldName := a.SymbolName
 	if oldName == "" {
 		if a.Line == nil || a.Character == nil {
-			return "", fmt.Errorf("rename_symbol: structural fallback requires symbol_name or both line and character")
+			return "", errors.New("rename_symbol: structural fallback requires symbol_name or both line and character")
 		}
 		var err error
 		oldName, err = identifierAtFile(path, *a.Line, *a.Character)

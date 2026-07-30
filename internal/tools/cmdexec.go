@@ -40,7 +40,7 @@ type ExecResult struct {
 // Concurrency: safe for concurrent use — each call owns its process and buffers.
 func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration) (ExecResult, error) {
 	if len(argv) == 0 {
-		return ExecResult{}, fmt.Errorf("run task: empty command")
+		return ExecResult{}, errors.New("run task: empty command")
 	}
 	if timeout <= 0 {
 		timeout = defaultTaskTimeout

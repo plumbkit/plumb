@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -55,7 +56,7 @@ func (t *relevantMemoriesTool) Execute(_ context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Path == "" {
-		return "", fmt.Errorf("`path` is required")
+		return "", errors.New("`path` is required")
 	}
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -197,10 +198,10 @@ func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {
 		a.Path = a.URI // uri is an alias for path
 	}
 	if a.Path == "" {
-		return a, fmt.Errorf("read_symbol: path (or uri) is required")
+		return a, errors.New("read_symbol: path (or uri) is required")
 	}
 	if a.Name == "" {
-		return a, fmt.Errorf("read_symbol: name is required")
+		return a, errors.New("read_symbol: name is required")
 	}
 	return a, nil
 }

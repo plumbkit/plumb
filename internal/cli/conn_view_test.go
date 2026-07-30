@@ -38,7 +38,7 @@ func TestSessionView_ConcurrentReadsDuringMutation(t *testing.T) {
 
 	// Readers: load the snapshot through the lock-free accessors and assert every
 	// observation is internally consistent (never a torn root).
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -65,7 +65,7 @@ func TestSessionView_ConcurrentReadsDuringMutation(t *testing.T) {
 		defer wg.Done()
 		s.attachWorkspace(context.Background(), "file://"+rootA)
 		s.applyProjectConfig(s.workspace())
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			target := rootA
 			if i%2 == 0 {
 				target = rootB

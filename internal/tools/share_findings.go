@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -117,7 +118,7 @@ func parseShareFindingsArgs(raw json.RawMessage) (shareFindingsArgs, error) {
 		return a, fmt.Errorf("share_findings: %w", err)
 	}
 	if strings.TrimSpace(a.Summary) == "" {
-		return a, fmt.Errorf("share_findings: summary is required")
+		return a, errors.New("share_findings: summary is required")
 	}
 	return a, nil
 }

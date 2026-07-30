@@ -79,7 +79,7 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 	for _, p := range plans {
 		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
 			if rbErr := rollbackWorkspaceEdit(plans, modified); rbErr != nil {
-				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %v", p.path, err, rbErr)
+				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
 		}
@@ -249,7 +249,7 @@ func applyTextEdits(data []byte, edits []protocol.TextEdit) ([]byte, error) {
 			return nil, fmt.Errorf("edit end position out of range: line %d char %d", e.Range.End.Line, e.Range.End.Character)
 		}
 		if startOff > endOff {
-			return nil, fmt.Errorf("edit start after end")
+			return nil, errors.New("edit start after end")
 		}
 		buf := make([]byte, 0, startOff+len(e.NewText)+(len(data)-endOff))
 		buf = append(buf, data[:startOff]...)

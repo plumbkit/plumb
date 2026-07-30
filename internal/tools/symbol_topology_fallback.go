@@ -117,7 +117,7 @@ func byteOffsetToPosition(content []byte, off int) (pos protocol.Position, ok bo
 		return protocol.Position{}, false
 	}
 	line, lineStart := 0, 0
-	for i := 0; i < off; i++ {
+	for i := range off {
 		if content[i] == '\n' {
 			line++
 			lineStart = i + 1

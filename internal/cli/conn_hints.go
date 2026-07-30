@@ -202,11 +202,11 @@ func labelGeneratedHints(names []string, mems []memory.Memory) []string {
 }
 
 // unseenHints filters names down to those not yet hinted this session, caps
-// the result at max, and records only the survivors as seen. Suppression runs
+// the result at limit, and records only the survivors as seen. Suppression runs
 // BEFORE the cap so an already-hinted memory frees its slot for the next
 // unseen match instead of permanently blocking everything ranked below it.
 // Clearing happens on re-pin (clearHintSeen), so a new project starts fresh.
-func (s *connSession) unseenHints(names []string, max int) []string {
+func (s *connSession) unseenHints(names []string, limit int) []string {
 	s.hintSeenMu.Lock()
 	defer s.hintSeenMu.Unlock()
 	if s.hintSeen == nil {
@@ -219,7 +219,7 @@ func (s *connSession) unseenHints(names []string, max int) []string {
 		}
 		s.hintSeen[n] = true
 		out = append(out, n)
-		if len(out) == max {
+		if len(out) == limit {
 			break
 		}
 	}

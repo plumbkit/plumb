@@ -53,7 +53,7 @@ func collectAddedSymbols(diff *Diff) []addedSymbol {
 // body is captured for thin-wrapper analysis.
 func symbolsInHunk(path string, h *Hunk) []addedSymbol {
 	var out []addedSymbol
-	for i := 0; i < len(h.Lines); i++ {
+	for i := range len(h.Lines) {
 		ln := h.Lines[i]
 		if ln.Kind != Added {
 			continue

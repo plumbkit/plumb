@@ -193,7 +193,17 @@ func (c *Conn) RequestHandler() RequestHandler {
 type MethodNotFoundError struct{ Method string }
 
 func (e *MethodNotFoundError) Error() string {
-	return fmt.Sprintf("method not found: %s", e.Method)
+	return "method not found: " + e.Method
+}
+
+// handlerErrCode maps an error returned by a server-request handler onto its
+// JSON-RPC error code.
+func handlerErrCode(err error) int {
+	var mnf *MethodNotFoundError
+	if errors.As(err, &mnf) {
+		return errCodeMethodNotFound
+	}
+	return errCodeInternal
 }
 
 // IsMethodNotFound reports whether err is, or wraps, a JSON-RPC
@@ -264,7 +274,7 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 		c.cancelRequest(rawID)
 		return ctx.Err()
 	case <-c.done:
-		return fmt.Errorf("jsonrpc: connection closed")
+		return errors.New("jsonrpc: connection closed")
 	case resp := <-ch:
 		if resp.Error != nil {
 			return resp.Error
@@ -342,7 +352,7 @@ var writeStallTimeout = 15 * time.Second
 func (c *Conn) sendCtx(ctx context.Context, msg wireMessage, trackNotify bool) error {
 	select {
 	case <-c.done:
-		return fmt.Errorf("jsonrpc: connection closed")
+		return errors.New("jsonrpc: connection closed")
 	default:
 	}
 	errc := make(chan error, 1)
@@ -361,7 +371,7 @@ func (c *Conn) sendCtx(ctx context.Context, msg wireMessage, trackNotify bool) e
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.done:
-		return fmt.Errorf("jsonrpc: connection closed")
+		return errors.New("jsonrpc: connection closed")
 	case <-timer.C:
 		slog.Warn("jsonrpc: write stalled — closing connection", "method", msg.Method, "timeout", writeStallTimeout)
 		_ = c.Close()
@@ -517,23 +527,17 @@ func (c *Conn) handleServerRequest(req wireMessage) {
 		JSONRPC: "2.0",
 		ID:      req.ID,
 	}
-	if err != nil {
-		code := errCodeInternal
-		var mnf *MethodNotFoundError
-		if errors.As(err, &mnf) {
-			code = errCodeMethodNotFound
-		}
-		resp.Error = &wireError{Code: code, Message: err.Error()}
-	} else {
-		if result == nil {
-			resp.Result = json.RawMessage("null")
+	switch {
+	case err != nil:
+		resp.Error = &wireError{Code: handlerErrCode(err), Message: err.Error()}
+	case result == nil:
+		resp.Result = json.RawMessage("null")
+	default:
+		encoded, mErr := json.Marshal(result)
+		if mErr != nil {
+			resp.Error = &wireError{Code: errCodeInternal, Message: "encoding result: " + mErr.Error()}
 		} else {
-			encoded, mErr := json.Marshal(result)
-			if mErr != nil {
-				resp.Error = &wireError{Code: errCodeInternal, Message: "encoding result: " + mErr.Error()}
-			} else {
-				resp.Result = encoded
-			}
+			resp.Result = encoded
 		}
 	}
 	if err := c.sendCtx(context.Background(), resp, false); err != nil {
@@ -564,7 +568,7 @@ func readMessage(r *bufio.Reader) (wireMessage, error) {
 		}
 	}
 	if length < 0 {
-		return wireMessage{}, fmt.Errorf("missing Content-Length header")
+		return wireMessage{}, errors.New("missing Content-Length header")
 	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {

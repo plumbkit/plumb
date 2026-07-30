@@ -73,7 +73,7 @@ func TestIndexer_EndToEnd(t *testing.T) {
 	var count int
 	for time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
-		db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck
+		db.QueryRow(`SELECT COUNT(*) FROM topology_nodes`).Scan(&count) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 		if count > 0 && idx.State() == "idle" {
 			break
 		}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -156,7 +157,7 @@ func (r *routingProxy) WorkspaceDiagnostic(ctx context.Context, uri string, para
 	}
 	wc, ok := c.(workspacePullCapableClient)
 	if !ok {
-		return nil, fmt.Errorf("workspace pull diagnostics unsupported")
+		return nil, errors.New("workspace pull diagnostics unsupported")
 	}
 	rep, err := wc.WorkspaceDiagnostic(ctx, params)
 	if jsonrpc.IsMethodNotFound(err) {

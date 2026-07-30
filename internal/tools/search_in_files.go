@@ -211,7 +211,7 @@ func parseSearchInFilesArgs(raw json.RawMessage) (searchInFilesArgs, error) {
 		return a, fmt.Errorf("search_in_files: invalid arguments: %w", err)
 	}
 	if a.Pattern == "" {
-		return a, fmt.Errorf("search_in_files: pattern must not be empty")
+		return a, errors.New("search_in_files: pattern must not be empty")
 	}
 	if strings.ContainsAny(a.Glob, "{}") {
 		return a, fmt.Errorf(

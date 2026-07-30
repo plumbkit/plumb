@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -73,7 +74,7 @@ func (t *ReadMultipleFiles) Execute(ctx context.Context, raw json.RawMessage) (s
 		return "", fmt.Errorf("read_multiple_files: invalid arguments: %w", err)
 	}
 	if len(a.Paths) == 0 {
-		return "", fmt.Errorf("read_multiple_files: paths must not be empty")
+		return "", errors.New("read_multiple_files: paths must not be empty")
 	}
 	if len(a.Paths) > 20 {
 		return "", fmt.Errorf("read_multiple_files: at most 20 paths per call, got %d", len(a.Paths))

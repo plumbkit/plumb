@@ -264,7 +264,7 @@ func copyGoFilesTo(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(dstPath), 0o700); err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path) //nolint:gosec
+		data, err := os.ReadFile(path) //nolint:gosec // G304: path comes from the benchmark's own filepath.WalkDir over a fixture tree
 		if err != nil {
 			return err
 		}

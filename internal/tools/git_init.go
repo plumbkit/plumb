@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -73,7 +74,7 @@ type gitInitArgs struct {
 
 func (a gitInitArgs) validate() error {
 	if strings.TrimSpace(a.Path) == "" {
-		return fmt.Errorf("git_init: path is required")
+		return errors.New("git_init: path is required")
 	}
 	return nil
 }
@@ -114,12 +115,12 @@ func (t *GitInit) run(ctx context.Context, a gitInitArgs) (string, error) {
 		return "", fmt.Errorf("git_init: %s", strings.TrimSpace(string(out)))
 	}
 	if !a.InitPlumb {
-		return fmt.Sprintf("initialised git repository at %s", a.Path), nil
+		return "initialised git repository at " + a.Path, nil
 	}
 	if err := createPlumbMarker(a.Path); err != nil {
 		return "", fmt.Errorf("git_init: %w", err)
 	}
-	return fmt.Sprintf("initialised git repository and .plumb/ workspace at %s", a.Path), nil
+	return "initialised git repository and .plumb/ workspace at " + a.Path, nil
 }
 
 func createPlumbMarker(root string) error {

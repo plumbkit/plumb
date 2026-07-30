@@ -157,7 +157,7 @@ func TestRenameSymbol_MultiFileDiffTruncation(t *testing.T) {
 	dir := t.TempDir()
 	changes := map[string][]protocol.TextEdit{}
 	const nFiles = 25 // maxRenameDiffFiles (20) + 5 beyond the cap
-	for i := 0; i < nFiles; i++ {
+	for i := range nFiles {
 		p := filepath.Join(dir, fmt.Sprintf("f%02d.go", i))
 		if err := os.WriteFile(p, []byte("package p\n\nfunc Foo() {}\n"), 0o644); err != nil {
 			t.Fatal(err)

@@ -263,7 +263,7 @@ func (st *tsState) processImport(trimmed, relPath string) {
 
 func countChar(s string, ch byte) int {
 	count := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == ch {
 			count++
 		}

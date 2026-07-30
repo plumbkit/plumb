@@ -101,7 +101,7 @@ func TestPoolXcodeSingleflightUsesSafeArgvAndOneRestart(t *testing.T) {
 	<-runner.started
 
 	var callers sync.WaitGroup
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		callers.Add(1)
 		go func() {
 			defer callers.Done()

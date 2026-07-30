@@ -46,7 +46,7 @@ func metaScenario() lsptest.Scenario {
 // subtest always fails its parent). A failing inner run prints its
 // "--- FAIL: …" lines into this package's output; that is expected and does
 // not affect the outer verdict.
-func runIsolated(name string, fn func(*testing.T)) (ok bool) {
+func runIsolated(name string, fn func(t *testing.T)) (ok bool) {
 	return testing.RunTests(
 		func(_, _ string) (bool, error) { return true, nil },
 		[]testing.InternalTest{{Name: name, F: fn}},
@@ -62,15 +62,15 @@ func TestRunConformance_FailsOnUnexpectedNotification(t *testing.T) {
 	// Positive control first: the identical scenario through the plain
 	// adapter passes, so a failure below is attributable ONLY to the rogue
 	// notification.
-	clean := runIsolated("control-clean-adapter", func(inner *testing.T) {
-		conformance.RunConformance(inner, func(c jsonrpc.Caller) lsp.Client { return gopls.New(c) }, gopls.DefaultInitParams, metaScenario())
+	clean := runIsolated("control-clean-adapter", func(t *testing.T) {
+		conformance.RunConformance(t, func(c jsonrpc.Caller) lsp.Client { return gopls.New(c) }, gopls.DefaultInitParams, metaScenario())
 	})
 	if !clean {
 		t.Fatal("control run with a well-behaved adapter failed — cannot attribute the doomed run's failure to the rogue notification")
 	}
 
-	doomed := runIsolated("doomed-rogue-notification", func(inner *testing.T) {
-		conformance.RunConformance(inner, func(c jsonrpc.Caller) lsp.Client {
+	doomed := runIsolated("doomed-rogue-notification", func(t *testing.T) {
+		conformance.RunConformance(t, func(c jsonrpc.Caller) lsp.Client {
 			return &rogueClient{Adapter: gopls.New(c), caller: c}
 		}, gopls.DefaultInitParams, metaScenario())
 	})

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/plumbkit/plumb/internal/session"
@@ -60,11 +61,11 @@ func (t *renameSession) Execute(_ context.Context, args json.RawMessage) (string
 		return "", err
 	}
 	if t.rename == nil {
-		return "", fmt.Errorf("session rename is not available")
+		return "", errors.New("session rename is not available")
 	}
 	name, err := t.rename(a.Name)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("session renamed to %s", name), nil
+	return "session renamed to " + name, nil
 }

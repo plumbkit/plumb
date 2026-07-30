@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -83,13 +84,13 @@ func (t *FindSymbol) Execute(ctx context.Context, args json.RawMessage) (string,
 		return "", fmt.Errorf("find_symbol: invalid arguments: %w", err)
 	}
 	if a.Query == "" {
-		return "", fmt.Errorf("find_symbol: query must not be empty")
+		return "", errors.New("find_symbol: query must not be empty")
 	}
 	if a.URI == "" {
 		// uri is intentionally NOT a schema-required parameter so this friendly
 		// redirect fires instead of a bare "missing required parameter" — agents
 		// wanting a workspace-wide search reach here having omitted uri.
-		return "", fmt.Errorf("find_symbol searches a single file and needs a uri. " +
+		return "", errors.New("find_symbol searches a single file and needs a uri. " +
 			"For a workspace-wide search by name, use workspace_symbols (no uri); " +
 			"to search one file, pass uri (absolute, file:// URI, or workspace-relative path)")
 	}

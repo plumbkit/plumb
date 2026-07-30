@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -178,7 +179,7 @@ func (p *workspacePool) restartSwift(root string) error {
 	p.mu.Lock()
 	if e.state != poolHibernated {
 		p.mu.Unlock()
-		return fmt.Errorf("restarting SourceKit-LSP: entry did not hibernate")
+		return errors.New("restarting SourceKit-LSP: entry did not hibernate")
 	}
 	if e.cache != nil {
 		e.cache.Clear()

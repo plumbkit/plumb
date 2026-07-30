@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -82,7 +83,7 @@ func (t *SafeDeleteSymbol) Execute(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.URI == "" || a.NamePath == "" {
-		return "", fmt.Errorf("`uri` and `name_path` are required")
+		return "", errors.New("`uri` and `name_path` are required")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true

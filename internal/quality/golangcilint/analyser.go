@@ -143,10 +143,10 @@ func logUnavailableOnce(ctx context.Context) {
 
 // stderrTail returns the trailing portion of stderr, bounded, for diagnostics.
 func stderrTail(s string) string {
-	const max = 512
+	const maxLen = 512
 	s = strings.TrimSpace(s)
-	if len(s) > max {
-		s = "…" + s[len(s)-max:]
+	if len(s) > maxLen {
+		s = "…" + s[len(s)-maxLen:]
 	}
 	return s
 }

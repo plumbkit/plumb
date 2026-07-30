@@ -29,7 +29,7 @@ func TestApplyTextEditsToFile_ConcurrentNoLostUpdate(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	errs := make([]error, k)
-	for i := 0; i < k; i++ {
+	for i := range k {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

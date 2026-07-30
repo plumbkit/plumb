@@ -179,7 +179,7 @@ func (w *listFilesWalker) visitFile(name, rel string) error {
 
 func formatListFilesResult(paths []string, root string, a listFilesArgs) string {
 	if len(paths) == 0 {
-		msg := fmt.Sprintf("No files found under %s", root)
+		msg := "No files found under " + root
 		if a.Pattern != "" {
 			msg += fmt.Sprintf(" matching %q", a.Pattern)
 		}

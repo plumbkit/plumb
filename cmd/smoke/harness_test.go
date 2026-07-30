@@ -195,14 +195,14 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 	t.Cleanup(func() {
 		cancel()
 		stdinW.Close()
-		cmd.Wait() //nolint:errcheck
+		cmd.Wait() //nolint:errcheck // best-effort teardown of a child process the test is finished with
 	})
 
 	// Stop the daemon we spawned at cleanup so it doesn't linger.
 	t.Cleanup(func() {
 		stopCmd := exec.Command(plumbBin, "stop", "--force")
 		stopCmd.Env = env
-		stopCmd.Run() //nolint:errcheck
+		stopCmd.Run() //nolint:errcheck // best-effort teardown of a child process the test is finished with
 	})
 
 	return c
@@ -299,7 +299,7 @@ func (c *mcpClient) handleServerRequest(ctx context.Context, req mcpMsg) {
 		"result":  result,
 	}
 	c.encMu.Lock()
-	c.enc.Encode(resp) //nolint:errcheck
+	c.enc.Encode(resp) //nolint:errcheck // best-effort write to a test pipe the peer may already have closed
 	c.encMu.Unlock()
 }
 

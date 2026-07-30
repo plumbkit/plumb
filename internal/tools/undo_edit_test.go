@@ -165,7 +165,7 @@ func TestUndoStore_RecordTakePeekReset(t *testing.T) {
 
 func TestUndoStore_EvictsOldest(t *testing.T) {
 	u := NewUndoStore()
-	for i := 0; i < maxUndoEntries+5; i++ {
+	for i := range maxUndoEntries + 5 {
 		u.Record("/p"+strconv.Itoa(i), undoSnapshot{})
 	}
 	u.mu.Lock()

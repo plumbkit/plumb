@@ -7,6 +7,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -167,8 +168,8 @@ func (st *ignoreStack) load(dir string) ignoreStack {
 }
 
 // isIgnored reports whether absPath should be excluded from traversal.
-func (st ignoreStack) isIgnored(absPath string, isDir bool) bool {
-	for _, s := range st {
+func (st *ignoreStack) isIgnored(absPath string, isDir bool) bool {
+	for _, s := range *st {
 		rel, err := filepath.Rel(s.dir, absPath)
 		if err != nil {
 			continue
@@ -295,7 +296,7 @@ func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts wa
 			if opts.maxDepth > 0 && relDepth >= opts.maxDepth {
 				continue
 			}
-			if err := fn(absPath, d, relDepth); err == fs.SkipDir {
+			if err := fn(absPath, d, relDepth); errors.Is(err, fs.SkipDir) {
 				continue
 			}
 			if err := walkDir(ctx, absPath, depth+1, st, opts, fn); err != nil {

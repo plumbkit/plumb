@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -27,7 +28,7 @@ type SearchOpts struct {
 // a recency tiebreak. Returns an empty slice (not an error) when nothing matches.
 func (ix *Index) Search(ctx context.Context, query string, opts SearchOpts) ([]Hit, error) {
 	if strings.TrimSpace(query) == "" {
-		return nil, fmt.Errorf("memory: search query is empty")
+		return nil, errors.New("memory: search query is empty")
 	}
 	if opts.Limit <= 0 {
 		opts.Limit = 20

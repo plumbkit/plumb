@@ -8,6 +8,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -113,7 +114,7 @@ func TestRoutingProxy_Diagnostic_MethodNotFound_Downgrades(t *testing.T) {
 func TestRoutingProxy_Diagnostic_OtherErrorKeepsMode(t *testing.T) {
 	rootA, _ := setupTwoProjects(t)
 	pool := newTestPool()
-	client := &pullStubClient{supports: true, err: fmt.Errorf("gopls diagnostic: connection reset")}
+	client := &pullStubClient{supports: true, err: errors.New("gopls diagnostic: connection reset")}
 	installEntry(pool, rootA, client)
 	setEntryDiagMode(pool, rootA, diagModePull)
 
@@ -281,19 +282,9 @@ func TestPool_WrapServerRequest_NilInner(t *testing.T) {
 	}
 	_, err := handler(context.Background(), "some/other", nil)
 	var mnf *jsonrpc.MethodNotFoundError
-	if err == nil || !asMethodNotFound(err, &mnf) {
+	if err == nil || !errors.As(err, &mnf) {
 		t.Errorf("unknown method with nil inner must answer MethodNotFoundError, got %v", err)
 	}
-}
-
-// asMethodNotFound is a tiny errors.As stand-in (mirrors jsonrpc's internal
-// helper) so the test does not need the errors package for one call.
-func asMethodNotFound(err error, target **jsonrpc.MethodNotFoundError) bool {
-	mnf, ok := err.(*jsonrpc.MethodNotFoundError)
-	if ok {
-		*target = mnf
-	}
-	return ok
 }
 
 // ─── routingInvProxy pull-state routing ──────────────────────────────────────

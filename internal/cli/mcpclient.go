@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -119,7 +120,7 @@ func (c *mcpCliClient) readResponse(wantID int) (json.RawMessage, error) {
 		}
 		if err := c.dec.Decode(&msg); err != nil {
 			if err == io.EOF {
-				return nil, fmt.Errorf("daemon closed connection")
+				return nil, errors.New("daemon closed connection")
 			}
 			return nil, fmt.Errorf("read response: %w", err)
 		}

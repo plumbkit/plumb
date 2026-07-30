@@ -60,11 +60,11 @@ func TestWriteManifest_AtomicUnderConcurrentScan(t *testing.T) {
 	}()
 
 	// Readers: concurrent Scans that must never roll back the live transaction.
-	for r := 0; r < 4; r++ {
+	for range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 300; i++ {
+			for range 300 {
 				Scan(ws, cutoff)
 			}
 		}()

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,11 +58,11 @@ func ProjectValuePresent(workspace string, path []string) (bool, error) {
 // touched key is written — the file stays sparse.
 func SetProjectValue(workspace string, path []string, value any) error {
 	if len(path) == 0 {
-		return fmt.Errorf("project config: empty key path")
+		return errors.New("project config: empty key path")
 	}
 	cfgPath := ProjectConfigPath(workspace)
 	if cfgPath == "" {
-		return fmt.Errorf("project config: no workspace path")
+		return errors.New("project config: no workspace path")
 	}
 	m, err := LoadProjectRaw(workspace)
 	if err != nil {
@@ -83,7 +84,7 @@ func UnsetProjectValue(workspace string, path []string) error {
 	}
 	cfgPath := ProjectConfigPath(workspace)
 	if cfgPath == "" {
-		return fmt.Errorf("project config: no workspace path")
+		return errors.New("project config: no workspace path")
 	}
 	m, err := LoadProjectRaw(workspace)
 	if err != nil {

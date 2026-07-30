@@ -20,7 +20,7 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 	switch a.Subcommand {
 	case "commit":
 		if strings.TrimSpace(a.Message) == "" {
-			return nil, fmt.Errorf("git commit: message is required")
+			return nil, errors.New("git commit: message is required")
 		}
 		argv := []string{"commit", "-m", a.Message}
 		// Path-limited commit: `git commit -m <msg> -- <files>` commits ONLY the
@@ -33,7 +33,7 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 		return argv, nil
 	case "add":
 		if len(a.Files) == 0 {
-			return nil, fmt.Errorf("git add: at least one path is required (use the files parameter)")
+			return nil, errors.New("git add: at least one path is required (use the files parameter)")
 		}
 		return append([]string{"add", "-A", "--"}, a.Files...), nil
 	default:
@@ -340,7 +340,7 @@ func truncateLines(s string, maxLines int, suffix string) string {
 // must resolve and boundary-check the repo before reaching here.
 func findGitRoot(path string) (string, error) {
 	if path == "" {
-		return "", fmt.Errorf("no repository path")
+		return "", errors.New("no repository path")
 	}
 	start := path
 

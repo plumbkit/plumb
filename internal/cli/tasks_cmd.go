@@ -22,7 +22,6 @@ import (
 var taskCmds = func() []*cobra.Command {
 	out := make([]*cobra.Command, 0, len(config.TaskSlots))
 	for _, slot := range config.TaskSlots {
-		slot := slot
 		out = append(out, &cobra.Command{
 			Use:   slot + " [target]",
 			Short: "Run the configured " + slot + " command for this workspace's language",

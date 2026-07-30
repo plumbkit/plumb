@@ -136,7 +136,7 @@ func TestRunQueueCycle_ReclaimedReturn(t *testing.T) {
 		var n int
 		idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 		idx.reclaimFn = func() { n++ }
-		for i := 0; i < reclaimAfterOps; i++ {
+		for i := range reclaimAfterOps {
 			idx.queue <- indexOp{kind: opUpsert, path: fmt.Sprintf("f%d.go", i)}
 		}
 		if got := idx.runQueueCycle(indexOp{kind: opUpsert, path: "seed.go"}); !got {

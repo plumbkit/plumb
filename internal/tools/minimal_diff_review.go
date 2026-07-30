@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -204,7 +205,8 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			msg := strings.TrimSpace(string(exitErr.Stderr))
 			if msg == "" {
 				msg = err.Error()

@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -26,7 +26,7 @@ func TestHandleCtrlConn_EnableLSP_Success(t *testing.T) {
 
 func TestHandleCtrlConn_EnableLSP_Error(t *testing.T) {
 	ln := testCtrlListener(t)
-	fn := func(string) (string, error) { return "", fmt.Errorf("unknown language \"cobol\"") }
+	fn := func(string) (string, error) { return "", errors.New("unknown language \"cobol\"") }
 	go serveControlSocket(ln, "info", "text", ctrlHandlers{enableLSP: fn})
 
 	resp := sendCtrl(t, ln, "enable-lsp cobol")

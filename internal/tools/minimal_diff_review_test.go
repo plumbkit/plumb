@@ -200,7 +200,7 @@ func TestMinimalDiffReview_BoundedOutputOnLargeDiff(t *testing.T) {
 	// Many untracked thin wrappers → many findings, capped by max_findings.
 	var b strings.Builder
 	b.WriteString("package pkg\n")
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		fmt.Fprintf(&b, "\nfunc Wrap%d(a int) int {\n\treturn Target%d(a)\n}\n", i, i)
 	}
 	writeFileT(t, dir, "many.go", b.String())

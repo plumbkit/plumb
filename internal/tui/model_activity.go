@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -382,7 +383,7 @@ func formatActivityCount(n int64) string {
 		}
 		return fmt.Sprintf("%.1fk", val)
 	default:
-		return fmt.Sprintf("%d", n)
+		return strconv.FormatInt(n, 10)
 	}
 }
 

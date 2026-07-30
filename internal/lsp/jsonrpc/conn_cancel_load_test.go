@@ -22,7 +22,7 @@ import (
 func TestConn_ContextCancel_AlwaysSendsCancelRequest_UnderLoad(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1)) // serialise to widen the cancel-vs-send window
 
-	for i := 0; i < 3000; i++ {
+	for i := range 3000 {
 		pr, pw := io.Pipe()
 		cr, cw := io.Pipe()
 		conn := NewConn(pr, cw)

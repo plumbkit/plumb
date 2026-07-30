@@ -43,8 +43,12 @@ func (m Model) leftLines() []string {
 		// One badge per active language server (a Go web app also serving HTML
 		// shows two chips: GO HTML), each with its own background, separated by a
 		// plain space.
-		for _, b := range sessionLangs(s) {
-			firstLine += " " + sessionLangBadge(b, selected, lf)
+		if langs := sessionLangs(s); len(langs) > 0 {
+			badges := make([]string, 0, len(langs))
+			for _, b := range langs {
+				badges = append(badges, sessionLangBadge(b, selected, lf))
+			}
+			firstLine += " " + strings.Join(badges, " ")
 		}
 		if s.Health == "blocked" {
 			firstLine += " !"

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -133,7 +134,7 @@ func parseTopologyExploreArgs(raw json.RawMessage) (topologyExploreArgs, error) 
 
 func (a *topologyExploreArgs) validate() error {
 	if a.Name == "" {
-		return fmt.Errorf("topology_explore: name is required")
+		return errors.New("topology_explore: name is required")
 	}
 	return nil
 }

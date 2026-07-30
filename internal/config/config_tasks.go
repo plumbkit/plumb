@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -103,7 +104,7 @@ func ParseTaskCommand(s string) ([]string, error) {
 	}
 	argv := strings.Fields(s)
 	if len(argv) == 0 {
-		return nil, fmt.Errorf("task command is empty after trimming")
+		return nil, errors.New("task command is empty after trimming")
 	}
 	return argv, nil
 }

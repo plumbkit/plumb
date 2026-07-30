@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -48,7 +49,7 @@ func newHeartbeatNonce() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		return ""
 	}
-	return fmt.Sprintf("%x", b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // heartbeatID returns the JSON-RPC id for heartbeat probe seq, qualified

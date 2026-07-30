@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -26,7 +26,7 @@ func newRenameSessionModal(currentName string) renameSessionModal {
 
 func (r *renameSessionModal) validateInput() error {
 	if strings.TrimSpace(r.input) == "" {
-		return fmt.Errorf("name is required")
+		return errors.New("name is required")
 	}
 	_, err := session.NormaliseName(r.input)
 	return err

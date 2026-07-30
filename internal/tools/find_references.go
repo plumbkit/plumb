@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,7 +117,7 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 		return "", fmt.Errorf("find_references: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return "", fmt.Errorf("find_references: uri is required")
+		return "", errors.New("find_references: uri is required")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 
@@ -133,7 +134,7 @@ func (t *FindReferences) Execute(ctx context.Context, raw json.RawMessage) (stri
 	}
 
 	if a.Line == nil || a.Character == nil {
-		return "", fmt.Errorf("find_references: either symbol_name or both line and character are required")
+		return "", errors.New("find_references: either symbol_name or both line and character are required")
 	}
 	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character, includeDecl)
 }

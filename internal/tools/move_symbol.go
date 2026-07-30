@@ -138,7 +138,7 @@ func parseMoveSymbolArgs(raw json.RawMessage) (moveSymbolArgs, error) {
 		return a, fmt.Errorf("move_symbol: invalid arguments: %w", err)
 	}
 	if a.SourceURI == "" || a.NamePath == "" || a.DestinationURI == "" {
-		return a, fmt.Errorf("move_symbol: source_uri, name_path, and destination_uri are required")
+		return a, errors.New("move_symbol: source_uri, name_path, and destination_uri are required")
 	}
 	return a, nil
 }
@@ -207,7 +207,7 @@ func (t *MoveSymbol) preflight(ctx context.Context, deps *WriteDeps, srcPath, ds
 		}
 	}
 	if filepath.Clean(srcPath) == filepath.Clean(dstPath) {
-		return fmt.Errorf("move_symbol: source_uri and destination_uri are the same file; use replace_symbol_body or insert_before/after_symbol to edit within one file")
+		return errors.New("move_symbol: source_uri and destination_uri are the same file; use replace_symbol_body or insert_before/after_symbol to edit within one file")
 	}
 	if filepath.Dir(srcPath) != filepath.Dir(dstPath) {
 		return fmt.Errorf("move_symbol: cross-directory move not supported in v1 (source dir %s, destination dir %s). Moving a declaration to a different directory changes its package/import path and would need reference rewriting across the workspace, which v1 does not do — move within the same directory/package, or relocate by hand and fix imports",
@@ -431,7 +431,7 @@ func extractRange(data []byte, rng protocol.Range) (string, error) {
 		return "", fmt.Errorf("symbol end position out of range: line %d char %d", rng.End.Line, rng.End.Character)
 	}
 	if startOff > endOff {
-		return "", fmt.Errorf("symbol start after end")
+		return "", errors.New("symbol start after end")
 	}
 	return string(data[startOff:endOff]), nil
 }
@@ -512,7 +512,7 @@ func applyMovePlans(plans []movePlan, onApplied func()) ([]string, error) {
 	for _, p := range plans {
 		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
 			if rbErr := rollbackMove(written); rbErr != nil {
-				return nil, fmt.Errorf("writing %s: %w; rollback failed: %v", p.path, err, rbErr)
+				return nil, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return nil, fmt.Errorf("writing %s: %w", p.path, err)
 		}

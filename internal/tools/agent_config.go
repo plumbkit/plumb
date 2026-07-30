@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -136,16 +137,16 @@ func (t *AgentConfig) describe() string {
 
 func (t *AgentConfig) set(ctx context.Context, a agentConfigArgs) (string, error) {
 	if a.Scope != "" && a.Scope != "project" {
-		return "", fmt.Errorf("agent_config: only scope=\"project\" is supported (global writes are out of scope)")
+		return "", errors.New("agent_config: only scope=\"project\" is supported (global writes are out of scope)")
 	}
 	if len(a.Set) == 0 {
-		return "", fmt.Errorf("agent_config: set requires a non-empty \"set\" map of key/value pairs")
+		return "", errors.New("agent_config: set requires a non-empty \"set\" map of key/value pairs")
 	}
 	if !t.enabled() {
-		return "", fmt.Errorf("agent_config: writes are disabled; ask the user to set [agent_config_writes] = true (they alone can enable it)")
+		return "", errors.New("agent_config: writes are disabled; ask the user to set [agent_config_writes] = true (they alone can enable it)")
 	}
 	if t.deps.Apply == nil {
-		return "", fmt.Errorf("agent_config: writing is not available for this session")
+		return "", errors.New("agent_config: writing is not available for this session")
 	}
 	return t.deps.Apply(ctx, a.Set)
 }

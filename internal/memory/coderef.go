@@ -27,15 +27,15 @@ type RefHit struct {
 	Why         string
 }
 
-// MemoriesForRefs returns up to max memories related to the given code refs.
+// MemoriesForRefs returns up to limit memories related to the given code refs.
 // A memory matches when a provenance source_symbol equals a ref's symbol
 // name, when one of its paths: globs matches a ref's file, or when a
 // provenance source_path equals a ref's file. User-authored memories claim
 // slots before generated ones — the same rule as the hint block, so machine
 // summaries never crowd out hand-written notes. Pure and deterministic over
 // the caller-supplied list (memory.List order).
-func MemoriesForRefs(mems []Memory, refs []CodeRef, max int) []RefHit {
-	if max <= 0 || len(mems) == 0 || len(refs) == 0 {
+func MemoriesForRefs(mems []Memory, refs []CodeRef, limit int) []RefHit {
+	if limit <= 0 || len(mems) == 0 || len(refs) == 0 {
 		return nil
 	}
 	var user, generated []RefHit
@@ -52,8 +52,8 @@ func MemoriesForRefs(mems []Memory, refs []CodeRef, max int) []RefHit {
 		}
 	}
 	hits := append(user, generated...)
-	if len(hits) > max {
-		hits = hits[:max]
+	if len(hits) > limit {
+		hits = hits[:limit]
 	}
 	return hits
 }

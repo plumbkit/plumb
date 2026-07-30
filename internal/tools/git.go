@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -93,7 +94,7 @@ type gitToolArgs struct {
 
 func (a gitToolArgs) validate() error {
 	if strings.TrimSpace(a.Subcommand) == "" {
-		return fmt.Errorf("git: subcommand is required")
+		return errors.New("git: subcommand is required")
 	}
 	return nil
 }
@@ -119,7 +120,7 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 			return "", fmt.Errorf("git stash: sub-command %q is not permitted; use list, show, push, pop, apply, drop, or clear", a.Args[0])
 		}
 		if a.Subcommand == "rm" {
-			return "", fmt.Errorf("git: subcommand \"rm\" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add")
+			return "", errors.New("git: subcommand \"rm\" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add")
 		}
 		return "", fmt.Errorf("git: subcommand %q is not permitted", a.Subcommand)
 	}
@@ -239,7 +240,7 @@ func (t *Git) checkBoundary(a gitToolArgs) error {
 	// fall through to the daemon's cwd (a different connection's project — a
 	// cross-session isolation leak), so refuse instead.
 	if a.Repo == "" {
-		return fmt.Errorf("git: no repository resolved — call session_start to attach a workspace, or pass an explicit \"repo\". " +
+		return errors.New("git: no repository resolved — call session_start to attach a workspace, or pass an explicit \"repo\". " +
 			"If this session was working a moment ago, the daemon may have restarted (e.g. after a rebuild or upgrade), which clears the per-connection workspace pin — re-run session_start to re-attach")
 	}
 	if err := t.deps.checkBoundary(a.Repo); err != nil {

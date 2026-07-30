@@ -252,7 +252,7 @@ func TestStore_NotifiesInRegistrationOrder(t *testing.T) {
 	s := NewStore(Defaults())
 	var mu sync.Mutex
 	var order []int
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		idx := i
 		s.Subscribe(func(Config) {
 			mu.Lock()

@@ -347,7 +347,7 @@ func countToolCalls(t *testing.T, tmpHome string) (int, string) {
 	if err != nil {
 		t.Fatalf("open stats.db: %v", err)
 	}
-	defer db.Close() //nolint:errcheck
+	defer db.Close() //nolint:errcheck // best-effort close in a deferred test cleanup
 	var n int
 	var tools sql.NullString
 	if err := db.QueryRow(`SELECT COUNT(*), GROUP_CONCAT(DISTINCT tool) FROM tool_calls`).Scan(&n, &tools); err != nil {

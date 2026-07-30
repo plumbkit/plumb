@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -159,7 +160,7 @@ func parseTopologyAffectedArgs(raw json.RawMessage) (topologyAffectedArgs, error
 
 func (a *topologyAffectedArgs) validate() error {
 	if len(a.Files) == 0 && len(a.Symbols) == 0 {
-		return fmt.Errorf("topology_affected: at least one file or symbol is required")
+		return errors.New("topology_affected: at least one file or symbol is required")
 	}
 	return nil
 }

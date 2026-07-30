@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -120,7 +121,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 		return "", fmt.Errorf("get_definition: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return "", fmt.Errorf("get_definition: uri must not be empty")
+		return "", errors.New("get_definition: uri must not be empty")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 
@@ -132,7 +133,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	if a.Line == nil || a.Character == nil {
-		return "", fmt.Errorf("get_definition: either symbol_name or both line and character are required")
+		return "", errors.New("get_definition: either symbol_name or both line and character are required")
 	}
 	return t.executeByPosition(ctx, a.URI, *a.Line, *a.Character, true, "")
 }

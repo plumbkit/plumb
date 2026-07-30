@@ -29,7 +29,7 @@ func (idx *Indexer) processDelete(ctx context.Context, relPath string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded; on the failure path the error is already being returned
 	if err := deleteFileNodes(tx, fileID); err != nil {
 		return err
 	}

@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -323,7 +323,7 @@ func TestGit_DefaultRepoBoundaryEnforced(t *testing.T) {
 	outside := t.TempDir()
 	deps := WriteDeps{
 		WorkspaceFn: func() string { return outside },
-		Boundary:    func(string) error { return fmt.Errorf("workspace boundary violation") },
+		Boundary:    func(string) error { return errors.New("workspace boundary violation") },
 	}
 	tool := NewGit(deps, nil)
 	_, err := callGit(t, tool, map[string]any{"subcommand": "status"})

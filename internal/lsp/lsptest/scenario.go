@@ -6,7 +6,7 @@ package lsptest
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"sync"
 	"time"
 
@@ -465,7 +465,7 @@ func (c *Caller) PushDiagnostics() error {
 	fn := c.onNotify
 	c.mu.Unlock()
 	if fn == nil {
-		return fmt.Errorf("lsptest: adapter did not install a notification handler")
+		return errors.New("lsptest: adapter did not install a notification handler")
 	}
 	p, err := json.Marshal(protocol.PublishDiagnosticsParams{URI: c.scenario.DocumentURI, Diagnostics: c.scenario.AllDiagnostics()})
 	if err != nil {
@@ -482,7 +482,7 @@ func (c *Caller) RegisterWatcher(ctx context.Context) error {
 	fn := c.onRequest
 	c.mu.Unlock()
 	if fn == nil {
-		return fmt.Errorf("lsptest: adapter did not install a request handler")
+		return errors.New("lsptest: adapter did not install a request handler")
 	}
 	params := json.RawMessage(`{"registrations":[{"id":"watch-1","method":"workspace/didChangeWatchedFiles","registerOptions":{"watchers":[{"globPattern":"**/*.kt"}]}}]}`)
 	_, err := fn(ctx, protocol.MethodRegisterCapability, params)
@@ -510,7 +510,7 @@ func (c *Caller) Refresh(ctx context.Context) error {
 	fn := c.onRequest
 	c.mu.Unlock()
 	if fn == nil {
-		return fmt.Errorf("lsptest: adapter did not install a request handler")
+		return errors.New("lsptest: adapter did not install a request handler")
 	}
 	_, err := fn(ctx, protocol.MethodWorkspaceDiagnosticRefresh, json.RawMessage(`null`))
 	return err

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -103,7 +104,7 @@ func (t *ListSymbols) Execute(ctx context.Context, raw json.RawMessage) (string,
 		return "", fmt.Errorf("list_symbols: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return "", fmt.Errorf("list_symbols: uri is required")
+		return "", errors.New("list_symbols: uri is required")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 

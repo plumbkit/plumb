@@ -11,16 +11,16 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 )
 
-// hibernatePool builds a pool with one language whose idle_timeout / max are set
+// hibernatePool builds a pool with one language whose idle_timeout / maxWorkspaces are set
 // by the test, so the janitor and LRU-eviction selection logic can be exercised
 // without spawning real language servers.
-func hibernatePool(language string, idle time.Duration, max int) *workspacePool {
+func hibernatePool(language string, idle time.Duration, maxWorkspaces int) *workspacePool {
 	return &workspacePool{
 		entries: make(map[poolKey]*poolEntry),
 		baseCtx: context.Background(),
 		langs: []langConfig{{name: language, cfg: config.LSPConfig{
 			IdleTimeout:   config.Duration{Duration: idle},
-			MaxWorkspaces: max,
+			MaxWorkspaces: maxWorkspaces,
 		}}},
 	}
 }

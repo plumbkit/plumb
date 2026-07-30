@@ -159,7 +159,7 @@ func duplicateHelperFindings(ctx context.Context, added []addedSymbol, deps Deps
 			Confidence: Low,
 			File:       s.File,
 			Line:       s.Line,
-			Rationale:  fmt.Sprintf("%s closely resembles an existing symbol — it may duplicate logic already in the codebase", s.Name),
+			Rationale:  s.Name + " closely resembles an existing symbol — it may duplicate logic already in the codebase",
 			Evidence:   fmt.Sprintf("existing %s %s at %s:%d has a near-identical tokenised name (verify they are not intentionally distinct)", m.Kind, m.Name, m.Path, m.Line),
 		}
 		if opts.IncludeSuggestions {

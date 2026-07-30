@@ -133,7 +133,7 @@ func TestGit_ConcurrentCommitsSerialise(t *testing.T) {
 	const n = 6
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

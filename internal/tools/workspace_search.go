@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -85,7 +86,7 @@ func parseWorkspaceSearchArgs(raw json.RawMessage) (workspaceSearchArgs, error) 
 
 func (a *workspaceSearchArgs) validate() error {
 	if strings.TrimSpace(a.Query) == "" {
-		return fmt.Errorf("workspace_search: query is required")
+		return errors.New("workspace_search: query is required")
 	}
 	for _, c := range a.Corpora {
 		if c != "code" && c != "docs" && c != "memory" {

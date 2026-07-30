@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -17,7 +17,7 @@ func TestExecuteShellCommand_EmptyCommand(t *testing.T) {
 
 func TestExecuteShellCommand_DisabledSurfaces(t *testing.T) {
 	sh := NewExecuteShellCommand(func() (ResolvedShell, error) {
-		return ResolvedShell{}, fmt.Errorf("execute_shell_command is disabled. enable it with [commands] allow_shell = true")
+		return ResolvedShell{}, errors.New("execute_shell_command is disabled. enable it with [commands] allow_shell = true")
 	})
 	_, err := sh.Execute(context.Background(), json.RawMessage(`{"command":"echo hi"}`))
 	if err == nil || !strings.Contains(err.Error(), "disabled") {

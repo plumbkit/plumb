@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -59,7 +60,7 @@ func parseUndoEditArgs(raw json.RawMessage) (undoEditArgs, error) {
 		return undoEditArgs{}, fmt.Errorf("undo_edit: invalid arguments: %w", err)
 	}
 	if in.Path == "" {
-		return undoEditArgs{}, fmt.Errorf("undo_edit: file_path is required")
+		return undoEditArgs{}, errors.New("undo_edit: file_path is required")
 	}
 	return undoEditArgs{Path: in.Path, Force: in.Force}, nil
 }

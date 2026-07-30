@@ -16,6 +16,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -133,7 +134,7 @@ func pullAndRecord(ctx context.Context, pd documentPuller, rec pullStateSource, 
 		return pullRecordResult{}, err
 	}
 	if rep == nil {
-		return pullRecordResult{}, fmt.Errorf("language server returned an empty diagnostic response")
+		return pullRecordResult{}, errors.New("language server returned an empty diagnostic response")
 	}
 	switch rep.Kind {
 	case protocol.DiagnosticReportFull:
@@ -192,7 +193,7 @@ func containsURI(uris []string, target string) bool {
 func (t *Diagnostics) pullDocument(ctx context.Context, uri string) (related, unresolved []string, err error) {
 	pd, ok := t.opener.(pullDiagnoser)
 	if !ok {
-		return nil, nil, fmt.Errorf("pull diagnostics unavailable on this connection")
+		return nil, nil, errors.New("pull diagnostics unavailable on this connection")
 	}
 	rec, _ := t.inv.(pullStateSource)
 	result, err := pullAndRecord(ctx, pd, rec, uri)

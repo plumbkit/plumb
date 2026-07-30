@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -251,7 +250,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	t, ok := s.tools[params.Name]
 	s.mu.RUnlock()
 	if !ok {
-		return errResp(req.ID, codeMethodNotFound, fmt.Sprintf("unknown tool: %s", params.Name))
+		return errResp(req.ID, codeMethodNotFound, "unknown tool: "+params.Name)
 	}
 
 	if s.OnBeforeTool != nil {
@@ -323,22 +322,32 @@ func runHookSafely(name string, fn func()) {
 	fn()
 }
 
+// appendUpTo appends as much of part to *out as limit allows, reporting whether
+// part had to be truncated — including the case where *out was already at the
+// limit and part was dropped entirely. That boolean is the "message was longer
+// than we are willing to buffer" signal readMessageLine acts on.
+func appendUpTo(out *[]byte, part []byte, limit int) bool {
+	remaining := limit - len(*out)
+	if remaining <= 0 {
+		return true
+	}
+	if len(part) > remaining {
+		*out = append(*out, part[:remaining]...)
+		return true
+	}
+	*out = append(*out, part...)
+	return false
+}
+
 func readMessageLine(r *bufio.Reader, limit int) ([]byte, bool, error) {
 	var out []byte
 	for {
 		part, err := r.ReadSlice('\n')
 		if len(part) > 0 {
-			remaining := limit - len(out)
-			if remaining > 0 {
-				if len(part) > remaining {
-					out = append(out, part[:remaining]...)
-				} else {
-					out = append(out, part...)
-				}
-			}
-			if len(out) >= limit && (err == bufio.ErrBufferFull || len(part) > remaining) {
-				if err := discardMessageRest(r); err != nil && !errors.Is(err, io.EOF) {
-					return out, true, err
+			truncated := appendUpTo(&out, part, limit)
+			if len(out) >= limit && (errors.Is(err, bufio.ErrBufferFull) || truncated) {
+				if dErr := discardMessageRest(r); dErr != nil && !errors.Is(dErr, io.EOF) {
+					return out, true, dErr
 				}
 				return out, true, nil
 			}

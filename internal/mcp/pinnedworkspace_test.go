@@ -22,6 +22,7 @@ func TestPinnedWorkspaceFromParams(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if got := pinnedWorkspaceFromParams(json.RawMessage(c.params)); got != c.want {
 				t.Fatalf("got %q want %q", got, c.want)
 			}

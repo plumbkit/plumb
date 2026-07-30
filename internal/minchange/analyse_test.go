@@ -343,7 +343,7 @@ func TestAnalyse_NotCheckedFlagsBinaryFiles(t *testing.T) {
 
 func TestAnalyse_BoundsFindingsAndReportsTruncation(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		b.WriteString(newFileDiff(fmt.Sprintf("pkg/w%d.go", i),
 			"package pkg",
 			fmt.Sprintf("func Wrap%d(a int) int {", i),

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -143,7 +144,7 @@ func parseTopologySearchArgs(raw json.RawMessage) (topologySearchArgs, error) {
 
 func (a *topologySearchArgs) validate() error {
 	if a.Query == "" {
-		return fmt.Errorf("topology_search: query is required")
+		return errors.New("topology_search: query is required")
 	}
 	return nil
 }

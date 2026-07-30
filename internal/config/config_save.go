@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,7 +49,7 @@ func Save(apply func(*Config)) error {
 	apply(&cfg)
 	path := GlobalConfigPath()
 	if path == "" {
-		return fmt.Errorf("writing config: no config path could be resolved")
+		return errors.New("writing config: no config path could be resolved")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
@@ -170,11 +171,11 @@ func loadGlobalRaw() (map[string]any, error) {
 // set it. The write is atomic (temp + rename), like Save.
 func SetGlobalValue(path []string, value any) error {
 	if len(path) == 0 {
-		return fmt.Errorf("global config: empty key path")
+		return errors.New("global config: empty key path")
 	}
 	cfgPath := GlobalConfigPath()
 	if cfgPath == "" {
-		return fmt.Errorf("writing config: no config path could be resolved")
+		return errors.New("writing config: no config path could be resolved")
 	}
 	m, err := loadGlobalRaw()
 	if err != nil {

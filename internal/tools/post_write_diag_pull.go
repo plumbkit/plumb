@@ -18,6 +18,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -153,7 +154,7 @@ func (d WriteDeps) pullCrossFileDiagnostics(ctx context.Context, editedURI strin
 func (d WriteDeps) workspacePullInto(ctx context.Context, wp postWriteWorkspacePuller, uri string) error {
 	rec, ok := d.Diag.(pullStateSource)
 	if !ok {
-		return fmt.Errorf("no pull-capable cache on this connection")
+		return errors.New("no pull-capable cache on this connection")
 	}
 	rep, err := wp.WorkspaceDiagnostic(ctx, uri, protocol.WorkspaceDiagnosticParams{
 		PreviousResultIDs: rec.AllPullResultIDs(),
@@ -162,7 +163,7 @@ func (d WriteDeps) workspacePullInto(ctx context.Context, wp postWriteWorkspaceP
 		return err
 	}
 	if rep == nil {
-		return fmt.Errorf("language server returned an empty workspace diagnostic response")
+		return errors.New("language server returned an empty workspace diagnostic response")
 	}
 	var unresolved []string
 	for _, item := range rep.Items {

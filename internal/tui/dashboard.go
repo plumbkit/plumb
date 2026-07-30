@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -317,7 +318,7 @@ func formatLargeInt(n int64) string {
 	case n >= 1_000:
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	default:
-		return fmt.Sprintf("%d", n)
+		return strconv.FormatInt(n, 10)
 	}
 }
 

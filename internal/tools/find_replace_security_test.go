@@ -59,7 +59,7 @@ func TestFindReplace_SkipsSymlinkEscapingWorkspace(t *testing.T) {
 // reporting a partial result (toolsfs-3).
 func TestFindReplace_WarnsOnMaxFilesTruncation(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), []byte("TODO"), 0o644); err != nil {
 			t.Fatal(err)
 		}

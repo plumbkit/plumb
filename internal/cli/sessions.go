@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -76,7 +77,7 @@ func renderSessions(sessions []session.Info, hidden int) error {
 			s.Language,
 			folder,
 			s.Adapter,
-			fmt.Sprintf("%d", s.PID),
+			strconv.Itoa(s.PID),
 			s.StartedAt.Format("2006-01-02 15:04:05"),
 		)
 	}

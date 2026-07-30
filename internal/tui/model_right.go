@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/render"
@@ -135,7 +136,7 @@ func (m Model) rightLinesDetails(rw int) []string {
 		detailRow(langLabel, lang),
 		detailRow("Folder", fld),
 		detailRow(adapterLabel, adp),
-		detailRow("PID", fmt.Sprintf("%d", s.PID)),
+		detailRow("PID", strconv.Itoa(s.PID)),
 	}
 	if s.DaemonVersion != "" {
 		lines = append(lines, detailRow("Daemon", s.DaemonVersion))
@@ -172,9 +173,9 @@ func (m Model) rightLinesDetails(rw int) []string {
 	if m.lastDiagnosticsOutput != "" {
 		_, _ = fmt.Sscanf(m.lastDiagnosticsOutput, "%d", &issues)
 	}
-	lines = append(lines, detailRow("Tools", fmt.Sprintf("%d", len(m.toolStats))))
-	lines = append(lines, detailRow("Calls", fmt.Sprintf("%d", totalCalls)))
-	lines = append(lines, detailRow("Issues", fmt.Sprintf("%d", issues)))
+	lines = append(lines, detailRow("Tools", strconv.Itoa(len(m.toolStats))))
+	lines = append(lines, detailRow("Calls", strconv.FormatInt(totalCalls, 10)))
+	lines = append(lines, detailRow("Issues", strconv.Itoa(issues)))
 	if row, ok := m.topologyDetailRow(); ok {
 		lines = append(lines, row)
 	}
@@ -221,15 +222,15 @@ func (m *Model) rightLinesTools(rw int) []string {
 		sel := m.focusPanel == focusToolStats && i == m.toolStatsCursor
 		tn := render.PadRight(truncate(ts.Tool, c1w-2), c1w-2)
 		if sel {
-			pc, pa, pe := render.PadLeft(fmt.Sprintf("%d", ts.Calls), c2w), render.PadLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), render.PadLeft("", c4w)
+			pc, pa, pe := render.PadLeft(strconv.FormatInt(ts.Calls, 10), c2w), render.PadLeft(fmt.Sprintf("%.0fms", ts.AvgMs), c3w), render.PadLeft("", c4w)
 			if ts.Errors > 0 {
-				pe = render.PadLeft(fmt.Sprintf("%d", ts.Errors), c4w)
+				pe = render.PadLeft(strconv.FormatInt(ts.Errors, 10), c4w)
 			}
 			lines = append(lines, SelectedStyle.Width(roww).Render("  > "+tn+s3+pc+s3+pa+s3+pe+s3))
 		} else {
-			c2, c3, c4 := render.PadLeft(OkStyle.Render(fmt.Sprintf("%d", ts.Calls)), c2w), render.PadLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), c3w), render.PadLeft("", c4w)
+			c2, c3, c4 := render.PadLeft(OkStyle.Render(strconv.FormatInt(ts.Calls, 10)), c2w), render.PadLeft(MutedStyle.Render(fmt.Sprintf("%.0fms", ts.AvgMs)), c3w), render.PadLeft("", c4w)
 			if ts.Errors > 0 {
-				c4 = render.PadLeft(WarnStyle.Render(fmt.Sprintf("%d", ts.Errors)), c4w)
+				c4 = render.PadLeft(WarnStyle.Render(strconv.FormatInt(ts.Errors, 10)), c4w)
 			}
 			lines = append(lines, "  ∙ "+tn+s3+c2+s3+c3+s3+c4+s3)
 		}

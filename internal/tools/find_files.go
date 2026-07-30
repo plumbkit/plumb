@@ -157,7 +157,7 @@ func parseFindFilesArgs(raw json.RawMessage) (findFilesArgs, error) {
 		return a, fmt.Errorf("find_files: invalid arguments: %w", err)
 	}
 	if a.Pattern == "" {
-		return a, fmt.Errorf("find_files: pattern must not be empty")
+		return a, errors.New("find_files: pattern must not be empty")
 	}
 	return a, nil
 }

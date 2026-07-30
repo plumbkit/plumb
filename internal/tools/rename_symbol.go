@@ -163,7 +163,7 @@ func parseRenameSymbolArgs(raw json.RawMessage) (renameSymbolArgs, error) {
 		return renameSymbolArgs{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if input.URI == "" || input.NewName == "" {
-		return renameSymbolArgs{}, fmt.Errorf("`uri` and `new_name` are required")
+		return renameSymbolArgs{}, errors.New("`uri` and `new_name` are required")
 	}
 	dryRun := true
 	if input.DryRun != nil {
@@ -266,7 +266,7 @@ func (t *RenameSymbol) renameWorkspaceEdit(ctx context.Context, a renameSymbolAr
 		return t.renameByName(ctx, a)
 	}
 	if a.Line == nil || a.Character == nil {
-		return nil, "", preLSPErr{fmt.Errorf("rename_symbol: either symbol_name or both line and character are required")}
+		return nil, "", preLSPErr{errors.New("rename_symbol: either symbol_name or both line and character are required")}
 	}
 	return t.renameByPosition(ctx, a, *a.Line, *a.Character, true)
 }

@@ -58,7 +58,7 @@ func TestWriteSessionFileAtomic_NoTornReads(t *testing.T) {
 	}()
 
 	// Writers: many concurrent Patches to the same file.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -376,13 +376,13 @@ func TestTouch_ConcurrentWithWriters_NoCorruption(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iters; i++ {
+		for range iters {
 			session.Touch(id)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iters; i++ {
+		for i := range iters {
 			if _, err := session.Rename(id, fmt.Sprintf("name-%d", i)); err != nil {
 				t.Errorf("Rename during concurrent Touch: %v", err)
 				return
@@ -391,7 +391,7 @@ func TestTouch_ConcurrentWithWriters_NoCorruption(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iters; i++ {
+		for range iters {
 			if _, err := session.List(); err != nil {
 				t.Errorf("List during concurrent Touch/Rename: %v", err)
 				return

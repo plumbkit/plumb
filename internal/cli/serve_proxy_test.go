@@ -346,6 +346,7 @@ func TestInjectReconnectNote(t *testing.T) {
 		{"content not array", `{"jsonrpc":"2.0","id":3,"result":{"content":"oops"}}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := injectReconnectNote([]byte(c.frame), "v1", "v1")
 			if ok {
 				t.Fatalf("expected ok=false for %s", c.name)

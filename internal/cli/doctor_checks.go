@@ -25,7 +25,7 @@ func checkDaemon() []checkResult {
 		return []checkResult{{
 			name:   "socket",
 			ok:     false,
-			detail: fmt.Sprintf("cannot dial %s", render.ContractPath(socketPath)),
+			detail: "cannot dial " + render.ContractPath(socketPath),
 			fix:    "run `plumb serve` or let an MCP client start it automatically",
 		}}
 	}

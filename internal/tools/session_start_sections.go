@@ -392,10 +392,10 @@ func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
 	// Gopls emits "not in your go.mod file" at go.mod:1:1 when the module cache
 	// is cold — packages declared in go.mod but not yet downloaded. Collapse
 	// these to a single advisory line so real errors are not buried.
-	real, coldCount := partitionColdCacheGoMod(filtered)
+	realDiags, coldCount := partitionColdCacheGoMod(filtered)
 
 	sb.WriteString("## Active diagnostics (errors and warnings)\n\n")
-	if len(real) > 0 {
+	if len(realDiags) > 0 {
 		// Flag entries whose file mtime is newer than the last publishDiagnostics:
 		// the orientation packet is the most likely place to surface diagnostics
 		// gopls produced before reconciling in-flight edits. Mirrors the diagnostics
@@ -403,14 +403,14 @@ func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
 		// analysis against a cold module cache is handled by the go.mod partition
 		// above.)
 		if ts, ok := t.diag.(timedDiagnosticsSource); ok {
-			sb.WriteString(formatDiagnosticsWithTimes(real, ts.AllDiagnosticTimes()))
+			sb.WriteString(formatDiagnosticsWithTimes(realDiags, ts.AllDiagnosticTimes()))
 		} else {
-			sb.WriteString(formatDiagnostics(real))
+			sb.WriteString(formatDiagnostics(realDiags))
 		}
 	}
 	if coldCount > 0 {
 		sep := ""
-		if len(real) > 0 {
+		if len(realDiags) > 0 {
 			sep = "\n"
 		}
 		fmt.Fprintf(sb, "%sNote: %d go.mod package(s) flagged \"not in your go.mod file\" at 1:1 — "+
@@ -422,11 +422,11 @@ func (t *SessionStart) writeSessionDiagnostics(sb *strings.Builder) {
 // partitionColdCacheGoMod splits diagnostics into real issues and cold-cache
 // false positives. Cold-cache entries match: URI ends with /go.mod, position
 // is 1:1 (0-indexed line 0 col 0), and message ends with "is not in your go.mod file".
-func partitionColdCacheGoMod(byURI map[string][]protocol.Diagnostic) (real map[string][]protocol.Diagnostic, coldCount int) {
-	real = make(map[string][]protocol.Diagnostic)
+func partitionColdCacheGoMod(byURI map[string][]protocol.Diagnostic) (realDiags map[string][]protocol.Diagnostic, coldCount int) {
+	realDiags = make(map[string][]protocol.Diagnostic)
 	for uri, diags := range byURI {
 		if !strings.HasSuffix(uri, "/go.mod") {
-			real[uri] = diags
+			realDiags[uri] = diags
 			continue
 		}
 		var kept []protocol.Diagnostic
@@ -439,8 +439,8 @@ func partitionColdCacheGoMod(byURI map[string][]protocol.Diagnostic) (real map[s
 			}
 		}
 		if len(kept) > 0 {
-			real[uri] = kept
+			realDiags[uri] = kept
 		}
 	}
-	return real, coldCount
+	return realDiags, coldCount
 }

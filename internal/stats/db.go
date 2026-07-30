@@ -333,11 +333,11 @@ const insertCallSQL = `INSERT INTO tool_calls
 func validateCall(c Call) error {
 	switch {
 	case c.Workspace == "":
-		return fmt.Errorf("stats: workspace is required")
+		return errors.New("stats: workspace is required")
 	case c.SessionID == "":
-		return fmt.Errorf("stats: session_id is required")
+		return errors.New("stats: session_id is required")
 	case c.Tool == "":
-		return fmt.Errorf("stats: tool is required")
+		return errors.New("stats: tool is required")
 	}
 	return nil
 }

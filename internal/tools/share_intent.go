@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -84,7 +85,7 @@ func parseShareIntentArgs(raw json.RawMessage) (shareIntentArgs, error) {
 		return a, fmt.Errorf("share_intent: %w", err)
 	}
 	if strings.TrimSpace(a.Body) == "" {
-		return a, fmt.Errorf("share_intent: body is required")
+		return a, errors.New("share_intent: body is required")
 	}
 	return a, nil
 }
@@ -105,7 +106,7 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 	}
 	store := t.deps.Store()
 	if store == nil {
-		return "", fmt.Errorf("share_intent: cross-agent store unavailable for this workspace")
+		return "", errors.New("share_intent: cross-agent store unavailable for this workspace")
 	}
 	return t.run(ctx, store, policy, args)
 }

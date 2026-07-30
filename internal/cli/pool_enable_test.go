@@ -167,7 +167,7 @@ func TestEnableLanguage_ConcurrentReadsRace(t *testing.T) {
 	const readers = 8
 	stop := make(chan struct{})
 	done := make(chan struct{})
-	for i := 0; i < readers; i++ {
+	for range readers {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			for {
@@ -189,7 +189,7 @@ func TestEnableLanguage_ConcurrentReadsRace(t *testing.T) {
 	}
 
 	close(stop)
-	for i := 0; i < readers; i++ {
+	for range readers {
 		<-done
 	}
 }

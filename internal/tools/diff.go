@@ -42,8 +42,8 @@ func renderUnifiedDiff(path string, script editScript) string {
 	}
 
 	var out []string
-	out = append(out, fmt.Sprintf("--- a/%s", path))
-	out = append(out, fmt.Sprintf("+++ b/%s", path))
+	out = append(out, "--- a/"+path)
+	out = append(out, "+++ b/"+path)
 	total := len(out)
 	truncated := false
 	for _, h := range hunks {
@@ -84,24 +84,24 @@ type editScript []diffLine
 // Myers' algorithm builds a greedy forward pass (finding the furthest-
 // reaching d-path on each diagonal k) and then backtracks through saved
 // snapshots to reconstruct the exact edit sequence.
-func computeEditScript(old, new []string) editScript {
-	n, m := len(old), len(new)
+func computeEditScript(oldLines, newLines []string) editScript {
+	n, m := len(oldLines), len(newLines)
 	if n == 0 && m == 0 {
 		return nil
 	}
 	maxD := n + m  // worst-case edit distance
 	offset := maxD // offset so index k+offset is always ≥0
-	trace, endD, found := myersForward(old, new, n, m, maxD, offset)
+	trace, endD, found := myersForward(oldLines, newLines, n, m, maxD, offset)
 	if !found {
 		return nil // should never happen for finite inputs
 	}
-	return myersBacktrack(old, new, n, m, trace, endD, offset)
+	return myersBacktrack(oldLines, newLines, n, m, trace, endD, offset)
 }
 
 // myersForward runs the greedy forward pass of Myers' O(ND) algorithm.
 // Returns trace snapshots (v array before each round), the edit distance
 // endD, and whether a solution was reached.
-func myersForward(old, new []string, n, m, maxD, offset int) (trace [][]int, endD int, found bool) {
+func myersForward(oldLines, newLines []string, n, m, maxD, offset int) (trace [][]int, endD int, found bool) {
 	v := make([]int, 2*maxD+1)
 	trace = make([][]int, 0, maxD+1)
 outer:
@@ -117,7 +117,7 @@ outer:
 				x = v[k-1+offset] + 1 // delete: move right on diagonal k-1
 			}
 			y := x - k
-			for x < n && y < m && old[x] == new[y] { // extend along diagonal
+			for x < n && y < m && oldLines[x] == newLines[y] { // extend along diagonal
 				x++
 				y++
 			}
@@ -134,7 +134,7 @@ outer:
 
 // myersBacktrack reconstructs the edit script from the trace snapshots
 // produced by myersForward. Returns the script in source order (forward).
-func myersBacktrack(old, new []string, n, m int, trace [][]int, endD, offset int) editScript {
+func myersBacktrack(oldLines, newLines []string, n, m int, trace [][]int, endD, offset int) editScript {
 	x, y := n, m
 	var script editScript
 	for d := endD; d > 0; d-- {
@@ -150,29 +150,29 @@ func myersBacktrack(old, new []string, n, m int, trace [][]int, endD, offset int
 		prevY := prevX - prevK
 		if prevK == k+1 {
 			// Insertion from diagonal k+1: snake from (prevX, prevY+1) → (x, y).
-			for x > prevX && y > prevY+1 && old[x-1] == new[y-1] {
+			for x > prevX && y > prevY+1 && oldLines[x-1] == newLines[y-1] {
 				x--
 				y--
-				script = append(script, diffLine{' ', old[x]})
+				script = append(script, diffLine{' ', oldLines[x]})
 			}
 			y-- // the actual insertion
-			script = append(script, diffLine{'+', new[y]})
+			script = append(script, diffLine{'+', newLines[y]})
 		} else {
 			// Deletion from diagonal k-1: snake from (prevX+1, prevY) → (x, y).
-			for x > prevX+1 && y > prevY && old[x-1] == new[y-1] {
+			for x > prevX+1 && y > prevY && oldLines[x-1] == newLines[y-1] {
 				x--
 				y--
-				script = append(script, diffLine{' ', old[x]})
+				script = append(script, diffLine{' ', oldLines[x]})
 			}
 			x-- // the actual deletion
-			script = append(script, diffLine{'-', old[x]})
+			script = append(script, diffLine{'-', oldLines[x]})
 		}
 		x, y = prevX, prevY
 	}
 	for x > 0 { // any remaining diagonal at the start is all common lines
 		x--
 		y--
-		script = append(script, diffLine{' ', old[x]})
+		script = append(script, diffLine{' ', oldLines[x]})
 	}
 	// Backtracking produces the script in reverse order; flip it.
 	for i, j := 0, len(script)-1; i < j; i, j = i+1, j-1 {

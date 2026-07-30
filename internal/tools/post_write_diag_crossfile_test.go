@@ -108,8 +108,8 @@ func TestFormatCrossFileDiagnostics(t *testing.T) {
 		}
 	})
 	t.Run("overflow", func(t *testing.T) {
-		var breaks []crossFileBreak
-		for i := 0; i < 5; i++ {
+		breaks := make([]crossFileBreak, 0, 5)
+		for range 5 {
 			breaks = append(breaks, crossFileBreak{uri: "file:///ws/f.go", postErrs: 1})
 		}
 		s := formatCrossFileDiagnostics(breaks, "/ws")

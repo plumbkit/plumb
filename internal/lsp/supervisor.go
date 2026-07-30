@@ -188,6 +188,29 @@ func (s *Supervisor) PID() int {
 	return s.proc.Process.Pid
 }
 
+// retryAfterStartFailure decides what happens after a failed start — either the
+// spawn itself or OnStart. On the FIRST attempt the error is handed to readyCh
+// (Start is still blocked on it) and supervision gives up, because a server that
+// never came up once is a configuration problem, not a transient one. After that
+// it backs off and reports that the loop should retry.
+//
+// Returns the next backoff and whether to continue supervising. Both start paths
+// need identical handling, and keeping one copy is what holds loop's complexity
+// down — it was the tree's only function over the cognitive-complexity budget.
+func (s *Supervisor) retryAfterStartFailure(
+	ctx context.Context, readyCh chan<- error, first bool, backoff time.Duration, err error,
+) (time.Duration, bool) {
+	if first {
+		readyCh <- err
+		return backoff, false
+	}
+	s.setState(StateRestarting)
+	if !s.sleep(ctx, backoff) {
+		return backoff, false
+	}
+	return min(backoff*2, s.opts.BackoffMax), true
+}
+
 // loop is the supervision goroutine.  It spawns the process, calls OnStart,
 // waits for the process to exit, then retries with exponential backoff.
 func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
@@ -210,15 +233,12 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 		conn, proc, err := s.spawn(ctx)
 		if err != nil {
 			slog.Error("supervisor: failed to spawn", "command", s.command, "err", err)
-			if first {
-				readyCh <- fmt.Errorf("supervisor: spawn %q: %w", s.command, err)
+			var retry bool
+			backoff, retry = s.retryAfterStartFailure(ctx, readyCh, first, backoff,
+				fmt.Errorf("supervisor: spawn %q: %w", s.command, err))
+			if !retry {
 				return
 			}
-			s.setState(StateRestarting)
-			if !s.sleep(ctx, backoff) {
-				return
-			}
-			backoff = min(backoff*2, s.opts.BackoffMax)
 			continue
 		}
 
@@ -237,15 +257,12 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 				// parent ends are closed and its IO goroutines joined, matching the
 				// normal-exit path — os.Process.Wait leaks both until GC.
 				_ = proc.Wait()
-				if first {
-					readyCh <- fmt.Errorf("supervisor: OnStart: %w", err)
+				var retry bool
+				backoff, retry = s.retryAfterStartFailure(ctx, readyCh, first, backoff,
+					fmt.Errorf("supervisor: OnStart: %w", err))
+				if !retry {
 					return
 				}
-				s.setState(StateRestarting)
-				if !s.sleep(ctx, backoff) {
-					return
-				}
-				backoff = min(backoff*2, s.opts.BackoffMax)
 				continue
 			}
 		}

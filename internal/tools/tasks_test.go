@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -36,7 +36,7 @@ func TestRunTask_NoResolver(t *testing.T) {
 
 func TestRunTask_ResolverErrorPropagates(t *testing.T) {
 	tool := NewTasks(WriteDeps{}, func(slot, _ string) (TaskCommand, error) {
-		return TaskCommand{}, fmt.Errorf("untrusted: run `plumb trust`")
+		return TaskCommand{}, errors.New("untrusted: run `plumb trust`")
 	})
 	_, err := runTask(t, tool, `{"slot":"build"}`)
 	if err == nil || !strings.Contains(err.Error(), "plumb trust") {

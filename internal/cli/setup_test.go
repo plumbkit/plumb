@@ -461,13 +461,13 @@ func TestInstallSkill_Idempotent(t *testing.T) {
 func TestInstallSkill_Updated(t *testing.T) {
 	dir := t.TempDir()
 	old := "---\nname: test-skill\ndescription: test\n---\nold content\n"
-	new := "---\nname: test-skill\ndescription: test\n---\nnew content\n"
+	updated := "---\nname: test-skill\ndescription: test\n---\nnew content\n"
 
 	if _, err := installSkill(dir, "test-skill", old); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 
-	action, err := installSkill(dir, "test-skill", new)
+	action, err := installSkill(dir, "test-skill", updated)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -492,8 +492,8 @@ func TestInstallSkill_Updated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading SKILL.md after update: %v", err)
 	}
-	if string(got) != new {
-		t.Errorf("content after update: got %q, want %q", string(got), new)
+	if string(got) != updated {
+		t.Errorf("content after update: got %q, want %q", string(got), updated)
 	}
 }
 

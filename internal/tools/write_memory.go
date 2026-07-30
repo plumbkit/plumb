@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/plumbkit/plumb/internal/memory"
@@ -64,10 +65,10 @@ func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (stri
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Name == "" {
-		return "", fmt.Errorf("`name` is required")
+		return "", errors.New("`name` is required")
 	}
 	if a.Content == "" {
-		return "", fmt.Errorf("`content` is required")
+		return "", errors.New("`content` is required")
 	}
 	ws := resolveWorkspace(a.Workspace, t.ws)
 	if ws == "" {
@@ -80,5 +81,5 @@ func (t *writeMemoryTool) Execute(_ context.Context, args json.RawMessage) (stri
 		return "", err
 	}
 	path, _ := memory.Path(ws, a.Name)
-	return fmt.Sprintf("Memory saved to %s", path), nil
+	return "Memory saved to " + path, nil
 }

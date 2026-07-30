@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,7 +70,7 @@ func (m Model) dashDaemonWidget(inner int) []string {
 
 	if m.daemonMetricsOK {
 		d := m.daemonMetrics
-		pidStr = fmt.Sprintf("%d", d.PID)
+		pidStr = strconv.Itoa(d.PID)
 		if d.RSSAvailable {
 			memStr = monitor.FormatBytes(d.RSSBytes)
 		}
@@ -78,7 +79,7 @@ func (m Model) dashDaemonWidget(inner int) []string {
 		sysStr = monitor.FormatBytes(d.HeapSysBytes)
 		relStr = monitor.FormatBytes(d.HeapReleasedBytes)
 		gcStr = fmt.Sprintf("%d cycles", d.NumGC)
-		gorStr = fmt.Sprintf("%d", d.Goroutines)
+		gorStr = strconv.Itoa(d.Goroutines)
 	}
 
 	titleText := " Daemon Memory "
@@ -306,7 +307,7 @@ func dashCompactTopToolsTable(width int, tools []stats.ToolStat, kind dashTopToo
 			metric = DetailStyle.Render("~" + stats.FormatSavings(int(eff)))
 		}
 		if kind == dashTopToolsUptime && t.Errors > 0 {
-			metric = WarnStyle.Render(fmt.Sprintf("%d", t.Errors))
+			metric = WarnStyle.Render(strconv.FormatInt(t.Errors, 10))
 		}
 		line := KeyStyle.Width(toolW).Render(truncate(t.Tool, toolW-1)) +
 			DetailStyle.Width(callsW).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
@@ -359,7 +360,7 @@ func dashTopToolsTable(title string, width int, tools []stats.ToolStat) []string
 	for _, t := range tools {
 		errStr := OkStyle.Render("—")
 		if t.Errors > 0 {
-			errStr = WarnStyle.Render(fmt.Sprintf("%d", t.Errors))
+			errStr = WarnStyle.Render(strconv.FormatInt(t.Errors, 10))
 		}
 		tokStr := MutedStyle.Render("—")
 		if eff := t.CapabilityTokens + t.EfficiencyTokens; eff > 0 {
@@ -368,7 +369,7 @@ func dashTopToolsTable(title string, width int, tools []stats.ToolStat) []string
 		line := KeyStyle.Width(cTool).Render(truncate(t.Tool, cTool-1)) +
 			DetailStyle.Width(cCalls).Align(lipgloss.Right).Render(formatLargeInt(t.Calls)) +
 			DetailStyle.Width(cAvg).Align(lipgloss.Right).Render(fmt.Sprintf("%.0f", t.AvgMs)) +
-			DetailStyle.Width(cP95).Align(lipgloss.Right).Render(fmt.Sprintf("%d", t.P95Ms)) +
+			DetailStyle.Width(cP95).Align(lipgloss.Right).Render(strconv.FormatInt(t.P95Ms, 10)) +
 			lipgloss.NewStyle().Width(cErr).Align(lipgloss.Right).Render(errStr) +
 			lipgloss.NewStyle().Width(cTokens).Align(lipgloss.Right).Render(tokStr)
 		content = append(content, line)

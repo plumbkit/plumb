@@ -17,7 +17,7 @@ import (
 const (
 	lspWatchCooldown = 200 * time.Millisecond
 	// Directory-name regex only; no credentials are embedded here.
-	lspWatchExcludeRegex = `(^|/)(\.[^/]+|vendor|node_modules|testdata|dist|build|target|out|__pycache__)(/|$)` //nolint:gosec
+	lspWatchExcludeRegex = `(^|/)(\.[^/]+|vendor|node_modules|testdata|dist|build|target|out|__pycache__)(/|$)` //nolint:gosec // G101: an exclusion regex naming build/cache directories, not a credential
 )
 
 type lspFSWatcher struct {

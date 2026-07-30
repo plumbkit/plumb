@@ -3,7 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +27,7 @@ func (e *stubEmbedder) Model() string { return "stub-model" }
 func (e *stubEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
 	e.calls++
 	if e.fail {
-		return nil, fmt.Errorf("stub embed failure")
+		return nil, errors.New("stub embed failure")
 	}
 	out := make([][]float32, len(texts))
 	for i, t := range texts {

@@ -360,38 +360,42 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 	fmt.Fprintf(&sb, "you:  %s\n", myName)
 
 	// ── active sessions ────────────────────────────────────────────────────
-	alone := len(peers) <= 1
-	if alone {
+	if len(peers) <= 1 {
 		sb.WriteString("\nactive sessions: you are the only active session on this workspace.\n")
 		sb.WriteString("  Your view of the project is authoritative — no concurrent agents.\n")
 	} else {
 		fmt.Fprintf(&sb, "\nactive sessions: %d (including you)\n", len(peers))
 		for _, p := range peers {
-			isSelf := p.ID == selfSessID
-			selfMark := ""
-			if isSelf {
-				selfMark = " (you)"
-			}
-			idle := ""
-			if !p.LastSeenAt.IsZero() {
-				age := now.Sub(p.LastSeenAt)
-				if age > session.IdleSessionThreshold {
-					idle = fmt.Sprintf(" — idle %s", humaniseAge(age))
-				} else {
-					idle = fmt.Sprintf(" — last seen %s ago", humaniseAge(age))
-				}
-			}
-			client := ""
-			if p.ClientName != "" {
-				client = fmt.Sprintf(" [%s]", p.ClientName)
-			}
-			fmt.Fprintf(&sb, "  %s%s%s%s%s%s\n", p.Name, selfMark, sessionPurpose(p), client, sessionLSP(p), idle)
+			fmt.Fprintf(&sb, "  %s\n", peerLine(p, selfSessID, now))
 		}
 	}
 
 	// ── recent writes ──────────────────────────────────────────────────────
 	writeRecentWrites(&sb, workspace, writes, annotations, now)
 	return sb.String()
+}
+
+// peerLine renders one active-session row: name, a (you) marker, purpose,
+// client, attached language servers, and a recency note.
+func peerLine(p session.Info, selfSessID string, now time.Time) string {
+	selfMark := ""
+	if p.ID == selfSessID {
+		selfMark = " (you)"
+	}
+	idle := ""
+	if !p.LastSeenAt.IsZero() {
+		age := now.Sub(p.LastSeenAt)
+		if age > session.IdleSessionThreshold {
+			idle = " — idle " + humaniseAge(age)
+		} else {
+			idle = fmt.Sprintf(" — last seen %s ago", humaniseAge(age))
+		}
+	}
+	client := ""
+	if p.ClientName != "" {
+		client = fmt.Sprintf(" [%s]", p.ClientName)
+	}
+	return p.Name + selfMark + sessionPurpose(p) + client + sessionLSP(p) + idle
 }
 
 // writeRecentWrites renders the recent-writes block, appending a best-effort
@@ -471,24 +475,33 @@ func fileFromInputJSON(raw string) string {
 		return ""
 	}
 	for _, key := range []string{"file_path", "from", "path"} {
-		if v, ok := m[key]; ok {
-			var s string
-			if json.Unmarshal(v, &s) == nil && s != "" {
-				return s
-			}
+		if s, ok := jsonStringField(m, key); ok {
+			return s
 		}
 	}
 	// transaction_apply: first op's file_path
 	if ops, ok := m["operations"]; ok {
 		var list []map[string]json.RawMessage
 		if json.Unmarshal(ops, &list) == nil && len(list) > 0 {
-			if v, ok := list[0]["file_path"]; ok {
-				var s string
-				if json.Unmarshal(v, &s) == nil && s != "" {
-					return s
-				}
+			if s, ok := jsonStringField(list[0], "file_path"); ok {
+				return s
 			}
 		}
 	}
 	return ""
+}
+
+// jsonStringField decodes m[key] as a non-empty JSON string. ok is false when
+// the key is absent, holds a non-string, or holds the empty string — all three
+// mean "no usable value here" to every caller.
+func jsonStringField(m map[string]json.RawMessage, key string) (string, bool) {
+	v, ok := m[key]
+	if !ok {
+		return "", false
+	}
+	var s string
+	if json.Unmarshal(v, &s) != nil || s == "" {
+		return "", false
+	}
+	return s, true
 }

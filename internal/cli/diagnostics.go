@@ -362,7 +362,7 @@ func printDiagHeader(workspace string) {
 
 	ctxStr := render.ContractPath(workspace)
 	if match != nil {
-		ctxStr += fmt.Sprintf("\nsession %s", match.ID)
+		ctxStr += "\nsession " + match.ID
 	}
 
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))

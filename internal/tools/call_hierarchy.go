@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -121,7 +122,7 @@ func parseCallHierarchyArgs(raw json.RawMessage) (callHierarchyArgs, error) {
 		return a, fmt.Errorf("call_hierarchy: invalid arguments: %w", err)
 	}
 	if a.URI == "" {
-		return a, fmt.Errorf("call_hierarchy: uri must not be empty")
+		return a, errors.New("call_hierarchy: uri must not be empty")
 	}
 	if a.Direction == "" {
 		a.Direction = "both"
@@ -143,7 +144,7 @@ func (t *CallHierarchy) Execute(ctx context.Context, args json.RawMessage) (stri
 		return t.executeByName(ctx, uri, a.SymbolName, a.Direction)
 	}
 	if a.Line == nil || a.Character == nil {
-		return "", fmt.Errorf("call_hierarchy: either symbol_name or both line and character are required")
+		return "", errors.New("call_hierarchy: either symbol_name or both line and character are required")
 	}
 	q := callHierarchyQuery{uri: uri, line: *a.Line, character: *a.Character, direction: a.Direction}
 	return t.executeByPosition(ctx, q, true)

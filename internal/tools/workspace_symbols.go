@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -138,7 +139,7 @@ func (t *WorkspaceSymbols) topologyFillTreeSitter(ctx context.Context, query str
 
 func hasSwiftWorkspaceSymbol(symbols []protocol.SymbolInformation) bool {
 	for _, symbol := range symbols {
-		if strings.HasSuffix(strings.ToLower(string(symbol.Location.URI)), ".swift") {
+		if strings.HasSuffix(strings.ToLower(symbol.Location.URI), ".swift") {
 			return true
 		}
 	}
@@ -151,7 +152,7 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("workspace_symbols: invalid arguments: %w", err)
 	}
 	if a.Query == "" {
-		return "", fmt.Errorf("workspace_symbols: query must not be empty")
+		return "", errors.New("workspace_symbols: query must not be empty")
 	}
 
 	key := "wsSymbols:" + a.Query

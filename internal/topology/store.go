@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -28,7 +29,7 @@ type Store struct {
 // background indexer automatically. The caller must call Close when done.
 func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store, error) {
 	if workspace == "" {
-		return nil, fmt.Errorf("topology: workspace path is empty")
+		return nil, errors.New("topology: workspace path is empty")
 	}
 	dbPath := DBPath(workspace)
 	db, err := openDB(dbPath)

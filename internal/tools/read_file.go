@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -221,7 +222,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("read_file: invalid arguments: %w", err)
 	}
 	if a.Path == "" {
-		return "", fmt.Errorf("read_file: file_path is required")
+		return "", errors.New("read_file: file_path is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -400,10 +401,10 @@ func resolveLineWindow(a readFileArgs) (start, end *int, err error) {
 		return start, a.EndLine, nil
 	}
 	if a.EndLine != nil {
-		return nil, nil, fmt.Errorf("specify end_line or limit, not both")
+		return nil, nil, errors.New("specify end_line or limit, not both")
 	}
 	if *a.Limit < 1 {
-		return nil, nil, fmt.Errorf("limit must be >= 1")
+		return nil, nil, errors.New("limit must be >= 1")
 	}
 	s := 1
 	if start != nil {
@@ -532,7 +533,7 @@ func readLineRange(src io.Reader, start, end int) (string, bool, error) {
 		return "", false, err
 	}
 	if lineNo < start {
-		endLabel := fmt.Sprintf("%d", end)
+		endLabel := strconv.Itoa(end)
 		if end < 0 {
 			endLabel = "EOF"
 		}

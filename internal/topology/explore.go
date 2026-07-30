@@ -212,18 +212,23 @@ func expandFrontier(ctx context.Context, db *sql.DB, ids []int64, edgeKinds []st
 		args[i] = id
 	}
 
+	// allArgs is allocated rather than aliased to args: the edge-kind filter below
+	// appends to it, and appending to a slice that shares args' backing array would
+	// write into args' spare capacity — harmless today only because args is not read
+	// again, which is not a property worth depending on. Sized for the widest case.
 	var where string
-	var allArgs []any
+	allArgs := make([]any, 0, 2*len(args)+len(edgeKinds))
 	switch dir {
 	case DirectionOutward:
 		where = fmt.Sprintf(`from_id IN (%s)`, ph)
-		allArgs = args
+		allArgs = append(allArgs, args...)
 	case DirectionInward:
 		where = fmt.Sprintf(`to_id IN (%s)`, ph)
-		allArgs = args
+		allArgs = append(allArgs, args...)
 	default:
 		where = fmt.Sprintf(`(from_id IN (%s) OR to_id IN (%s))`, ph, ph)
-		allArgs = append(args, args...)
+		allArgs = append(allArgs, args...)
+		allArgs = append(allArgs, args...)
 	}
 
 	if len(edgeKinds) > 0 {

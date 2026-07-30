@@ -135,7 +135,7 @@ func withSessionDirLock(dir string, fn func() error) error {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck // the fd is closed on return either way, which releases the lock
 	return fn()
 }
 
@@ -328,8 +328,8 @@ func FindEnded(externalID string, grace time.Duration) *Info {
 			continue
 		}
 		if best == nil || endedAt.After(best.EndedAt) {
-			copy := info
-			best = &copy
+			snapshot := info
+			best = &snapshot
 		}
 	}
 	return best

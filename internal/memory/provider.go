@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,7 +92,7 @@ func (p *ResourceProvider) Read(_ context.Context, uri string) (*mcp.ResourceCon
 	if uri == contextURI {
 		ws := p.workspaceFn()
 		if ws == "" {
-			return nil, fmt.Errorf("no workspace resolved; cannot read context")
+			return nil, errors.New("no workspace resolved; cannot read context")
 		}
 		data, err := os.ReadFile(contextMDPath(ws))
 		if err != nil {
@@ -111,7 +112,7 @@ func (p *ResourceProvider) Read(_ context.Context, uri string) (*mcp.ResourceCon
 	}
 	ws := p.workspaceFn()
 	if ws == "" {
-		return nil, fmt.Errorf("no workspace resolved; cannot read memory")
+		return nil, errors.New("no workspace resolved; cannot read memory")
 	}
 	text, err := Read(ws, name)
 	if err != nil {

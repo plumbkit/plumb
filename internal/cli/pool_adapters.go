@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -133,5 +134,5 @@ func argsFor(language, root string, lspCfg config.LSPConfig) []string {
 // each project gets isolated Eclipse state.
 func jdtlsDataDir(root string) string {
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(config.CacheDir(), "jdtls-data", fmt.Sprintf("%x", sum[:8]))
+	return filepath.Join(config.CacheDir(), "jdtls-data", hex.EncodeToString(sum[:8]))
 }

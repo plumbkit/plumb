@@ -154,7 +154,7 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 	})
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("language server did not respond in time (it may still be indexing the workspace — retry shortly)")
+			return nil, errors.New("language server did not respond in time (it may still be indexing the workspace — retry shortly)")
 		}
 		return nil, fmt.Errorf("documentSymbols: %w", err)
 	}
@@ -247,7 +247,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.URI == "" || a.NamePath == "" {
-		return "", fmt.Errorf("`uri` and `name_path` are required")
+		return "", errors.New("`uri` and `name_path` are required")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true
@@ -348,7 +348,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.URI == "" || a.NamePath == "" {
-		return "", fmt.Errorf("`uri` and `name_path` are required")
+		return "", errors.New("`uri` and `name_path` are required")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true
@@ -452,7 +452,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("invalid args: %w", err)
 	}
 	if a.URI == "" || a.NamePath == "" {
-		return "", fmt.Errorf("`uri` and `name_path` are required")
+		return "", errors.New("`uri` and `name_path` are required")
 	}
 	a.URI = toFileURIAnchored(a.URI, t.ws)
 	dryRun := true

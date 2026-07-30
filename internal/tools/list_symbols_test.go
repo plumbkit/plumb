@@ -71,11 +71,10 @@ func TestListSymbols_MissingURI(t *testing.T) {
 }
 
 func TestListSymbols_IncludeSignatures(t *testing.T) {
-	f, err := os.CreateTemp("", "list_symbols_test_*.go")
+	f, err := os.CreateTemp(t.TempDir(), "list_symbols_test_*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
 	content := "package p\n\nfunc Greet(name string) string {\n\treturn name\n}\n"
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatal(err)
@@ -109,11 +108,10 @@ func TestListSymbols_IncludeSignatures(t *testing.T) {
 }
 
 func TestListSymbols_IncludeSignatures_NonCallableKinds(t *testing.T) {
-	f, err := os.CreateTemp("", "list_symbols_test_*.go")
+	f, err := os.CreateTemp(t.TempDir(), "list_symbols_test_*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
 	// Line 0: package; Line 1: blank; Line 2: type Foo struct; Line 3: field; Line 4: closing brace
 	content := "package p\n\ntype Foo struct {\n\tBar string\n}\n"
 	if _, err := f.WriteString(content); err != nil {
@@ -158,11 +156,10 @@ func TestListSymbols_IncludeSignatures_NonCallableKinds(t *testing.T) {
 }
 
 func TestListSymbols_IncludeSignatures_SkipsCommentLines(t *testing.T) {
-	f, err := os.CreateTemp("", "list_symbols_test_*.go")
+	f, err := os.CreateTemp(t.TempDir(), "list_symbols_test_*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
 	// Simulate a case where the LSP reports start_line pointing at a comment.
 	// Line 0: package; Line 1: blank; Line 2: // comment; Line 3: func Greet...
 	content := "package p\n\n// Greet says hello.\nfunc Greet(name string) string {\n\treturn name\n}\n"

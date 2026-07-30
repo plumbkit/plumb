@@ -20,7 +20,7 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 	if err != nil {
 		return fmt.Errorf("topology: begin tx: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded; on the failure path the error is already being returned
 
 	newFileID, err := upsertFileRecord(tx, fileID, relPath, info, hash, lang)
 	if err != nil {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -79,7 +80,7 @@ func (t *FileDiff) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("file_diff: invalid arguments: %w", err)
 	}
 	if a.FileA == "" || a.FileB == "" {
-		return "", fmt.Errorf("file_diff: file_a and file_b are required")
+		return "", errors.New("file_diff: file_a and file_b are required")
 	}
 	a.FileA = resolvePath(a.FileA, t.ws)
 	a.FileB = resolvePath(a.FileB, t.ws)
@@ -104,7 +105,8 @@ func (t *FileDiff) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	cmd := exec.CommandContext(ctx, "diff", args...)
 	out, err := cmd.Output()
 	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
+		var exitErr *exec.ExitError
+		ok := errors.As(err, &exitErr)
 		if !ok {
 			return "", fmt.Errorf("file_diff: running diff: %w", err)
 		}

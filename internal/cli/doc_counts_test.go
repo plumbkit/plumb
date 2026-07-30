@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestDocToolCountMatchesRegistry(t *testing.T) {
 		{"docs/token-efficiency.md", fmt.Sprintf("same %d tools", n)},
 		{"docs/index.md", fmt.Sprintf("the %d tools", n)},
 		{"site/index.html", fmt.Sprintf(`data-count="%d">0</div><div class="l">structured tools`, n)},
-		{"site/index.html", fmt.Sprintf("%s structured tools", titleWord(n))},
+		{"site/index.html", titleWord(n) + " structured tools"},
 	}
 	for _, c := range checks {
 		assertFileContains(t, root, c.path, c.needle, n)
@@ -113,7 +114,7 @@ func numberToWords(n int) string {
 	tens := []string{"", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"}
 	switch {
 	case n < 0 || n >= 100:
-		return fmt.Sprintf("%d", n)
+		return strconv.Itoa(n)
 	case n < 20:
 		return ones[n]
 	default:

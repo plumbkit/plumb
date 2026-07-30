@@ -3,6 +3,7 @@ package collab
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -83,7 +84,7 @@ func Exists(workspace string) bool {
 // and prune paths guard with Exists first.
 func Open(workspace string) (*Store, error) {
 	if workspace == "" {
-		return nil, fmt.Errorf("collab: empty workspace")
+		return nil, errors.New("collab: empty workspace")
 	}
 	path := DBPath(workspace)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -129,7 +130,7 @@ func (s *Store) Workspace() string { return s.ws }
 // (callers redact before persisting). TTL is clamped to at least minTTL.
 func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) error {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("collab: nil store")
+		return errors.New("collab: nil store")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -157,7 +158,7 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 // body is stored verbatim (callers redact first). TTL is clamped to minTTL.
 func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) error {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("collab: nil store")
+		return errors.New("collab: nil store")
 	}
 	addr := strings.TrimSpace(in.Addressee)
 	if addr == "" {

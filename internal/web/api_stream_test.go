@@ -39,7 +39,7 @@ func TestLogsStream_SurfacesRecentLinesNearEOF(t *testing.T) {
 	// ~60 bytes per line; ~400 lines ≫ the 8KiB tail window, so ~130 lines fall
 	// inside the tail and every one of them must be surfaced contiguously.
 	const lineCount = 400
-	for i := 0; i < lineCount; i++ {
+	for i := range lineCount {
 		fmt.Fprintf(&b, "MARK-%04d daemon log line padding-padding-padding-pad\n", i)
 	}
 	if err := os.WriteFile(logPath, []byte(b.String()), 0o600); err != nil {

@@ -274,9 +274,9 @@ func stringPaths(m map[string]any) []string {
 	return out
 }
 
-func joinBackticked(items []string, max int) string {
-	if len(items) > max {
-		items = items[:max]
+func joinBackticked(items []string, limit int) string {
+	if len(items) > limit {
+		items = items[:limit]
 	}
 	quoted := make([]string, len(items))
 	for i, it := range items {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,7 +126,7 @@ func parseFileStatusArgs(raw json.RawMessage) (fileStatusArgs, error) {
 
 func (a fileStatusArgs) validate() error {
 	if len(a.Paths) == 0 {
-		return fmt.Errorf("file_status: paths must contain at least one path")
+		return errors.New("file_status: paths must contain at least one path")
 	}
 	if len(a.Paths) > maxFileStatusPaths {
 		return fmt.Errorf("file_status: too many paths (%d); maximum is %d", len(a.Paths), maxFileStatusPaths)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -192,25 +193,25 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	addConfigSection(cfgTable, "cache", [][]string{
 		{"ttl", projectCfg.Cache.TTL.String(), sourceFor("ttl", defaultsCfg.Cache.TTL, globalCfg.Cache.TTL, projectCfg.Cache.TTL)},
-		{"max_size", fmt.Sprintf("%d", projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
+		{"max_size", strconv.Itoa(projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
 	})
 
 	addConfigSection(cfgTable, "edits", [][]string{
-		{"strict", fmt.Sprintf("%v", projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
-		{"block_dirty_writes", fmt.Sprintf("%v", projectCfg.Edits.BlockDirtyWrites), sourceFor("block_dirty_writes", defaultsCfg.Edits.BlockDirtyWrites, globalCfg.Edits.BlockDirtyWrites, projectCfg.Edits.BlockDirtyWrites)},
-		{"rate_limit_per_minute", fmt.Sprintf("%d", projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
-		{"post_write_diagnostics_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteDiagnosticsMs), sourceFor("post_write_diagnostics_ms", defaultsCfg.Edits.PostWriteDiagnosticsMs, globalCfg.Edits.PostWriteDiagnosticsMs, projectCfg.Edits.PostWriteDiagnosticsMs)},
-		{"post_write_cross_file", fmt.Sprintf("%v", projectCfg.Edits.PostWriteCrossFile), sourceFor("post_write_cross_file", defaultsCfg.Edits.PostWriteCrossFile, globalCfg.Edits.PostWriteCrossFile, projectCfg.Edits.PostWriteCrossFile)},
-		{"post_write_cross_file_settle_ms", fmt.Sprintf("%d", projectCfg.Edits.PostWriteCrossFileSettleMs), sourceFor("post_write_cross_file_settle_ms", defaultsCfg.Edits.PostWriteCrossFileSettleMs, globalCfg.Edits.PostWriteCrossFileSettleMs, projectCfg.Edits.PostWriteCrossFileSettleMs)},
+		{"strict", strconv.FormatBool(projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
+		{"block_dirty_writes", strconv.FormatBool(projectCfg.Edits.BlockDirtyWrites), sourceFor("block_dirty_writes", defaultsCfg.Edits.BlockDirtyWrites, globalCfg.Edits.BlockDirtyWrites, projectCfg.Edits.BlockDirtyWrites)},
+		{"rate_limit_per_minute", strconv.Itoa(projectCfg.Edits.RateLimitPerMinute), sourceFor("rate_limit_per_minute", defaultsCfg.Edits.RateLimitPerMinute, globalCfg.Edits.RateLimitPerMinute, projectCfg.Edits.RateLimitPerMinute)},
+		{"post_write_diagnostics_ms", strconv.Itoa(projectCfg.Edits.PostWriteDiagnosticsMs), sourceFor("post_write_diagnostics_ms", defaultsCfg.Edits.PostWriteDiagnosticsMs, globalCfg.Edits.PostWriteDiagnosticsMs, projectCfg.Edits.PostWriteDiagnosticsMs)},
+		{"post_write_cross_file", strconv.FormatBool(projectCfg.Edits.PostWriteCrossFile), sourceFor("post_write_cross_file", defaultsCfg.Edits.PostWriteCrossFile, globalCfg.Edits.PostWriteCrossFile, projectCfg.Edits.PostWriteCrossFile)},
+		{"post_write_cross_file_settle_ms", strconv.Itoa(projectCfg.Edits.PostWriteCrossFileSettleMs), sourceFor("post_write_cross_file_settle_ms", defaultsCfg.Edits.PostWriteCrossFileSettleMs, globalCfg.Edits.PostWriteCrossFileSettleMs, projectCfg.Edits.PostWriteCrossFileSettleMs)},
 	})
 
 	addConfigSection(cfgTable, "walk", [][]string{
-		{"refuse_home_roots", fmt.Sprintf("%v", projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
+		{"refuse_home_roots", strconv.FormatBool(projectCfg.Walk.RefuseHomeRoots), sourceFor("refuse_home_roots", defaultsCfg.Walk.RefuseHomeRoots, globalCfg.Walk.RefuseHomeRoots, projectCfg.Walk.RefuseHomeRoots)},
 	})
 
 	wsRows := [][]string{
-		{"auto_attach", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttach), sourceFor("auto_attach", defaultsCfg.Workspace.AutoAttach, globalCfg.Workspace.AutoAttach, projectCfg.Workspace.AutoAttach)},
-		{"auto_attach_persist", fmt.Sprintf("%v", projectCfg.Workspace.AutoAttachPersist), sourceFor("auto_attach_persist", defaultsCfg.Workspace.AutoAttachPersist, globalCfg.Workspace.AutoAttachPersist, projectCfg.Workspace.AutoAttachPersist)},
+		{"auto_attach", strconv.FormatBool(projectCfg.Workspace.AutoAttach), sourceFor("auto_attach", defaultsCfg.Workspace.AutoAttach, globalCfg.Workspace.AutoAttach, projectCfg.Workspace.AutoAttach)},
+		{"auto_attach_persist", strconv.FormatBool(projectCfg.Workspace.AutoAttachPersist), sourceFor("auto_attach_persist", defaultsCfg.Workspace.AutoAttachPersist, globalCfg.Workspace.AutoAttachPersist, projectCfg.Workspace.AutoAttachPersist)},
 	}
 	// Trusted per-workspace roots granted manually (via the TUI / CLI), recorded
 	// in plumb's data dir — never in the project config. Distinct provenance from
@@ -225,9 +226,9 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	addConfigSection(cfgTable, "workspace", wsRows)
 
 	addConfigSection(cfgTable, "git", [][]string{
-		{"allow_writes", fmt.Sprintf("%v", projectCfg.Git.AllowWrites), sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites)},
-		{"allow_destructive", fmt.Sprintf("%v", projectCfg.Git.AllowDestructive), sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive)},
-		{"allow_push", fmt.Sprintf("%v", projectCfg.Git.AllowPush), sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush)},
+		{"allow_writes", strconv.FormatBool(projectCfg.Git.AllowWrites), sourceFor("allow_writes", defaultsCfg.Git.AllowWrites, globalCfg.Git.AllowWrites, projectCfg.Git.AllowWrites)},
+		{"allow_destructive", strconv.FormatBool(projectCfg.Git.AllowDestructive), sourceFor("allow_destructive", defaultsCfg.Git.AllowDestructive, globalCfg.Git.AllowDestructive, projectCfg.Git.AllowDestructive)},
+		{"allow_push", strconv.FormatBool(projectCfg.Git.AllowPush), sourceFor("allow_push", defaultsCfg.Git.AllowPush, globalCfg.Git.AllowPush, projectCfg.Git.AllowPush)},
 		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches)},
 	})
 
@@ -237,36 +238,36 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 
 	sem, gsem, dsem := projectCfg.Semantics, globalCfg.Semantics, defaultsCfg.Semantics
 	addConfigSection(cfgTable, "semantics", [][]string{
-		{"enabled", fmt.Sprintf("%v", sem.Enabled), sourceFor("enabled", dsem.Enabled, gsem.Enabled, sem.Enabled)},
+		{"enabled", strconv.FormatBool(sem.Enabled), sourceFor("enabled", dsem.Enabled, gsem.Enabled, sem.Enabled)},
 		{"provider", sem.Provider, sourceFor("provider", dsem.Provider, gsem.Provider, sem.Provider)},
 		{"model", sem.Model, sourceFor("model", dsem.Model, gsem.Model, sem.Model)},
 		{"base_url", sem.BaseURL, sourceFor("base_url", dsem.BaseURL, gsem.BaseURL, sem.BaseURL)},
 		{"api_key", maskConfigKey(sem.APIKey), sourceFor("api_key", dsem.APIKey, gsem.APIKey, sem.APIKey)},
 		{"api_key_env", sem.APIKeyEnv, sourceFor("api_key_env", dsem.APIKeyEnv, gsem.APIKeyEnv, sem.APIKeyEnv)},
-		{"rerank_candidates", fmt.Sprintf("%d", sem.RerankCandidates), sourceFor("rerank_candidates", dsem.RerankCandidates, gsem.RerankCandidates, sem.RerankCandidates)},
+		{"rerank_candidates", strconv.Itoa(sem.RerankCandidates), sourceFor("rerank_candidates", dsem.RerankCandidates, gsem.RerankCandidates, sem.RerankCandidates)},
 		{"timeout", sem.Timeout.String(), sourceFor("timeout", dsem.Timeout, gsem.Timeout, sem.Timeout)},
 	})
 
 	mem, gmem, dmem := projectCfg.Memory, globalCfg.Memory, defaultsCfg.Memory
 	addConfigSection(cfgTable, "memory", [][]string{
-		{"enabled", fmt.Sprintf("%v", mem.Enabled), sourceFor("enabled", dmem.Enabled, gmem.Enabled, mem.Enabled)},
-		{"generated_summaries", fmt.Sprintf("%v", mem.GeneratedSummaries), sourceFor("generated_summaries", dmem.GeneratedSummaries, gmem.GeneratedSummaries, mem.GeneratedSummaries)},
-		{"inject_hints", fmt.Sprintf("%v", mem.InjectHints), sourceFor("inject_hints", dmem.InjectHints, gmem.InjectHints, mem.InjectHints)},
-		{"hint_budget_bytes", fmt.Sprintf("%d", mem.HintBudgetBytes), sourceFor("hint_budget_bytes", dmem.HintBudgetBytes, gmem.HintBudgetBytes, mem.HintBudgetBytes)},
-		{"episodic_budget_bytes", fmt.Sprintf("%d", mem.EpisodicBudgetBytes), sourceFor("episodic_budget_bytes", dmem.EpisodicBudgetBytes, gmem.EpisodicBudgetBytes, mem.EpisodicBudgetBytes)},
-		{"max_hints", fmt.Sprintf("%d", mem.MaxHints), sourceFor("max_hints", dmem.MaxHints, gmem.MaxHints, mem.MaxHints)},
-		{"idle_summary_minutes", fmt.Sprintf("%d", mem.IdleSummaryMinutes), sourceFor("idle_summary_minutes", dmem.IdleSummaryMinutes, gmem.IdleSummaryMinutes, mem.IdleSummaryMinutes)},
-		{"generated_memory_keep", fmt.Sprintf("%d", mem.GeneratedMemoryKeep), sourceFor("generated_memory_keep", dmem.GeneratedMemoryKeep, gmem.GeneratedMemoryKeep, mem.GeneratedMemoryKeep)},
+		{"enabled", strconv.FormatBool(mem.Enabled), sourceFor("enabled", dmem.Enabled, gmem.Enabled, mem.Enabled)},
+		{"generated_summaries", strconv.FormatBool(mem.GeneratedSummaries), sourceFor("generated_summaries", dmem.GeneratedSummaries, gmem.GeneratedSummaries, mem.GeneratedSummaries)},
+		{"inject_hints", strconv.FormatBool(mem.InjectHints), sourceFor("inject_hints", dmem.InjectHints, gmem.InjectHints, mem.InjectHints)},
+		{"hint_budget_bytes", strconv.Itoa(mem.HintBudgetBytes), sourceFor("hint_budget_bytes", dmem.HintBudgetBytes, gmem.HintBudgetBytes, mem.HintBudgetBytes)},
+		{"episodic_budget_bytes", strconv.Itoa(mem.EpisodicBudgetBytes), sourceFor("episodic_budget_bytes", dmem.EpisodicBudgetBytes, gmem.EpisodicBudgetBytes, mem.EpisodicBudgetBytes)},
+		{"max_hints", strconv.Itoa(mem.MaxHints), sourceFor("max_hints", dmem.MaxHints, gmem.MaxHints, mem.MaxHints)},
+		{"idle_summary_minutes", strconv.Itoa(mem.IdleSummaryMinutes), sourceFor("idle_summary_minutes", dmem.IdleSummaryMinutes, gmem.IdleSummaryMinutes, mem.IdleSummaryMinutes)},
+		{"generated_memory_keep", strconv.Itoa(mem.GeneratedMemoryKeep), sourceFor("generated_memory_keep", dmem.GeneratedMemoryKeep, gmem.GeneratedMemoryKeep, mem.GeneratedMemoryKeep)},
 	})
 
 	col, gcol, dcol := projectCfg.Collab, globalCfg.Collab, defaultsCfg.Collab
 	addConfigSection(cfgTable, "collab", [][]string{
-		{"peer_awareness", fmt.Sprintf("%v", col.PeerAwareness), sourceFor("peer_awareness", dcol.PeerAwareness, gcol.PeerAwareness, col.PeerAwareness)},
-		{"hint_budget_bytes", fmt.Sprintf("%d", col.HintBudgetBytes), sourceFor("hint_budget_bytes", dcol.HintBudgetBytes, gcol.HintBudgetBytes, col.HintBudgetBytes)},
-		{"intents", fmt.Sprintf("%v", col.Intents), sourceFor("intents", dcol.Intents, gcol.Intents, col.Intents)},
-		{"mailbox", fmt.Sprintf("%v", col.Mailbox), sourceFor("mailbox", dcol.Mailbox, gcol.Mailbox, col.Mailbox)},
-		{"knowledge_handoff", fmt.Sprintf("%v", col.KnowledgeHandoff), sourceFor("knowledge_handoff", dcol.KnowledgeHandoff, gcol.KnowledgeHandoff, col.KnowledgeHandoff)},
-		{"intent_ttl_minutes", fmt.Sprintf("%d", col.IntentTTLMinutes), sourceFor("intent_ttl_minutes", dcol.IntentTTLMinutes, gcol.IntentTTLMinutes, col.IntentTTLMinutes)},
+		{"peer_awareness", strconv.FormatBool(col.PeerAwareness), sourceFor("peer_awareness", dcol.PeerAwareness, gcol.PeerAwareness, col.PeerAwareness)},
+		{"hint_budget_bytes", strconv.Itoa(col.HintBudgetBytes), sourceFor("hint_budget_bytes", dcol.HintBudgetBytes, gcol.HintBudgetBytes, col.HintBudgetBytes)},
+		{"intents", strconv.FormatBool(col.Intents), sourceFor("intents", dcol.Intents, gcol.Intents, col.Intents)},
+		{"mailbox", strconv.FormatBool(col.Mailbox), sourceFor("mailbox", dcol.Mailbox, gcol.Mailbox, col.Mailbox)},
+		{"knowledge_handoff", strconv.FormatBool(col.KnowledgeHandoff), sourceFor("knowledge_handoff", dcol.KnowledgeHandoff, gcol.KnowledgeHandoff, col.KnowledgeHandoff)},
+		{"intent_ttl_minutes", strconv.Itoa(col.IntentTTLMinutes), sourceFor("intent_ttl_minutes", dcol.IntentTTLMinutes, gcol.IntentTTLMinutes, col.IntentTTLMinutes)},
 	})
 
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
@@ -275,7 +276,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		defCfg := defaultsCfg.LSP[lang]
 
 		addConfigSection(cfgTable, "lsp."+lang, [][]string{
-			{"enabled", fmt.Sprintf("%v", cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
+			{"enabled", strconv.FormatBool(cfg.Enabled), sourceFor("enabled", defCfg.Enabled, globCfg.Enabled, cfg.Enabled)},
 			{"active", lspActiveStatus(cfg), "derived"},
 			{"command", cfg.Command, sourceFor("command", defCfg.Command, globCfg.Command, cfg.Command)},
 			{"args", fmt.Sprintf("%v", cfg.Args), sourceFor("args", defCfg.Args, globCfg.Args, cfg.Args)},

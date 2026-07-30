@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -79,7 +80,7 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	from := t.deps.resolvePath(a.From)
 	to := t.deps.resolvePath(a.To)
 	if from == to {
-		return "", fmt.Errorf("rename_file: from and to are the same path")
+		return "", errors.New("rename_file: from and to are the same path")
 	}
 	if err := t.deps.checkBoundary(from); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
@@ -121,10 +122,10 @@ func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {
 		return a, fmt.Errorf("rename_file: invalid arguments: %w", err)
 	}
 	if a.From == "" || a.To == "" {
-		return a, fmt.Errorf("rename_file: both `from` and `to` are required")
+		return a, errors.New("rename_file: both `from` and `to` are required")
 	}
 	if paths.URIToPath(a.From) == paths.URIToPath(a.To) {
-		return a, fmt.Errorf("rename_file: from and to are the same path")
+		return a, errors.New("rename_file: from and to are the same path")
 	}
 	return a, nil
 }

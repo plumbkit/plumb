@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -128,7 +129,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Println(tui.SepStyle.Render(strings.Repeat("╌", headerWidth)))
 
 	termWidth := 80
-	if w, _, err := term.GetSize(uintptr(os.Stdout.Fd())); err == nil && w > 0 {
+	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
 		termWidth = w
 	}
 	errMaxWidth := max(termWidth-wWhen-2, 40)
@@ -152,12 +153,12 @@ func statsToolSummaryTable(db *stats.DB, filter stats.Filter) (string, error) {
 	for _, s := range summary {
 		t1.Row(
 			s.Tool,
-			fmt.Sprintf("%d", s.Calls),
+			strconv.FormatInt(s.Calls, 10),
 			fmt.Sprintf("%.0f", s.AvgMs),
-			fmt.Sprintf("%d", s.P95Ms),
+			strconv.FormatInt(s.P95Ms, 10),
 			fmt.Sprintf("%.1f KB", s.TotalInputKB),
 			fmt.Sprintf("%.1f KB", s.TotalOutputKB),
-			fmt.Sprintf("%d", s.Errors),
+			strconv.FormatInt(s.Errors, 10),
 			axisCell(s.CapabilityTokens),
 			axisCell(s.EfficiencyTokens),
 		)
@@ -201,7 +202,7 @@ func renderRecentCallRow(c stats.RecentCall, wWhen, wTool, wMs, wStatus, wSessID
 	name := tui.MutedStyle.Render(c.SessionName)
 	when := render.PadRight(render.HumanAge(c.CalledAt), wWhen)
 	tool := render.PadRight(c.Tool, wTool)
-	ms := render.PadRight(fmt.Sprintf("%d", c.DurationMs), wMs)
+	ms := render.PadRight(strconv.FormatInt(c.DurationMs, 10), wMs)
 	status := centerStr(ok, wStatus)
 
 	if !c.Success {

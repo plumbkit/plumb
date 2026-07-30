@@ -67,12 +67,12 @@ func TestIndexer_OversizedGrammarSkippedButRecorded(t *testing.T) {
 
 	nodeCount := func(path string) int {
 		var n int
-		db.QueryRow(`SELECT COUNT(*) FROM topology_nodes n JOIN topology_files f ON n.file_id = f.id WHERE f.path = ?`, path).Scan(&n) //nolint:errcheck
+		db.QueryRow(`SELECT COUNT(*) FROM topology_nodes n JOIN topology_files f ON n.file_id = f.id WHERE f.path = ?`, path).Scan(&n) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 		return n
 	}
 	fileRecorded := func(path string) bool {
 		var n int
-		db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE path = ?`, path).Scan(&n) //nolint:errcheck
+		db.QueryRow(`SELECT COUNT(*) FROM topology_files WHERE path = ?`, path).Scan(&n) //nolint:errcheck // a failed Scan leaves the zero value, which the assertion below catches
 		return n == 1
 	}
 
