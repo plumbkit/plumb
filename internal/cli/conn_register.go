@@ -158,7 +158,13 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithPurpose(s.sessionPurpose).
 		WithLSPStatus(func() tools.LSPStatus {
 			warming, elapsed := s.lspWarming()
-			return tools.LSPStatus{Language: s.acquiredLanguageName(), Warming: warming, Elapsed: elapsed, DiagnosticsMode: s.lspDiagMode()}
+			return tools.LSPStatus{
+				Language:        s.acquiredLanguageName(),
+				Warming:         warming,
+				Elapsed:         elapsed,
+				DiagnosticsMode: s.lspDiagMode(),
+				Routed:          s.routedLanguageNames(),
+			}
 		}).
 		WithToolProfile(func() (string, int, string) {
 			p, reason := s.resolveToolProfile()
@@ -214,6 +220,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPLanguages(s.acquiredLanguageLabels).
+		WithLSPRouted(s.routedLanguageNames).
 		WithLSPWarmup(s.lspWarming).
 		WithLSPDiagMode(s.lspDiagMode).
 		WithXcodeHint(xcodeHintFn).

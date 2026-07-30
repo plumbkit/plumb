@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +39,13 @@ type routingProxy struct {
 	// server under the primary root serves a request, so the session can list
 	// every active LSP. Guarded by mu; nil-safe.
 	onActivate func(language string)
+	// activated is the set of non-primary languages this connection has actually
+	// been served by, so daemon_info and session_start can report a live routed
+	// server on a connection that has no primary at all (a LanguageNone root that
+	// serves files purely through per-file routing never acquires one). Guarded by
+	// mu; cleared by resetPrimary, since a deliberate workspace switch starts with
+	// a clean set.
+	activated map[string]struct{}
 	// wsRoot is the connection's workspace root and discovered the child language
 	// roots found beneath it at attach (the monorepo case: core/build.zig +
 	// app/Package.swift under one .plumb/ root). They drive WorkspaceSymbols
@@ -64,15 +70,6 @@ func (r *routingProxy) setBoundaryGuard(guard func(string) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guard = guard
-}
-
-// setActivateHook wires the callback fired when a secondary language server
-// first serves a request under the primary root. Pass nil to clear it (done on
-// a workspace re-pin so a switched connection starts with a clean adapter set).
-func (r *routingProxy) setActivateHook(fn func(language string)) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.onActivate = fn
 }
 
 // setDiscovered records the connection's workspace root and the child language
@@ -110,6 +107,10 @@ func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
 	r.primaryRoot = root
 	r.primaryLang = language
 	r.primary = p
+	// A switched connection starts with a clean routed set, mirroring the adapter
+	// list the re-pin path clears via setActivateHook(nil): the previous project's
+	// servers are not serving this workspace.
+	r.activated = nil
 }
 
 // primaryClient returns the primary workspace's adapter or an error. If the
@@ -215,34 +216,6 @@ func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Cl
 	}
 	_, elapsed := r.pool.warmupFor(e.root, e.language)
 	return nil, warmingErr(elapsed, root)
-}
-
-// noteActivated reports a secondary language server coming live for a file
-// inside the connection's pinned workspace, so the session record can surface
-// every active LSP (not just the primary). It fires for any language other than
-// the primary whose file resolves to the primary root OR a directory beneath it
-// — a secondary's own root marker (e.g. index.html for HTML) makes Detect carve
-// out a sub-root (site/), so a strict root== check would miss it. It does NOT
-// fire for a genuinely different project reached by cross-workspace routing.
-// A no-op for the primary language and when no callback is wired.
-func (r *routingProxy) noteActivated(root, language string) {
-	r.mu.RLock()
-	cb := r.onActivate
-	primaryRoot := r.primaryRoot
-	primaryLang := r.primaryLang
-	r.mu.RUnlock()
-	if cb == nil || language == primaryLang || !withinRoot(root, primaryRoot) {
-		return
-	}
-	cb(language)
-}
-
-// withinRoot reports whether path is root itself or a descendant directory of it.
-func withinRoot(path, root string) bool {
-	if root == "" {
-		return false
-	}
-	return path == root || strings.HasPrefix(path, root+"/")
 }
 
 // ─── lsp.Client implementation ─────────────────────────────────────────

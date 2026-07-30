@@ -280,6 +280,10 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 // session has no primary workspace yet. Applies auto-attach and auto-attach-
 // persist when configured.
 func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.RawMessage) {
+	// Before the attached-already short circuit: an ALREADY attached session is
+	// exactly the one whose primary can be stale after a live `enable-lsp`.
+	// Generation-gated, so this is one atomic load on the steady-state path.
+	s.refreshPrimaryIfStale(toolCtx)
 	if s.view().acquiredRoot != "" {
 		return
 	}
