@@ -134,9 +134,11 @@ func (s *Supervisor) StartAsync(ctx context.Context) (<-chan error, error) {
 }
 
 // Start spawns the process and blocks until the first OnStart has succeeded or
-// failed. Cancelling ctx stops the loop; call Stop for a clean shutdown.
-// Retained for synchronous callers and tests; the daemon hot path uses
-// StartAsync so a slow cold-start handshake never blocks a tool call.
+// failed. As with StartAsync, a first start cut short by a deliberate Stop
+// returns nil, not an error — the server was stopped, it did not fail.
+// Cancelling ctx stops the loop and returns ctx's error; call Stop for a clean
+// shutdown. Retained for synchronous callers and tests; the daemon hot path
+// uses StartAsync so a slow cold-start handshake never blocks a tool call.
 func (s *Supervisor) Start(ctx context.Context) error {
 	readyCh, err := s.StartAsync(ctx)
 	if err != nil {
