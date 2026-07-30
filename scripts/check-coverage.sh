@@ -7,6 +7,12 @@
 # gate. It is deliberately set just under the current figure — the point is to
 # catch a regression, not to force a number.
 #
+# -coverpkg=./... instruments every package in the module, not just the ones a
+# test binary happens to touch: a package with no tests enters the profile at
+# 0%, so adding an untested package drags the total down and deleting a
+# package's only test file can never raise it. Without it both holes were
+# invisible to the floor.
+#
 # Ratchet policy: when the tree sits comfortably above the floor, raise FLOOR.
 # Never lower it to make a red build green; add tests instead.
 #
@@ -20,7 +26,7 @@
 # differs by platform. CI enforces on ubuntu only for that reason.
 set -eu
 
-FLOOR="${FLOOR:-70.0}"
+FLOOR="${FLOOR:-71.5}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="${PROFILE:-$ROOT/.testcache/coverage.out}"
 
@@ -28,7 +34,7 @@ cd "$ROOT"
 mkdir -p "$(dirname "$PROFILE")"
 
 echo "coverage: running tests with -covermode=atomic (this takes a few minutes)…"
-GOTMPDIR="$ROOT/.testcache" go test -covermode=atomic -coverprofile="$PROFILE" ./... >/dev/null
+GOTMPDIR="$ROOT/.testcache" go test -covermode=atomic -coverpkg=./... -coverprofile="$PROFILE" ./... >/dev/null
 
 total=$(go tool cover -func="$PROFILE" | awk '/^total:/ {gsub(/%/,"",$NF); print $NF}')
 if [ -z "$total" ]; then
