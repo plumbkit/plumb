@@ -285,6 +285,17 @@ capability; otherwise it returns the cached view plus an honest note that
 only already-analysed or already-pulled files are covered — pass `uris` to
 check specific files.
 
+The same honesty applies to a **cold** server. While a language server is
+still completing its handshake it does not fail — it simply has not published
+anything yet, so a report taken then would read as a clean bill of health. Any
+report assembled while the server is warming is therefore labelled
+`INCOMPLETE`, with the elapsed warm-up time and a `daemon_info` pointer: a
+clean result there is **not** proof the code compiles. The label is applied to
+every outcome, not just an empty one (a partial set can be missing whatever the
+server has not reached yet), and a multi-URI batch is labelled when the server
+behind *any* of its URIs is warming — batches can span languages, and so
+servers.
+
 ---
 
 ## LSP semantic edits

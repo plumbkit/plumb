@@ -106,6 +106,25 @@ func TestDiagnostics_CleanReportOnReadyServer_StaysPlain(t *testing.T) {
 	}
 }
 
+// TestDiagnostics_MultiURI_WarmingBehindLaterURI_IsLabelled: a batch can span
+// languages and roots, so it can span SERVERS. Probing only uris[0] — ready —
+// would hand back a report that reads complete while the server behind a later
+// URI is still indexing.
+func TestDiagnostics_MultiURI_WarmingBehindLaterURI_IsLabelled(t *testing.T) {
+	warmingOnlyForGo := func(uri string) (bool, time.Duration) {
+		return strings.HasSuffix(uri, ".go"), 3 * time.Second
+	}
+	tool := tools.NewDiagnostics(&trackedCleanDiags{}).WithLSPWarmup(warmingOnlyForGo)
+	args, _ := json.Marshal(map[string]any{"uris": []string{"file:///p/a.ts", "file:///p/b.go"}})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("diagnostics: %v", err)
+	}
+	if !strings.Contains(out, "INCOMPLETE") {
+		t.Errorf("a warming server behind a later URI must still label the report: %q", out)
+	}
+}
+
 // trackedCleanDiags reports every file as tracked with no diagnostics — the
 // "analysed and clean" shape, which is indistinguishable from "warming and
 // silent" without the warm-up probe.

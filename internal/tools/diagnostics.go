@@ -150,15 +150,38 @@ func (t *Diagnostics) Execute(ctx context.Context, raw json.RawMessage) (string,
 	// report from a server mid-handshake is incomplete whichever way it reads —
 	// clean means "nothing published yet", and a non-empty set may still be
 	// missing the errors the server has not reached.
+	// The probe runs AFTER the query, so it reflects the server state the report
+	// was actually assembled from.
 	switch len(a.URIs) {
 	case 0:
-		// Whole-workspace query: probe the connection's primary server (uri "").
-		return t.allFiles(ctx) + coldLSPIncompleteNote(t.warmup, ""), nil
+		out := t.allFiles(ctx)
+		return out + coldLSPIncompleteNoteFor(t.warmup, nil), nil
 	case 1:
-		return t.singleURI(ctx, a.URIs[0]) + coldLSPIncompleteNote(t.warmup, a.URIs[0]), nil
+		out := t.singleURI(ctx, a.URIs[0])
+		return out + coldLSPIncompleteNoteFor(t.warmup, a.URIs), nil
 	default:
-		return t.multiURI(ctx, a.URIs) + coldLSPIncompleteNote(t.warmup, a.URIs[0]), nil
+		out := t.multiURI(ctx, a.URIs)
+		return out + coldLSPIncompleteNoteFor(t.warmup, a.URIs), nil
 	}
+}
+
+// coldLSPIncompleteNoteFor returns the incomplete-report caveat for the first of
+// uris whose server is still warming, or "" when every one of them is ready. A
+// batch can span languages and roots — hence several servers — so probing only
+// uris[0] would miss a warming server behind any later URI and hand back a
+// report that reads complete. An empty list probes the connection's primary
+// server (the whole-workspace query). WarmupStatus is resolution-only and never
+// starts a server, so the loop costs nothing.
+func coldLSPIncompleteNoteFor(fn LSPWarmupFn, uris []string) string {
+	if len(uris) == 0 {
+		return coldLSPIncompleteNote(fn, "")
+	}
+	for _, uri := range uris {
+		if note := coldLSPIncompleteNote(fn, uri); note != "" {
+			return note
+		}
+	}
+	return ""
 }
 
 // singleURI dispatches a single-file query by the connection's resolved
