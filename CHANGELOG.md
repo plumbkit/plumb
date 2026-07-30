@@ -124,8 +124,9 @@
   `TestDaemonInfo_UptimeSpansSuspend`, `TestDaemonStartTime_HasNoMonotonicReading`,
   and `TestFormatUptime`.
 
-- **Write durability: every acknowledged write is now fsynced before the call
-  returns ("fsync-before-ack").** A real incident proved the gap: an
+- **Write durability: an acknowledged write now fsyncs its staged file before the
+  call returns, and its parent directory on a best-effort basis
+  ("fsync-before-ack").** A real incident proved the gap: an
   `edit_file` reported success, the machine hard-rebooted seconds later, and
   the edit was gone. The audit found two holes. First, no write path fsynced
   the parent directory after the atomic rename, so the directory entry linking
