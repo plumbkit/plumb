@@ -19,7 +19,7 @@
 ### Changed
 
 - **One home for `.gitignore` writing, held by a new rule shape.** Four
-  hand-rolled gitignore appenders had accumulated by the time last month's
+  hand-rolled gitignore appenders had accumulated by the time the July 2026
   consolidation extracted `paths.EnsureGitignoreEntries`: the audit named two
   (topology, memory), a third (the provenance sidecar's — see Fixed) already
   existed unnoticed, and a fourth (the collab store's) was written while the

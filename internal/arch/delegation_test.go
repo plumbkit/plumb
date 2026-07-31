@@ -56,17 +56,22 @@ func delegationSitesInFile(fset *token.FileSet, pkg, filename string, file *ast.
 				if !ok || len(vs.Names) == 0 {
 					continue
 				}
-				for _, v := range vs.Values {
+				for i, v := range vs.Values {
 					litPos, hits := literalHits(v, rule.Literal)
 					if hits == 0 {
 						continue
 					}
+					// In a multi-name spec, attribute the hit to the name
+					// paired with the matching value, not the first name.
+					name := vs.Names[0].Name
+					if len(vs.Names) == len(vs.Values) {
+						name = vs.Names[i].Name
+					}
 					out = append(out, delegationSite{
 						pkg:  pkg,
-						name: vs.Names[0].Name,
+						name: name,
 						pos:  delegationPos(fset, pkg, filename, litPos),
 					})
-					break
 				}
 			}
 		}
@@ -201,9 +206,9 @@ func allDelegationSites(t *testing.T, root string, rule DelegationRule) []delega
 // TestDelegationRules fails when a function touches a pinned resource's file
 // directly instead of delegating to the single implementation.
 //
-// This is the rule that would have caught the fifth gitignore appender: it
-// shared no name family with the original and open-coded no pinned stdlib
-// call, but it could not avoid naming the file.
+// This is the rule that catches the next hand-rolled appender: it may share
+// no name family with the original and open-code no pinned stdlib call, but
+// it cannot avoid naming the file.
 func TestDelegationRules(t *testing.T) {
 	root := repoRoot(t)
 
@@ -448,6 +453,21 @@ const gitignoreName = ".gitignore"
 	s := sites[0]
 	if s.name != "gitignoreName" || s.funcLevel || s.delegates {
 		t.Errorf("package-level literal not flagged as expected: %+v", s)
+	}
+
+	// In a multi-name spec the hit is attributed to the name paired with the
+	// matching value, so the failure message names the right identifier.
+	multi := `package demo
+
+var other, ignoreName = "x", ".gitignore"
+`
+	fset, file = parseDelegationFixture(t, multi)
+	sites = delegationSitesInFile(fset, "internal/demo", "names.go", file, gitignoreDelegationRule(t))
+	if len(sites) != 1 {
+		t.Fatalf("want exactly one site for the multi-name spec, got %d: %+v", len(sites), sites)
+	}
+	if s := sites[0]; s.name != "ignoreName" || s.funcLevel || s.delegates {
+		t.Errorf("multi-name spec misattributed: %+v", s)
 	}
 }
 
