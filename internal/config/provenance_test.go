@@ -58,3 +58,38 @@ func TestProvenance_Drop(t *testing.T) {
 		t.Error("other key should remain")
 	}
 }
+
+// TestProvenance_GitignoreEntryNotSuppressedBySubstring pins the exact-line
+// matching of the gitignore append. The original hand-rolled implementation
+// used a substring test, so any line merely containing the entry — a
+// commented-out copy, a negation, a longer path — convinced it the entry was
+// already present and the sidecar was silently left unignored.
+func TestProvenance_GitignoreEntryNotSuppressedBySubstring(t *testing.T) {
+	ws := t.TempDir()
+	giPath := filepath.Join(ws, ".plumb", ".gitignore")
+	if err := os.MkdirAll(filepath.Dir(giPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(giPath, []byte("#config.provenance.json\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := RecordAgentWrite(ws, "log_level", ProvenanceEntry{Source: "agent"}); err != nil {
+		t.Fatalf("RecordAgentWrite: %v", err)
+	}
+	data, err := os.ReadFile(giPath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	bare := 0
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if strings.TrimSpace(line) == "config.provenance.json" {
+			bare++
+		}
+	}
+	if bare != 1 {
+		t.Errorf("config.provenance.json must appear as its own line exactly once, got %d:\n%s", bare, data)
+	}
+	if !strings.Contains(string(data), "#config.provenance.json\n") {
+		t.Errorf("pre-existing commented-out line was lost:\n%s", data)
+	}
+}
