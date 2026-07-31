@@ -36,6 +36,12 @@ func (s *connSession) attachWorkspace(ctx context.Context, rootURI string) {
 // target, so a reconnect restores the workspace the caller actually chose rather
 // than whatever file it touched first. See persistPin.
 func (s *connSession) attachWorkspacePin(ctx context.Context, rootURI string, origin sessionstate.PinSource) {
+	s.attachWorkspacePinFrom(ctx, rootURI, origin, pinTriggerLive)
+}
+
+// attachWorkspacePinFrom is attachWorkspacePin with the pin trigger made
+// explicit, so a pin restored on reconnect is not logged as a live one.
+func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string, origin sessionstate.PinSource, trigger pinTrigger) {
 	folder := paths.URIToPath(rootURI)
 	if folder == "" || folder == "/" {
 		return
@@ -59,6 +65,7 @@ func (s *connSession) attachWorkspacePin(ctx context.Context, rootURI string, or
 		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = folder
 		v.acquiredLanguage = language
+		recordPinProvenance(v, origin, trigger, "")
 		// Rehydrate strict-mode reads for this root (after a daemon restart) and
 		// persist the pin, both scoped to the proxy session ID. No-ops when
 		// persistence is off or this is not a serve-proxy connection.
@@ -92,6 +99,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 			return
 		}
 		v.acquiredRoot = root
+		recordPinProvenance(v, sessionstate.PinSourceUnknown, pinTriggerLive, "")
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
 		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState, sessionstate.PinSourceUnknown)
 		s.startQualityRunner(v, root)
@@ -135,7 +143,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 // infer. An unknown or inactive override is ignored (detection wins), so a typo
 // or an uninstalled server never breaks the pin.
 func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string) (string, error) {
-	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart)
+	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive)
 }
 
 // repinWorkspaceFrom is repinWorkspace with the pin origin made explicit.
@@ -144,7 +152,7 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride s
 // named. Recording both as session_start would let a stale roots answer outrank
 // a deliberate pin on the next reconnect — the bug this distinction exists to
 // prevent.
-func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource) (string, error) {
+func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource, trigger pinTrigger) (string, error) {
 	folder = paths.URIToPath(folder)
 	if folder == "" || folder == "/" {
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
@@ -158,7 +166,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
 		language = langOverride
 	}
-	if s.attachOrRepinTo(ctx, root, language, origin) {
+	if s.attachOrRepinTo(ctx, root, language, origin, trigger) {
 		s.applyProjectConfig(root)
 	}
 	return root, nil
@@ -170,7 +178,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 // root actually changed (false on a no-op re-pin to the same root). language is
 // the LSP language for root, or LanguageNone. The whole teardown-and-reattach
 // runs under the one mutation lane so readers never see a half-switched view.
-func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource) bool {
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger) bool {
 	changed := false
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
@@ -189,6 +197,10 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			// pin.
 			if origin == sessionstate.PinSourceSessionStart {
 				s.persistPin(v.proxySessionID, root, language, v.session.PersistState, origin)
+				// The root did not move, so pinAt/pinPrev stand; only the label is
+				// upgraded. Rebuild the policy so boundary errors quote the new one.
+				v.pinVia = pinViaLabel(origin, trigger)
+				v.policy = s.buildPathPolicy(v)
 			}
 			return
 		}
@@ -224,6 +236,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		v.discoveredLangs = distinctLanguages(discovered)
 		v.acquiredRoot = root
 		v.acquiredLanguage = language
+		recordPinProvenance(v, origin, trigger, prev)
 		v.lastCfgMtime = time.Time{}
 		// Rehydrate AFTER the Reset() above, keyed by the NEW root, so a re-pin to a
 		// different workspace can never restore the old project's reads. Re-persist
@@ -250,7 +263,8 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 				info.ClientVersion = cv
 			}
 		})
-		s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter)
+		s.log().Info("daemon: session re-pinned", "from", prev, "to", root, "language", language, "adapter", adapter,
+			"source", pinSourceLabel(origin), "trigger", string(trigger))
 	})
 	return changed
 }
@@ -265,7 +279,7 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 	req := s.clientRequest
 	s.requestMu.RUnlock()
 	if req != nil {
-		if folder := paths.URIToPath(rootFromRoots(ctx, req)); folder != "" && folder != "/" {
+		if folder := paths.URIToPath(rootFromRoots(ctx, req, s.log())); folder != "" && folder != "/" {
 			root, _, err := s.pool.Detect(folder)
 			if err != nil {
 				return folder
@@ -516,67 +530,4 @@ func adaptersFor(adapter string) []string {
 		return nil
 	}
 	return []string{adapter}
-}
-
-func adapterForLanguage(language string) string {
-	switch language {
-	case "go":
-		return "gopls"
-	case "python":
-		return "pyright"
-	case "java":
-		return "jdtls"
-	case "rust":
-		return "rust-analyzer"
-	case "swift":
-		return "sourcekit-lsp"
-	case "zig":
-		return "zls"
-	case "typescript", "javascript":
-		return "typescript-language-server"
-	case "kotlin":
-		return "kotlin-language-server"
-	case "html":
-		return "vscode-html-language-server"
-	default:
-		return ""
-	}
-}
-
-func detectAnyLanguageAt(dir string, cfg config.Config) string {
-	langs := make([]string, 0, len(cfg.LSP))
-	for name, lspCfg := range cfg.LSP {
-		if len(lspCfg.RootMarkers) > 0 {
-			langs = append(langs, name)
-		}
-	}
-	sort.Slice(langs, func(i, j int) bool {
-		if langs[i] == "go" {
-			return true
-		}
-		if langs[j] == "go" {
-			return false
-		}
-		return langs[i] < langs[j]
-	})
-	homeInfo := homeFileInfo()
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		// Stop at $HOME, mirroring the pool's Detect/detectLanguageAt walks: a stray
-		// marker in the home directory (e.g. a global ~/package.json) must not be
-		// reported as the detected language for a workspace beneath it.
-		if sameDirAs(d, homeInfo) {
-			return ""
-		}
-		for _, name := range langs {
-			for _, marker := range cfg.LSP[name].RootMarkers {
-				if markerPresent(d, marker) {
-					return name
-				}
-			}
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return ""
-		}
-	}
 }

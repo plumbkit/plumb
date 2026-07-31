@@ -147,6 +147,15 @@ type sessionView struct {
 	// daemon restart. Authoritative — it outranks a client-reported root. Empty on
 	// a first connect and on a proxy that predates the key.
 	replayedPin string
+
+	// pinVia / pinAt / pinPrev are pin-drift observability for issue #182: the
+	// label of the source that last set this connection's pin (see pinViaLabel),
+	// when it was set, and the root it replaced. Stamped inside the attach /
+	// re-pin mutate, beside acquiredRoot, so they can never disagree with the pin
+	// they describe. Zero while unattached.
+	pinVia  string
+	pinAt   time.Time
+	pinPrev string
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

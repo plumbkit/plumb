@@ -2,6 +2,25 @@
 
 ## 0.16.1 (unreleased)
 
+### Added
+
+- **Pin-drift observability: every workspace re-pin now explains itself.** A
+  client that multiplexes several logical agent sessions over one `plumb
+  serve` connection can have a peer's `session_start` silently re-pin the
+  shared connection (issue #182); confirming that from a log was impossible
+  because the evidence was spread across unlabelled lines. Four
+  hypothesis-neutral additions close that: the `session re-pinned` log gains
+  `source` (`session_start`/`roots`/`unknown`) and `trigger` (`live`/`restore`)
+  fields; the `roots changed` log records the received root list (count and
+  values, bounded at eight); the roots-resolution logs carry the session id
+  like every other per-connection line; and a workspace boundary violation now
+  ends with the pin's provenance — "Pin provenance: set 2m ago via
+  session_start (previously /x/cvex)." — so the refused agent's own error says
+  who moved the pin and when. `daemon_info` reports the same provenance line.
+  Log message strings are unchanged, so `grep -E 'session re-pinned|roots
+  changed'` keeps working. No behaviour changes: groundwork for #182, not the
+  fix.
+
 ### Fixed
 
 - **`config.provenance.json` could stay committable despite the ignore

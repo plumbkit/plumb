@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -14,10 +15,40 @@ import (
 // connection. A nil guard is a no-op, preserving simple unit-test setup.
 type BoundaryGuard func(path string) error
 
+// PinProvenance records how, when, and from where the connection's workspace
+// pin was last set. The zero value means unknown, and renders nothing.
+type PinProvenance struct {
+	Source   string    // "session_start", "roots", "unknown"; "restore:"-prefixed when replayed on reconnect; "" renders nothing
+	At       time.Time // when the pin was set; zero omits the age
+	Previous string    // previously pinned root; "" on a first attach
+}
+
+// String renders the pin provenance for splicing into a boundary-error
+// message or daemon_info output. An empty Source is the zero value's
+// signature and renders "" so callers can unconditionally append the result
+// without an extra empty-check producing a stray space.
+func (p PinProvenance) String() string {
+	if p.Source == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Pin provenance: set")
+	if !p.At.IsZero() {
+		sb.WriteString(" " + humaniseAge(time.Since(p.At)) + " ago")
+	}
+	sb.WriteString(" via " + p.Source)
+	if p.Previous != "" {
+		sb.WriteString(" (previously " + p.Previous + ")")
+	}
+	sb.WriteString(".")
+	return sb.String()
+}
+
 type WorkspaceBoundaryError struct {
 	Workspace    string
 	Path         string
-	ReadOnlyRoot string // non-empty when the path is under a read-only root; indicates a write was attempted
+	ReadOnlyRoot string        // non-empty when the path is under a read-only root; indicates a write was attempted
+	Provenance   PinProvenance // pin provenance for the different-project denial; zero value renders nothing (ReadOnlyRoot denials never carry it)
 }
 
 // UnattachedWorkspaceError is returned when a path-bearing tool is called on a
@@ -48,12 +79,16 @@ func (e WorkspaceBoundaryError) Error() string {
 			e.Path, e.ReadOnlyRoot,
 		)
 	}
-	return fmt.Sprintf(
+	msg := fmt.Sprintf(
 		"workspace boundary violation: this connection is pinned to %s; %s is in a different project. "+
 			"To work there, call session_start with workspace set to that project's root — it will re-pin this connection. "+
 			"Do not browse other projects on disk.",
 		e.Workspace, e.Path,
 	)
+	if prov := e.Provenance.String(); prov != "" {
+		msg += " " + prov
+	}
+	return msg
 }
 
 func (g BoundaryGuard) check(path string) error {

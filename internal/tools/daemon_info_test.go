@@ -204,6 +204,53 @@ func TestDaemonInfo_ToolProfile(t *testing.T) {
 	})
 }
 
+// TestDaemonInfo_PinProvenanceLine covers the optional workspace-pin
+// provenance line: wired with a non-zero provenance, unwired, and wired but
+// returning the zero value (which itself renders "", so the line must be
+// absent the same as unwired).
+func TestDaemonInfo_PinProvenanceLine(t *testing.T) {
+	t.Run("wired non-zero", func(t *testing.T) {
+		d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now()).
+			WithPinProvenance(func() PinProvenance {
+				return PinProvenance{
+					Source:   "session_start",
+					At:       time.Now().Add(-2*time.Minute - 5*time.Second),
+					Previous: "/x/cvex",
+				}
+			})
+		out, err := d.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "Pin provenance:") || !strings.Contains(out, "via session_start") {
+			t.Errorf("missing pin provenance line:\n%s", out)
+		}
+	})
+
+	t.Run("unwired", func(t *testing.T) {
+		d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now())
+		out, err := d.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "Pin provenance:") {
+			t.Errorf("pin provenance line should be absent when unwired:\n%s", out)
+		}
+	})
+
+	t.Run("wired zero value", func(t *testing.T) {
+		d := NewDaemonInfo("sess-1", "swift-falcon", "0.7.x", time.Now()).
+			WithPinProvenance(func() PinProvenance { return PinProvenance{} })
+		out, err := d.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "Pin provenance:") {
+			t.Errorf("pin provenance line should be absent for the zero value:\n%s", out)
+		}
+	})
+}
+
 // TestRunWithTimeout_ReturnsResultBeforeTimeout verifies the happy path:
 // a fast producer's value is returned, not the sentinel.
 func TestRunWithTimeout_ReturnsResultBeforeTimeout(t *testing.T) {

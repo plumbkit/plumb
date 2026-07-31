@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testBoundaryGuard(workspace string) BoundaryGuard {
@@ -111,6 +112,72 @@ func TestFindReplaceBoundaryRejectsOutsideWorkspace(t *testing.T) {
 	}
 	if string(got) != "before" {
 		t.Fatalf("outside file was modified: %q", got)
+	}
+}
+
+func TestPinProvenance_String(t *testing.T) {
+	set2mAgo := time.Now().Add(-2*time.Minute - 5*time.Second)
+	tests := []struct {
+		name string
+		prov PinProvenance
+		want string
+	}{
+		{
+			name: "zero value renders nothing",
+			prov: PinProvenance{},
+			want: "",
+		},
+		{
+			name: "full",
+			prov: PinProvenance{Source: "session_start", At: set2mAgo, Previous: "/x/cvex"},
+			want: "Pin provenance: set 2m ago via session_start (previously /x/cvex).",
+		},
+		{
+			name: "zero At omits the age",
+			prov: PinProvenance{Source: "roots", Previous: "/x/cvex"},
+			want: "Pin provenance: set via roots (previously /x/cvex).",
+		},
+		{
+			name: "empty Previous omits the parenthetical",
+			prov: PinProvenance{Source: "session_start", At: set2mAgo},
+			want: "Pin provenance: set 2m ago via session_start.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.prov.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceBoundaryError_ProvenanceAppended(t *testing.T) {
+	err := WorkspaceBoundaryError{
+		Workspace: "/w",
+		Path:      "/other",
+		Provenance: PinProvenance{
+			Source:   "session_start",
+			At:       time.Now().Add(-2*time.Minute - 5*time.Second),
+			Previous: "/x/cvex",
+		},
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "workspace boundary violation: this connection is pinned to /w; /other is in a different project.") {
+		t.Errorf("existing sentence missing:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Pin provenance: set 2m ago via session_start (previously /x/cvex).") {
+		t.Errorf("provenance not appended:\n%s", msg)
+	}
+}
+
+func TestWorkspaceBoundaryError_ZeroProvenanceUnchanged(t *testing.T) {
+	err := WorkspaceBoundaryError{Workspace: "/w", Path: "/other"}
+	want := "workspace boundary violation: this connection is pinned to /w; /other is in a different project. " +
+		"To work there, call session_start with workspace set to that project's root — it will re-pin this connection. " +
+		"Do not browse other projects on disk."
+	if got := err.Error(); got != want {
+		t.Errorf("zero-provenance message changed:\ngot:  %q\nwant: %q", got, want)
 	}
 }
 

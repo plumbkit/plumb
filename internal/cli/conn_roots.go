@@ -10,9 +10,22 @@ package cli
 import (
 	"context"
 
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
+
+// handleRootsListChanged services notifications/roots/list_changed: refresh the
+// client-request callback, log the roots actually received (the pin-drift
+// evidence issue #182 needed and did not have), then apply them.
+func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.RequestFn) {
+	s.setClientRequest(request)
+	roots := rootsFromClient(ctx, request, s.log())
+	s.log().Info("daemon: roots changed — re-fetching workspace root",
+		"count", len(roots), "roots", boundedForLog(roots, 8))
+	s.onRootsChanged(ctx, roots)
+	s.startConfigWatcher()
+}
 
 // onRootsChanged applies a client's updated workspace roots (the
 // notifications/roots/list_changed path). On the first attach it pins the root,
@@ -44,7 +57,7 @@ func (s *connSession) onRootsChanged(ctx context.Context, roots []string) {
 	if folder == "" || folder == "/" {
 		return
 	}
-	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots); err != nil {
+	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots, pinTriggerLive); err != nil {
 		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
 	}
 }

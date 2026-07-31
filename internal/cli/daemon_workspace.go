@@ -13,23 +13,35 @@ import (
 
 // rootFromRoots calls roots/list on the MCP client and returns the first root
 // URI, or "" if the client does not support roots/list or returns no roots.
-func rootFromRoots(ctx context.Context, request mcp.RequestFn) string {
-	roots := rootsFromClient(ctx, request)
+// logger scopes the log lines to the calling connection (session_id); nil falls
+// back to the process default.
+func rootFromRoots(ctx context.Context, request mcp.RequestFn, logger *slog.Logger) string {
+	roots := rootsFromClient(ctx, request, logger)
 	if len(roots) == 0 {
 		return ""
 	}
-	slog.Info("workspace root from MCP client", "rootURI", roots[0])
+	loggerOr(logger).Info("workspace root from MCP client", "rootURI", roots[0])
 	return roots[0]
+}
+
+// loggerOr falls back to the process default so a nil logger (tests, static
+// callers) still logs instead of panicking.
+func loggerOr(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		return slog.Default()
+	}
+	return l
 }
 
 // rootsFromClient returns ALL root URIs the client reports via roots/list, in
 // order, or nil when it reports none or does not support roots/list. onRootsChanged
 // needs the full list — not just Roots[0] — so it can tell a mere reorder (the
 // pinned root is still present) from a genuine workspace removal.
-func rootsFromClient(ctx context.Context, request mcp.RequestFn) []string {
+func rootsFromClient(ctx context.Context, request mcp.RequestFn, logger *slog.Logger) []string {
+	logger = loggerOr(logger)
 	raw, err := request(ctx, "roots/list", nil)
 	if err != nil {
-		slog.Info("roots/list not supported by client — deferring to OnBeforeTool", "err", err)
+		logger.Info("roots/list not supported by client — deferring to OnBeforeTool", "err", err)
 		return nil
 	}
 
@@ -39,11 +51,11 @@ func rootsFromClient(ctx context.Context, request mcp.RequestFn) []string {
 		} `json:"roots"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		slog.Warn("parsing roots/list response", "err", err)
+		logger.Warn("parsing roots/list response", "err", err)
 		return nil
 	}
 	if len(resp.Roots) == 0 {
-		slog.Info("roots/list returned no roots — deferring to OnBeforeTool")
+		logger.Info("roots/list returned no roots — deferring to OnBeforeTool")
 		return nil
 	}
 

@@ -48,6 +48,7 @@ type daemonInfo struct {
 	purpose       func() string                                      // optional; nil when no purpose accessor is wired
 	lspStatus     func() LSPStatus                                   // optional; nil when no LSP accessor is wired
 	toolProfile   func() (profile string, hidden int, reason string) // optional; nil when no tool-profile accessor is wired
+	pinProvenance func() PinProvenance                               // optional; nil when no provenance accessor is wired
 }
 
 // WithLSPStatus wires an accessor returning the session's live language-server
@@ -84,6 +85,15 @@ func (t *daemonInfo) WithToolProfile(fn func() (profile string, hidden int, reas
 	return t
 }
 
+// WithPinProvenance wires an accessor returning this connection's current
+// workspace-pin provenance. Nil-safe: when unset, or when the returned value
+// is the zero PinProvenance, daemon_info omits the provenance line. Returns
+// the receiver for chaining.
+func (t *daemonInfo) WithPinProvenance(fn func() PinProvenance) *daemonInfo {
+	t.pinProvenance = fn
+	return t
+}
+
 // NewDaemonInfo creates a tool that exposes session and daemon metadata.
 // sessID and sessName identify the current MCP connection; daemonVersion and
 // startedAt describe the daemon process itself.
@@ -112,7 +122,8 @@ func (t *daemonInfo) Description() string {
 	return "Returns metadata about the current MCP session and daemon process: " +
 		"session name (e.g. swift-falcon), session ID, daemon version, start timestamp, and uptime, " +
 		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
-		"for a pending restart-bound change). " +
+		"for a pending restart-bound change), and — when available — this connection's workspace-pin " +
+		"provenance (how, when, and from where the pin was last set). " +
 		"It also reports this session's total tool-call count and its slowest calls " +
 		"(per-call durations from recorded stats). " +
 		"Use this to identify which session you are operating in or to verify the daemon state."
@@ -153,6 +164,11 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 		t.startedAt.Format(time.RFC3339),
 		formatUptime(time.Since(t.startedAt)),
 	)
+	if t.pinProvenance != nil {
+		if prov := t.pinProvenance().String(); prov != "" {
+			out += "\n" + prov
+		}
+	}
 	if t.purpose != nil {
 		if p := t.purpose(); p != "" {
 			out += "\npurpose:        " + p

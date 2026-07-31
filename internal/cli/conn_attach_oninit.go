@@ -47,7 +47,7 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	if s.workspace() == "" {
 		// Only ask the client for roots when nothing stronger has pinned us —
 		// roots/list is a synchronous round-trip that can block.
-		s.attachWorkspace(ctx, rootFromRoots(ctx, request))
+		s.attachWorkspace(ctx, rootFromRoots(ctx, request, s.log()))
 	}
 	if s.workspace() == "" && pinOK {
 		// A roots-origin or legacy pin: the rung that keeps a roots-less client
@@ -73,7 +73,7 @@ func (s *connSession) attachReplayedPin(ctx context.Context, root string, origin
 	if root == "" {
 		return
 	}
-	if _, err := s.repinWorkspaceFrom(ctx, root, "", origin); err != nil {
+	if _, err := s.repinWorkspaceFrom(ctx, root, "", origin, pinTriggerRestore); err != nil {
 		s.log().Warn("daemon: restoring persisted pin failed", "root", root, "err", err)
 		return
 	}
