@@ -60,10 +60,13 @@ Key packages:
 | `internal/redact/` | Secret scrubber (API keys, tokens, PEM keys, URL credentials, secret assignments) applied before any generated/episodic memory is persisted |
 | `internal/tui/` | Bubble Tea v2 TUI — live session + stats dashboard, recent-edits panel |
 | `internal/render/` | Shared, pure CLI/TUI presentation helpers (stdlib + rendering libs only) |
+| `internal/fsync/` | The one atomic temp-then-rename write (`AtomicWrite`): stages a per-writer temp sibling, fsyncs it before the rename and the parent dir after, preserves the target's permissions on rewrite, and falls back across filesystems (EXDEV). Every durable write in the tree goes through it; the fsync steps are gated by the `[edits] fsync` knob |
+| `internal/sqlitex/` | The one place a SQLite DSN is built (`Open`/`OpenReadOnly`): pragmas, busy timeout, WAL and a real `file:`-URI `mode=ro` by construction, with the DB dir created 0700 |
+| `internal/textfmt/` | Stdlib-only text primitives (no lipgloss): pluralisation, rune-safe truncation/ellipsis, and KiB/MiB byte-size labels |
 | `internal/fsguard/` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs |
 | `internal/monitor/` | Process resource-usage snapshots (CPU %, memory) plus daemon start time, feeding the TUI daemon metrics |
 | `internal/cli/` | Cobra subcommands; daemon, proxy, pool, workspace detection, `config show` |
-| `internal/arch/` | The layered architecture as data (`arch.Layers`) plus the tests that enforce it. No runtime code depends on it |
+| `internal/arch/` | The layered architecture as data (`arch.Layers`) plus the shared-primitives and pinned-calls rules (`PrimitiveRules`/`CallRules`) — all enforced by tests. No runtime code depends on it |
 
 ## Daemon architecture
 
