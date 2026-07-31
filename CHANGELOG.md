@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.16.1 (unreleased)
+
+### Fixed
+
+- **`config.provenance.json` could stay committable despite the ignore
+  machinery.** The gitignore append for the agent-config provenance sidecar
+  tested for its entry with a substring match, so a `.plumb/.gitignore` line
+  merely *containing* `config.provenance.json` — a commented-out
+  `#config.provenance.json`, a negation, a longer filename ending in it —
+  convinced it the entry was already present, and the real entry was silently
+  never written. The sidecar holds local audit metadata (session ids,
+  timestamps), and keeping it out of commits is the function's whole job. It
+  now delegates to `paths.EnsureGitignoreEntries`, which matches entries by
+  exact trimmed line; the regression test plants the commented-out line and
+  was confirmed to fail against the old implementation.
+
+### Changed
+
+- **One home for `.gitignore` writing, held by a new rule shape.** Four
+  hand-rolled gitignore appenders had accumulated by the time last month's
+  consolidation extracted `paths.EnsureGitignoreEntries`: the audit named two
+  (topology, memory), a third (the provenance sidecar's — see Fixed) already
+  existed unnoticed, and a fourth (the collab store's) was written while the
+  fix waited. The extraction migrated only the two the audit named, so the
+  other two carried on — one of them defective. Both now delegate, closing
+  the last item of the audit batch (#69). Because neither an audit nor an
+  extraction demonstrably finds every copy, `internal/arch` gains a third
+  rule kind, `DelegationRule`: a production function containing the string
+  literal `".gitignore"` outside `internal/paths` must call
+  `paths.EnsureGitignoreEntries`, or carry an allowlist entry stating why it
+  is genuinely different (two exist: the directory walker, which only *reads*
+  ignore files, and the rule's own declaration, which must spell the literal
+  it pins). The existing name- and call-based rules cannot see this shape — a
+  hand-rolled copy shares no name family with the helper and open-codes no
+  pinned stdlib call, but it cannot avoid naming the file. A literal matches
+  exactly, or as a path ending in `/.gitignore` — never on a bare substring,
+  so `.gitignore` inside prose (tool descriptions, error wraps, log messages)
+  never matches. The checker was verified red against both copies before they
+  were migrated, and the collab copy's source is frozen into the test suite
+  so the red case stays pinned rather than verified once and forgotten.
+
 ## 0.16.0 (2026-07-31)
 
 ### Added
