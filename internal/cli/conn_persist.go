@@ -216,7 +216,7 @@ func (s *connSession) rehydratePin(ctx context.Context) {
 	if !ok {
 		return
 	}
-	s.attachWorkspacePin(ctx, "file://"+root, source)
+	s.attachWorkspacePinFrom(ctx, "file://"+root, source, pinTriggerRestore)
 	if s.workspace() != "" {
 		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", root, "source", string(source))
 	}

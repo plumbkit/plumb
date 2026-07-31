@@ -127,7 +127,11 @@ func (s *connSession) buildPathPolicy(v *sessionView) *tools.PathPolicy {
 	if v.ws.AllowDependencyReads && v.depRootsLang == v.acquiredLanguage {
 		roots = append(roots, v.depRoots...)
 	}
-	return tools.NewPathPolicy(ws, roots)
+	return tools.NewPathPolicy(ws, roots).WithProvenance(tools.PinProvenance{
+		Source:   v.pinVia,
+		At:       v.pinAt,
+		Previous: v.pinPrev,
+	})
 }
 
 // warmDepRoots computes the session language's read-only toolchain dependency

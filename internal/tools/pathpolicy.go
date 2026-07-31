@@ -38,8 +38,9 @@ type AllowedRoot struct {
 // rebuilds a fresh one on workspace re-pin or config change rather than
 // mutating in place.
 type PathPolicy struct {
-	primary string // the workspace root, named in the boundary-violation error
-	roots   []AllowedRoot
+	primary    string // the workspace root, named in the boundary-violation error
+	roots      []AllowedRoot
+	provenance PinProvenance // attached to different-project boundary errors this policy produces
 }
 
 // NewPathPolicy canonicalises primary and roots and returns an immutable policy.
@@ -55,6 +56,13 @@ func NewPathPolicy(primary string, roots []AllowedRoot) *PathPolicy {
 		canon = append(canon, AllowedRoot{Path: canonicalRoot(r.Path), Access: r.Access, Label: r.Label})
 	}
 	return &PathPolicy{primary: canonicalRoot(primary), roots: canon}
+}
+
+// WithProvenance attaches pin provenance to boundary errors this policy
+// produces. Call only during construction, before the policy is published.
+func (p *PathPolicy) WithProvenance(prov PinProvenance) *PathPolicy {
+	p.provenance = prov
+	return p
 }
 
 // match returns the longest-prefix root containing path (regardless of access)
@@ -96,7 +104,7 @@ func (p *PathPolicy) Check(path string, want Access) (AllowedRoot, error) {
 		// Matched a root, but its access level is insufficient (e.g. write to a read-only dep root).
 		return AllowedRoot{}, WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, ReadOnlyRoot: r.Label}
 	}
-	return AllowedRoot{}, NewWorkspaceBoundaryError(p.primary, cleaned)
+	return AllowedRoot{}, WorkspaceBoundaryError{Workspace: p.primary, Path: cleaned, Provenance: p.provenance}
 }
 
 // OutsideWorkspaceLabel returns the matched root's label when path resolves

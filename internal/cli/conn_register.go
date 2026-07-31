@@ -172,7 +172,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 				return p, 0, reason
 			}
 			return p, hiddenToolCount(srv), reason
-		}))
+		}).
+		WithPinProvenance(s.pinProvenance))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessID).WithBoundary(boundary).
 		WithTopology(topoFn).
@@ -311,10 +312,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		s.startConfigWatcher()
 	}
 	srv.OnRootsChanged = func(initCtx context.Context, request mcp.RequestFn) {
-		s.setClientRequest(request)
-		s.log().Info("daemon: roots changed — re-fetching workspace root")
-		s.onRootsChanged(initCtx, rootsFromClient(initCtx, request))
-		s.startConfigWatcher()
+		s.handleRootsListChanged(initCtx, request)
 	}
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage) {
 		s.onBeforeTool(toolCtx, name, args)

@@ -9,8 +9,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 func TestRootsRotation_ReorderKeepsCurrentPin(t *testing.T) {
@@ -99,6 +103,42 @@ func TestRootsChanged_FirstAttachPinsFirstRoot(t *testing.T) {
 	s.onRootsChanged(context.Background(), []string{"file://" + rootA, "file://" + rootB})
 	if got := s.workspace(); got != rootA {
 		t.Fatalf("first attach = %q, want %q", got, rootA)
+	}
+}
+
+func TestRootsChanged_LogsReceivedRootsBounded(t *testing.T) {
+	// The roots-changed log must record what the client actually reported — the
+	// pin-drift evidence issue #182's grep needed — bounded so a pathological
+	// multi-root client cannot flood the log line.
+	store, ss := newOriginStore(t)
+	rootA := freshTempDir(t)
+	mustGitDir(t, rootA)
+
+	extras := []string{"b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	uris := make([]string, 0, len(extras)+1)
+	uris = append(uris, "file://"+rootA)
+	for _, extra := range extras {
+		uris = append(uris, "file:///nowhere/"+extra)
+	}
+	quoted := make([]string, 0, len(uris))
+	for _, u := range uris {
+		quoted = append(quoted, `{"uri":"`+u+`"}`)
+	}
+	fake := mcp.RequestFn(func(_ context.Context, method string, _ any) (json.RawMessage, error) {
+		if method != "roots/list" {
+			return nil, nil
+		}
+		return json.RawMessage(`{"roots":[` + strings.Join(quoted, ",") + `]}`), nil
+	})
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	buf := captureLog(s)
+	s.handleRootsListChanged(context.Background(), fake)
+
+	for _, want := range []string{"roots changed", "count=10", "file://" + rootA, "+2 more"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("roots-changed log missing %q:\n%s", want, buf.String())
+		}
 	}
 }
 

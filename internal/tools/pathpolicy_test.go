@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPathPolicy_ReadWriteAccess(t *testing.T) {
@@ -135,6 +136,41 @@ func TestPathPolicy_ReadOnlyWriteDenialMessage(t *testing.T) {
 	}
 	if !strings.Contains(errOut.Error(), "different project") {
 		t.Errorf("unmatched-path denial should say 'different project'; got: %s", errOut.Error())
+	}
+}
+
+func TestPathPolicy_ProvenanceFlowsIntoBoundaryError(t *testing.T) {
+	ws := t.TempDir()
+	dep := t.TempDir()
+	prov := PinProvenance{
+		Source:   "session_start",
+		At:       time.Now().Add(-2*time.Minute - 5*time.Second),
+		Previous: "/x/cvex",
+	}
+	pol := NewPathPolicy(ws, []AllowedRoot{
+		{Path: ws, Access: AccessReadWrite, Label: "workspace"},
+		{Path: dep, Access: AccessRead, Label: "GOMODCACHE"},
+	}).WithProvenance(prov)
+
+	// Different-project denial: carries the provenance.
+	outside := filepath.Join(t.TempDir(), "x.go")
+	_, err := pol.Check(outside, AccessRead)
+	if err == nil {
+		t.Fatal("expected denial for path outside all roots")
+	}
+	if !strings.Contains(err.Error(), "via session_start") {
+		t.Errorf("different-project denial should carry provenance; got: %s", err.Error())
+	}
+
+	// Read-only-root denial: must NOT carry the provenance, even though the
+	// policy has one configured.
+	depFile := filepath.Join(dep, "lib.go")
+	_, errRO := pol.Check(depFile, AccessReadWrite)
+	if errRO == nil {
+		t.Fatal("expected denial for write to read-only root")
+	}
+	if strings.Contains(errRO.Error(), "Pin provenance") {
+		t.Errorf("read-only-root denial must not carry provenance; got: %s", errRO.Error())
 	}
 }
 
