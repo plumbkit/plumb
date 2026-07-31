@@ -162,8 +162,21 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 	p.langsMu.Lock()
 	p.langs = next
 	p.langsMu.Unlock()
+	// Published last, so a connection that observes the new generation is
+	// guaranteed to see the widened set when it re-detects. Bumped only on a real
+	// widening — the already-enabled no-op above returns before here, so a repeat
+	// `enable-lsp go` costs live sessions nothing.
+	p.langsGen.Add(1)
 
 	return false, nil
+}
+
+// langsGeneration returns the current effective-language-set generation. A live
+// connection compares it against the generation it last resolved its primary
+// language at; a difference means `enable-lsp` widened the set and the primary
+// may now be resolvable. See connSession.refreshPrimaryIfStale.
+func (p *workspacePool) langsGeneration() uint64 {
+	return p.langsGen.Load()
 }
 
 // enableLanguageCtrl is the control-socket adapter over enableLanguage: it maps

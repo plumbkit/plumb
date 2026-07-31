@@ -54,6 +54,8 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErro
 		} else {
 			sb.WriteString("LSP is ready — use `workspace_symbols` to survey the codebase.\n\n")
 		}
+	case t.writeLSPRouted(sb):
+		// routed advisory already written
 	case t.topologyActive():
 		sb.WriteString("No language server is attached, but the topology index is active — use " +
 			"`topology_search` and `file_outline` for discovery and structure. " +
@@ -83,6 +85,26 @@ func (t *SessionStart) writeNoLSPGuidance(sb *strings.Builder, lang, lspKey stri
 		fmt.Fprintf(sb, "Its adapter is opt-in — set `[lsp.%s] enabled = true` and ensure the server is on PATH. "+
 			"For language-server-free symbol search, enable the topology index (`[topology] enabled = true`).\n\n", lspKey)
 	}
+}
+
+// writeLSPRouted covers a session with no primary language server whose files
+// are nonetheless served by per-file routing — a workspace root with no
+// detectable language (a bare .plumb/ root) never acquires a primary, so the
+// checks above all miss and the agent used to be told, falsely, that no language
+// server was attached. Reports whether it wrote anything.
+func (t *SessionStart) writeLSPRouted(sb *strings.Builder) bool {
+	routed := t.lspRouted()
+	if len(routed) == 0 {
+		return false
+	}
+	fmt.Fprintf(sb, "No primary language server is attached, but %s files here are served by a live language server — "+
+		"`get_definition`, `find_references`, and `diagnostics` work for them. ", strings.Join(routed, "/"))
+	if t.topologyActive() {
+		sb.WriteString("For anything else, the topology index is active — use `topology_search` and `file_outline`.\n\n")
+		return true
+	}
+	sb.WriteString("For anything else, use `search_in_files` and `list_files`.\n\n")
+	return true
 }
 
 // writeLSPWarming writes a warm-up advisory when the primary language server is

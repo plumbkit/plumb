@@ -112,7 +112,8 @@ func TestDaemonInfo_OmitsPurposeWhenEmpty(t *testing.T) {
 }
 
 // TestDaemonInfoLSPStatusRow covers the three-state lsp row (ready / warming /
-// none attached) and its omission when no accessor is wired.
+// none attached), the routed-language suffix, and the row's omission when no
+// accessor is wired.
 func TestDaemonInfoLSPStatusRow(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -128,6 +129,12 @@ func TestDaemonInfoLSPStatusRow(t *testing.T) {
 		{"warming without elapsed", &LSPStatus{Language: "go", Warming: true}, "lsp:            warming (go)"},
 		{"empty language means none attached", &LSPStatus{}, "lsp:            none attached"},
 		{"LanguageNone means none attached", &LSPStatus{Language: "none"}, "lsp:            none attached"},
+		// PLAN-258: "none attached" alone told agents no language server was
+		// serving them while a routed one was answering every query.
+		{"no primary but routed", &LSPStatus{Routed: []string{"go"}}, "lsp:            none attached (primary); routed: go"},
+		{"no primary, several routed", &LSPStatus{Routed: []string{"go", "html"}}, "lsp:            none attached (primary); routed: go, html"},
+		{"ready with a routed secondary", &LSPStatus{Language: "go", Routed: []string{"html"}}, "lsp:            ready (go); routed: html"},
+		{"warming with a routed secondary", &LSPStatus{Language: "go", Warming: true, Routed: []string{"html"}}, "lsp:            warming (go); routed: html"},
 		{"accessor unwired omits the row", nil, ""},
 	}
 	for _, tt := range tests {

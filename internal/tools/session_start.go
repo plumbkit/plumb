@@ -86,6 +86,7 @@ type SessionStart struct {
 	gitPolicyFn   func() GitPolicy                                                      // may be nil; git policy section skipped when nil
 	lspLangFn     func() string                                                         // may be nil; the LSP language attached to this session ("" when none)
 	lspLangsFn    func() []string                                                       // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
+	lspRoutedFn   func() []string                                                       // may be nil; non-primary languages whose servers have actually served this session
 	externalIDFn  func(id string) string                                                // may be nil; links session to external ID, returns inherited name
 	pinConflict   func(requested string)                                                // may be nil; records a same-connection workspace switch attempt
 	repin         func(ctx context.Context, workspace, language string) (string, error) // may be nil; re-pins the connection to an explicit workspace, optionally forcing a primary language
@@ -248,6 +249,26 @@ func (t *SessionStart) WithPurpose(fn func(purpose string)) *SessionStart {
 // lspAttached reports whether a language server is attached for this session.
 func (t *SessionStart) lspAttached() bool {
 	return t.lspLangFn != nil && t.lspLangFn() != ""
+}
+
+// WithLSPRouted wires an accessor for the non-primary languages whose servers
+// have actually served this session through per-file routing. A workspace with
+// no detectable primary language (a bare .plumb/ root) never attaches one, so
+// without this the recommended first step told the agent no language server was
+// attached while routing was answering its queries — and the agent, believing
+// it, stopped asking. Nil-safe. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPRouted(fn func() []string) *SessionStart {
+	t.lspRoutedFn = fn
+	return t
+}
+
+// lspRouted returns the routed (non-primary) languages serving this session, or
+// nil when none are or no accessor is wired.
+func (t *SessionStart) lspRouted() []string {
+	if t.lspRoutedFn == nil {
+		return nil
+	}
+	return t.lspRoutedFn()
 }
 
 // WithLSPWarmup wires an accessor reporting whether the session's primary

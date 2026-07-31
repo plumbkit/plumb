@@ -225,6 +225,43 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		}
 	})
 
+	// PLAN-258: a workspace with no detectable primary language never acquires
+	// one, so the recommended step told the agent no language server was attached
+	// — while per-file routing was answering its queries. Believing it, the agent
+	// stopped asking.
+	t.Run("no primary but routed names the LSP tools", func(t *testing.T) {
+		ws := t.TempDir()
+		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "" }).
+			WithLSPRouted(func() []string { return []string{"html"} })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if strings.Contains(out, "No language server is attached") {
+			t.Errorf("claims no language server is attached while one is serving html\n%s", out)
+		}
+		for _, want := range []string{"html", "get_definition", "find_references"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("want %q in the recommended step\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("an attached primary outranks the routed advisory", func(t *testing.T) {
+		ws := makeGoWorkspace(t)
+		tool := NewSessionStart(func() string { return ws }, &stubDiagnostics{}, nil, nil, func() string { return "" }, nil).
+			WithLSPLanguage(func() string { return "go" }).
+			WithLSPRouted(func() []string { return []string{"html"} })
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(out, "LSP is ready") {
+			t.Errorf("an attached primary must still lead the recommended step\n%s", out)
+		}
+	})
+
 	t.Run("no LSP no language uses default", func(t *testing.T) {
 		ws := t.TempDir()
 		tool := NewSessionStart(func() string { return ws }, nil, nil, nil, func() string { return "" }, nil)

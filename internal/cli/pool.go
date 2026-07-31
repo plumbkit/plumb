@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
@@ -59,6 +60,17 @@ type workspacePool struct {
 	// the backing array of any published slice is immutable.
 	langs   []langConfig
 	langsMu sync.RWMutex
+
+	// langsGen counts the times enableLanguage has widened the effective set. It
+	// is the signal a live connection watches to know its primary language may be
+	// resolvable now when it was not at attach time: `enable-lsp` deliberately
+	// leaves existing pool entries and pinned workspaces untouched, so without
+	// this a session that attached as LanguageNone would report "none attached"
+	// for its whole life while per-file routing quietly served it. Atomic rather
+	// than langsMu-guarded because every tool call reads it (see
+	// connSession.refreshPrimaryIfStale) and must not contend with the hot
+	// detection path.
+	langsGen atomic.Uint64
 
 	baseConfig config.Config // global base for per-workspace LSP overrides
 	cacheTTL   time.Duration

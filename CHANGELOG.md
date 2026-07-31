@@ -174,6 +174,31 @@
 
 ### Fixed
 
+- **`daemon_info` no longer reports "lsp: none attached" for a session a
+  language server is demonstrably serving.** The row printed the primary
+  language acquired at attach time and nothing else, which conflated two
+  different facts and could stay wrong for the whole life of a connection —
+  while routed queries were being answered correctly. Agents read it, believed
+  it, routed around the LSP tools, and told users the language server was
+  unavailable; it self-healed only on a daemon restart, a workspace switch, or
+  an explicit `session_start({language: …})`, none of which an agent has reason
+  to try precisely because the row says there is nothing there. Two causes, both
+  fixed. **(1)** `plumb enable-lsp <lang>` deliberately leaves existing pool
+  entries and pinned workspaces untouched, so a session that attached while the
+  language was inactive never re-resolved its primary. A connection now notices
+  the widened language set — one atomic load per tool call, so the steady-state
+  path is unchanged — and resolves the primary on its next tool call, with no
+  restart and no re-orientation. It only ever fills in a *missing* primary: an
+  attached one is never re-detected, and unlike a workspace re-pin the refresh
+  leaves read/write tracking, undo history, and the pinned root alone.
+  **(2)** A workspace root with no detectable language never acquires a primary
+  at all and is served purely by per-file routing; activation was recorded only
+  for files under the (empty) primary root, so such a session listed no adapters
+  and reported nothing attached. Routing now records what actually served the
+  connection, and both `daemon_info` and `session_start` report it as a separate
+  fact: `lsp: none attached (primary); routed: go`, with the recommended first
+  step naming the LSP tools that do work instead of steering away from them.
+
 - **CI: the widened linter set is now trialled against the Darwin tree too,
   and the toolchain is past four stdlib CVEs.** `usetesting` fired only in
   CI's macOS job — its one hit (`sandbox_darwin_test.go`) is a deliberate

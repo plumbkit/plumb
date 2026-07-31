@@ -112,7 +112,9 @@ recorded negotiation outcome, surfaced in four places:
 - `plumb debug lsp` (the `lsp-status` line) — the `diag=<mode>` field on each
   server row.
 - `daemon_info` — the `lsp:` row appends `, diagnostics: <mode>` for a
-  non-push mode.
+  non-push mode. (The row also appends `; routed: <langs>` when per-file
+  routing has reached a language server other than the primary — including on
+  a workspace that has no primary at all.)
 - `session_start` — the same non-default-only annotation on the LSP identity
   line.
 

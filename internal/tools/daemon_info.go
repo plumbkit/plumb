@@ -29,6 +29,13 @@ type LSPStatus struct {
 	// ready row only when it is a non-default value (anything but push), so a
 	// default push setup stays quiet.
 	DiagnosticsMode string
+	// Routed lists the non-primary languages whose servers have actually served
+	// this session. It is a SEPARATE fact from Language, not a fallback for it: a
+	// workspace with no detectable primary language serves files purely through
+	// per-file routing, and reporting only the (absent) primary told agents no
+	// language server was attached while one was answering their queries. Empty
+	// for the common single-language session.
+	Routed []string
 }
 
 // daemonInfo returns session and daemon metadata to the calling agent.
@@ -178,12 +185,23 @@ func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, erro
 	return out, nil
 }
 
-// formatLSPStatusRow renders the three-state language-server row: ready,
-// warming (with elapsed time when known), or none attached. On the ready row a
-// non-default diagnostics mode (anything but push) is appended, so a default
-// push setup stays quiet.
+// formatLSPStatusRow renders the language-server row: the primary's three-state
+// status (ready, warming with elapsed time when known, or none attached) plus
+// the set of languages routing has actually served this session. On the ready
+// row a non-default diagnostics mode (anything but push) is appended, so a
+// default push setup stays quiet.
 func formatLSPStatusRow(s LSPStatus) string {
+	return primaryLSPRow(s) + routedSuffix(s.Routed)
+}
+
+// primaryLSPRow renders the primary language server's own state. "none attached"
+// is qualified as "(primary)" when something IS routed, so the row never reads as
+// "no language server is serving you" while one is.
+func primaryLSPRow(s LSPStatus) string {
 	if s.Language == "" || s.Language == "none" {
+		if len(s.Routed) > 0 {
+			return "none attached (primary)"
+		}
 		return "none attached"
 	}
 	if !s.Warming {
@@ -196,6 +214,16 @@ func formatLSPStatusRow(s LSPStatus) string {
 		return fmt.Sprintf("warming (%s, ~%s elapsed)", s.Language, d)
 	}
 	return fmt.Sprintf("warming (%s)", s.Language)
+}
+
+// routedSuffix names the languages serving this session through per-file routing,
+// appended to whatever the primary row says. Empty (the common case) leaves every
+// row byte-identical to the pre-routed-facet output.
+func routedSuffix(routed []string) string {
+	if len(routed) == 0 {
+		return ""
+	}
+	return "; routed: " + strings.Join(routed, ", ")
 }
 
 // roundLSPElapsed rounds a warm-up duration for display: 100 ms precision under

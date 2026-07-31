@@ -181,6 +181,12 @@ type connSession struct {
 	state    atomic.Pointer[sessionView] // lock-free reads of the session snapshot
 	muMutate sync.Mutex                  // the single mutation lane (see mutate)
 
+	// lspGenSeen is the pool language-set generation this connection last resolved
+	// its primary language at (see workspacePool.langsGen). Deliberately NOT a
+	// sessionView field: every tool call compares it, so it must stay a lock-free
+	// atomic outside the copy-on-write snapshot.
+	lspGenSeen atomic.Uint64
+
 	sessionProxy *routingProxy
 	sessionInv   *routingInvProxy
 	sessionCache *cache.Cache
@@ -276,6 +282,12 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		undoStore:    tools.NewUndoStore(),
 		writeLimiter: tools.NewRateLimiter(cfg.Edits.RateLimitPerMinute, time.Minute),
 		logger:       slog.Default().With("session_id", sessID),
+	}
+	// Seed the language-set generation so only a widening AFTER this connection
+	// was built triggers a primary refresh; a connection that attaches later
+	// resolves against the current set anyway.
+	if pool != nil {
+		s.lspGenSeen.Store(pool.langsGeneration())
 	}
 	s.state.Store(&sessionView{
 		sessName:  sessName,
@@ -388,6 +400,18 @@ func (s *connSession) lspWarming() (bool, time.Duration) {
 		return false, 0
 	}
 	return s.sessionProxy.WarmupStatus("")
+}
+
+// routedLanguageNames returns the non-primary languages whose servers have
+// actually served this session (empty when none have). daemon_info and
+// session_start pair it with acquiredLanguageName so a connection with no
+// primary — a LanguageNone root served purely by per-file routing — stops
+// reporting that no language server is attached while one answers its queries.
+func (s *connSession) routedLanguageNames() []string {
+	if s.sessionProxy == nil {
+		return nil
+	}
+	return s.sessionProxy.routedLanguages()
 }
 
 // lspDiagMode reports the resolved diagnostics mode of this session's primary

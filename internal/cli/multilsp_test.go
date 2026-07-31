@@ -174,6 +174,100 @@ func TestRoutingProxy_ActivateHookFiresForSubRootSecondary(t *testing.T) {
 	if len(activated) != 1 || activated[0] != "html" {
 		t.Fatalf("activate hook for a sub-root secondary: got %v, want [html]", activated)
 	}
+	if got := rp.routedLanguages(); len(got) != 1 || got[0] != "html" {
+		t.Errorf("routedLanguages() = %v, want [html]", got)
+	}
+}
+
+// TestRoutingProxy_ActivationWithoutPrimary is the PLAN-258 regression test for
+// the routed-only session: a workspace root with no detectable language never
+// acquires a primary, so gating activation on primaryRoot (which is "") meant a
+// live routed server was recorded nowhere — the session listed no adapters and
+// daemon_info reported "none attached" while that server answered every query.
+// The connection's own workspace root, set on every attach path, is the correct
+// containment test when there is no primary.
+func TestRoutingProxy_ActivationWithoutPrimary(t *testing.T) {
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, ".plumb", "marker"), "")
+	mustWrite(t, filepath.Join(root, "index.html"), "<html></html>\n")
+
+	pool := newTestPoolMulti("html")
+	installEntryLang(pool, root, "html", &stubClient{id: "html"})
+
+	rp := newRoutingProxy(pool)
+	// No setPrimary: this is the LanguageNone attach, which records only the
+	// workspace root.
+	rp.setDiscovered(root, nil)
+	var activated []string
+	rp.setActivateHook(func(lang string) { activated = append(activated, lang) })
+
+	_, _ = rp.Definition(context.Background(), protocol.DefinitionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file://" + filepath.Join(root, "index.html")},
+	})
+
+	if len(activated) != 1 || activated[0] != "html" {
+		t.Errorf("activate hook on a primary-less session: got %v, want [html]", activated)
+	}
+	if got := rp.routedLanguages(); len(got) != 1 || got[0] != "html" {
+		t.Errorf("routedLanguages() = %v, want [html]", got)
+	}
+}
+
+// TestRoutingProxy_ActivationIgnoresForeignProject keeps the widened containment
+// test honest: cross-workspace routing into a genuinely different project must
+// not be reported as a language server serving THIS session's workspace.
+func TestRoutingProxy_ActivationIgnoresForeignProject(t *testing.T) {
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, ".plumb", "marker"), "")
+	other := freshTempDir(t)
+	mustWrite(t, filepath.Join(other, "index.html"), "<html></html>\n")
+
+	pool := newTestPoolMulti("html")
+	installEntryLang(pool, other, "html", &stubClient{id: "html"})
+
+	rp := newRoutingProxy(pool)
+	rp.setDiscovered(root, nil)
+	var activated []string
+	rp.setActivateHook(func(lang string) { activated = append(activated, lang) })
+
+	_, _ = rp.Definition(context.Background(), protocol.DefinitionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file://" + filepath.Join(other, "index.html")},
+	})
+
+	if len(activated) != 0 {
+		t.Errorf("activate hook fired for a foreign project: %v", activated)
+	}
+	if got := rp.routedLanguages(); len(got) != 0 {
+		t.Errorf("routedLanguages() = %v for a foreign project, want none", got)
+	}
+}
+
+// TestRoutingProxy_ResetPrimaryClearsRouted pins the re-pin contract: a
+// deliberate workspace switch starts with a clean routed set, mirroring the
+// adapter list the re-pin path clears.
+func TestRoutingProxy_ResetPrimaryClearsRouted(t *testing.T) {
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, ".plumb", "marker"), "")
+	mustWrite(t, filepath.Join(root, "index.html"), "<html></html>\n")
+
+	pool := newTestPoolMulti("go", "html")
+	installEntryLang(pool, root, "html", &stubClient{id: "html"})
+	rp := newRoutingProxy(pool)
+	rp.setDiscovered(root, nil)
+	_, _ = rp.Definition(context.Background(), protocol.DefinitionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file://" + filepath.Join(root, "index.html")},
+	})
+	if got := rp.routedLanguages(); len(got) != 1 {
+		t.Fatalf("precondition: routedLanguages() = %v, want [html]", got)
+	}
+
+	next := freshTempDir(t)
+	mustWrite(t, filepath.Join(next, "go.mod"), "module y\n")
+	rp.resetPrimary(next, "go", installEntryLang(pool, next, "go", &stubClient{id: "go"}))
+
+	if got := rp.routedLanguages(); len(got) != 0 {
+		t.Errorf("routedLanguages() = %v after a re-pin, want none", got)
+	}
 }
 
 // TestRoutingInvProxy_MergesAcrossLanguages verifies AllDiagnostics aggregates

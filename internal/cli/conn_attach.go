@@ -280,6 +280,10 @@ func (s *connSession) rootFromClient(ctx context.Context) string {
 // session has no primary workspace yet. Applies auto-attach and auto-attach-
 // persist when configured.
 func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.RawMessage) {
+	// Before the attached-already short circuit: an ALREADY attached session is
+	// exactly the one whose primary can be stale after a live `enable-lsp`.
+	// Generation-gated, so this is one atomic load on the steady-state path.
+	s.refreshPrimaryIfStale(toolCtx)
 	if s.view().acquiredRoot != "" {
 		return
 	}
@@ -380,6 +384,12 @@ func (s *connSession) appendActiveAdapter(language string) {
 // selects resetPrimary (a deliberate workspace switch) over setPrimary (first
 // attach). Must run inside the s.mutate lane: it writes v.lsRefRoot/lsRefLang.
 func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, folder, language string, repin bool) (lang, adapter string, discovered []discoveredRoot, adapters []string) {
+	// Wire the secondary-activation hook here, on every attach path, rather than
+	// in bindPrimary: the LanguageNone exits below never reach bindPrimary, and
+	// a primary-less session is exactly the one whose routed servers would
+	// otherwise never reach the session record's Adapters list. Idempotent, and
+	// noteActivated's workspace gate keeps it scoped to what serves this root.
+	s.sessionProxy.setActivateHook(s.appendActiveAdapter)
 	if language != LanguageNone {
 		e, err := s.pool.acquireLang(ctx, folder, language, true)
 		if err != nil {
@@ -436,10 +446,11 @@ func (s *connSession) resolvePrimaryLSP(ctx context.Context, v *sessionView, fol
 }
 
 // bindPrimary wires an acquired primary entry into the session: routing proxy,
-// invalidator, the secondary-activation hook, and the pinned LS reference (kept
-// at the entry's OWN root — a discovered child root may sit below the workspace
-// — for release symmetry on detach). repin uses resetPrimary (switch) instead
-// of setPrimary (first-wins).
+// invalidator, and the pinned LS reference (kept at the entry's OWN root — a
+// discovered child root may sit below the workspace — for release symmetry on
+// detach). repin uses resetPrimary (switch) instead of setPrimary (first-wins).
+// The secondary-activation hook is wired by resolvePrimaryLSP on every path,
+// including the LanguageNone ones that never arrive here.
 func (s *connSession) bindPrimary(v *sessionView, root, language string, e *poolEntry, repin bool) {
 	if repin {
 		s.sessionProxy.resetPrimary(root, language, e.proxy)
@@ -448,7 +459,6 @@ func (s *connSession) bindPrimary(v *sessionView, root, language string, e *pool
 		s.sessionProxy.setPrimary(root, language, e.proxy)
 		s.sessionInv.setPrimary(root, language, e.inv)
 	}
-	s.sessionProxy.setActivateHook(s.appendActiveAdapter)
 	v.lsRefRoot = root
 	v.lsRefLang = language
 }
