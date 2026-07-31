@@ -32,7 +32,15 @@ func pinSourceLabel(origin sessionstate.PinSource) string {
 
 // pinViaLabel is the provenance label for a pin: the origin, prefixed with
 // "restore:" when it was replayed on reconnect rather than set by a live call.
+// An unknown origin returns "" — an incidental auto-attach has no provenance
+// worth telling an agent about, and "via unknown" in a boundary error is noise
+// that invites speculation. The log's source field keeps the explicit
+// "unknown" label via pinSourceLabel; only the agent-facing provenance is
+// suppressed.
 func pinViaLabel(origin sessionstate.PinSource, t pinTrigger) string {
+	if origin == sessionstate.PinSourceUnknown {
+		return ""
+	}
 	if t == pinTriggerRestore {
 		return "restore:" + pinSourceLabel(origin)
 	}
@@ -58,7 +66,8 @@ func (s *connSession) pinProvenance() tools.PinProvenance {
 }
 
 // boundedForLog caps a slice for a log field, appending a "+N more" sentinel
-// rather than silently truncating. Never aliases or mutates vals.
+// rather than silently truncating. Never mutates vals; the within-limit branch
+// returns the input slice itself, so callers must not modify the result.
 func boundedForLog(vals []string, limit int) []string {
 	if limit <= 0 || len(vals) <= limit {
 		return vals

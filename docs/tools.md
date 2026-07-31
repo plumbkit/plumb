@@ -104,9 +104,11 @@ rejected with a clear error).
 
 ### `daemon_info`
 Current session name and ID, daemon version, start time, and uptime; the
-session's `purpose` tag when set; live config-store state (generation, last
-reload time, whether a restart is needed); and this session's tool-call count
-plus its slowest calls (per-call durations from recorded stats).
+session's `purpose` tag when set; the workspace pin's provenance when known
+(how, when, and from where the pin was last set — pin-drift observability,
+issue #182); live config-store state (generation, last reload time, whether a
+restart is needed); and this session's tool-call count plus its slowest calls
+(per-call durations from recorded stats).
 **Inputs:** none.
 
 ### `rename_session`

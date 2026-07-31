@@ -18,11 +18,16 @@ import (
 // handleRootsListChanged services notifications/roots/list_changed: refresh the
 // client-request callback, log the roots actually received (the pin-drift
 // evidence issue #182 needed and did not have), then apply them.
+//
+// The "roots changed" line is emitted BEFORE the roots/list round-trip: that
+// request has no timeout of its own, so logging after it would make the
+// protected grep line vanish for exactly the hung-client case an operator is
+// diagnosing. The received list follows on its own "roots received" line.
 func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.RequestFn) {
 	s.setClientRequest(request)
+	s.log().Info("daemon: roots changed — re-fetching workspace root")
 	roots := rootsFromClient(ctx, request, s.log())
-	s.log().Info("daemon: roots changed — re-fetching workspace root",
-		"count", len(roots), "roots", boundedForLog(roots, 8))
+	s.log().Info("daemon: roots received", "count", len(roots), "roots", boundedForLog(roots, 8))
 	s.onRootsChanged(ctx, roots)
 	s.startConfigWatcher()
 }

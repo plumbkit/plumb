@@ -11,12 +11,16 @@
   because the evidence was spread across unlabelled lines. Four
   hypothesis-neutral additions close that: the `session re-pinned` log gains
   `source` (`session_start`/`roots`/`unknown`) and `trigger` (`live`/`restore`)
-  fields; the `roots changed` log records the received root list (count and
-  values, bounded at eight); the roots-resolution logs carry the session id
-  like every other per-connection line; and a workspace boundary violation now
-  ends with the pin's provenance — "Pin provenance: set 2m ago via
-  session_start (previously /x/cvex)." — so the refused agent's own error says
-  who moved the pin and when. `daemon_info` reports the same provenance line.
+  fields; a new `roots received` log line records the received root list
+  (count and values, bounded at eight), emitted after the protected `roots
+  changed` line so a hung roots/list round-trip cannot suppress it; the
+  roots-resolution logs carry the session id like every other per-connection
+  line; and a different-project workspace boundary violation now ends with the
+  pin's provenance — "Pin provenance: set 2m ago via session_start (previously
+  /x/cvex)." — so the refused agent's own error says who moved the pin and
+  when (suppressed for incidental auto-attach pins, where the source is
+  unknown; read-only-root denials never carry it). `daemon_info` reports the
+  same provenance line.
   Log message strings are unchanged, so `grep -E 'session re-pinned|roots
   changed'` keeps working. No behaviour changes: groundwork for #182, not the
   fix.

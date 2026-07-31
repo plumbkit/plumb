@@ -142,6 +142,11 @@ func TestPinProvenance_String(t *testing.T) {
 			prov: PinProvenance{Source: "session_start", At: set2mAgo},
 			want: "Pin provenance: set 2m ago via session_start.",
 		},
+		{
+			name: "restore prefix renders as prose",
+			prov: PinProvenance{Source: "restore:session_start", At: set2mAgo, Previous: "/x/cvex"},
+			want: "Pin provenance: set 2m ago via session_start, restored on reconnect (previously /x/cvex).",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
