@@ -130,3 +130,66 @@ var CallRules = []CallRule{
 		},
 	},
 }
+
+// DelegationRule pins a resource named by a string literal to a single
+// implementation: any production function whose body contains a string
+// literal exactly equal to Literal, outside Home, must also call Delegate —
+// or carry an Allowed entry saying why it legitimately does not (for
+// instance, it only ever reads the resource).
+//
+// Where PrimitiveRule catches a helper re-declared under a family of names,
+// and CallRule catches a stdlib call open-coded with no helper at all, this
+// catches a file-format owner being bypassed: a hand-rolled copy of the
+// .gitignore appender shares no name and no distinctive stdlib call with the
+// original, but it cannot avoid naming the file. A literal matches when it
+// equals Literal after unquoting, or ends in "/"+Literal (the whole relative
+// path spelled as one literal) — never on a bare substring, because
+// ".gitignore" appears inside prose in tool descriptions, error wraps and
+// log messages, none of which touch the file.
+type DelegationRule struct {
+	// Resource names what is being protected, for the failure message.
+	Resource string
+
+	// Literal is the exact (unquoted) string-literal value that marks a
+	// function as touching the resource.
+	Literal string
+
+	// Home is the package (relative to the module root) that owns the single
+	// implementation. Functions in Home are exempt.
+	Home string
+
+	// Delegate is the required call in display form, e.g.
+	// "paths.EnsureGitignoreEntries". The checker matches the function name
+	// after the last dot, qualified by the file's actual local import name
+	// for Home — an aliased or dot import still counts as delegation.
+	Delegate string
+
+	// Why explains, in the failure message, what to use instead.
+	Why string
+
+	// Allowed maps "<package>.<func>" to the reason that site legitimately
+	// touches the literal without delegating. Methods are keyed by their name
+	// alone, as elsewhere; a package-level const or var carrying the literal
+	// — including a func-literal var, which has no enclosing function to
+	// delegate from — is keyed by its identifier and can only be excused
+	// here. Every entry must say why, not just that.
+	Allowed map[string]string
+}
+
+// DelegationRules is the full set.
+//
+// Like CallRules, these are checked against production files only: a test
+// that stages a .gitignore fixture is touching the file on purpose.
+var DelegationRules = []DelegationRule{
+	{
+		Resource: ".gitignore writing",
+		Literal:  ".gitignore",
+		Home:     "internal/paths",
+		Delegate: "paths.EnsureGitignoreEntries",
+		Why:      "appending to a .gitignore belongs in paths.EnsureGitignoreEntries, which matches entries by exact trimmed line — one hand-rolled copy used a substring match instead, so an entry appearing inside any other line (a comment, a longer path) was silently treated as already present and never appended",
+		Allowed: map[string]string{
+			"internal/arch.DelegationRules": "the rule's own declaration: a DelegationRule must spell the literal it pins, which the package-level-literal check then sees",
+			"internal/tools.load":           "ignoreStack.load READS .gitignore and .ignore to honour ignore rules during directory walks; it never writes the file, so there is nothing to delegate",
+		},
+	},
+}
