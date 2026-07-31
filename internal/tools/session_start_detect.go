@@ -172,7 +172,7 @@ func joinLanguageLabels(keys []string) string {
 // gitBranch returns the current branch name, or "" if not a git repo / git
 // is unavailable. Best-effort with a short timeout.
 func gitBranch(ws string) string {
-	cmd := exec.Command("git", "-C", ws, "branch", "--show-current")
+	cmd := exec.Command("git", gitNoOptionalLocks, "-C", ws, "branch", "--show-current")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -183,7 +183,7 @@ func gitBranch(ws string) string {
 // gitRecentCommits returns up to n recent commit subjects in "shortsha subject"
 // form. Best-effort; returns nil on any error.
 func gitRecentCommits(ws string, n int) []string {
-	cmd := exec.Command("git", "-C", ws, "log", fmt.Sprintf("-%d", n), "--pretty=format:%h %s")
+	cmd := exec.Command("git", gitNoOptionalLocks, "-C", ws, "log", fmt.Sprintf("-%d", n), "--pretty=format:%h %s")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -201,7 +201,7 @@ func gitRecentCommits(ws string, n int) []string {
 // see *what* was already changed at orientation instead of guessing from a bare
 // file list (from dogfooding feedback).
 func gitWorkingTreeSummary(ws string, maxLines int) string {
-	cmd := exec.Command("git", "-C", ws, "diff", "--stat", "HEAD")
+	cmd := exec.Command("git", gitNoOptionalLocks, "-C", ws, "diff", "--stat", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -232,7 +232,7 @@ func gitSubmodules(ws string) []string {
 	if _, err := os.Stat(gitmodules); err != nil {
 		return nil
 	}
-	cmd := exec.Command("git", "-C", ws, "config", "--file", gitmodules, "--get-regexp", `^submodule\..*\.path$`)
+	cmd := exec.Command("git", gitNoOptionalLocks, "-C", ws, "config", "--file", gitmodules, "--get-regexp", `^submodule\..*\.path$`)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil

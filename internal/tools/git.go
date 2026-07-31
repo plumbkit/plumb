@@ -280,7 +280,7 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 	if err != nil {
 		return a.Files, nil
 	}
-	lsArgs := append([]string{"ls-files", "--"}, a.Files...)
+	lsArgs := gitReadArgv(append([]string{"ls-files", "--"}, a.Files...))
 	cmd := exec.CommandContext(ctx, "git", lsArgs...)
 	cmd.Dir = repoRoot
 	out, lsErr := cmd.Output()

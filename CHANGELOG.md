@@ -225,6 +225,43 @@
   fact: `lsp: none attached (primary); routed: go`, with the recommended first
   step naming the LSP tools that do work instead of steering away from them.
 
+- **The gopls integration tests failed when the repo sat under a `go.work`.**
+  They pointed gopls at `testdata/go-fixture` in place. That directory declares
+  its own module, but when this repo is checked out beneath a workspace file
+  that `use`s it — plumb's own ops workspace does exactly that — the workspace
+  wins and the fixture resolves to the parent module, which then excludes it
+  for living under `testdata/`. gopls was left serving a directory belonging to
+  no package and answered `documentSymbol` and `definition` with nothing, so
+  the failure read as a broken adapter rather than a broken fixture. The tests
+  now copy the fixture into a temp workspace, which every other gopls test in
+  the tree already did.
+
+- **A cancelled read-only git query could strand `.git/index.lock`.** `git
+  status` and `git diff` refresh the index as a side effect, and that refresh
+  is a write: it takes `.git/index.lock`. plumb runs those queries under
+  `exec.CommandContext`, whose default cancellation is SIGKILL — which git
+  cannot trap, so it never removes the lock. A daemon shutdown, a connection
+  eviction, or any cancelled tool call mid-query therefore left a lock behind,
+  and the next `git add` in that repo failed with "Unable to create
+  index.lock: File exists" plus the misleading advice that another git process
+  was running. Every read-only query now passes `--no-optional-locks`, which
+  skips the refresh (a stat-cache optimisation that never changes the output)
+  and removes the failure mode by construction. The dirty-write guard runs one
+  of these on every destructive write, so it was the likeliest source.
+  `runGit`'s claim that "read-tier ops never lock" was simply false before
+  this, and is now true.
+
+- **Truncated tool output could contain a broken character.** Six display and
+  storage truncations sliced by byte at a fixed offset, emitting a replacement
+  character whenever that offset landed inside a multi-byte sequence — routine
+  for any file with an accented word, a CJK comment, or an emoji in a string
+  literal. Affected the `topology_explore` line preview, the `file_outline`
+  signature and doc-headline caps, the `find_references` line preview, the
+  docstring stored in the topology index, and the text sent to an embedding
+  provider — where invalid UTF-8 in the JSON body can have the request
+  rejected outright. All now go through the rune-safe helpers in
+  `internal/textfmt`.
+
 - **A "read-only" SQLite handle was never actually read-only.** `mode=ro` is
   honoured only when the DSN is a `file:` URI; appended to a bare path the
   modernc driver ignores it and opens the database read-WRITE. Both

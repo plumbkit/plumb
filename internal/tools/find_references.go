@@ -15,6 +15,7 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 var findReferencesSchema = json.RawMessage(`{
@@ -328,10 +329,7 @@ func readFileLines(path string, lines map[uint32]bool) map[uint32]string {
 	for scanner.Scan() {
 		if lines[lineNum] {
 			text := scanner.Text()
-			if len(text) > 120 {
-				text = text[:120] + "…"
-			}
-			result[lineNum] = text
+			result[lineNum] = textfmt.ClampBytes(text, 120)
 		}
 		lineNum++
 	}

@@ -17,24 +17,6 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
-// goFixtureWS copies the go-fixture (go.mod + main.go) into a fresh temp
-// workspace so a test can mutate it without dirtying testdata/.
-func goFixtureWS(t *testing.T) string {
-	t.Helper()
-	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "go-fixture")
-	ws := t.TempDir()
-	for _, name := range []string{"go.mod", "main.go"} {
-		src, err := os.ReadFile(filepath.Join(fixtureSrc, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(ws, name), src, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return ws
-}
-
 // enablePullInit initialises ad against ws with the LSP 3.17 pull model forced
 // on — exactly the Task 3 mechanism the pool uses when [lsp.go] diagnostics =
 // "pull": ClientCapabilitiesFor(true) plus gopls's pullDiagnostics init option,

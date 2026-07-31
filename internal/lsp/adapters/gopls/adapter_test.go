@@ -42,6 +42,36 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// goFixtureWS copies testdata/go-fixture (go.mod + main.go) into a fresh temp
+// workspace and returns its path. Every test here goes through it.
+//
+// Using the fixture IN PLACE does not work, and fails in a way that looks like
+// a broken adapter rather than a broken fixture. testdata/go-fixture declares
+// its own module, but it sits inside this repo — so when this repo is checked
+// out beneath a go.work that `use`s it (plumb's own ops workspace does exactly
+// that), the workspace file wins and the fixture resolves to the PARENT module.
+// Go then excludes it anyway, because it lives under testdata/. gopls is left
+// serving a directory that belongs to no package, and answers documentSymbol
+// and definition with nothing at all.
+//
+// A temp workspace has no go.work above it, so the fixture's own go.mod
+// governs. This also keeps a mutating test from dirtying testdata/.
+func goFixtureWS(t *testing.T) string {
+	t.Helper()
+	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "go-fixture")
+	ws := t.TempDir()
+	for _, name := range []string{"go.mod", "main.go"} {
+		src, err := os.ReadFile(filepath.Join(fixtureSrc, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ws, name), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ws
+}
+
 // startGopls spawns gopls and returns a ready adapter. The adapter and process
 // are cleaned up via t.Cleanup.
 func startGopls(t *testing.T) *gopls.Adapter {
@@ -73,7 +103,7 @@ func startGopls(t *testing.T) *gopls.Adapter {
 
 func TestIntegration_DocumentSymbols(t *testing.T) {
 	ad := startGopls(t)
-	fixture := filepath.Join(repoRoot(t), "testdata", "go-fixture")
+	fixture := goFixtureWS(t)
 	mainPath := filepath.Join(fixture, "main.go")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -125,7 +155,7 @@ func TestIntegration_DocumentSymbols(t *testing.T) {
 
 func TestIntegration_WorkspaceSymbols(t *testing.T) {
 	ad := startGopls(t)
-	fixture := filepath.Join(repoRoot(t), "testdata", "go-fixture")
+	fixture := goFixtureWS(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -148,7 +178,7 @@ func TestIntegration_WorkspaceSymbols(t *testing.T) {
 
 func TestIntegration_Definition(t *testing.T) {
 	ad := startGopls(t)
-	fixture := filepath.Join(repoRoot(t), "testdata", "go-fixture")
+	fixture := goFixtureWS(t)
 	mainPath := filepath.Join(fixture, "main.go")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -200,20 +230,7 @@ func TestIntegration_Definition(t *testing.T) {
 // after every plumb-initiated write.
 func TestIntegration_DidChangeWatchedFiles(t *testing.T) {
 	ad := startGopls(t)
-	fixtureSrc := filepath.Join(repoRoot(t), "testdata", "go-fixture")
-
-	// Copy the fixture into a temp workspace so we can mutate without dirtying
-	// the real testdata directory.
-	ws := t.TempDir()
-	for _, name := range []string{"go.mod", "main.go"} {
-		src, err := os.ReadFile(filepath.Join(fixtureSrc, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(ws, name), src, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	ws := goFixtureWS(t)
 	brokenPath := filepath.Join(ws, "broken.go")
 	brokenURI := protocol.FileURI(brokenPath)
 

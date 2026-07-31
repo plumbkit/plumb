@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -251,10 +252,9 @@ func firstLine(s string) string {
 	for _, ln := range strings.Split(s, "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln != "" {
-			if len(ln) > 120 {
-				return ln[:120] + "…"
-			}
-			return ln
+			// Byte budget, rune-safe: this is an arbitrary source line, so a
+			// plain ln[:120] lands mid-rune on any non-ASCII file.
+			return textfmt.ClampBytes(ln, 120)
 		}
 	}
 	return ""

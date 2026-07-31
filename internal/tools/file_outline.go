@@ -15,6 +15,7 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -368,9 +369,7 @@ func signatureAt(lines []string, start int) string {
 	if i := strings.IndexByte(sig, '{'); i >= 0 {
 		sig = strings.TrimSpace(sig[:i])
 	}
-	if len(sig) > 160 {
-		sig = sig[:160] + "…"
-	}
+	sig = textfmt.ClampBytes(sig, 160)
 	return sig
 }
 
@@ -396,9 +395,7 @@ func docCommentAbove(lines []string, start int) string {
 		return ""
 	}
 	top := stripCommentMarker(block[len(block)-1]) // topmost line of the block
-	if len(top) > 100 {
-		top = top[:100] + "…"
-	}
+	top = textfmt.ClampBytes(top, 100)
 	return top
 }
 

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // EmbedDoc is the text embedded for a node — name, signature, and docstring,
@@ -22,10 +24,10 @@ func EmbedDoc(n Node) string {
 		parts = append(parts, n.Docstring)
 	}
 	d := strings.Join(parts, " | ")
-	if len(d) > 2000 {
-		d = d[:2000]
-	}
-	return d
+	// Rune-safe: this string is sent to an embedding provider as JSON, and a
+	// half-rune left by a plain d[:2000] is invalid UTF-8 that some providers
+	// reject outright.
+	return textfmt.TruncateBytes(d, 2000)
 }
 
 // ContentHash hashes an embed doc; with the model name it is the cache key for a

@@ -41,10 +41,43 @@ func buildGitArgv(a gitToolArgs) ([]string, error) {
 	}
 }
 
+// gitReadArgv prefixes a READ-ONLY git argv with --no-optional-locks.
+//
+// `git status` and `git diff` refresh the index as a side effect of running,
+// and that refresh is a WRITE: it takes .git/index.lock and rewrites
+// .git/index. Every one of plumb's read-only git queries runs under
+// exec.CommandContext, whose default cancellation is SIGKILL — which git
+// cannot trap, so it never gets to remove the lock. A daemon shutdown, a
+// connection eviction, or any cancelled tool call mid-query therefore strands
+// an index.lock, and the next `git add` in that repo fails with "Unable to
+// create index.lock: File exists" and the misleading advice that another git
+// process is running. (Observed twice in one session, both times with no git
+// process alive and a zero-byte lock file.)
+//
+// --no-optional-locks tells git to skip any operation needing a lock. The
+// refresh it skips is purely a stat-cache optimisation — the command's output
+// is identical either way — so this is the correct flag for every query plumb
+// makes, and it removes the failure mode by construction rather than by
+// cleaning up after it.
+//
+// Mutating commands must NOT use it: they need the lock.
+//
+// Use the constant directly when the argv is a literal list, and the helper
+// when it is a slice built at runtime — gosec cannot see through the call, so
+// the literal form keeps the argv inspectable and avoids a //nolint.
+const gitNoOptionalLocks = "--no-optional-locks"
+
+func gitReadArgv(argv []string) []string {
+	return append([]string{gitNoOptionalLocks}, argv...)
+}
+
 // runGit runs a git subcommand in the repository containing repo. Non-read tiers
 // (index/ref-mutating + network) are serialised per repo so concurrent
 // plumb-initiated writes queue rather than collide on .git/index.lock; read-tier
-// ops never lock. For the index/ref-mutating tiers the git child also runs under
+// ops never lock — which is true only because they run with
+// --no-optional-locks (see gitReadArgv). Without it `git status`/`git diff`
+// refresh the index, and that refresh takes the very lock this comment claims
+// reads never touch. For the index/ref-mutating tiers the git child also runs under
 // a cancellation-decoupled, bounded context (see beginSerialisedGit) so a daemon
 // shutdown or connection eviction mid-commit lets git finish and release the
 // lock rather than SIGKILLing it and stranding the lock.
@@ -61,6 +94,9 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier) 
 			return "", err
 		}
 		defer cleanup()
+	}
+	if tier == tierRead {
+		argv = gitReadArgv(argv)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(execCtx, "git", argv...)
@@ -279,7 +315,7 @@ func formatGitOutput(sub, result string) string {
 
 // stagedSummary returns a description of what is currently in the index.
 func stagedSummary(ctx context.Context, repoRoot string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--name-status")
+	cmd := exec.CommandContext(ctx, "git", gitNoOptionalLocks, "diff", "--cached", "--name-status")
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -299,7 +335,7 @@ type gitCommitResult struct {
 }
 
 func resolveCommitInfo(ctx context.Context, repoRoot string) (gitCommitResult, error) {
-	cmd := exec.CommandContext(ctx, "git", "log", "-1", "--format=%H\t%s")
+	cmd := exec.CommandContext(ctx, "git", gitNoOptionalLocks, "log", "-1", "--format=%H\t%s")
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -353,7 +389,7 @@ func findGitRoot(path string) (string, error) {
 		dir = filepath.Dir(start)
 	}
 
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	out, err := exec.Command("git", gitNoOptionalLocks, "-C", dir, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", fmt.Errorf("not a git repository: %s", dir)
 	}
