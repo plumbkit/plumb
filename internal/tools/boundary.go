@@ -26,17 +26,23 @@ type PinProvenance struct {
 // String renders the pin provenance for splicing into a boundary-error
 // message or daemon_info output. An empty Source is the zero value's
 // signature and renders "" so callers can unconditionally append the result
-// without an extra empty-check producing a stray space.
+// without an extra empty-check producing a stray space. A "restore:"-prefixed
+// Source is rendered as prose ("via X, restored on reconnect") — the raw
+// colon-delimited label belongs in log fields, not an agent-facing sentence.
 func (p PinProvenance) String() string {
 	if p.Source == "" {
 		return ""
 	}
+	source, restored := strings.CutPrefix(p.Source, "restore:")
 	var sb strings.Builder
 	sb.WriteString("Pin provenance: set")
 	if !p.At.IsZero() {
 		sb.WriteString(" " + humaniseAge(time.Since(p.At)) + " ago")
 	}
-	sb.WriteString(" via " + p.Source)
+	sb.WriteString(" via " + source)
+	if restored {
+		sb.WriteString(", restored on reconnect")
+	}
 	if p.Previous != "" {
 		sb.WriteString(" (previously " + p.Previous + ")")
 	}

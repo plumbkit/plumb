@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -87,6 +88,24 @@ func TestRepinLog_RestoreTrigger(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("restore re-pin log missing %q:\n%s", want, buf.String())
 		}
+	}
+	if calls != 0 {
+		t.Errorf("roots/list was asked %d time(s); the persisted session_start pin must bypass the roots rung", calls)
+	}
+}
+
+func TestPinProvenance_UnknownOriginSuppressed(t *testing.T) {
+	// An incidental auto-attach (tool-path seed, cwd hint, synthetic root) has no
+	// provenance worth telling an agent about — "via unknown" is noise. The log's
+	// source field keeps the label; the agent-facing provenance stays zero.
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	s.attachWorkspacePin(context.Background(), "file://"+root, sessionstate.PinSourceUnknown)
+	if got := s.pinProvenance(); got != (tools.PinProvenance{}) {
+		t.Errorf("pinProvenance() = %+v, want the zero value for an unknown origin", got)
 	}
 }
 

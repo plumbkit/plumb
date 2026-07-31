@@ -135,7 +135,7 @@ func TestRootsChanged_LogsReceivedRootsBounded(t *testing.T) {
 	buf := captureLog(s)
 	s.handleRootsListChanged(context.Background(), fake)
 
-	for _, want := range []string{"roots changed", "count=10", "file://" + rootA, "+2 more"} {
+	for _, want := range []string{"roots changed", "roots received", "count=10", "file://" + rootA, "+2 more"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("roots-changed log missing %q:\n%s", want, buf.String())
 		}
