@@ -16,6 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/redact"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // episodicWaitDeadline bounds the polls that wait for an episodic summary to land
@@ -196,14 +197,14 @@ func TestRunIdleReaper_SummarisesWhenGlobalSummariesOff(t *testing.T) {
 }
 
 func TestClampBytes(t *testing.T) {
-	if got := clampBytes("short", 0); got != "short" {
+	if got := textfmt.ClampBytes("short", 0); got != "short" {
 		t.Errorf("zero budget should be a no-op, got %q", got)
 	}
-	if got := clampBytes("short", 100); got != "short" {
+	if got := textfmt.ClampBytes("short", 100); got != "short" {
 		t.Errorf("fits-in-budget should be a no-op, got %q", got)
 	}
-	if got := clampBytes("hello world", 5); got != "he…" {
-		t.Errorf("clampBytes(hello world, 5) = %q, want \"he…\" (5 bytes)", got)
+	if got := textfmt.ClampBytes("hello world", 5); got != "he…" {
+		t.Errorf("textfmt.ClampBytes(hello world, 5) = %q, want \"he…\" (5 bytes)", got)
 	}
 	// Multi-byte: every result must stay within the BYTE budget and be valid UTF-8.
 	for _, c := range []struct {
@@ -215,12 +216,12 @@ func TestClampBytes(t *testing.T) {
 		{"abc", 2},    // budget below the ellipsis width
 		{"héllo wörld", 6},
 	} {
-		got := clampBytes(c.in, c.budget)
+		got := textfmt.ClampBytes(c.in, c.budget)
 		if len(got) > c.budget {
-			t.Errorf("clampBytes(%q, %d) = %q is %d bytes, over budget", c.in, c.budget, got, len(got))
+			t.Errorf("textfmt.ClampBytes(%q, %d) = %q is %d bytes, over budget", c.in, c.budget, got, len(got))
 		}
 		if !utf8.ValidString(got) {
-			t.Errorf("clampBytes(%q, %d) = %q is not valid UTF-8", c.in, c.budget, got)
+			t.Errorf("textfmt.ClampBytes(%q, %d) = %q is not valid UTF-8", c.in, c.budget, got)
 		}
 	}
 }

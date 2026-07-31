@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // crossFileDiagSource is the wider capability the cross-file sweep needs beyond
@@ -141,7 +142,7 @@ func formatCrossFileDiagnostics(breaks []crossFileBreak, root string) string {
 		return ""
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "\n⚠ this edit introduced new errors in %d other %s:", len(breaks), plural(len(breaks), "file", "files"))
+	fmt.Fprintf(&sb, "\n⚠ this edit introduced new errors in %d other %s:", len(breaks), textfmt.Plural(len(breaks), "file", "files"))
 	for i, b := range breaks {
 		if i >= maxCrossFileRows {
 			fmt.Fprintf(&sb, "\n  …(+%d more)", len(breaks)-maxCrossFileRows)
@@ -149,7 +150,7 @@ func formatCrossFileDiagnostics(breaks []crossFileBreak, root string) string {
 		}
 		path := relativeToRoot(strings.TrimPrefix(b.uri, "file://"), root)
 		delta := b.postErrs - b.baseErrs
-		fmt.Fprintf(&sb, "\n  %s: +%d %s (%d → %d)", path, delta, plural(delta, "error", "errors"), b.baseErrs, b.postErrs)
+		fmt.Fprintf(&sb, "\n  %s: +%d %s (%d → %d)", path, delta, textfmt.Plural(delta, "error", "errors"), b.baseErrs, b.postErrs)
 		if b.exampleMsg != "" {
 			fmt.Fprintf(&sb, "  e.g. L%d: %s", b.exampleLine, b.exampleMsg)
 		}

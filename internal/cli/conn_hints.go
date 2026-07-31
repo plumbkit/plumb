@@ -13,6 +13,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // hintAllowedTools is the small set of path-bearing tools whose responses are
@@ -337,5 +338,5 @@ func hintBlock(names []string, budget int) string {
 	}
 	block := fmt.Sprintf("\n\n[Hint: relevant %s attached to this path: %s — call read_memory to view.]",
 		noun, strings.Join(quoted, ", "))
-	return clampBytes(block, budget)
+	return textfmt.ClampBytes(block, budget)
 }

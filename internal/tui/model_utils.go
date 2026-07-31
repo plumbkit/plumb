@@ -107,17 +107,6 @@ func overlayLogoBottom(line string, width int) string {
 	return b.String()
 }
 
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 1 {
-		return "…"
-	}
-	return string(r[:n-1]) + "…"
-}
-
 func wrapText(s string, width int) []string {
 	if width < 8 {
 		width = 8

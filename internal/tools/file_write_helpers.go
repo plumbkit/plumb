@@ -442,10 +442,12 @@ func dirtyBasenamesInDir(ctx context.Context, dir string, files []string, skipUn
 	if _, err := exec.LookPath("git"); err != nil {
 		return nil
 	}
-	args := make([]string, 0, 3+len(files))
+	args := make([]string, 0, 4+len(files))
 	args = append(args, "status", "--porcelain", "--")
 	args = append(args, files...)
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// Read-only: never take .git/index.lock (see gitReadArgv). This runs on
+	// every destructive write, so it is the likeliest source of a stranded lock.
+	cmd := exec.CommandContext(ctx, "git", gitReadArgv(args)...) //nolint:gosec // G204: argv is package literals plus `files`, which are basenames within dir supplied by plumb's own write path and passed after the "--" separator, so they cannot be read as flags
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil || len(out) == 0 {

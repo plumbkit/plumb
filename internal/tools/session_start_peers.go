@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -47,7 +47,7 @@ func (t *SessionStart) writeSessionPeers(sb *strings.Builder, ws string) {
 	if block == "" {
 		return
 	}
-	sb.WriteString(clampToBytes(block, budget))
+	sb.WriteString(textfmt.ClampBytes(block, budget))
 }
 
 // activePeers returns the sessions active on ws right now, excluding this one.
@@ -171,32 +171,4 @@ func peerArea(ctx context.Context, ws, absPath string, store *topology.Store) st
 		return fmt.Sprintf("%s (%s)", dir, annot)
 	}
 	return dir
-}
-
-// clampToBytes truncates s to at most budget bytes on a UTF-8 rune boundary,
-// appending an ellipsis when it trims. A no-op when s fits or budget <= 0. The
-// [collab] budget is named *_bytes, so a multi-byte digest must be measured in
-// bytes, mirroring the [memory] budget rule.
-func clampToBytes(s string, budget int) string {
-	if budget <= 0 || len(s) <= budget {
-		return s
-	}
-	const ell = "…"
-	if budget <= len(ell) {
-		return truncateToRuneBoundary(s, budget)
-	}
-	return truncateToRuneBoundary(s, budget-len(ell)) + ell
-}
-
-func truncateToRuneBoundary(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }

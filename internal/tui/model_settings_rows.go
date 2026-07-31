@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // settingsDisplayLines renders the scrollable logical lines to display strings
@@ -85,7 +86,7 @@ func settingsContLine(it settingItem, idx, labelW, valueW int, wsScope bool) str
 	}
 	entry := ""
 	if idx < len(it.list) {
-		entry = truncate(it.list[idx], valueW-2)
+		entry = textfmt.Ellipsis(it.list[idx], valueW-2)
 	}
 	return strings.Repeat(" ", labelW+3) + style.Render(entry)
 }
@@ -111,7 +112,7 @@ func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW in
 	label := rowLabel(it)
 	// Truncate two short of the column so an over-long value keeps a gap
 	// before the control instead of running into it.
-	value := fmt.Sprintf("%-*s", valueW, truncate(rowValues(it)[0], valueW-2))
+	value := fmt.Sprintf("%-*s", valueW, textfmt.Ellipsis(rowValues(it)[0], valueW-2))
 	ctrl := settingControl(it)
 
 	numeral, numeralPlain := reloadNumeral(it.key)
@@ -244,7 +245,7 @@ func settingsLegend(wsScope bool) string {
 // the background colour to the full content width.
 func settingsStatusContent(text string, contentW int) string {
 	if lipgloss.Width(text) > contentW {
-		text = truncate(text, contentW)
+		text = textfmt.Ellipsis(text, contentW)
 	}
 	pad := max(contentW-lipgloss.Width(text), 0)
 	return SettingsBarMsgStyle.Render(text) + SettingsBarStyle.Render(strings.Repeat(" ", pad))

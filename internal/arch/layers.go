@@ -87,7 +87,9 @@ var Layers = map[string]Layer{
 	"internal/arch":                 LayerFoundation, // this package: the rules themselves
 	"internal/paths":                LayerFoundation,
 	"internal/fsync":                LayerFoundation,
+	"internal/sqlitex":              LayerFoundation, // the one place a SQLite DSN is built
 	"internal/tokenise":             LayerFoundation,
+	"internal/textfmt":              LayerFoundation, // stdlib-only text primitives, no lipgloss
 	"internal/redact":               LayerFoundation,
 	"internal/theme":                LayerFoundation, // UI-agnostic hex palettes, no lipgloss
 	"internal/render":               LayerFoundation, // pure presentation helpers

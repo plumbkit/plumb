@@ -124,21 +124,11 @@ func TestFormatStatus_ShowsLastError(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	cases := []struct {
-		b    int64
-		want string
-	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{1024, "1.0 KiB"},
-		{2048, "2.0 KiB"},
-		{1 << 20, "1.0 MiB"},
-		{3 * (1 << 20), "3.0 MiB"},
-	}
-	for _, c := range cases {
-		if got := formatBytes(c.b); got != c.want {
-			t.Errorf("formatBytes(%d) = %q, want %q", c.b, got, c.want)
-		}
+// Byte formatting itself is covered by internal/textfmt; what matters here is
+// that FormatStatus actually routes the DB size through it.
+func TestFormatStatus_DBSizeUsesBinaryUnits(t *testing.T) {
+	out := FormatStatus(Status{DBSizeBytes: 2048}, "/ws")
+	if !strings.Contains(out, "2.0 KiB") {
+		t.Errorf("FormatStatus should render db size as 2.0 KiB; got:\n%s", out)
 	}
 }

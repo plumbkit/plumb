@@ -467,11 +467,8 @@ func TestFooterCountFormatting(t *testing.T) {
 	if got := formatToolCallCount(1); got != "1 tool call" {
 		t.Fatalf("formatToolCallCount(1) = %q, want singular", got)
 	}
-	if got := pluralWord(1, "token", "tokens"); got != "token" {
-		t.Fatalf("pluralWord for one token = %q, want token", got)
-	}
-	if got := pluralWord(2, "token", "tokens"); got != "tokens" {
-		t.Fatalf("pluralWord for two tokens = %q, want tokens", got)
+	if got := formatToolCallCount(2); got != "2 tool calls" {
+		t.Fatalf("formatToolCallCount(2) = %q, want plural", got)
 	}
 }
 

@@ -41,8 +41,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // plumbBin is the freshly-built plumb binary, shared across all subtests. Built
@@ -343,7 +344,10 @@ func countToolCalls(t *testing.T, tmpHome string) (int, string) {
 	if _, err := os.Stat(path); err != nil {
 		return 0, ""
 	}
-	db, err := sql.Open("sqlite", path+"?mode=ro&_busy_timeout=2000")
+	// Was `path+"?mode=ro&_busy_timeout=2000"`, which got both halves wrong:
+	// modernc ignores the mattn-style _busy_timeout= spelling (leaving it at 0)
+	// and ignores mode= entirely on a bare path (leaving the handle writable).
+	db, err := sqlitex.OpenReadOnly(path, sqlitex.ReadOnlyOptions{BusyTimeout: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("open stats.db: %v", err)
 	}

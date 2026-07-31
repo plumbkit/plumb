@@ -12,6 +12,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
+
+	"github.com/plumbkit/plumb/internal/fsync"
 )
 
 // claudeCodeConfigPath returns the user-level Claude Code config path.
@@ -293,6 +295,18 @@ func readOrInitCodexConfig(path string) (m map[string]any, isNew bool, err error
 	return m, false, nil
 }
 
+// setupWriteOptions is the write policy for every file `plumb setup` touches.
+//
+// These land in OTHER tools' directories — ~/.codex, the Claude skills dir, a
+// Gemini config tree — whose scanners plumb does not control, so the staging
+// file is always dot-prefixed. Mode matters here too: os.CreateTemp makes 0600
+// and these writers never chmod'd, so the first time `plumb setup` rewrote a
+// user's existing 0644 config it silently downgraded it. AtomicWrite preserves
+// an existing file's mode; 0600 applies only to one plumb creates itself.
+func setupWriteOptions(tempPattern string) fsync.Options {
+	return fsync.Options{TempPattern: tempPattern, Label: "setup"}
+}
+
 // writeJSON writes m to path as indented JSON, creating the file if needed.
 // It writes to a temp file in the same directory and renames atomically.
 func writeJSON(path string, m map[string]any) error {
@@ -302,22 +316,7 @@ func writeJSON(path string, m map[string]any) error {
 	}
 	data = append(data, '\n')
 
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".plumb_setup_*.json")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return fsync.AtomicWrite(path, data, setupWriteOptions(".plumb_setup_*.json"))
 }
 
 // writeTOML writes m to path as TOML, creating the file if needed.
@@ -328,22 +327,7 @@ func writeTOML(path string, m map[string]any) error {
 		return err
 	}
 
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".plumb_setup_*.toml")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return fsync.AtomicWrite(path, data, setupWriteOptions(".plumb_setup_*.toml"))
 }
 
 // readOrInitYAMLConfig reads cfgPath as YAML into a generic map.
@@ -379,22 +363,7 @@ func writeYAML(path string, m map[string]any) error {
 		return err
 	}
 
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".plumb_setup_*.yaml")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return fsync.AtomicWrite(path, data, setupWriteOptions(".plumb_setup_*.yaml"))
 }
 
 // mergeServerEntry is the shared, format-agnostic merge used by every
@@ -499,21 +468,7 @@ func installSkill(skillsDir, name, content string) (string, error) {
 		return "", fmt.Errorf("reading %s: %w", dst, readErr)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".plumb_skill_*.md")
-	if err != nil {
-		return "", fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmpPath, dst); err != nil {
+	if err := fsync.AtomicWrite(dst, []byte(content), setupWriteOptions(".plumb_skill_*.md")); err != nil {
 		return "", fmt.Errorf("installing skill: %w", err)
 	}
 

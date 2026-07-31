@@ -201,7 +201,7 @@ func (t *MinimalDiffReview) gitDiff(ctx context.Context, repoRoot, ws string, a 
 	// needs the raw, byte-exact diff text for minchange.ParseUnifiedDiff, and
 	// runGit's postProcessGit step plus its write-tier serialisation machinery
 	// are built for the git tool's read-tier command output, not that.
-	cmd := exec.CommandContext(ctx, "git", argv...)
+	cmd := exec.CommandContext(ctx, "git", gitReadArgv(argv)...) //nolint:gosec // G204: argv is literals plus a.BaseRef (rejected by validate() when dash-leading, so it cannot become a git option) and pathspecs, which follow the "--" separator
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -240,7 +240,7 @@ func (t *MinimalDiffReview) untrackedDiffs(ctx context.Context, repoRoot, ws str
 	} else {
 		argv = append(argv, ws)
 	}
-	out, err := exec.CommandContext(ctx, "git", argv...).Output()
+	out, err := exec.CommandContext(ctx, "git", gitReadArgv(argv)...).Output() //nolint:gosec // G204: argv is literals plus workspace-resolved pathspecs, all after the "--" separator
 	if err != nil {
 		return ""
 	}

@@ -53,6 +53,32 @@
 
 ### Changed
 
+- **One home each for byte formatting, pluralisation and truncation.** The new
+  stdlib-only `internal/textfmt` replaces sixteen scattered helpers: four byte
+  formatters (`render.HumanBytes`, `topology.formatBytes`, `tools.formatSize`,
+  `monitor.FormatBytes`), four pluralisers, and eight truncate/clamp helpers
+  including two byte-identical pairs. It is its own Foundation package rather
+  than a move into `internal/render` because render imports lipgloss, and
+  `internal/memory`, `internal/topology` and `internal/tools` all want these
+  helpers without dragging a terminal rendering library into their dependency
+  graph. **Byte sizes now read KiB/MiB/GiB everywhere.** Every copy already
+  divided by 1024; two of them labelled the result "KB", stating a different
+  number than they computed. Visible in `plumb debug`, the TUI daemon rows,
+  `plumb doctor` and `list_directory` file sizes.
+
+- **One home for atomic writes, and one for opening SQLite.** A staged
+  temp→rename write is now `fsync.AtomicWrite`, replacing twelve open-coded
+  copies across eight files; `sqlitex.Open`/`OpenReadOnly` build every SQLite
+  DSN, replacing seven hand-written ones. Both consolidations are held by tests
+  in `internal/arch` (`TestSharedPrimitives`, `TestPinnedCalls`) that fail when
+  the pattern is reimplemented or the underlying call is made directly — the
+  atomic write had already regrown from five copies to twelve since the
+  cleanup was first filed, precisely because nothing failed in between.
+  SQLite pragma delivery is normalised too: `foreign_keys` is on for every
+  database (it was off for two), `synchronous` is now an explicit per-caller
+  decision rather than an accident, and connection pragmas travel in the DSN so
+  they reach every pooled connection rather than only the one an `Exec` hit.
+
 - **The coverage floor now counts every package.** `make cover`
   (`scripts/check-coverage.sh`) instruments the whole module with
   `-coverpkg=./...` instead of only the packages a test binary touches —
@@ -198,6 +224,77 @@
   connection, and both `daemon_info` and `session_start` report it as a separate
   fact: `lsp: none attached (primary); routed: go`, with the recommended first
   step naming the LSP tools that do work instead of steering away from them.
+
+- **The gopls integration tests failed when the repo sat under a `go.work`.**
+  They pointed gopls at `testdata/go-fixture` in place. That directory declares
+  its own module, but when this repo is checked out beneath a workspace file
+  that `use`s it — plumb's own ops workspace does exactly that — the workspace
+  wins and the fixture resolves to the parent module, which then excludes it
+  for living under `testdata/`. gopls was left serving a directory belonging to
+  no package and answered `documentSymbol` and `definition` with nothing, so
+  the failure read as a broken adapter rather than a broken fixture. The tests
+  now copy the fixture into a temp workspace, which every other gopls test in
+  the tree already did.
+
+- **A cancelled read-only git query could strand `.git/index.lock`.** `git
+  status` and `git diff` refresh the index as a side effect, and that refresh
+  is a write: it takes `.git/index.lock`. plumb runs those queries under
+  `exec.CommandContext`, whose default cancellation is SIGKILL — which git
+  cannot trap, so it never removes the lock. A daemon shutdown, a connection
+  eviction, or any cancelled tool call mid-query therefore left a lock behind,
+  and the next `git add` in that repo failed with "Unable to create
+  index.lock: File exists" plus the misleading advice that another git process
+  was running. Every read-only query now passes `--no-optional-locks`, which
+  skips the refresh (a stat-cache optimisation that never changes the output)
+  and removes the failure mode by construction. The dirty-write guard runs one
+  of these on every destructive write, so it was the likeliest source.
+  `runGit`'s claim that "read-tier ops never lock" was simply false before
+  this, and is now true.
+
+- **Truncated tool output could contain a broken character.** Six display and
+  storage truncations sliced by byte at a fixed offset, emitting a replacement
+  character whenever that offset landed inside a multi-byte sequence — routine
+  for any file with an accented word, a CJK comment, or an emoji in a string
+  literal. Affected the `topology_explore` line preview, the `file_outline`
+  signature and doc-headline caps, the `find_references` line preview, the
+  docstring stored in the topology index, and the text sent to an embedding
+  provider — where invalid UTF-8 in the JSON body can have the request
+  rejected outright. All now go through the rune-safe helpers in
+  `internal/textfmt`.
+
+- **A "read-only" SQLite handle was never actually read-only.** `mode=ro` is
+  honoured only when the DSN is a `file:` URI; appended to a bare path the
+  modernc driver ignores it and opens the database read-WRITE. Both
+  `stats.OpenReadOnly` and `topology.StatusForWorkspace` documented themselves
+  as side-effect-free inspections and neither was one. This is the same class of
+  silent-DSN-defect as the `_busy_timeout=` bug fixed earlier, and it is why
+  `internal/sqlitex` now builds every DSN by construction. `cmd/clientsmoke`
+  additionally still used the ignored `_busy_timeout=` spelling, leaving its
+  stats reader at `busy_timeout=0`. Note the consequence: a genuinely read-only
+  reader of a WAL database *does* create transient `-wal`/`-shm` sidecars (it
+  needs a WAL index), which the previous non-read-only handle had no reason to.
+
+- **Concurrent writes to one memory could fail.** `memory.Write` staged into a
+  fixed `<path>.tmp` with no lock, so simultaneous writes of the same memory
+  shared a single staging file: whichever renamed first moved it out from under
+  the others. Replaying the old algorithm with eight writers fails four or five
+  of them every run. `fsync.AtomicWrite` gives each writer its own staging file.
+
+- **`plumb setup` silently tightened third-party config permissions.** The
+  setup writers edit files belonging to other tools (`~/.codex`, the Claude
+  config, Gemini trees) and staged through `os.CreateTemp`, which always creates
+  0600, without ever restoring the original mode — so the first run over a
+  user's existing 0644 config quietly made it private. Rewriting an existing
+  file now preserves its permissions.
+
+- **The daemon metrics snapshot never fsynced.** It was the one staged-rename
+  writer in the tree opting out of the fsync-before-ack contract the rest of the
+  daemon keeps. It now honours it, still gated by the `[edits] fsync` knob.
+
+- **Edit-error snippets could emit mojibake.** `truncateSnippet` sliced at byte
+  60, producing a replacement character whenever that offset landed inside a
+  multi-byte sequence — routine for any non-ASCII source file. Truncation is
+  now rune-safe.
 
 - **CI: the widened linter set is now trialled against the Darwin tree too,
   and the toolchain is past four stdlib CVEs.** `usetesting` fired only in

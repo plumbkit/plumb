@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/fsync"
 )
 
 const SnapshotFileName = "daemon.metrics.json"
@@ -133,25 +134,14 @@ func WriteSnapshot(path string, metrics DaemonMetrics) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create metrics dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".daemon.metrics-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create metrics temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write metrics temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close metrics temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("publish metrics snapshot: %w", err)
-	}
-	return nil
+	// This was the one staged-rename writer in the tree that never fsynced,
+	// silently opting out of the durability contract the rest of the daemon
+	// keeps. It now honours it like everything else; the [edits] fsync knob
+	// still governs whether the sync actually happens.
+	return fsync.AtomicWrite(path, data, fsync.Options{
+		TempPattern: ".daemon.metrics-*.tmp",
+		Label:       "monitor",
+	})
 }
 
 func StartSnapshotWriter(ctx context.Context, path string, interval time.Duration, startedAt time.Time) {
@@ -194,20 +184,6 @@ func ProcessRSS(pid int) (uint64, bool) {
 		return 0, false
 	}
 	return processChildRSS(pid)
-}
-
-func FormatBytes(n uint64) string {
-	const unit = 1024
-	switch {
-	case n >= unit*unit*unit:
-		return fmt.Sprintf("%.1f GB", float64(n)/(unit*unit*unit))
-	case n >= unit*unit:
-		return fmt.Sprintf("%.0f MB", float64(n)/(unit*unit))
-	case n >= unit:
-		return fmt.Sprintf("%.0f KB", float64(n)/unit)
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
 }
 
 func FormatCPU(percent float64) string {

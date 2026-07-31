@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -95,7 +96,7 @@ func (s *connSession) intentHint(args []byte, ws string) string {
 		block := fmt.Sprintf(
 			"\n\n[Peer intent (claim, unverified): session %s declared %s ago: %q. This is advisory.]",
 			r.AuthorSession, humaniseSince(now.Sub(r.CreatedAt)), r.Body)
-		return clampBytes(block, ccfg.HintBudgetBytes)
+		return textfmt.ClampBytes(block, ccfg.HintBudgetBytes)
 	}
 	return ""
 }

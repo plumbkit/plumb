@@ -8,13 +8,13 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/redact"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // episodicWriteTools are the tools that unconditionally mutate files; a call to
@@ -62,7 +62,7 @@ func (s *connSession) generateEpisodicSummary() {
 		return
 	}
 	summary, _ := redact.Redact(detail.Summary)
-	summary = clampBytes(summary, episodicBudget(mcfg))
+	summary = textfmt.ClampBytes(summary, episodicBudget(mcfg))
 	s.statsStore.RecordEpisodic(stats.Episodic{
 		Workspace:    ws,
 		SessionID:    s.sessID,
@@ -226,10 +226,10 @@ func renderEpisodic(touched, symbols []string, readN, writeN int) string {
 	if len(touched) > 0 {
 		fmt.Fprintf(&sb, "modified %s", joinBackticked(touched, 4))
 		if writeN > 0 {
-			fmt.Fprintf(&sb, " (%d write%s)", writeN, plural(writeN))
+			fmt.Fprintf(&sb, " (%d write%s)", writeN, textfmt.Plural(writeN, "", "s"))
 		}
 	} else {
-		fmt.Fprintf(&sb, "ran %d read tool call%s", readN, plural(readN))
+		fmt.Fprintf(&sb, "ran %d read tool call%s", readN, textfmt.Plural(readN, "", "s"))
 	}
 	if len(symbols) > 0 {
 		fmt.Fprintf(&sb, " and looked at %s", joinBackticked(symbols, 3))
@@ -283,41 +283,4 @@ func joinBackticked(items []string, limit int) string {
 		quoted[i] = "`" + it + "`"
 	}
 	return strings.Join(quoted, ", ")
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
-// clampBytes truncates s so the result is at most budget BYTES, including the
-// trailing ellipsis, cut on a UTF-8 rune boundary. A no-op when s already fits
-// or budget <= 0. The config knobs are named *_bytes, so a multi-byte (CJK /
-// emoji) summary or hint must be measured in bytes, not rune count.
-func clampBytes(s string, budget int) string {
-	if budget <= 0 || len(s) <= budget {
-		return s
-	}
-	const ell = "…"
-	if budget <= len(ell) {
-		return truncateToBytes(s, budget) // no room for content + ellipsis
-	}
-	return truncateToBytes(s, budget-len(ell)) + ell
-}
-
-// truncateToBytes returns the longest prefix of s that is at most n bytes and
-// ends on a rune boundary.
-func truncateToBytes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n-- // back up off a continuation byte to the rune boundary
-	}
-	return s[:n]
 }

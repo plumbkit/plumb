@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 var listDirectorySchema = json.RawMessage(`{
@@ -214,38 +215,18 @@ func formatDirResult(dir string, entries []dirEntry) string {
 			fmt.Fprintf(&sb, "[DIR]  %-40s  %12s  %s\n", name, "", mt)
 		default:
 			files++
-			fmt.Fprintf(&sb, "[FILE] %-40s  %12s  %s\n", name, formatSize(e.size), mt)
+			fmt.Fprintf(&sb, "[FILE] %-40s  %12s  %s\n", name, textfmt.HumanBytes(e.size), mt)
 		}
 	}
 	if len(entries) == 0 {
 		sb.WriteString("(empty)\n")
 	} else {
 		fmt.Fprintf(&sb, "\n%d director%s, %d file%s",
-			dirs, plural(dirs, "y", "ies"),
-			files, plural(files, "", "s"),
+			dirs, textfmt.Plural(dirs, "y", "ies"),
+			files, textfmt.Plural(files, "", "s"),
 		)
 	}
 	return sb.String()
-}
-
-func formatSize(n int64) string {
-	switch {
-	case n < 1024:
-		return fmt.Sprintf("%d B", n)
-	case n < 1024*1024:
-		return fmt.Sprintf("%.1f KB", float64(n)/1024)
-	case n < 1024*1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
-	default:
-		return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
-	}
-}
-
-func plural(n int, singular, pluralSuffix string) string {
-	if n == 1 {
-		return singular
-	}
-	return pluralSuffix
 }
 
 // resolvePath resolves a path argument for filesystem tools. Strips a leading

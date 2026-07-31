@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // Hit is one ranked memory search result.
@@ -134,9 +136,9 @@ func matchMemoryField(query, name, tokens, desc, body, globs, spaths, ssyms stri
 
 func memorySnippet(desc, body string) string {
 	if desc != "" {
-		return truncateMemory(desc, 120)
+		return textfmt.Ellipsis(desc, 120)
 	}
-	return truncateMemory(firstNonBlankLine(body), 120)
+	return textfmt.Ellipsis(firstNonBlankLine(body), 120)
 }
 
 func firstNonBlankLine(s string) string {
@@ -146,12 +148,4 @@ func firstNonBlankLine(s string) string {
 		}
 	}
 	return ""
-}
-
-func truncateMemory(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

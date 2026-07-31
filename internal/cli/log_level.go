@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
-	"github.com/plumbkit/plumb/internal/monitor"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 var logLevelCmd = &cobra.Command{
@@ -353,12 +353,12 @@ func handleMemStats(conn net.Conn) {
 	// aligned dotted-leader rows so presentation stays out of the daemon.
 	fmt.Fprintf(conn,
 		"HeapAlloc\t%s\nHeapInuse\t%s\nHeapSys\t%s\nHeapIdle\t%s\nHeapReleased\t%s\nNextGC\t%s\nNumGC\t%d\nGoroutines\t%d\n",
-		monitor.FormatBytes(m.HeapAlloc),
-		monitor.FormatBytes(m.HeapInuse),
-		monitor.FormatBytes(m.HeapSys),
-		monitor.FormatBytes(m.HeapIdle),
-		monitor.FormatBytes(m.HeapReleased),
-		monitor.FormatBytes(m.NextGC),
+		textfmt.HumanBytesCompact(m.HeapAlloc),
+		textfmt.HumanBytesCompact(m.HeapInuse),
+		textfmt.HumanBytesCompact(m.HeapSys),
+		textfmt.HumanBytesCompact(m.HeapIdle),
+		textfmt.HumanBytesCompact(m.HeapReleased),
+		textfmt.HumanBytesCompact(m.NextGC),
 		m.NumGC,
 		runtime.NumGoroutine(),
 	)

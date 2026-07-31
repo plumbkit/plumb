@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -99,38 +98,19 @@ func writeConfigAtomic(path string, cfg Config) error {
 // rename and the directory after it (best-effort), so a crash cannot silently
 // resurrect the previous config.
 func writeTOMLAtomic(path string, v any) error {
-	dir := filepath.Dir(path)
-	mode := os.FileMode(0o644)
-	if fi, statErr := os.Stat(path); statErr == nil {
-		mode = fi.Mode().Perm()
-	}
-	tmp, err := os.CreateTemp(dir, ".config-*.toml.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp config: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename
-	if err := toml.NewEncoder(tmp).Encode(v); err != nil {
-		tmp.Close()
-		return fmt.Errorf("encoding config: %w", err)
-	}
-	if err := fsync.SyncFile(tmp); err != nil {
-		tmp.Close()
-		return fmt.Errorf("syncing config: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("flushing config: %w", err)
-	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return fmt.Errorf("setting config permissions: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("renaming config into place: %w", err)
-	}
-	if err := fsync.SyncDir(dir); err != nil {
-		slog.Warn("config: directory fsync failed after config write", "path", path, "err", err)
-	}
-	return nil
+	// The TOML encoder streams straight into the staging file rather than
+	// marshalling to a byte slice first, hence AtomicWriteFunc.
+	//
+	// The ".config-*.toml.tmp" pattern is pinned by
+	// config_global_watcher_test.go: the global-config watcher must not treat a
+	// staging file as a reload trigger.
+	return fsync.AtomicWriteFunc(path, fsync.Options{
+		TempPattern: ".config-*.toml.tmp",
+		Mode:        0o644, // a config file the user is expected to read and edit
+		Label:       "config",
+	}, func(w io.Writer) error {
+		return toml.NewEncoder(w).Encode(v)
+	})
 }
 
 // loadGlobalRaw reads the global config file into a nested map of only the keys

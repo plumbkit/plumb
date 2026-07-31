@@ -19,6 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // episodicMemoriesDDL is the single source of truth for the episodic_memories
@@ -201,23 +202,12 @@ const SchemaVersion = 13
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {
 	path := DBPathFor()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("stats: mkdir: %w", err)
-	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// SyncNormal: stats are telemetry. Under WAL this stays corruption-safe and
+	// only risks losing the most recent records on a hard power cut, which is a
+	// fair trade for not fsyncing on every tool call.
+	db, err := sqlitex.Open(path, sqlitex.Options{Sync: sqlitex.SyncNormal, MaxOpenConns: 1})
 	if err != nil {
 		return nil, fmt.Errorf("stats: open %s: %w", path, err)
-	}
-	db.SetMaxOpenConns(1)
-	// synchronous=NORMAL is corruption-safe under WAL and avoids an fsync per
-	// commit; the only exposure is losing the last batch of stats on a hard
-	// power cut, which is acceptable for metrics. WAL + busy_timeout come from the
-	// DSN via the `_pragma=` form — the modernc driver SILENTLY IGNORES the
-	// mattn-style `_busy_timeout=`/`_journal_mode=` params — and synchronous is
-	// asserted here since it is per-connection.
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("stats: synchronous: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -227,19 +217,19 @@ func Open() (*DB, error) {
 	// user_version stamp is a write, so only issue it when the version actually
 	// moved — stamping on every Open turns a read-only open into a writer that
 	// contends for the write lock.
-	var currentVersion int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
+	currentVersion, err := sqlitex.Version(db)
+	if err != nil {
 		db.Close()
-		return nil, fmt.Errorf("stats: reading user_version: %w", err)
+		return nil, err
 	}
 	if currentVersion < SchemaVersion {
 		if err := migrate(db, currentVersion, SchemaVersion); err != nil {
 			db.Close()
 			return nil, err
 		}
-		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
+		if err := sqlitex.StampVersion(db, SchemaVersion); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("stats: stamping user_version: %w", err)
+			return nil, err
 		}
 	}
 	return &DB{db: db}, nil
@@ -252,7 +242,9 @@ func OpenReadOnly() (*DB, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
 	}
-	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=busy_timeout(1000)")
+	// Short timeout: a reader here is a CLI or TUI inspector that should report
+	// contention rather than stall behind the daemon's writer.
+	db, err := sqlitex.OpenReadOnly(path, sqlitex.ReadOnlyOptions{BusyTimeout: time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("stats: open readonly %s: %w", path, err)
 	}
@@ -264,9 +256,9 @@ func OpenReadOnly() (*DB, error) {
 }
 
 func checkReadOnlySchema(db *sql.DB) error {
-	var currentVersion int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&currentVersion); err != nil {
-		return fmt.Errorf("stats: reading readonly schema version: %w", err)
+	currentVersion, err := sqlitex.Version(db)
+	if err != nil {
+		return err
 	}
 	if currentVersion >= SchemaVersion {
 		return nil

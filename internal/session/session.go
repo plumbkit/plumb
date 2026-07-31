@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -151,33 +150,13 @@ func writeSessionFileAtomic(path string, info Info) error {
 		return err
 	}
 	out = append(out, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".session-*.json.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(out); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := fsync.SyncFile(tmp); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := fsync.SyncDir(filepath.Dir(path)); err != nil {
-		slog.Warn("session: directory fsync failed after session-file write", "path", path, "err", err)
-	}
-	return nil
+	// The trailing ".tmp" is load-bearing: List and FindEnded scan this
+	// directory for a ".json" suffix, so a staging file named "<x>.json" would
+	// be read mid-write.
+	return fsync.AtomicWrite(path, out, fsync.Options{
+		TempPattern: ".session-*.json.tmp",
+		Label:       "session",
+	})
 }
 
 // Rename validates and writes a new session name for id, returning the

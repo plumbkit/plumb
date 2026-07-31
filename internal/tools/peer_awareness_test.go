@@ -8,6 +8,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 func TestJoinTopologyAnnotation(t *testing.T) {
@@ -90,13 +91,13 @@ func TestFormatWorkspaceSessions_Annotation(t *testing.T) {
 }
 
 func TestClampToBytes(t *testing.T) {
-	if got := clampToBytes("hello", 0); got != "hello" {
+	if got := textfmt.ClampBytes("hello", 0); got != "hello" {
 		t.Errorf("budget 0 disables clamp, got %q", got)
 	}
-	if got := clampToBytes("hello", 100); got != "hello" {
+	if got := textfmt.ClampBytes("hello", 100); got != "hello" {
 		t.Errorf("fitting string unchanged, got %q", got)
 	}
-	got := clampToBytes("hello world", 8)
+	got := textfmt.ClampBytes("hello world", 8)
 	if len([]byte(got)) > 8 {
 		t.Errorf("clamped %q exceeds 8 bytes", got)
 	}
@@ -104,7 +105,7 @@ func TestClampToBytes(t *testing.T) {
 		t.Errorf("clamped string should end with ellipsis, got %q", got)
 	}
 	// Multi-byte: never split a rune.
-	multi := clampToBytes(strings.Repeat("é", 10), 7) // 'é' = 2 bytes; ellipsis 3 bytes
+	multi := textfmt.ClampBytes(strings.Repeat("é", 10), 7) // 'é' = 2 bytes; ellipsis 3 bytes
 	if !utf8ValidString(multi) {
 		t.Errorf("clamp split a multi-byte rune: %q", multi)
 	}

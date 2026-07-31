@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // settingsRowsLines returns the scrollable rows-pane lines for the active tab:
@@ -63,7 +64,7 @@ func (m Model) cmdListPaneLines(w int) []string {
 	}
 	focused := m.commandsFocus == cmdFocusList
 	for i, c := range m.commandsList {
-		name := truncate(c.Name, max(w-2, 1))
+		name := textfmt.Ellipsis(c.Name, max(w-2, 1))
 		switch {
 		case i == m.commandsListCursor && focused:
 			lines = append(lines, SelectedStyle.Render("❯ "+name))
@@ -93,7 +94,7 @@ func (m Model) cmdDetailPaneLines(w int) []string {
 		{"deny_network", onOff(c.DenyNetwork)},
 	}
 	for i, f := range fields {
-		row := truncate(fmt.Sprintf("%-12s %s", f.label, f.val), max(w-2, 1))
+		row := textfmt.Ellipsis(fmt.Sprintf("%-12s %s", f.label, f.val), max(w-2, 1))
 		if focused && i == m.commandsDetailCursor {
 			lines = append(lines, SelectedStyle.Render("❯ "+row))
 		} else {

@@ -6,15 +6,14 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/sqlitex"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
-// statusReadDSN opens the topology index read-only with busy_timeout applied via
-// the `_pragma=` form. The modernc driver SILENTLY IGNORES the mattn-style
-// `_busy_timeout=` param (same defect fixed for stats/sessionstate), so a bare
-// `_busy_timeout=2000` left this read-only status handle at busy_timeout=0 —
-// turning recoverable writer contention into an immediate "database is locked"
-// for topology_status / the CLI status read while the daemon holds the writer.
-const statusReadDSN = "?mode=ro&_pragma=busy_timeout(2000)"
+// statusReadTimeout keeps an inspector from hanging behind the daemon's writer:
+// `plumb doctor` and the TUI would rather report contention than block.
+const statusReadTimeout = 2 * time.Second
 
 // Report builds a Status snapshot of the topology index.
 func Report(db *sql.DB, workspace string, idx *Indexer) Status {
@@ -39,16 +38,19 @@ func Report(db *sql.DB, workspace string, idx *Indexer) Status {
 // database is reported as an error satisfying os.IsNotExist; the IndexerState in
 // the returned Status is "stopped" because no live indexer is attached.
 //
-// The connection is opened with mode=ro so the inspection is side-effect-free:
-// it never writes the main database and — when the daemon is down and the WAL
-// has been checkpointed away on clean shutdown — creates no -wal/-shm sidecars.
-// This mirrors stats.OpenReadOnly.
+// The connection is opened read-only, so the inspection never writes the main
+// database. It may create transient -wal/-shm sidecars: reading a WAL database
+// requires a WAL index, and those files are already gitignored. An earlier
+// version of this comment promised no sidecars at all, which happened to be
+// true only because `mode=ro` appended to a bare path is silently ignored — the
+// handle was read-write, and so had no WAL index to build. This mirrors
+// stats.OpenReadOnly.
 func StatusForWorkspace(ws string) (Status, error) {
 	dbPath := DBPath(ws)
 	if _, err := os.Stat(dbPath); err != nil {
 		return Status{}, err
 	}
-	db, err := sql.Open("sqlite", dbPath+statusReadDSN)
+	db, err := sqlitex.OpenReadOnly(dbPath, sqlitex.ReadOnlyOptions{BusyTimeout: statusReadTimeout})
 	if err != nil {
 		return Status{}, fmt.Errorf("topology: open db read-only: %w", err)
 	}
@@ -104,7 +106,7 @@ func FormatStatus(s Status, workspace string) string {
 	fmt.Fprintf(&sb, "  skipped files: %d\n", s.SkippedFiles)
 	fmt.Fprintf(&sb, "  total nodes:   %d\n", s.TotalNodes)
 	fmt.Fprintf(&sb, "  total edges:   %d\n", s.TotalEdges)
-	fmt.Fprintf(&sb, "  db size:       %s\n", formatBytes(s.DBSizeBytes))
+	fmt.Fprintf(&sb, "  db size:       %s\n", textfmt.HumanBytes(s.DBSizeBytes))
 	if !s.LastSync.IsZero() {
 		fmt.Fprintf(&sb, "  last sync:     %s\n", s.LastSync.Format(time.RFC3339))
 	}
@@ -115,15 +117,4 @@ func FormatStatus(s Status, workspace string) string {
 		fmt.Fprintf(&sb, "  last error:    %s\n", s.LastError)
 	}
 	return sb.String()
-}
-
-func formatBytes(b int64) string {
-	switch {
-	case b >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
-	case b >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(b)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", b)
-	}
 }

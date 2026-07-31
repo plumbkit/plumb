@@ -2,10 +2,11 @@ package topology
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 func TestStatusForWorkspace_MissingDB(t *testing.T) {
@@ -89,16 +90,25 @@ func TestStatusForWorkspace_ReadOnly(t *testing.T) {
 	if !before.ModTime().Equal(after.ModTime()) {
 		t.Errorf("read-only status mutated the DB file: mtime %v -> %v", before.ModTime(), after.ModTime())
 	}
-	if _, err := os.Stat(DBPath(dir) + "-wal"); err == nil {
-		t.Error("read-only status created a -wal sidecar")
-	}
+	// Deliberately NOT asserting the absence of -wal/-shm sidecars. That used
+	// to hold, but only because `mode=ro` on a bare path is ignored, so the
+	// handle was never actually read-only and SQLite had no reason to build a
+	// WAL index. A genuinely read-only reader of a WAL database does create
+	// them, and they are transient bookkeeping the .gitignore already covers.
+	// The guarantee that matters is the mtime check above: the main database is
+	// not mutated.
 }
 
-// TestStatusForWorkspace_BusyTimeoutApplied guards against regressing the
-// read-only status DSN to the mattn-style `_busy_timeout=` form, which the
-// modernc driver silently ignores (busy_timeout stays 0). It opens a freshly
-// created index with the production statusReadDSN and asserts the pragma applied.
-func TestStatusForWorkspace_BusyTimeoutApplied(t *testing.T) {
+// TestStatusForWorkspace_ReadHandleIsTimedAndReadOnly pins both halves of the
+// status read handle.
+//
+// busy_timeout guards the mattn-style `_busy_timeout=` regression, which the
+// modernc driver silently ignores. The write refusal guards a second, subtler
+// one found while consolidating these opens: `mode=ro` is honoured only when
+// the DSN is a file: URI. Appended to a bare path it is read as part of the
+// filename, and the handle this function documents as side-effect-free opens
+// read-WRITE.
+func TestStatusForWorkspace_ReadHandleIsTimedAndReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(DBPath(dir))
 	if err != nil {
@@ -106,16 +116,21 @@ func TestStatusForWorkspace_BusyTimeoutApplied(t *testing.T) {
 	}
 	db.Close()
 
-	ro, err := sql.Open("sqlite", DBPath(dir)+statusReadDSN)
+	ro, err := sqlitex.OpenReadOnly(DBPath(dir), sqlitex.ReadOnlyOptions{BusyTimeout: statusReadTimeout})
 	if err != nil {
 		t.Fatalf("open ro: %v", err)
 	}
 	defer ro.Close()
+
 	var bt int
 	if err := ro.QueryRow("PRAGMA busy_timeout").Scan(&bt); err != nil {
 		t.Fatalf("query busy_timeout: %v", err)
 	}
-	if bt != 2000 {
-		t.Errorf("busy_timeout = %d, want 2000 (the _pragma= DSN must apply; mattn-style _busy_timeout= is ignored by modernc)", bt)
+	if bt != int(statusReadTimeout.Milliseconds()) {
+		t.Errorf("busy_timeout = %d, want %d", bt, statusReadTimeout.Milliseconds())
+	}
+
+	if _, err := ro.Exec(`INSERT INTO topology_files (path, lang, mtime, size, hash) VALUES ('x','go',0,0,'h')`); err == nil {
+		t.Error("insert succeeded on the status read handle — it is not actually read-only")
 	}
 }

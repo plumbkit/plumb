@@ -8,6 +8,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -163,7 +164,7 @@ func (s *connSession) peerHint(args []byte, ws string) string {
 		"\n\n[Peer: session %s edited this file %s ago — consider file_status before editing.]",
 		pw.session, humaniseSince(now.Sub(pw.at)),
 	)
-	return clampBytes(block, ccfg.HintBudgetBytes)
+	return textfmt.ClampBytes(block, ccfg.HintBudgetBytes)
 }
 
 // humaniseSince renders a positive duration as a compact age ("just now",
@@ -175,11 +176,11 @@ func humaniseSince(d time.Duration) string {
 		return "just now"
 	case d < time.Hour:
 		n := int(d.Minutes())
-		return fmt.Sprintf("%d min%s", n, plural(n))
+		return fmt.Sprintf("%d min%s", n, textfmt.Plural(n, "", "s"))
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%d h", int(d.Hours()))
 	default:
 		n := int(d.Hours() / 24)
-		return fmt.Sprintf("%d day%s", n, plural(n))
+		return fmt.Sprintf("%d day%s", n, textfmt.Plural(n, "", "s"))
 	}
 }

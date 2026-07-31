@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -388,10 +389,8 @@ func docComment(cg *ast.CommentGroup) string {
 		sb.WriteString(" ")
 	}
 	s := strings.TrimSpace(sb.String())
-	if len(s) > 500 {
-		s = s[:500]
-	}
-	return s
+	// Rune-safe: a docstring cut mid-rune would be persisted broken in the index.
+	return textfmt.TruncateBytes(s, 500)
 }
 
 func isTestFunc(name string) bool {
