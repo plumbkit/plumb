@@ -16,7 +16,7 @@
     "vite": "^6.2.0"
   },
   "dependencies": {
-    "echarts": "^5.5.1",
+    "echarts": "^6.1.0",
     "uplot": "^1.6.31"
   }
 }
