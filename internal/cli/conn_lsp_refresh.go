@@ -57,9 +57,24 @@ func (s *connSession) refreshPrimaryIfStale(ctx context.Context) {
 		return
 	}
 
+	s.bindRefreshedPrimary(ctx, root, language)
+}
+
+// bindRefreshedPrimary binds a primary detected off-lane by
+// refreshPrimaryIfStale, provided the session has not moved on since the
+// detect. Both re-checks happen inside the mutation lane because each inbound
+// MCP message runs in its own goroutine: a concurrent attach may have resolved
+// the primary, or a re-pin may have switched the workspace entirely. Binding a
+// root the session no longer pins would weld the old project's language onto
+// the new workspace — the drift the refresh exists never to cause (the re-pin's
+// own attach already resolved the new root against the widened language set).
+func (s *connSession) bindRefreshedPrimary(ctx context.Context, root, language string) {
 	s.mutate(func(v *sessionView) {
 		if !needsPrimary(*v) {
 			return // resolved by a concurrent attach while we were detecting
+		}
+		if v.acquiredRoot != root {
+			return // re-pinned to a different workspace while we were detecting
 		}
 		// repin=false selects the idempotent setPrimary: there is definitively no
 		// primary to reset. bindPrimary still records lsRefRoot/lsRefLang, so the

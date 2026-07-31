@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -174,5 +175,67 @@ func TestRefreshPrimary_UnattachedIsNoop(t *testing.T) {
 	}
 	if got := s.acquiredLanguageName(); got != "" {
 		t.Errorf("refresh resolved language %q on an unpinned connection", got)
+	}
+}
+
+// TestRefreshPrimary_SkipsStaleRootAfterRepin pins the in-lane root re-check:
+// the detect runs off-lane, and each inbound MCP message runs in its own
+// goroutine, so a re-pin can land between the two. Presenting the refresh with
+// the root/language pair detected for the OLD workspace must then be a no-op —
+// binding it would weld the old project's language onto the new workspace.
+func TestRefreshPrimary_SkipsStaleRootAfterRepin(t *testing.T) {
+	pool := enableTestPool()
+	rootA := freshTempDir(t)
+	mustWrite(t, filepath.Join(rootA, ".plumb", "config.toml"), "")
+	mustWrite(t, filepath.Join(rootA, "index.html"), "<html></html>\n")
+	installEntryLang(pool, rootA, "html", &stubClient{id: "html"})
+	rootB := freshTempDir(t)
+	mustWrite(t, filepath.Join(rootB, ".plumb", "config.toml"), "")
+
+	s := newRefreshSession(t, pool)
+	s.attachWorkspace(context.Background(), "file://"+rootA)
+	if got := s.acquiredLanguageName(); got != "" {
+		t.Fatalf("precondition: language %q attached to root A, want none", got)
+	}
+
+	// A concurrent session_start({workspace: B}) re-pins mid-refresh; the
+	// refresh then enters the lane holding root A's detected pair.
+	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
+		t.Fatalf("repinWorkspace: %v", err)
+	}
+	s.bindRefreshedPrimary(context.Background(), rootA, "html")
+
+	if got := s.workspace(); got != rootB {
+		t.Errorf("workspace = %q, want %q — the stale bind must not move the pin", got, rootB)
+	}
+	if got := s.acquiredLanguageName(); got != "" {
+		t.Errorf("language = %q after a stale refresh, want none", got)
+	}
+	if info := sessionRecord(t, s.sessID); info.Language != LanguageNone {
+		t.Errorf("session record Language = %q, want %q", info.Language, LanguageNone)
+	}
+}
+
+// TestAttachLanguageNone_WiresSecondaryActivation pins the second half of the
+// fix: a primary-less attach never reaches bindPrimary, so the activation hook
+// is wired on every resolvePrimaryLSP path — otherwise a routed server serving
+// the session never reaches the session record's Adapters list (what the TUI
+// and workspace_sessions show).
+func TestAttachLanguageNone_WiresSecondaryActivation(t *testing.T) {
+	pool := enableTestPool()
+	root := freshTempDir(t)
+	mustWrite(t, filepath.Join(root, ".plumb", "config.toml"), "")
+
+	s := newRefreshSession(t, pool)
+	s.attachWorkspace(context.Background(), "file://"+root)
+	if got := s.acquiredLanguageName(); got != "" {
+		t.Fatalf("precondition: language %q attached, want none", got)
+	}
+
+	// A secondary comes live for a file under the workspace via per-file routing.
+	s.sessionProxy.noteActivated(root, "html")
+
+	if info := sessionRecord(t, s.sessID); !slices.Contains(info.Adapters, "vscode-html-language-server") {
+		t.Errorf("session record Adapters = %v, want vscode-html-language-server listed", info.Adapters)
 	}
 }
