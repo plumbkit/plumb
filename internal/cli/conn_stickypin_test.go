@@ -22,6 +22,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 func TestStickyPin_ConflictingSessionStartRepinRefused(t *testing.T) {
@@ -323,11 +324,9 @@ func TestStickyPin_ConcurrentExplicitPins_ExactlyOneLands(t *testing.T) {
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
 	for i, target := range []string{rootA, rootB} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = s.repinWorkspace(context.Background(), target, "", false)
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -457,6 +456,116 @@ func TestStickyPin_RestoredRootsOriginPinNotSticky(t *testing.T) {
 	}
 	if got := after.workspace(); got != rootB {
 		t.Fatalf("explicit re-pin did not land: got %q, want %q", got, rootB)
+	}
+}
+
+// newSessionStartTool wires a tools.SessionStart to a connSession the way
+// registerAllTools does for the pieces under test here (workspace + re-pin),
+// so these tests exercise the REAL tool surface, not just the daemon API —
+// resolveSessionWorkspace's sameDir routing sits between the two.
+func newSessionStartTool(s *connSession) *tools.SessionStart {
+	return tools.NewSessionStart(s.workspace, nil, nil, nil, func() string { return "" }, nil).
+		WithRepin(s.repinWorkspace)
+}
+
+func TestStickyPin_VictimSameRootSessionStartHealsViaTool(t *testing.T) {
+	// The heal must be reachable through the real MCP call: the #182 victim's
+	// natural next move is session_start({workspace: A}) with A EXACTLY the
+	// pinned root. resolveSessionWorkspace used to short-circuit on sameDir and
+	// never reach the daemon, leaving the session flagged blocked forever.
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+		t.Fatal("precondition: the conflicting re-pin should have been refused")
+	}
+	if health, _ := sessionHealth(t, s.sessID); health != "blocked" {
+		t.Fatalf("precondition: health = %q, want blocked", health)
+	}
+
+	out, err := newSessionStartTool(s).Execute(context.Background(), json.RawMessage(`{"workspace":"`+rootA+`"}`))
+	if err != nil {
+		t.Fatalf("victim's same-root session_start: %v", err)
+	}
+	if strings.Contains(out, "Re-pinned this connection") {
+		t.Errorf("same-root session_start must not announce a re-pin\n%s", out)
+	}
+	if health, msg := sessionHealth(t, s.sessID); health != "" {
+		t.Errorf("health after the victim's same-root session_start = %q (%q), want clear", health, msg)
+	}
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("workspace = %q, want %q", got, rootA)
+	}
+}
+
+func TestStickyPin_SameRootPromotionThroughToolSurface(t *testing.T) {
+	// The promotion twin of the heal test: session_start naming EXACTLY the
+	// roots-attached root must make the pin sticky through the tool surface,
+	// not only via the daemon API.
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	s.attachWorkspace(context.Background(), "file://"+rootA) // origin roots
+
+	if _, err := newSessionStartTool(s).Execute(context.Background(), json.RawMessage(`{"workspace":"`+rootA+`"}`)); err != nil {
+		t.Fatalf("same-root session_start: %v", err)
+	}
+	if got := s.view().pinOrigin; got != sessionstate.PinSourceSessionStart {
+		t.Fatalf("pin origin = %q, want session_start (promotion through the tool surface)", got)
+	}
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+		t.Fatal("the promoted pin should be sticky")
+	}
+}
+
+func TestStickyPin_MarkerlessPinRestoredAcrossRestart(t *testing.T) {
+	// A persisted markerless (synthetic-root) pin must survive a daemon
+	// restart through rehydratePin: Detect still finds no marker, so the
+	// restore re-synthesises under the loaded origin instead of deferring —
+	// and the restored pin is just as sticky as it was live.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ss, err := sessionstate.Open()
+	if err != nil {
+		t.Fatalf("sessionstate.Open: %v", err)
+	}
+	t.Cleanup(func() { ss.Close() })
+	cfg := config.Defaults()
+	cfg.Workspace.AutoAttach = true
+	store := config.NewStore(cfg)
+
+	rootA, rootB := freshTempDir(t), freshTempDir(t) // deliberately NO markers
+	before := newPersistSession(t, store, ss, "proxyX")
+	before.onBeforeTool(context.Background(), "session_start", json.RawMessage(`{"workspace":"`+rootA+`"}`))
+	if got := before.workspace(); got != rootA {
+		t.Fatalf("precondition: markerless explicit pin = %q, want %q", got, rootA)
+	}
+	before.close()
+
+	after := newPersistSession(t, store, ss, "proxyX")
+	defer after.close()
+	after.rehydratePin(context.Background())
+	if got := after.workspace(); got != rootA {
+		t.Fatalf("restored markerless pin = %q, want %q", got, rootA)
+	}
+	if got := after.view().pinOrigin; got != sessionstate.PinSourceSessionStart {
+		t.Fatalf("restored origin = %q, want session_start", got)
+	}
+	if got := after.view().pinVia; got != "restore:session_start" {
+		t.Fatalf("restored provenance label = %q, want restore:session_start", got)
+	}
+	if _, err := after.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+		t.Fatal("a restored markerless explicit pin must still be sticky")
 	}
 }
 

@@ -64,7 +64,8 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
 	}
 	root, language, err := s.pool.Detect(folder)
-	if err != nil {
+	synthetic := err != nil
+	if synthetic {
 		// No .plumb/marker/.git found — the folder itself becomes the workspace.
 		root = s.pool.SynthesiseRoot(folder)
 		language = LanguageNone
@@ -77,7 +78,7 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	// to the current root is never falsely refused, and on the view under
 	// mutation, so a concurrent re-pin can never land between the refusal
 	// decision and the pin move.
-	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force)
+	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic)
 	if err != nil {
 		return "", err
 	}
@@ -103,7 +104,11 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 // check-then-act window — two racing explicit re-pins serialise, the first
 // lands and makes the pin sticky, and the second is refused rather than
 // silently replacing it.
-func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force bool) (changed bool, refused error) {
+//
+// synthetic records whether root was synthesised (no marker found), so the
+// session record keeps its Synthetic flag truthful across re-pins and restore
+// replays instead of hardcoding false.
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic bool) (changed bool, refused error) {
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
 		// Sticky-pin guard (issue #182). Only a LIVE re-pin away from a pin held
@@ -214,7 +219,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			info.DetectedLanguage = detectedLanguage
 			info.Adapter = adapter
 			info.Adapters = adapters
-			info.Synthetic = false
+			info.Synthetic = synthetic
 			info.Health = ""
 			info.HealthMessage = ""
 			if cn != "" {

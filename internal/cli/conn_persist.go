@@ -216,7 +216,16 @@ func (s *connSession) rehydratePin(ctx context.Context) {
 	if !ok {
 		return
 	}
-	s.attachWorkspacePinFrom(ctx, "file://"+root, source, pinTriggerRestore)
+	if _, _, err := s.pool.Detect(root); err != nil {
+		// A persisted markerless (synthetic-root) pin: Detect finds no marker
+		// now either, so attachWorkspacePinFrom would defer to the first tool
+		// call and the deliberate pin would fall through to the weaker
+		// cwd-hint/seed rungs. Re-synthesise under the loaded origin instead —
+		// attachSynthetic is first-wins, preserving this function's idempotence.
+		s.attachSynthetic(ctx, s.pool.SynthesiseRoot(root), source, pinTriggerRestore)
+	} else {
+		s.attachWorkspacePinFrom(ctx, "file://"+root, source, pinTriggerRestore)
+	}
 	if s.workspace() != "" {
 		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", root, "source", string(source))
 	}

@@ -441,7 +441,18 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	if t.ws != nil {
 		if current := t.ws(); current != "" {
 			switch {
-			case a.Workspace != "" && !sameDir(a.Workspace, current):
+			case a.Workspace != "":
+				// A same-dir workspace arg still goes through the re-pin: naming
+				// the CURRENT workspace explicitly is what promotes a roots-held
+				// pin to sticky and clears a Health mark left by a refused steal
+				// attempt (issue #182) — short-circuiting on sameDir here made
+				// both unreachable for the exact-path call. repinExplicit
+				// suppresses the "re-pinned" banner when no root actually moved.
+				if sameDir(a.Workspace, current) && t.repin == nil {
+					// Legacy wiring without a re-pin callback: naming the current
+					// workspace is a no-op, not a conflict.
+					return current, "", nil
+				}
 				return t.repinExplicit(ctx, current, a.Workspace, a.Language, a.Force)
 			case a.Language != "":
 				return t.forceLanguage(ctx, current, a.Language)
@@ -481,8 +492,12 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 // session_start argument is an unambiguous intent to work elsewhere, so plumb
 // honours it (tearing down and re-attaching the new root) instead of refusing —
 // otherwise a connection reused across conversations stays welded to the first
-// project it touched, with no in-session escape. When no re-pin callback is
-// wired (older wiring / tests), it falls back to the historical refusal.
+// project it touched, with no in-session escape. It also runs when the argument
+// names the CURRENT workspace: the daemon-side same-root path is what promotes
+// a roots-held pin to sticky and clears a refusal's Health mark (issue #182),
+// and the "re-pinned" banner is suppressed below since no root moved. When no
+// re-pin callback is wired (older wiring / tests), it falls back to the
+// historical refusal.
 // force overrides the sticky-pin guard (issue #182): without it the daemon
 // refuses the re-pin when the current pin was itself set by an explicit
 // session_start, so a peer agent on a multiplexed connection cannot silently

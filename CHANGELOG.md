@@ -56,12 +56,18 @@
   rather than silently replacing it. Stickiness does not depend on the folder
   having a repo or language marker: an explicit pin of a markerless folder
   keeps its `session_start` origin through the synthetic-root path (and is
-  now persisted like any other explicit pin). Guarded by
-  `conn_stickypin_test.go` (refusal, force override, restored-pin stickiness,
-  non-sticky origins incl. restored roots pins, same-root/subdir/language-only
-  pass-through, roots-change guard, promotion-to-sticky, markerless pins,
-  health marking and healing, racing-pins serialisation) and
-  `TestSessionStart_ForceThreadedToRepin`.
+  now persisted like any other explicit pin, restored — re-synthesised under
+  its origin — after a daemon restart, with the session record's Synthetic
+  flag staying truthful across re-pins and restores). A `session_start` naming
+  exactly the current root now reaches the daemon instead of being
+  short-circuited at the tool layer, so the promotion-to-sticky and the heal
+  work for the natural exact-root call, not only for subdirectory paths.
+  Guarded by `conn_stickypin_test.go` (refusal, force override, restored-pin
+  stickiness, non-sticky origins incl. restored roots pins,
+  same-root/subdir/language-only pass-through, roots-change guard,
+  promotion-to-sticky incl. through the tool surface, markerless pins live
+  and restored, health marking and healing via the real tool call,
+  racing-pins serialisation) and `TestSessionStart_ForceThreadedToRepin`.
 
 - **`config.provenance.json` could stay committable despite the ignore
   machinery.** The gitignore append for the agent-config provenance sidecar
