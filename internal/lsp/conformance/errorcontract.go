@@ -386,8 +386,8 @@ func queryErrorCases(ctx context.Context, adapter lsp.Client, docURI string) []l
 }
 
 // hierarchyErrorCases needs docURI on the two prepare* params: the lazy-open
-// adapters ensureOpen the document there, and an empty URI would pin their
-// "open <uri>" label instead of the request label.
+// adapters ensure the document is open there (base.OpenTracker.Ensure), and an
+// empty URI would pin their "open <uri>" label instead of the request label.
 func hierarchyErrorCases(ctx context.Context, adapter lsp.Client, docURI string) []labelledCall {
 	doc := protocol.TextDocumentIdentifier{URI: docURI}
 	return []labelledCall{

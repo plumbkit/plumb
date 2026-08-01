@@ -18,7 +18,7 @@ import (
 // real-binary integration test remains the gate on sourcekit-lsp itself.
 //
 // The document must exist on disk: this adapter opens per-document queries
-// lazily, reading the file itself (Adapter.ensureOpen), so an in-memory-only
+// lazily, reading the file itself (base.OpenTracker.Ensure), so an in-memory-only
 // URI would fail the harness's document subtest on a read error before it ever
 // reached the protocol contract under test.
 func TestConformance_PushBaseline(t *testing.T) {
