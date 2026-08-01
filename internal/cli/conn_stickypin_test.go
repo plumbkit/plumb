@@ -15,8 +15,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
@@ -231,5 +233,122 @@ func TestStickyPin_SameRootSessionStartMakesPinSticky(t *testing.T) {
 
 	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
 		t.Fatal("a same-root session_start promotion should have made the pin sticky")
+	}
+}
+
+// sessionHealth reads the persisted Health/HealthMessage for a session ID.
+func sessionHealth(t *testing.T, id string) (string, string) {
+	t.Helper()
+	infos, err := session.List()
+	if err != nil {
+		t.Fatalf("session.List: %v", err)
+	}
+	for _, info := range infos {
+		if info.ID == id {
+			return info.Health, info.HealthMessage
+		}
+	}
+	t.Fatalf("session %s not found", id)
+	return "", ""
+}
+
+func TestStickyPin_RefusalMarksSessionHealth(t *testing.T) {
+	// A refused steal attempt is surfaced to the operator the same way a
+	// boundary violation is (Health: blocked in the TUI/dashboard), and a later
+	// successful forced re-pin clears it — the session is healthy again.
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+	if health, _ := sessionHealth(t, s.sessID); health != "" {
+		t.Fatalf("precondition: health = %q, want clear", health)
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err == nil {
+		t.Fatal("precondition: the conflicting re-pin should have been refused")
+	}
+	health, msg := sessionHealth(t, s.sessID)
+	if health != "blocked" {
+		t.Errorf("health after refusal = %q, want %q", health, "blocked")
+	}
+	if !strings.Contains(msg, "sticky") || !strings.Contains(msg, rootB) {
+		t.Errorf("health message should name the sticky pin and the requested root, got %q", msg)
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", true); err != nil {
+		t.Fatalf("forced re-pin: %v", err)
+	}
+	if health, msg := sessionHealth(t, s.sessID); health != "" {
+		t.Errorf("health after successful forced re-pin = %q (%q), want clear", health, msg)
+	}
+}
+
+func TestStickyPin_ConcurrentExplicitPins_ExactlyOneLands(t *testing.T) {
+	// The check-then-act hardening: the guard runs on the view under mutation,
+	// so two explicit re-pins racing on an unpinned connection serialise —
+	// whichever enters the lane first lands and makes the pin sticky, and the
+	// other is refused. Under the old outside-the-lane snapshot check, both
+	// could pass and the loser's pin was silently replaced.
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i, target := range []string{rootA, rootB} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = s.repinWorkspace(context.Background(), target, "", false)
+		}()
+	}
+	wg.Wait()
+
+	if (errs[0] == nil) == (errs[1] == nil) {
+		t.Fatalf("exactly one racing explicit pin must land: errA=%v errB=%v", errs[0], errs[1])
+	}
+	winner := rootA
+	if errs[0] != nil {
+		winner = rootB
+	}
+	if got := s.workspace(); got != winner {
+		t.Fatalf("workspace = %q, want the winning pin %q", got, winner)
+	}
+}
+
+func TestStickyPin_DirectRootsRepinKeptInLane(t *testing.T) {
+	// The in-lane guard is authoritative for the roots vector too: even when
+	// onRootsChanged's snapshot fast path is bypassed (a roots-origin re-pin
+	// racing the explicit pin), a live roots-driven re-pin silently keeps an
+	// explicit pin — no error, pin and origin unchanged.
+	store, ss := newOriginStore(t)
+	rootA, rootB := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootA)
+	mustGitDir(t, rootB)
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), rootA, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+
+	if _, err := s.repinWorkspaceFrom(context.Background(), rootB, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err != nil {
+		t.Fatalf("a roots-driven re-pin against an explicit pin must be a silent keep, not an error: %v", err)
+	}
+	if got := s.workspace(); got != rootA {
+		t.Fatalf("a roots-driven re-pin moved an explicit pin: got %q, want %q", got, rootA)
+	}
+	if got := s.view().pinOrigin; got != sessionstate.PinSourceSessionStart {
+		t.Fatalf("pin origin demoted to %q, want session_start", got)
 	}
 }

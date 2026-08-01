@@ -62,6 +62,8 @@ func (s *connSession) onRootsChanged(ctx context.Context, roots []string) {
 	// roots entirely (the live counterpart of the persisted-pin promotion rule): a
 	// multiplexing client managing one shared folder set across agent sessions
 	// must not drag a deliberate pin away by dropping our root (issue #182).
+	// Snapshot fast path — the authoritative, race-free check runs again inside
+	// attachOrRepinTo's mutation lane.
 	if s.pinExplicitlyHeld() {
 		s.log().Info("daemon: roots changed — keeping explicit session_start pin", "pinned", s.workspace(), "roots", boundedForLog(roots, 8))
 		return

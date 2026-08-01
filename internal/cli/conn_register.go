@@ -225,9 +225,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithLSPWarmup(s.lspWarming).
 		WithLSPDiagMode(s.lspDiagMode).
 		WithXcodeHint(xcodeHintFn).
-		WithRepin(func(ctx context.Context, workspace, language string, force bool) (string, error) {
-			return s.repinWorkspace(ctx, workspace, language, force)
-		}).
+		WithRepin(s.repinWorkspace).
 		WithPinConflict(func(requested string) {
 			ws := s.workspace()
 			s.markBoundaryViolation(fmt.Sprintf("session_start workspace switch refused: connection is pinned to %s; requested %s", ws, requested))
