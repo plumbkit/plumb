@@ -248,6 +248,7 @@ reports the resolved path, or warns with a fix hint when there is none.
 | `resync_on_attach` | bool | `false` | Force a full resync each time the workspace attaches. |
 | `exclude_patterns` | []string | `[]` | Path glob patterns to skip during indexing. |
 | `max_file_size_bytes` | int64 | `524288` (512 KiB) | Largest file considered for extraction. `0` uses the default. |
+| `extract_timeout_seconds` | int | `10` | Longest one file's parse may take before it is abandoned, recorded as a file error, and the indexer moves on. Size caps bound how much source a grammar sees, not how long it spends: a pathological error-recovery path can burn tens of seconds on a small file, and the indexer runs one worker, so that would stall the whole index. `0` disables the timeout. |
 | `resync_batch` | int | `100` | Files the full resync extracts before pausing, to throttle CPU. `0` disables pacing. |
 | `resync_pause_ms` | int | `25` | Pause (milliseconds) after each `resync_batch` files. `0` disables pacing. |
 | `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
@@ -781,6 +782,7 @@ enabled                 = true              # on by default; set false to opt ou
 resync_on_attach        = false
 exclude_patterns        = []
 max_file_size_bytes     = 524288            # 512 KiB
+extract_timeout_seconds = 10                # abandon one file's parse after this long (0 disables)
 resync_batch            = 100               # files per pause during a full resync (0 disables)
 resync_pause_ms         = 25                # pause after each batch, ms (0 disables)
 resync_interval_minutes = 60                # periodic full resync FALLBACK (suppressed while watch is on); 0 disables

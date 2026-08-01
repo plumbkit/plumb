@@ -30,6 +30,13 @@ type Indexer struct {
 	resyncBatch int           // files per pause during a full resync; 0 disables pacing
 	resyncPause time.Duration // pause between resync batches; 0 disables pacing
 
+	// extractTimeout caps one file's parse. The size gates bound how much source
+	// a grammar sees, not how long it spends on it — a pathological error-recovery
+	// path can burn tens of seconds on a file well inside maxSize — and the worker
+	// below is a single goroutine, so one such file stalls the whole index. 0
+	// disables the timeout.
+	extractTimeout time.Duration
+
 	queue chan indexOp
 	done  chan struct{}
 	wg    sync.WaitGroup

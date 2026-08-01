@@ -197,6 +197,7 @@ enabled                 = true    # on by default. SQLite/FTS5 index at <workspa
 resync_on_attach        = false   # full resync each time the workspace attaches
 exclude_patterns        = []      # path globs to skip during indexing
 max_file_size_bytes     = 524288  # 512 KiB cap per file; 0 = default
+extract_timeout_seconds = 10      # abandon one file's parse after this long; 0 disables
 resync_batch            = 100     # files per pause during a full resync; 0 disables pacing
 resync_pause_ms         = 25      # pause after each batch, ms; 0 disables pacing
 resync_interval_minutes = 60      # periodic full resync FALLBACK; suppressed while the watcher is live; 0 disables

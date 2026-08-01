@@ -33,9 +33,9 @@ func (e *HCLExtractor) Extensions() []string { return []string{".tf", ".tfvars",
 // `data`/`provider` (and any other labelled block) → type, `module` → import.
 // HCL declarations are flat, so no containment edges are emitted. Returns
 // (nil, nil, nil) when src cannot be parsed.
-func (e *HCLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *HCLExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &hclWalk{lang: lang, src: src, path: relPath}
 		w.walk(root)
 		return w.nodes, nil

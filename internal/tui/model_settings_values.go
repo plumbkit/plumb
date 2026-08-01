@@ -134,6 +134,7 @@ var numberMetaTable = map[settingKey]struct {
 	skPostWriteCrossFileSettleMs: {50, "cross-file settle (ms)"},
 	skConcurrentSkewMs:           {25, "concurrent skew (ms)"},
 	skTopoMaxFileSize:            {65536, "max file size (B)"},
+	skTopoExtractTimeoutSec:      {5, "extract timeout (s)"},
 	skTopoResyncBatch:            {25, "resync batch"},
 	skTopoResyncPauseMs:          {5, "resync pause (ms)"},
 	skTopoResyncIntervalMin:      {5, "resync interval (min)"},
@@ -178,6 +179,8 @@ func intField(c *config.Config, key settingKey) *int {
 		return &c.Edits.PostWriteCrossFileSettleMs
 	case skConcurrentSkewMs:
 		return &c.Edits.ConcurrentWriteSkewMs
+	case skTopoExtractTimeoutSec:
+		return &c.Topology.ExtractTimeoutSeconds
 	case skTopoResyncBatch:
 		return &c.Topology.ResyncBatch
 	case skTopoResyncPauseMs:

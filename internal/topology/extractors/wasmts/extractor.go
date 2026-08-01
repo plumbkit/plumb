@@ -49,7 +49,10 @@ type Extractor struct {
 	build    builder
 	fallback topology.Extractor
 
-	once     sync.Once
+	// mu guards the lazily-built runtime. Not a sync.Once: a parse terminated by
+	// its context leaves wazero's module closed, so the runtime has to be
+	// discardable and rebuildable rather than built exactly once.
+	mu       sync.Mutex
 	rt       *runtime
 	initErr  error
 	warnOnce sync.Once
@@ -94,36 +97,95 @@ func buildTS(lang string) builder {
 func (e *Extractor) Language() string     { return e.langName }
 func (e *Extractor) Extensions() []string { return e.exts }
 
-func (e *Extractor) ensure(ctx context.Context) *runtime {
-	e.once.Do(func() { e.rt, e.initErr = newRuntime(ctx, e.wasm, e.exports) })
-	return e.rt
+// ensure returns the extractor's runtime, building it on first use and again
+// after a discard. The build deliberately runs on a ctx stripped of the
+// caller's deadline: compiling the bundle is one-off setup, not the per-file
+// parse the deadline is meant to bound, and a runtime built under a nearly
+// expired context would be born closed.
+func (e *Extractor) ensure(ctx context.Context) (*runtime, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.rt == nil && e.initErr == nil {
+		e.rt, e.initErr = newRuntime(context.WithoutCancel(ctx), e.wasm, e.exports)
+	}
+	return e.rt, e.initErr
+}
+
+// discard drops the extractor's reference to a runtime whose parse overran its
+// deadline, so the next Extract builds a fresh one instead of queueing behind
+// the stuck parse's lock. Guarded by identity so a concurrent caller that has
+// already rebuilt is not undone.
+//
+// It deliberately does NOT close the runtime. The abandoned goroutine is still
+// executing inside that wasm module, and without the interruptible mode there
+// are no check points at which it would notice a close — tearing down the
+// module would free linear memory out from under a live parse. Dropping the
+// reference is enough: the stuck goroutine holds the last one, so the runtime
+// becomes garbage as soon as its parse finally returns.
+func (e *Extractor) discard(stuck *runtime) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.rt != stuck {
+		return
+	}
+	e.rt, e.initErr = nil, nil
 }
 
 // Extract parses src and returns the grammar's symbols and edges. Containment is
 // lexical and certain (1.0/extractor); intra-file call edges are name-resolved
 // heuristics (0.8). On any wasm-init or parse fault it degrades to the fallback
 // extractor.
+//
+// The parse runs on its own goroutine so a ctx deadline can end the WAIT even
+// though it cannot end the parse (see newRuntime for why the interruptible
+// wazero mode is not worth its cost). One parse holds the runtime's lock for its
+// whole duration, so a parse that overruns would otherwise serialise every later
+// file behind it — each then burning its own full timeout. Discarding the
+// runtime is what prevents that: the overrunning parse keeps the old one to
+// itself and the next file builds a fresh one.
 func (e *Extractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
-	rt := e.ensure(ctx)
-	if e.initErr != nil || rt == nil {
+	rt, initErr := e.ensure(ctx)
+	if initErr != nil || rt == nil {
 		e.warnOnce.Do(func() {
-			slog.Warn("wasmts: tree-sitter wasm unavailable; using fallback", "lang", e.langName, "err", e.initErr)
+			slog.Warn("wasmts: tree-sitter wasm unavailable; using fallback", "lang", e.langName, "err", initErr)
 		})
 		return e.fallback.Extract(ctx, relPath, src)
 	}
 
-	var nodes []topology.Node
-	var edges []topology.Edge
-	err := rt.parse(ctx, rt.langs[e.primary], src, func(root node) {
-		nodes, edges = e.build(root, relPath, src, newLineMap(src))
-	})
-	if err != nil {
+	type parsed struct {
+		nodes []topology.Node
+		edges []topology.Edge
+		err   error
+	}
+	// Buffered: an abandoned parse must be able to send and exit rather than
+	// block forever on a receiver that has moved on.
+	done := make(chan parsed, 1)
+	go func() {
+		var nodes []topology.Node
+		var edges []topology.Edge
+		err := rt.parse(ctx, rt.langs[e.primary], src, func(root node) {
+			nodes, edges = e.build(root, relPath, src, newLineMap(src))
+		})
+		done <- parsed{nodes: nodes, edges: edges, err: err}
+	}()
+
+	var res parsed
+	select {
+	case res = <-done:
+	case <-ctx.Done():
+		slog.Warn("wasmts: parse abandoned at the deadline; discarding the runtime",
+			"lang", e.langName, "path", relPath, "bytes", len(src))
+		e.discard(rt)
+		return nil, nil, ctx.Err()
+	}
+
+	if res.err != nil {
 		e.warnOnce.Do(func() {
-			slog.Warn("wasmts: wasm parse fault; using fallback", "lang", e.langName, "path", relPath, "err", err)
+			slog.Warn("wasmts: wasm parse fault; using fallback", "lang", e.langName, "path", relPath, "err", res.err)
 		})
 		return e.fallback.Extract(ctx, relPath, src)
 	}
-	return nodes, edges, nil
+	return res.nodes, res.edges, nil
 }
 
 // lineMap converts a byte offset to a 1-based line number, matching tree-sitter's
