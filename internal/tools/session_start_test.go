@@ -823,3 +823,24 @@ func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
 		t.Fatalf("force threading = %v, want [false true]", gotForce)
 	}
 }
+
+// TestSessionStart_ForceThreadedOnUnattachedLanguagePin covers the other repin
+// call site: an unattached connection pinning workspace+language. The guard
+// cannot fire there today (no pin is held), but the caller's force must still
+// arrive rather than being silently dropped.
+func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
+	target := t.TempDir()
+	var gotForce bool
+	tool := NewSessionStart(func() string { return "" }, nil, nil, nil, func() string { return "" }, nil).
+		WithRepin(func(_ context.Context, _, _ string, force bool) (string, error) {
+			gotForce = force
+			return target, nil
+		})
+	raw := json.RawMessage(`{"workspace":"` + target + `","language":"go","force":true}`)
+	if _, err := tool.Execute(context.Background(), raw); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !gotForce {
+		t.Fatal("force: true must reach the repin callback on the unattached workspace+language path")
+	}
+}

@@ -456,7 +456,11 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// guessing it produced confidently-wrong "workspaces".
 	if a.Workspace != "" {
 		if a.Language != "" && t.repin != nil {
-			root, rerr := t.repin(ctx, a.Workspace, a.Language, false)
+			// a.Force is threaded even though the guard cannot fire here today
+			// (this branch only runs unattached, so no pin is held) — the caller
+			// asked to force; dropping the flag would be a trap if these branch
+			// conditions ever shift.
+			root, rerr := t.repin(ctx, a.Workspace, a.Language, a.Force)
 			if rerr != nil {
 				return "", "", fmt.Errorf("session_start: pinning %s as %s: %w", a.Workspace, a.Language, rerr)
 			}

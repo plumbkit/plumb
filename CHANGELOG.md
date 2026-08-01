@@ -47,10 +47,16 @@
   auto-attach, so the first explicit pin always lands; same-root requests
   (including subdirectories that resolve to the current root) and restore
   replays are never refused. The boundary-violation error now tells the
-  refused agent about the `force: true` escape hatch. Guarded by
+  refused agent about the `force: true` escape hatch. A refusal is also
+  recorded on the session record (`Health: blocked`, cleared by the next
+  successful re-pin) so the TUI surfaces the refused steal attempt, and the
+  guard runs inside the connection's mutation lane — two racing explicit
+  re-pins serialise, the first lands and makes the pin sticky, the second is
+  refused rather than silently replacing it. Guarded by
   `conn_stickypin_test.go` (refusal, force override, restored-pin stickiness,
   non-sticky origins, same-root/subdir pass-through, roots-change guard,
-  promotion-to-sticky) and `TestSessionStart_ForceThreadedToRepin`.
+  promotion-to-sticky, health marking, racing-pins serialisation) and
+  `TestSessionStart_ForceThreadedToRepin`.
 
 - **`config.provenance.json` could stay committable despite the ignore
   machinery.** The gitignore append for the agent-config provenance sidecar
