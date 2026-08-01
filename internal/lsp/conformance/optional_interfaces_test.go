@@ -91,6 +91,17 @@ func TestAdapters_OptionalInterfaceSurface(t *testing.T) {
 		t.Fatalf("table covers %d adapters, want %d — add the new adapter and state its capabilities", len(cases), want)
 	}
 
+	// Workspace pull without document pull would be an incoherent surface: the
+	// routing proxy reaches workspace/diagnostic only on a connection already
+	// negotiated onto the pull path. This is a property of the table above, not
+	// of any constructed adapter, so it is checked once here rather than nine
+	// times inside the loop.
+	for _, tc := range cases {
+		if tc.workspacePull && !tc.documentPull {
+			t.Fatalf("%s: table is inconsistent — workspace pull requires document pull", tc.name)
+		}
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			adapter := tc.newAdapter(jsonrpc.NewMockCaller())
@@ -115,13 +126,6 @@ func TestAdapters_OptionalInterfaceSurface(t *testing.T) {
 
 			_, isWorkspacePull := adapter.(workspacePullClient)
 			check("the workspace-pull surface (WorkspaceDiagnostic)", isWorkspacePull, tc.workspacePull)
-
-			// Workspace pull without document pull would be an incoherent
-			// surface: the routing proxy reaches workspace/diagnostic only on
-			// a connection already negotiated onto the pull path.
-			if tc.workspacePull && !tc.documentPull {
-				t.Fatalf("%s: table is inconsistent — workspace pull requires document pull", tc.name)
-			}
 		})
 	}
 }

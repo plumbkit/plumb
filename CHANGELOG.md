@@ -25,6 +25,31 @@
   changed'` keeps working. No behaviour changes: groundwork for #182, not the
   fix.
 
+- **Regression nets under the nine LSP adapters, ahead of the base-adapter
+  extraction (#60).** The adapters duplicate ~2,400 lines of identical
+  plumbing and the planned fix embeds a shared base in each; three things that
+  refactor could change silently had nothing pinning them.
+  `conformance.RunErrorContract` now drives every `lsp.Client` method against
+  an always-failing transport and asserts the exact `"<server> <label>:
+  <cause>"` string plus `errors.Is`, across all nine adapters — 21 labels each,
+  22 or 23 where an optional pull surface exists — guarded by a golden label
+  set that fails in BOTH directions, so a case cannot be deleted quietly and a
+  newly added error-returning method cannot arrive unpinned.
+  `conformance.RunLazyOpenErrorContract` pins the `open <uri>` label the three
+  lazy-open adapters (sourcekit-lsp, zls, vscode-html-language-server) emit for
+  an unreadable document, and the HTML adapter's hand-rolled symbol-union
+  decode — the one wrapping a transport failure can never reach — carries its
+  own pin. `TestAdapters_OptionalInterfaceSurface` pins which adapters expose
+  the optional pull surfaces, in both directions: an embedded base promotes
+  every exported method into all nine embedders, so one stray method there
+  would opt six language servers into pull diagnostics with no visible diff at
+  any call site. All nine adapter packages now assert `lsp.Client` at build
+  time, and the six with no conformance suite gained one. Both harnesses are
+  proven load-bearing by meta-tests that run deliberately broken adapters — one
+  mislabelled, one whose message renders correctly but no longer unwraps —
+  against a clean control, and assert the doomed runs fail. Tests and
+  compile-time assertions only; no behaviour change.
+
 ### Fixed
 
 - **A peer agent can no longer silently steal a shared connection's workspace

@@ -1,7 +1,6 @@
 package jdtls_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,7 +27,7 @@ func jdtlsConformanceScenario(t *testing.T) lsptest.Scenario {
 	const text = "public class App {\n    public static void main(String[] args) { missing(); }\n}\n"
 	const pom = `<project><modelVersion>4.0.0</modelVersion>` +
 		`<groupId>dev.plumb</groupId><artifactId>conformance</artifactId><version>1.0</version></project>`
-	writeConformanceFixture(t, map[string]string{
+	conformance.WriteFixture(t, map[string]string{
 		filepath.Join(root, "pom.xml"): pom,
 		source:                         text,
 	})
@@ -38,21 +37,5 @@ func jdtlsConformanceScenario(t *testing.T) lsptest.Scenario {
 		LanguageID:  "java", Source: text, Mode: lsptest.Push,
 		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevError, Source: "Java", Message: "The method missing() is undefined for the type App"},
 		RegisterWatch: true,
-	}
-}
-
-// writeConformanceFixture materialises the scenario's files on disk. The
-// conformance harness queries the document through the adapter, and adapters
-// that open lazily read it from disk, so the fixture must be real rather than
-// in-memory.
-func writeConformanceFixture(t *testing.T, files map[string]string) {
-	t.Helper()
-	for path, body := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

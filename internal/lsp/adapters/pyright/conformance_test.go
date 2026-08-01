@@ -1,7 +1,6 @@
 package pyright_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,7 +27,7 @@ func pyrightConformanceScenario(t *testing.T) lsptest.Scenario {
 	root := t.TempDir()
 	source := filepath.Join(root, "app.py")
 	const text = "def main():\n    missing()\n"
-	writeConformanceFixture(t, map[string]string{
+	conformance.WriteFixture(t, map[string]string{
 		filepath.Join(root, "pyrightconfig.json"): `{"include": ["."]}`,
 		source: text,
 	})
@@ -38,21 +37,5 @@ func pyrightConformanceScenario(t *testing.T) lsptest.Scenario {
 		LanguageID:  "python", Source: text, Mode: lsptest.Push,
 		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevError, Source: "Pyright", Message: `"missing" is not defined`},
 		RegisterWatch: true,
-	}
-}
-
-// writeConformanceFixture materialises the scenario's files on disk. The
-// conformance harness queries the document through the adapter, and adapters
-// that open lazily read it from disk, so the fixture must be real rather than
-// in-memory.
-func writeConformanceFixture(t *testing.T, files map[string]string) {
-	t.Helper()
-	for path, body := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

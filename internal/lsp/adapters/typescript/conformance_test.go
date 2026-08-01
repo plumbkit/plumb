@@ -1,7 +1,6 @@
 package typescript_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -30,7 +29,7 @@ func typescriptConformanceScenario(t *testing.T) lsptest.Scenario {
 	root := t.TempDir()
 	source := filepath.Join(root, "src", "index.ts")
 	const text = "export function main(): void {\n  missing();\n}\n"
-	writeConformanceFixture(t, map[string]string{
+	conformance.WriteFixture(t, map[string]string{
 		filepath.Join(root, "tsconfig.json"): `{"compilerOptions": {"strict": true}, "include": ["src"]}`,
 		source:                               text,
 	})
@@ -40,21 +39,5 @@ func typescriptConformanceScenario(t *testing.T) lsptest.Scenario {
 		LanguageID:  "typescript", Source: text, Mode: lsptest.Push,
 		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevError, Source: "typescript", Message: "Cannot find name 'missing'."},
 		RegisterWatch: true,
-	}
-}
-
-// writeConformanceFixture materialises the scenario's files on disk. The
-// conformance harness queries the document through the adapter, and adapters
-// that open lazily read it from disk, so the fixture must be real rather than
-// in-memory.
-func writeConformanceFixture(t *testing.T, files map[string]string) {
-	t.Helper()
-	for path, body := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

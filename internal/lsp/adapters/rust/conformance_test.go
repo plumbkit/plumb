@@ -1,7 +1,6 @@
 package rust_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,7 +28,7 @@ func rustConformanceScenario(t *testing.T) lsptest.Scenario {
 	source := filepath.Join(root, "src", "main.rs")
 	const text = "fn main() { missing(); }\n"
 	const manifest = "[package]\nname = \"conformance\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
-	writeConformanceFixture(t, map[string]string{
+	conformance.WriteFixture(t, map[string]string{
 		filepath.Join(root, "Cargo.toml"): manifest,
 		source:                            text,
 	})
@@ -39,21 +38,5 @@ func rustConformanceScenario(t *testing.T) lsptest.Scenario {
 		LanguageID:  "rust", Source: text, Mode: lsptest.Push,
 		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevError, Source: "rustc", Message: "cannot find function `missing` in this scope"},
 		RegisterWatch: true,
-	}
-}
-
-// writeConformanceFixture materialises the scenario's files on disk. The
-// conformance harness queries the document through the adapter, and adapters
-// that open lazily read it from disk, so the fixture must be real rather than
-// in-memory.
-func writeConformanceFixture(t *testing.T, files map[string]string) {
-	t.Helper()
-	for path, body := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

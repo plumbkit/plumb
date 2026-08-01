@@ -1,7 +1,6 @@
 package swift_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -33,7 +32,7 @@ func swiftConformanceScenario(t *testing.T) lsptest.Scenario {
 	const text = "missing()\n"
 	const manifest = "// swift-tools-version:5.9\nimport PackageDescription\n" +
 		"let package = Package(name: \"conformance\", targets: [.executableTarget(name: \"conformance\")])\n"
-	writeConformanceFixture(t, map[string]string{
+	conformance.WriteFixture(t, map[string]string{
 		filepath.Join(root, "Package.swift"): manifest,
 		source:                               text,
 	})
@@ -43,21 +42,5 @@ func swiftConformanceScenario(t *testing.T) lsptest.Scenario {
 		LanguageID:  "swift", Source: text, Mode: lsptest.Push,
 		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevError, Source: "sourcekitd", Message: "cannot find 'missing' in scope"},
 		RegisterWatch: true,
-	}
-}
-
-// writeConformanceFixture materialises the scenario's files on disk. The
-// conformance harness queries the document through the adapter, and adapters
-// that open lazily read it from disk, so the fixture must be real rather than
-// in-memory.
-func writeConformanceFixture(t *testing.T, files map[string]string) {
-	t.Helper()
-	for path, body := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }

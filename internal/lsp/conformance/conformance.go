@@ -4,6 +4,8 @@ package conformance
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -40,6 +42,26 @@ type pullClient interface {
 // expose (only gopls implements it today).
 type workspacePullClient interface {
 	WorkspaceDiagnostic(context.Context, protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error)
+}
+
+// WriteFixture materialises files — absolute path to contents — on disk,
+// creating parent directories as needed. Both harnesses in this package query
+// the document through the adapter, and the adapters that open lazily
+// (sourcekit-lsp, zls, vscode-html-language-server) read it from the filesystem
+// themselves, so a scenario's files must be real rather than in-memory.
+//
+// The owner-only modes are gosec's (G301/G306) rather than a fixture
+// requirement: only the test process ever reads these files.
+func WriteFixture(t *testing.T, files map[string]string) {
+	t.Helper()
+	for path, body := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // adapterFactory builds a fresh adapter + fake server pair from sc, fully

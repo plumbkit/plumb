@@ -126,8 +126,11 @@ linters:
       # The closures passed to runIsolated are test BODIES (testing.InternalTest.F
       # run through testing.RunTests), not helpers — thelper reads them as helpers
       # only because their parameter is correctly named t. Calling t.Helper() in a
-      # test body would be meaningless. Both meta-tests use runIsolated; the paths
-      # are named individually so a future helper in this package is still linted.
+      # test body would be meaningless. thelper has no per-function suppression, so
+      # this exempts the two meta-test files ENTIRELY: a genuine helper added to
+      # either one escapes the linter. The files are listed by name rather than the
+      # package so the blind spot stops at them — every other test file in
+      # internal/lsp/conformance is still checked.
       - linters:
           - thelper
         path: internal/lsp/conformance/(conformance|errorcontract)_test\.go

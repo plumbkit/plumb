@@ -1,7 +1,6 @@
 package html_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -32,28 +31,12 @@ func htmlConformanceScenario(t *testing.T) lsptest.Scenario {
 	root := t.TempDir()
 	source := filepath.Join(root, "index.html")
 	const text = "<html>\n  <body>\n    <h1>Sample\n  </body>\n</html>\n"
-	writeConformanceFixture(t, map[string]string{source: text})
+	conformance.WriteFixture(t, map[string]string{source: text})
 	return lsptest.Scenario{
 		Name: "html document push", RootURI: paths.PathToURI(root),
 		DocumentURI: paths.PathToURI(source),
 		LanguageID:  "html", Source: text, Mode: lsptest.Push,
 		Diagnostic:    protocol.Diagnostic{Severity: protocol.SevWarning, Source: "html", Message: "Tag must be paired, missing end tag: </h1>"},
 		RegisterWatch: true,
-	}
-}
-
-// writeConformanceFixture materialises the scenario's files on disk. The
-// conformance harness queries the document through the adapter, and adapters
-// that open lazily read it from disk, so the fixture must be real rather than
-// in-memory.
-func writeConformanceFixture(t *testing.T, files map[string]string) {
-	t.Helper()
-	for path, body := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
