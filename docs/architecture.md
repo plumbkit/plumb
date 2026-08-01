@@ -39,9 +39,10 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
 | `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
-| `internal/lsp` | `LSPClient` interface, process supervisor |
+| `internal/lsp` | `lsp.Client` interface (23 methods), process supervisor |
 | `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio (server-request support); mock for testing |
 | `internal/lsp/protocol` | LSP types and method-name constants |
+| `internal/lsp/adapters/base` | The half of every adapter that is identical across servers: all 23 `lsp.Client` methods, capability cache, notification fan-out, server-request handler, error labelling. Adapters embed `*base.Adapter` |
 | `internal/lsp/adapters/gopls` | Validated Go adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/pyright` | Validated Python adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/jdtls` | Java adapter (validated, experimental tier); activates automatically when `jdtls` (+ a Java 21+ runtime) is on PATH; set `[lsp.java] enabled = false` to exclude |

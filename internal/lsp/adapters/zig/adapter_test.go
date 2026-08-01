@@ -41,7 +41,7 @@ func newAdapter(t *testing.T) (*zig.Adapter, *jsonrpc.MockCaller) {
 }
 
 // writeTempZig writes content to a temp .zig file and returns its file:// URI,
-// so ensureOpen can read the document from disk before a query.
+// so base.OpenTracker.Ensure can read the document from disk before a query.
 func writeTempZig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "main.zig")

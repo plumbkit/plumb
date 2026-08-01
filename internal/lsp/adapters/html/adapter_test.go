@@ -37,7 +37,7 @@ func newAdapter(t *testing.T) (*html.Adapter, *jsonrpc.MockCaller) {
 }
 
 // writeTempHTML writes content to a temp index.html and returns its file:// URI,
-// so ensureOpen can read the document from disk before a query.
+// so base.OpenTracker.Ensure can read the document from disk before a query.
 func writeTempHTML(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "index.html")

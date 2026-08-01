@@ -41,7 +41,8 @@ func newAdapter(t *testing.T) (*swift.Adapter, *jsonrpc.MockCaller) {
 }
 
 // writeTempSwift writes content to a temp .swift file and returns its file://
-// URI, so ensureOpen can read the document from disk before a query.
+// URI, so base.OpenTracker.Ensure can read the document from disk before a
+// query.
 func writeTempSwift(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "Greeter.swift")
@@ -374,9 +375,9 @@ func TestAdapter_Rename(t *testing.T) {
 }
 
 // TestAdapter_RenameEnsuresOpen verifies Rename sends textDocument/didOpen
-// (ensureOpen) before the rename request — even with no preceding PrepareRename,
-// which is how rename_symbol may invoke it. Without the open, sourcekit-lsp
-// replies -32001 "No language service found".
+// (base.OpenTracker.Ensure) before the rename request — even with no preceding
+// PrepareRename, which is how rename_symbol may invoke it. Without the open,
+// sourcekit-lsp replies -32001 "No language service found".
 func TestAdapter_RenameEnsuresOpen(t *testing.T) {
 	ad, mock := newAdapter(t)
 	ctx := context.Background()

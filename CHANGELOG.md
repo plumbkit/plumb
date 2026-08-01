@@ -108,6 +108,39 @@
 
 ### Changed
 
+- **The nine LSP adapters now share one base: ~2,240 lines of duplicated
+  plumbing deleted, with no behaviour change (#60).** Each adapter hand-wrote
+  all 23 `lsp.Client` methods, the negotiated-capability cache, the
+  notification fan-out, the server-request handler and the error labelling —
+  ~280 near-identical lines apiece, which the adapter guide actively told the
+  next author to "copy verbatim from gopls or pyright". That half now lives in
+  `internal/lsp/adapters/base`; an adapter embeds `*base.Adapter` and shadows
+  only what its server genuinely does differently (rust is down to 46 lines).
+  `base.New` installs BOTH transport handlers and keeps `dispatch` /
+  `handleServerRequest` unexported, so the "forgot `SetRequestHandler`, server
+  stalls" bug is now unrepresentable rather than merely documented.
+  Server-specific behaviour is preserved exactly: gopls keeps its
+  `lsp.PullInitializer` and workspace-pull surface, typescript and zls their
+  document-pull surface, swift/zig/html their lazy `didOpen` (now
+  `base.OpenTracker`) and union decodes.
+  **The constraint that shapes the design:** `base.Adapter`'s exported surface
+  is exactly `lsp.Client` and nothing more, because Go promotes an embedded
+  type's exported methods into every embedder and `internal/cli` resolves
+  optional adapter capabilities *structurally* — one stray
+  `SupportsPullDiagnostics` on the base would opt six servers that answer
+  `-32601` into pull diagnostics, compiling cleanly and changing no call site.
+  So every escape hatch is a package-level FUNCTION (`base.Call`, `CallPtr`,
+  `CallRaw`, `Notify`, `Wrap`) and `base.OpenTracker` is held as a named field,
+  never embedded. Guarded in both directions by
+  `TestExportedSurface_IsExactlyLSPClient`,
+  `TestAdapters_OptionalInterfaceSurface` and
+  `TestLazyOpenAdapters_LanguageIDAndExportedSurface`, on top of the
+  error-contract and conformance harnesses landed ahead of the refactor. The
+  nine pre-existing adapter suites were left untouched through the migration as
+  the behaviour proof. `docs/adding-an-lsp.md` and the `add-lsp-adapter` skill
+  were rewritten for the new shape — the old copy-verbatim recipe was the
+  direct cause of the duplication.
+
 - **One home for `.gitignore` writing, held by a new rule shape.** Four
   hand-rolled gitignore appenders had accumulated by the time the July 2026
   consolidation extracted `paths.EnsureGitignoreEntries`: the audit named two
