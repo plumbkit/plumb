@@ -126,10 +126,11 @@ linters:
       # The closures passed to runIsolated are test BODIES (testing.InternalTest.F
       # run through testing.RunTests), not helpers — thelper reads them as helpers
       # only because their parameter is correctly named t. Calling t.Helper() in a
-      # test body would be meaningless.
+      # test body would be meaningless. Both meta-tests use runIsolated; the paths
+      # are named individually so a future helper in this package is still linted.
       - linters:
           - thelper
-        path: internal/lsp/conformance/conformance_test\.go
+        path: internal/lsp/conformance/(conformance|errorcontract)_test\.go
 
       # Bubble Tea's Model convention IS a mixed receiver set: value receivers for
       # the pure View/render half, pointers for the Update/mutate half. Model has
