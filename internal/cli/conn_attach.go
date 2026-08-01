@@ -142,8 +142,15 @@ func (s *connSession) attachSynthetic(_ context.Context, root string) {
 // no SwiftPM Package.swift) where the agent knows the language detection cannot
 // infer. An unknown or inactive override is ignored (detection wins), so a typo
 // or an uninstalled server never breaks the pin.
-func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string) (string, error) {
-	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive)
+//
+// force overrides the sticky-pin guard (issue #182): once this connection's pin
+// was set by an explicit session_start, a conflicting re-pin to a DIFFERENT root
+// is refused unless force is set — a multiplexed peer agent sharing this
+// connection must not silently steal the pin the caller deliberately chose.
+// The refusal error names the remediation (retry with force: true), so a new
+// conversation deliberately switching projects still can, one round-trip later.
+func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride string, force bool) (string, error) {
+	return s.repinWorkspaceFrom(ctx, folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
 }
 
 // repinWorkspaceFrom is repinWorkspace with the pin origin made explicit.
@@ -152,7 +159,7 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride s
 // named. Recording both as session_start would let a stale roots answer outrank
 // a deliberate pin on the next reconnect — the bug this distinction exists to
 // prevent.
-func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource, trigger pinTrigger) (string, error) {
+func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverride string, origin sessionstate.PinSource, trigger pinTrigger, force bool) (string, error) {
 	folder = paths.URIToPath(folder)
 	if folder == "" || folder == "/" {
 		return "", fmt.Errorf("repin: empty workspace path %q", folder)
@@ -165,6 +172,18 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 	}
 	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
 		language = langOverride
+	}
+	// Sticky-pin guard (issue #182). Only a LIVE, explicit session_start re-pin
+	// to a DIFFERENT root is gated: a same-root request (or a subdir resolving
+	// to the current root) passes through, a restore replay is never blocked,
+	// and a pin held via roots/auto-attach is not sticky — the first explicit
+	// pin must always land. The check runs AFTER root resolution so a requested
+	// path that resolves to the current root is never falsely refused.
+	if !force && origin == sessionstate.PinSourceSessionStart && trigger == pinTriggerLive && s.pinExplicitlyHeld() {
+		if cur := s.workspace(); root != cur {
+			s.log().Warn("daemon: session_start re-pin refused — explicit pin held (sticky, issue #182)", "pinned", cur, "requested", root)
+			return "", fmt.Errorf("refusing to re-pin this connection from %s to %s: the current pin was set by an explicit session_start (%s), and silently moving it would retarget every relative-path call made over this shared connection — issue #182: a multiplexing client can run several agent sessions over one plumb serve process. If you are a new conversation deliberately switching this connection to a different project, call session_start again with force: true; if several agents share this connection, run a dedicated plumb serve process per agent instead", cur, root, s.pinProvenance())
+		}
 	}
 	if s.attachOrRepinTo(ctx, root, language, origin, trigger) {
 		s.applyProjectConfig(root)
@@ -197,9 +216,11 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			// pin.
 			if origin == sessionstate.PinSourceSessionStart {
 				s.persistPin(v.proxySessionID, root, language, v.session.PersistState, origin)
-				// The root did not move, so pinAt/pinPrev stand; only the label is
-				// upgraded. Rebuild the policy so boundary errors quote the new one.
+				// The root did not move, so pinAt/pinPrev stand; only the provenance
+				// origin/label is upgraded — making the pin sticky from here on.
+				// Rebuild the policy so boundary errors quote the new label.
 				v.pinVia = pinViaLabel(origin, trigger)
+				v.pinOrigin = origin
 				v.policy = s.buildPathPolicy(v)
 			}
 			return

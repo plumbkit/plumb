@@ -87,7 +87,8 @@ func (e WorkspaceBoundaryError) Error() string {
 	}
 	msg := fmt.Sprintf(
 		"workspace boundary violation: this connection is pinned to %s; %s is in a different project. "+
-			"To work there, call session_start with workspace set to that project's root — it will re-pin this connection. "+
+			"To work there, call session_start with workspace set to that project's root — it will re-pin this connection "+
+			"(if the re-pin is refused because an explicit session_start pin already holds this connection, retry with force: true). "+
 			"Do not browse other projects on disk.",
 		e.Workspace, e.Path,
 	)

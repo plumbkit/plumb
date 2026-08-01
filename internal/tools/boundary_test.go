@@ -179,7 +179,8 @@ func TestWorkspaceBoundaryError_ProvenanceAppended(t *testing.T) {
 func TestWorkspaceBoundaryError_ZeroProvenanceUnchanged(t *testing.T) {
 	err := WorkspaceBoundaryError{Workspace: "/w", Path: "/other"}
 	want := "workspace boundary violation: this connection is pinned to /w; /other is in a different project. " +
-		"To work there, call session_start with workspace set to that project's root — it will re-pin this connection. " +
+		"To work there, call session_start with workspace set to that project's root — it will re-pin this connection " +
+		"(if the re-pin is refused because an explicit session_start pin already holds this connection, retry with force: true). " +
 		"Do not browse other projects on disk."
 	if got := err.Error(); got != want {
 		t.Errorf("zero-provenance message changed:\ngot:  %q\nwant: %q", got, want)

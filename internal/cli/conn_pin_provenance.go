@@ -53,6 +53,19 @@ func recordPinProvenance(v *sessionView, origin sessionstate.PinSource, t pinTri
 	v.pinVia = pinViaLabel(origin, t)
 	v.pinAt = time.Now()
 	v.pinPrev = prevRoot
+	v.pinOrigin = origin
+}
+
+// pinExplicitlyHeld reports whether the connection's current pin was set by an
+// explicit session_start workspace argument (live or restored on reconnect).
+// Only such a pin is sticky: a conflicting live session_start re-pin must pass
+// force, and a roots-driven re-pin is refused (issue #182 — a multiplexed
+// peer's session_start must not silently steal the pin a caller deliberately
+// chose). Incidental auto-attaches (unknown origin) and client-roots attaches
+// are not sticky: the first explicit pin must always be able to land.
+func (s *connSession) pinExplicitlyHeld() bool {
+	v := s.view()
+	return v.acquiredRoot != "" && v.pinOrigin == sessionstate.PinSourceSessionStart
 }
 
 // pinProvenance reports the connection's current pin provenance; the zero

@@ -50,7 +50,7 @@ func TestPersistPin_SessionStartOriginRecorded(t *testing.T) {
 	mustGitDir(t, root)
 
 	s := newPersistSession(t, store, ss, "proxyX")
-	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestPersistPin_SameRootSessionStartPromotesRootsOrigin(t *testing.T) {
 		t.Fatalf("precondition: source = %q, want roots", src)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil { // explicit, same root
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil { // explicit, same root
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestPersistPin_SameRootRootsChangeDoesNotDemote(t *testing.T) {
 	mustGitDir(t, root)
 
 	s := newPersistSession(t, store, ss, "proxyX")
-	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil { // origin session_start
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil { // origin session_start
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	s.onRootsChanged(context.Background(), []string{"file://" + root}) // same root, roots origin
@@ -165,7 +165,7 @@ func TestRehydratePin_PreservesSessionStartSource(t *testing.T) {
 	mustGitDir(t, root)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	if _, err := before.repinWorkspace(context.Background(), root, ""); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), root, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()

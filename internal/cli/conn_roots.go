@@ -58,11 +58,19 @@ func (s *connSession) onRootsChanged(ctx context.Context, roots []string) {
 	if s.pinnedRootStillReported(roots) {
 		return
 	}
+	// A pin the caller set with an explicit session_start outranks client-reported
+	// roots entirely (the live counterpart of the persisted-pin promotion rule): a
+	// multiplexing client managing one shared folder set across agent sessions
+	// must not drag a deliberate pin away by dropping our root (issue #182).
+	if s.pinExplicitlyHeld() {
+		s.log().Info("daemon: roots changed — keeping explicit session_start pin", "pinned", s.workspace(), "roots", boundedForLog(roots, 8))
+		return
+	}
 	folder := paths.URIToPath(roots[0])
 	if folder == "" || folder == "/" {
 		return
 	}
-	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots, pinTriggerLive); err != nil {
+	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err != nil {
 		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
 	}
 }

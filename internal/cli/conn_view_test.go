@@ -70,7 +70,9 @@ func TestSessionView_ConcurrentReadsDuringMutation(t *testing.T) {
 			if i%2 == 0 {
 				target = rootB
 			}
-			if _, err := s.repinWorkspace(context.Background(), target, ""); err != nil {
+			// force: the loop's whole point is repeated deliberate A/B re-pins;
+			// after the first one the pin is explicit and sticky (issue #182).
+			if _, err := s.repinWorkspace(context.Background(), target, "", true); err != nil {
 				t.Errorf("repin: %v", err)
 				break
 			}

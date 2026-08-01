@@ -398,7 +398,7 @@ func TestSessionStart_LanguageOverride(t *testing.T) {
 	var gotWs, gotLang string
 	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
 		WithLSPLanguage(func() string { return "swift" }). // server attached after the forced pin
-		WithRepin(func(_ context.Context, ws, lang string) (string, error) {
+		WithRepin(func(_ context.Context, ws, lang string, _ bool) (string, error) {
 			gotWs, gotLang = ws, lang
 			return ws, nil
 		})
@@ -447,7 +447,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 		target := t.TempDir()
 		var got string
 		tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
-			WithRepin(func(_ context.Context, ws, _ string) (string, error) {
+			WithRepin(func(_ context.Context, ws, _ string, _ bool) (string, error) {
 				got = ws
 				return ws, nil
 			})
@@ -798,5 +798,28 @@ func TestSessionStart_Idempotent(t *testing.T) {
 	}
 	if externalIDCalls != 2 {
 		t.Errorf("external-ID callback should fire exactly once per Execute call (2 calls total), got %d", externalIDCalls)
+	}
+}
+
+// TestSessionStart_ForceThreadedToRepin verifies the `force` arg reaches the
+// re-pin callback: absent it arrives false, present it arrives true. The guard
+// itself lives daemon-side (conn_stickypin_test.go); the tool only threads it.
+func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
+	attached := t.TempDir()
+	target := t.TempDir()
+	var gotForce []bool
+	tool := NewSessionStart(func() string { return attached }, nil, nil, nil, func() string { return "" }, nil).
+		WithRepin(func(_ context.Context, ws, _ string, force bool) (string, error) {
+			gotForce = append(gotForce, force)
+			return ws, nil
+		})
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+target+`"}`)); err != nil {
+		t.Fatalf("Execute without force: %v", err)
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+target+`","force":true}`)); err != nil {
+		t.Fatalf("Execute with force: %v", err)
+	}
+	if len(gotForce) != 2 || gotForce[0] != false || gotForce[1] != true {
+		t.Fatalf("force threading = %v, want [false true]", gotForce)
 	}
 }
