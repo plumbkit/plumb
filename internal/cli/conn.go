@@ -150,12 +150,15 @@ type sessionView struct {
 
 	// pinVia / pinAt / pinPrev are pin-drift observability for issue #182: the
 	// label of the source that last set this connection's pin (see pinViaLabel),
-	// when it was set, and the root it replaced. Stamped inside the attach /
-	// re-pin mutate, beside acquiredRoot, so they can never disagree with the pin
-	// they describe. Zero while unattached.
-	pinVia  string
-	pinAt   time.Time
-	pinPrev string
+	// when it was set, and the root it replaced. pinOrigin is the structured
+	// origin behind the label — the sticky-pin guard keys on it instead of
+	// parsing the label. Stamped inside the attach / re-pin mutate, beside
+	// acquiredRoot, so they can never disagree with the pin they describe.
+	// Zero while unattached.
+	pinVia    string
+	pinAt     time.Time
+	pinPrev   string
+	pinOrigin sessionstate.PinSource
 }
 
 // connSession holds all per-connection state for an MCP session. The mutable,

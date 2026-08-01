@@ -27,6 +27,31 @@
 
 ### Fixed
 
+- **A peer agent can no longer silently steal a shared connection's workspace
+  pin — an explicit `session_start` pin is now sticky (issue #182).** A client
+  that multiplexes several logical agent sessions over one `plumb serve`
+  connection (Cowork, Claude Desktop local-agent-mode) let any peer's
+  `session_start({workspace: B})` re-pin the *shared* connection mid-session,
+  retargeting the victim agent's relative-path calls onto project B and
+  refusing even absolute paths into the correct project with `workspace
+  boundary violation: pinned to B` — with no `session_start` visible to the
+  victim. The pin is now sticky once set by an explicit `session_start`
+  (live or restored on reconnect): a conflicting live re-pin to a *different*
+  root is refused with an error that names the current pin, its provenance,
+  and the remediation — retry with the new `force: true` argument, which a new
+  conversation deliberately switching projects passes to override the guard —
+  or run a dedicated `plumb serve` per agent. A `roots/list_changed` that
+  drops the pinned root no longer moves an explicit pin either (the live
+  counterpart of the persisted-pin promotion rule: a deliberate pin outranks
+  client-reported roots). Not sticky: pins held via client roots or incidental
+  auto-attach, so the first explicit pin always lands; same-root requests
+  (including subdirectories that resolve to the current root) and restore
+  replays are never refused. The boundary-violation error now tells the
+  refused agent about the `force: true` escape hatch. Guarded by
+  `conn_stickypin_test.go` (refusal, force override, restored-pin stickiness,
+  non-sticky origins, same-root/subdir pass-through, roots-change guard,
+  promotion-to-sticky) and `TestSessionStart_ForceThreadedToRepin`.
+
 - **`config.provenance.json` could stay committable despite the ignore
   machinery.** The gitignore append for the agent-config provenance sidecar
   tested for its entry with a substring match, so a `.plumb/.gitignore` line
