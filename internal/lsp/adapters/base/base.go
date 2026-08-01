@@ -216,6 +216,11 @@ func (a *Adapter) DidChangeWatchedFiles(ctx context.Context, params protocol.Did
 // ── Capabilities / subscriptions ─────────────────────────────────────────────
 
 // Capabilities returns the negotiated server capabilities, or nil before Initialize.
+// The returned pointer is shared with the adapter and with every other caller,
+// so treat it as read-only. Initialize writes the cache once and nothing
+// mutates it afterwards, which is what lets a caller read the pointee after
+// this method has released the lock — an embedder that mutated it would
+// introduce a data race no test here would catch.
 func (a *Adapter) Capabilities() *protocol.ServerCapabilities {
 	a.capsMu.RLock()
 	defer a.capsMu.RUnlock()
