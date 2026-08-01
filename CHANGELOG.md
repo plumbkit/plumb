@@ -49,13 +49,18 @@
   replays are never refused. The boundary-violation error now tells the
   refused agent about the `force: true` escape hatch. A refusal is also
   recorded on the session record (`Health: blocked`, cleared by the next
-  successful re-pin) so the TUI surfaces the refused steal attempt, and the
-  guard runs inside the connection's mutation lane — two racing explicit
-  re-pins serialise, the first lands and makes the pin sticky, the second is
-  refused rather than silently replacing it. Guarded by
+  successful explicit `session_start` — the victim's own same-root call or a
+  forced switch) so the TUI surfaces the refused steal attempt, and the guard
+  runs inside the connection's mutation lane — two racing explicit re-pins
+  serialise, the first lands and makes the pin sticky, the second is refused
+  rather than silently replacing it. Stickiness does not depend on the folder
+  having a repo or language marker: an explicit pin of a markerless folder
+  keeps its `session_start` origin through the synthetic-root path (and is
+  now persisted like any other explicit pin). Guarded by
   `conn_stickypin_test.go` (refusal, force override, restored-pin stickiness,
-  non-sticky origins, same-root/subdir pass-through, roots-change guard,
-  promotion-to-sticky, health marking, racing-pins serialisation) and
+  non-sticky origins incl. restored roots pins, same-root/subdir/language-only
+  pass-through, roots-change guard, promotion-to-sticky, markerless pins,
+  health marking and healing, racing-pins serialisation) and
   `TestSessionStart_ForceThreadedToRepin`.
 
 - **`config.provenance.json` could stay committable despite the ignore
