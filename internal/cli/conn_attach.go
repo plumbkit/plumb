@@ -95,14 +95,15 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 // markerless folder (sticky and persisted, like any other explicit pin — issue
 // #182's contract must not depend on the folder having a .git or language
 // marker) from an incidental tool-path seed (PinSourceUnknown: not sticky,
-// never persisted).
-func (s *connSession) attachSynthetic(_ context.Context, root string, origin sessionstate.PinSource) {
+// never persisted). trigger separates a live seed from rehydratePin's restore
+// of a persisted synthetic pin, so the provenance label reads restore:… .
+func (s *connSession) attachSynthetic(_ context.Context, root string, origin sessionstate.PinSource, trigger pinTrigger) {
 	s.mutate(func(v *sessionView) {
 		if v.acquiredRoot != "" {
 			return
 		}
 		v.acquiredRoot = root
-		recordPinProvenance(v, origin, pinTriggerLive, "")
+		recordPinProvenance(v, origin, trigger, "")
 		s.rehydrateReads(v.proxySessionID, root, v.session.PersistState)
 		s.persistPin(v.proxySessionID, root, LanguageNone, v.session.PersistState, origin)
 		s.startQualityRunner(v, root)
@@ -206,7 +207,7 @@ func (s *connSession) onBeforeTool(toolCtx context.Context, _ string, args json.
 			return
 		}
 		synthRoot := s.pool.SynthesiseRoot(startDir)
-		s.attachSynthetic(toolCtx, synthRoot, origin)
+		s.attachSynthetic(toolCtx, synthRoot, origin, pinTriggerLive)
 		if s.store.Current().Workspace.AutoAttachPersist {
 			go func() {
 				if mkErr := materialisePlumbDir(synthRoot); mkErr != nil {

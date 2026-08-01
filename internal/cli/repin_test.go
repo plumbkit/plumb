@@ -131,6 +131,22 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	if newRoot != bare || s.workspace() != bare {
 		t.Fatalf("marker-less repin: workspace = %s (returned %s), want %s", s.workspace(), newRoot, bare)
 	}
+
+	// The session record must keep the Synthetic flag truthful for the
+	// synthesised root — a re-pin used to hardcode it to false.
+	infos, err := session.List()
+	if err != nil {
+		t.Fatalf("session.List: %v", err)
+	}
+	for _, info := range infos {
+		if info.ID == s.sessID {
+			if !info.Synthetic {
+				t.Fatal("session record Synthetic = false after a marker-less re-pin, want true")
+			}
+			return
+		}
+	}
+	t.Fatalf("session %s not found", s.sessID)
 }
 
 // TestRepinWorkspace_ResetsTrackers verifies a re-pin clears the per-session
