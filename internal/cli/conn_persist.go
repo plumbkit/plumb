@@ -162,8 +162,10 @@ func (s *connSession) rehydrateReads(proxyID, root string, persistState bool) {
 // after a restart. Called from inside the attach mutation lane with explicit
 // args, for the same reason as rehydrateReads.
 //
-// Only a pin with a known origin is persisted: a deliberate session_start
-// workspace arg, or a client-reported root. An auto-attach seeded from an
+// Only a pin with a known origin is persisted: a deliberate session_start call
+// (a workspace arg, or a language override applied to the current root — both
+// record session_start origin), or a client-reported root. An auto-attach
+// seeded from an
 // incidental tool path (onBeforeTool) passes PinSourceUnknown and writes
 // nothing, so it can never overwrite the sticky target — a reconnect then lands
 // back on the last workspace the caller actually chose rather than on whatever

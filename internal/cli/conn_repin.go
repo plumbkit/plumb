@@ -70,15 +70,17 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 		root = s.pool.SynthesiseRoot(folder)
 		language = LanguageNone
 	}
+	langForced := false
 	if langOverride != "" && s.pool.hasActiveLanguage(langOverride) {
 		language = langOverride
+		langForced = true
 	}
 	// The sticky-pin guard (issue #182) lives inside attachOrRepinTo's mutation
 	// lane: after the root resolution above, so a requested path that resolves
 	// to the current root is never falsely refused, and on the view under
 	// mutation, so a concurrent re-pin can never land between the refusal
 	// decision and the pin move.
-	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic)
+	changed, err := s.attachOrRepinTo(ctx, root, language, origin, trigger, force, synthetic, langForced)
 	if err != nil {
 		return "", err
 	}
@@ -107,8 +109,10 @@ func (s *connSession) repinWorkspaceFrom(ctx context.Context, folder, langOverri
 //
 // synthetic records whether root was synthesised (no marker found), so the
 // session record keeps its Synthetic flag truthful across re-pins and restore
-// replays instead of hardcoding false.
-func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic bool) (changed bool, refused error) {
+// replays instead of hardcoding false. langForced marks language as an
+// explicit, active session_start override — the only signal allowed to
+// re-acquire on a same-root call (see the no-op branch).
+func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string, origin sessionstate.PinSource, trigger pinTrigger, force, synthetic, langForced bool) (changed bool, refused error) {
 	s.mutate(func(v *sessionView) {
 		prev := v.acquiredRoot
 		// Sticky-pin guard (issue #182). Only a LIVE re-pin away from a pin held
@@ -135,10 +139,14 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			s.log().Info("daemon: roots re-pin skipped — explicit session_start pin held (issue #182)", "pinned", prev, "requested", root)
 			return
 		}
-		// No-op only when neither the root NOR the primary language changes; a
-		// same-root language switch (a forced primary via session_start) must still
-		// re-acquire the new server.
-		if root == prev && language == v.acquiredLanguage {
+		// No-op when the root does not change, UNLESS the caller explicitly
+		// forced a different primary language (an active session_start
+		// `language` arg) — only that declared intent re-acquires on the same
+		// root. Detect-vs-acquired drift — a failed LSP acquire (acquired
+		// none), a monorepo root electing a child primary, a content-sniffed
+		// root — must never let a REDUNDANT same-root session_start take the
+		// teardown path and reset the read/write/undo trackers.
+		if root == prev && (!langForced || language == v.acquiredLanguage) {
 			// Nothing to re-acquire — but an explicit session_start still UPGRADES
 			// the pin's recorded origin. Without this, a session_start(workspace=B)
 			// for a B already attached from client roots would leave the stored
@@ -149,7 +157,9 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			// session_start) is skipped here, so it can never demote a session_start
 			// pin.
 			if origin == sessionstate.PinSourceSessionStart {
-				s.persistPin(v.proxySessionID, root, language, v.session.PersistState, origin)
+				// Persist the language actually acquired, not Detect's raw value
+				// — on this branch they can differ (drift cases above).
+				s.persistPin(v.proxySessionID, root, v.acquiredLanguage, v.session.PersistState, origin)
 				// The root did not move, so pinAt/pinPrev stand; only the provenance
 				// origin/label is upgraded — making the pin sticky from here on.
 				// Rebuild the policy so boundary errors quote the new label.

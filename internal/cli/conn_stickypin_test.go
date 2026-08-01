@@ -529,6 +529,79 @@ func TestStickyPin_SameRootPromotionThroughToolSurface(t *testing.T) {
 	}
 }
 
+func TestStickyPin_AliasOfOwnRootNotRefusedViaTool(t *testing.T) {
+	// sameDir (os.SameFile) recognises alias spellings of the current root — a
+	// symlink, a macOS firmlink (/var vs /private/var) — while the daemon's
+	// sticky guard compares literal resolved roots. The tool layer must hand
+	// the daemon the pinned spelling, so a caller naming their OWN workspace
+	// through an alias is never refused as a peer steal, never torn down, and
+	// never flagged blocked.
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlink creation failed: %v", err)
+	}
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+
+	out, err := newSessionStartTool(s).Execute(context.Background(), json.RawMessage(`{"workspace":"`+alias+`"}`))
+	if err != nil {
+		t.Fatalf("an alias of the caller's own root must not be refused: %v", err)
+	}
+	if strings.Contains(out, "Re-pinned this connection") {
+		t.Errorf("alias call must not announce a re-pin\n%s", out)
+	}
+	if got := s.workspace(); got != root {
+		t.Fatalf("workspace = %q, want the pinned spelling %q", got, root)
+	}
+	if health, msg := sessionHealth(t, s.sessID); health != "" {
+		t.Errorf("health = %q (%q), want clear — an alias call is not a steal attempt", health, msg)
+	}
+}
+
+func TestStickyPin_RedundantSameRootCallKeepsTrackers(t *testing.T) {
+	// Detect-vs-acquired drift (here: a go.mod root whose language server
+	// cannot be acquired, so the acquired language stays none while Detect
+	// says go) must not let a REDUNDANT same-root session_start take the
+	// teardown path — write tracking (and with it undo history and strict-mode
+	// read state) must survive. Only an explicit active language override
+	// re-acquires on the same root.
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	s := newPersistSession(t, store, ss, "proxyX")
+	defer s.close()
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+		t.Fatalf("first explicit pin: %v", err)
+	}
+	if got := s.view().acquiredLanguage; got != LanguageNone {
+		t.Skipf("precondition: expected a failed acquire (language none), got %q — no drift to exercise", got)
+	}
+
+	written := filepath.Join(root, "touched.go")
+	s.writeTracker.Record(written)
+	if !s.writeTracker.Wrote(written) {
+		t.Fatal("precondition: write tracker should hold the recorded path")
+	}
+
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
+		t.Fatalf("redundant same-root re-pin: %v", err)
+	}
+	if !s.writeTracker.Wrote(written) {
+		t.Fatal("a redundant same-root session_start reset the write tracker (teardown path taken despite no explicit language override)")
+	}
+}
+
 func TestStickyPin_MarkerlessPinRestoredAcrossRestart(t *testing.T) {
 	// A persisted markerless (synthetic-root) pin must survive a daemon
 	// restart through rehydratePin: Detect still finds no marker, so the
