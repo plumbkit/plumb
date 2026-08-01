@@ -60,13 +60,14 @@ hold it as a **named field** (`open *base.OpenTracker`), never embedded, because
 embedding would promote `Ensure` and `Refresh` into the adapter's exported
 surface.
 
-Three tests catch a breach:
+Four tests catch a breach:
 
 | Guard | Where | What it pins |
 |---|---|---|
 | `TestExportedSurface_IsExactlyLSPClient` | `internal/lsp/adapters/base/base_test.go` | The base's exported method set is exactly `lsp.Client`. |
 | `TestAdapters_OptionalInterfaceSurface` | `internal/lsp/conformance/optional_interfaces_test.go` | Which adapters expose the optional pull surfaces — in **both** directions. |
 | `TestLazyOpenAdapters_LanguageIDAndExportedSurface` | `internal/lsp/conformance/lazyopen_guard_test.go` | The lazy-open adapters' `languageId` and exported surface. |
+| `TestLazyOpenAdapters_DidOpenMatrix` | `internal/lsp/conformance/lazyopen_guard_test.go` | The per-method `didOpen` count for each lazy-open adapter, asserted in **both** directions. |
 
 ### `base.New` installs both transport handlers
 
@@ -94,6 +95,18 @@ zls deliberately does not. The HTML server needs it for the queries but not for
 the rename or hierarchy prepares, which it answers from the document it already
 holds. Copying another adapter's set without checking your server is how this
 goes wrong.
+
+Since the `base.Adapter` migration the asymmetry is carried by method
+**absence** — an adapter that does not shadow a method inherits the base's plain
+forward, with no ensure-open — so making the three adapters "consistent" looks
+like tidying and is not: it changes what plumb puts on the wire to three real
+servers, under cover of a refactor.
+`TestLazyOpenAdapters_DidOpenMatrix`
+(`internal/lsp/conformance/lazyopen_guard_test.go`) is the record of what each
+server actually needs. It pins the `didOpen` count of every `lsp.Client` method
+on every lazy-open adapter in **both** directions: a 0 that becomes a 1 fails as
+loudly as a 1 that becomes a 0. Read its doc comment before you change an
+ensure-open set — including your own adapter's.
 
 ---
 
@@ -220,8 +233,8 @@ type Adapter struct {
 }
 
 func New(conn jsonrpc.Caller) *Adapter {
-	b := base.New(conn, "sourcekit-lsp")
-	return &Adapter{Adapter: b, open: base.NewOpenTracker(b, "swift")}
+	b := base.New(conn, "<binary-name>")
+	return &Adapter{Adapter: b, open: base.NewOpenTracker(b, "<languageId>")}
 }
 
 func (a *Adapter) Hover(ctx context.Context, params protocol.HoverParams) (*protocol.Hover, error) {
@@ -231,6 +244,10 @@ func (a *Adapter) Hover(ctx context.Context, params protocol.HoverParams) (*prot
 	return a.Adapter.Hover(ctx, params)
 }
 ```
+
+`<languageId>` is the LSP `languageId` the server expects (`swift`, `zig`,
+`html` for the three above) — servers key their parser off it, so a wrong one
+compiles and fails silently at runtime rather than at build time.
 
 Pair it with a `DidChangeWatchedFiles` shadow that calls
 `a.open.Refresh(ctx, params.Changes)` before delegating — and pass the
@@ -348,6 +365,20 @@ func TestLazyOpenErrorContract(t *testing.T) {
 Call it from the lazy-open adapters and nowhere else: the per-adapter call is
 what makes an adapter's participation visible at its own call site.
 
+**Two shared guard tables also need a row.** Both hard-gate on their own row
+count and fail with a directive message until the new adapter is added, so
+`go test ./...` stays red until you state its behaviour explicitly:
+
+- `internal/lsp/conformance/optional_interfaces_test.go` — add a case to
+  `TestAdapters_OptionalInterfaceSurface` stating which optional pull surfaces
+  the adapter exposes, and bump the gate (`if want := 9; len(cases) != want`,
+  ~line 90). Every adapter goes here, whether or not it has any capability.
+- `internal/lsp/conformance/lazyopen_guard_test.go` — **lazy-open adapters
+  only**: add a row to `lazyOpenAdapters` with the adapter's `languageId` and
+  its fixture document, state its expected `didOpen` count in every row of
+  `lazyOpenMethods`, and bump the gate (`if want := 3; len(adapters) != want`,
+  ~line 86).
+
 ### 6. Add integration tests
 
 Put them in `integration_test.go`, gated with `//go:build integration` so they
@@ -368,7 +399,14 @@ The test should:
 2. Spawn the binary via `exec.Command` and pipe stdin/stdout into
    `jsonrpc.NewConn`.
 3. Wrap the conn in the adapter, `Initialize` + `Initialized`.
-4. Assert `DocumentSymbols` against a file in `testdata/<lang>-fixture/`.
+4. Assert `DocumentSymbols` against a file in the language's fixture. Fixtures
+   live at the **repo root** — `testdata/<lang>-fixture/`, not a package-local
+   `testdata/`; there is none anywhere under `internal/lsp/adapters/`. Reach it
+   with the per-package `repoRoot(t)` helper, which walks up to `go.mod`:
+   `filepath.Join(repoRoot(t), "testdata", "<lang>-fixture")` — see
+   `internal/lsp/adapters/rust/integration_test.go`. Copy the fixture into a
+   temp workspace first if the test mutates it, so a run cannot dirty
+   `testdata/`.
 5. Assert the `DidChangeWatchedFiles` + `DidOpen` → `publishDiagnostics`
    round-trip. **This is the promotion gate** (see the rule in
    `.claude/skills/add-lsp-adapter/SKILL.md`).
@@ -379,7 +417,8 @@ go test -tags integration ./internal/lsp/adapters/<name>/...
 
 ### 7. Register the adapter
 
-Three places, all mechanical:
+Three places, all mechanical — on top of the two shared guard tables in step 5,
+which gate on their row counts and fail until the new adapter is listed:
 
 - `internal/langsupport/langsupport.go` — add a `Language` row with the
   extensions and the `LSPAdapter` binary name. This is the single source of
@@ -510,7 +549,7 @@ per-document quirk that forced a shadowed method.
   (the rustup proxy at `~/.cargo/bin/rust-analyzer` dispatches to the toolchain
   component; a bare proxy without the component installed errors).
 - **Status**: validated — integration tests in `internal/lsp/adapters/rust/`
-  (`testdata/rust-fixture/`).
+  (repo-root `testdata/rust-fixture/`).
 - **Root markers**: `Cargo.toml`.
 - **Workspace model**: requires `rootUri` pointing at the Cargo workspace root
   (the directory containing `Cargo.toml`). Reads configuration from
@@ -533,7 +572,7 @@ per-document quirk that forced a shadowed method.
 - **Binary**: `sourcekit-lsp` — ships with the Swift toolchain (Xcode or a
   standalone swift.org toolchain). On macOS it lives at `/usr/bin/sourcekit-lsp`.
 - **Status**: validated — integration tests in `internal/lsp/adapters/swift/`
-  (`testdata/swift-fixture/`, a SwiftPM package).
+  (repo-root `testdata/swift-fixture/`, a SwiftPM package).
 - **Root markers**: `Package.swift`, `*.xcodeproj`, `*.xcworkspace` (the last two
   glob-matched, for Xcode-app projects with no SwiftPM manifest).
 - **Workspace model**: requires `rootUri` pointing at the SwiftPM package root.
@@ -556,7 +595,7 @@ per-document quirk that forced a shadowed method.
 - **Binary**: `zls` — install from https://github.com/zigtools/zls (or
   `brew install zls`).
 - **Status**: validated (promoted 2026-06-17) — unit-tested with a mocked
-  transport, and the integration test (`internal/lsp/adapters/zig/`,
+  transport, and the integration test (`internal/lsp/adapters/zig/`, repo-root
   `testdata/zig-fixture/`) runs green against a real zls 0.16: document-symbol
   extraction plus the `DidChangeWatchedFiles`+`DidOpen` → `publishDiagnostics`
   round-trip both pass, once plumb advertised the `textDocument.publishDiagnostics`
@@ -583,7 +622,7 @@ per-document quirk that forced a shadowed method.
   `npm install -g typescript-language-server typescript`.
 - **Status**: validated (promoted 2026-06-16) — unit-tested with a mocked
   transport, and the integration test (`internal/lsp/adapters/typescript/`,
-  `testdata/typescript-fixture/`) runs green against a real
+  repo-root `testdata/typescript-fixture/`) runs green against a real
   typescript-language-server 5.3.0. It publishes nothing unless the client
   advertises `textDocument.publishDiagnostics` — it does not implement pull
   diagnostics despite the earlier assumption.
@@ -611,7 +650,8 @@ per-document quirk that forced a shadowed method.
   `brew install kotlin-language-server` or build from
   https://github.com/fwcd/kotlin-language-server (needs a JDK).
 - **Status**: experimental — unit-tested with a mocked transport; the
-  integration test (`internal/lsp/adapters/kotlin/`, `testdata/kotlin-fixture/`)
+  integration test (`internal/lsp/adapters/kotlin/`, repo-root
+  `testdata/kotlin-fixture/`)
   is written and gated `//go:build integration`. The 2026-06-10 real-binary
   retest passed document-symbol extraction but failed the
   `DidChangeWatchedFiles`+`DidOpen` → `publishDiagnostics` round-trip: the

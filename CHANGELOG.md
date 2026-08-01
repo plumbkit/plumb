@@ -133,8 +133,11 @@
   `CallRaw`, `Notify`, `Wrap`) and `base.OpenTracker` is held as a named field,
   never embedded. Guarded in both directions by
   `TestExportedSurface_IsExactlyLSPClient`,
-  `TestAdapters_OptionalInterfaceSurface` and
-  `TestLazyOpenAdapters_LanguageIDAndExportedSurface`, on top of the
+  `TestAdapters_OptionalInterfaceSurface`,
+  `TestLazyOpenAdapters_LanguageIDAndExportedSurface` and
+  `TestLazyOpenAdapters_DidOpenMatrix` — the last pinning the per-method
+  `didOpen` count of every lazy-open adapter, so the deliberately asymmetric
+  ensure-open set cannot be "made consistent" as tidying — on top of the
   error-contract and conformance harnesses landed ahead of the refactor. The
   nine pre-existing adapter suites were left untouched through the migration as
   the behaviour proof. `docs/adding-an-lsp.md` and the `add-lsp-adapter` skill
