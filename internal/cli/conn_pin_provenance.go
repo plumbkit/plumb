@@ -57,7 +57,9 @@ func recordPinProvenance(v *sessionView, origin sessionstate.PinSource, t pinTri
 }
 
 // pinExplicitlyHeld reports whether the connection's current pin was set by an
-// explicit session_start workspace argument (live or restored on reconnect).
+// explicit session_start call (live or restored on reconnect) — a workspace
+// argument, or a language override applied to the current root: both are
+// deliberate acts on this connection, so either records session_start origin.
 // Only such a pin is sticky (issue #182 — a multiplexed peer's session_start
 // or roots notification must not silently steal the pin a caller deliberately
 // chose); incidental auto-attaches (unknown origin) and client-roots attaches

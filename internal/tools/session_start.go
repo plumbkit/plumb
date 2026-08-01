@@ -440,25 +440,7 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 	// the displayed workspace consistent with the TUI, memory, and topology.
 	if t.ws != nil {
 		if current := t.ws(); current != "" {
-			switch {
-			case a.Workspace != "":
-				// A same-dir workspace arg still goes through the re-pin: naming
-				// the CURRENT workspace explicitly is what promotes a roots-held
-				// pin to sticky and clears a Health mark left by a refused steal
-				// attempt (issue #182) — short-circuiting on sameDir here made
-				// both unreachable for the exact-path call. repinExplicit
-				// suppresses the "re-pinned" banner when no root actually moved.
-				if sameDir(a.Workspace, current) && t.repin == nil {
-					// Legacy wiring without a re-pin callback: naming the current
-					// workspace is a no-op, not a conflict.
-					return current, "", nil
-				}
-				return t.repinExplicit(ctx, current, a.Workspace, a.Language, a.Force)
-			case a.Language != "":
-				return t.forceLanguage(ctx, current, a.Language)
-			default:
-				return current, "", nil
-			}
+			return t.resolveAttached(ctx, current, a.Workspace, a.Language, a.Force)
 		}
 	}
 	// Not attached yet: honour an explicit arg, then ask the client for roots.
@@ -485,6 +467,40 @@ func (t *SessionStart) resolveSessionWorkspace(ctx context.Context, raw json.Raw
 		}
 	}
 	return "", "", noWorkspaceError()
+}
+
+// resolveAttached handles session_start on an already-attached connection: an
+// explicit workspace arg routes through the re-pin, a language-only arg forces
+// the primary on the current root, and a bare call returns the current root.
+//
+// A same-dir workspace arg still goes through the re-pin: naming the CURRENT
+// workspace explicitly is what promotes a roots-held pin to sticky and clears
+// a Health mark left by a refused steal attempt (issue #182) —
+// short-circuiting on sameDir here made both unreachable for the exact-path
+// call. repinExplicit suppresses the "re-pinned" banner when no root actually
+// moved. sameDir (os.SameFile) recognises alias spellings of the current root
+// — a symlink, a macOS firmlink (/var vs /private/var), a trailing slash —
+// while the daemon's sticky guard compares literal resolved roots, so the
+// re-pin is handed the pinned spelling, not the alias: the caller is naming
+// their OWN workspace, and the alias must not read as a peer steal.
+func (t *SessionStart) resolveAttached(ctx context.Context, current, workspace, language string, force bool) (string, string, error) {
+	switch {
+	case workspace != "":
+		requested := workspace
+		if sameDir(workspace, current) {
+			if t.repin == nil {
+				// Legacy wiring without a re-pin callback: naming the current
+				// workspace is a no-op, not a conflict.
+				return current, "", nil
+			}
+			requested = current
+		}
+		return t.repinExplicit(ctx, current, requested, language, force)
+	case language != "":
+		return t.forceLanguage(ctx, current, language)
+	default:
+		return current, "", nil
+	}
 }
 
 // repinExplicit switches an already-pinned connection to a different workspace
