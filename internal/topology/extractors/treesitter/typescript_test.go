@@ -442,3 +442,34 @@ export default function Bar() {
 		}
 	}
 }
+
+// TestTypeScript_QuotedPropertyKeyKeepsQuotes pins wasm/canonical parity for
+// string-literal member keys: the emitted name keeps its quotes
+// (`variable|"~standard"`, zod v4 core/standard-schema.ts). In this grammar a
+// property_signature's string name node excludes the quote bytes from its span
+// while a public_field_definition's includes them — keyText re-attaches the
+// missing ones, and this test guards both shapes.
+func TestTypeScript_QuotedPropertyKeyKeepsQuotes(t *testing.T) {
+	src := []byte(`interface Standard {
+  readonly "~standard": number;
+}
+class Box {
+  "quoted field" = 1;
+}
+`)
+	nodes, _, err := NewTypeScript().Extract(context.Background(), "q.ts", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	vars := names(nodes, topology.KindVariable)
+	for _, want := range []string{`"~standard"`, `"quoted field"`} {
+		if !slices.Contains(vars, want) {
+			t.Errorf("quoted member key %s not extracted with its quotes; variables=%v", want, vars)
+		}
+	}
+	for _, n := range nodes {
+		if n.Name == "~standard" || n.Name == "quoted field" {
+			t.Errorf("quoted key %q lost its quotes (kind=%s)", n.Name, n.Kind)
+		}
+	}
+}
