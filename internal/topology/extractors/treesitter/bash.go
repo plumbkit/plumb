@@ -32,9 +32,9 @@ func (e *BashExtractor) Extensions() []string { return []string{".sh", ".bash"} 
 // call edges between functions. Call sites are syntactically certain but the
 // callee is resolved by name within the file, so call edges are heuristic
 // (0.8). Returns (nil, nil, nil) when src cannot be parsed.
-func (e *BashExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *BashExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &bashWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root)
 		w.callEdges(root)

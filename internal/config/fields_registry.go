@@ -101,6 +101,10 @@ var registryData = []Field{
 		Description: "Cap on file size considered for extraction (bytes). 0 uses the 512 KiB default.",
 	},
 	{
+		Key: "topology.extract_timeout_seconds", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
+		Description: "Cap on how long one file's parse may take before it is abandoned (seconds). 0 disables the timeout.",
+	},
+	{
 		Key: "topology.resync_batch", Type: FieldInt, ReloadTier: ReloadNextSession, Min: &minZero,
 		Description: "Files a full resync extracts before pausing. 0 disables pacing.",
 	},

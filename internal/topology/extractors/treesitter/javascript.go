@@ -36,9 +36,9 @@ func (e *JavaScriptExtractor) Extensions() []string { return []string{".js", ".m
 // describe/it/test blocks (→ KindTest). Class → method containment is lexical
 // and therefore certain (1.0); intra-file call edges are name-resolved
 // heuristics (0.8). Returns (nil, nil, nil) when src cannot be parsed.
-func (e *JavaScriptExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *JavaScriptExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &jsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root)
 		w.scanTests(root)

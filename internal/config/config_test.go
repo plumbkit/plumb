@@ -455,6 +455,23 @@ func TestDefaults_TopologyEnabledAndMaxFileSize(t *testing.T) {
 	if cfg.Topology.MaxFileSizeBytes != wantMaxSize {
 		t.Errorf("MaxFileSizeBytes = %d, want %d", cfg.Topology.MaxFileSizeBytes, wantMaxSize)
 	}
+	// A default of 0 would ship the timeout disabled, which is the bug the knob
+	// exists to prevent: the size cap alone does not bound parse TIME.
+	if cfg.Topology.ExtractTimeoutSeconds != 10 {
+		t.Errorf("ExtractTimeoutSeconds = %d, want 10", cfg.Topology.ExtractTimeoutSeconds)
+	}
+}
+
+func TestValidate_TopologyExtractTimeout(t *testing.T) {
+	cfg := Defaults()
+	cfg.Topology.ExtractTimeoutSeconds = -1
+	if err := validate(cfg); err == nil {
+		t.Error("a negative extract_timeout_seconds must be rejected")
+	}
+	cfg.Topology.ExtractTimeoutSeconds = 0 // the documented "disabled" value
+	if err := validate(cfg); err != nil {
+		t.Errorf("extract_timeout_seconds = 0 must be accepted as disabled, got %v", err)
+	}
 }
 
 func TestDefaults_Memory(t *testing.T) {
