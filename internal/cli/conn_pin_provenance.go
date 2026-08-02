@@ -53,16 +53,39 @@ func recordPinProvenance(v *sessionView, origin sessionstate.PinSource, t pinTri
 	v.pinVia = pinViaLabel(origin, t)
 	v.pinAt = time.Now()
 	v.pinPrev = prevRoot
+	v.pinOrigin = origin
 }
 
-// pinProvenance reports the connection's current pin provenance; the zero
-// value while unattached, which renders nothing.
-func (s *connSession) pinProvenance() tools.PinProvenance {
+// pinExplicitlyHeld reports whether the connection's current pin was set by an
+// explicit session_start call (live or restored on reconnect) — a workspace
+// argument, or a language override applied to the current root: both are
+// deliberate acts on this connection, so either records session_start origin.
+// Only such a pin is sticky (issue #182 — a multiplexed peer's session_start
+// or roots notification must not silently steal the pin a caller deliberately
+// chose); incidental auto-attaches (unknown origin) and client-roots attaches
+// are not, so the first explicit pin can always land. This snapshot read is
+// the onRootsChanged fast path; the AUTHORITATIVE guard runs on the view under
+// mutation, inside attachOrRepinTo, where it cannot race a concurrent re-pin.
+func (s *connSession) pinExplicitlyHeld() bool {
 	v := s.view()
+	return v.acquiredRoot != "" && v.pinOrigin == sessionstate.PinSourceSessionStart
+}
+
+// pinProvenanceOf reads a view's pin provenance; the zero value while
+// unattached, which renders nothing. Usable inside a mutate closure (on the
+// view under mutation) as well as on a snapshot.
+func pinProvenanceOf(v *sessionView) tools.PinProvenance {
 	if v.pinVia == "" {
 		return tools.PinProvenance{}
 	}
 	return tools.PinProvenance{Source: v.pinVia, At: v.pinAt, Previous: v.pinPrev}
+}
+
+// pinProvenance reports the connection's current pin provenance from the
+// latest snapshot.
+func (s *connSession) pinProvenance() tools.PinProvenance {
+	v := s.view()
+	return pinProvenanceOf(&v)
 }
 
 // boundedForLog caps a slice for a log field, appending a "+N more" sentinel

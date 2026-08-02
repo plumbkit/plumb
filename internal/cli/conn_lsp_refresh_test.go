@@ -200,7 +200,7 @@ func TestRefreshPrimary_SkipsStaleRootAfterRepin(t *testing.T) {
 
 	// A concurrent session_start({workspace: B}) re-pins mid-refresh; the
 	// refresh then enters the lane holding root A's detected pair.
-	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	s.bindRefreshedPrimary(context.Background(), rootA, "html")

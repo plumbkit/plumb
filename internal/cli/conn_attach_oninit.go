@@ -73,7 +73,7 @@ func (s *connSession) attachReplayedPin(ctx context.Context, root string, origin
 	if root == "" {
 		return
 	}
-	if _, err := s.repinWorkspaceFrom(ctx, root, "", origin, pinTriggerRestore); err != nil {
+	if _, err := s.repinWorkspaceFrom(ctx, root, "", origin, pinTriggerRestore, false); err != nil {
 		s.log().Warn("daemon: restoring persisted pin failed", "root", root, "err", err)
 		return
 	}

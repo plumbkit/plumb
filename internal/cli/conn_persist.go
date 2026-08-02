@@ -162,8 +162,10 @@ func (s *connSession) rehydrateReads(proxyID, root string, persistState bool) {
 // after a restart. Called from inside the attach mutation lane with explicit
 // args, for the same reason as rehydrateReads.
 //
-// Only a pin with a known origin is persisted: a deliberate session_start
-// workspace arg, or a client-reported root. An auto-attach seeded from an
+// Only a pin with a known origin is persisted: a deliberate session_start call
+// (a workspace arg, or a language override applied to the current root — both
+// record session_start origin), or a client-reported root. An auto-attach
+// seeded from an
 // incidental tool path (onBeforeTool) passes PinSourceUnknown and writes
 // nothing, so it can never overwrite the sticky target — a reconnect then lands
 // back on the last workspace the caller actually chose rather than on whatever
@@ -216,7 +218,16 @@ func (s *connSession) rehydratePin(ctx context.Context) {
 	if !ok {
 		return
 	}
-	s.attachWorkspacePinFrom(ctx, "file://"+root, source, pinTriggerRestore)
+	if _, _, err := s.pool.Detect(root); err != nil {
+		// A persisted markerless (synthetic-root) pin: Detect finds no marker
+		// now either, so attachWorkspacePinFrom would defer to the first tool
+		// call and the deliberate pin would fall through to the weaker
+		// cwd-hint/seed rungs. Re-synthesise under the loaded origin instead —
+		// attachSynthetic is first-wins, preserving this function's idempotence.
+		s.attachSynthetic(ctx, s.pool.SynthesiseRoot(root), source, pinTriggerRestore)
+	} else {
+		s.attachWorkspacePinFrom(ctx, "file://"+root, source, pinTriggerRestore)
+	}
 	if s.workspace() != "" {
 		s.log().Info("daemon: workspace rehydrated from persisted pin", "root", root, "source", string(source))
 	}

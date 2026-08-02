@@ -36,7 +36,7 @@ func TestRepinWorkspace_IgnoresInactiveLanguageOverride(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+root)
 
-	if _, err := s.repinWorkspace(context.Background(), root, "swift"); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "swift", false); err != nil {
 		t.Fatalf("repin: %v", err)
 	}
 	if got := s.view().acquiredLanguage; got != LanguageNone {
@@ -88,7 +88,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 		t.Fatalf("attach: workspace = %s, want %s", got, rootA)
 	}
 
-	newRoot, err := s.repinWorkspace(context.Background(), rootB, "")
+	newRoot, err := s.repinWorkspace(context.Background(), rootB, "", false)
 	if err != nil {
 		t.Fatalf("repin: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestRepinWorkspace_SwitchesPinnedRoot(t *testing.T) {
 	}
 
 	// Re-pinning to the already-pinned root is a no-op (no error, same root).
-	again, err := s.repinWorkspace(context.Background(), rootB, "")
+	again, err := s.repinWorkspace(context.Background(), rootB, "", false)
 	if err != nil || again != rootB {
 		t.Fatalf("no-op repin: returned %s, err %v; want %s, nil", again, err, rootB)
 	}
@@ -124,13 +124,29 @@ func TestRepinWorkspace_MarkerlessFolderBecomesWorkspace(t *testing.T) {
 	defer s.close()
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 
-	newRoot, err := s.repinWorkspace(context.Background(), bare, "")
+	newRoot, err := s.repinWorkspace(context.Background(), bare, "", false)
 	if err != nil {
 		t.Fatalf("repin to marker-less dir: %v", err)
 	}
 	if newRoot != bare || s.workspace() != bare {
 		t.Fatalf("marker-less repin: workspace = %s (returned %s), want %s", s.workspace(), newRoot, bare)
 	}
+
+	// The session record must keep the Synthetic flag truthful for the
+	// synthesised root — a re-pin used to hardcode it to false.
+	infos, err := session.List()
+	if err != nil {
+		t.Fatalf("session.List: %v", err)
+	}
+	for _, info := range infos {
+		if info.ID == s.sessID {
+			if !info.Synthetic {
+				t.Fatal("session record Synthetic = false after a marker-less re-pin, want true")
+			}
+			return
+		}
+	}
+	t.Fatalf("session %s not found", s.sessID)
 }
 
 // TestRepinWorkspace_ResetsTrackers verifies a re-pin clears the per-session
@@ -159,7 +175,7 @@ func TestRepinWorkspace_ResetsTrackers(t *testing.T) {
 		t.Fatal("precondition: tracker should hold the recorded paths before re-pin")
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repin: %v", err)
 	}
 	if s.writeTracker.Wrote(writtenA) {

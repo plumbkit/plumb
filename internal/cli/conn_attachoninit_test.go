@@ -54,7 +54,7 @@ func TestExplicitRepinSurvivesDaemonRestart(t *testing.T) {
 	if got := before.workspace(); got != rootA {
 		t.Fatalf("first attach = %q, want the client root %q", got, rootA)
 	}
-	if _, err := before.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()
@@ -77,7 +77,7 @@ func TestOnInit_RootsAttachDoesNotClobberSessionStartPin(t *testing.T) {
 	calls := 0
 	before := newPersistSession(t, store, ss, "proxyX")
 	before.attachOnInit(context.Background(), rootsReplying(rootA, &calls))
-	if _, err := before.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()
@@ -104,7 +104,7 @@ func TestOnInit_SkipsRootsRPCWhenPinned(t *testing.T) {
 
 	calls := 0
 	before := newPersistSession(t, store, ss, "proxyX")
-	if _, err := before.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()

@@ -37,7 +37,7 @@ func TestRepinLog_CarriesSourceAndTrigger(t *testing.T) {
 	s.attachWorkspace(context.Background(), "file://"+rootA)
 	buf := captureLog(s)
 
-	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	for _, want := range []string{"session re-pinned", "source=session_start", "trigger=live"} {
@@ -75,7 +75,7 @@ func TestRepinLog_RestoreTrigger(t *testing.T) {
 
 	calls := 0
 	before := newPersistSession(t, store, ss, "proxyX")
-	if _, err := before.repinWorkspace(context.Background(), root, ""); err != nil {
+	if _, err := before.repinWorkspace(context.Background(), root, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	before.close()
@@ -117,7 +117,7 @@ func TestPinProvenance_RecordedOnRepin(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	s.attachWorkspace(context.Background(), "file://"+rootA)
-	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestBoundaryError_CarriesPinProvenance(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	s.attachWorkspace(context.Background(), "file://"+rootA)
-	if _, err := s.repinWorkspace(context.Background(), rootB, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), rootB, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestPinProvenance_SameRootPromotionUpgradesViaOnly(t *testing.T) {
 		t.Fatalf("precondition: Source = %q, want roots", got)
 	}
 
-	if _, err := s.repinWorkspace(context.Background(), root, ""); err != nil {
+	if _, err := s.repinWorkspace(context.Background(), root, "", false); err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
 	prov := s.pinProvenance()
