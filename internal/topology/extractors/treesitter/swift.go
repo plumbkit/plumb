@@ -240,8 +240,9 @@ func (w *swiftWalk) methodSignature(n *tsg.Node, enclosing int64) string {
 
 // funcSignature returns the function head text — everything before the body
 // (a function_body, or a subscript's computed_property/getter block). For
-// protocol declarations (no body), the full node text is returned. The result is used for pattern-matching in topology_routes and
-// similar tools (e.g. detecting "RoutesBuilder" in a Vapor RouteCollection).
+// protocol declarations (no body), the full node text is returned. The result
+// is used for pattern-matching in topology_routes and similar tools (e.g.
+// detecting "RoutesBuilder" in a Vapor RouteCollection).
 func (w *swiftWalk) funcSignature(n *tsg.Node) string {
 	var parts []string
 	for _, c := range n.Children() {

@@ -461,11 +461,21 @@ class Box {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	vars := names(nodes, topology.KindVariable)
+	// The readonly key lands under KindVariable because fieldReadonly only
+	// recognises a property_identifier name — a quirk shared with the wasm walk,
+	// so parity holds. Search across all nodes so a future shared fix over there
+	// fails the kind expectation honestly rather than as "not extracted".
+	allNames := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		allNames = append(allNames, n.Name)
+	}
 	for _, want := range []string{`"~standard"`, `"quoted field"`} {
-		if !slices.Contains(vars, want) {
-			t.Errorf("quoted member key %s not extracted with its quotes; variables=%v", want, vars)
+		if !slices.Contains(allNames, want) {
+			t.Errorf("quoted member key %s not extracted with its quotes; names=%v", want, allNames)
 		}
+	}
+	if !slices.Contains(names(nodes, topology.KindVariable), `"~standard"`) {
+		t.Errorf(`"~standard" should be KindVariable (fieldReadonly misses quoted keys, matching wasm); got %v`, names(nodes, topology.KindVariable))
 	}
 	for _, n := range nodes {
 		if n.Name == "~standard" || n.Name == "quoted field" {

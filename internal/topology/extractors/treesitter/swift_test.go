@@ -409,6 +409,9 @@ final class Handle {
 func TestSwift_OperatorsAndTypealias(t *testing.T) {
 	src := []byte(`typealias Handler = (Int) -> Void
 
+infix operator <^>
+func <^> (l: Int, r: Int) -> Int { l + r }
+
 struct Vec: Equatable {
     let x: Double
     typealias Scalar = Double
@@ -416,7 +419,7 @@ struct Vec: Equatable {
     static func + (l: Vec, r: Vec) -> Vec { l }
 }
 `)
-	nodes, _, err := NewSwift().Extract(context.Background(), "v.swift", src)
+	nodes, edges, err := NewSwift().Extract(context.Background(), "v.swift", src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -430,6 +433,20 @@ struct Vec: Equatable {
 	for _, want := range []string{"==", "+"} {
 		if !slices.Contains(methods, want) {
 			t.Errorf("operator method %q not extracted; methods=%v", want, methods)
+		}
+	}
+	// A file-scope custom operator function goes through the same operatorName
+	// fallback but at enclosing == -1, so it must surface as a function.
+	if !slices.Contains(names(nodes, topology.KindFunction), "<^>") {
+		t.Errorf("file-scope operator function <^> not extracted; functions=%v", names(nodes, topology.KindFunction))
+	}
+	// The member typealias is contained by its type; the file-scope one is not.
+	if !containedIn(t, nodes, edges, "Vec", "Scalar") {
+		t.Error("member typealias Scalar not contained by Vec")
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeContains && nodes[e.ToID].Name == "Handler" {
+			t.Errorf("file-scope typealias Handler must have no container; got edge from %q", nodes[e.FromID].Name)
 		}
 	}
 }
