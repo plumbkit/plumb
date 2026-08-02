@@ -129,11 +129,15 @@ func skipOversizedGrammar(relPath, lang string, srcLen int) bool {
 // wedge the caller.
 //
 // The abandoned goroutine is NOT killed — nothing here can stop a parse already
-// running inside a grammar. Each engine bounds its own work from the same ctx
-// (the wasm runtime is built with WithCloseOnContextDone; the gotreesitter
-// parsers get SetTimeoutMicros), which is what actually ends the parse. This
-// watchdog is the backstop for an engine that honours neither: it frees the
-// indexer worker to keep going while the orphan winds down on its own.
+// running inside a grammar. The gotreesitter parsers bound themselves from the
+// same ctx (SetTimeoutMicros). A wasm parse is NOT ctx-interruptible — the
+// interruptible wazero mode measured 4.8x slower and was rejected (see
+// wasmts.newRuntime) — so on deadline the wasm extractor stops waiting, drops
+// the abandoned goroutine's late result, and discards the runtime WITHOUT
+// closing it (the stuck goroutine is still executing inside), so later files
+// get a fresh runtime rather than serialising behind the stuck parse's lock.
+// This watchdog is the backstop for an engine that honours neither: it frees
+// the indexer worker to keep going while the orphan winds down on its own.
 func safeExtract(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
 	type result struct {
 		nodes []Node

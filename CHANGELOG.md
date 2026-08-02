@@ -38,6 +38,20 @@
   now delegates to `paths.EnsureGitignoreEntries`, which matches entries by
   exact trimmed line; the regression test plants the commented-out line and
   was confirmed to fail against the old implementation.
+- **One slow parse can no longer stall topology indexing.** A grammar's error
+  recovery can go superlinear on a file well inside the indexer's size caps,
+  and the single indexer worker would sit on it for as long as the parse
+  liked. The new `topology.extract_timeout_seconds` config (default 10, 0
+  disables) bounds each file's extraction, enforced in three layers:
+  `extractFile` runs the parse under a ctx deadline, the gotreesitter
+  extractors hand the remaining budget to the parser via `SetTimeoutMicros`,
+  and a watchdog in `safeExtract` abandons any parse that outlives its
+  deadline — a wasm parse cannot be interrupted, so its runtime is discarded
+  unclosed rather than letting later files queue behind the stuck goroutine's
+  lock. A gotreesitter parse cut short this way returns a partial tree with a
+  nil error, which would record a truncated symbol set as though it were the
+  whole file; the early stop is now surfaced as an error so the file is
+  recorded as failed instead.
 
 ### Changed
 
