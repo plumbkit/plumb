@@ -36,8 +36,10 @@ func (e *SwiftExtractor) Extensions() []string { return []string{".swift"} }
 
 // Extract parses src and returns Swift types (struct/class/enum/actor and
 // extensions, all KindClass), protocols (KindType — a contract, mirroring the
-// Rust trait / Kotlin interface mapping), functions, methods, member and
-// top-level properties (let → constant, var → variable), enum cases (constants),
+// Rust trait / Kotlin interface mapping), functions, methods — including
+// operator methods and init/deinit/subscript under those fixed names —
+// typealiases (KindType), member and top-level properties (let → constant,
+// var → variable), enum cases (constants),
 // imports, and XCTest tests (methods named test… inside an XCTestCase subclass),
 // plus container → member containment edges and intra-file call edges.
 // Containment is lexical and certain (1.0/extractor); intra-file calls are
@@ -79,6 +81,19 @@ func (w *swiftWalk) walk(n *tsg.Node, enclosing int64, inFunc, testCtx bool) {
 	case "function_declaration", "protocol_function_declaration":
 		w.addFunc(n, enclosing, testCtx)
 		w.walkChildren(n, -1, true, testCtx)
+	case "init_declaration":
+		w.addNamedMember(n, enclosing, "init")
+		w.walkChildren(n, -1, true, testCtx)
+	case "deinit_declaration":
+		w.addNamedMember(n, enclosing, "deinit")
+		w.walkChildren(n, -1, true, testCtx)
+	case "subscript_declaration":
+		w.addNamedMember(n, enclosing, "subscript")
+		w.walkChildren(n, -1, true, testCtx)
+	case "typealias_declaration":
+		if !inFunc {
+			w.addTypealias(n, enclosing)
+		}
 	case "property_declaration", "protocol_property_declaration":
 		if !inFunc {
 			w.addProperty(n, enclosing)
@@ -180,6 +195,35 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 	w.containedBy(enclosing, idx)
 }
 
+// addNamedMember records a callable whose name is not a simple_identifier —
+// init, deinit, subscript — under a fixed name. A member of a type is a method;
+// at file scope (impossible for these, but handled) it is a function. In the
+// gotreesitter grammar a protocol's init/subscript requirements parse as these
+// same node kinds (there are no protocol_initializer/… variants), so this also
+// covers protocol bodies.
+func (w *swiftWalk) addNamedMember(n *tsg.Node, enclosing int64, name string) {
+	kind := topology.KindFunction
+	if enclosing >= 0 {
+		kind = topology.KindMethod
+	}
+	idx := int64(len(w.nodes))
+	node := topology.Node{
+		Kind:      kind,
+		Name:      name,
+		Qualified: name,
+		Signature: w.methodSignature(n, enclosing),
+		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
+		Language:  "swift",
+		Path:      w.path,
+	}
+	setSpan(&node, n)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, swiftIsComment)
+	w.nodes = append(w.nodes, node)
+	w.funcIdx[name] = idx
+	w.containedBy(enclosing, idx)
+}
+
 // methodSignature returns the function head, suffixed with the enclosing type's
 // conformance list when this is a method of a conforming type. This surfaces a
 // type's protocol conformance (e.g. ParsableCommand) on its methods so pattern
@@ -194,14 +238,14 @@ func (w *swiftWalk) methodSignature(n *tsg.Node, enclosing int64) string {
 	return sig
 }
 
-// funcSignature returns the function head text — everything before the opening
-// brace of the body. For protocol declarations (no body), the full node text is
-// returned. The result is used for pattern-matching in topology_routes and
+// funcSignature returns the function head text — everything before the body
+// (a function_body, or a subscript's computed_property/getter block). For
+// protocol declarations (no body), the full node text is returned. The result is used for pattern-matching in topology_routes and
 // similar tools (e.g. detecting "RoutesBuilder" in a Vapor RouteCollection).
 func (w *swiftWalk) funcSignature(n *tsg.Node) string {
 	var parts []string
 	for _, c := range n.Children() {
-		if c.Type(w.lang) == "function_body" {
+		if t := c.Type(w.lang); t == "function_body" || t == "computed_property" {
 			break
 		}
 		if t := strings.TrimSpace(c.Text(w.src)); t != "" {
@@ -237,14 +281,40 @@ func (w *swiftWalk) addProperty(n *tsg.Node, enclosing int64) {
 	w.containedBy(enclosing, idx)
 }
 
+// addEnumEntry records every case bound by one entry (`case a, b` is two).
 func (w *swiftWalk) addEnumEntry(n *tsg.Node, enclosing int64) {
-	id := childByType(n, "simple_identifier", w.lang)
+	for _, c := range n.Children() {
+		if c.Type(w.lang) != "simple_identifier" {
+			continue
+		}
+		idx := int64(len(w.nodes))
+		node := topology.Node{
+			Kind:      topology.KindConstant,
+			Name:      c.Text(w.src),
+			Qualified: c.Text(w.src),
+			StartLine: line(n.StartPoint()),
+			EndLine:   line(n.EndPoint()),
+			Language:  "swift",
+			Path:      w.path,
+		}
+		setSpan(&node, n)
+		w.nodes = append(w.nodes, node)
+		w.containedBy(enclosing, idx)
+	}
+}
+
+// addTypealias records a `typealias Foo = Bar` declaration as a KindType. The
+// name is the first direct type_identifier child; the aliased type is nested
+// inside a user_type/array_type wrapper, so a direct-child lookup cannot
+// confuse the two.
+func (w *swiftWalk) addTypealias(n *tsg.Node, enclosing int64) {
+	id := childByType(n, "type_identifier", w.lang)
 	if id == nil {
 		return
 	}
 	idx := int64(len(w.nodes))
 	node := topology.Node{
-		Kind:      topology.KindConstant,
+		Kind:      topology.KindType,
 		Name:      id.Text(w.src),
 		Qualified: id.Text(w.src),
 		StartLine: line(n.StartPoint()),
@@ -312,10 +382,29 @@ func (w *swiftWalk) typeBody(n *tsg.Node) *tsg.Node {
 	return childByType(n, "enum_class_body", w.lang)
 }
 
-// funcName returns the function's name (its direct simple_identifier child).
+// funcName returns the function's name (its direct simple_identifier child),
+// falling back to the operator token for an operator function.
 func (w *swiftWalk) funcName(n *tsg.Node) string {
 	if id := childByType(n, "simple_identifier", w.lang); id != nil {
 		return id.Text(w.src)
+	}
+	return w.operatorName(n)
+}
+
+// operatorName returns the operator token of an operator function (`static func
+// + …`) — the token immediately after the `func` keyword.
+func (w *swiftWalk) operatorName(n *tsg.Node) string {
+	kids := n.Children()
+	for i, c := range kids {
+		if c.Type(w.lang) != "func" || i+1 >= len(kids) {
+			continue
+		}
+		op := kids[i+1]
+		t := strings.TrimSpace(op.Text(w.src))
+		if t != "" && t != "(" && op.Type(w.lang) != "simple_identifier" {
+			return t
+		}
+		return ""
 	}
 	return ""
 }
