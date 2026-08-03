@@ -46,8 +46,8 @@ type Language struct {
 	// LSPAdapter is the language-server key in [lsp.<adapter>], or "" when no
 	// language server is wired (the structural engine is then the only source).
 	LSPAdapter string
-	// PreferStructuralOutline makes outline-style tools (file_outline,
-	// find_symbol) consult the topology Map BEFORE the language
+	// PreferStructuralOutline makes outline-style tools (file_outline)
+	// consult the topology Map BEFORE the language
 	// server. Set for markup languages whose LSP documentSymbol is unusable as an
 	// outline (vscode-html emits a node per tag AND attribute — ~1220 for one
 	// page vs the Map's ~54 clean landmarks). The LSP stays the source for

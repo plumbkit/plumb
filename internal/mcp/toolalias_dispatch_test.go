@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/lsp"
+	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -17,15 +19,30 @@ import (
 // dispatch against the REAL survivor tools, so an alias whose adapter does not
 // fit the canonical tool's actual schema fails here rather than in the field.
 
-// aliasToolServer registers the real tools that alias canonicals point at.
-// Both are metadata- and schema-complete with nil dependencies; daemon_info
-// answers fully, and file_outline is exercised only as far as its argument
-// guard (its language-server dependency is never reached).
+// aliasToolServer registers the real tools that alias canonicals point at. All
+// are metadata- and schema-complete with nil dependencies; daemon_info answers
+// fully, while file_outline and workspace_symbols are exercised as far as their
+// argument guard and their own validation (the language-server dependency is
+// reached only where the test says so).
 func aliasToolServer() *mcp.Server {
 	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
 	s.Register(tools.NewDaemonInfo("", "swift-falcon", "9.9.9", time.Now()))
 	s.Register(tools.NewFileOutline(nil, nil, 0, 0))
+	s.Register(tools.NewWorkspaceSymbols(stubDocSymbols{}, nil, 0, 0, nil))
 	return s
+}
+
+// stubDocSymbols is the minimum language server the workspace_symbols alias
+// tests need: a documentSymbol answer for the uri-scoped mode and an empty
+// workspace/symbol answer for the uri-less one.
+type stubDocSymbols struct{ lsp.Client }
+
+func (stubDocSymbols) DocumentSymbols(context.Context, protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
+	return []protocol.DocumentSymbol{{Name: "Greeter", Kind: protocol.SKClass}}, nil
+}
+
+func (stubDocSymbols) WorkspaceSymbols(context.Context, protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
+	return nil, nil
 }
 
 // echoArgsTool stands in for a canonical tool so a test can observe exactly
@@ -108,15 +125,49 @@ func TestToolsList_OmitsAliases(t *testing.T) {
 	for _, tl := range resultByID(t, resps, 1)["tools"].([]any) {
 		listed[tl.(map[string]any)["name"].(string)] = true
 	}
-	for _, canonical := range []string{"daemon_info", "file_outline"} {
+	for _, canonical := range []string{"daemon_info", "file_outline", "workspace_symbols"} {
 		if !listed[canonical] {
 			t.Errorf("tools/list is missing the canonical tool %q", canonical)
 		}
 	}
-	for _, alias := range []string{"version", "list_symbols"} {
+	for _, alias := range []string{"version", "list_symbols", "find_symbol"} {
 		if listed[alias] {
 			t.Errorf("tools/list advertises the alias %q — aliases must stay hidden", alias)
 		}
+	}
+}
+
+// TestToolsCall_FindSymbolAliasServesFileScopedSearch is the uri-present half of
+// the merge: the retired name still runs the single-document engine, now living
+// inside workspace_symbols, and says so.
+func TestToolsCall_FindSymbolAliasServesFileScopedSearch(t *testing.T) {
+	text := callTool(t, aliasToolServer(), "find_symbol", `{"query":"Greeter","uri":"file:///p/main.go"}`)
+
+	const wantNotice = "note: find_symbol is a tool-name alias served by workspace_symbols — call workspace_symbols directly.\n\n"
+	if !strings.HasPrefix(text, wantNotice) {
+		t.Errorf("result must begin with the alias notice; got:\n%s", text)
+	}
+	if !strings.Contains(text, `Symbols matching "Greeter" in file:///p/main.go`) {
+		t.Errorf("expected the file-scoped engine to have answered; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_FindSymbolAliasWithoutURISearchesWorkspace pins the upgrade: a
+// uri-less find_symbol call used to fail with a redirect naming
+// workspace_symbols. It now RUNS the workspace-wide search that redirect
+// pointed at — strictly better, and the notice still names the survivor.
+func TestToolsCall_FindSymbolAliasWithoutURISearchesWorkspace(t *testing.T) {
+	text := callTool(t, aliasToolServer(), "find_symbol", `{"query":"Greeter"}`)
+
+	const wantNotice = "note: find_symbol is a tool-name alias served by workspace_symbols — call workspace_symbols directly.\n\n"
+	if !strings.HasPrefix(text, wantNotice) {
+		t.Errorf("result must begin with the alias notice; got:\n%s", text)
+	}
+	if !strings.Contains(text, `No symbols found matching "Greeter"`) {
+		t.Errorf("expected the workspace-wide search to have answered; got:\n%s", text)
+	}
+	if strings.Contains(text, "needs a uri") {
+		t.Errorf("the retired uri-less redirect must be gone; got:\n%s", text)
 	}
 }
 

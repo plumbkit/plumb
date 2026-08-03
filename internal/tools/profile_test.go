@@ -55,7 +55,6 @@ func leanToolSet() []describable {
 // payload reduction.
 func nonLeanToolSet() []describable {
 	return []describable{
-		NewFindSymbol(nil, nil, 0, 0),
 		NewExplainSymbol(nil, nil, 0, 0),
 		NewCallHierarchy(nil, 0),
 		NewTypeHierarchy(nil, 0),

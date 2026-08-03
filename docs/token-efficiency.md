@@ -15,7 +15,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 
 ### 1. Surgical Reads
 *   **Never read a whole file** if you only need one function.
-*   Use `file_outline` or `find_symbol` to get line numbers first.
+*   Use `file_outline` or `workspace_symbols` to get line numbers first.
 *   Use the `start_line` and `end_line` parameters in `read_file` to request only the necessary slice.
 
 ### 2. Optimistic Verification
@@ -31,7 +31,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 
 ### 5. Batch Reads Within a Turn
 *   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. One tool result is cheaper than four headers, and Anthropic's prompt cache hits the next turn either way.
-*   Same rule for the LSP queries: a single `file_outline` is cheaper than calling `find_symbol` four times.
+*   Same rule for the LSP queries: a single `file_outline` is cheaper than calling `workspace_symbols` four times.
 
 ### 6. Don't Read to Confirm What `git` or `diagnostics` Already Tells You
 *   After a write, `diagnostics(uri)` reports whether the LSP server flagged anything. If it returns no errors and you trust the language server, that *is* the verification — re-reading the file just to "check it looks right" doubles your token cost on the round trip.
@@ -45,7 +45,7 @@ These are mistakes Claude (and other LLM agents) actually make in practice — c
 The single most common failure mode. The post-write response says "wrote 142 bytes", which feels too thin to "trust", so the agent calls `read_file` again to look at the result. This doubles the token cost of every write. On plumb's side, `edit_file`/`write_file` already return a unified diff by default (`[edits] show_write_diff`), so the success response shows exactly what changed; on the agent's side, the discipline is to stop reading unless an error was returned.
 
 ### Reading a 5 KB file to change one line
-A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `file_outline → find_symbol → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
+A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `file_outline → workspace_symbols → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
 
 ### Calling `search_in_files` with a vague pattern, then reading every hit
 A loose grep that returns 60 matches × ~200 bytes of context each is 12 KB of output that the agent will then partially re-read by opening files. Either tighten the pattern (often a quoted phrase or a regex anchor fixes it), or use `find_references` on the symbol — the LSP knows what the grep doesn't.
@@ -99,7 +99,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 
 Anthropic's prompt cache has a 5-minute TTL on the conversation prefix. Plumb's design intersects with this in three ways:
 
-1.  **Tool schemas are stable across turns.** Plumb registers the same 60 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
+1.  **Tool schemas are stable across turns.** Plumb registers the same 59 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
 2.  **Tool outputs do not cache.** Anything plumb returns is part of the conversation, not the cached prefix. Returning shorter outputs is *always* a direct win — there's no "cached call" rebate.
 3.  **`session_start` output is not cached.** It runs once at session start, but its output sits in the conversation thereafter. Keep it lean by default and lazy-load (a roadmap item) for the heavy bits.
 
@@ -130,7 +130,7 @@ Features that would shift token efficiency from "the agent has to remember to be
 *   **Tool-subset registration.** A Go-only project doesn't need pyright-shaped tools in the schema. Conditional tool registration based on the resolved workspace language would cut the cached prompt prefix by ~5% (small per-call but compounds across all sessions). Note: a related but distinct mechanism has since shipped — the `[tools]` client-aware profile (`auto`/`lean`/`full`) trims the non-lean remainder for clients that have declared verified deferred-tool discovery (an explicit opt-in — see [tools] in docs/configuration.md). This item is specifically about language-conditional trimming, which is still unshipped.
 *   **Result-handle returns.** A `find_replace` dry-run returns a short handle (e.g. `"fr-94a3e"`); committing references the handle rather than re-sending the pattern + paths. Saves a full duplication of the dry-run input on the commit call.
 *   **`recent_edits()` tool.** A per-session record of writes the agent has made, returned as a compact list. Cheaper than scrolling back in the conversation to remember "what did I just do."
-*   **Bundled symbol-explainer mega-tool.** `explain_full(symbol)` runs `find_symbol → get_definition → find_references → explain_symbol` in one tool call and returns a unified report. One tool-call round trip instead of four, with deduplicated output.
+*   **Bundled symbol-explainer mega-tool.** `explain_full(symbol)` runs `workspace_symbols → get_definition → find_references → explain_symbol` in one tool call and returns a unified report. One tool-call round trip instead of four, with deduplicated output.
 *   **Streaming / partial outputs.** For tools that can produce results incrementally (search, list), supporting incremental delivery would let the agent abort early if it has what it needs. Requires MCP protocol-level support — listed here as a watch-this-space item.
 
 ### Considered but rejected

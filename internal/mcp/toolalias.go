@@ -42,9 +42,15 @@ type toolAlias struct {
 //     the file must exist on disk and be under the 2 MiB outline cap, and
 //     include_signatures is dropped — the outline always renders signature
 //     lines, so the flag has no counterpart to carry.
+//   - find_symbol → workspace_symbols: both parameters survive unchanged, so
+//     the adapter is nil. uri is now OPTIONAL on the survivor: a uri-bearing
+//     call gets the same single-document search, and a uri-less call — which
+//     find_symbol rejected with a redirect — now runs the workspace-wide
+//     search that redirect pointed at.
 var toolAliases = map[string]toolAlias{
 	"version":      {canonical: "daemon_info"},
 	"list_symbols": {canonical: "file_outline", adapt: dropArgs("include_signatures")},
+	"find_symbol":  {canonical: "workspace_symbols"},
 }
 
 // dropArgs builds an adapter that removes parameters the canonical tool does

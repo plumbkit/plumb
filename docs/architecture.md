@@ -2,7 +2,7 @@
 
 Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language
 Server Protocol) capabilities to LLMs.  Instead of dumping raw source files
-into an LLM's context, clients call structured tools (`find_symbol`,
+into an LLM's context, clients call structured tools (`workspace_symbols`,
 `get_definition`, `explain_symbol`) and receive focused, language-aware
 answers from a real language server running under the hood.
 
@@ -28,7 +28,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
-| `internal/tools` | MCP tool implementations (60 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
+| `internal/tools` | MCP tool implementations (59 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
@@ -255,7 +255,7 @@ CREATE TABLE tool_calls (
     session_id   TEXT    NOT NULL DEFAULT '',  -- session.Info.ID
     session_name TEXT    NOT NULL DEFAULT '',  -- session.Info.Name
     workspace    TEXT    NOT NULL DEFAULT '',  -- absolute project root
-    tool         TEXT    NOT NULL,              -- e.g. "find_symbol"
+    tool         TEXT    NOT NULL,              -- e.g. "workspace_symbols"
     called_at    INTEGER NOT NULL,              -- Unix milliseconds
     duration_ms  INTEGER NOT NULL DEFAULT 0,    -- wall-clock execution time
     input_bytes  INTEGER NOT NULL DEFAULT 0,    -- raw JSON arg length

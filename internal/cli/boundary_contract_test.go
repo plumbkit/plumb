@@ -53,7 +53,6 @@ var knownToolGuarding = map[string]string{
 	"NewFindReplace":      "writedeps",
 	"NewMoveSymbol":       "writedeps",
 	// Guarded at the proxy routing layer (setBoundaryGuard on sessionProxy/sessionInv)
-	"NewFindSymbol":         "proxy",
 	"NewWorkspaceSymbols":   "proxy",
 	"NewGetDefinition":      "proxy",
 	"NewExplainSymbol":      "proxy",

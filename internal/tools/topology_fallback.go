@@ -81,7 +81,7 @@ func topologyDisabledMessage() string {
 }
 
 // filterTopologyByName returns nodes whose name contains query (case-insensitive),
-// mirroring the substring matching of find_symbol's LSP path.
+// mirroring the substring matching of workspace_symbols' in-file LSP path.
 func filterTopologyByName(nodes []topology.Node, query string) []topology.Node {
 	q := strings.ToLower(query)
 	out := make([]topology.Node, 0, len(nodes))

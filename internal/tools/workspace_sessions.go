@@ -18,7 +18,7 @@ import (
 // recent-writes feed. Any tool in this list that modifies workspace files is
 // captured, so an agent can spot co-worker edits before touching the same file.
 //
-// The list deliberately excludes read-only tools (read_file, find_symbol, …)
+// The list deliberately excludes read-only tools (read_file, workspace_symbols, …)
 // and meta-tools (rename_session, session_start, daemon_info) — only ops that
 // change on-disk content are interesting for conflict-awareness.
 var writeToolNames = []string{

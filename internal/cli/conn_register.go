@@ -112,7 +112,6 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			s.pool.markXcodeSemanticProven(s.workspace())
 		}
 	}
-	srv.Register(tools.NewFindSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))
 	srv.Register(tools.NewWorkspaceSymbols(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout, s.workspace).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
 	srv.Register(tools.NewGetDefinition(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace).WithXcodeHint(xcodeHintFn).WithXcodeProof(xcodeProofFn))
 	srv.Register(tools.NewExplainSymbol(s.sessionProxy, s.sessionCache, s.ttl, lspTimeout).WithLSPWarmup(warmupFn).WithWorkspace(s.workspace))

@@ -100,7 +100,6 @@ func allToolSchemas() map[string]json.RawMessage {
 		(*FindFiles)(nil).Name():            (*FindFiles)(nil).InputSchema(),
 		(*findReplaceTool)(nil).Name():      (*findReplaceTool)(nil).InputSchema(),
 		(*FindReferences)(nil).Name():       (*FindReferences)(nil).InputSchema(),
-		(*FindSymbol)(nil).Name():           (*FindSymbol)(nil).InputSchema(),
 		(*GetDefinition)(nil).Name():        (*GetDefinition)(nil).InputSchema(),
 		(*Git)(nil).Name():                  (*Git)(nil).InputSchema(),
 		(*GitInit)(nil).Name():              (*GitInit)(nil).InputSchema(),

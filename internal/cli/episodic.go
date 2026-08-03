@@ -32,7 +32,7 @@ var episodicWriteTools = map[string]bool{
 // episodicSymbolTools are LSP/navigation tools whose `name` argument is a symbol
 // worth mentioning in the summary.
 var episodicSymbolTools = map[string]bool{
-	"find_references": true, "find_symbol": true, "get_definition": true,
+	"find_references": true, "workspace_symbols": true, "get_definition": true,
 	"call_hierarchy": true, "type_hierarchy": true, "read_symbol": true,
 	"explain_symbol": true,
 }

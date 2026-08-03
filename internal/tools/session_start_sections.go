@@ -122,7 +122,7 @@ func (t *SessionStart) writeLSPWarming(sb *strings.Builder) bool {
 	} else {
 		sb.WriteString("Language server is still warming up. ")
 	}
-	sb.WriteString("`topology_search`, `find_symbol`, and `file_outline` answer now; " +
+	sb.WriteString("`topology_search`, `workspace_symbols`, and `file_outline` answer now; " +
 		"`get_definition`, `find_references`, and the hierarchies will work once it's ready (retry shortly).\n\n")
 	return true
 }

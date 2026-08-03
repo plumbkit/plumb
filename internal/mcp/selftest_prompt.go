@@ -22,7 +22,7 @@ var (
 	selftestBootstrap = []string{"session_start", "daemon_info"}
 
 	selftestLSPQuery = []string{
-		"find_symbol", "workspace_symbols", "get_definition", "explain_symbol",
+		"workspace_symbols", "get_definition", "explain_symbol",
 		"file_outline", "find_references", "call_hierarchy",
 		"type_hierarchy", "diagnostics",
 	}

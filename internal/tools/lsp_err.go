@@ -55,7 +55,7 @@ func queryErr(tool, symbolName string, err error) error {
 // tools/list, whereas this hint is reactive — the agent has just hit a cold
 // server, and a lean client can still reach a hidden tool through deferred
 // schema discovery, which is exactly what the lean profile assumes.
-const ColdLSPToolsHint = "topology_search / find_symbol / file_outline answer now; " +
+const ColdLSPToolsHint = "topology_search / workspace_symbols / file_outline answer now; " +
 	"the tree-sitter topology index also backs the symbol-edit tools " +
 	"(insert_before/after_symbol, replace_symbol_body, move_symbol)"
 

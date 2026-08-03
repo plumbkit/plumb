@@ -14,6 +14,7 @@ func TestToolAliases_ExactMembership(t *testing.T) {
 	want := map[string]string{
 		"version":      "daemon_info",
 		"list_symbols": "file_outline",
+		"find_symbol":  "workspace_symbols",
 	}
 	if len(toolAliases) != len(want) {
 		t.Fatalf("toolAliases has %d entries, want exactly %d: %v", len(toolAliases), len(want), toolAliases)
@@ -101,6 +102,14 @@ func TestResolveToolAlias(t *testing.T) {
 			wantCanon:   "file_outline",
 			wantAliased: true,
 			wantArgs:    `[1,2]`,
+		},
+		{
+			name:        "find_symbol passes query and uri through",
+			tool:        "find_symbol",
+			args:        `{"query":"Greeter","uri":"/p/main.go"}`,
+			wantCanon:   "workspace_symbols",
+			wantAliased: true,
+			wantArgs:    `{"query":"Greeter","uri":"/p/main.go"}`,
 		},
 		{
 			name:      "a registered tool name is not an alias",

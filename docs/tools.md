@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **60** structured tools to AI assistants. Every write tool is
+Plumb exposes **59** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -209,21 +209,19 @@ route it to those files).
 
 ## LSP queries
 
-### `find_symbol`
-Search symbols by name within a **single document** (case-insensitive
-substring). **Inputs:** `query` (string, required), `uri` (string, optional but
-needed for a real search). Omitting `uri` returns a friendly redirect to
-`workspace_symbols` for workspace-wide name search. When the language server
-errors or times out and `[topology]` is enabled, falls back to the topology
-index, returning approximate results annotated `source=topology,
-mode=indexed-approximate`.
-
 ### `workspace_symbols`
 Search symbols by name across the **entire workspace** via the LSP index;
 stdlib/dependency hits are filtered out. Prefer over text search for name
-lookups. **Inputs:** `query` (string, required). Falls back to the topology
-index (annotated `source=topology, mode=indexed-approximate`) when the LSP
-errors or times out and `[topology]` is enabled.
+lookups. Pass `uri` to restrict the same search to a **single document** — a
+case-insensitive substring match over that file's symbol tree, children
+included. **Inputs:** `query` (string, required), `uri` (string, optional —
+absolute path, `file://` URI, or workspace-relative path; omit it for the
+workspace-wide search). Falls back to the topology index (annotated
+`source=topology, mode=indexed-approximate`) when the LSP errors or times out
+and `[topology]` is enabled. `find_symbol` was merged into this tool: the old
+name still works as an unadvertised alias — `query` and `uri` pass through
+unchanged, a uri-less call now runs the workspace-wide search it used to
+redirect to, and the result carries a notice pointing at `workspace_symbols`.
 
 ### `get_definition`
 Source location where a symbol is defined. **Inputs:** `uri` (required), and
