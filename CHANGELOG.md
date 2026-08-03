@@ -86,6 +86,55 @@
 
 ### Changed
 
+- **Tool descriptions and `session_start` guidance stop restating the workflows
+  the skills teach.** A description and an orientation packet are paid for on
+  every session whether or not they are read, and a workflow spelled out in
+  three places drifts in three places. The skills `plumb setup claude-code`
+  installs are now the canonical, expanded home for anything that spans more
+  than one tool; the always-on channels keep the tool *contract* (semantics,
+  caps, formats, safety mechanics) plus a pointer, and drop the comparative
+  routing.
+
+  **A fourth skill, `plumb-testing`**, gives the post-edit loop a home:
+  `topology_affected` for which tests the change touches, `run_task` to run
+  them, `diagnostics` / `await_diagnostics` for compile truth, and the cases
+  where a heuristic over an index earns a full-suite run anyway (mostly `low`
+  confidence, a cross-cutting change, an index that may be behind the tree).
+  **`plumb-explore`** is re-based on `workspace_search`, which postdated it: it
+  now opens with that tool and states the discovery ladder
+  (`workspace_search` → topology/LSP → `search_in_files` → bounded `read_file`)
+  with the signal for leaving each rung. **`plumb-refactor`**'s illustrative
+  `rename_symbol` call was looser than the real schema — it showed a `name`
+  parameter that does not exist and implied a call that applies, when `dry_run`
+  defaults to true — and is now accurate.
+
+  On the always-on side: the Claude Code edit-lane warning is ~40% shorter,
+  keeping both harness error strings verbatim (they are the recognition hook
+  for an agent that has already hit one) and deferring the rest to
+  `plumb-refactor`; the topology and topology-off guidance blocks drop from ~12
+  and ~8 tool bullets to four lines each; and twenty-odd descriptions lose their
+  comparative-routing sentences — the `No native Claude Code equivalent`
+  openers, `Prefer this over shelling out to grep/rg`, `THE headline topology
+  tool`, `Essential for clients without shell access` — while every contract
+  fact and one-clause scope statement stays (`edit_file` keeps its native-edit
+  parenthetical, `read_file` its mtime/sha mechanics, `rename_file` its
+  `copy_file`/`rename_symbol` disambiguation). `search_in_files` reads ~35%
+  shorter with nothing about its behaviour left undocumented. Claude Desktop's
+  block is deliberately left long: Desktop installs no skills, so that block
+  *is* its condensed channel.
+
+  Guarded by `TestNativeEditLaneWarning_LoadBearingPhrases` (both harness
+  strings survive the trim), `TestClaudeCodeSkills_HaveValidFrontmatter` (the
+  pinned skill set gains `plumb-testing`),
+  `TestSessionGuidance_LeanDiscoveryLineAvoidsHiddenTool` (new — a lean client's
+  discovery line names `topology_search`, never the lean-hidden
+  `workspace_search`), `TestSessionGuidance_NamesColdLSPLadder` /
+  `TestSessionGuidance_LeanProfileOmitsColdLSPLadder`,
+  `TestSessionStart_TopologyLedGuidance` /
+  `TestSessionStart_LSPLedGuidanceWhenTopologyOff`,
+  `TestSessionStart_EditLaneWarning_ClaudeCode`, and `TestLeanProfileBudget`
+  (lean stays ~46% of the full `tools/list` payload, against its 52% cap).
+
 - **Five tools folded into four survivors behind a permanent unadvertised alias
   layer — the advertised surface drops 62 → 57 with no capability removed.**
   Five registered tools were commodity duplicates of a neighbour: `version`
