@@ -144,6 +144,15 @@ func (e *Extractor) discard(stuck *runtime) {
 // runtime is what prevents that: the overrunning parse keeps the old one to
 // itself and the next file builds a fresh one.
 func (e *Extractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+	// A context that is already dead starts no parse — matching the treesitter
+	// envelope's contract (an expired budget starts no parse). Without this, a
+	// cancelled call spawns a parse doomed to be abandoned at the select below,
+	// discarding a warm runtime and leaking the parse goroutine for nothing;
+	// worse, a fast parse can win the select against the already-closed
+	// ctx.Done() and return a result where the caller was promised ctx.Err().
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	rt, initErr := e.ensure(ctx)
 	if initErr != nil || rt == nil {
 		e.warnOnce.Do(func() {
