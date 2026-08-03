@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,5 +388,175 @@ func TestFindFiles_SortOrders(t *testing.T) {
 	out := runFindFiles(t, map[string]any{"path": dir, "sort_by": "size"})
 	if got := firstLine(out); !strings.Contains(got, "b_big.txt") {
 		t.Errorf("sort_by=size over files only should lead with the largest, got %q:\n%s", got, out)
+	}
+}
+
+// TestFindFiles_FilePathListsParentWithANote is F1. Pointing find_files at a
+// FILE has always walked its parent — a caller who names a file usually means
+// "around here" — and the retired list_directory hard-errored on the same
+// input. Keeping the walk is the compatible choice for canonical callers; the
+// note is what stops it being a silently different answer for the alias's.
+func TestFindFiles_FilePathListsParentWithANote(t *testing.T) {
+	root := listTree(t)
+	file := filepath.Join(root, "main.go")
+
+	out := runFindFiles(t, map[string]any{"path": file})
+	wantNote := "note: " + file + " is a file — listing its parent directory " + root + ".\n\n"
+	if !strings.HasPrefix(out, wantNote) {
+		t.Errorf("want the redirect announced up front:\nwant prefix %q\ngot:\n%s", wantNote, out)
+	}
+	if !strings.Contains(out, "README.md") {
+		t.Errorf("the parent listing must follow the note:\n%s", out)
+	}
+}
+
+// TestFindFiles_FilePathNoteSurvivesAnEmptyResult keeps the note on the branch
+// that renders no rows at all — the one where a caller has the least other
+// evidence about which directory they were answered from.
+func TestFindFiles_FilePathNoteSurvivesAnEmptyResult(t *testing.T) {
+	root := listTree(t)
+	out := runFindFiles(t, map[string]any{"path": filepath.Join(root, "main.go"), "pattern": "*.nope"})
+	if !strings.Contains(out, "is a file — listing its parent directory") {
+		t.Errorf("the note must survive the no-match branch:\n%s", out)
+	}
+}
+
+// TestFindFiles_MaxDepthRejectsNonPositive is F6's canonical half. find_files
+// declares max_depth "minimum": 1 and reads 0 as unlimited, so an unchecked 0
+// INVERTS the caller's intent — the shallowest request there is, answered with
+// the whole tree. A clean rejection is the only honest reading.
+func TestFindFiles_MaxDepthRejectsNonPositive(t *testing.T) {
+	root := listTree(t)
+	for _, depth := range []int{0, -1} {
+		raw, err := json.Marshal(map[string]any{"path": root, "max_depth": depth})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := NewFindFiles(nil).Execute(context.Background(), raw)
+		if err == nil {
+			t.Fatalf("max_depth=%d must be rejected, got:\n%s", depth, out)
+		}
+		if !strings.Contains(err.Error(), "max_depth must be >= 1") {
+			t.Errorf("max_depth=%d error = %v, want it to name the range", depth, err)
+		}
+	}
+}
+
+// TestFindFiles_ExcludesDotGitEvenWhenHidden is F3. include_hidden asks for
+// dotfiles, not for the object database — and find_files' own description
+// promises "no .git/", which only .gitignore-independent exclusion can keep.
+func TestFindFiles_ExcludesDotGitEvenWhenHidden(t *testing.T) {
+	root := t.TempDir()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.MkdirAll(filepath.Join(root, ".git", "objects", "ab"), 0o755))
+	must(os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	must(os.WriteFile(filepath.Join(root, ".git", "objects", "ab", "cdef"), []byte("x"), 0o644))
+	must(os.WriteFile(filepath.Join(root, ".env"), []byte("x"), 0o644))
+	must(os.WriteFile(filepath.Join(root, "main.go"), []byte("x"), 0o644))
+
+	out := runFindFiles(t, map[string]any{"path": root, "include_hidden": true, "type": "any"})
+	if strings.Contains(out, ".git") {
+		t.Errorf(".git must be excluded whatever include_hidden says:\n%s", out)
+	}
+	for _, want := range []string{".env", "main.go"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("excluding .git must not disturb the rest of include_hidden (missing %q):\n%s", want, out)
+		}
+	}
+}
+
+// TestFindFiles_TruncationReportsTheTally is F2's second half: a truncation
+// note that REPLACES the count drops the one number every other summary branch
+// reports — and for a detailed listing it would drop the directory/file split
+// entirely.
+func TestFindFiles_TruncationReportsTheTally(t *testing.T) {
+	root := t.TempDir()
+	for _, n := range []string{"a.go", "b.go", "c.go", "d.go"} {
+		if err := os.WriteFile(filepath.Join(root, n), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := runFindFiles(t, map[string]any{"path": root, "max_results": 2})
+	if !strings.Contains(out, "2 result(s) (truncated at 2 results") {
+		t.Errorf("a truncated summary must lead with the tally:\n%s", out)
+	}
+
+	detailed := runFindFiles(t, map[string]any{
+		"path": root, "max_results": 2, "type": "any", "include_details": true,
+	})
+	if !strings.Contains(detailed, "0 directories, 2 files (truncated at 2 results") {
+		t.Errorf("a truncated detailed listing must keep its directory/file tally:\n%s", detailed)
+	}
+}
+
+// TestFindFiles_ExactlyMaxResultsIsNotTruncated is F13. Truncation means the
+// walk STOPPED SHORT. A result set that happens to land exactly on max_results
+// having exhausted the tree is complete, and calling it truncated sends the
+// caller narrowing a search that had nothing left to find.
+func TestFindFiles_ExactlyMaxResultsIsNotTruncated(t *testing.T) {
+	root := t.TempDir()
+	for _, n := range []string{"a.go", "b.go", "c.go"} {
+		if err := os.WriteFile(filepath.Join(root, n), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := runFindFiles(t, map[string]any{"path": root, "max_results": 3})
+	if strings.Contains(out, "truncated") {
+		t.Errorf("exactly max_results matches with nothing left is complete:\n%s", out)
+	}
+	if !strings.Contains(out, "3 result(s)") {
+		t.Errorf("want the plain count, got:\n%s", out)
+	}
+}
+
+// TestFindFiles_TruncationNoteIsSingularAtOne guards the plural the fixed
+// summary now carries.
+func TestFindFiles_TruncationNoteIsSingularAtOne(t *testing.T) {
+	root := t.TempDir()
+	for _, n := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(root, n), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := runFindFiles(t, map[string]any{"path": root, "max_results": 1})
+	if !strings.Contains(out, "truncated at 1 result —") {
+		t.Errorf("want the singular form at max_results=1, got:\n%s", out)
+	}
+}
+
+// TestNewFindFileHit_DirectorySizeIsZero is F16. A directory's stat size is its
+// inode's own bookkeeping; the detailed rendering leaves the column blank for
+// one, so sort_by="size" was ranking directories by a number the caller is
+// never shown.
+func TestNewFindFileHit_DirectorySizeIsZero(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Enough entries that the directory inode is unlikely to report size 0 by
+	// accident, so a passing assertion means the code chose zero.
+	for i := range 200 {
+		if err := os.WriteFile(filepath.Join(sub, fmt.Sprintf("f%03d", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newFindFileHit(sub, "sub", entries[0], true, true)
+	if h.size != 0 {
+		t.Errorf("directory hit size = %d, want 0", h.size)
+	}
+	if h.modified == 0 {
+		t.Error("a directory hit must still carry its modified time")
 	}
 }

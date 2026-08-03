@@ -131,6 +131,7 @@ type findFilesConfig struct {
 	matchFn         func(string) bool
 	patternHasSlash bool
 	globPrefix      string
+	note            string // leading advisory prepended to the result, "" when there is none
 }
 
 // findFilesWalker accumulates results for a single find_files call. Keeping
@@ -167,9 +168,13 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		hits, truncated = hits[:a.MaxResults], true
 	}
 	if len(hits) == 0 {
-		return emptyFindFilesResult(a, cfg, walkErr)
+		out, err := emptyFindFilesResult(a, cfg, walkErr)
+		if err != nil {
+			return "", err
+		}
+		return cfg.note + out, nil
 	}
-	return formatFindFilesOutput(hits, a, cfg.root, truncated, walkErr), nil
+	return cfg.note + formatFindFilesOutput(hits, a, cfg.root, truncated, walkErr), nil
 }
 
 func parseFindFilesArgs(raw json.RawMessage) (findFilesArgs, error) {
@@ -177,7 +182,29 @@ func parseFindFilesArgs(raw json.RawMessage) (findFilesArgs, error) {
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return a, fmt.Errorf("find_files: invalid arguments: %w", err)
 	}
+	if err := checkFindFilesDepth(raw); err != nil {
+		return a, err
+	}
 	return a, nil
+}
+
+// checkFindFilesDepth enforces max_depth's declared "minimum": 1. The struct's
+// zero value cannot tell an explicit 0 from an absent key, and 0 means
+// "unlimited" downstream — so an out-of-range depth would silently INVERT the
+// caller's intent (0 reads as "shallowest possible", answers as "the whole
+// tree"). A pointer probe over the raw object turns it into a clean rejection,
+// the same shape read_file's "limit must be >= 1" guard uses.
+func checkFindFilesDepth(raw json.RawMessage) error {
+	var probe struct {
+		MaxDepth *int `json:"max_depth"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil // not an object — the decode above already reported it
+	}
+	if probe.MaxDepth != nil && *probe.MaxDepth < 1 {
+		return fmt.Errorf("find_files: max_depth must be >= 1 (got %d) — omit it to descend without limit", *probe.MaxDepth)
+	}
+	return nil
 }
 
 func applyFindFilesDefaults(a *findFilesArgs) {
@@ -208,8 +235,16 @@ func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) 
 	if err != nil {
 		return findFilesConfig{}, fmt.Errorf("find_files: path %q: %w", root, err)
 	}
+	// A file path walks its PARENT rather than erroring — long-standing find_files
+	// behaviour (a caller who points at a file usually means "around here"), kept
+	// so canonical callers are not broken. It is announced, though: the retired
+	// list_directory hard-errored on a file, so its alias must never answer a
+	// different question in silence.
+	var note string
 	if !info.IsDir() {
-		root = filepath.Dir(root)
+		parent := filepath.Dir(root)
+		note = fmt.Sprintf("note: %s is a file — listing its parent directory %s.\n\n", root, parent)
+		root = parent
 	}
 	ext := strings.ToLower(strings.TrimPrefix(a.Extension, "."))
 	matchFn, err := buildMatcher(a.Pattern, a.UseRegex)
@@ -223,7 +258,7 @@ func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) 
 	}
 	return findFilesConfig{
 		root: root, ext: ext, matchFn: matchFn,
-		patternHasSlash: patternHasSlash, globPrefix: globPrefix,
+		patternHasSlash: patternHasSlash, globPrefix: globPrefix, note: note,
 	}, nil
 }
 
@@ -260,10 +295,16 @@ func (w *findFilesWalker) visit(path string, d fs.DirEntry, depth int) error {
 	if !w.matches(rel, d, isDir, depth) {
 		return nil
 	}
-	w.hits = append(w.hits, newFindFileHit(path, rel, d, isDir, w.stat))
+	// Truncation means the walk STOPPED SHORT — proven by a match arriving with
+	// the collection ceiling already full, never by the ceiling merely being
+	// reached. A result set of exactly max_results entries that exhausted the
+	// tree is complete, and saying otherwise sends the caller narrowing a search
+	// that had nothing left to find.
 	if len(w.hits) >= w.collectCap {
 		w.truncated = true
+		return nil
 	}
+	w.hits = append(w.hits, newFindFileHit(path, rel, d, isDir, w.stat))
 	return nil
 }
 
@@ -278,9 +319,11 @@ func (w *findFilesWalker) shouldPrune(path string) bool {
 }
 
 // matches applies the depth, type, extension, and pattern filters. The depth
-// check is the tool's own: the shared walk prunes directories at the limit but
-// still visits the FILES inside the last directory it descended into, so
-// max_depth=1 would otherwise return one level more than it says.
+// check is belt-and-braces over the shared walk's own strict prune: the walk no
+// longer descends into a directory whose children would sit past the limit, so
+// nothing over-deep should reach here — but this tool's contract ("max_depth=1
+// lists one level") is stated in its schema, and it enforces it itself rather
+// than inheriting it from a shared traversal another tool could retune.
 func (w *findFilesWalker) matches(rel string, d fs.DirEntry, isDir bool, depth int) bool {
 	if w.a.MaxDepth > 0 && depth >= w.a.MaxDepth {
 		return false

@@ -39,7 +39,14 @@ func newFindFileHit(path, rel string, d fs.DirEntry, isDir, stat bool) findFileH
 		return h
 	}
 	if fi, err := d.Info(); err == nil {
-		h.size = fi.Size()
+		// A directory's stat size is its inode's own bookkeeping, not the size of
+		// anything the caller can see: the detailed rendering leaves the column
+		// blank for a directory, so ranking one by it would order the list by a
+		// number that is never shown. Zero keeps directories in walk order among
+		// themselves under sort_by="size".
+		if !isDir {
+			h.size = fi.Size()
+		}
 		h.modified = fi.ModTime().UnixNano()
 	}
 	if d.Type()&os.ModeSymlink != 0 {
@@ -118,7 +125,11 @@ func writeFindFilesSummary(sb *strings.Builder, a findFilesArgs, hits []findFile
 	count := findFilesCountLabel(a, hits)
 	switch {
 	case truncated:
-		fmt.Fprintf(sb, "\n(truncated at %d results — use a more specific pattern or set max_depth)", a.MaxResults)
+		// The tally leads here too: a truncation note ALONE loses the one number
+		// every other branch reports, and a detailed listing would lose its
+		// directory/file split entirely.
+		fmt.Fprintf(sb, "\n%s (truncated at %d result%s — use a more specific pattern or set max_depth)",
+			count, a.MaxResults, textfmt.Plural(a.MaxResults, "", "s"))
 	case errors.Is(walkErr, context.DeadlineExceeded):
 		fmt.Fprintf(sb, "\n%s (partial — walk timed out after %s; narrow with path or max_depth)", count, findFilesDefaultDeadline)
 	case walkErr != nil:

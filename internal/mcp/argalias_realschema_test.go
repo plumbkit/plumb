@@ -93,7 +93,8 @@ func TestToolsCall_RealSchemas_CommonAliases(t *testing.T) {
 		{"edit_file", fmt.Sprintf(`{"path":%q,"edits":[{"old_str":"alpha","new_str":"gamma"}]}`, f), []string{`interpreted "path" as "file_path"`, `interpreted "edits[].old_str" as "old_string"`}},
 		// list_files is a retired NAME served by find_files: the tool-name alias
 		// resolves first, then the parameter alias rewrites dir onto find_files'
-		// own "path" — both layers in one call.
+		// own "path" — both layers in one call. The ORDER the two notices compose
+		// in is pinned separately, by TestToolsCall_BothAliasLayersComposeInOrder.
 		{"list_files", fmt.Sprintf(`{"dir":%q}`, dir), []string{`interpreted "dir" as "path"`, "a.txt"}},
 		// The edit_file case above already rewrote alpha → gamma in a.txt.
 		{"search_in_files", fmt.Sprintf(`{"path":%q,"query":"gamma"}`, dir), []string{`interpreted "query" as "pattern"`, "a.txt"}},
@@ -113,6 +114,35 @@ func TestToolsCall_RealSchemas_CommonAliases(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestToolsCall_BothAliasLayersComposeInOrder pins the one thing a
+// "both notices are present" assertion cannot see: which one leads.
+//
+// The two prepends happen back to back in handleToolsCall, so swapping them is
+// a silent, compiling, still-passing change. The order is deliberate and reads
+// outside-in — the tool NAME the caller got wrong first, then the parameter
+// inside that call — which is also the order in which a caller must fix them
+// (there is no point renaming a parameter on a tool you should not be calling).
+func TestToolsCall_BothAliasLayersComposeInOrder(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, realToolServer(), "list_files", fmt.Sprintf(`{"dir":%q}`, dir))
+
+	// toolAliasNotice("list_files", "find_files") then aliasNotice(["…"]), each
+	// closing with a blank line. Spelled out rather than composed from the
+	// helpers, which are unexported — so this also pins the wording.
+	const wantPrefix = "note: list_files is a tool-name alias served by find_files — call find_files directly.\n\n" +
+		"note: interpreted \"dir\" as \"path\" — prefer the tool's documented parameter names.\n\n"
+	if !strings.HasPrefix(text, wantPrefix) {
+		t.Errorf("the tool-name notice must lead the parameter notice.\nwant prefix:\n%q\ngot:\n%q", wantPrefix, text)
+	}
+	if !strings.Contains(text, "a.txt") {
+		t.Errorf("the listing itself must follow both notices; got:\n%s", text)
 	}
 }
 

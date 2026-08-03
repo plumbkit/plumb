@@ -200,10 +200,16 @@ func parseFileList(output, cwd string) []string {
 	var files []string
 	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
-		// find_files closes with a summary line ("12 result(s)", or a truncation /
-		// partial-walk note in parentheses) that is not a path.
+		// find_files wraps its path list in prose that is not a path: a summary
+		// line ("12 result(s)", or a truncation / partial-walk note in
+		// parentheses), a leading "note: …" advisory, and — when the budget runs
+		// out before any match — a whole-output timeout sentence beginning
+		// "find_files … timed out". Matching "timed out" rather than that sentence's
+		// exact opening keeps the skip alive across rewording, and it also covers
+		// the partial-walk variant if its parenthesised shape ever changes.
 		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") ||
-			strings.HasPrefix(line, "(") || strings.Contains(line, "result(s)") {
+			strings.HasPrefix(line, "(") || strings.HasPrefix(line, "note: ") ||
+			strings.Contains(line, "result(s)") || strings.Contains(line, "timed out") {
 			continue
 		}
 		// find_files prints relative paths from cwd.

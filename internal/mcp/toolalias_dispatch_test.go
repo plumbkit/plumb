@@ -55,7 +55,7 @@ type echoArgsTool struct{ name string }
 func (e *echoArgsTool) Name() string        { return e.name }
 func (e *echoArgsTool) Description() string { return "echoes the arguments it received" }
 func (e *echoArgsTool) InputSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"uri":{"type":"string"},"path":{"type":"string"},"type":{"type":"string"},"max_depth":{"type":"integer"},"include_details":{"type":"boolean"}},"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"uri":{"type":"string"},"path":{"type":"string"},"type":{"type":"string"},"max_depth":{"type":"integer"},"max_results":{"type":"integer"},"include_details":{"type":"boolean"}},"additionalProperties":false}`)
 }
 
 func (e *echoArgsTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
@@ -246,6 +246,11 @@ func TestToolsCall_ListFilesAliasPinsTheOldDepthDefault(t *testing.T) {
 // TestToolsCall_UnknownTool_DidYouMean covers the rejection path: a near-miss of
 // a registered name OR of an alias gets a suggestion, and genuine garbage gets
 // the bare error rather than a nonsense guess.
+//
+// A typo of an ALIAS is suggested as its canonical. Aliases are matched (so the
+// hint fires at all) but never named: pointing a caller at a tool that appears
+// in no tool list, and that plumb would only redirect anyway, teaches the wrong
+// name at the one moment they are reading for the right one.
 func TestToolsCall_UnknownTool_DidYouMean(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -253,7 +258,8 @@ func TestToolsCall_UnknownTool_DidYouMean(t *testing.T) {
 		wantMsg string
 	}{
 		{"typo of a registered tool", "file_outlin", `unknown tool: file_outlin; did you mean "file_outline"?`},
-		{"typo of an alias", "versio", `unknown tool: versio; did you mean "version"?`},
+		{"typo of an alias suggests its canonical", "versio", `unknown tool: versio; did you mean "daemon_info"?`},
+		{"typo of a retired list tool suggests the survivor", "list_file", `unknown tool: list_file; did you mean "find_files"?`},
 		{"nothing close enough", "qqqqqqqqqqqqqqqq", "unknown tool: qqqqqqqqqqqqqqqq"},
 	}
 	for _, tt := range tests {
@@ -268,5 +274,149 @@ func TestToolsCall_UnknownTool_DidYouMean(t *testing.T) {
 				t.Errorf("error message = %q, want %q", got, tt.wantMsg)
 			}
 		})
+	}
+}
+
+// TestToolsCall_AliasNoticeOnTheErrorPath is the failure half of the alias
+// contract. An aliased call that errors reports the SURVIVOR's name in the
+// message ("daemon_info: unknown parameter …") — a tool the caller never
+// invoked. Without the notice there is nothing in the response connecting the
+// two names, and the error reads as plumb answering something else entirely.
+func TestToolsCall_AliasNoticeOnTheErrorPath(t *testing.T) {
+	text := callTool(t, aliasToolServer(), "version", `{"bogus_param":1}`)
+
+	const wantNotice = "note: version is a tool-name alias served by daemon_info — call daemon_info directly.\n\n"
+	if !strings.HasPrefix(text, wantNotice) {
+		t.Errorf("an errored aliased call must still carry the alias notice; got:\n%s", text)
+	}
+	if !strings.Contains(text, "error: ") {
+		t.Fatalf("expected an error result; got:\n%s", text)
+	}
+	if !strings.Contains(text, "bogus_param") {
+		t.Errorf("the real rejection must survive the notice prepend; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListAliasesLiftTheResultCap guards the second silent clip the
+// fold could have caused: NEITHER retired tool capped its output —
+// list_directory read a whole directory and list_files walked eight levels,
+// both returning everything they found — while find_files stops at 500 results
+// by default. Both adapters carry the schema maximum so a big listing still
+// comes back whole.
+func TestToolsCall_ListAliasesLiftTheResultCap(t *testing.T) {
+	for _, alias := range []struct{ name, args string }{
+		{"list_directory", `{"path":"/p"}`},
+		{"list_files", `{"root":"/p"}`},
+	} {
+		t.Run(alias.name, func(t *testing.T) {
+			s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+			s.Register(&echoArgsTool{name: "find_files"})
+
+			text := callTool(t, s, alias.name, alias.args)
+			if !strings.Contains(text, `"max_results":5000`) {
+				t.Errorf("adapter must lift the result cap for a previously uncapped listing; got:\n%s", text)
+			}
+		})
+	}
+}
+
+// TestToolsCall_ListDirectoryAliasHonoursAnExplicitDepth is the set-if-absent
+// policy end to end: the adapter's max_depth:1 is a DEFAULT. A caller who names
+// a depth is deliberately asking for more than the retired tool could give, and
+// gets it.
+func TestToolsCall_ListDirectoryAliasHonoursAnExplicitDepth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "deep.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, aliasToolServer(), "list_directory", fmt.Sprintf(`{"path":%q,"max_depth":2}`, dir))
+	if !strings.Contains(text, "deep.go") {
+		t.Errorf("an explicit max_depth must win over the adapter's default; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListFilesAliasHonoursAnExplicitType is the same policy on the
+// other listing alias: list_files could only ever list files, so type:"dir" is
+// unambiguously the caller reaching past it.
+func TestToolsCall_ListFilesAliasHonoursAnExplicitType(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "top.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, aliasToolServer(), "list_files", fmt.Sprintf(`{"root":%q,"type":"dir"}`, dir))
+	if !strings.Contains(text, "sub") {
+		t.Errorf("type:\"dir\" must survive the adapter; got:\n%s", text)
+	}
+	if strings.Contains(text, "top.go") {
+		t.Errorf("type:\"dir\" must exclude files; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListFilesAliasRejectsRootAndPathTogether pins the collision
+// policy: two supplied values for one slot is a caller mistake the argument
+// guard should state, not something the adapter quietly picks a winner for.
+func TestToolsCall_ListFilesAliasRejectsRootAndPathTogether(t *testing.T) {
+	dir := t.TempDir()
+	text := callTool(t, aliasToolServer(), "list_files",
+		fmt.Sprintf(`{"root":%q,"path":%q}`, dir, t.TempDir()))
+
+	if !strings.Contains(text, "unknown parameter") || !strings.Contains(text, "root") {
+		t.Errorf("expected an honest unknown-parameter rejection naming root; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListFilesAliasZeroDepthStaysShallow is the inversion the alias
+// exists to prevent: find_files reads max_depth:0 as UNLIMITED, so passing the
+// old caller's 0 straight through would answer a whole-tree walk to a request
+// for the shallowest listing there is.
+func TestToolsCall_ListFilesAliasZeroDepthStaysShallow(t *testing.T) {
+	dir := t.TempDir()
+	deep := filepath.Join(dir, "a", "b", "c", "d", "e", "f", "g", "h", "i")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "buried.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "top.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, aliasToolServer(), "list_files", fmt.Sprintf(`{"root":%q,"max_depth":0}`, dir))
+	if !strings.Contains(text, "top.go") {
+		t.Errorf("the listing must still answer; got:\n%s", text)
+	}
+	if strings.Contains(text, "buried.go") {
+		t.Errorf("max_depth:0 must not invert into an unlimited walk; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListDirectoryAliasOnAFileSaysSo is F1's alias half. find_files
+// has always answered a file path by listing its PARENT, while the retired
+// list_directory hard-errored ("is not a directory"). Keeping the walk is fine;
+// keeping it SILENT is not — an old caller who pointed at a file would read the
+// parent's contents as that file's directory listing with nothing to say
+// otherwise.
+func TestToolsCall_ListDirectoryAliasOnAFileSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, aliasToolServer(), "list_directory", fmt.Sprintf(`{"path":%q}`, file))
+	if !strings.Contains(text, "is a file — listing its parent directory") {
+		t.Errorf("a file path must be announced, not silently redirected; got:\n%s", text)
+	}
+	if !strings.Contains(text, "main.go") {
+		t.Errorf("the parent listing must still be rendered; got:\n%s", text)
 	}
 }

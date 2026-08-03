@@ -298,8 +298,16 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 	if err != nil {
 		slog.Warn("mcp: tool error", "tool", params.Name, "err", err)
+		// The notice leads the FAILURE too. An aliased call that errors reports a
+		// tool the caller never named ("find_files: …" from a list_directory call),
+		// which reads as plumb answering a different question; without the notice
+		// there is nothing in the response tying the two names together.
+		msg := "error: " + err.Error()
+		if aliasUsed != "" {
+			msg = toolAliasNotice(aliasUsed, params.Name) + msg
+		}
 		return okResp(req.ID, callResult{
-			Content: []content{{Type: "text", Text: "error: " + err.Error()}},
+			Content: []content{{Type: "text", Text: msg}},
 			IsError: true,
 		})
 	}

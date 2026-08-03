@@ -114,12 +114,22 @@ func TestResolveToolAlias(t *testing.T) {
 			wantArgs:    `{"query":"Greeter","uri":"/p/main.go"}`,
 		},
 		{
-			name:        "list_directory pins one level, both types, and the detailed rendering",
+			name:        "list_directory defaults one level, both types, the detailed rendering, and an uncapped-sized result budget",
 			tool:        "list_directory",
 			args:        `{"path":"/p","pattern":"*.go","include_hidden":true,"sort_by":"size"}`,
 			wantCanon:   "find_files",
 			wantAliased: true,
-			wantArgs:    `{"include_details":true,"include_hidden":true,"max_depth":1,"path":"/p","pattern":"*.go","sort_by":"size","type":"any"}`,
+			wantArgs:    `{"include_details":true,"include_hidden":true,"max_depth":1,"max_results":5000,"path":"/p","pattern":"*.go","sort_by":"size","type":"any"}`,
+		},
+		{
+			// The adapter's settings are defaults, not mandates: a caller who names
+			// one is deliberately reaching past the retired tool's shape.
+			name:        "list_directory honours an explicit max_depth and type",
+			tool:        "list_directory",
+			args:        `{"path":"/p","max_depth":3,"type":"dir"}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"include_details":true,"max_depth":3,"max_results":5000,"path":"/p","type":"dir"}`,
 		},
 		{
 			name:        "list_files renames root to path and pins the old default depth",
@@ -127,7 +137,7 @@ func TestResolveToolAlias(t *testing.T) {
 			args:        `{"root":"/p","pattern":"*.go"}`,
 			wantCanon:   "find_files",
 			wantAliased: true,
-			wantArgs:    `{"max_depth":8,"path":"/p","pattern":"*.go","type":"file"}`,
+			wantArgs:    `{"max_depth":8,"max_results":5000,"path":"/p","pattern":"*.go","type":"file"}`,
 			absentArg:   "root",
 		},
 		{
@@ -136,7 +146,85 @@ func TestResolveToolAlias(t *testing.T) {
 			args:        `{"root":"/p","max_depth":2}`,
 			wantCanon:   "find_files",
 			wantAliased: true,
-			wantArgs:    `{"max_depth":2,"path":"/p","type":"file"}`,
+			wantArgs:    `{"max_depth":2,"max_results":5000,"path":"/p","type":"file"}`,
+		},
+		{
+			// find_files reads a non-positive depth as UNLIMITED — the exact
+			// opposite of what a list_files caller writing 0 meant (that tool's own
+			// guard made 0 the shallowest listing there was). Unusable, so the
+			// documented default takes over rather than the inversion shipping.
+			name:        "list_files treats max_depth 0 as absent",
+			tool:        "list_files",
+			args:        `{"root":"/p","max_depth":0}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"max_results":5000,"path":"/p","type":"file"}`,
+		},
+		{
+			name:        "list_files treats a negative max_depth as absent",
+			tool:        "list_files",
+			args:        `{"root":"/p","max_depth":-2}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"max_results":5000,"path":"/p","type":"file"}`,
+		},
+		{
+			// The parameter layer would rewrite `depth` onto max_depth, so the
+			// adapter must not take the canonical slot out from under it.
+			name:        "list_files leaves a usable depth alias to the parameter layer",
+			tool:        "list_files",
+			args:        `{"root":"/p","depth":2}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"depth":2,"max_results":5000,"path":"/p","type":"file"}`,
+		},
+		{
+			// wantArgs carries the whole proof that the unusable `depth` key is
+			// gone; absentArg cannot say so here, since "max_depth" contains it.
+			name:        "list_files replaces a non-positive depth alias too",
+			tool:        "list_files",
+			args:        `{"root":"/p","depth":0}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"max_results":5000,"path":"/p","type":"file"}`,
+		},
+		{
+			// Dropping an unusable spelling must not hand the default the
+			// canonical slot when the caller ALSO named max_depth explicitly —
+			// the surviving value wins, exactly as if the garbage were never sent.
+			name:        "list_files drops a bad depth alias without clobbering an explicit max_depth",
+			tool:        "list_files",
+			args:        `{"root":"/p","depth":0,"max_depth":3}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":3,"max_results":5000,"path":"/p","type":"file"}`,
+		},
+		{
+			name:        "list_files honours an explicit type",
+			tool:        "list_files",
+			args:        `{"root":"/p","type":"dir"}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"max_results":5000,"path":"/p","type":"dir"}`,
+		},
+		{
+			name:        "list_files honours an explicit max_results",
+			tool:        "list_files",
+			args:        `{"root":"/p","max_results":10}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"max_results":10,"path":"/p","type":"file"}`,
+		},
+		{
+			// Two supplied values for one slot: the adapter keeps BOTH so the
+			// argument guard can reject honestly. Picking one would answer a
+			// question the caller did not ask.
+			name:        "list_files given both root and path resolves neither",
+			tool:        "list_files",
+			args:        `{"root":"/a","path":"/b"}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"max_results":5000,"path":"/b","root":"/a","type":"file"}`,
 		},
 		{
 			name:      "a registered tool name is not an alias",
