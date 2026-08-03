@@ -32,12 +32,16 @@ type pair struct {
 	pure topology.Extractor
 }
 
-// nodeKey identifies a node by every field a consumer can see. Signature and
-// EndLine are part of the key deliberately: the Swift walks on both sides set
-// Signature (file_outline renders it), so a kind|name|startLine key would call
-// a signature regression "parity".
+// nodeKey identifies a node by every field a consumer can see. Signature,
+// EndLine, and the byte-precise span fields are part of the key deliberately:
+// the Swift walks set Signature (file_outline renders it), and the symbol-edit
+// fallback branches on HasBytes — a kind|name|line key once called completely
+// missing TS spans "parity", which is exactly the blind spot this key closes.
+// Doc spans are excluded: the wasm walk deliberately leaves them absent.
 func nodeKey(n topology.Node) string {
-	return fmt.Sprintf("%s|%s|%s|%d-%d", n.Kind, n.Name, n.Signature, n.StartLine, n.EndLine)
+	return fmt.Sprintf("%s|%s|%s|%d-%d|%v:%d-%d:%d-%d",
+		n.Kind, n.Name, n.Signature, n.StartLine, n.EndLine,
+		n.HasBytes, n.StartByte, n.EndByte, n.StartCol, n.EndCol)
 }
 
 func normalise(nodes []topology.Node, edges []topology.Edge) (ns, es []string) {
