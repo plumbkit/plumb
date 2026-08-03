@@ -1,0 +1,42 @@
+---
+name: plumb-testing
+description: After changing code with plumb, find which tests to run (topology_affected)
+  and run them (run_task). Use after any edit, before claiming work is done.
+---
+
+After changing code in a codebase that has plumb available, verify the change before calling it done: ask which tests it touches, run those, and confirm the code still compiles — rather than guessing, or paying for the whole suite every time.
+
+## 1. Ask which tests the change affects
+
+**`topology_affected`** traverses inward dependency edges from what you changed and adds the tests co-located with the affected files:
+
+    topology_affected(files=["internal/tools/edit_file.go"])
+    topology_affected(symbols=["applyEdits"])
+
+It is biased toward recall — a missed test is worse than an extra one — so every result carries a **confidence** and the reason it was flagged. Read those labels; they decide the last section.
+
+## 2. Run what it named
+
+**`run_task`** runs the project's stored `[tasks.<lang>]` command with no shell and bounded output:
+
+    run_task(slot="test", target="./internal/tools/")
+    run_task(slot="verify")    # build, then test
+
+`slot` is `build` / `lint` / `test` / `e2e` / `verify`; `target` fills a `{target}` placeholder in the stored command with one shell-safe argument. When the project configures no command for the slot, use the client's own runner — but keep the scope `topology_affected` gave you.
+
+## 3. Confirm it still compiles
+
+Passing tests are not compile truth, and a narrow test says nothing about the file the edit broke elsewhere.
+
+- Pass `await_diagnostics=true` on the write itself to block briefly for the language server's authoritative post-write pass.
+- Or call **`diagnostics`** afterwards with the files you touched. A report labelled INCOMPLETE means the server was still warming, so a clean result then is not proof.
+
+## When to widen to the full suite
+
+`topology_affected` is a heuristic over an index, not a proof. Run everything when:
+
+- the results are mostly **low** confidence, or come back empty for a change that plainly has callers;
+- the change is cross-cutting — a shared helper, an interface, a config key, a build file, generated code;
+- the index may be behind the tree: a fresh clone, a large rebase, or a language it does not index.
+
+Narrow first, wide when in doubt — and never report work as done on tests you did not run.
