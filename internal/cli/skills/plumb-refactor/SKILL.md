@@ -9,7 +9,10 @@ When asked to rename, move, or edit code across files in a codebase that has plu
 
 Use **`rename_symbol`** for any identifier rename — workspace-wide, type-aware, updates all definitions and references including imports:
 
-    rename_symbol(uri="/path/to/file.go", name="OldName", new_name="NewName")
+    rename_symbol(uri="/path/to/file.go", symbol_name="OldName", new_name="NewName")   # preview
+    rename_symbol(uri="/path/to/file.go", symbol_name="OldName", new_name="NewName", dry_run=false)
+
+Only `uri` and `new_name` are required. Identify the symbol by `symbol_name` — plumb resolves the identifier position for you; raw `line`/`character` is the fallback. `dry_run` defaults to **true**, so the first call returns a per-file diff to check and a second call with `dry_run=false` applies it.
 
 Never use `find_replace` or grep+sed for identifier renames — they miss references across files and break imports.
 
