@@ -107,6 +107,18 @@ func TestExtract_AbandonedParseDoesNotBlockTheNextExtract(t *testing.T) {
 		t.Fatalf("expected the wedged parse to be abandoned, got %v", err)
 	}
 
+	// Structural fast-fail in front of the behavioural pin: the discard must
+	// have dropped the wedged runtime. This fails in milliseconds where the
+	// liveness pin below takes its full budget to time out — and it keeps the
+	// test honest if rt.parse ever stops holding rt.mu for its whole duration,
+	// where the liveness pin alone would pass on the old runtime vacuously.
+	ex.mu.Lock()
+	still := ex.rt
+	ex.mu.Unlock()
+	if still == stuck {
+		t.Fatal("the abandoned parse's runtime was not discarded")
+	}
+
 	// The pin: stuck.mu is still held, so this can only succeed on a runtime the
 	// extractor built after dropping the wedged one. The budget is far longer
 	// than the 5s the tests above use because this window contains a whole wasm
