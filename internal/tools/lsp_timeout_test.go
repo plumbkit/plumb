@@ -33,12 +33,13 @@ func TestWorkspaceSymbols_Timeout(t *testing.T) {
 	}
 }
 
-// TestListSymbols_Timeout exercises the same path through a DocumentSymbols
+// TestFileOutline_Timeout exercises the same path through a DocumentSymbols
 // query to confirm the deadline is applied uniformly across query tools.
-func TestListSymbols_Timeout(t *testing.T) {
+func TestFileOutline_Timeout(t *testing.T) {
 	mock := &mockLSP{block: true}
-	tool := tools.NewListSymbols(mock, nil, 0, 20*time.Millisecond)
-	args, _ := json.Marshal(map[string]any{"uri": "file:///p/main.go"})
+	tool := tools.NewFileOutline(mock, nil, 0, 20*time.Millisecond)
+	_, uri := writeOutlineFile(t)
+	args, _ := json.Marshal(map[string]any{"uri": uri})
 
 	start := time.Now()
 	_, err := tool.Execute(context.Background(), args)

@@ -57,7 +57,6 @@ var knownToolGuarding = map[string]string{
 	"NewWorkspaceSymbols":   "proxy",
 	"NewGetDefinition":      "proxy",
 	"NewExplainSymbol":      "proxy",
-	"NewListSymbols":        "proxy",
 	"NewFindReferences":     "proxy",
 	"NewCallHierarchy":      "proxy",
 	"NewTypeHierarchy":      "proxy",
@@ -66,7 +65,6 @@ var knownToolGuarding = map[string]string{
 	"NewReplaceSymbolBody":  "proxy",
 	"NewSafeDeleteSymbol":   "proxy",
 	// No path input — guard not applicable
-	"NewVersion":             "none",
 	"NewDaemonInfoFunc":      "none",
 	"NewRenameSession":       "none",
 	"NewSessionStart":        "none", // workspace arg is for deliberate re-pinning, not file access

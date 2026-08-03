@@ -246,11 +246,19 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		return errResp(req.ID, codeInvalidParams, "invalid params: "+err.Error())
 	}
 
+	// A retired tool name is resolved onto its canonical tool BEFORE the registry
+	// lookup, so the canonical name is what the hooks, the parameter-alias
+	// resolver, execTool, and the recorded stats all see. See toolalias.go.
+	aliasUsed := ""
+	if canonical, adapted, ok := resolveToolAlias(params.Name, params.Arguments); ok {
+		aliasUsed, params.Name, params.Arguments = params.Name, canonical, adapted
+	}
+
 	s.mu.RLock()
 	t, ok := s.tools[params.Name]
 	s.mu.RUnlock()
 	if !ok {
-		return errResp(req.ID, codeMethodNotFound, "unknown tool: "+params.Name)
+		return errResp(req.ID, codeMethodNotFound, s.unknownToolMessage(params.Name))
 	}
 
 	if s.OnBeforeTool != nil {
@@ -297,6 +305,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 	if len(warnings) > 0 {
 		text = aliasNotice(warnings) + text
+	}
+	if aliasUsed != "" {
+		text = toolAliasNotice(aliasUsed, params.Name) + text
 	}
 	if s.EnrichToolOutput != nil {
 		runHookSafely("EnrichToolOutput", func() {

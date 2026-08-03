@@ -71,7 +71,7 @@ var toolModels = map[string]toolModel{
 	"type_hierarchy":    {cat: catSemantic, content: ContentCode, reconstruct: 800},
 	"find_references":   {cat: catSemantic, content: ContentCode, reconstruct: 800},
 	"workspace_symbols": {cat: catSemantic, content: ContentCode, reconstruct: 800},
-	"list_symbols":      {cat: catSemantic, content: ContentCode, reconstruct: 800},
+	"file_outline":      {cat: catSemantic, content: ContentCode, reconstruct: 800},
 	"explain_symbol":    {cat: catSemantic, content: ContentCode, reconstruct: 400},
 	"find_symbol":       {cat: catSemantic, content: ContentCode, reconstruct: 400},
 	"get_definition":    {cat: catSemantic, content: ContentCode, reconstruct: 250},

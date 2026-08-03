@@ -36,7 +36,7 @@ var readSymbolSchema = json.RawMessage(`{
 }`)
 
 // ReadSymbol returns the source body of a named symbol in one call,
-// collapsing the list_symbols + read_file two-round-trip pattern.
+// collapsing the file_outline + read_file two-round-trip pattern.
 // When multiple symbols share the name, all matches are returned.
 // The mtime header matches read_file so callers can pass it as expected_mtime.
 //
@@ -120,7 +120,7 @@ func (t *ReadSymbol) Description() string {
 		"no native Claude Code equivalent for this LSP-backed lookup. " +
 		"Accepts plain name or dotted ReceiverType.MethodName form. " +
 		"Returns all matches when the name is ambiguous. " +
-		"Prefer this over a list_symbols + read_file pair for targeted symbol reads. " +
+		"Prefer this over a file_outline + read_file pair for targeted symbol reads. " +
 		"Each body line carries a display-only 1-based file line-number gutter ('<n>\\t', cat -n style) " +
 		"— strip it before reusing a line as an edit_file old_string. " +
 		"Falls back to a tree-sitter parse when the language server is cold or absent."

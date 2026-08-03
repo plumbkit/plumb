@@ -62,7 +62,8 @@ type FileOutline struct {
 }
 
 // NewFileOutline constructs the tool. It shares the documentSymbol cache key
-// with list_symbols, so a warm outline reuses an existing symbol query.
+// with the other symbol queries, so a warm outline reuses an existing
+// documentSymbol result.
 func NewFileOutline(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FileOutline {
 	return &FileOutline{client: client, cache: c, ttl: ttl, timeout: timeout}
 }

@@ -73,7 +73,7 @@ func fileSHA256(path string) (string, error) {
 
 // invalidateCache evicts every cache entry whose key references uri. Safe
 // when c is nil. Called by all write tools immediately after a successful
-// write so the next find_symbol / get_definition / list_symbols sees fresh
+// write so the next find_symbol / get_definition / file_outline sees fresh
 // data without waiting for gopls to re-publish diagnostics (and without
 // relying on the TTL expiring).
 func invalidateCache(c *cache.Cache, uri string) {

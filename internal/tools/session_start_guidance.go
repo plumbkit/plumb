@@ -80,9 +80,7 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 		sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
 	}
 	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
-	if !t.leanProfile() {
-		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
-	}
+	sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) without reading it.\n")
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +
 		"ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")

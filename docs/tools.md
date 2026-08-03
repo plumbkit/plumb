@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **62** structured tools to AI assistants. Every write tool is
+Plumb exposes **60** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -103,8 +103,8 @@ session list, `daemon_info`, and `workspace_sessions`. An invalid value is
 rejected with a clear error).
 
 ### `daemon_info`
-Current session name and ID, daemon version, start time, and uptime; the
-session's `purpose` tag when set; the workspace pin's provenance when known
+Current session name and ID, daemon version, Go runtime, OS/arch, start time,
+and uptime; the session's `purpose` tag when set; the workspace pin's provenance when known
 (how, when, and from where the pin was last set — pin-drift observability,
 issue #182); live config-store state (generation, last reload time, whether a
 restart is needed); and this session's tool-call count plus its slowest calls
@@ -233,13 +233,6 @@ either `line` + `character` or `symbol_name`.
 Hover documentation and type information for a symbol. **Inputs:** `uri`
 (required) plus a position (`line` + `character`).
 
-### `list_symbols`
-Full symbol outline of a file — names, kinds, line ranges, children.
-**Inputs:** `uri` (required), `include_signatures` (bool — appends each
-function/method/constructor's declaration line). Falls back to the topology
-index (annotated `source=topology, mode=indexed-approximate`) when the LSP
-errors or times out and `[topology]` is enabled.
-
 ### `file_outline`
 A token-cheap skeleton of a file: every function, type, method, class, and
 constant rendered as its **signature line with the body collapsed**, nested by
@@ -252,8 +245,11 @@ cover the file it falls back to the **tree-sitter topology index** (so the
 outline still works for files no warm LSP serves), and the output is annotated
 `source=lsp` or `source=topology`. Multi-line signatures are joined; the body
 opener (`{`) and everything after it is stripped. Shares the documentSymbol
-cache with `list_symbols`. Distinct from `list_symbols`, which lists names/kinds/
-ranges; `file_outline` shows the actual signature of every symbol as a skeleton.
+cache with the other symbol queries, so a warm outline reuses an existing
+query. `list_symbols` was merged into this tool: the old name still works as an
+unadvertised alias (its `include_signatures` flag is dropped — the outline
+always renders signature lines) and the result carries a notice pointing at
+`file_outline`.
 
 ### `find_references`
 All usages of a symbol across the workspace, each with its source line.
@@ -732,9 +728,6 @@ section listing the review's blind spots. **Inputs:** `base_ref` (default
 `HEAD`), `files` (array, optional scope), `mode` (`changed` (default) = working
 tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
 20, max 100), `include_suggestions` (default true).
-
-### `version`
-Plumb version, Go runtime, OS/arch. **Inputs:** none.
 
 ### `run_task`
 Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output

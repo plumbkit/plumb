@@ -15,7 +15,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 
 ### 1. Surgical Reads
 *   **Never read a whole file** if you only need one function.
-*   Use `list_symbols` or `find_symbol` to get line numbers first.
+*   Use `file_outline` or `find_symbol` to get line numbers first.
 *   Use the `start_line` and `end_line` parameters in `read_file` to request only the necessary slice.
 
 ### 2. Optimistic Verification
@@ -31,7 +31,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 
 ### 5. Batch Reads Within a Turn
 *   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. One tool result is cheaper than four headers, and Anthropic's prompt cache hits the next turn either way.
-*   Same rule for the LSP queries: a single `list_symbols` is cheaper than calling `find_symbol` four times.
+*   Same rule for the LSP queries: a single `file_outline` is cheaper than calling `find_symbol` four times.
 
 ### 6. Don't Read to Confirm What `git` or `diagnostics` Already Tells You
 *   After a write, `diagnostics(uri)` reports whether the LSP server flagged anything. If it returns no errors and you trust the language server, that *is* the verification — re-reading the file just to "check it looks right" doubles your token cost on the round trip.
@@ -45,7 +45,7 @@ These are mistakes Claude (and other LLM agents) actually make in practice — c
 The single most common failure mode. The post-write response says "wrote 142 bytes", which feels too thin to "trust", so the agent calls `read_file` again to look at the result. This doubles the token cost of every write. On plumb's side, `edit_file`/`write_file` already return a unified diff by default (`[edits] show_write_diff`), so the success response shows exactly what changed; on the agent's side, the discipline is to stop reading unless an error was returned.
 
 ### Reading a 5 KB file to change one line
-A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `list_symbols → find_symbol → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
+A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `file_outline → find_symbol → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
 
 ### Calling `search_in_files` with a vague pattern, then reading every hit
 A loose grep that returns 60 matches × ~200 bytes of context each is 12 KB of output that the agent will then partially re-read by opening files. Either tighten the pattern (often a quoted phrase or a regex anchor fixes it), or use `find_references` on the symbol — the LSP knows what the grep doesn't.
@@ -86,7 +86,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 | `search_in_files` | Hit count × ~200 bytes per hit | Use a quoted phrase or anchored regex. Use `find_references` for symbol-shaped queries. |
 | `find_replace` | Doubles in dry-run + commit cycle | Run dry-run *only when* you don't trust your pattern. For deterministic patterns, go straight to commit. |
 | `workspace_symbols` | Compact (one line per symbol) | Almost always cheaper than the grep+read alternative. Use this first when navigating by name. |
-| `list_symbols` | Compact tree per file | Use to plan a surgical `read_file` slice. |
+| `file_outline` | Compact signature skeleton per file | Use to plan a surgical `read_file` slice. |
 | `get_definition` | Small (location only) | Don't chain into `read_file` unless you actually need the body. |
 | `diagnostics` | Linear in error count | Pass a `uri` to scope to one file. Workspace-wide is for "give me the picture", not for routine verification. |
 | `edit_file` | Cost of `old_str + new_str` | Far cheaper than `write_file` for any change under ~80% of file size. |
@@ -99,7 +99,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 
 Anthropic's prompt cache has a 5-minute TTL on the conversation prefix. Plumb's design intersects with this in three ways:
 
-1.  **Tool schemas are stable across turns.** Plumb registers the same 62 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
+1.  **Tool schemas are stable across turns.** Plumb registers the same 60 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
 2.  **Tool outputs do not cache.** Anything plumb returns is part of the conversation, not the cached prefix. Returning shorter outputs is *always* a direct win — there's no "cached call" rebate.
 3.  **`session_start` output is not cached.** It runs once at session start, but its output sits in the conversation thereafter. Keep it lean by default and lazy-load (a roadmap item) for the heavy bits.
 

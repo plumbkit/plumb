@@ -7,10 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/topology"
+	tsext "github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // outlineSource is a Go file whose symbols and line numbers the LSP-path test
@@ -113,6 +116,55 @@ func TestFileOutline_IncludeDocsFalse(t *testing.T) {
 	// Signatures must still be present.
 	if !strings.Contains(out, "type Server struct  [Struct L4-6]") {
 		t.Errorf("signatures should remain with include_docs=false; got:\n%s", out)
+	}
+}
+
+// newIndexedMarkdownStore indexes one Markdown file — a language flagged
+// PreferStructuralOutline — and waits for the background indexer.
+func newIndexedMarkdownStore(t *testing.T) (store *topology.Store, uri string) {
+	t.Helper()
+	ws := t.TempDir()
+	path := filepath.Join(ws, "notes.md")
+	if err := os.WriteFile(path, []byte("# Title\n\n## Section One\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{tsext.NewMarkdown()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	uri = "file://" + path
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if nodes, _ := s.SymbolsInFile(context.Background(), uri); len(nodes) > 0 {
+			return s, uri
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("topology did not index notes.md within 5s")
+	return nil, ""
+}
+
+// TestFileOutline_MarkupPrefersStructuralMap pins the markup pre-empt: for a
+// language flagged PreferStructuralOutline the Map is consulted BEFORE the
+// language server, whose documentSymbol for markup is a node per tag/attribute
+// and unusable as an outline. A healthy, answering LSP must not win here.
+func TestFileOutline_MarkupPrefersStructuralMap(t *testing.T) {
+	store, uri := newIndexedMarkdownStore(t)
+	tool := tools.NewFileOutline(&mockLSP{docSymbols: serverDocSymbols()}, nil, 0, 0).
+		WithTopologyFallback(func() *topology.Store { return store })
+	out := runOutline(t, tool, uri, nil)
+
+	if !strings.Contains(out, "source=topology") {
+		t.Errorf("markup outline must come from the structural Map; got:\n%s", out)
+	}
+	if strings.Contains(out, "Server") {
+		t.Errorf("LSP symbols leaked into a markup outline; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Section One") {
+		t.Errorf("expected the Markdown headings from the Map; got:\n%s", out)
 	}
 }
 

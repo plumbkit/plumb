@@ -11,15 +11,19 @@ import (
 // harness asserts against the live tools/list (cmd/smoke). When a new tool is
 // added, add its name here in the matching tier or the parity guard fails.
 //
+// A tool-name ALIAS (internal/mcp/toolalias.go) never appears here: aliases are
+// unadvertised by design, so listing one would break the tools/list parity the
+// union exists to assert.
+//
 // The grouping doubles as the playbook's structure: each tier is exercised the
 // same way (read-only, sandbox file, in-module scratch, or deferred), so the
 // agent can follow one recipe per group.
 var (
-	selftestBootstrap = []string{"session_start", "version", "daemon_info"}
+	selftestBootstrap = []string{"session_start", "daemon_info"}
 
 	selftestLSPQuery = []string{
 		"find_symbol", "workspace_symbols", "get_definition", "explain_symbol",
-		"list_symbols", "file_outline", "find_references", "call_hierarchy",
+		"file_outline", "find_references", "call_hierarchy",
 		"type_hierarchy", "diagnostics",
 	}
 
@@ -177,7 +181,7 @@ func selftestPreflight(ws string) []string {
 		"The first call may take up to ~2 minutes while the language server cold-starts —",
 		"this is expected; do not abort. Record from the output: the **workspace root**, the",
 		"**language**, and whether **topology** is enabled (a topology line appears when it is).",
-		"This step covers " + toolList(selftestBootstrap) + " (also call `version` and `daemon_info`).",
+		"This step covers " + toolList(selftestBootstrap) + " (also call `daemon_info`).",
 	}
 }
 

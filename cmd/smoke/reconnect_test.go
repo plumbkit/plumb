@@ -20,13 +20,16 @@ import (
 // fresh daemon and transparently replayed the initialize handshake. That the
 // recovery daemon is genuinely new is confirmed by the pid file changing.
 //
-// Only daemon-local tools (version, daemon_info) are used, so no gopls
-// cold-start is involved and recovery is fast. This is a Tier-D behaviour
+// Only daemon-local tools are used, so no gopls cold-start is involved and
+// recovery is fast. The probe is deliberately the retired `version` name, which
+// daemon_info now serves through the tool-name alias layer
+// (internal/mcp/toolalias.go) — so this also proves an alias resolves over the
+// real wire, across a daemon restart. This is a Tier-D behaviour
 // (unsafe/non-deterministic to drive against a live agent), deferred here per
 // internal/mcp/selftest_prompt.go.
 func TestSmoke_ProxyReconnect(t *testing.T) {
 	plumbBin := buildPlumb(t)
-	fixture := makeFixture(t) // version/daemon_info never attach the workspace, so gopls never starts
+	fixture := makeFixture(t) // daemon_info never attaches the workspace, so gopls never starts
 	tmpHome := mkTmpHome(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -35,7 +38,8 @@ func TestSmoke_ProxyReconnect(t *testing.T) {
 	c := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	c.initialize(t, fixture)
 
-	// Baseline: the proxy is up and the daemon answers.
+	// Baseline: the proxy is up and the daemon answers. os/arch is on
+	// daemon_info's own output, so the assertion holds via the alias.
 	v1 := c.call(t, "version", map[string]any{}, toolTimeout)
 	assertContains(t, "version(baseline)", v1, runtime.GOOS)
 

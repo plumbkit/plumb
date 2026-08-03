@@ -678,7 +678,7 @@ func TestSessionStart_LeanProfileNote(t *testing.T) {
 		t.Errorf("lean note should state the resolution reason:\n%s", out)
 	}
 	// The note must not enumerate hidden tool names.
-	for _, hidden := range []string{"call_hierarchy", "type_hierarchy", "topology_routes", "topology_impact", "list_symbols"} {
+	for _, hidden := range []string{"call_hierarchy", "type_hierarchy", "topology_routes", "topology_impact", "explain_symbol"} {
 		if strings.Contains(out, hidden) {
 			t.Errorf("lean guidance recommends hidden tool %q:\n%s", hidden, out)
 		}

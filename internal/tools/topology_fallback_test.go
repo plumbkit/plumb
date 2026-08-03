@@ -63,21 +63,6 @@ func TestWorkspaceSymbols_TopologyFallback(t *testing.T) {
 	}
 }
 
-func TestListSymbols_TopologyFallback(t *testing.T) {
-	store, uri := newIndexedStore(t)
-	tool := tools.NewListSymbols(brokenLSP(), nil, 0, 0).
-		WithTopologyFallback(func() *topology.Store { return store })
-	args, _ := json.Marshal(map[string]any{"uri": uri})
-
-	out, err := tool.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatalf("expected topology fallback to succeed, got error: %v", err)
-	}
-	if !strings.Contains(out, "topology fallback") || !strings.Contains(out, "HandleRequest") {
-		t.Errorf("expected annotated outline naming HandleRequest, got:\n%s", out)
-	}
-}
-
 func TestFindSymbol_TopologyFallback(t *testing.T) {
 	store, uri := newIndexedStore(t)
 	tool := tools.NewFindSymbol(brokenLSP(), nil, 0, 0).
