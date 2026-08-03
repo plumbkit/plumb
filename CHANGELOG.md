@@ -53,6 +53,19 @@
 
 ### Fixed
 
+- **A cancelled context no longer costs the wasm extractor its runtime — and
+  the deadline tests are scheduler-independent.** `wasmts.Extract` now refuses
+  a context that is already dead before starting the parse (matching the
+  treesitter envelope's expired-budget contract), instead of spawning a parse
+  doomed to be abandoned — discarding a warm runtime and leaking the parse
+  goroutine for nothing — and, when a fast parse won the `select` against the
+  already-closed `ctx.Done()`, returning a result where the caller was
+  promised `ctx.Err()`. That race was real: on a loaded race-detector runner
+  the parse goroutine starved the selecting goroutine for the parse's full
+  duration and `TestExtract_ExpiredContextReturnsPromptly` failed with a nil
+  error. Both deadline tests now wedge the runtime's parse lock so the select
+  has exactly one reachable arm in either implementation.
+
 - **The gotreesitter Swift fallback extracts the full member surface.** The
   pure-Go Swift walk — live in production whenever the wasm runtime fails to
   initialise, and the flip candidate for WASM retirement — was missing
