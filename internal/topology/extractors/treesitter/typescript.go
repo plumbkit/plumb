@@ -354,12 +354,30 @@ func (w *tsWalk) typeName(n *tsg.Node) string {
 
 func (w *tsWalk) memberName(m *tsg.Node) string {
 	if id := m.ChildByFieldName("name", w.lang); id != nil {
-		return id.Text(w.src)
+		return w.keyText(id)
 	}
 	if id := childByType(m, "property_identifier", w.lang); id != nil {
 		return id.Text(w.src)
 	}
 	return ""
+}
+
+// keyText returns a member-name node's source text, keeping the quotes on a
+// quoted key (`"~standard"`) as the canonical grammar does. In this grammar a
+// property_signature's string name node excludes the quote bytes from its span
+// while a public_field_definition's includes them, so when the span left the
+// quotes out they are re-attached from the surrounding source.
+func (w *tsWalk) keyText(id *tsg.Node) string {
+	t := id.Text(w.src)
+	if id.Type(w.lang) != "string" || t == "" || t[0] == '"' || t[0] == '\'' || t[0] == '`' {
+		return t
+	}
+	s, e := id.StartByte(), id.EndByte()
+	if s > 0 && int(e) < len(w.src) && w.src[e] == w.src[s-1] &&
+		(w.src[s-1] == '"' || w.src[s-1] == '\'' || w.src[s-1] == '`') {
+		return string(w.src[s-1 : e+1])
+	}
+	return t
 }
 
 func (w *tsWalk) declaratorName(d *tsg.Node) string {

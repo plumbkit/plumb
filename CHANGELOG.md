@@ -41,6 +41,14 @@
 
 ### Fixed
 
+- **The gotreesitter Swift fallback extracts the full member surface.** The
+  pure-Go Swift walk — live in production whenever the wasm runtime fails to
+  initialise, and the flip candidate for WASM retirement — was missing
+  `init`/`deinit`/`subscript`/`typealias`/operator members entirely and leaked
+  initialiser-body locals into the index as type members. It now matches the
+  wasm walk member-for-member, and a quoted TypeScript member key keeps its
+  quotes (the one extraction drift the parity corpus showed on TS).
+
 - **A peer agent can no longer silently steal a shared connection's workspace
   pin — an explicit `session_start` pin is now sticky (issue #182).** A client
   that multiplexes several logical agent sessions over one `plumb serve`
