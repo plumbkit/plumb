@@ -143,3 +143,28 @@ func TestExtract_AbandonedParseDoesNotBlockTheNextExtract(t *testing.T) {
 		t.Fatal("the next Extract serialised behind the stuck runtime's lock: the abandoned parse was not discarded")
 	}
 }
+
+// TestExtract_DiscardReArmsTheFallbackWarning pins the warned reset in
+// discard: the fallback warning is a latch (one log per lifetime), but a
+// discard starts a new lifetime — a rebuild that then fails must get its own
+// warning rather than hiding behind one spent on the pre-discard runtime.
+// Without the reset the latch stays spent and the permanent fallback is silent.
+func TestExtract_DiscardReArmsTheFallbackWarning(t *testing.T) {
+	ex := NewTypeScript()
+	if _, _, err := ex.Extract(context.Background(), "warm.ts", []byte(tsFixture)); err != nil {
+		t.Fatalf("warmup Extract: %v", err)
+	}
+
+	ex.mu.Lock()
+	rt := ex.rt
+	ex.mu.Unlock()
+	if rt == nil {
+		t.Fatal("no runtime after warmup; the extractor fell back")
+	}
+
+	ex.warned.Store(true) // as a pre-discard init failure or parse fault would leave it
+	ex.discard(rt)
+	if ex.warned.Load() {
+		t.Fatal("discard did not re-arm the fallback warning — a failed rebuild would fall back silently")
+	}
+}

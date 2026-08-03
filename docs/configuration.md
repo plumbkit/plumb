@@ -254,6 +254,8 @@ reports the resolved path, or warns with a fix hint when there is none.
 | `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
 | `watch` | bool | `true` | OS-level file watching ([`fswatcher`](https://github.com/sgtdi/fswatcher)): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
 
+Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` means *use the default*, while `extract_timeout_seconds = 0` means *disabled*.
+
 ## `[session]` — idle detection & eviction
 
 | Field | Type | Default | Env | Effect |
