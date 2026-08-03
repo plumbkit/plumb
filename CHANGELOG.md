@@ -120,8 +120,9 @@
   parenthetical, `read_file` its mtime/sha mechanics, `rename_file` its
   `copy_file`/`rename_symbol` disambiguation). `search_in_files` reads ~35%
   shorter with nothing about its behaviour left undocumented. Claude Desktop's
-  block is deliberately left long: Desktop installs no skills, so that block
-  *is* its condensed channel.
+  and Kimi Code's blocks are deliberately left long for the same reason: those
+  clients install no skills, so their guidance blocks *are* their condensed
+  channel.
 
   Guarded by `TestNativeEditLaneWarning_LoadBearingPhrases` (both harness
   strings survive the trim), `TestClaudeCodeSkills_HaveValidFrontmatter` (the

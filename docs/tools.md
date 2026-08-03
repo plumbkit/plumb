@@ -604,8 +604,9 @@ for conceptual questions ("where is daemon locking handled?"); use
 `search_in_files` for exact literal/regex matches over current file contents.
 Ladder: `workspace_search` → topology/LSP → `search_in_files` → bounded
 `read_file` — the `plumb-explore` skill teaches the same ladder, with the
-signal for leaving each rung. **Inputs:** `query` (required), `corpora` (optional subset of
-`code`/`docs`/`memory`; default all), `limit` (default 20, max 100).
+signal for leaving each rung. **Inputs:** `query` (required), `corpora`
+(optional subset of `code`/`docs`/`memory`; default all), `limit` (default 20,
+max 100).
 
 ### `topology_explore`
 BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`

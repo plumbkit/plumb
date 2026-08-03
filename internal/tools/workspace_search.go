@@ -66,7 +66,6 @@ func (*WorkspaceSearch) Description() string {
 	return "Ranked discovery across the workspace's indexed corpora: code symbols, doc sections (Markdown/HTML), and project memories. " +
 		"Use workspace_search when you have a conceptual question (\"where is daemon locking handled?\") and want likely starting points. " +
 		"Approximate by design and never a proof of absence — the exact lane is search_in_files (literal or regex over current file contents). " +
-		"Workflow: the plumb-explore skill covers when to move from this tool to topology/LSP, search_in_files, or read_file. " +
 		"Results are FTS5-ranked within each corpus and interleaved; every hit is labelled with corpus, source, field, score, and why it matched, and the header reports per-corpus index freshness (exact_match=false always)."
 }
 

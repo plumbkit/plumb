@@ -13,7 +13,7 @@ Each rung is broader and cheaper than the one below it. Start at the top and dro
 
 One query across every indexed corpus at once — code symbols, doc sections, and project memories — with each hit labelled by corpus, score, and why it matched.
 
-- **`workspace_search`** — the opening move for a conceptual question ("where is daemon locking handled?").
+- **`workspace_search`** — the opening move for a conceptual question ("where is daemon locking handled?"). Under a lean tool profile it is not advertised — open with **`topology_search`** instead.
 
 Drop down once a hit gives you a symbol or file worth following — or straight away when you already know the name. This rung is approximate by design and never proof of absence.
 
@@ -24,6 +24,7 @@ Topology answers instantly and works even while the language server is warming u
 - **`topology_search`** — ranked symbol/file discovery.
 - **`topology_explore`** — neighbourhood around a named symbol (callers, callees, depth=2).
 - **`topology_impact`** — blast radius: what would break if this symbol changes.
+- **`topology_routes`** — framework entry points (HTTP handlers, CLI commands).
 - **`file_outline`** — file shape (signatures, bodies collapsed) in ~200 tokens.
 - **`read_symbol`** — source of one named symbol without reading the whole file.
 

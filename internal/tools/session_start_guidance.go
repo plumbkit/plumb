@@ -40,7 +40,8 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			"covers every indexed language. **LSP (the GPS)** is for precise, type-aware navigation " +
 			"once you know where to work.\n\n")
 		sb.WriteString("- **topology_affected** — which tests to run after an edit (dependency edges + " +
-			"co-location, recall-biased, confidence-labelled); the plumb-testing skill has the post-edit flow.\n")
+			"co-location, recall-biased, confidence-labelled); the plumb-testing skill has the post-edit flow " +
+			"(skills install via `plumb setup claude-code`).\n")
 		// workspace_search is not in the lean set, so a lean client is pointed at
 		// topology_search instead — guidance must never name a hidden tool.
 		if t.leanProfile() {
@@ -53,7 +54,7 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 		sb.WriteString("- Refactors: **rename_symbol** for identifiers, **transaction_apply** for one atomic " +
 			"multi-file change — the plumb-refactor skill has the rest.\n")
 		sb.WriteString("- **diagnostics** — live errors and warnings without running a build; await_diagnostics " +
-			"on a write returns the authoritative post-write pass.\n\n")
+			"on edit_file/write_file returns the authoritative post-write pass.\n\n")
 		// Lean hides these tools from tools/list, so the orientation packet does
 		// not advertise them. Error messages DO name them (ColdLSPToolsHint) even
 		// under lean: that is reactive — the agent has already hit a cold server
@@ -71,7 +72,8 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
 	sb.WriteString("- **workspace_symbols** / **get_definition** / **find_references** — find a symbol by name, " +
 		"jump to its definition, list every call site (scope-aware, not text search).\n")
-	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename; the plumb-refactor skill has the rest of the edit lane.\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename; the plumb-refactor skill has the rest of the edit lane " +
+		"(skills install via `plumb setup claude-code`).\n")
 	sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) without reading it.\n")
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +

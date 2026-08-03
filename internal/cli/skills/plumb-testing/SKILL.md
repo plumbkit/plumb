@@ -22,13 +22,13 @@ It is biased toward recall — a missed test is worse than an extra one — so e
     run_task(slot="test", target="./internal/tools/")
     run_task(slot="verify")    # build, then test
 
-`slot` is `build` / `lint` / `test` / `e2e` / `verify`; `target` fills a `{target}` placeholder in the stored command with one shell-safe argument. When the project configures no command for the slot, use the client's own runner — but keep the scope `topology_affected` gave you.
+`slot` is `build` / `lint` / `test` / `e2e` / `verify`; `target` fills a `{target}` placeholder in the stored command with one shell-safe argument. When the project configures no command for the slot, use the client's own runner — but keep the scope `topology_affected` gave you. A project-supplied command that is not yet trusted is refused with a pointer to `plumb trust`: that is a gate, not a missing command — surface it rather than shelling around it.
 
 ## 3. Confirm it still compiles
 
 Passing tests are not compile truth, and a narrow test says nothing about the file the edit broke elsewhere.
 
-- Pass `await_diagnostics=true` on the write itself to block briefly for the language server's authoritative post-write pass.
+- On an `edit_file` or `write_file` call, pass `await_diagnostics=true` to block briefly for the language server's authoritative post-write pass — the other write tools do not take that parameter.
 - Or call **`diagnostics`** afterwards with the files you touched. A report labelled INCOMPLETE means the server was still warming, so a clean result then is not proof.
 
 ## When to widen to the full suite
