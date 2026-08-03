@@ -53,6 +53,13 @@
 
 ### Fixed
 
+- **A wasm runtime rebuilt after a discard now announces its own failure.**
+  The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
+  lifetime — so a runtime rebuilt after a timeout discard that then failed to
+  initialise degraded to the fallback extractor in permanent silence. The
+  latch is now per runtime lifetime (an `atomic.Bool` the discard re-arms),
+  pinned by `TestExtract_DiscardReArmsTheFallbackWarning`. (#216)
+
 - **A cancelled context no longer costs the wasm extractor its runtime — and
   the deadline tests are scheduler-independent.** `wasmts.Extract` now refuses
   a context that is already dead before starting the parse (matching the
