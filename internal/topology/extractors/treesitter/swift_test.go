@@ -363,6 +363,7 @@ func TestSwift_InitDeinitSubscript(t *testing.T) {
     init(rows: Int) { self.rows = rows }
     init?(text: String) { self.rows = 0 }
     subscript(i: Int) -> Int { rows }
+    func makeIt() -> Matrix { Matrix.init(rows: rows) }
 }
 
 final class Handle {
@@ -370,7 +371,7 @@ final class Handle {
     func cleanup() {}
 }
 `)
-	nodes, _, err := NewSwift().Extract(context.Background(), "m.swift", src)
+	nodes, edges, err := NewSwift().Extract(context.Background(), "m.swift", src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -401,6 +402,19 @@ final class Handle {
 		if count > 1 {
 			t.Errorf("%s emitted %d times, want once", key, count)
 		}
+	}
+	// A named member is registered for call resolution like any other callable:
+	// a sibling method calling `Matrix.init(…)` gets an EdgeCalls into an init
+	// node. Nothing else in this suite observes that registration — dropping it
+	// silently loses every init/deinit/subscript call edge the wasm walk emits.
+	callToInit := false
+	for _, e := range edges {
+		if e.Kind == topology.EdgeCalls && nodes[e.FromID].Name == "makeIt" && nodes[e.ToID].Name == "init" {
+			callToInit = true
+		}
+	}
+	if !callToInit {
+		t.Errorf("no EdgeCalls from makeIt to init — named members are not registered for call resolution; edges=%+v", edges)
 	}
 }
 
@@ -463,6 +477,7 @@ func TestSwift_NamedMemberBodyLocalsSuppressed(t *testing.T) {
     init(rows: Int) {
         let cached = rows
         var scratch = cached
+        typealias LocalAlias = Int
         self.rows = scratch
     }
     deinit {
@@ -471,6 +486,7 @@ func TestSwift_NamedMemberBodyLocalsSuppressed(t *testing.T) {
     subscript(i: Int) -> Int {
         get {
             let offset = 1
+            typealias Cell = Int
             return i + offset
         }
     }
@@ -497,7 +513,7 @@ func TestSwift_NamedMemberBodyLocalsSuppressed(t *testing.T) {
 	}
 	for _, n := range nodes {
 		switch n.Name {
-		case "cached", "scratch", "handle", "offset":
+		case "cached", "scratch", "handle", "offset", "LocalAlias", "Cell":
 			t.Errorf("local %q inside a named-member body leaked into the index as %s", n.Name, n.Kind)
 		}
 	}
@@ -505,9 +521,11 @@ func TestSwift_NamedMemberBodyLocalsSuppressed(t *testing.T) {
 
 // TestSwift_MultiCaseEnumEntry: one enum_entry can bind several cases
 // (`case a, b`); every bound identifier must surface as a constant contained
-// by the enum. Before the port only the first identifier was taken.
+// by the enum, carrying the whole entry's span rather than its own
+// identifier's — the entry is split across lines here so the two are
+// distinguishable. Before the port only the first identifier was taken.
 func TestSwift_MultiCaseEnumEntry(t *testing.T) {
-	src := []byte("enum Compass {\n    case north, south\n    case east\n}\n")
+	src := []byte("enum Compass {\n    case north,\n         south\n    case east\n}\n")
 	nodes, edges, err := NewSwift().Extract(context.Background(), "c.swift", src)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -519,6 +537,14 @@ func TestSwift_MultiCaseEnumEntry(t *testing.T) {
 		}
 		if !containedIn(t, nodes, edges, "Compass", want) {
 			t.Errorf("enum case %q not contained by Compass", want)
+		}
+	}
+	for _, n := range nodes {
+		if n.Name != "north" && n.Name != "south" {
+			continue
+		}
+		if n.StartLine != 2 || n.EndLine != 3 {
+			t.Errorf("case %s span = %d-%d, want 2-3 (the enum_entry's span)", n.Name, n.StartLine, n.EndLine)
 		}
 	}
 }

@@ -402,6 +402,9 @@ func (w *swiftWalk) operatorName(n *tsg.Node) string {
 		}
 		op := kids[i+1]
 		t := strings.TrimSpace(op.Text(w.src))
+		// The simple_identifier arm cannot fire here — funcName already returned
+		// any direct simple_identifier — and is kept for fidelity with the wasm
+		// reference walk, where its funcName tries a field lookup first.
 		if t != "" && t != "(" && op.Type(w.lang) != "simple_identifier" {
 			return t
 		}
