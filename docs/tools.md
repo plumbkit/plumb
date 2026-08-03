@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **59** structured tools to AI assistants. Every write tool is
+Plumb exposes **57** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -427,20 +427,22 @@ carry the same display-only line-number gutter as `read_file`.
 Read up to 20 files in parallel; per-file errors reported inline. **Inputs:**
 `paths` (array, 1–20, required).
 
-### `list_directory`
-Immediate children of a directory (`[FILE]`/`[DIR]`, sizes, mtimes) —
-non-recursive. **Inputs:** `path` (required), `pattern` (glob),
-`include_hidden` (bool), `sort_by` (`name` | `size` | `modified`).
-
-### `list_files`
-Recursive file listing relative to a root. **Inputs:** `root`, `pattern`
-(glob), `max_depth` (default 8), `include_hidden`. Honours `.gitignore` and
-skips `.git`, `vendor`, `node_modules`, …
-
 ### `find_files`
-Glob/regex file or directory finder. **Inputs:** `pattern` (required), `path`,
-`type` (`file` | `dir` | `any`, default `file`), `extension`, `max_depth`,
-`max_results` (default 500), `include_hidden`, `use_regex`.
+Glob/regex file or directory finder, and plumb's directory lister. **Inputs:**
+`pattern` (optional — omit to match everything), `path`, `type` (`file` | `dir`
+| `any`, default `file`), `extension`, `max_depth` (`1` lists one level, like
+`ls`), `max_results` (default 500), `include_hidden`, `include_details`,
+`sort_by` (`name` | `size` | `modified`, default `name`), `use_regex`. Honours
+`.gitignore`. `include_details` renders each entry with a
+`[FILE]`/`[DIR]`/`[LINK]` marker, its size and modified time (symlinks as
+`name -> target`) instead of a bare path list.
+
+`list_files` and `list_directory` were merged into this tool: the old names
+still work as unadvertised aliases (`list_files`' `root` is mapped to `path`
+and its depth default of 8 is pinned; `list_directory` is served as
+`max_depth:1, type:"any", include_details:true`), each with a notice naming
+`find_files`. Both now inherit `find_files`' `.gitignore` confinement in place
+of `list_files`' hardcoded exclude list.
 
 ### `search_in_files`
 ripgrep-style content search; smart-case; honours `.gitignore`. **Inputs:**

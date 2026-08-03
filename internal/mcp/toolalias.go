@@ -47,10 +47,82 @@ type toolAlias struct {
 //     call gets the same single-document search, and a uri-less call — which
 //     find_symbol rejected with a redirect — now runs the workspace-wide
 //     search that redirect pointed at.
+//   - list_directory → find_files: the adapter pins the three settings that
+//     made list_directory what it was (one level, both entry types, the
+//     detailed rendering); path, pattern, include_hidden, and sort_by carry
+//     over as themselves.
+//   - list_files → find_files: root is renamed to path, and max_depth is
+//     defaulted to list_files' 8 when the caller did not set one — find_files
+//     descends without limit, so an unpinned default would silently widen an
+//     old caller's walk.
+//
+// Both listing aliases also inherit find_files' .gitignore confinement in place
+// of list_files' hardcoded exclude list (and list_directory's absence of one):
+// vendor/ is visible unless it is gitignored, and gitignored build output is
+// not. That delta is the one migration note this layer cannot paper over.
 var toolAliases = map[string]toolAlias{
 	"version":      {canonical: "daemon_info"},
 	"list_symbols": {canonical: "file_outline", adapt: dropArgs("include_signatures")},
 	"find_symbol":  {canonical: "workspace_symbols"},
+	"list_directory": {canonical: "find_files", adapt: setArgs(map[string]any{
+		"max_depth": 1, "type": "any", "include_details": true,
+	})},
+	"list_files": {canonical: "find_files", adapt: listFilesArgs},
+}
+
+// setArgs builds an adapter that forces parameters onto the canonical tool's
+// shape, overriding whatever the caller sent. It carries the settings that were
+// implicit in the retired tool's own behaviour.
+func setArgs(fixed map[string]any) func(map[string]any) map[string]any {
+	return func(args map[string]any) map[string]any {
+		for k, v := range fixed {
+			args[k] = v
+		}
+		return args
+	}
+}
+
+// listFilesArgs maps a list_files call onto find_files: the directory argument
+// is renamed (root → path) and the old default depth is pinned. list_files
+// listed files only, which is find_files' default type, so type is set
+// explicitly rather than left to drift with that default.
+func listFilesArgs(args map[string]any) map[string]any {
+	if root, ok := args["root"]; ok {
+		delete(args, "root")
+		if _, taken := args["path"]; !taken {
+			args["path"] = root
+		}
+	}
+	if !argAlreadyCarries(args, "max_depth") {
+		args["max_depth"] = 8
+	}
+	args["type"] = "file"
+	return args
+}
+
+// argAlreadyCarries reports whether args already supply a value destined for a
+// canonical parameter — under that name, under a case/separator variant of it,
+// or under any alias spelling the parameter layer would rewrite onto it.
+//
+// An adapter that injects a default must consult this rather than a plain map
+// lookup: injecting over an alias spelling (a caller's `depth` against an
+// injected `max_depth`) would take the canonical slot, and the parameter layer
+// only rewrites onto an UNSET canonical — so the caller's own key would then be
+// rejected as unknown.
+func argAlreadyCarries(args map[string]any, canonical string) bool {
+	nc := normaliseKey(canonical)
+	for key := range args {
+		nk := normaliseKey(key)
+		if nk == nc {
+			return true
+		}
+		for _, cand := range paramAliases[nk] {
+			if cand.name == canonical {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dropArgs builds an adapter that removes parameters the canonical tool does

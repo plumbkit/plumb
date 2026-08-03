@@ -143,7 +143,7 @@ func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
 	sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
 	sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
 	sb.WriteString("- **write_file** / **edit_file** — create or modify files atomically.\n")
-	sb.WriteString("- **list_files** / **find_files** / **search_in_files** — discover and search the codebase.\n")
+	sb.WriteString("- **find_files** / **search_in_files** — discover, list, and search the codebase.\n")
 	sb.WriteString("- **git** — read-only git queries (status, log, diff, blame).\n\n")
 	if t.topologyActive() {
 		sb.WriteString("**Topology (the Map)** — in-process, always-on structural index:\n\n")

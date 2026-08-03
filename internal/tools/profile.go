@@ -10,7 +10,7 @@ import (
 // search tools keeps. Every other registered tool is a commodity duplicate
 // hidden from tools/list yet still callable by name (hidden ≠ unregistered).
 //
-// MUTATION-LANE RULE: a read-only commodity tool (copy_file, list_directory,
+// MUTATION-LANE RULE: a read-only commodity tool (copy_file, find_files,
 // the extra search/symbol conveniences) may be hidden freely, but a mutation
 // tool whose native fallback is UNSAFE must stay lean — a client that falls back
 // to shell mv/rm/sed bypasses plumb's per-path locks, the LSP
@@ -28,7 +28,7 @@ import (
 // fallback plumb exists to replace. Hidden from tools/list, a recognised CLI
 // client never SEES it and silently shells out to build, the exact anti-pattern
 // the profile is meant to avoid. The read-only commodity search/list/find tools
-// (search_in_files, find_files, list_directory, …) stay hidden under lean — a
+// (search_in_files, find_files, file_diff, …) stay hidden under lean — a
 // client that wants them sets [tools] profile = "full".
 var LeanTools = map[string]bool{
 	"session_start":     true,

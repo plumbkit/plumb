@@ -106,8 +106,6 @@ func allToolSchemas() map[string]json.RawMessage {
 		(*InsertAfterSymbol)(nil).Name():    (*InsertAfterSymbol)(nil).InputSchema(),
 		(*InsertBeforeSymbol)(nil).Name():   (*InsertBeforeSymbol)(nil).InputSchema(),
 		(*LeaveNote)(nil).Name():            (*LeaveNote)(nil).InputSchema(),
-		(*ListDirectory)(nil).Name():        (*ListDirectory)(nil).InputSchema(),
-		(*ListFiles)(nil).Name():            (*ListFiles)(nil).InputSchema(),
 		(*listMemoriesTool)(nil).Name():     (*listMemoriesTool)(nil).InputSchema(),
 		(*MinimalDiffReview)(nil).Name():    (*MinimalDiffReview)(nil).InputSchema(),
 		(*MoveSymbol)(nil).Name():           (*MoveSymbol)(nil).InputSchema(),

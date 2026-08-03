@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -29,6 +31,7 @@ func aliasToolServer() *mcp.Server {
 	s.Register(tools.NewDaemonInfo("", "swift-falcon", "9.9.9", time.Now()))
 	s.Register(tools.NewFileOutline(nil, nil, 0, 0))
 	s.Register(tools.NewWorkspaceSymbols(stubDocSymbols{}, nil, 0, 0, nil))
+	s.Register(tools.NewFindFiles(nil))
 	return s
 }
 
@@ -52,7 +55,7 @@ type echoArgsTool struct{ name string }
 func (e *echoArgsTool) Name() string        { return e.name }
 func (e *echoArgsTool) Description() string { return "echoes the arguments it received" }
 func (e *echoArgsTool) InputSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"uri":{"type":"string"}},"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"uri":{"type":"string"},"path":{"type":"string"},"type":{"type":"string"},"max_depth":{"type":"integer"},"include_details":{"type":"boolean"}},"additionalProperties":false}`)
 }
 
 func (e *echoArgsTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
@@ -125,12 +128,12 @@ func TestToolsList_OmitsAliases(t *testing.T) {
 	for _, tl := range resultByID(t, resps, 1)["tools"].([]any) {
 		listed[tl.(map[string]any)["name"].(string)] = true
 	}
-	for _, canonical := range []string{"daemon_info", "file_outline", "workspace_symbols"} {
+	for _, canonical := range []string{"daemon_info", "file_outline", "workspace_symbols", "find_files"} {
 		if !listed[canonical] {
 			t.Errorf("tools/list is missing the canonical tool %q", canonical)
 		}
 	}
-	for _, alias := range []string{"version", "list_symbols", "find_symbol"} {
+	for _, alias := range []string{"version", "list_symbols", "find_symbol", "list_directory", "list_files"} {
 		if listed[alias] {
 			t.Errorf("tools/list advertises the alias %q — aliases must stay hidden", alias)
 		}
@@ -168,6 +171,75 @@ func TestToolsCall_FindSymbolAliasWithoutURISearchesWorkspace(t *testing.T) {
 	}
 	if strings.Contains(text, "needs a uri") {
 		t.Errorf("the retired uri-less redirect must be gone; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListDirectoryAliasListsOneLevelWithDetails drives the alias
+// against the REAL find_files: the retired name still renders the detailed
+// single-level listing, which only happens if the adapter's forced max_depth,
+// type, and include_details all fit find_files' actual schema.
+func TestToolsCall_ListDirectoryAliasListsOneLevelWithDetails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "deep.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "top.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, aliasToolServer(), "list_directory", fmt.Sprintf(`{"path":%q}`, dir))
+
+	const wantNotice = "note: list_directory is a tool-name alias served by find_files — call find_files directly.\n\n"
+	if !strings.HasPrefix(text, wantNotice) {
+		t.Errorf("result must begin with the alias notice; got:\n%s", text)
+	}
+	for _, want := range []string{"[DIR]  sub", "[FILE] top.go", "1 directory, 1 file"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("detailed listing missing %q; got:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "deep.go") {
+		t.Errorf("list_directory is one level only; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListFilesAliasRenamesRoot proves the root → path rename against
+// the real find_files schema: find_files declares no "root", so an unadapted
+// call would be rejected by the argument guard before the walk ever ran.
+func TestToolsCall_ListFilesAliasRenamesRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := callTool(t, aliasToolServer(), "list_files", fmt.Sprintf(`{"root":%q,"pattern":"*.go"}`, dir))
+
+	const wantNotice = "note: list_files is a tool-name alias served by find_files — call find_files directly.\n\n"
+	if !strings.HasPrefix(text, wantNotice) {
+		t.Errorf("result must begin with the alias notice; got:\n%s", text)
+	}
+	if !strings.Contains(text, "main.go") {
+		t.Errorf("expected the walk to have answered; got:\n%s", text)
+	}
+}
+
+// TestToolsCall_ListFilesAliasPinsTheOldDepthDefault guards the one silent
+// widening the rename could have caused: list_files stopped at depth 8,
+// find_files descends without limit, so the adapter must inject the old
+// default when the caller did not set one.
+func TestToolsCall_ListFilesAliasPinsTheOldDepthDefault(t *testing.T) {
+	s := mcp.New(mcp.ServerInfo{Name: "test", Version: "0"})
+	s.Register(&echoArgsTool{name: "find_files"})
+
+	text := callTool(t, s, "list_files", `{"root":"/p"}`)
+	if !strings.Contains(text, `"max_depth":8`) {
+		t.Errorf("adapter must pin list_files' default depth; got:\n%s", text)
+	}
+	if strings.Contains(text, `"root"`) {
+		t.Errorf("root must be renamed away before dispatch; got:\n%s", text)
 	}
 }
 

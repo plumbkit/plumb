@@ -28,8 +28,6 @@ func realToolServer() *mcp.Server {
 	s.Register(tools.NewWriteFile(tools.WriteDeps{}))
 	s.Register(tools.NewDeleteFile(tools.WriteDeps{}))
 	s.Register(tools.NewRenameFile(tools.WriteDeps{}))
-	s.Register(tools.NewListFiles(nil))
-	s.Register(tools.NewListDirectory(nil))
 	s.Register(tools.NewFindFiles(nil))
 	s.Register(tools.NewFindReplace())
 	s.Register(tools.NewSearchInFiles(nil, nil, nil, 0))
@@ -93,7 +91,10 @@ func TestToolsCall_RealSchemas_CommonAliases(t *testing.T) {
 		{"read_file", fmt.Sprintf(`{"filepath":%q}`, f), []string{`interpreted "filepath" as "file_path"`, "alpha"}},
 		{"write_file", fmt.Sprintf(`{"path":%q,"text":"beta"}`, filepath.Join(dir, "b.txt")), []string{`interpreted "path" as "file_path"`, `interpreted "text" as "content"`}},
 		{"edit_file", fmt.Sprintf(`{"path":%q,"edits":[{"old_str":"alpha","new_str":"gamma"}]}`, f), []string{`interpreted "path" as "file_path"`, `interpreted "edits[].old_str" as "old_string"`}},
-		{"list_files", fmt.Sprintf(`{"dir":%q}`, dir), []string{`interpreted "dir" as "root"`, "a.txt"}},
+		// list_files is a retired NAME served by find_files: the tool-name alias
+		// resolves first, then the parameter alias rewrites dir onto find_files'
+		// own "path" — both layers in one call.
+		{"list_files", fmt.Sprintf(`{"dir":%q}`, dir), []string{`interpreted "dir" as "path"`, "a.txt"}},
 		// The edit_file case above already rewrote alpha → gamma in a.txt.
 		{"search_in_files", fmt.Sprintf(`{"path":%q,"query":"gamma"}`, dir), []string{`interpreted "query" as "pattern"`, "a.txt"}},
 		{"rename_file", fmt.Sprintf(`{"source":%q,"destination":%q}`, f, filepath.Join(dir, "c.txt")), []string{`interpreted "source" as "from"`, `interpreted "destination" as "to"`}},
@@ -250,14 +251,14 @@ func TestToolsCall_RealSchemas_Phase2Aliases(t *testing.T) {
 			wantSubs: []string{`interpreted "hidden" as "include_hidden"`, ".secret"},
 		},
 		{
-			name:       "depth → max_depth on list_files",
+			name:       "depth → max_depth on find_files (via the list_files name alias)",
 			tool:       "list_files",
 			args:       fmt.Sprintf(`{"dir":%q,"depth":1}`, dir),
 			wantSubs:   []string{`interpreted "depth" as "max_depth"`, "a.go"},
 			notWantSub: []string{"deep.txt"},
 		},
 		{
-			name:     "sort/hidden → sort_by/include_hidden on list_directory",
+			name:     "sort/hidden → sort_by/include_hidden on find_files (via the list_directory name alias)",
 			tool:     "list_directory",
 			args:     fmt.Sprintf(`{"path":%q,"sort":"name","hidden":true}`, dir),
 			wantSubs: []string{`interpreted "sort" as "sort_by"`, `interpreted "hidden" as "include_hidden"`, ".secret"},

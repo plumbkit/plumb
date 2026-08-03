@@ -83,7 +83,7 @@ func runDiagnostics(_ *cobra.Command, args []string) error {
 func runDiagOnFile(cli *mcpCliClient, abs string) error {
 	uri := "file://" + abs
 	// Warm-up the workspace via a path-bearing call so the daemon attaches gopls.
-	_, _ = cli.CallTool("list_files", map[string]any{"path": filepath.Dir(abs), "max_results": 1})
+	_, _ = cli.CallTool("find_files", map[string]any{"path": filepath.Dir(abs), "max_results": 1})
 	printDiagHeader(filepath.Dir(abs))
 	out, err := cli.CallTool("diagnostics", map[string]any{"uri": uri})
 	if err != nil {
@@ -96,7 +96,7 @@ func runDiagOnFile(cli *mcpCliClient, abs string) error {
 func runDiagOnWorkspace(ctx context.Context, cli *mcpCliClient, cwd string) error {
 	// Resolve the actual workspace root via find_files (returns paths under
 	// the project root).
-	_, _ = cli.CallTool("list_files", map[string]any{"path": cwd, "max_results": 1})
+	_, _ = cli.CallTool("find_files", map[string]any{"path": cwd, "max_results": 1})
 
 	printDiagHeader(cwd)
 
@@ -200,7 +200,10 @@ func parseFileList(output, cwd string) []string {
 	var files []string
 	for line := range strings.SplitSeq(output, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") || strings.HasPrefix(line, "(") {
+		// find_files closes with a summary line ("12 result(s)", or a truncation /
+		// partial-walk note in parentheses) that is not a path.
+		if line == "" || strings.HasPrefix(line, "Found") || strings.HasPrefix(line, "No ") ||
+			strings.HasPrefix(line, "(") || strings.Contains(line, "result(s)") {
 			continue
 		}
 		// find_files prints relative paths from cwd.

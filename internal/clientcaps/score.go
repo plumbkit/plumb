@@ -53,11 +53,9 @@ const perCallOverhead = 80
 // more than a single get_definition.
 var toolModels = map[string]toolModel{
 	// Capability-gated reads / listings.
-	"read_file":      {cat: catRead, content: ContentCode},
-	"read_symbol":    {cat: catRead, content: ContentCode},
-	"find_files":     {cat: catRead, content: ContentProse},
-	"list_files":     {cat: catRead, content: ContentProse},
-	"list_directory": {cat: catRead, content: ContentProse},
+	"read_file":   {cat: catRead, content: ContentCode},
+	"read_symbol": {cat: catRead, content: ContentCode},
+	"find_files":  {cat: catRead, content: ContentProse},
 
 	// Content search.
 	"search_in_files": {cat: catSearch, content: ContentCode},

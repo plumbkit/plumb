@@ -20,8 +20,6 @@ var knownToolGuarding = map[string]string{
 	// Direct .WithBoundary guard
 	"NewFileOutline":           "guard",
 	"NewDiagnosticsWithOpener": "guard",
-	"NewListFiles":             "guard",
-	"NewListDirectory":         "guard",
 	"NewReadFile":              "guard",
 	"NewReadSymbol":            "guard",
 	"NewReadMultipleFiles":     "guard",

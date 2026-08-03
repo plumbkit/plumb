@@ -109,8 +109,9 @@ func workspaceArgPresent(args json.RawMessage) bool {
 //
 //	{"uri": "file:///..."}                      — LSP tools
 //	{"file_path": "/..."}                       — file-content tools (read/write/edit/delete)
-//	{"path": "/..."}                            — search/dir tools (list_directory, find_files, …)
-//	{"root": "/..."}                            — list_files
+//	{"path": "/..."}                            — search/dir tools (find_files, search_in_files, …)
+//	{"root": "/..."}                            — the retired list_files spelling, still reachable
+//	                                              through the tool-name alias
 //	{"workspace": "/..."}                       — session_start
 //	{"paths": ["/...", ...]}                    — read_multiple_files
 //	{"operations": [{"path": "/..."}, ...]}     — transaction_apply

@@ -17,11 +17,11 @@ const authTimeout = 180 * time.Second
 // toolPrompt forces the agent to invoke a PATH-BEARING plumb tool. plumb only
 // records a tool call in stats once it resolves a workspace root, and it derives
 // that root from a path argument (seedPathFromArgs) — so a path-less call like
-// `version` on a connection that never attached a workspace leaves no row. A
-// list_directory on the fixture's absolute path always resolves the root, making
+// `daemon_info` on a connection that never attached a workspace leaves no row. A
+// find_files on the fixture's absolute path always resolves the root, making
 // the stats signal reliable regardless of how the model paraphrases the output.
 func toolPrompt(dir string) string {
-	return "Use the plumb MCP server's list_directory tool to list the directory \"" + dir +
+	return "Use the plumb MCP server's find_files tool to list the directory \"" + dir +
 		"\". Call that plumb tool with exactly that path. Do not use any other tool or answer from memory."
 }
 

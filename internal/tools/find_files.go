@@ -16,14 +16,28 @@ import (
 // findFilesDefaultDeadline caps a single find_files call when the parent
 // context has no deadline. Matches search_in_files: prevents a runaway walk
 // over a giant tree from outliving the MCP client's own timeout.
+//
+// find_files deliberately does NOT implement mcp.ExecTimeoutBounded: it already
+// self-bounds here and the walk aborts cooperatively on ctx cancellation at
+// every directory and entry, so opting in would only replace this budget with
+// the dispatcher's shorter one and newly time out broad walks over large trees.
 const findFilesDefaultDeadline = 30 * time.Second
+
+// findFilesSortScanCap bounds the walk when a size/modified ranking is asked
+// for. Those orders cannot be honoured by the walk's early stop — "largest
+// first" over whichever max_results entries the traversal happened to reach is
+// not largest-first at all — so the stop is lifted and replaced by this
+// ceiling, which matches max_results' own schema maximum. A name sort keeps the
+// early stop: the traversal is already path-ordered, so truncation drops the
+// tail either way.
+const findFilesSortScanCap = 5000
 
 var findFilesSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Glob (or regex if use_regex=true) matched against the file/directory name. When the pattern contains '/' it matches the full relative path. Use \"*\" to match everything — a literal \".\" only matches a file named \".\"."
+      "description": "Glob (or regex if use_regex=true) matched against the file/directory name. When the pattern contains '/' it matches the full relative path. OPTIONAL — omit it to list every entry. A literal \".\" only matches a file named \".\"."
     },
     "path": {
       "type": "string",
@@ -40,7 +54,7 @@ var findFilesSchema = json.RawMessage(`{
     },
     "max_depth": {
       "type": "integer",
-      "description": "Maximum directory depth to descend. Default: unlimited.",
+      "description": "Maximum directory depth to descend. 1 lists one level only, like ls. Default: unlimited.",
       "minimum": 1
     },
     "max_results": {
@@ -53,16 +67,26 @@ var findFilesSchema = json.RawMessage(`{
       "type": "boolean",
       "description": "Include hidden files and directories (starting with '.'). Default false."
     },
+    "include_details": {
+      "type": "boolean",
+      "description": "Render each entry with a [FILE]/[DIR]/[LINK] marker, its size and last-modified time (symlinks as 'name -> target') instead of a bare path list. Default false."
+    },
+    "sort_by": {
+      "type": "string",
+      "enum": ["name", "size", "modified"],
+      "description": "Order of the result list: 'name' (directories first, then path), 'size' (largest first), 'modified' (newest first). Default: name."
+    },
     "use_regex": {
       "type": "boolean",
       "description": "Treat pattern as a regular expression instead of a glob. Default false."
     }
   },
-  "required": ["pattern"],
   "additionalProperties": false
 }`)
 
-// FindFiles implements fd-like recursive file/directory finding.
+// FindFiles implements fd-like recursive file/directory finding, and is also
+// plumb's one directory listing tool — list_files and list_directory were
+// folded into it.
 type FindFiles struct {
 	ws    WorkspaceFn
 	guard BoundaryGuard
@@ -78,22 +102,26 @@ func (t *FindFiles) WithBoundary(guard BoundaryGuard) *FindFiles {
 func (t *FindFiles) Name() string                 { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
 func (t *FindFiles) Description() string {
-	return "Workspace-scoped file/directory finder. Prefer this over shelling out to find/fd: " +
+	return "Workspace-scoped file/directory finder and directory lister. Prefer this over shelling out to find/fd/ls: " +
 		"results are confined to the active project (no .git/, node_modules/, build output, or anything else .gitignore excludes), " +
 		"every call is recorded in the project's stats, and the pattern semantics are consistent across hosts. " +
-		"Supports glob and regex patterns, extension filters, type filters (file/dir), and depth limits. " +
+		"pattern is optional — omit it to list everything. Supports glob and regex patterns, extension and type (file/dir/any) filters, " +
+		"depth limits (max_depth=1 lists one level, like ls), sort_by name/size/modified, and include_details for a per-entry " +
+		"[FILE]/[DIR]/[LINK] marker, size, and modified time. " +
 		"Essential for clients without filesystem access of their own (Claude Desktop, Cursor MCP, etc.)."
 }
 
 type findFilesArgs struct {
-	Pattern       string `json:"pattern"`
-	Path          string `json:"path"`
-	Type          string `json:"type"`
-	Extension     string `json:"extension"`
-	MaxDepth      int    `json:"max_depth"`
-	MaxResults    int    `json:"max_results"`
-	IncludeHidden bool   `json:"include_hidden"`
-	UseRegex      bool   `json:"use_regex"`
+	Pattern        string `json:"pattern"`
+	Path           string `json:"path"`
+	Type           string `json:"type"`
+	Extension      string `json:"extension"`
+	MaxDepth       int    `json:"max_depth"`
+	MaxResults     int    `json:"max_results"`
+	IncludeHidden  bool   `json:"include_hidden"`
+	IncludeDetails bool   `json:"include_details"`
+	SortBy         string `json:"sort_by"`
+	UseRegex       bool   `json:"use_regex"`
 }
 
 // findFilesConfig holds the resolved walk parameters derived from findFilesArgs.
@@ -109,11 +137,13 @@ type findFilesConfig struct {
 // state in a struct lets the walk callback (visit) be a named method instead
 // of a closure, reducing cyclomatic complexity.
 type findFilesWalker struct {
-	ctx       context.Context
-	cfg       findFilesConfig
-	a         findFilesArgs
-	hits      []string
-	truncated bool
+	ctx        context.Context
+	cfg        findFilesConfig
+	a          findFilesArgs
+	collectCap int
+	stat       bool // populate each hit's size/mtime/symlink fields
+	hits       []findFileHit
+	truncated  bool
 }
 
 func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -132,32 +162,20 @@ func (t *FindFiles) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	}
 
 	hits, truncated, walkErr := findFilesWalkTree(ctx, a, cfg)
-
-	timedOut := errors.Is(walkErr, context.DeadlineExceeded)
-	cancelled := errors.Is(walkErr, context.Canceled)
-	if len(hits) == 0 {
-		if timedOut {
-			return fmt.Sprintf("find_files for %q timed out before any matches were found (budget %s — narrow with path or max_depth).", a.Pattern, findFilesDefaultDeadline), nil
-		}
-		if cancelled {
-			return "", walkErr
-		}
-		if walkErr != nil {
-			return "", fmt.Errorf("find_files: walking %s: %w", cfg.root, walkErr)
-		}
-		return fmt.Sprintf("No files found matching %q.", a.Pattern), nil
+	sortFindFileHits(hits, a.SortBy)
+	if len(hits) > a.MaxResults {
+		hits, truncated = hits[:a.MaxResults], true
 	}
-
-	return formatFindFilesOutput(hits, a, truncated, walkErr), nil
+	if len(hits) == 0 {
+		return emptyFindFilesResult(a, cfg, walkErr)
+	}
+	return formatFindFilesOutput(hits, a, cfg.root, truncated, walkErr), nil
 }
 
 func parseFindFilesArgs(raw json.RawMessage) (findFilesArgs, error) {
 	var a findFilesArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return a, fmt.Errorf("find_files: invalid arguments: %w", err)
-	}
-	if a.Pattern == "" {
-		return a, errors.New("find_files: pattern must not be empty")
 	}
 	return a, nil
 }
@@ -168,6 +186,9 @@ func applyFindFilesDefaults(a *findFilesArgs) {
 	}
 	if a.Type == "" {
 		a.Type = "file"
+	}
+	if a.SortBy == "" {
+		a.SortBy = "name"
 	}
 }
 
@@ -206,8 +227,13 @@ func buildFindFilesConfig(a findFilesArgs, ws WorkspaceFn, guard BoundaryGuard) 
 	}, nil
 }
 
-func findFilesWalkTree(ctx context.Context, a findFilesArgs, cfg findFilesConfig) ([]string, bool, error) {
-	w := &findFilesWalker{ctx: ctx, cfg: cfg, a: a}
+func findFilesWalkTree(ctx context.Context, a findFilesArgs, cfg findFilesConfig) ([]findFileHit, bool, error) {
+	ranked := a.SortBy == "size" || a.SortBy == "modified"
+	collectCap := a.MaxResults
+	if ranked && findFilesSortScanCap > collectCap {
+		collectCap = findFilesSortScanCap
+	}
+	w := &findFilesWalker{ctx: ctx, cfg: cfg, a: a, collectCap: collectCap, stat: ranked || a.IncludeDetails}
 	opts := walkOptions{
 		root:          cfg.root,
 		maxDepth:      a.MaxDepth,
@@ -218,7 +244,7 @@ func findFilesWalkTree(ctx context.Context, a findFilesArgs, cfg findFilesConfig
 	return w.hits, w.truncated, walkErr
 }
 
-func (w *findFilesWalker) visit(path string, d fs.DirEntry, _ int) error {
+func (w *findFilesWalker) visit(path string, d fs.DirEntry, depth int) error {
 	if err := w.ctx.Err(); err != nil {
 		return err
 	}
@@ -226,33 +252,47 @@ func (w *findFilesWalker) visit(path string, d fs.DirEntry, _ int) error {
 		return nil
 	}
 	isDir := d.IsDir()
-	// Prune incompatible directory subtrees before any other filtering.
-	if isDir && w.cfg.globPrefix != "" && path != w.cfg.root {
-		rel, _ := filepath.Rel(w.cfg.root, path)
-		if !dirCompatibleWithPrefix(filepath.ToSlash(rel), w.cfg.globPrefix) {
-			return fs.SkipDir
-		}
-	}
-	if !w.passesTypeFilter(isDir) {
-		return nil
-	}
-	if !w.passesExtFilter(d, isDir) {
-		return nil
+	if isDir && w.shouldPrune(path) {
+		return fs.SkipDir
 	}
 	rel, _ := filepath.Rel(w.cfg.root, path)
 	rel = filepath.ToSlash(rel)
+	if !w.matches(rel, d, isDir, depth) {
+		return nil
+	}
+	w.hits = append(w.hits, newFindFileHit(path, rel, d, isDir, w.stat))
+	if len(w.hits) >= w.collectCap {
+		w.truncated = true
+	}
+	return nil
+}
+
+// shouldPrune reports whether a directory subtree cannot hold a match for a
+// slash-bearing glob, so the walk can skip it without descending.
+func (w *findFilesWalker) shouldPrune(path string) bool {
+	if w.cfg.globPrefix == "" || path == w.cfg.root {
+		return false
+	}
+	rel, _ := filepath.Rel(w.cfg.root, path)
+	return !dirCompatibleWithPrefix(filepath.ToSlash(rel), w.cfg.globPrefix)
+}
+
+// matches applies the depth, type, extension, and pattern filters. The depth
+// check is the tool's own: the shared walk prunes directories at the limit but
+// still visits the FILES inside the last directory it descended into, so
+// max_depth=1 would otherwise return one level more than it says.
+func (w *findFilesWalker) matches(rel string, d fs.DirEntry, isDir bool, depth int) bool {
+	if w.a.MaxDepth > 0 && depth >= w.a.MaxDepth {
+		return false
+	}
+	if !w.passesTypeFilter(isDir) || !w.passesExtFilter(d, isDir) {
+		return false
+	}
 	target := d.Name()
 	if w.cfg.patternHasSlash {
 		target = rel
 	}
-	if !w.cfg.matchFn(target) {
-		return nil
-	}
-	w.hits = append(w.hits, rel)
-	if len(w.hits) >= w.a.MaxResults {
-		w.truncated = true
-	}
-	return nil
+	return w.cfg.matchFn(target)
 }
 
 func (w *findFilesWalker) passesTypeFilter(isDir bool) bool {
@@ -273,27 +313,42 @@ func (w *findFilesWalker) passesExtFilter(d fs.DirEntry, isDir bool) bool {
 	return strings.ToLower(strings.TrimPrefix(filepath.Ext(d.Name()), ".")) == w.cfg.ext
 }
 
-func formatFindFilesOutput(hits []string, a findFilesArgs, truncated bool, walkErr error) string {
-	var sb strings.Builder
-	for _, h := range hits {
-		sb.WriteString(h)
-		sb.WriteByte('\n')
-	}
+// emptyFindFilesResult renders the no-hits answer. A detailed listing reports
+// an empty directory the way list_directory did; a plain one names what was
+// looked for, which is a pattern only when the caller supplied one.
+func emptyFindFilesResult(a findFilesArgs, cfg findFilesConfig, walkErr error) (string, error) {
 	switch {
-	case truncated:
-		fmt.Fprintf(&sb, "\n(truncated at %d results — use a more specific pattern or set max_depth)", a.MaxResults)
 	case errors.Is(walkErr, context.DeadlineExceeded):
-		fmt.Fprintf(&sb, "\n%d result(s) (partial — walk timed out after %s; narrow with path or max_depth)", len(hits), findFilesDefaultDeadline)
+		return fmt.Sprintf("find_files %s timed out before any matches were found (budget %s — narrow with path or max_depth).",
+			findFilesSubject(a, cfg.root), findFilesDefaultDeadline), nil
+	case errors.Is(walkErr, context.Canceled):
+		return "", walkErr
 	case walkErr != nil:
-		fmt.Fprintf(&sb, "\n%d result(s) (partial — walk stopped: %v)", len(hits), walkErr)
+		return "", fmt.Errorf("find_files: walking %s: %w", cfg.root, walkErr)
+	case a.IncludeDetails:
+		return cfg.root + "\n\n(empty)\n", nil
+	case a.Pattern == "":
+		return "No entries found under " + cfg.root + ".", nil
 	default:
-		fmt.Fprintf(&sb, "\n%d result(s)", len(hits))
+		return fmt.Sprintf("No files found matching %q.", a.Pattern), nil
 	}
-	return sb.String()
+}
+
+// findFilesSubject names what a call was looking for, so the timeout message
+// reads correctly whether or not a pattern was given.
+func findFilesSubject(a findFilesArgs, root string) string {
+	if a.Pattern == "" {
+		return "under " + root
+	}
+	return fmt.Sprintf("for %q", a.Pattern)
 }
 
 // buildMatcher returns a function that tests a name/path against the pattern.
+// An empty pattern matches everything — find_files doubles as a plain lister.
 func buildMatcher(pattern string, useRegex bool) (func(string) bool, error) {
+	if pattern == "" {
+		return func(string) bool { return true }, nil
+	}
 	if useRegex {
 		re, err := regexp.Compile(pattern)
 		if err != nil {

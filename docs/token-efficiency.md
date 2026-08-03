@@ -82,7 +82,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 |---|---|---|
 | `read_file` | ~1 token per byte (text) | Always pass `start_line` / `end_line` once you know them. Stream in slices, not full files. |
 | `read_multiple_files` | Sum of per-file costs | Prefer over many sequential `read_file` calls when you know the set up front. |
-| `list_files` | Linear in file count | Pair with a tight `pattern` glob. `**/*.go` is cheaper than dumping the whole tree. |
+| `find_files` | Linear in file count | Pair with a tight `pattern` glob. `**/*.go` is cheaper than dumping the whole tree. Add `max_depth` to stay shallow, and leave `include_details` off unless you need sizes/mtimes. |
 | `search_in_files` | Hit count × ~200 bytes per hit | Use a quoted phrase or anchored regex. Use `find_references` for symbol-shaped queries. |
 | `find_replace` | Doubles in dry-run + commit cycle | Run dry-run *only when* you don't trust your pattern. For deterministic patterns, go straight to commit. |
 | `workspace_symbols` | Compact (one line per symbol) | Almost always cheaper than the grep+read alternative. Use this first when navigating by name. |
@@ -99,7 +99,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 
 Anthropic's prompt cache has a 5-minute TTL on the conversation prefix. Plumb's design intersects with this in three ways:
 
-1.  **Tool schemas are stable across turns.** Plumb registers the same 59 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
+1.  **Tool schemas are stable across turns.** Plumb registers the same 57 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
 2.  **Tool outputs do not cache.** Anything plumb returns is part of the conversation, not the cached prefix. Returning shorter outputs is *always* a direct win — there's no "cached call" rebate.
 3.  **`session_start` output is not cached.** It runs once at session start, but its output sits in the conversation thereafter. Keep it lean by default and lazy-load (a roadmap item) for the heavy bits.
 
@@ -115,13 +115,13 @@ Features that would shift token efficiency from "the agent has to remember to be
 *   **Error payloads designed for one-round recovery.** Today, `edit_file` failures like "old_str matched twice" send back the error and force the agent to re-read the file to figure out where. Instead: include the surrounding 5 lines of *each* match in the error, plus the file's current mtime. The agent gets enough to retry with a more specific `old_str` without burning a `read_file` call.
 *   **`stat` tool (shipped — `file_status`).** A lightweight, content-free probe returning per-path `git_dirty`/`changed_since_plumb_wrote`/`last_writer`/mtime/size. Used by agents recovering from concurrent-write errors so they don't have to re-read the body just to grab a fresh mtime.
 *   **Mtime auto-propagation within a session.** Plumb already tracks per-session `ReadTracker` state including mtime. `edit_file` could default to the last-read mtime for that path automatically; the agent only needs to override it explicitly. Removes the verbose `expected_mtime` copy step from every edit.
-*   **Smart output truncation with continuation handles.** Large `search_in_files`, `list_files`, or `find_references` results return the first N hits + a `next_page_token`. The token is short and lets the agent decide whether to spend more context on the rest. No need to truncate silently or dump everything.
+*   **Smart output truncation with continuation handles.** Large `search_in_files`, `find_files`, or `find_references` results return the first N hits + a `next_page_token`. The token is short and lets the agent decide whether to spend more context on the rest. No need to truncate silently or dump everything.
 
 ### Medium impact
 
 *   **Lazy memory loading.** `session_start` currently includes memories. Switch to descriptions only; the agent calls `read_memory(name)` if it actually needs the body. Pairs well with MCP Resources — memories already are resources, so this is mostly tuning what gets pulled vs referenced.
 *   **Output-format hints.** A `format: "compact" | "default" | "verbose"` parameter on read tools, list tools, and diagnostics. Compact strips repeated path prefixes, drops surrounding context lines in search hits, and uses YAML-style key:value instead of indented JSON where appropriate. The agent opts into compact when it's running tight on context.
-*   **Relative-path output mode.** Every output today repeats the workspace's absolute prefix. A connection-level "use relative paths" toggle would shave 30-60 bytes off every path mentioned in a tool result. Especially valuable for `list_files`, `find_files`, `git diff`.
+*   **Relative-path output mode.** Every output today repeats the workspace's absolute prefix. A connection-level "use relative paths" toggle would shave 30-60 bytes off every path mentioned in a tool result. Especially valuable for `find_files`, `search_in_files`, `git diff`.
 *   **Context pruning advisories.** Plumb's stats DB knows the input/output sizes per tool call. Surface a "your last 10 `read_file` calls averaged 4 KB output — try `start_line/end_line`" hint inside `session_start`'s footer when the average is high. Self-correcting feedback for agents.
 *   **Cap on session_start orientation packet.** Currently includes recent commits, recently-modified files, top-5 tool stats, active diagnostics, memory list. Each section is useful for *some* tasks and noise for others. A `sections: ["git", "memories"]` parameter lets the agent ask for what it needs.
 

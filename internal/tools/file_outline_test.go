@@ -210,8 +210,8 @@ func TestFileOutline_DirectoryTarget(t *testing.T) {
 	if !strings.Contains(err.Error(), "file_outline:") {
 		t.Errorf("error should carry the tool prefix, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "use list_directory") {
-		t.Errorf("error should suggest list_directory, got: %v", err)
+	if !strings.Contains(err.Error(), "use find_files") {
+		t.Errorf("error should suggest find_files, got: %v", err)
 	}
 }
 

@@ -12,6 +12,6 @@ Before making any other tool calls, call session_start with no arguments. It ret
 
 If session_start reports the workspace as resolving or empty, the project has no .plumb/ marker. Ask the user to run "plumb init" in the project root, or — if you have write authorisation — create .plumb/ yourself.
 
-Prefer symbol-aware tools (find_symbol, list_symbols, get_definition, find_references) over read_file when you only need to understand structure. Read entire files only when you need to edit them.
+Prefer symbol-aware tools (workspace_symbols, file_outline, get_definition, find_references) over read_file when you only need to understand structure. Read entire files only when you need to edit them.
 
 Check the diagnostics in the orientation packet and after every write — they show compile errors, type errors, and warnings from the language server.`

@@ -24,7 +24,7 @@ import (
 // that are NOT in tools.LeanTools. Checking these stay hidden under lean (and
 // visible under full) is what proves the admitted set is exactly LeanTools —
 // not merely a superset of it.
-var nonLeanSample = []string{"copy_file", "list_files", "list_directory", "call_hierarchy", "workspace_search"}
+var nonLeanSample = []string{"copy_file", "find_files", "file_diff", "call_hierarchy", "workspace_search"}
 
 func init() {
 	// Guard the fixture: if one of these is ever promoted into LeanTools, the

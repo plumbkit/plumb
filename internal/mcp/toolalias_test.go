@@ -12,9 +12,11 @@ import (
 // stated in one place and asserted here.
 func TestToolAliases_ExactMembership(t *testing.T) {
 	want := map[string]string{
-		"version":      "daemon_info",
-		"list_symbols": "file_outline",
-		"find_symbol":  "workspace_symbols",
+		"version":        "daemon_info",
+		"list_symbols":   "file_outline",
+		"find_symbol":    "workspace_symbols",
+		"list_directory": "find_files",
+		"list_files":     "find_files",
 	}
 	if len(toolAliases) != len(want) {
 		t.Fatalf("toolAliases has %d entries, want exactly %d: %v", len(toolAliases), len(want), toolAliases)
@@ -110,6 +112,31 @@ func TestResolveToolAlias(t *testing.T) {
 			wantCanon:   "workspace_symbols",
 			wantAliased: true,
 			wantArgs:    `{"query":"Greeter","uri":"/p/main.go"}`,
+		},
+		{
+			name:        "list_directory pins one level, both types, and the detailed rendering",
+			tool:        "list_directory",
+			args:        `{"path":"/p","pattern":"*.go","include_hidden":true,"sort_by":"size"}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"include_details":true,"include_hidden":true,"max_depth":1,"path":"/p","pattern":"*.go","sort_by":"size","type":"any"}`,
+		},
+		{
+			name:        "list_files renames root to path and pins the old default depth",
+			tool:        "list_files",
+			args:        `{"root":"/p","pattern":"*.go"}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":8,"path":"/p","pattern":"*.go","type":"file"}`,
+			absentArg:   "root",
+		},
+		{
+			name:        "list_files keeps an explicit max_depth",
+			tool:        "list_files",
+			args:        `{"root":"/p","max_depth":2}`,
+			wantCanon:   "find_files",
+			wantAliased: true,
+			wantArgs:    `{"max_depth":2,"path":"/p","type":"file"}`,
 		},
 		{
 			name:      "a registered tool name is not an alias",
