@@ -25,6 +25,20 @@
   changed'` keeps working. No behaviour changes: groundwork for #182, not the
   fix.
 
+- **The wasm runtime discard now has a test that dies without it.** Dropping
+  the wasm runtime when a parse overruns its deadline is the whole reason one
+  slow file cannot serialise every later file behind its parse lock, and it
+  was unpinned: the recovery test covering that path stayed green with the
+  discard deleted, because the parse it abandons actually completes and frees
+  the runtime by itself. The new
+  `TestExtract_AbandonedParseDoesNotBlockTheNextExtract` wedges the runtime
+  for real — it holds the runtime's parse lock for the whole test, which is
+  what a parse that never returns looks like to every later caller, abandons
+  an Extract against it, and then requires the *next* Extract to finish while
+  that lock is still held, which is impossible unless the extractor dropped
+  the wedged runtime and built a fresh one. Confirmed red against a neutered
+  discard (it times out on the lock convoy) and green with it restored.
+
 ### Fixed
 
 - **The gotreesitter Swift fallback extracts the full member surface.** The
