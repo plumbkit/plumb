@@ -3,7 +3,7 @@
 // Parity sweep harness for the PLAN-1 WASM retirement gate. NOT part of the
 // normal test suite (build tag `parity`); delete after the sweep.
 //
-// Runs the WASM (canonical tree-sitter) and pure-Go (gotreesitter v0.47.x)
+// Runs the WASM (canonical tree-sitter) and pure-Go (gotreesitter v0.48.x)
 // extractors over every .swift/.ts/.tsx file under PARITY_CORPUS and diffs the
 // extracted node/edge sets per file.
 // Usage: PARITY_CORPUS=<dir> go test -tags parity ./internal/topology/extractors/ -run TestParitySweep -v
