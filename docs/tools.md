@@ -603,7 +603,8 @@ labelled) and kicks an async reindex. Decision rule: use `workspace_search`
 for conceptual questions ("where is daemon locking handled?"); use
 `search_in_files` for exact literal/regex matches over current file contents.
 Ladder: `workspace_search` → topology/LSP → `search_in_files` → bounded
-`read_file`. **Inputs:** `query` (required), `corpora` (optional subset of
+`read_file` — the `plumb-explore` skill teaches the same ladder, with the
+signal for leaving each rung. **Inputs:** `query` (required), `corpora` (optional subset of
 `code`/`docs`/`memory`; default all), `limit` (default 20, max 100).
 
 ### `topology_explore`
@@ -701,8 +702,9 @@ also creates `.plumb/context.md`).
 Text/regex find-and-replace across files; **dry-run by default.** **Inputs:**
 `pattern`, `replacement` (required), `path`, `glob`, `use_regex`, `dry_run`
 (default true), `dirty_ok`, `format_after` (run the workspace formatter),
-`case_sensitive`, `max_files`, `max_file_bytes`. Prefer `rename_symbol` for
-renaming identifiers — it understands scope and types. When `[edits].show_write_diff`
+`case_sensitive`, `max_files`, `max_file_bytes`. For identifier refactors use
+`rename_symbol` (scope- and type-aware); `find_replace` is the plain-text lane.
+When `[edits].show_write_diff`
 is on (default), the response appends a per-file unified diff in both preview and
 applied modes, for up to the first 20 changed files, with a `+N more file(s)`
 summary beyond that.
@@ -735,7 +737,8 @@ Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
 `verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
 one shell-safe argument). A project-supplied command must be trusted first
 (`plumb trust`); defaults and global-config commands always run. Pairs with
-`topology_affected` (which says *which* tests to run).
+`topology_affected` (which says *which* tests to run) — the `plumb-testing`
+skill walks the whole post-edit loop.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist

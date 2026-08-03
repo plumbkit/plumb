@@ -84,8 +84,7 @@ func (t *CallHierarchy) WithWorkspace(ws WorkspaceFn) *CallHierarchy {
 func (t *CallHierarchy) Name() string                 { return "call_hierarchy" }
 func (t *CallHierarchy) InputSchema() json.RawMessage { return callHierarchySchema }
 func (t *CallHierarchy) Description() string {
-	return "No native Claude Code equivalent. " +
-		"Show the call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing). " +
+	return "Show the call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing). " +
 		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position for you, " +
 		"avoiding off-by-one errors; a raw file position (uri + line + character) is the fallback " +
 		"and, when it lands off an identifier, is snapped to the enclosing symbol. " +

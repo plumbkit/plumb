@@ -79,8 +79,7 @@ func (t *Git) Description() string {
 		"relies on the current branch is refused, since it may target a protected branch). " +
 		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
 		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
-		"worktree); every other subcommand uses args. " +
-		"Essential for clients without shell access (Claude Desktop, Cursor MCP)."
+		"worktree); every other subcommand uses args."
 }
 
 type gitToolArgs struct {

@@ -69,14 +69,14 @@ func (t *TopologyAffected) WithMemories(ws WorkspaceFn) *TopologyAffected {
 func (*TopologyAffected) Name() string                 { return "topology_affected" }
 func (*TopologyAffected) InputSchema() json.RawMessage { return topologyAffectedSchema }
 func (*TopologyAffected) Description() string {
-	return "THE headline topology tool: after you change code, ask this which tests to run " +
-		"instead of running the whole suite. Given changed files or symbols, it returns the " +
+	return "After you change code, ask this which tests to run instead of running the whole " +
+		"suite. Given changed files or symbols, it returns the " +
 		"likely affected files and tests by traversing inward dependency edges AND by " +
 		"co-location (tests in the same directory as a changed/affected file — which catches " +
 		"sibling test files the call graph alone misses). " +
 		"Results are heuristic and biased toward recall (a missed test is worse than an extra); " +
-		"every test carries a confidence and the reason it was flagged. No language server gives " +
-		"this answer. Returns a clear message when topology is disabled."
+		"every test carries a confidence and the reason it was flagged. " +
+		"Returns a clear message when topology is disabled."
 }
 
 type topologyAffectedArgs struct {

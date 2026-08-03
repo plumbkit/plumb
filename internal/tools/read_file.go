@@ -194,8 +194,7 @@ func (t *ReadFile) Description() string {
 		"1-based line number (and optional context_lines), so an over-cap file stays searchable in one tool — " +
 		"literal text by default (smart-case: case-insensitive when all lowercase), Go RE2 regex when use_regex; " +
 		"output is bounded by max_matches (default 200) and labelled when truncated. Combine pattern with " +
-		"start_line/end_line to restrict the search to a line window; pattern with limit is rejected. " +
-		"Essential for clients without filesystem access (Claude Desktop, Cursor MCP, etc.)."
+		"start_line/end_line to restrict the search to a line window; pattern with limit is rejected."
 }
 
 type readFileArgs struct {

@@ -116,11 +116,9 @@ func (t *ReadSymbol) outsideLabel(path string) string {
 func (t *ReadSymbol) Name() string                 { return "read_symbol" }
 func (t *ReadSymbol) InputSchema() json.RawMessage { return readSymbolSchema }
 func (t *ReadSymbol) Description() string {
-	return "Read the source body of a named symbol (function, method, type) in one call — " +
-		"no native Claude Code equivalent for this LSP-backed lookup. " +
+	return "Read the source body of a named symbol (function, method, type) in one call. " +
 		"Accepts plain name or dotted ReceiverType.MethodName form. " +
 		"Returns all matches when the name is ambiguous. " +
-		"Prefer this over a file_outline + read_file pair for targeted symbol reads. " +
 		"Each body line carries a display-only 1-based file line-number gutter ('<n>\\t', cat -n style) " +
 		"— strip it before reusing a line as an edit_file old_string. " +
 		"Falls back to a tree-sitter parse when the language server is cold or absent."
