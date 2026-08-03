@@ -63,10 +63,10 @@ type Capabilities struct {
 
 // registry holds one entry per known client. Claude Desktop is the thin client
 // (no native filesystem, search, shell, or LSP); the CLI agents (Claude Code,
-// Codex, Gemini) carry strong local file/search/shell access but no native LSP;
-// unknownCaps is the conservative default for any unrecognised client — it
-// assumes capable local tooling, which credits efficiency (small) rather than
-// capability (large), keeping estimates defensibly low.
+// Codex, Gemini, Kimi Code) carry strong local file/search/shell access but no
+// native LSP; unknownCaps is the conservative default for any unrecognised
+// client — it assumes capable local tooling, which credits efficiency (small)
+// rather than capability (large), keeping estimates defensibly low.
 var registry = []Capabilities{
 	{
 		Name:     "claude-desktop",
@@ -105,6 +105,37 @@ var registry = []Capabilities{
 		NativeSearch:   true,
 		NativeShell:    true,
 		Tokeniser:      FamilyGemini,
+	},
+	{
+		// Kimi Code is schema-discovery-only: it builds its tool set purely from
+		// tools/list and has no deferred-tool/ToolSearch mechanism, so a
+		// lean-hidden tool would be unreachable rather than merely undisplayed —
+		// auto mode must serve it "full" (reason schema-discovery-only-client).
+		// ReliableDeferredToolDiscovery is deliberately left unset: it is the
+		// evidence-gated lean opt-in, and no deferred-discovery behaviour has been
+		// demonstrated here. The token relief for Kimi Code comes instead from a
+		// CLIENT-side allowlist — `plumb setup kimi-code --lean` writes
+		// tools.LeanToolNames() into the enabledTools key of Kimi's own mcp.json.
+		//
+		// Tokeniser: Kimi K2's BPE is tiktoken-lineage, so FamilyGPT is the
+		// closest modelled family; a FamilyKimi with invented ratios would be fake
+		// precision, not better accuracy.
+		//
+		// Prefixes: "kimi-code" is the clientInfo.name observed from a real Kimi
+		// Code handshake (recorded as client_name in the session registry); the
+		// bare "kimi" alias covers sibling products (Kimi Desktop) that share the
+		// same mcp.json. Longest-prefix matching in Lookup keeps "kimi-code"
+		// winning over "kimi". If a future build reports some other name, Lookup
+		// simply falls through to unknownCaps and the client degrades gracefully
+		// to unrecognised-client behaviour (still "full", reason
+		// unknown-deferred-discovery) — never to a broken lean surface.
+		Name:                "kimi-code",
+		Prefixes:            []string{"kimi-code", "kimi"},
+		NativeFileRead:      true,
+		NativeSearch:        true,
+		NativeShell:         true,
+		SchemaDiscoveryOnly: true,
+		Tokeniser:           FamilyGPT,
 	},
 }
 

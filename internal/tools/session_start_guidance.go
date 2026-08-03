@@ -10,6 +10,8 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 		t.writeClaudeCodeGuidance(sb)
 	case isClaudeDesktop(t.clientNameFn):
 		t.writeClaudeDesktopGuidance(sb)
+	case isKimiCode(t.clientNameFn):
+		t.writeKimiCodeGuidance(sb)
 	}
 }
 
@@ -84,6 +86,51 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +
 		"ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
+}
+
+// writeKimiCodeGuidance is the Kimi Code block. Two constraints shape it.
+//
+// LEAN-SET TOOLS ONLY, unconditionally. Kimi Code filters tools CLIENT-side via
+// the enabledTools allowlist `plumb setup kimi-code --lean` writes into its
+// mcp.json. plumb cannot observe that filter — tools/call arrives identically
+// whether or not it is in force — so t.leanProfile() says nothing here. Naming
+// a non-lean tool would therefore be a broken pointer for every user who took
+// the --lean advice this block itself gives. Restricting the whole block to
+// tools.LeanTools is the only shape that is correct in both states.
+//
+// A SOFT edit lane, not nativeEditLaneWarning. Kimi Code has its own file
+// tools, but there is no evidence it enforces harness-side read-before-edit
+// tracking, and that warning quotes Claude Code's exact harness error strings
+// — quoting errors a Kimi user will never see would be worse than saying
+// nothing. So this recommends the plumb lane on its merits instead.
+func (t *SessionStart) writeKimiCodeGuidance(sb *strings.Builder) {
+	sb.WriteString("## Tool guidance (Kimi Code)\n\n")
+	sb.WriteString("**Edit lane.** Kimi Code has native file tools, so plumb is a choice here rather " +
+		"than the only route — but route tracked edits through plumb: `read_file` returns an " +
+		"mtime/sha header that `edit_file` takes back as `expected_mtime`, so the write is " +
+		"concurrency-checked against exactly what you read, per-path locked, announced to " +
+		"the language server, and reversible with `undo_edit`. Reading with plumb and then editing " +
+		"natively gets you none of that. `write_file` and `transaction_apply` (one atomic " +
+		"multi-file change) sit on the same lane.\n\n")
+	if t.topologyActive() {
+		sb.WriteString("Start from the Map, not from a text search:\n\n")
+		sb.WriteString("- **topology_affected** — THE post-change tool: which tests to run after an edit " +
+			"(dependency edges + co-location, recall-biased). No language server gives this.\n")
+		sb.WriteString("- **topology_search** — ranked symbol/file search across the index. Use it before grep.\n")
+		sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) in ~200 tokens.\n\n")
+	} else {
+		sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) " +
+			"for ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
+	}
+	sb.WriteString("LSP-semantic — precise navigation no text search can do:\n\n")
+	sb.WriteString("- **get_definition** / **find_references** — exact definition and all call sites, scope-aware.\n")
+	sb.WriteString("- **workspace_symbols** — find a symbol by name across the workspace instantly.\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide semantic rename.\n")
+	sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
+	sb.WriteString("**run_task** runs the project's stored `[tasks.<lang>]` build/test/lint command with no " +
+		"shell and bounded output — prefer it over shelling out to `go test`/`npm test`.\n\n")
+	sb.WriteString("If plumb's full tool surface feels heavy, `plumb setup kimi-code --lean` writes a " +
+		"client-side allowlist into Kimi's own mcp.json, trimming the loaded schemas to plumb's lean set.\n\n")
 }
 
 func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {

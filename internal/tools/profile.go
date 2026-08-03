@@ -1,6 +1,9 @@
 package tools
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // LeanTools is the single source of truth for the tools advertised under the
 // "lean" profile — the set a client that already has native filesystem and
@@ -75,6 +78,37 @@ var BootstrapTools = map[string]bool{
 // IsBootstrap reports whether name is one of the always-visible bootstrap
 // tools (see BootstrapTools).
 func IsBootstrap(name string) bool { return BootstrapTools[name] }
+
+// LeanToolNames returns the sorted, deduplicated UNION of LeanTools and
+// BootstrapTools. It is the single source of truth for a CLIENT-SIDE tool
+// allowlist — the list `plumb setup <client> --lean` writes into the client's
+// own MCP config (today Kimi Code's mcp.json "enabledTools" key).
+//
+// The union, not LeanTools alone: a client-side allowlist is enforced by the
+// CLIENT, so plumb's "bootstrap tools are advertised whatever the profile"
+// guarantee cannot rescue a bootstrap tool the client itself filtered out. If
+// the two sets ever diverge, an allowlist built from LeanTools alone could
+// silently strip session_start. Today BootstrapTools ⊆ LeanTools
+// (TestBootstrapToolsAreLean), so the union is exactly the lean set.
+//
+// Sorted so the written config is stable across runs — map iteration order is
+// random, and an unsorted list would make every re-register look like a change
+// and produce noisy diffs in a config the user may have in version control.
+func LeanToolNames() []string {
+	names := make([]string, 0, len(LeanTools)+len(BootstrapTools))
+	seen := make(map[string]bool, len(LeanTools)+len(BootstrapTools))
+	for _, set := range []map[string]bool{LeanTools, BootstrapTools} {
+		for name, on := range set {
+			if !on || seen[name] {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
 
 // IsLean reports whether name is advertised under the lean profile.
 //
