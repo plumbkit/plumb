@@ -297,20 +297,22 @@ func (w *tsWalk) appendImport(target string, rng *tsg.Node) {
 	if target == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
 		Language:  "typescript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	w.nodes = append(w.nodes, node)
 }
 
 // appendNode records a node spanning rng and returns its index.
 func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -318,7 +320,10 @@ func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) 
 		EndLine:   line(rng.EndPoint()),
 		Language:  "typescript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	w.nodes = append(w.nodes, node)
 	return idx
 }
 
@@ -433,15 +438,7 @@ func (w *tsWalk) maybeTest(call *tsg.Node) {
 	if name == "" {
 		name = fn.Text(w.src)
 	}
-	w.nodes = append(w.nodes, topology.Node{
-		Kind:      topology.KindTest,
-		Name:      name,
-		Qualified: name,
-		StartLine: line(call.StartPoint()),
-		EndLine:   line(call.EndPoint()),
-		Language:  "typescript",
-		Path:      w.path,
-	})
+	w.nodes = appendTest(w.nodes, name, "typescript", w.path, call)
 }
 
 // callEdges emits EdgeCalls between functions defined in the file (0.8/heuristic).

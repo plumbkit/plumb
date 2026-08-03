@@ -49,7 +49,17 @@
   six remaining upstream parse residuals clear. The wiring is pinned by
   `TestExtractorCtors_EngineWiring`; the wasmts TS bundle and the legacy regex
   fallback remain in-tree only as the parity-sweep reference until wasmts
-  retires entirely.
+  retires entirely. Two behavioural notes: the regex fallback is no longer
+  reachable for TS on any failure (wasmts also degraded to it on parse faults;
+  the pure-Go path records an unparseable file with zero symbols instead —
+  zero such files in the 492-file corpus), and TS/TSX declarations now carry
+  doc-comment spans, which the wasm walk could not provide. Review hardening:
+  the independent review caught the pure-Go extractor emitting no byte-precise
+  spans — invisible to the sweep because its node key omitted the span fields.
+  Both fixed: spans now match the wasm walk byte-for-byte across all 435
+  TS/TSX corpus files under an extended key that includes them, and
+  `TestExtractorsEmitByteSpans` tables the setSpan discipline over all 17
+  extractors so the next extractor cannot repeat the miss.
 
 - **gotreesitter bumped v0.47.1 → v0.48.0 — the twelve filed parser fixes
   land.** Every user-filed parse divergence (#539–#544, #556–#561; all Swift
