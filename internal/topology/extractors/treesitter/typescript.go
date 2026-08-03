@@ -19,9 +19,11 @@ import (
 // on typed arrow parameters (`(a: number) => a`) and default-valued arrow
 // params (`(a = 5) => a`), which is what forced TS/TSX onto WASM; both parse
 // cleanly on v0.47.x (verified 2026-07-29), so this extractor is kept
-// flip-ready. The flip itself is gated: a 492-file corpus sweep still found
-// ~8% of real-world files failing on gotreesitter (upstream issues #539-#544),
-// so it waits on those fixes plus a release. See PLAN-1 in the ops repo and
+// flip-ready. On v0.48.0 — which ships the fixes for all twelve filed parser
+// issues (#539-#544, #556-#561) — the 492-file corpus sweep is fully clean for
+// TS/TSX: 435/435 files at extraction parity with the wasm path, zero parse
+// failures. The flip is no longer parser-gated for TS/TSX; the remaining
+// residuals are Swift-only. See PLAN-1 in the ops repo and
 // extractors/parity_sweep_test.go.
 //
 // TSX nodes are labelled language "typescript" (not "tsx") so .ts and .tsx

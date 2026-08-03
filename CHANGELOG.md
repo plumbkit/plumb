@@ -39,6 +39,18 @@
   the wedged runtime and built a fresh one. Confirmed red against a neutered
   discard (it times out on the lock convoy) and green with it restored.
 
+### Changed
+
+- **gotreesitter bumped v0.47.1 → v0.48.0 — the twelve filed parser fixes
+  land.** Every user-filed parse divergence (#539–#544, #556–#561; all Swift
+  or TypeScript) ships in this tag. On the 492-file parity corpus the drift
+  count drops 15 → 6 and the one total parse failure (zod v3 `types.ts`,
+  #544) is gone; TS/TSX are at full extraction parity (435/435). All six
+  remaining drifts are Swift files whose direct parse still carries
+  ERROR/MISSING nodes — upstream residual shapes, not walk gaps. No
+  production parse changes: Swift/TS/TSX still index through the wasm path;
+  this moves the fallback and the WASM-retirement gate.
+
 ### Fixed
 
 - **A cancelled context no longer costs the wasm extractor its runtime — and
