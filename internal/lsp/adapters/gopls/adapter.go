@@ -44,6 +44,15 @@ type Adapter struct {
 	subs  map[int64]func(string, json.RawMessage)
 }
 
+// Compile-time contract check: a mis-signed method fails here, in this package,
+// rather than as a confusing error wherever the adapter is used as an lsp.Client.
+// gopls is the only adapter that also customises its own pull negotiation, and
+// internal/cli resolves that structurally, so pin it at build time too.
+var (
+	_ lsp.Client          = (*Adapter)(nil)
+	_ lsp.PullInitializer = (*Adapter)(nil)
+)
+
 // New creates an Adapter wired to conn. The caller must call Initialize before
 // any query method.
 func New(conn jsonrpc.Caller) *Adapter {
