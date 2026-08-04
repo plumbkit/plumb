@@ -36,9 +36,9 @@ func (e *JavaScriptExtractor) Extensions() []string { return []string{".js", ".m
 // describe/it/test blocks (→ KindTest). Class → method containment is lexical
 // and therefore certain (1.0); intra-file call edges are name-resolved
 // heuristics (0.8). Returns (nil, nil, nil) when src cannot be parsed.
-func (e *JavaScriptExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *JavaScriptExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &jsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root)
 		w.scanTests(root)
@@ -378,17 +378,7 @@ func (w *jsWalk) maybeTest(call *tsg.Node) {
 	if name == "" {
 		name = fn.Text(w.src)
 	}
-	node := topology.Node{
-		Kind:      topology.KindTest,
-		Name:      name,
-		Qualified: name,
-		StartLine: line(call.StartPoint()),
-		EndLine:   line(call.EndPoint()),
-		Language:  "javascript",
-		Path:      w.path,
-	}
-	setSpan(&node, call)
-	w.nodes = append(w.nodes, node)
+	w.nodes = appendTest(w.nodes, name, "javascript", w.path, call)
 }
 
 // jsIsComment reports whether a JavaScript grammar node type is a comment.

@@ -32,9 +32,9 @@ func (e *TOMLExtractor) Extensions() []string { return []string{".toml"} }
 // type (named by its dotted key), each top-level `key = value` pair and each
 // pair inside a table as a field, with table→field links as certain (1.0)
 // containment edges. Returns (nil, nil, nil) when src cannot be parsed.
-func (e *TOMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *TOMLExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &tomlWalk{lang: lang, src: src, path: relPath}
 		w.walk(root)
 		return w.nodes, w.edges

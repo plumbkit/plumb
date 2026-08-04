@@ -37,9 +37,9 @@ func (e *KotlinExtractor) Extensions() []string { return []string{".kt", ".kts"}
 // are emitted as KindType (a type contract, mirroring the Rust trait mapping);
 // concrete declarations are KindClass. Returns (nil, nil, nil) when src cannot
 // be parsed.
-func (e *KotlinExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *KotlinExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &kotlinWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root, -1, false)
 		w.callEdges(root)

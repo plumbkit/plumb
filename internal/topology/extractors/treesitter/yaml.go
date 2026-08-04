@@ -35,9 +35,9 @@ func (e *YAMLExtractor) Extensions() []string { return []string{".yaml", ".yml"}
 // matching the SQL/TOML convention. Keys reached through a block sequence
 // (lists of objects) are attached to the nearest enclosing key. Returns
 // (nil, nil, nil) when src cannot be parsed.
-func (e *YAMLExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *YAMLExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &yamlWalk{lang: lang, src: src, path: relPath}
 		w.walkNode(root, -1, "")
 		return w.nodes, w.edges

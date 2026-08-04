@@ -53,6 +53,7 @@ const (
 	skTopoResyncOnAttach
 	skTopoWatch
 	skTopoMaxFileSize
+	skTopoExtractTimeoutSec
 	skTopoResyncBatch
 	skTopoResyncPauseMs
 	skTopoResyncIntervalMin
@@ -263,6 +264,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Indexing", label: "Resync on attach", kind: settingToggle, key: skTopoResyncOnAttach, value: onOff(cfg.Topology.ResyncOnAttach)},
 		{group: "Indexing", label: "Watch files", kind: settingToggle, key: skTopoWatch, value: onOff(cfg.Topology.Watch)},
 		{group: "Indexing", label: "Max file size (B)", kind: settingNumber, key: skTopoMaxFileSize, value: itoa(int(cfg.Topology.MaxFileSizeBytes))},
+		{group: "Indexing", label: "Extract timeout (s)", kind: settingNumber, key: skTopoExtractTimeoutSec, value: itoa(cfg.Topology.ExtractTimeoutSeconds)},
 		{group: "Indexing", label: "Resync batch", kind: settingNumber, key: skTopoResyncBatch, value: itoa(cfg.Topology.ResyncBatch)},
 		{group: "Indexing", label: "Resync pause (ms)", kind: settingNumber, key: skTopoResyncPauseMs, value: itoa(cfg.Topology.ResyncPauseMs)},
 		{group: "Indexing", label: "Resync interval (min)", kind: settingNumber, key: skTopoResyncIntervalMin, value: itoa(cfg.Topology.ResyncIntervalMinutes)},
