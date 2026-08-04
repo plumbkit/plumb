@@ -105,6 +105,7 @@ var Layers = map[string]Layer{
 	"internal/lsp/watcher":             LayerTransport,
 	"internal/lsp/lsptest":             LayerTransport,
 	"internal/lsp/conformance":         LayerTransport,
+	"internal/lsp/adapters/base":       LayerTransport,
 	"internal/lsp/adapters/gopls":      LayerTransport,
 	"internal/lsp/adapters/pyright":    LayerTransport,
 	"internal/lsp/adapters/jdtls":      LayerTransport,

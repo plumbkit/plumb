@@ -37,7 +37,9 @@ type builder func(root node, relPath string, src []byte, lines *lineMap) ([]topo
 //
 // Robustness: if the WASM runtime cannot initialise (it is pure-Go and
 // cross-platform, so this is not expected), Extract degrades to a fallback
-// extractor and logs once, rather than dropping the language entirely.
+// extractor and logs once per runtime lifetime — a discard re-arms the
+// warning, so a rebuild that also fails announces itself — rather than
+// dropping the language entirely.
 //
 // Concurrency: safe for concurrent Extract calls; the underlying runtime
 // serialises parses through one wasm module (see runtime).

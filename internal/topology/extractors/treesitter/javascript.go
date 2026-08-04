@@ -378,17 +378,7 @@ func (w *jsWalk) maybeTest(call *tsg.Node) {
 	if name == "" {
 		name = fn.Text(w.src)
 	}
-	node := topology.Node{
-		Kind:      topology.KindTest,
-		Name:      name,
-		Qualified: name,
-		StartLine: line(call.StartPoint()),
-		EndLine:   line(call.EndPoint()),
-		Language:  "javascript",
-		Path:      w.path,
-	}
-	setSpan(&node, call)
-	w.nodes = append(w.nodes, node)
+	w.nodes = appendTest(w.nodes, name, "javascript", w.path, call)
 }
 
 // jsIsComment reports whether a JavaScript grammar node type is a comment.

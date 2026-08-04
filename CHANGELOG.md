@@ -70,6 +70,30 @@
   changed'` keeps working. No behaviour changes: groundwork for #182, not the
   fix.
 
+- **Regression nets under the nine LSP adapters, ahead of the base-adapter
+  extraction (#60).** The adapters duplicate ~2,400 lines of identical
+  plumbing and the planned fix embeds a shared base in each; three things that
+  refactor could change silently had nothing pinning them.
+  `conformance.RunErrorContract` now drives every `lsp.Client` method against
+  an always-failing transport and asserts the exact `"<server> <label>:
+  <cause>"` string plus `errors.Is`, across all nine adapters — 21 labels each,
+  22 or 23 where an optional pull surface exists — guarded by a golden label
+  set that fails in BOTH directions, so a case cannot be deleted quietly and a
+  newly added error-returning method cannot arrive unpinned.
+  `conformance.RunLazyOpenErrorContract` pins the `open <uri>` label the three
+  lazy-open adapters (sourcekit-lsp, zls, vscode-html-language-server) emit for
+  an unreadable document, and the HTML adapter's hand-rolled symbol-union
+  decode — the one wrapping a transport failure can never reach — carries its
+  own pin. `TestAdapters_OptionalInterfaceSurface` pins which adapters expose
+  the optional pull surfaces, in both directions: an embedded base promotes
+  every exported method into all nine embedders, so one stray method there
+  would opt six language servers into pull diagnostics with no visible diff at
+  any call site. All nine adapter packages now assert `lsp.Client` at build
+  time, and the six with no conformance suite gained one. Both harnesses are
+  proven load-bearing by meta-tests that run deliberately broken adapters — one
+  mislabelled, one whose message renders correctly but no longer unwraps —
+  against a clean control, and assert the doomed runs fail. Tests and
+  compile-time assertions only; no behaviour change.
 - **The wasm runtime discard now has a test that dies without it.** Dropping
   the wasm runtime when a parse overruns its deadline is the whole reason one
   slow file cannot serialise every later file behind its parse lock, and it
@@ -212,6 +236,26 @@
   `TestSmoke_ToolListParity`, `TestAgentsToolCount`, and
   `TestDocToolCountMatchesRegistry`.
 
+- **TypeScript and TSX/JSX now index through the pure-Go gotreesitter
+  extractor — the per-language WASM-retirement flip, part 1.** On v0.48.0 the
+  492-file parity corpus shows 435/435 TS/TSX files at full extraction parity
+  with the canonical-grammar WASM path and zero parse failures, so the WASM
+  detour for TS/TSX is over. Swift deliberately stays on `wasmts` until its
+  six remaining upstream parse residuals clear. The wiring is pinned by
+  `TestExtractorCtors_EngineWiring`; the wasmts TS bundle and the legacy regex
+  fallback remain in-tree only as the parity-sweep reference until wasmts
+  retires entirely. Two behavioural notes: the regex fallback is no longer
+  reachable for TS on any failure (wasmts also degraded to it on parse faults;
+  the pure-Go path records an unparseable file with zero symbols instead —
+  zero such files in the 492-file corpus), and TS/TSX declarations now carry
+  doc-comment spans, which the wasm walk could not provide. Review hardening:
+  the independent review caught the pure-Go extractor emitting no byte-precise
+  spans — invisible to the sweep because its node key omitted the span fields.
+  Both fixed: spans now match the wasm walk byte-for-byte across all 435
+  TS/TSX corpus files under an extended key that includes them, and
+  `TestExtractorsEmitByteSpans` tables the setSpan discipline over all 17
+  extractors so the next extractor cannot repeat the miss.
+
 - **gotreesitter bumped v0.47.1 → v0.48.0 — the twelve filed parser fixes
   land.** Every user-filed parse divergence (#539–#544, #556–#561; all Swift
   or TypeScript) ships in this tag. On the 492-file parity corpus the drift
@@ -223,6 +267,13 @@
   this moves the fallback and the WASM-retirement gate.
 
 ### Fixed
+
+- **A wasm runtime rebuilt after a discard now announces its own failure.**
+  The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
+  lifetime — so a runtime rebuilt after a timeout discard that then failed to
+  initialise degraded to the fallback extractor in permanent silence. The
+  latch is now per runtime lifetime (an `atomic.Bool` the discard re-arms),
+  pinned by `TestExtract_DiscardReArmsTheFallbackWarning`. (#216)
 
 - **A cancelled context no longer costs the wasm extractor its runtime — and
   the deadline tests are scheduler-independent.** `wasmts.Extract` now refuses
@@ -314,6 +365,42 @@
   recorded as failed instead.
 
 ### Changed
+
+- **The nine LSP adapters now share one base: ~2,240 lines of duplicated
+  plumbing deleted, with no behaviour change (#60).** Each adapter hand-wrote
+  all 23 `lsp.Client` methods, the negotiated-capability cache, the
+  notification fan-out, the server-request handler and the error labelling —
+  ~280 near-identical lines apiece, which the adapter guide actively told the
+  next author to "copy verbatim from gopls or pyright". That half now lives in
+  `internal/lsp/adapters/base`; an adapter embeds `*base.Adapter` and shadows
+  only what its server genuinely does differently (rust is down to 46 lines).
+  `base.New` installs BOTH transport handlers and keeps `dispatch` /
+  `handleServerRequest` unexported, so the "forgot `SetRequestHandler`, server
+  stalls" bug is now unrepresentable rather than merely documented.
+  Server-specific behaviour is preserved exactly: gopls keeps its
+  `lsp.PullInitializer` and workspace-pull surface, typescript and zls their
+  document-pull surface, swift/zig/html their lazy `didOpen` (now
+  `base.OpenTracker`) and union decodes.
+  **The constraint that shapes the design:** `base.Adapter`'s exported surface
+  is exactly `lsp.Client` and nothing more, because Go promotes an embedded
+  type's exported methods into every embedder and `internal/cli` resolves
+  optional adapter capabilities *structurally* — one stray
+  `SupportsPullDiagnostics` on the base would opt six servers that answer
+  `-32601` into pull diagnostics, compiling cleanly and changing no call site.
+  So every escape hatch is a package-level FUNCTION (`base.Call`, `CallPtr`,
+  `CallRaw`, `Notify`, `Wrap`) and `base.OpenTracker` is held as a named field,
+  never embedded. Guarded in both directions by
+  `TestExportedSurface_IsExactlyLSPClient`,
+  `TestAdapters_OptionalInterfaceSurface`,
+  `TestLazyOpenAdapters_LanguageIDAndExportedSurface` and
+  `TestLazyOpenAdapters_DidOpenMatrix` — the last pinning the per-method
+  `didOpen` count of every lazy-open adapter, so the deliberately asymmetric
+  ensure-open set cannot be "made consistent" as tidying — on top of the
+  error-contract and conformance harnesses landed ahead of the refactor. The
+  nine pre-existing adapter suites were left untouched through the migration as
+  the behaviour proof. `docs/adding-an-lsp.md` and the `add-lsp-adapter` skill
+  were rewritten for the new shape — the old copy-verbatim recipe was the
+  direct cause of the duplication.
 
 - **One home for `.gitignore` writing, held by a new rule shape.** Four
   hand-rolled gitignore appenders had accumulated by the time the July 2026

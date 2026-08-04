@@ -5,13 +5,14 @@
 // Confidence on all edges is 0.7 — lower than the Python extractor's 0.8
 // because JavaScript/TypeScript syntax is noisier without a grammar.
 //
-// Not wired into topology_pool's extractorCtors directly: TypeScript (.ts) and
-// TSX/JSX (.tsx/.jsx) are structurally parsed by the canonical tree-sitter
-// grammar compiled to WASM (see internal/topology/extractors/wasmts,
-// wasmts.NewTypeScript/NewTSX), and plain JavaScript (.js/.mjs/.cjs) by the
-// pure-Go gotreesitter extractor (internal/topology/extractors/treesitter,
-// treesitter.NewJavaScript). This package now survives only as the
-// wasm-init-failure fallback that wasmts.Extractor.Extract degrades to.
+// Not wired into topology_pool's extractorCtors: TypeScript (.ts), TSX/JSX
+// (.tsx/.jsx) and plain JavaScript (.js/.mjs/.cjs) are all structurally parsed
+// by the pure-Go gotreesitter extractors (internal/topology/extractors/
+// treesitter) since the per-language TS flip. This package is no longer
+// reachable in production — it was the wasmts TS init-failure and parse-fault
+// fallback, and the wasmts TS path itself is now only the parity-sweep
+// reference — and it is retained solely for that harness until wasmts retires
+// with the Swift flip.
 //
 // Validation status: unit-tested with fixture files.
 package typescript

@@ -61,6 +61,23 @@ func extractWith(
 	return nodes, edges, nil
 }
 
+// appendTest emits a KindTest node spanning call, stamped with its byte span.
+// Shared by the JavaScript and TypeScript walks, whose test emission is
+// otherwise identical clone code.
+func appendTest(nodes []topology.Node, name, lang, path string, call *tsg.Node) []topology.Node {
+	node := topology.Node{
+		Kind:      topology.KindTest,
+		Name:      name,
+		Qualified: name,
+		StartLine: line(call.StartPoint()),
+		EndLine:   line(call.EndPoint()),
+		Language:  lang,
+		Path:      path,
+	}
+	setSpan(&node, call)
+	return append(nodes, node)
+}
+
 // walkCallSites drives the second pass shared by every extractor that emits
 // intra-file call edges: a pre-order descent that threads the innermost
 // enclosing callable's node index down through the children.
