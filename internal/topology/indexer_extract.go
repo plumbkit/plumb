@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/langsupport"
 )
@@ -90,12 +91,20 @@ func (idx *Indexer) readAndHash(absPath, relPath string) (src []byte, ex Extract
 // extractFile runs the extractor for a file that isStale has confirmed needs
 // re-indexing. A nil extractor (no language match) or an oversized GLR grammar
 // yields zero nodes, matching the records persisted by the pre-reorder path.
+// The parse runs under extractTimeout so a pathological file cannot stall the
+// single indexer worker; on expiry the file is recorded as an error by the
+// caller and the worker moves on.
 func (idx *Indexer) extractFile(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
 	if ex == nil {
 		return nil, nil, nil
 	}
 	if skipOversizedGrammar(relPath, ex.Language(), len(src)) {
 		return nil, nil, nil
+	}
+	if idx.extractTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, idx.extractTimeout)
+		defer cancel()
 	}
 	return safeExtract(ctx, ex, relPath, src)
 }
@@ -115,12 +124,48 @@ func skipOversizedGrammar(relPath, lang string, srcLen int) bool {
 	return true
 }
 
-// safeExtract wraps Extract in a recover so malformed files cannot panic the daemon.
+// safeExtract wraps Extract in a recover so malformed files cannot panic the
+// daemon, and abandons it when ctx expires so a parse that runs away cannot
+// wedge the caller.
+//
+// The abandoned goroutine is NOT killed — nothing here can stop a parse already
+// running inside a grammar. The gotreesitter parsers bound themselves from the
+// same ctx (SetTimeoutMicros). A wasm parse is NOT ctx-interruptible — the
+// interruptible wazero mode measured 4.8x slower and was rejected (see
+// wasmts.newRuntime) — so on deadline the wasm extractor stops waiting, drops
+// the abandoned goroutine's late result, and discards the runtime WITHOUT
+// closing it (the stuck goroutine is still executing inside), so later files
+// get a fresh runtime rather than serialising behind the stuck parse's lock.
+// This watchdog is the backstop for an engine that honours neither: it frees
+// the indexer worker to keep going while the orphan winds down on its own.
 func safeExtract(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("extractor panic: %v", r)
-		}
+	type result struct {
+		nodes []Node
+		edges []Edge
+		err   error
+	}
+	// Buffered so an abandoned extract can always send and exit rather than block
+	// on a receiver that has already given up.
+	done := make(chan result, 1)
+	started := time.Now()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{err: fmt.Errorf("extractor panic: %v", r)}
+			}
+		}()
+		n, e, xerr := ex.Extract(ctx, relPath, src)
+		done <- result{nodes: n, edges: e, err: xerr}
 	}()
-	return ex.Extract(ctx, relPath, src)
+
+	select {
+	case r := <-done:
+		return r.nodes, r.edges, r.err
+	case <-ctx.Done():
+		slog.Warn("topology: abandoning slow extract",
+			"path", relPath, "lang", ex.Language(),
+			"bytes", len(src), "elapsed", time.Since(started))
+		return nil, nil, fmt.Errorf("extract %s: %w", relPath, ctx.Err())
+	}
 }

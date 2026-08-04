@@ -43,6 +43,19 @@ type runtime struct {
 // newRuntime compiles and instantiates a bundled tree-sitter wasm once, loading
 // each grammar export in exports into the langs map.
 func newRuntime(ctx context.Context, wasm []byte, exports []string) (*runtime, error) {
+	// Deliberately the default runtime config, which does NOT check the call's
+	// context: wazero's WithCloseOnContextDone would make a running parse
+	// interruptible, but it inserts a periodic check into the compiled code and
+	// measured 4.8x slower here (1226ms vs 254ms per parse of a 400-class
+	// TypeScript fixture, 20 iterations x 3-5 runs). That is a permanent tax on
+	// every TypeScript and Swift file indexed, paid to bound a risk that lives
+	// mostly in the OTHER engine — the pure-Go gotreesitter path, whose parsers
+	// take a free in-engine deadline instead (see treesitter.extractWith).
+	//
+	// A wasm parse therefore runs to completion even past its deadline. What
+	// bounds it is Extractor.Extract, which stops WAITING and discards this
+	// runtime, so the stuck parse keeps a dead runtime to itself and the next
+	// file gets a fresh one rather than queueing behind it.
 	wzr := wazero.NewRuntime(ctx)
 	wasi_snapshot_preview1.MustInstantiate(ctx, wzr)
 

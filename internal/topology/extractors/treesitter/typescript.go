@@ -13,16 +13,17 @@ import (
 // TypeScriptExtractor extracts TypeScript/TSX symbols using the gotreesitter
 // TypeScript and TSX grammars.
 //
-// NOT WIRED: the canonical grammar compiled to WASM (extractors/wasmts) remains
-// the primary TS/TSX path — extractorCtors builds wasmts.NewTypeScript and
-// wasmts.NewTSX, not this extractor. gotreesitter v0.20.x cascaded ERROR nodes
-// on typed arrow parameters (`(a: number) => a`) and default-valued arrow
-// params (`(a = 5) => a`), which is what forced TS/TSX onto WASM; both parse
-// cleanly on v0.47.x (verified 2026-07-29), so this extractor is kept
-// flip-ready. The flip itself is gated: a 492-file corpus sweep still found
-// ~8% of real-world files failing on gotreesitter (upstream issues #539-#544),
-// so it waits on those fixes plus a release. See PLAN-1 in the ops repo and
-// extractors/parity_sweep_test.go.
+// WIRED as the primary TS/TSX path: extractorCtors builds this extractor for
+// "typescript" and "tsx" (the per-language gate split — Swift stays on the
+// canonical WASM grammar until its upstream parse residuals clear).
+// gotreesitter v0.20.x cascaded ERROR nodes on typed arrow parameters
+// (`(a: number) => a`) and default-valued arrow params (`(a = 5) => a`), which
+// is what originally forced TS/TSX onto WASM; on v0.48.0 — which ships the
+// fixes for all twelve filed parser issues (#539-#544, #556-#561) — the
+// 492-file corpus sweep is fully clean for TS/TSX: 435/435 files at extraction
+// parity with the wasm path, zero parse failures. The wasmts TS bundle remains
+// only as the parity-sweep reference until the Swift flip retires wasmts
+// entirely. See PLAN-1 in the ops repo and extractors/parity_sweep_test.go.
 //
 // TSX nodes are labelled language "typescript" (not "tsx") so .ts and .tsx
 // symbols search together under one language, matching the langsupport
@@ -57,9 +58,9 @@ func (e *TypeScriptExtractor) Extensions() []string { return e.exts }
 // namespace bodies are descended into. Containment is lexical and certain
 // (1.0/extractor); intra-file call edges are name-resolved heuristics (0.8).
 // Returns (nil, nil, nil) when src cannot be parsed.
-func (e *TypeScriptExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *TypeScriptExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &tsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		for _, n := range root.Children() {
 			w.dispatch(n)
@@ -296,20 +297,22 @@ func (w *tsWalk) appendImport(target string, rng *tsg.Node) {
 	if target == "" {
 		return
 	}
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      topology.KindImport,
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
 		Language:  "typescript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	w.nodes = append(w.nodes, node)
 }
 
 // appendNode records a node spanning rng and returns its index.
 func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) int64 {
 	idx := int64(len(w.nodes))
-	w.nodes = append(w.nodes, topology.Node{
+	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
 		Qualified: name,
@@ -317,7 +320,10 @@ func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) 
 		EndLine:   line(rng.EndPoint()),
 		Language:  "typescript",
 		Path:      w.path,
-	})
+	}
+	setSpan(&node, rng)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	w.nodes = append(w.nodes, node)
 	return idx
 }
 
@@ -354,12 +360,30 @@ func (w *tsWalk) typeName(n *tsg.Node) string {
 
 func (w *tsWalk) memberName(m *tsg.Node) string {
 	if id := m.ChildByFieldName("name", w.lang); id != nil {
-		return id.Text(w.src)
+		return w.keyText(id)
 	}
 	if id := childByType(m, "property_identifier", w.lang); id != nil {
 		return id.Text(w.src)
 	}
 	return ""
+}
+
+// keyText returns a member-name node's source text, keeping the quotes on a
+// quoted key (`"~standard"`) as the canonical grammar does. In this grammar a
+// property_signature's string name node excludes the quote bytes from its span
+// while a public_field_definition's includes them, so when the span left the
+// quotes out they are re-attached from the surrounding source.
+func (w *tsWalk) keyText(id *tsg.Node) string {
+	t := id.Text(w.src)
+	if id.Type(w.lang) != "string" || t == "" || t[0] == '"' || t[0] == '\'' || t[0] == '`' {
+		return t
+	}
+	s, e := id.StartByte(), id.EndByte()
+	if s > 0 && int(e) < len(w.src) && w.src[e] == w.src[s-1] &&
+		(w.src[s-1] == '"' || w.src[s-1] == '\'' || w.src[s-1] == '`') {
+		return string(w.src[s-1 : e+1])
+	}
+	return t
 }
 
 func (w *tsWalk) declaratorName(d *tsg.Node) string {
@@ -414,15 +438,7 @@ func (w *tsWalk) maybeTest(call *tsg.Node) {
 	if name == "" {
 		name = fn.Text(w.src)
 	}
-	w.nodes = append(w.nodes, topology.Node{
-		Kind:      topology.KindTest,
-		Name:      name,
-		Qualified: name,
-		StartLine: line(call.StartPoint()),
-		EndLine:   line(call.EndPoint()),
-		Language:  "typescript",
-		Path:      w.path,
-	})
+	w.nodes = appendTest(w.nodes, name, "typescript", w.path, call)
 }
 
 // callEdges emits EdgeCalls between functions defined in the file (0.8/heuristic).

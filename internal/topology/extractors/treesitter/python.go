@@ -38,9 +38,9 @@ func (e *PythonExtractor) Extensions() []string { return []string{".py"} }
 // variable), plus class→member containment edges and intra-file call edges.
 // Function-local bindings are not surfaced. Returns (nil, nil, nil) when the
 // source cannot be parsed.
-func (e *PythonExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *PythonExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &pyWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root, -1, false)
 		w.callEdges(root)

@@ -15,9 +15,12 @@
 // assert the document-pull shape (SupportsPullDiagnostics + Diagnostic) and the
 // workspace-pull shape (WorkspaceDiagnostic). One extra exported method here is
 // therefore promoted into every embedding adapter at once — a single stray
-// SupportsPullDiagnostics would opt language servers that answer -32601 to
-// textDocument/diagnostic into the pull model. That regression compiles,
-// changes no call site, and surfaces only as broken diagnostics at runtime.
+// WorkspaceDiagnostic or EnablePullDiagnostics would opt every adapter into a
+// pull surface it never declared, against servers that answer -32601 to those
+// methods. (SupportsPullDiagnostics alone is inert: the document-pull shape
+// is a two-method interface, SupportsPullDiagnostics + Diagnostic.) That
+// regression compiles, changes no call site, and surfaces only as broken
+// diagnostics at runtime.
 //
 // So every escape hatch this package offers an adapter is a package-level
 // FUNCTION — Call, CallPtr, CallRaw, Notify, Wrap. Functions are never

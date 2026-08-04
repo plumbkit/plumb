@@ -33,9 +33,9 @@ func (e *ZigExtractor) Extensions() []string { return []string{".zig"} }
 // edges. Containment is lexical (the method is inside the container literal) and
 // therefore certain (1.0); intra-file call edges are name-resolved heuristics
 // (0.8). Returns (nil, nil, nil) when src cannot be parsed.
-func (e *ZigExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *ZigExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &zigWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root, -1, false)
 		w.callEdges(root)

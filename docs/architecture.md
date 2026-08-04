@@ -34,7 +34,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/session` | Per-connection session registry with client identity tracking |
 | `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 13); also holds the `episodic_memories` table for idle-session summaries |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
-| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter, many languages) + canonical-grammar WASM via wazero for TypeScript/TSX/JSX + Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
+| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter — most languages incl. TypeScript/TSX/JSX) + canonical-grammar WASM via wazero for Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
 | `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
 | `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
@@ -70,7 +70,7 @@ flowchart LR
 ```
 
 ### 1. Plumb Topology (The Map)
-Topology uses **Go AST plus pure-Go tree-sitter (gotreesitter) and canonical-grammar WASM (wazero) extractors** spanning many languages, and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). **On by default** (opt out with `[topology] enabled = false`). It is exposed through the `topology_*` tools (`topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`) plus `structural_query`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
+Topology uses **Go AST plus pure-Go tree-sitter (gotreesitter) extractors for most languages, and a canonical-grammar WASM (wazero) extractor for Swift,** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). **On by default** (opt out with `[topology] enabled = false`). It is exposed through the `topology_*` tools (`topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`) plus `structural_query`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
 *   **Strengths:** Instant availability (no LSP boot time), minimal memory footprint, handles broken code gracefully, FTS5 ranked search, BFS neighbourhood exploration.
 *   **Role in Plumb:** Discovery engine. When an agent asks "Where is the routing logic?" or needs to see a symbol's neighbourhood, Topology handles it without waiting for the language server to index.
 *   **Trade-offs:** Syntactic extraction only — no type resolution. "Broad" recall, not compiler-level precision.

@@ -1,8 +1,11 @@
 package treesitter
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	tsg "github.com/odvcencio/gotreesitter"
 
@@ -22,20 +25,57 @@ import (
 // structural: an extractor written against extractWith cannot forget, because it
 // never holds the tree.
 //
+// It also bounds the parse by ctx's deadline. A grammar's error recovery can go
+// superlinear on a file well inside the indexer's size caps, so without this a
+// single pathological file would run for as long as it liked. Note that a
+// timed-out parse comes back as a PARTIAL tree with a nil error — walking it
+// would record a truncated symbol set as though it were the whole file — so the
+// early stop is turned into an error for the caller to record.
+//
 // walk returns the nodes and edges it collected; a nil edge slice is fine for a
 // language that emits none.
 func extractWith(
+	ctx context.Context,
 	lang *tsg.Language,
 	src []byte,
 	walk func(root *tsg.Node) ([]topology.Node, []topology.Edge),
 ) ([]topology.Node, []topology.Edge, error) {
-	tree, err := tsg.NewParser(lang).Parse(src)
+	parser := tsg.NewParser(lang)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, nil, ctx.Err()
+		}
+		//nolint:gosec // G115: remaining is > 0 per the check above, so the conversion cannot wrap.
+		parser.SetTimeoutMicros(uint64(remaining.Microseconds()))
+	}
+	tree, err := parser.Parse(src)
 	if err != nil || tree == nil {
 		return nil, nil, nil
 	}
 	defer tree.Release()
+	if tree.ParseStoppedEarly() {
+		return nil, nil, fmt.Errorf("parse stopped early: %s", tree.ParseStopReason())
+	}
 	nodes, edges := walk(tree.RootNode())
 	return nodes, edges, nil
+}
+
+// appendTest emits a KindTest node spanning call, stamped with its byte span.
+// Shared by the JavaScript and TypeScript walks, whose test emission is
+// otherwise identical clone code.
+func appendTest(nodes []topology.Node, name, lang, path string, call *tsg.Node) []topology.Node {
+	node := topology.Node{
+		Kind:      topology.KindTest,
+		Name:      name,
+		Qualified: name,
+		StartLine: line(call.StartPoint()),
+		EndLine:   line(call.EndPoint()),
+		Language:  lang,
+		Path:      path,
+	}
+	setSpan(&node, call)
+	return append(nodes, node)
 }
 
 // walkCallSites drives the second pass shared by every extractor that emits

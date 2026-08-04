@@ -33,9 +33,9 @@ func (e *RustExtractor) Extensions() []string { return []string{".rs"} }
 // certain (1.0); impl-method → type links are name-resolved within the file and
 // so are heuristic (0.8), as are intra-file call edges. Returns (nil, nil, nil)
 // when src cannot be parsed.
-func (e *RustExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *RustExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &rustWalk{
 			lang:    lang,
 			src:     src,
