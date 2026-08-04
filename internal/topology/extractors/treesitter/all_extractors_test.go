@@ -1,6 +1,11 @@
 package treesitter
 
-import "github.com/plumbkit/plumb/internal/topology"
+import (
+	"context"
+	"testing"
+
+	"github.com/plumbkit/plumb/internal/topology"
+)
 
 // extractorCase is one pure-Go extractor in this package plus a minimal source
 // sample that must yield at least one symbol.
@@ -90,5 +95,32 @@ func allExtractorCases() []extractorCase {
 			"html", func() topology.Extractor { return NewHTML() }, "a.html",
 			"<html><body><div id=\"x\">hi</div></body></html>\n",
 		},
+	}
+}
+
+// TestExtractorsEmitByteSpans guards the setSpan discipline: every extractor
+// stamps HasBytes plus a byte-precise span on the symbols it emits. Without
+// them the symbol-edit fallback (nodeToDocSymbol) degrades to line-granular
+// ranges — and on a single-line declaration every member collapses onto the
+// same range, so a fallback body replace would rewrite its siblings. The
+// pure-Go TS/TSX extractor shipped without spans while the parity sweep stayed
+// green; this table makes that miss unrepeatable for the next extractor too.
+func TestExtractorsEmitByteSpans(t *testing.T) {
+	for _, c := range allExtractorCases() {
+		t.Run(c.name, func(t *testing.T) {
+			nodes, _, err := c.ctor().Extract(context.Background(), c.path, []byte(c.src))
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if len(nodes) == 0 {
+				t.Fatal("no symbols extracted; the sample is wrong")
+			}
+			for _, n := range nodes {
+				if !n.HasBytes || n.EndByte <= n.StartByte {
+					t.Errorf("%s %q has no byte span (HasBytes=%v, bytes %d-%d)",
+						n.Kind, n.Name, n.HasBytes, n.StartByte, n.EndByte)
+				}
+			}
+		})
 	}
 }

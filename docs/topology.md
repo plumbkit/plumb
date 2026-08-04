@@ -79,7 +79,9 @@ flowchart LR
 - **Topology is the Map.** Use it for discovery: "where is the routing logic?",
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
-  is syntactic (Go AST; pure-Go tree-sitter for Python/JavaScript/Rust/Zig/Kotlin/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown; and canonical-grammar WASM for TypeScript/TSX/JSX and Swift), so it offers
+  is syntactic (Go AST; pure-Go tree-sitter for TypeScript/TSX/JSX, Python,
+  JavaScript, Rust, Zig, Kotlin, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML
+  and Markdown; and canonical-grammar WASM for Swift), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
   (`get_definition`, `find_references`, `rename_symbol`, `diagnostics`) make and
@@ -96,13 +98,11 @@ pipeline has four parts:
 1. **Extractors read your source.** Per language, a lightweight extractor turns
    a file into a list of *entities* (functions, types, methods, imports, tests)
    and *edges* (calls, imports, containment). Go uses the standard library's
-   `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin and
-   Java use the pure-Go gotreesitter runtime, as does JavaScript
-   (`.js`/`.mjs`/`.cjs`); and TypeScript (`.ts`), TSX/JSX (`.tsx`/`.jsx`) and
-   Swift use the canonical tree-sitter grammars compiled to WASM and run via
-   wazero (gotreesitter's TSX grammar cascades on typed-arrow params, so the
-   canonical grammar parses them cleanly). The old line-by-line regex TS/JS
-   scanner survives only as a wasm-init-failure fallback.
+   `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin, Java,
+   JavaScript (`.js`/`.mjs`/`.cjs`), TypeScript (`.ts`) and TSX/JSX
+   (`.tsx`/`.jsx`) use the pure-Go gotreesitter runtime; Swift uses the
+   canonical tree-sitter grammar compiled to WASM and run via wazero, until
+   the remaining upstream gotreesitter Swift parse gaps close.
    None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
    tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual
