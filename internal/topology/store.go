@@ -39,6 +39,7 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 	idx := newIndexer(workspace, db, exts, cfg.MaxFileSizeBytes, cfg.ResyncIntervalMinutes)
 	idx.resyncBatch = cfg.ResyncBatch
 	idx.resyncPause = time.Duration(cfg.ResyncPauseMs) * time.Millisecond
+	idx.extractTimeout = time.Duration(cfg.ExtractTimeoutSeconds) * time.Second
 	s := &Store{workspace: workspace, db: db, idx: idx}
 
 	var watcher *fsWatcher

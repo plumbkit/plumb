@@ -40,9 +40,11 @@ import (
 //
 // The negative assertions are the point. Should the adapters ever share an
 // embedded base type, every exported method on that base is promoted into all
-// nine embedders at once: one stray SupportsPullDiagnostics or
-// WorkspaceDiagnostic there would silently opt six language servers into pull
-// diagnostics — servers that answer -32601 to textDocument/diagnostic. That
+// nine embedders at once: one stray WorkspaceDiagnostic or
+// EnablePullDiagnostics there would silently opt every embedder into a pull
+// surface it never declared — against servers that answer -32601 to those
+// methods. (SupportsPullDiagnostics alone is inert: the document-pull shape
+// is a two-method interface, SupportsPullDiagnostics + Diagnostic.) That
 // regression compiles, changes no call site, and would otherwise only surface
 // as broken diagnostics at runtime. Here it fails a test.
 //

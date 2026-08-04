@@ -187,6 +187,9 @@ func validateTopology(tp TopologyConfig) error {
 	if tp.MaxFileSizeBytes < 0 {
 		return errors.New("topology.max_file_size_bytes must be non-negative (0 uses the default)")
 	}
+	if tp.ExtractTimeoutSeconds < 0 {
+		return errors.New("topology.extract_timeout_seconds must be non-negative (0 disables the timeout)")
+	}
 	if tp.ResyncBatch < 0 {
 		return errors.New("topology.resync_batch must be non-negative (0 disables pacing)")
 	}

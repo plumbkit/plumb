@@ -49,8 +49,81 @@
   mislabelled, one whose message renders correctly but no longer unwraps —
   against a clean control, and assert the doomed runs fail. Tests and
   compile-time assertions only; no behaviour change.
+- **The wasm runtime discard now has a test that dies without it.** Dropping
+  the wasm runtime when a parse overruns its deadline is the whole reason one
+  slow file cannot serialise every later file behind its parse lock, and it
+  was unpinned: the recovery test covering that path stayed green with the
+  discard deleted, because the parse it abandons actually completes and frees
+  the runtime by itself. The new
+  `TestExtract_AbandonedParseDoesNotBlockTheNextExtract` wedges the runtime
+  for real — it holds the runtime's parse lock for the whole test, which is
+  what a parse that never returns looks like to every later caller, abandons
+  an Extract against it, and then requires the *next* Extract to finish while
+  that lock is still held, which is impossible unless the extractor dropped
+  the wedged runtime and built a fresh one. Confirmed red against a neutered
+  discard (it times out on the lock convoy) and green with it restored.
+
+### Changed
+
+- **TypeScript and TSX/JSX now index through the pure-Go gotreesitter
+  extractor — the per-language WASM-retirement flip, part 1.** On v0.48.0 the
+  492-file parity corpus shows 435/435 TS/TSX files at full extraction parity
+  with the canonical-grammar WASM path and zero parse failures, so the WASM
+  detour for TS/TSX is over. Swift deliberately stays on `wasmts` until its
+  six remaining upstream parse residuals clear. The wiring is pinned by
+  `TestExtractorCtors_EngineWiring`; the wasmts TS bundle and the legacy regex
+  fallback remain in-tree only as the parity-sweep reference until wasmts
+  retires entirely. Two behavioural notes: the regex fallback is no longer
+  reachable for TS on any failure (wasmts also degraded to it on parse faults;
+  the pure-Go path records an unparseable file with zero symbols instead —
+  zero such files in the 492-file corpus), and TS/TSX declarations now carry
+  doc-comment spans, which the wasm walk could not provide. Review hardening:
+  the independent review caught the pure-Go extractor emitting no byte-precise
+  spans — invisible to the sweep because its node key omitted the span fields.
+  Both fixed: spans now match the wasm walk byte-for-byte across all 435
+  TS/TSX corpus files under an extended key that includes them, and
+  `TestExtractorsEmitByteSpans` tables the setSpan discipline over all 17
+  extractors so the next extractor cannot repeat the miss.
+
+- **gotreesitter bumped v0.47.1 → v0.48.0 — the twelve filed parser fixes
+  land.** Every user-filed parse divergence (#539–#544, #556–#561; all Swift
+  or TypeScript) ships in this tag. On the 492-file parity corpus the drift
+  count drops 15 → 6 and the one total parse failure (zod v3 `types.ts`,
+  #544) is gone; TS/TSX are at full extraction parity (435/435). All six
+  remaining drifts are Swift files whose direct parse still carries
+  ERROR/MISSING nodes — upstream residual shapes, not walk gaps. No
+  production parse changes: Swift/TS/TSX still index through the wasm path;
+  this moves the fallback and the WASM-retirement gate.
 
 ### Fixed
+
+- **A wasm runtime rebuilt after a discard now announces its own failure.**
+  The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
+  lifetime — so a runtime rebuilt after a timeout discard that then failed to
+  initialise degraded to the fallback extractor in permanent silence. The
+  latch is now per runtime lifetime (an `atomic.Bool` the discard re-arms),
+  pinned by `TestExtract_DiscardReArmsTheFallbackWarning`. (#216)
+
+- **A cancelled context no longer costs the wasm extractor its runtime — and
+  the deadline tests are scheduler-independent.** `wasmts.Extract` now refuses
+  a context that is already dead before starting the parse (matching the
+  treesitter envelope's expired-budget contract), instead of spawning a parse
+  doomed to be abandoned — discarding a warm runtime and leaking the parse
+  goroutine for nothing — and, when a fast parse won the `select` against the
+  already-closed `ctx.Done()`, returning a result where the caller was
+  promised `ctx.Err()`. That race was real: on a loaded race-detector runner
+  the parse goroutine starved the selecting goroutine for the parse's full
+  duration and `TestExtract_ExpiredContextReturnsPromptly` failed with a nil
+  error. Both deadline tests now wedge the runtime's parse lock so the select
+  has exactly one reachable arm in either implementation.
+
+- **The gotreesitter Swift fallback extracts the full member surface.** The
+  pure-Go Swift walk — live in production whenever the wasm runtime fails to
+  initialise, and the flip candidate for WASM retirement — was missing
+  `init`/`deinit`/`subscript`/`typealias`/operator members entirely and leaked
+  initialiser-body locals into the index as type members. It now matches the
+  wasm walk member-for-member, and a quoted TypeScript member key keeps its
+  quotes (the one extraction drift the parity corpus showed on TS).
 
 - **A peer agent can no longer silently steal a shared connection's workspace
   pin — an explicit `session_start` pin is now sticky (issue #182).** A client
@@ -105,6 +178,20 @@
   now delegates to `paths.EnsureGitignoreEntries`, which matches entries by
   exact trimmed line; the regression test plants the commented-out line and
   was confirmed to fail against the old implementation.
+- **One slow parse can no longer stall topology indexing.** A grammar's error
+  recovery can go superlinear on a file well inside the indexer's size caps,
+  and the single indexer worker would sit on it for as long as the parse
+  liked. The new `topology.extract_timeout_seconds` config (default 10, 0
+  disables) bounds each file's extraction, enforced in three layers:
+  `extractFile` runs the parse under a ctx deadline, the gotreesitter
+  extractors hand the remaining budget to the parser via `SetTimeoutMicros`,
+  and a watchdog in `safeExtract` abandons any parse that outlives its
+  deadline — a wasm parse cannot be interrupted, so its runtime is discarded
+  unclosed rather than letting later files queue behind the stuck goroutine's
+  lock. A gotreesitter parse cut short this way returns a partial tree with a
+  nil error, which would record a truncated symbol set as though it were the
+  whole file; the early stop is now surfaced as an error so the file is
+  recorded as failed instead.
 
 ### Changed
 
