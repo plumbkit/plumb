@@ -365,9 +365,13 @@ func TestLazyOpenErrorContract(t *testing.T) {
 Call it from the lazy-open adapters and nowhere else: the per-adapter call is
 what makes an adapter's participation visible at its own call site.
 
-**Two shared guard tables also need a row.** Both hard-gate on their own row
-count and fail with a directive message until the new adapter is added, so
-`go test ./...` stays red until you state its behaviour explicitly:
+**Two shared guard tables also need a row.** Each hard-gates on its own row
+count, so a partial edit — the row without the gate bump, or the bump without
+the row — fails with a directive message. Skipping a table entirely does NOT
+fail on its own: a row-count gate cannot see a package it was never told
+about. The row is not optional paperwork — it is the only thing pinning your
+adapter's optional capability surface (and, for lazy-open adapters, its
+didOpen matrix) against future drift:
 
 - `internal/lsp/conformance/optional_interfaces_test.go` — add a case to
   `TestAdapters_OptionalInterfaceSurface` stating which optional pull surfaces
@@ -417,8 +421,7 @@ go test -tags integration ./internal/lsp/adapters/<name>/...
 
 ### 7. Register the adapter
 
-Three places, all mechanical — on top of the two shared guard tables in step 5,
-which gate on their row counts and fail until the new adapter is listed:
+Four places, all mechanical — on top of the two shared guard tables in step 5:
 
 - `internal/langsupport/langsupport.go` — add a `Language` row with the
   extensions and the `LSPAdapter` binary name. This is the single source of
@@ -427,10 +430,26 @@ which gate on their row counts and fail until the new adapter is listed:
   to `adapterInitParams` (`DefaultInitParams`).
 - `internal/cli/conn_attach_language.go` — add a case to `adapterForLanguage`
   for the display name.
+- `internal/arch/layers.go` — add the package to the transport layer
+  (`LayerTransport`, alongside the other nine adapter entries).
+  `TestEveryPackageHasALayer` fails until you do, and the layering violations
+  cascade into `TestFoundationIsSelfContained`.
 
 If the tree-sitter language name differs from the config LSP key, fold it in
 `normaliseLangName` (`internal/cli/pool_detect.go`) — that is how the
 `tsx`/`jsx`/`javascript` dialects fold onto the `typescript` adapter.
+
+> **New language vs new server.** The list above assumes the *language* is new
+> to the tree. A new `Language` row also trips two more gates:
+> `TestLanguageAndClientSourceCountsPinned`
+> (`internal/cli/doc_counts_test.go`) — bump `wantLanguages` and update the
+> language counts in `README.md` and `site/index.html` per that test's
+> directive — and `TestBuildExtractorsCoversRegistry`
+> (`internal/cli/topology_pool_test.go`), which needs a tree-sitter extractor
+> entry (`extractorCtors`) for the language; without a grammar for it in the
+> tree that gate is not mechanical. If the language already HAS a `Language`
+> row (an existing language gaining its first server), edit that row's
+> `LSPAdapter` field instead of adding a duplicate.
 
 > **Primary vs secondary.** A workspace root may bind several language servers at
 > once (e.g. Go + HTML). Routing keys the pool by `(root, language)` and sends
