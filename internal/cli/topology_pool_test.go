@@ -7,6 +7,8 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
+	"github.com/plumbkit/plumb/internal/topology/extractors/wasmts"
 )
 
 func enabledTopologyConfig() config.TopologyConfig {
@@ -189,5 +191,23 @@ func TestExtractorRegistryAlignment(t *testing.T) {
 		if !slices.Equal(ex.Extensions(), row.Extensions) {
 			t.Errorf("extractor %q Extensions() = %v, want %v (langsupport row)", name, ex.Extensions(), row.Extensions)
 		}
+	}
+}
+
+// TestExtractorCtors_EngineWiring pins the per-language gate split: TypeScript
+// and TSX index through the pure-Go gotreesitter extractor (435/435 corpus
+// extraction parity on v0.48.0, zero parse failures), while Swift deliberately
+// stays on the canonical-grammar WASM path until its six upstream parse
+// residuals clear. Reverting either side of that split is a production engine
+// change and must not happen silently.
+func TestExtractorCtors_EngineWiring(t *testing.T) {
+	if _, ok := extractorCtors["typescript"]().(*treesitter.TypeScriptExtractor); !ok {
+		t.Errorf("typescript extractor is %T, want *treesitter.TypeScriptExtractor (the TS flip)", extractorCtors["typescript"]())
+	}
+	if _, ok := extractorCtors["tsx"]().(*treesitter.TypeScriptExtractor); !ok {
+		t.Errorf("tsx extractor is %T, want *treesitter.TypeScriptExtractor (the TS flip)", extractorCtors["tsx"]())
+	}
+	if _, ok := extractorCtors["swift"]().(*wasmts.Extractor); !ok {
+		t.Errorf("swift extractor is %T, want *wasmts.Extractor (Swift stays on WASM until its upstream residuals clear)", extractorCtors["swift"]())
 	}
 }

@@ -18,7 +18,10 @@
 // document-symbol outlines, hover, completion, and validation of embedded
 // CSS/JavaScript; it does not implement workspace/symbol, call hierarchy, or
 // type hierarchy, so those forward to the server and return its empty/
-// unsupported response — the Client interface is satisfied structurally.
+// unsupported response — the Client interface is satisfied structurally. Its
+// rename is document-local for the same reason: the server scopes renames to
+// matching tag pairs / linked editing ranges within a document, so a
+// "workspace-wide" rename here only ever edits the one file.
 //
 // Run integration tests with: go test -tags=integration ./internal/lsp/adapters/html/
 package html
