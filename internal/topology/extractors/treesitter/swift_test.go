@@ -3,6 +3,7 @@ package treesitter
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -350,5 +351,283 @@ struct Hello: ParsableCommand {
 	}
 	if !strings.Contains(run.Signature, "ParsableCommand") {
 		t.Errorf("run Signature %q does not carry the enclosing type's ParsableCommand conformance", run.Signature)
+	}
+}
+
+// TestSwift_InitDeinitSubscript confirms non-identifier-named members are
+// extracted under their fixed names (ported from the wasmts suite — the
+// pure-Go extractor missed these entirely before the walk port).
+func TestSwift_InitDeinitSubscript(t *testing.T) {
+	src := []byte(`struct Matrix {
+    let rows: Int
+    init(rows: Int) { self.rows = rows }
+    init?(text: String) { self.rows = 0 }
+    subscript(i: Int) -> Int { rows }
+    func makeIt() -> Matrix { Matrix.init(rows: rows) }
+}
+
+final class Handle {
+    deinit { cleanup() }
+    func cleanup() {}
+}
+`)
+	nodes, edges, err := NewSwift().Extract(context.Background(), "m.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	methods := names(nodes, topology.KindMethod)
+	for _, want := range []string{"init", "deinit", "subscript", "cleanup"} {
+		if !slices.Contains(methods, want) {
+			t.Errorf("member %q not extracted; methods=%v", want, methods)
+		}
+	}
+	// Two inits both surface (Matrix has a designated and a failable init).
+	initCount := 0
+	for _, m := range methods {
+		if m == "init" {
+			initCount++
+		}
+	}
+	if initCount != 2 {
+		t.Errorf("expected 2 init members, got %d (methods=%v)", initCount, methods)
+	}
+	// The new dispatch cases must not double-emit: a declaration handled by its
+	// own case AND reached again via default-descent would appear twice at the
+	// same position (the two inits legitimately share a name, so key by line).
+	seen := map[string]int{}
+	for _, n := range nodes {
+		seen[string(n.Kind)+"|"+n.Name+"|"+strconv.Itoa(n.StartLine)]++
+	}
+	for key, count := range seen {
+		if count > 1 {
+			t.Errorf("%s emitted %d times, want once", key, count)
+		}
+	}
+	// A named member is registered for call resolution like any other callable:
+	// a sibling method calling `Matrix.init(…)` gets an EdgeCalls into an init
+	// node. Nothing else in this suite observes that registration — dropping it
+	// silently loses every init/deinit/subscript call edge the wasm walk emits.
+	callToInit := false
+	for _, e := range edges {
+		if e.Kind == topology.EdgeCalls && nodes[e.FromID].Name == "makeIt" && nodes[e.ToID].Name == "init" {
+			callToInit = true
+		}
+	}
+	if !callToInit {
+		t.Errorf("no EdgeCalls from makeIt to init — named members are not registered for call resolution; edges=%+v", edges)
+	}
+}
+
+// TestSwift_OperatorsAndTypealias confirms operator functions (named by their
+// operator token) and typealiases are extracted (ported from the wasmts suite).
+func TestSwift_OperatorsAndTypealias(t *testing.T) {
+	src := []byte(`typealias Handler = (Int) -> Void
+
+infix operator <^>
+func <^> (l: Int, r: Int) -> Int { l + r }
+
+struct Vec: Equatable {
+    let x: Double
+    typealias Scalar = Double
+    static func == (l: Vec, r: Vec) -> Bool { l.x == r.x }
+    static func + (l: Vec, r: Vec) -> Vec { l }
+}
+`)
+	nodes, edges, err := NewSwift().Extract(context.Background(), "v.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	types := names(nodes, topology.KindType)
+	for _, want := range []string{"Handler", "Scalar"} {
+		if !slices.Contains(types, want) {
+			t.Errorf("typealias %q not extracted; types=%v", want, types)
+		}
+	}
+	methods := names(nodes, topology.KindMethod)
+	for _, want := range []string{"==", "+"} {
+		if !slices.Contains(methods, want) {
+			t.Errorf("operator method %q not extracted; methods=%v", want, methods)
+		}
+	}
+	// A file-scope custom operator function goes through the same operatorName
+	// fallback but at enclosing == -1, so it must surface as a function.
+	if !slices.Contains(names(nodes, topology.KindFunction), "<^>") {
+		t.Errorf("file-scope operator function <^> not extracted; functions=%v", names(nodes, topology.KindFunction))
+	}
+	// The member typealias is contained by its type; the file-scope one is not.
+	if !containedIn(t, nodes, edges, "Vec", "Scalar") {
+		t.Error("member typealias Scalar not contained by Vec")
+	}
+	for _, e := range edges {
+		if e.Kind == topology.EdgeContains && nodes[e.ToID].Name == "Handler" {
+			t.Errorf("file-scope typealias Handler must have no container; got edge from %q", nodes[e.FromID].Name)
+		}
+	}
+}
+
+// TestSwift_NamedMemberBodyLocalsSuppressed pins the locals-suppression
+// invariant for the callable kinds that are NOT function_declaration: before
+// the walk port, init/deinit/subscript bodies fell through the default case
+// with the enclosing type still set, so `let x = …` inside an initialiser
+// leaked into the index as a type member. TestSwift_LocalNotExtracted only
+// covers func bodies and stayed green through that leak.
+func TestSwift_NamedMemberBodyLocalsSuppressed(t *testing.T) {
+	src := []byte(`class Grid {
+    let rows: Int
+    init(rows: Int) {
+        let cached = rows
+        var scratch = cached
+        typealias LocalAlias = Int
+        self.rows = scratch
+    }
+    deinit {
+        let handle = 1
+    }
+    subscript(i: Int) -> Int {
+        get {
+            let offset = 1
+            typealias Cell = Int
+            return i + offset
+        }
+    }
+}
+`)
+	nodes, _, err := NewSwift().Extract(context.Background(), "g.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	// Anti-vacuity: the class, all three named members, and the real member
+	// property must be present — otherwise the absence checks below pass on an
+	// empty extraction.
+	if !slices.Contains(names(nodes, topology.KindClass), "Grid") {
+		t.Fatalf("class Grid missing; nodes=%+v", nodes)
+	}
+	methods := names(nodes, topology.KindMethod)
+	for _, want := range []string{"init", "deinit", "subscript"} {
+		if !slices.Contains(methods, want) {
+			t.Fatalf("member %q missing; methods=%v", want, methods)
+		}
+	}
+	if !slices.Contains(names(nodes, topology.KindConstant), "rows") {
+		t.Errorf("member property rows should be extracted; constants=%v", names(nodes, topology.KindConstant))
+	}
+	for _, n := range nodes {
+		switch n.Name {
+		case "cached", "scratch", "handle", "offset", "LocalAlias", "Cell":
+			t.Errorf("local %q inside a named-member body leaked into the index as %s", n.Name, n.Kind)
+		}
+	}
+}
+
+// TestSwift_MultiCaseEnumEntry: one enum_entry can bind several cases
+// (`case a, b`); every bound identifier must surface as a constant contained
+// by the enum, carrying the whole entry's span rather than its own
+// identifier's — the entry is split across lines here so the two are
+// distinguishable. Before the port only the first identifier was taken.
+func TestSwift_MultiCaseEnumEntry(t *testing.T) {
+	src := []byte("enum Compass {\n    case north,\n         south\n    case east\n}\n")
+	nodes, edges, err := NewSwift().Extract(context.Background(), "c.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	consts := names(nodes, topology.KindConstant)
+	for _, want := range []string{"north", "south", "east"} {
+		if !slices.Contains(consts, want) {
+			t.Errorf("enum case %q not extracted; constants=%v", want, consts)
+		}
+		if !containedIn(t, nodes, edges, "Compass", want) {
+			t.Errorf("enum case %q not contained by Compass", want)
+		}
+	}
+	for _, n := range nodes {
+		if n.Name != "north" && n.Name != "south" {
+			continue
+		}
+		if n.StartLine != 2 || n.EndLine != 3 {
+			t.Errorf("case %s span = %d-%d, want 2-3 (the enum_entry's span)", n.Name, n.StartLine, n.EndLine)
+		}
+	}
+}
+
+// containedIn reports whether a contains edge links the named container to the
+// named member.
+func containedIn(t *testing.T, nodes []topology.Node, edges []topology.Edge, container, member string) bool {
+	t.Helper()
+	for _, e := range edges {
+		if e.Kind != topology.EdgeContains {
+			continue
+		}
+		if nodes[e.FromID].Name == container && nodes[e.ToID].Name == member {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSwift_SubscriptSignatureAndConformance: a subscript's body is a
+// computed_property, not a function_body — funcSignature must stop there or
+// the whole accessor block bleeds into the signature. The enclosing type's
+// conformance suffix applies to named members exactly as it does to methods.
+func TestSwift_SubscriptSignatureAndConformance(t *testing.T) {
+	src := []byte(`struct Deck: Collection {
+    subscript(i: Int) -> Int {
+        get { return i }
+    }
+}
+`)
+	nodes, _, err := NewSwift().Extract(context.Background(), "d.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var sub *topology.Node
+	for i := range nodes {
+		if nodes[i].Name == "subscript" {
+			sub = &nodes[i]
+			break
+		}
+	}
+	if sub == nil {
+		t.Fatalf("subscript not extracted; nodes=%+v", nodes)
+	}
+	if !strings.Contains(sub.Signature, "Int") {
+		t.Errorf("subscript Signature %q lost the parameter/return head", sub.Signature)
+	}
+	if strings.Contains(sub.Signature, "get") || strings.Contains(sub.Signature, "return") {
+		t.Errorf("subscript Signature %q bleeds into the accessor body — computed_property break missing", sub.Signature)
+	}
+	if !strings.Contains(sub.Signature, "Collection") {
+		t.Errorf("subscript Signature %q missing the enclosing type's Collection conformance suffix", sub.Signature)
+	}
+}
+
+// TestSwift_ProtocolRequirementMembers: in the gotreesitter grammar a
+// protocol's init/subscript requirements parse as plain init_declaration /
+// subscript_declaration (no protocol_* variants exist), and a protocol-body
+// typealias as typealias_declaration — all must surface as members of the
+// protocol.
+func TestSwift_ProtocolRequirementMembers(t *testing.T) {
+	src := []byte(`protocol Storage {
+    init(capacity: Int)
+    subscript(key: String) -> Int { get }
+    typealias Key = String
+}
+`)
+	nodes, edges, err := NewSwift().Extract(context.Background(), "s.swift", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if !slices.Contains(names(nodes, topology.KindType), "Storage") {
+		t.Fatalf("protocol Storage missing; nodes=%+v", nodes)
+	}
+	for _, want := range []string{"init", "subscript"} {
+		if !slices.Contains(names(nodes, topology.KindMethod), want) {
+			t.Errorf("protocol requirement %q not extracted; methods=%v", want, names(nodes, topology.KindMethod))
+		}
+		if !containedIn(t, nodes, edges, "Storage", want) {
+			t.Errorf("protocol requirement %q not contained by Storage", want)
+		}
+	}
+	if !slices.Contains(names(nodes, topology.KindType), "Key") {
+		t.Errorf("protocol typealias Key not extracted; types=%v", names(nodes, topology.KindType))
 	}
 }

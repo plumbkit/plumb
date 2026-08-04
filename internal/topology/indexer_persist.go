@@ -39,6 +39,10 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 	return tx.Commit()
 }
 
+// recordFileError stores the failure with the file's mtime but no content
+// hash, so the staleness check re-attempts the file on every resync — a
+// pathological file whose parse keeps timing out re-pays its full extract
+// timeout each cycle (intended: a transient engine fault should be retried).
 func (idx *Indexer) recordFileError(relPath string, info os.FileInfo, extractErr error) error {
 	_, err := idx.db.Exec(
 		`INSERT INTO topology_files(path, mtime_ns, error_msg) VALUES (?, ?, ?)

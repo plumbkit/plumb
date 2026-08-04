@@ -36,9 +36,9 @@ func (e *JavaExtractor) Extensions() []string { return []string{".java"} }
 // name-resolved heuristics (0.8). This is the structural Map for Java; the
 // semantic GPS is the jdtls LSP adapter. Returns (nil, nil, nil) when src cannot
 // be parsed.
-func (e *JavaExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *JavaExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &javaWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root, -1, false)
 		w.callEdges(root)

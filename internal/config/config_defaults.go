@@ -49,6 +49,7 @@ var defaults = Config{
 	Topology: TopologyConfig{
 		Enabled:               true,
 		MaxFileSizeBytes:      512 * 1024,
+		ExtractTimeoutSeconds: 10,
 		ResyncBatch:           100,
 		ResyncPauseMs:         25,
 		ResyncIntervalMinutes: 60,

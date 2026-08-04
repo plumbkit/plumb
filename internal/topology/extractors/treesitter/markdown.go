@@ -33,9 +33,9 @@ func (e *MarkdownExtractor) Extensions() []string { return []string{".md", ".mar
 // (1.0) containment edge from a heading to the sub-headings nested beneath it
 // (an `## H2` under an `# H1`). Returns (nil, nil, nil) when src cannot be
 // parsed.
-func (e *MarkdownExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *MarkdownExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &mdWalk{lang: lang, src: src, path: relPath}
 		w.walk(root, -1)
 		return w.nodes, w.edges

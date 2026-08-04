@@ -34,9 +34,9 @@ func (e *DockerfileExtractor) Extensions() []string { return []string{"dockerfil
 // `AS` alias or base image) as a type, and the `ENV`/`ARG` declarations that
 // follow it as variables contained in that stage (containment is lexical and
 // certain, 1.0). Returns (nil, nil, nil) when src cannot be parsed.
-func (e *DockerfileExtractor) Extract(_ context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+func (e *DockerfileExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
 	lang := e.lang.get()
-	return extractWith(lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &dockerWalk{lang: lang, src: src, path: relPath}
 		w.walk(root)
 		return w.nodes, w.edges
