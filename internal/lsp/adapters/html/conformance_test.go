@@ -20,7 +20,7 @@ import (
 //
 // The document must exist on disk: the HTML server has no filesystem access, so
 // the adapter opens the file itself before a per-document query
-// (Adapter.ensureOpen), and an in-memory-only URI would fail the harness's
+// (base.OpenTracker.Ensure), and an in-memory-only URI would fail the harness's
 // document subtest on a read error before reaching the contract under test.
 func TestConformance_PushBaseline(t *testing.T) {
 	conformance.RunConformance(t, func(c jsonrpc.Caller) lsp.Client { return html.New(c) }, html.DefaultInitParams, htmlConformanceScenario(t))
