@@ -313,6 +313,7 @@ func (w *jsWalk) appendImport(target string, rng *tsg.Node) {
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
+		EndLine:   line(rng.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
 	}

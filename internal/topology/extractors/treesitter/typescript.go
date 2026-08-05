@@ -302,6 +302,7 @@ func (w *tsWalk) appendImport(target string, rng *tsg.Node) {
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
+		EndLine:   line(rng.EndPoint()),
 		Language:  "typescript",
 		Path:      w.path,
 	}

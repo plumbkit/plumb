@@ -341,6 +341,7 @@ func (w *swiftWalk) addImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
 		Path:      w.path,
 	}

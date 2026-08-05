@@ -168,6 +168,7 @@ func (w *javaWalk) addImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      strings.TrimSpace(name),
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "java",
 		Path:      w.path,
 	}

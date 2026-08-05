@@ -279,6 +279,7 @@ func (w *zigWalk) addImport(bf *tsg.Node, decl *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(decl.StartPoint()),
+		EndLine:   line(decl.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
 	}

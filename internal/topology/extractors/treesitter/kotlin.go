@@ -242,6 +242,7 @@ func (w *kotlinWalk) addImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
 	}
