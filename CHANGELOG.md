@@ -4,6 +4,51 @@
 
 ### Added
 
+- **Kimi Code support completed, with a client-side tool allowlist.** Kimi Code
+  had a `plumb setup` target but no capability entry, so plumb treated it as an
+  unrecognised client. It now has one in `internal/clientcaps` — native
+  file/search/shell, `SchemaDiscoveryOnly`, tokeniser `FamilyGPT` (Kimi K2's BPE
+  is tiktoken-lineage; a `FamilyKimi` with invented ratios would be fake
+  precision) — so `auto` resolves it to **full** for the accurate reason
+  `schema-discovery-only-client` rather than `unknown-deferred-discovery`.
+  `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
+  evidence-gated lean opt-in, never an inference from native tooling.
+  Because a schema-discovery-only client cannot reach a tool plumb hid, the
+  ~97 KB of advertised schemas has to be trimmed on the client side instead:
+  **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
+  (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
+  client-enforced allowlist can never strip a bootstrap tool) into the
+  `enabledTools` key of the plumb entry in Kimi's own `mcp.json`, loading 21
+  schemas instead of 62. The idempotence predicate is lean-aware, which is the
+  whole trick: without it `mergeServerEntry`'s "already points at this binary"
+  short-circuit would make `--lean` a silent no-op on every machine that
+  already had plumb registered. A later bare re-register (and `plumb setup
+  --all`) preserves the key — the same merge-onto-existing contract that keeps
+  Codex's approval tables — while `--lean` over a hand-edited list replaces it;
+  there is deliberately no `--full` un-set flag. `plumb doctor` adds an
+  informational line (never a warning — a full registration is a valid default)
+  when Kimi registers plumb with no allowlist, plus a **warning** when the key
+  is present but degenerate (`[]`, null, or not a list): only a non-empty list
+  is an allowlist, and a degenerate one loads zero plumb tools, so grading on
+  key presence alone would call a dead integration healthy. `session_start` now
+  emits Kimi-specific guidance: a soft edit-lane recommendation (not the Claude Code
+  warning, which quotes harness errors a Kimi user never sees) plus the
+  topology trio and `run_task`, restricted to lean-set tools **unconditionally**
+  — plumb cannot observe a client-side filter, so naming a non-lean tool would
+  be a broken pointer for anyone who took the `--lean` advice.
+  Guarded by `TestKimiCodeInto_Lean` (six cases: fresh, already-registered,
+  repeat, bare-preserves, repoint-preserves, replaces-custom),
+  `TestKimiLeanHintAt` (including the degenerate-allowlist shapes),
+  `TestKimiLeanFlagOnTheCommand` / `TestRunSetupTargetPrintsTheNote` (the CLI
+  seam: the flag is registered on the generated command, bound to the var the
+  target reads, absent from a control client, and the note prints on both of
+  `runSetupTarget`'s exits), `TestLeanToolNames_SortedUnion` /
+  `TestLeanToolNames_CoversBootstrap` (computed from the maps, never a literal
+  21), `TestKimiCodeGuidance_LeanSetOnly` (forbidden set derived from
+  `nonLeanToolSet()`), `TestKimiCodeHasNoNativeEditConflict`, the `auto +
+  kimi-code` row of `TestClientProfileContractMatrix`, and the extended
+  `clientcaps` prefix/`SchemaDiscoveryOnly` tables.
+
 - **Pin-drift observability: every workspace re-pin now explains itself.** A
   client that multiplexes several logical agent sessions over one `plumb
   serve` connection can have a peer's `session_start` silently re-pin the

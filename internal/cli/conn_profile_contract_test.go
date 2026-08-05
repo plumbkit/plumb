@@ -113,6 +113,21 @@ func TestClientProfileContractMatrix(t *testing.T) {
 		assertFullAdmitsEverything(t, s)
 	})
 
+	t.Run("auto + kimi-code", func(t *testing.T) {
+		// Kimi Code has strong native file/search/shell tooling but is
+		// schema-discovery-only, so auto must resolve to full for the SAME reason
+		// Claude Code does — not the weaker "unverified-deferred-discovery" a
+		// registry entry without SchemaDiscoveryOnly would produce, and not the
+		// "unknown-deferred-discovery" of an unregistered client.
+		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "kimi-code")
+		profile, reason := s.resolveToolProfile()
+		if profile != "full" || reason != "schema-discovery-only-client" {
+			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"full\", \"schema-discovery-only-client\")", profile, reason)
+		}
+		assertBootstrapAlwaysVisible(t, s)
+		assertFullAdmitsEverything(t, s)
+	})
+
 	t.Run("explicit lean", func(t *testing.T) {
 		s := newProfileSession(t, config.ToolsConfig{Profile: "lean"}, "claude-code")
 		profile, reason := s.resolveToolProfile()

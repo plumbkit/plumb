@@ -31,6 +31,10 @@ import (
 // configured, so an absent file does not imply an absent client. When it
 // reports installed, the bulk paths and doctor treat the client as
 // installed-but-unregistered (and --install-missing may create the config).
+// flags and note are the per-target hooks for a client whose registration takes
+// an option: flags registers extra command-line flags on the generated cobra
+// command, and note returns an extra hint line printed after the registration
+// report (empty for nothing). Only Kimi Code sets them today, for --lean.
 type setupTarget struct {
 	use         string
 	name        string
@@ -39,6 +43,8 @@ type setupTarget struct {
 	installedFn func() bool
 	intoFn      func(cfgPath, plumbBin string) (added bool, preserved []string, err error)
 	extractFn   func(cfgPath string) (binPath string, registered bool, err error)
+	flags       func(cmd *cobra.Command)
+	note        func() string
 }
 
 // claudeDesktopCommandExtractor reads the plumb launch binary back from a
@@ -54,7 +60,19 @@ var extraSetupTargets = []setupTarget{
 	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
 	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
-	{use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor},
+	{
+		use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled,
+		// Kimi Code is the one target with an option: --lean additionally writes a
+		// client-side enabledTools allowlist. The flag is read at call time, so the
+		// bulk --all/--install-missing paths (which never set it) keep registering
+		// bare and preserve any allowlist already present. See setup_kimi.go.
+		intoFn: func(cfgPath, plumbBin string) (bool, []string, error) {
+			return kimiCodeInto(cfgPath, plumbBin, setupKimiLeanFlag)
+		},
+		extractFn: claudeDesktopCommandExtractor,
+		flags:     registerKimiLeanFlag,
+		note:      kimiLeanNote,
+	},
 	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "opencode", name: "OpenCode", pathFn: OpenCodeConfigPath, intoFn: setupOpenCodeInto, extractFn: mapCommandExtractor(readOrInitClaudeConfig, "mcp", "command")},
@@ -149,11 +167,15 @@ func antigravityCommandExtractor(cfgPath string) (string, bool, error) {
 
 func init() {
 	for _, t := range extraSetupTargets {
-		setupCmd.AddCommand(&cobra.Command{
+		cmd := &cobra.Command{
 			Use:   t.use,
 			Short: fmt.Sprintf("Register plumb as an MCP server in %s's config", t.name),
 			RunE:  func(_ *cobra.Command, _ []string) error { return runSetupTarget(t) },
-		})
+		}
+		if t.flags != nil {
+			t.flags(cmd)
+		}
+		setupCmd.AddCommand(cmd)
 	}
 }
 
@@ -180,6 +202,7 @@ func runSetupTarget(t setupTarget) error {
 	if !added {
 		fmt.Printf("plumb is already registered in %s — no changes made.\n", t.name)
 		fmt.Printf("Config: %s\n", cfgPath)
+		printSetupNote(t)
 		return nil
 	}
 
@@ -191,7 +214,22 @@ func runSetupTarget(t setupTarget) error {
 	tui.RebuildStyles()
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
+	printSetupNote(t)
 	return nil
+}
+
+// printSetupNote prints a target's optional post-registration hint. It runs on
+// BOTH the registered and the already-current paths: a repeat
+// `plumb setup kimi-code --lean` writes nothing, and the note is the only
+// confirmation the user gets that the allowlist is in place. A nil hook, or one
+// that returns "", prints nothing.
+func printSetupNote(t setupTarget) {
+	if t.note == nil {
+		return
+	}
+	if s := t.note(); s != "" {
+		fmt.Printf("\n%s\n", s)
+	}
 }
 
 // runSetupAll repoints every client that already registers plumb at the current

@@ -399,7 +399,14 @@ in Xcode; Plumb will not do that automatically.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (39 tools today). Project-overridable.
+the non-lean remainder (41 tools today). Project-overridable.
+
+A *schema-discovery-only* client cannot use this knob at all — it can only
+invoke what `tools/list` advertised, so hiding a tool removes the capability
+rather than the schema. Kimi Code is one, and takes the same saving on the
+client side instead: `plumb setup kimi-code --lean` writes plumb's lean tool
+names into the `enabledTools` allowlist of its own `mcp.json`. See
+[CLI reference → `plumb setup`](cli-reference.md#plumb-setup).
 
 **Auto resolution is capability-gated, not a config setting.** `auto` resolves
 to **lean** only when the connecting client's entry in `internal/clientcaps`

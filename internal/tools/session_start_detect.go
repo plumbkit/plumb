@@ -303,6 +303,26 @@ func isClaudeCode(fn func() string) bool {
 	return n == "claude-code" || strings.HasPrefix(n, "claude-code/")
 }
 
+// isKimiCode reports whether fn identifies the MCP client as Kimi Code.
+// Matches "kimi-code" exactly or "kimi-code/<version>", mirroring isClaudeCode:
+// a bare HasPrefix on "kimi-code" would falsely match a name like
+// "kimi-codegen".
+//
+// Bare "kimi" is deliberately NOT matched, even though clientcaps.Lookup
+// accepts it as an alias. The two predicates answer different questions:
+// Lookup is picking the closest capability profile and errs towards a useful
+// match, whereas this one gates a block of prose written specifically for the
+// Kimi Code CLI (its native edit tools, its mcp.json allowlist). Showing that
+// to some other "kimi*" product would be wrong advice, and the cost of not
+// matching is only a missing hint.
+func isKimiCode(fn func() string) bool {
+	if fn == nil {
+		return false
+	}
+	n := strings.ToLower(fn())
+	return n == "kimi-code" || strings.HasPrefix(n, "kimi-code/")
+}
+
 // isClaudeDesktop reports whether fn identifies the MCP client as Claude Desktop.
 // Claude Desktop identifies itself as "claude-ai" (e.g. "claude-ai 0.1.0") over
 // MCP, not "claude-desktop" — both are matched so the guidance fires regardless

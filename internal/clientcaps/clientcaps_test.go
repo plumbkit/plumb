@@ -16,6 +16,12 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 		{"claude", "claude-desktop", false}, // bare claude is the thin client
 		{"codex", "codex", true},
 		{"gemini-cli", "gemini", true},
+		{"kimi-code", "kimi-code", true},
+		{"kimi-code/1.2", "kimi-code", true},
+		{"Kimi-Code", "kimi-code", true},         // case-insensitive
+		{"kimi", "kimi-code", true},              // bare alias (Kimi Desktop) resolves to the same entry
+		{"kimiko", "kimi-code", true},            // any kimi* client matches the bare alias, by design
+		{"kimchi-bot", "unknown", true},          // diverges at the 4th char, so no prefix matches
 		{"totally-unknown-xyz", "unknown", true}, // conservative default
 		{"", "unknown", true},
 	}
@@ -31,10 +37,10 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 }
 
 // TestSchemaDiscoveryOnly pins which clients can only invoke advertised tools.
-// Claude Code is the one flagged true (it builds its tool/ToolSearch list from
-// tools/list, so a lean-hidden tool is unreachable); the other CLI agents and the
-// unknown fallback are false; lean eligibility is gated separately on
-// ReliableDeferredToolDiscovery.
+// Claude Code and Kimi Code are flagged true (both build their tool list — and
+// Claude Code its ToolSearch list — from tools/list, so a lean-hidden tool is
+// unreachable); the other CLI agents and the unknown fallback are false; lean
+// eligibility is gated separately on ReliableDeferredToolDiscovery.
 func TestSchemaDiscoveryOnly(t *testing.T) {
 	tests := []struct {
 		client string
@@ -42,6 +48,9 @@ func TestSchemaDiscoveryOnly(t *testing.T) {
 	}{
 		{"claude-code", true},
 		{"claude-code/1.2.3", true},
+		{"kimi-code", true},
+		{"kimi-code/0.0.0", true},
+		{"kimi", true},
 		{"codex", false},
 		{"gemini-cli", false},
 		{"claude-desktop", false},
@@ -62,6 +71,17 @@ func TestTokensForRatiosAndFallback(t *testing.T) {
 	// Unknown family falls back to the default ratio (4.0): 400 → 100.
 	if got := tokensFor(Family("nope"), ContentProse, 400); got != 100 {
 		t.Errorf("tokensFor(unknown family) = %d, want 100 (default ratio)", got)
+	}
+}
+
+// TestKimiCodeIsNotLeanEligible pins the evidence gate: Kimi Code has strong
+// native file/search/shell tooling, but that must never be read as proof it can
+// invoke an unadvertised tool. Its token relief comes from the client-side
+// enabledTools allowlist (`plumb setup kimi-code --lean`), not from the lean
+// tools/list profile.
+func TestKimiCodeIsNotLeanEligible(t *testing.T) {
+	if Lookup("kimi-code").ReliableDeferredToolDiscovery {
+		t.Error("kimi-code must not declare ReliableDeferredToolDiscovery without reviewed integration evidence")
 	}
 }
 
