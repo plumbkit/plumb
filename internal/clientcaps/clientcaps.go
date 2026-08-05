@@ -129,6 +129,36 @@ var registry = []Capabilities{
 		// simply falls through to unknownCaps and the client degrades gracefully
 		// to unrecognised-client behaviour (still "full", reason
 		// unknown-deferred-discovery) — never to a broken lean surface.
+		//
+		// WHY THE BARE ALIAS SHARES THIS ENTRY, unlike claude/claude-desktop.
+		// Reading it as "Kimi Desktop is handed the CLI's native-capability
+		// flags" overstates the difference: unknownCaps — where a bare "kimi"
+		// would land without the alias — ALSO sets NativeFileRead, NativeSearch
+		// and NativeShell true, so all three are identical either way. The
+		// claude/claude-desktop split exists for the opposite reason: Claude
+		// Desktop is *known* to be thin, so its entry DEPARTS from those
+		// conservative defaults on evidence. No such evidence exists for Kimi
+		// Desktop, and inventing a thin profile for it would be a claim, not a
+		// finding — the same fake-precision trap the tokeniser note above avoids.
+		//
+		// The alias only changes the two fields where sharing is the safer
+		// answer. SchemaDiscoveryOnly resolves the profile to "full"
+		// (schema-discovery-only-client) where unknownCaps resolves it to "full"
+		// too (unknown-deferred-discovery) — same served surface, and the
+		// dangerous direction would be a wrongly-absent flag on a client that
+		// cannot invoke an unadvertised tool, never a wrongly-present one.
+		// Tokeniser FamilyGPT is nearer a Kimi model than unknownCaps'
+		// FamilyClaude. So the alias is strictly better-informed than the
+		// fallback and cannot cost capability.
+		//
+		// This is deliberately NOT the rule isKimiCode follows
+		// (session_start_detect.go), which refuses the bare alias. The two
+		// answer different questions: this one picks the closest capability
+		// profile among defensible options, where being approximately right is
+		// the goal; that one gates PROSE naming Kimi Code's own edit tools and
+		// mcp.json, where being approximately right means telling a sibling
+		// product something false. Capability estimates degrade; wrong advice
+		// does not.
 		Name:                "kimi-code",
 		Prefixes:            []string{"kimi-code", "kimi"},
 		NativeFileRead:      true,

@@ -128,6 +128,26 @@ func TestClientProfileContractMatrix(t *testing.T) {
 		assertFullAdmitsEverything(t, s)
 	})
 
+	t.Run("auto + the bare kimi alias", func(t *testing.T) {
+		// The kimi-code registry entry claims the bare "kimi" prefix too, rather
+		// than splitting a Kimi Desktop entry off the way claude-desktop is split
+		// from claude-code. That choice is only defensible while it cannot cost a
+		// sibling product capability, so pin the property the comment in
+		// internal/clientcaps rests on: the alias serves the SAME surface an
+		// unregistered "kimi*" client would get by falling through to unknownCaps
+		// (full, above), differing only in the reason it arrives at it. If the
+		// alias is ever dropped or the flag removed, this stays green and the
+		// serving is unchanged — it goes red only if the alias starts hiding
+		// tools from a client, the one outcome the split was meant to prevent.
+		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "kimi")
+		profile, reason := s.resolveToolProfile()
+		if profile != "full" {
+			t.Fatalf("resolveToolProfile() = (%q, %q), want profile \"full\" — a bare kimi client must never be served a lean surface", profile, reason)
+		}
+		assertBootstrapAlwaysVisible(t, s)
+		assertFullAdmitsEverything(t, s)
+	})
+
 	t.Run("explicit lean", func(t *testing.T) {
 		s := newProfileSession(t, config.ToolsConfig{Profile: "lean"}, "claude-code")
 		profile, reason := s.resolveToolProfile()
