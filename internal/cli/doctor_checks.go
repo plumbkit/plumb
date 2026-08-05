@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -16,7 +15,6 @@ import (
 	"github.com/plumbkit/plumb/internal/quality/golangcilint"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
-	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // checkDaemon verifies the daemon is reachable and its version matches.
@@ -86,114 +84,6 @@ func checkMCPClients() []checkResult {
 		results = append(results, r)
 	}
 	return results
-}
-
-// checkKimiLeanHint surfaces what `plumb doctor` can usefully say about Kimi
-// Code's tool surface beyond "registered": either plumb is advertising its whole
-// tool registry and Kimi's own mcp.json could trim it with an enabledTools
-// allowlist, or the allowlist that is there is degenerate and filters plumb down
-// to nothing. ok is false when the config is absent, does not register plumb, or
-// carries a working allowlist — there is nothing to say in those cases.
-func checkKimiLeanHint() (checkResult, bool) {
-	path, err := KimiCodeConfigPath()
-	if err != nil {
-		return checkResult{}, false
-	}
-	return kimiLeanHintAt(path)
-}
-
-// kimiLeanHintAt is checkKimiLeanHint's path-injectable body, so a test can
-// drive an allowlist that is present, absent, degenerate, or in a config that
-// does not register plumb at all.
-//
-// Only a NON-EMPTY list counts as a working allowlist. Presence of the key is
-// not enough: `"enabledTools": []`, null, or a non-list value all mean Kimi
-// registers zero plumb tools, and a presence-only check would call that server
-// healthy while it is effectively dead — the one failure mode of this feature
-// that a user cannot see from the outside.
-//
-// It reads the file directly rather than through readOrInitClaudeConfig, which
-// creates the parent directory for an absent config — a doctor check must never
-// write to the filesystem it is inspecting.
-func kimiLeanHintAt(cfgPath string) (checkResult, bool) {
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return checkResult{}, false
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return checkResult{}, false // a malformed config is checkOneClient's business
-	}
-	servers, ok := cfg["mcpServers"].(map[string]any)
-	if !ok {
-		return checkResult{}, false
-	}
-	entry, ok := servers["plumb"].(map[string]any)
-	if !ok {
-		return checkResult{}, false
-	}
-	raw, has := entry["enabledTools"]
-	if !has {
-		return kimiFullSurfaceHint(), true
-	}
-	if list, isList := raw.([]any); isList && len(list) > 0 {
-		return checkResult{}, false
-	}
-	return kimiDegenerateAllowlistResult(raw), true
-}
-
-const kimiToolSurfaceCheck = "Kimi Code (tool surface)"
-
-// kimiFullSurfaceHint is the no-allowlist result, and it is INFORMATIONAL:
-// ok=true, warn=false, no fix line. A full registration is a perfectly valid
-// default — it is what every other client gets — so flagging it as a warning
-// would put a "!" against a healthy machine and inflate doctor's warning count
-// for a preference. The suggestion goes in the detail, which prints on a clean
-// pass; fix lines only render on attention.
-func kimiFullSurfaceHint() checkResult {
-	return checkResult{
-		name: kimiToolSurfaceCheck,
-		ok:   true,
-		detail: fmt.Sprintf("no client-side allowlist, so Kimi loads whatever plumb advertises "+
-			"(every tool under the default profile) — `plumb setup kimi-code --lean` writes an "+
-			"enabledTools allowlist trimming it to the %d-tool lean set", len(tools.LeanToolNames())),
-	}
-}
-
-// kimiDegenerateAllowlistResult grades an enabledTools key that cannot function
-// as an allowlist — empty, null, or not a list at all.
-//
-// This is a WARNING (ok=true, warn=true, with a fix), not the informational line
-// above and not a failure. It is a real misconfiguration, not a preference: the
-// server still starts, but Kimi filters every plumb tool out of it, so the whole
-// integration is silently inert — the same shape as the golangci-lint check,
-// where a capability quietly disappears and only doctor can say why. It stays
-// non-fatal because doctor's exit code is reserved for plumb itself being
-// broken, and this is a hand-edited client config plumb can rewrite in one
-// command.
-func kimiDegenerateAllowlistResult(raw any) checkResult {
-	return checkResult{
-		name: kimiToolSurfaceCheck,
-		ok:   true,
-		warn: true,
-		detail: "enabledTools is " + kimiAllowlistShape(raw) + " — Kimi loads NO plumb tools at all; " +
-			"the server connects but nothing it offers is callable",
-		fix: fmt.Sprintf("run `plumb setup kimi-code --lean` to write the %d-tool lean allowlist, "+
-			"or delete the enabledTools key to restore the full tool surface", len(tools.LeanToolNames())),
-	}
-}
-
-// kimiAllowlistShape names the degenerate value so the detail line says which
-// hand-edit produced it.
-func kimiAllowlistShape(raw any) string {
-	switch v := raw.(type) {
-	case nil:
-		return "null"
-	case []any:
-		return "an empty list"
-	default:
-		return fmt.Sprintf("not a list (%T)", v)
-	}
 }
 
 // checkClaudeDesktopExtraProfiles validates the plumb binary registered in any
