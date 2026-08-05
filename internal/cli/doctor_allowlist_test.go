@@ -36,21 +36,31 @@ func TestGradeToolAllowlist(t *testing.T) {
 		{name: "only nulls", raw: []any{nil}, want: allowlistDegenerate, wantShape: "a list holding no tool name"},
 		{name: "only numbers", raw: []any{1.0, 2.0, 3.0}, want: allowlistDegenerate, wantShape: "a list holding no tool name"},
 
-		{name: "no name is a plumb tool", raw: []any{"not_a_plumb_tool", "nope"},
-			want: allowlistUnrecognised, wantUnknown: []string{"not_a_plumb_tool", "nope"}},
+		{
+			name: "no name is a plumb tool", raw: []any{"not_a_plumb_tool", "nope"},
+			want: allowlistUnrecognised, wantUnknown: []string{"not_a_plumb_tool", "nope"},
+		},
 
 		{name: "exactly the pinned set", raw: anyList(gradePinned...), want: allowlistUsable},
-		{name: "pinned set plus a deliberate addition", raw: anyList("a_tool", "b_tool", "c_tool", "d_tool", "e_tool", "extra_tool"),
-			want: allowlistUsable},
+		{
+			name: "pinned set plus a deliberate addition", raw: anyList("a_tool", "b_tool", "c_tool", "d_tool", "e_tool", "extra_tool"),
+			want: allowlistUsable,
+		},
 		// missing is still computed here (driftVerdict needs it); it is only
 		// REPORTED for a list that reads as plumb's own aged snapshot.
-		{name: "hand-picked subset is the user's business", raw: anyList("a_tool", "b_tool"),
-			want: allowlistUsable, wantMissing: []string{"c_tool", "d_tool", "e_tool"}},
+		{
+			name: "hand-picked subset is the user's business", raw: anyList("a_tool", "b_tool"),
+			want: allowlistUsable, wantMissing: []string{"c_tool", "d_tool", "e_tool"},
+		},
 
-		{name: "aged snapshot missing a pinned name", raw: anyList("a_tool", "b_tool", "c_tool", "d_tool"),
-			want: allowlistStale, wantMissing: []string{"e_tool"}},
-		{name: "aged snapshot naming a retired tool", raw: anyList("a_tool", "b_tool", "c_tool", "d_tool", "e_tool", "retired_tool"),
-			want: allowlistStale, wantUnknown: []string{"retired_tool"}},
+		{
+			name: "aged snapshot missing a pinned name", raw: anyList("a_tool", "b_tool", "c_tool", "d_tool"),
+			want: allowlistStale, wantMissing: []string{"e_tool"},
+		},
+		{
+			name: "aged snapshot naming a retired tool", raw: anyList("a_tool", "b_tool", "c_tool", "d_tool", "e_tool", "retired_tool"),
+			want: allowlistStale, wantUnknown: []string{"retired_tool"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := gradeToolAllowlist(tc.raw, gradeRegistered, gradePinned)

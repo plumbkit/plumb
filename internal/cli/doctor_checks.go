@@ -239,15 +239,26 @@ func checkOneClient(c setupTarget, selfPath string) checkResult {
 
 // classifyClientBinary compares the binary a client launches for plumb against the
 // running executable: a missing registered binary is a failure, a mismatch with an
-// existing binary a non-fatal warning, an exact match a clean pass. When the launch
-// command can't be extracted it falls back to a plain "registered" pass.
+// existing binary a non-fatal warning, an exact match a clean pass. A config the
+// extractor cannot parse is a FAILURE — the client cannot load it either, so plumb
+// is not running there whatever the file says. When the config parses but holds no
+// recognisable plumb entry, it falls back to a plain "registered" pass (the
+// caller already found the word "plumb" in the file).
 func classifyClientBinary(c setupTarget, cfgPath, selfPath string) checkResult {
 	detail := contractConfigPath(cfgPath)
 	if c.extractFn == nil {
 		return checkResult{ok: true, detail: detail}
 	}
 	regPath, registered, err := c.extractFn(cfgPath)
-	if err != nil || !registered {
+	if err != nil {
+		return checkResult{
+			ok:     false,
+			detail: detail + "\nconfig cannot be parsed: " + err.Error(),
+			fix: fmt.Sprintf("fix the syntax in %s — %s cannot load it either, so plumb is not registered there",
+				detail, c.name),
+		}
+	}
+	if !registered {
 		return checkResult{ok: true, detail: detail}
 	}
 	regPath = expandRegisteredPath(regPath)
