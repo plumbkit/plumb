@@ -121,3 +121,45 @@ func TestExtractWith_CancelledContextDoesNotParse(t *testing.T) {
 		t.Error("expected no nodes/edges from a cancelled extract")
 	}
 }
+
+// unmarkedExpiredCtx is a context whose deadline has already passed but which
+// has not been marked: Err() is nil. That window is real — a context's Err() is
+// set by the timer goroutine that fires at the deadline, so between the deadline
+// passing and that goroutine running, Deadline() reports the past and Err()
+// reports nothing. Stubbing it is the only way to reach the branch reliably,
+// because a real expired context is almost always already marked by the time a
+// test observes it: the ctx.Err() guard at the top of extractWith catches it
+// first and returns context.DeadlineExceeded for its own reasons, so the budget
+// branch could return anything at all and every existing test would still pass.
+type unmarkedExpiredCtx struct{ context.Context }
+
+func (unmarkedExpiredCtx) Deadline() (time.Time, bool) { return time.Now().Add(-time.Hour), true }
+func (unmarkedExpiredCtx) Err() error                  { return nil }
+
+// TestExtractWith_ExpiredBudgetOnUnmarkedContext pins what the budget branch
+// returns. It must be context.DeadlineExceeded outright and not ctx.Err(), which
+// is precisely nil here — a nil error alongside nil nodes reads to
+// indexer_extract as "this file has no symbols", so the file would be recorded
+// as successfully empty rather than retried.
+func TestExtractWith_ExpiredBudgetOnUnmarkedContext(t *testing.T) {
+	ctx := unmarkedExpiredCtx{context.Background()}
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("the stub must be unmarked for this test to exercise the budget branch; Err() = %v", err)
+	}
+
+	walked := false
+	nodes, edges, err := extractWith(ctx, NewPython().lang.get(), []byte("def f():\n    pass\n"),
+		func(*tsg.Node) ([]topology.Node, []topology.Edge) {
+			walked = true
+			return []topology.Node{{Name: "f"}}, nil
+		})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded — an expired budget must not report success", err)
+	}
+	if walked {
+		t.Error("the walk ran, so the parse did too: an expired budget started work")
+	}
+	if nodes != nil || edges != nil {
+		t.Error("expected no nodes/edges from an extract whose budget was already spent")
+	}
+}
