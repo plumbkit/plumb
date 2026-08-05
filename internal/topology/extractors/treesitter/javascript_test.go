@@ -313,6 +313,50 @@ func TestJavaScript_CommentInsideExportWrapperKeepsItsSpan(t *testing.T) {
 	assertDocSpans(t, src, nodes, map[string]string{"Inner": "/** Documents Inner. */"})
 }
 
+// TestJavaScript_MultiLineCommentRunIsCollectedWhole pins the backward half of
+// the run-walk for JavaScript, where a previous-sibling chain cannot find it.
+// In this grammar a comment that precedes every other top-level node reports a
+// nil Parent, so PrevSibling returns nil from the first hop and a `//` doc
+// block collapsed to its LAST line. Nothing caught it because no test used a
+// multi-comment run in JavaScript, and every other grammar chains fine.
+//
+// A collapsed span is not merely short: include_doc_comment (default TRUE on
+// move_symbol) starts the edit at the doc span, so replacing `add` would have
+// left `// Adds two numbers.` orphaned above the new declaration. `third` is
+// the case the index walk must still get right — with the whole child list in
+// hand it is just as easy to walk back past the blank line as to stop at it, so
+// the flushness check is what has to hold, not the traversal.
+func TestJavaScript_MultiLineCommentRunIsCollectedWhole(t *testing.T) {
+	src := []byte(`// Adds two numbers.
+// Both arguments are coerced to Number.
+export function add(a, b) {
+  return a + b;
+}
+
+// Not exported.
+// Two lines of it.
+function helper() {}
+
+// Detached banner note.
+// Second banner line.
+
+// Documents third.
+// Second doc line.
+export function third(c) {
+  return c;
+}
+`)
+	nodes, _, err := NewJavaScript().Extract(context.Background(), "run.js", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{
+		"add":    "// Adds two numbers.\n// Both arguments are coerced to Number.",
+		"helper": "// Not exported.\n// Two lines of it.",
+		"third":  "// Documents third.\n// Second doc line.",
+	})
+}
+
 // docNodeNamed returns the first extracted node called name, or nil.
 func docNodeNamed(nodes []topology.Node, name string) *topology.Node {
 	for i := range nodes {

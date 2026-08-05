@@ -531,7 +531,14 @@
   text rather than from node positions, because a grammar may let a comment
   node swallow the newlines after it — Rust's `///` does, leaving a comment
   whose end offset *is* the following declaration's start offset, blank line
-  included.
+  included. The backward walk itself is resolved through the declaration's
+  sibling list by index rather than by chaining `PrevSibling` off each comment,
+  which repairs a second, older defect the export climb had just made reachable
+  on the write path: the JavaScript grammar reports a nil parent for a comment
+  that precedes every other top-level node, so the chain stopped after one hop
+  and a multi-line `//` block above the first declaration in a `.js` file
+  collapsed to its LAST line — `include_doc_comment` then cut the block in half
+  and left an orphaned comment above the replacement.
 
 - **Import nodes no longer carry an inverted line range.** Every extractor that
   emits a `KindImport` set `StartLine` and left `EndLine` at zero, so an import

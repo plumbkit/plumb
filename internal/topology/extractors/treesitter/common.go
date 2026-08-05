@@ -174,19 +174,59 @@ func setSpan(node *topology.Node, tn *tsg.Node) {
 // are therefore checked: the closest comment must be flush against the
 // declaration, and the backward walk stops at the first separation, so
 // `banner / blank line / doc-block / decl` keeps only the doc-block.
+//
+// The backward walk goes through the DECLARATION's sibling list by index rather
+// than by chaining PrevSibling off each comment, because a comment cannot be
+// relied on to know where it sits. In the tree-sitter JavaScript grammar a
+// comment that precedes every other top-level node reports a nil Parent, so
+// PrevSibling — which resolves through the parent link — returns nil from the
+// first hop and the run collapses to its last line: a three-line `//` doc block
+// above the first declaration in a .js file yielded only its third line, which
+// include_doc_comment then split, moving half a comment. The declaration's own
+// parent link is sound (that is how last was found at all), and its child list
+// contains the whole run, so resolving the run there is immune to the quirk in
+// every grammar.
 func docSpanBefore(decl *tsg.Node, lang *tsg.Language, src []byte, isComment func(typ string) bool) (start, end int) {
 	last := decl.PrevSibling() // the comment closest to the declaration
 	if last == nil || !isComment(last.Type(lang)) || !commentFlushBefore(src, last, decl.StartByte()) {
 		return 0, 0
 	}
 	first := last
-	for sib := last.PrevSibling(); sib != nil; sib = sib.PrevSibling() {
+	sibs := siblingsOf(decl)
+	for j := nodeIndexIn(sibs, last) - 1; j >= 0; j-- {
+		sib := sibs[j]
 		if !isComment(sib.Type(lang)) || !commentFlushBefore(src, sib, first.StartByte()) {
 			break
 		}
 		first = sib
 	}
 	return clampU32(first.StartByte()), clampU32(last.EndByte())
+}
+
+// siblingsOf returns the child list n belongs to — its parent's children, n
+// included — or nil when n has no parent.
+func siblingsOf(n *tsg.Node) []*tsg.Node {
+	parent := n.Parent()
+	if parent == nil {
+		return nil
+	}
+	return parent.Children()
+}
+
+// nodeIndexIn returns target's position in sibs, or -1 when it is not there (in
+// particular for a nil sibs, which makes every caller's index walk a no-op).
+//
+// Nodes are matched on their byte span, not by pointer: gotreesitter
+// materializes node structs lazily and on demand, so the same syntactic node
+// reached two different ways is not guaranteed to be the same *Node. A span is
+// a safe key here because siblings never overlap.
+func nodeIndexIn(sibs []*tsg.Node, target *tsg.Node) int {
+	for i, s := range sibs {
+		if s.StartByte() == target.StartByte() && s.EndByte() == target.EndByte() {
+			return i
+		}
+	}
+	return -1
 }
 
 // commentFlushBefore reports whether comment sits directly above whatever starts
