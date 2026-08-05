@@ -194,8 +194,7 @@ func (t *ReadFile) Description() string {
 		"1-based line number (and optional context_lines), so an over-cap file stays searchable in one tool — " +
 		"literal text by default (smart-case: case-insensitive when all lowercase), Go RE2 regex when use_regex; " +
 		"output is bounded by max_matches (default 200) and labelled when truncated. Combine pattern with " +
-		"start_line/end_line to restrict the search to a line window; pattern with limit is rejected. " +
-		"Essential for clients without filesystem access (Claude Desktop, Cursor MCP, etc.)."
+		"start_line/end_line to restrict the search to a line window; pattern with limit is rejected."
 }
 
 type readFileArgs struct {
@@ -239,7 +238,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("read_file: %w", err)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("read_file: %q is a directory — use list_files to browse directories", fpath)
+		return "", fmt.Errorf("read_file: %q is a directory — use find_files to browse directories", fpath)
 	}
 	mtime := info.ModTime()
 	concurrentNote := t.concurrentEditNote(fpath, mtime)

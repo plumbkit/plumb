@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/plumbkit/plumb/internal/topology"
 	tsregex "github.com/plumbkit/plumb/internal/topology/extractors/typescript"
@@ -36,7 +37,9 @@ type builder func(root node, relPath string, src []byte, lines *lineMap) ([]topo
 //
 // Robustness: if the WASM runtime cannot initialise (it is pure-Go and
 // cross-platform, so this is not expected), Extract degrades to a fallback
-// extractor and logs once, rather than dropping the language entirely.
+// extractor and logs once per runtime lifetime — a discard re-arms the
+// warning, so a rebuild that also fails announces itself — rather than
+// dropping the language entirely.
 //
 // Concurrency: safe for concurrent Extract calls; the underlying runtime
 // serialises parses through one wasm module (see runtime).
@@ -52,10 +55,13 @@ type Extractor struct {
 	// mu guards the lazily-built runtime. Not a sync.Once: a parse terminated by
 	// its context leaves wazero's module closed, so the runtime has to be
 	// discardable and rebuildable rather than built exactly once.
-	mu       sync.Mutex
-	rt       *runtime
-	initErr  error
-	warnOnce sync.Once
+	mu      sync.Mutex
+	rt      *runtime
+	initErr error
+	// warned latches the fallback warning so it logs once, not per file. Not a
+	// sync.Once: discard re-arms it, so a rebuild that fails gets its own
+	// warning rather than hiding behind one spent before the discard.
+	warned atomic.Bool
 }
 
 // tsExports are the two grammars in ts.wasm.
@@ -129,6 +135,10 @@ func (e *Extractor) discard(stuck *runtime) {
 		return
 	}
 	e.rt, e.initErr = nil, nil
+	// Re-arm the fallback warning: a rebuild that now fails would otherwise
+	// fall back silently, the one permitted warning already spent on the
+	// pre-discard runtime.
+	e.warned.Store(false)
 }
 
 // Extract parses src and returns the grammar's symbols and edges. Containment is
@@ -144,11 +154,20 @@ func (e *Extractor) discard(stuck *runtime) {
 // runtime is what prevents that: the overrunning parse keeps the old one to
 // itself and the next file builds a fresh one.
 func (e *Extractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+	// A context that is already dead starts no parse — matching the treesitter
+	// envelope's contract (an expired budget starts no parse). Without this, a
+	// cancelled call spawns a parse doomed to be abandoned at the select below,
+	// discarding a warm runtime and leaking the parse goroutine for nothing;
+	// worse, a fast parse can win the select against the already-closed
+	// ctx.Done() and return a result where the caller was promised ctx.Err().
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	rt, initErr := e.ensure(ctx)
 	if initErr != nil || rt == nil {
-		e.warnOnce.Do(func() {
+		if e.warned.CompareAndSwap(false, true) {
 			slog.Warn("wasmts: tree-sitter wasm unavailable; using fallback", "lang", e.langName, "err", initErr)
-		})
+		}
 		return e.fallback.Extract(ctx, relPath, src)
 	}
 
@@ -180,9 +199,9 @@ func (e *Extractor) Extract(ctx context.Context, relPath string, src []byte) ([]
 	}
 
 	if res.err != nil {
-		e.warnOnce.Do(func() {
+		if e.warned.CompareAndSwap(false, true) {
 			slog.Warn("wasmts: wasm parse fault; using fallback", "lang", e.langName, "path", relPath, "err", res.err)
-		})
+		}
 		return e.fallback.Extract(ctx, relPath, src)
 	}
 	return res.nodes, res.edges, nil

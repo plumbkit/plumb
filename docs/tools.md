@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **62** structured tools to AI assistants. Every write tool is
+Plumb exposes **57** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -103,8 +103,8 @@ session list, `daemon_info`, and `workspace_sessions`. An invalid value is
 rejected with a clear error).
 
 ### `daemon_info`
-Current session name and ID, daemon version, start time, and uptime; the
-session's `purpose` tag when set; the workspace pin's provenance when known
+Current session name and ID, daemon version, Go runtime, OS/arch, start time,
+and uptime; the session's `purpose` tag when set; the workspace pin's provenance when known
 (how, when, and from where the pin was last set — pin-drift observability,
 issue #182); live config-store state (generation, last reload time, whether a
 restart is needed); and this session's tool-call count plus its slowest calls
@@ -209,21 +209,19 @@ route it to those files).
 
 ## LSP queries
 
-### `find_symbol`
-Search symbols by name within a **single document** (case-insensitive
-substring). **Inputs:** `query` (string, required), `uri` (string, optional but
-needed for a real search). Omitting `uri` returns a friendly redirect to
-`workspace_symbols` for workspace-wide name search. When the language server
-errors or times out and `[topology]` is enabled, falls back to the topology
-index, returning approximate results annotated `source=topology,
-mode=indexed-approximate`.
-
 ### `workspace_symbols`
 Search symbols by name across the **entire workspace** via the LSP index;
 stdlib/dependency hits are filtered out. Prefer over text search for name
-lookups. **Inputs:** `query` (string, required). Falls back to the topology
-index (annotated `source=topology, mode=indexed-approximate`) when the LSP
-errors or times out and `[topology]` is enabled.
+lookups. Pass `uri` to restrict the same search to a **single document** — a
+case-insensitive substring match over that file's symbol tree, children
+included. **Inputs:** `query` (string, required), `uri` (string, optional —
+absolute path, `file://` URI, or workspace-relative path; omit it for the
+workspace-wide search). Falls back to the topology index (annotated
+`source=topology, mode=indexed-approximate`) when the LSP errors or times out
+and `[topology]` is enabled. `find_symbol` was merged into this tool: the old
+name still works as an unadvertised alias — `query` and `uri` pass through
+unchanged, a uri-less call now runs the workspace-wide search it used to
+redirect to, and the result carries a notice pointing at `workspace_symbols`.
 
 ### `get_definition`
 Source location where a symbol is defined. **Inputs:** `uri` (required), and
@@ -232,13 +230,6 @@ either `line` + `character` or `symbol_name`.
 ### `explain_symbol`
 Hover documentation and type information for a symbol. **Inputs:** `uri`
 (required) plus a position (`line` + `character`).
-
-### `list_symbols`
-Full symbol outline of a file — names, kinds, line ranges, children.
-**Inputs:** `uri` (required), `include_signatures` (bool — appends each
-function/method/constructor's declaration line). Falls back to the topology
-index (annotated `source=topology, mode=indexed-approximate`) when the LSP
-errors or times out and `[topology]` is enabled.
 
 ### `file_outline`
 A token-cheap skeleton of a file: every function, type, method, class, and
@@ -252,8 +243,11 @@ cover the file it falls back to the **tree-sitter topology index** (so the
 outline still works for files no warm LSP serves), and the output is annotated
 `source=lsp` or `source=topology`. Multi-line signatures are joined; the body
 opener (`{`) and everything after it is stripped. Shares the documentSymbol
-cache with `list_symbols`. Distinct from `list_symbols`, which lists names/kinds/
-ranges; `file_outline` shows the actual signature of every symbol as a skeleton.
+cache with the other symbol queries, so a warm outline reuses an existing
+query. `list_symbols` was merged into this tool: the old name still works as an
+unadvertised alias (its `include_signatures` flag is dropped — the outline
+always renders signature lines) and the result carries a notice pointing at
+`file_outline`.
 
 ### `find_references`
 All usages of a symbol across the workspace, each with its source line.
@@ -433,20 +427,22 @@ carry the same display-only line-number gutter as `read_file`.
 Read up to 20 files in parallel; per-file errors reported inline. **Inputs:**
 `paths` (array, 1–20, required).
 
-### `list_directory`
-Immediate children of a directory (`[FILE]`/`[DIR]`, sizes, mtimes) —
-non-recursive. **Inputs:** `path` (required), `pattern` (glob),
-`include_hidden` (bool), `sort_by` (`name` | `size` | `modified`).
-
-### `list_files`
-Recursive file listing relative to a root. **Inputs:** `root`, `pattern`
-(glob), `max_depth` (default 8), `include_hidden`. Honours `.gitignore` and
-skips `.git`, `vendor`, `node_modules`, …
-
 ### `find_files`
-Glob/regex file or directory finder. **Inputs:** `pattern` (required), `path`,
-`type` (`file` | `dir` | `any`, default `file`), `extension`, `max_depth`,
-`max_results` (default 500), `include_hidden`, `use_regex`.
+Glob/regex file or directory finder, and plumb's directory lister. **Inputs:**
+`pattern` (optional — omit to match everything), `path`, `type` (`file` | `dir`
+| `any`, default `file`), `extension`, `max_depth` (`1` lists one level, like
+`ls`), `max_results` (default 500), `include_hidden`, `include_details`,
+`sort_by` (`name` | `size` | `modified`, default `name`), `use_regex`. Honours
+`.gitignore`. `include_details` renders each entry with a
+`[FILE]`/`[DIR]`/`[LINK]` marker, its size and modified time (symlinks as
+`name -> target`) instead of a bare path list.
+
+`list_files` and `list_directory` were merged into this tool: the old names
+still work as unadvertised aliases (`list_files`' `root` is mapped to `path`
+and its depth default of 8 is pinned; `list_directory` is served as
+`max_depth:1, type:"any", include_details:true`), each with a notice naming
+`find_files`. Both now inherit `find_files`' `.gitignore` confinement in place
+of `list_files`' hardcoded exclude list.
 
 ### `search_in_files`
 ripgrep-style content search; smart-case; honours `.gitignore`. **Inputs:**
@@ -607,8 +603,10 @@ labelled) and kicks an async reindex. Decision rule: use `workspace_search`
 for conceptual questions ("where is daemon locking handled?"); use
 `search_in_files` for exact literal/regex matches over current file contents.
 Ladder: `workspace_search` → topology/LSP → `search_in_files` → bounded
-`read_file`. **Inputs:** `query` (required), `corpora` (optional subset of
-`code`/`docs`/`memory`; default all), `limit` (default 20, max 100).
+`read_file` — the `plumb-explore` skill teaches the same ladder, with the
+signal for leaving each rung. **Inputs:** `query` (required), `corpora`
+(optional subset of `code`/`docs`/`memory`; default all), `limit` (default 20,
+max 100).
 
 ### `topology_explore`
 BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`
@@ -705,8 +703,9 @@ also creates `.plumb/context.md`).
 Text/regex find-and-replace across files; **dry-run by default.** **Inputs:**
 `pattern`, `replacement` (required), `path`, `glob`, `use_regex`, `dry_run`
 (default true), `dirty_ok`, `format_after` (run the workspace formatter),
-`case_sensitive`, `max_files`, `max_file_bytes`. Prefer `rename_symbol` for
-renaming identifiers — it understands scope and types. When `[edits].show_write_diff`
+`case_sensitive`, `max_files`, `max_file_bytes`. For identifier refactors use
+`rename_symbol` (scope- and type-aware); `find_replace` is the plain-text lane.
+When `[edits].show_write_diff`
 is on (default), the response appends a per-file unified diff in both preview and
 applied modes, for up to the first 20 changed files, with a `+N more file(s)`
 summary beyond that.
@@ -733,16 +732,14 @@ section listing the review's blind spots. **Inputs:** `base_ref` (default
 tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
 20, max 100), `include_suggestions` (default true).
 
-### `version`
-Plumb version, Go runtime, OS/arch. **Inputs:** none.
-
 ### `run_task`
 Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
 (100 KiB/200 lines) and timeout. **Inputs:** `slot` (`build`/`lint`/`test`/`e2e`/`verify`;
 `verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
 one shell-safe argument). A project-supplied command must be trusted first
 (`plumb trust`); defaults and global-config commands always run. Pairs with
-`topology_affected` (which says *which* tests to run).
+`topology_affected` (which says *which* tests to run) — the `plumb-testing`
+skill walks the whole post-edit loop.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist

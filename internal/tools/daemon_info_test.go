@@ -2,12 +2,35 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/stats"
 )
+
+// TestDaemonInfo_ReportsRuntimeAndArch pins the two facts daemon_info absorbed
+// when the `version` tool was merged into it: the Go runtime and the os/arch
+// pair. They are unconditional — a bug report must be fillable from this one
+// call, and the `version` alias resolves here.
+func TestDaemonInfo_ReportsRuntimeAndArch(t *testing.T) {
+	d := NewDaemonInfo("", "swift-falcon", "1.2.3", time.Now())
+	out, err := d.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{
+		"daemon version: 1.2.3",
+		"go runtime:     " + runtime.Version(),
+		fmt.Sprintf("os/arch:        %s/%s", runtime.GOOS, runtime.GOARCH),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("daemon_info output missing %q:\n%s", want, out)
+		}
+	}
+}
 
 // TestDaemonInfo_UptimeSpansSuspend pins the monotonic strip: startedAt must
 // not carry a monotonic clock reading, or time.Since would exclude

@@ -65,8 +65,7 @@ func (*WorkspaceSearch) InputSchema() json.RawMessage { return workspaceSearchSc
 func (*WorkspaceSearch) Description() string {
 	return "Ranked discovery across the workspace's indexed corpora: code symbols, doc sections (Markdown/HTML), and project memories. " +
 		"Use workspace_search when you have a conceptual question (\"where is daemon locking handled?\") and want likely starting points. " +
-		"Use search_in_files for exact literal or regex matches over current file contents (audits, replacement prep) — this tool is approximate by design and never a proof of absence. " +
-		"Discovery ladder: workspace_search → topology/LSP tools → search_in_files → bounded read_file. " +
+		"Approximate by design and never a proof of absence — the exact lane is search_in_files (literal or regex over current file contents). " +
 		"Results are FTS5-ranked within each corpus and interleaved; every hit is labelled with corpus, source, field, score, and why it matched, and the header reports per-corpus index freshness (exact_match=false always)."
 }
 

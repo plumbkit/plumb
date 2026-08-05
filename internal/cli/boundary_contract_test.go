@@ -20,8 +20,6 @@ var knownToolGuarding = map[string]string{
 	// Direct .WithBoundary guard
 	"NewFileOutline":           "guard",
 	"NewDiagnosticsWithOpener": "guard",
-	"NewListFiles":             "guard",
-	"NewListDirectory":         "guard",
 	"NewReadFile":              "guard",
 	"NewReadSymbol":            "guard",
 	"NewReadMultipleFiles":     "guard",
@@ -53,11 +51,9 @@ var knownToolGuarding = map[string]string{
 	"NewFindReplace":      "writedeps",
 	"NewMoveSymbol":       "writedeps",
 	// Guarded at the proxy routing layer (setBoundaryGuard on sessionProxy/sessionInv)
-	"NewFindSymbol":         "proxy",
 	"NewWorkspaceSymbols":   "proxy",
 	"NewGetDefinition":      "proxy",
 	"NewExplainSymbol":      "proxy",
-	"NewListSymbols":        "proxy",
 	"NewFindReferences":     "proxy",
 	"NewCallHierarchy":      "proxy",
 	"NewTypeHierarchy":      "proxy",
@@ -66,7 +62,6 @@ var knownToolGuarding = map[string]string{
 	"NewReplaceSymbolBody":  "proxy",
 	"NewSafeDeleteSymbol":   "proxy",
 	// No path input — guard not applicable
-	"NewVersion":             "none",
 	"NewDaemonInfoFunc":      "none",
 	"NewRenameSession":       "none",
 	"NewSessionStart":        "none", // workspace arg is for deliberate re-pinning, not file access

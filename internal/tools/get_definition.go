@@ -100,7 +100,6 @@ func (t *GetDefinition) Name() string                 { return "get_definition" 
 func (t *GetDefinition) InputSchema() json.RawMessage { return getDefinitionSchema }
 func (t *GetDefinition) Description() string {
 	return "Returns the SOURCE LOCATION (file path + line number) of where a symbol is defined. " +
-		"No native Claude Code equivalent for LSP-backed semantic definition lookup. " +
 		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position " +
 		"for you, avoiding off-by-one errors; a raw file position (uri + line + character) " +
 		"is the fallback and, when it lands off an identifier, is snapped to the enclosing symbol. " +

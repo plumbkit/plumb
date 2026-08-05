@@ -10,6 +10,8 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 		t.writeClaudeCodeGuidance(sb)
 	case isClaudeDesktop(t.clientNameFn):
 		t.writeClaudeDesktopGuidance(sb)
+	case isKimiCode(t.clientNameFn):
+		t.writeKimiCodeGuidance(sb)
 	}
 }
 
@@ -21,11 +23,14 @@ func (t *SessionStart) leanProfile() bool {
 }
 
 // writeClaudeCodeGuidance leads with topology (the Map) for discovery / structure
-// / impact when the index is active, then the LSP-semantic tools (the GPS) for
-// precise navigation, and closes with the cold-LSP ladder (what still works via
-// tree-sitter while the server warms, what needs a ready one). When topology is
-// off it falls back to the LSP-led form with a one-line pointer to enabling the
-// index.
+// / impact when the index is active, names the handful of moves that matter
+// after orientation, and closes with the cold-LSP ladder (what still works via
+// tree-sitter while the server warms, what needs a ready one). Each multi-tool
+// workflow points at the skill that owns it — plumb-explore for discovery,
+// plumb-refactor for edits, plumb-testing for verification — rather than being
+// restated here; the orientation packet is paid for on every session, the skills
+// are not. When topology is off it falls back to the LSP-led form with a
+// one-line pointer to enabling the index.
 func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("## Tool guidance (Claude Code)\n\n")
 	sb.WriteString(nativeEditLaneWarning)
@@ -34,27 +39,22 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			"discovery, structure, and impact — it answers instantly, tolerates broken code, and " +
 			"covers every indexed language. **LSP (the GPS)** is for precise, type-aware navigation " +
 			"once you know where to work.\n\n")
-		sb.WriteString("Topology — start here for where / what / what-if:\n\n")
-		sb.WriteString("- **topology_affected** — THE post-change tool: which tests to run after an edit " +
-			"(dependency edges + co-location, recall-biased, confidence-labelled). No language server gives this.\n")
-		sb.WriteString("- **topology_search** — ranked symbol/file search across the index. Use over grep for discovery.\n")
+		sb.WriteString("- **topology_affected** — which tests to run after an edit (dependency edges + " +
+			"co-location, recall-biased, confidence-labelled); the plumb-testing skill has the post-edit flow " +
+			"(skills install via `plumb setup claude-code`).\n")
+		// workspace_search is not in the lean set, so a lean client is pointed at
+		// topology_search instead — guidance must never name a hidden tool.
 		if t.leanProfile() {
-			sb.WriteString("- **topology_explore** — the neighbourhood around a symbol.\n")
+			sb.WriteString("- Discovery: start with **topology_search**, then **get_definition** / " +
+				"**find_references** for exact, type-aware answers — the plumb-explore skill has the full ladder.\n")
 		} else {
-			sb.WriteString("- **topology_explore** / **topology_impact** — neighbourhood and blast radius around a symbol.\n")
+			sb.WriteString("- Discovery: start with **workspace_search**, then the Map and **get_definition** / " +
+				"**find_references** for exact, type-aware answers — the plumb-explore skill has the full ladder.\n")
 		}
-		sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) in ~200 tokens.\n")
-		if !t.leanProfile() {
-			sb.WriteString("- **topology_routes** — framework entry points (HTTP handlers, Cobra, Flask).\n")
-		}
-		sb.WriteString("\n")
-		sb.WriteString("LSP-semantic — precise navigation (Claude Code lacks these natively):\n\n")
-		sb.WriteString("- **get_definition** / **find_references** — exact definition and all call sites (scope-aware, not text search).\n")
-		sb.WriteString("- **rename_symbol** — workspace-wide semantic rename.\n")
-		if !t.leanProfile() {
-			sb.WriteString("- **call_hierarchy** / **type_hierarchy** — callers/callees, super/subtypes.\n")
-		}
-		sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
+		sb.WriteString("- Refactors: **rename_symbol** for identifiers, **transaction_apply** for one atomic " +
+			"multi-file change — the plumb-refactor skill has the rest.\n")
+		sb.WriteString("- **diagnostics** — live errors and warnings without running a build; await_diagnostics " +
+			"on edit_file/write_file returns the authoritative post-write pass.\n\n")
 		// Lean hides these tools from tools/list, so the orientation packet does
 		// not advertise them. Error messages DO name them (ColdLSPToolsHint) even
 		// under lean: that is reactive — the agent has already hit a cold server
@@ -70,20 +70,60 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 		return
 	}
 	sb.WriteString("Plumb adds LSP-semantic tools Claude Code lacks natively:\n\n")
-	sb.WriteString("- **workspace_symbols** — find a symbol by name instantly (LSP index). Use instead of grep/search_in_files for name lookups.\n")
-	sb.WriteString("- **find_references** — all call sites for a symbol (LSP-semantic, not text search). Accepts name or position.\n")
-	sb.WriteString("- **get_definition** — jump to definition by name or position without reading files first.\n")
-	if !t.leanProfile() {
-		sb.WriteString("- **call_hierarchy** — callers and callees of a function.\n")
-		sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
-	}
-	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
-	if !t.leanProfile() {
-		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
-	}
+	sb.WriteString("- **workspace_symbols** / **get_definition** / **find_references** — find a symbol by name, " +
+		"jump to its definition, list every call site (scope-aware, not text search).\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename; the plumb-refactor skill has the rest of the edit lane " +
+		"(skills install via `plumb setup claude-code`).\n")
+	sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) without reading it.\n")
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +
-		"ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
+		"ranked search, file outlines, and `topology_affected` — which tests to run after a change " +
+		"(the plumb-testing skill covers that flow).\n\n")
+}
+
+// writeKimiCodeGuidance is the Kimi Code block. Two constraints shape it.
+//
+// LEAN-SET TOOLS ONLY, unconditionally. Kimi Code filters tools CLIENT-side via
+// the enabledTools allowlist `plumb setup kimi-code --lean` writes into its
+// mcp.json. plumb cannot observe that filter — tools/call arrives identically
+// whether or not it is in force — so t.leanProfile() says nothing here. Naming
+// a non-lean tool would therefore be a broken pointer for every user who took
+// the --lean advice this block itself gives. Restricting the whole block to
+// tools.LeanTools is the only shape that is correct in both states.
+//
+// A SOFT edit lane, not nativeEditLaneWarning. Kimi Code has its own file
+// tools, but there is no evidence it enforces harness-side read-before-edit
+// tracking, and that warning quotes Claude Code's exact harness error strings
+// — quoting errors a Kimi user will never see would be worse than saying
+// nothing. So this recommends the plumb lane on its merits instead.
+func (t *SessionStart) writeKimiCodeGuidance(sb *strings.Builder) {
+	sb.WriteString("## Tool guidance (Kimi Code)\n\n")
+	sb.WriteString("**Edit lane.** Kimi Code has native file tools, so plumb is a choice here rather " +
+		"than the only route — but route tracked edits through plumb: `read_file` returns an " +
+		"mtime/sha header that `edit_file` takes back as `expected_mtime`, so the write is " +
+		"concurrency-checked against exactly what you read, per-path locked, announced to " +
+		"the language server, and reversible with `undo_edit`. Reading with plumb and then editing " +
+		"natively gets you none of that. `write_file` and `transaction_apply` (one atomic " +
+		"multi-file change) sit on the same lane.\n\n")
+	if t.topologyActive() {
+		sb.WriteString("Start from the Map, not from a text search:\n\n")
+		sb.WriteString("- **topology_affected** — THE post-change tool: which tests to run after an edit " +
+			"(dependency edges + co-location, recall-biased). No language server gives this.\n")
+		sb.WriteString("- **topology_search** — ranked symbol/file search across the index. Use it before grep.\n")
+		sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) in ~200 tokens.\n\n")
+	} else {
+		sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) " +
+			"for ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
+	}
+	sb.WriteString("LSP-semantic — precise navigation no text search can do:\n\n")
+	sb.WriteString("- **get_definition** / **find_references** — exact definition and all call sites, scope-aware.\n")
+	sb.WriteString("- **workspace_symbols** — find a symbol by name across the workspace instantly.\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide semantic rename.\n")
+	sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n\n")
+	sb.WriteString("**run_task** runs the project's stored `[tasks.<lang>]` build/test/lint command with no " +
+		"shell and bounded output — prefer it over shelling out to `go test`/`npm test`.\n\n")
+	sb.WriteString("If plumb's full tool surface feels heavy, `plumb setup kimi-code --lean` writes a " +
+		"client-side allowlist into Kimi's own mcp.json, trimming the loaded schemas to plumb's lean set.\n\n")
 }
 
 func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
@@ -98,7 +138,7 @@ func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
 	sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
 	sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
 	sb.WriteString("- **write_file** / **edit_file** — create or modify files atomically.\n")
-	sb.WriteString("- **list_files** / **find_files** / **search_in_files** — discover and search the codebase.\n")
+	sb.WriteString("- **find_files** / **search_in_files** — discover, list, and search the codebase.\n")
 	sb.WriteString("- **git** — read-only git queries (status, log, diff, blame).\n\n")
 	if t.topologyActive() {
 		sb.WriteString("**Topology (the Map)** — in-process, always-on structural index:\n\n")
@@ -107,9 +147,8 @@ func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
 		sb.WriteString("- **file_outline** — a file's shape in ~200 tokens without reading it.\n\n")
 	}
 	sb.WriteString("**LSP-semantic tools** (no equivalent without a language server):\n\n")
-	sb.WriteString("- **workspace_symbols** — find any symbol by name across the workspace instantly.\n")
-	sb.WriteString("- **find_references** — all call sites for a symbol (scope-aware, not text search).\n")
-	sb.WriteString("- **get_definition** — jump to definition without reading the file first.\n")
+	sb.WriteString("- **workspace_symbols** / **get_definition** / **find_references** — find any symbol by name, " +
+		"jump to its definition, list every call site (scope-aware, not text search).\n")
 	sb.WriteString("- **rename_symbol** — workspace-wide semantic rename across all files.\n")
 	sb.WriteString("- **diagnostics** — live compile errors and warnings from the language server.\n\n")
 	sb.WriteString("If a plumb tool fails, retry or check `daemon_info`. Do not attempt native shell commands — they are unavailable.\n\n")

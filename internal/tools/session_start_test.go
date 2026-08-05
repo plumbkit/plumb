@@ -220,8 +220,8 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		if !strings.Contains(out, "isn't installed") {
 			t.Errorf("want binary-path guidance for Go\n%s", out)
 		}
-		if !strings.Contains(out, "list_files") {
-			t.Errorf("want fallback mention of list_files\n%s", out)
+		if !strings.Contains(out, "find_files") {
+			t.Errorf("want fallback mention of find_files\n%s", out)
 		}
 	})
 
@@ -269,8 +269,8 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
-		if !strings.Contains(out, "list_files") {
-			t.Errorf("want 'list_files' in output\n%s", out)
+		if !strings.Contains(out, "find_files") {
+			t.Errorf("want 'find_files' in output\n%s", out)
 		}
 	})
 
@@ -678,7 +678,7 @@ func TestSessionStart_LeanProfileNote(t *testing.T) {
 		t.Errorf("lean note should state the resolution reason:\n%s", out)
 	}
 	// The note must not enumerate hidden tool names.
-	for _, hidden := range []string{"call_hierarchy", "type_hierarchy", "topology_routes", "topology_impact", "list_symbols"} {
+	for _, hidden := range []string{"call_hierarchy", "type_hierarchy", "topology_routes", "topology_impact", "explain_symbol"} {
 		if strings.Contains(out, hidden) {
 			t.Errorf("lean guidance recommends hidden tool %q:\n%s", hidden, out)
 		}

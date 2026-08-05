@@ -63,7 +63,7 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErro
 	case lang != "":
 		t.writeNoLSPGuidance(sb, lang, lspKey)
 	default:
-		sb.WriteString("Use `list_files` to explore the codebase.\n\n")
+		sb.WriteString("Use `find_files` to explore the codebase.\n\n")
 	}
 }
 
@@ -75,11 +75,11 @@ func (t *SessionStart) writeNoLSPGuidance(sb *strings.Builder, lang, lspKey stri
 	fmt.Fprintf(sb, "No language server is attached for %s. ", lang)
 	switch lspKey {
 	case "":
-		sb.WriteString("plumb has no language server for it yet — use `search_in_files` and `list_files`, " +
+		sb.WriteString("plumb has no language server for it yet — use `search_in_files` and `find_files`, " +
 			"or enable the topology index (`[topology] enabled = true`) for indexed symbol search.\n\n")
 	case "go", "python":
 		sb.WriteString("Its server ships on by default, so it likely isn't installed or failed to start — " +
-			"check the server binary is on PATH. Meanwhile use `search_in_files`/`list_files`, or enable " +
+			"check the server binary is on PATH. Meanwhile use `search_in_files`/`find_files`, or enable " +
 			"`[topology] enabled = true` for indexed search.\n\n")
 	default:
 		fmt.Fprintf(sb, "Its adapter is opt-in — set `[lsp.%s] enabled = true` and ensure the server is on PATH. "+
@@ -103,7 +103,7 @@ func (t *SessionStart) writeLSPRouted(sb *strings.Builder) bool {
 		sb.WriteString("For anything else, the topology index is active — use `topology_search` and `file_outline`.\n\n")
 		return true
 	}
-	sb.WriteString("For anything else, use `search_in_files` and `list_files`.\n\n")
+	sb.WriteString("For anything else, use `search_in_files` and `find_files`.\n\n")
 	return true
 }
 
@@ -122,7 +122,7 @@ func (t *SessionStart) writeLSPWarming(sb *strings.Builder) bool {
 	} else {
 		sb.WriteString("Language server is still warming up. ")
 	}
-	sb.WriteString("`topology_search`, `find_symbol`, and `file_outline` answer now; " +
+	sb.WriteString("`topology_search`, `workspace_symbols`, and `file_outline` answer now; " +
 		"`get_definition`, `find_references`, and the hierarchies will work once it's ready (retry shortly).\n\n")
 	return true
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -54,13 +55,9 @@ func leanToolSet() []describable {
 // payload reduction.
 func nonLeanToolSet() []describable {
 	return []describable{
-		NewFindSymbol(nil, nil, 0, 0),
 		NewExplainSymbol(nil, nil, 0, 0),
-		NewListSymbols(nil, nil, 0, 0),
 		NewCallHierarchy(nil, 0),
 		NewTypeHierarchy(nil, 0),
-		NewListFiles(nil),
-		NewListDirectory(nil),
 		NewMinimalDiffReview(nil),
 		NewReadMultipleFiles(),
 		NewFileStatus(nil),
@@ -71,7 +68,6 @@ func nonLeanToolSet() []describable {
 		NewAgentConfig(AgentConfigDeps{}),
 		NewFileDiff(),
 		NewFindReplace(),
-		NewVersion(),
 		NewDaemonInfoFunc("", nil, "", time.Time{}),
 		NewRenameSession(nil),
 		NewWorkspaceSessions(nil, ""),
@@ -228,6 +224,59 @@ func TestBootstrapToolsAreLean(t *testing.T) {
 	for name := range BootstrapTools {
 		if !IsLean(name) {
 			t.Errorf("bootstrap tool %q is not in LeanTools — the lean set must stay a superset of the bootstrap set", name)
+		}
+	}
+}
+
+// TestLeanToolNames_SortedUnion pins the client-side allowlist accessor to its
+// contract: the sorted, deduplicated union of LeanTools and BootstrapTools. The
+// expectation is COMPUTED from the two maps, never a hardcoded count — growing
+// or shrinking the lean set must change the allowlist, not fail this test.
+func TestLeanToolNames_SortedUnion(t *testing.T) {
+	want := map[string]bool{}
+	for name := range LeanTools {
+		want[name] = true
+	}
+	for name := range BootstrapTools {
+		want[name] = true
+	}
+
+	got := LeanToolNames()
+	if len(got) != len(want) {
+		t.Fatalf("LeanToolNames() has %d entries, want %d (|LeanTools ∪ BootstrapTools|)", len(got), len(want))
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Errorf("LeanToolNames() is not sorted: %v", got)
+	}
+	seen := map[string]bool{}
+	for _, name := range got {
+		if seen[name] {
+			t.Errorf("LeanToolNames() repeats %q", name)
+		}
+		seen[name] = true
+		if !want[name] {
+			t.Errorf("LeanToolNames() includes %q, which is in neither LeanTools nor BootstrapTools", name)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("LeanToolNames() is missing %q", name)
+		}
+	}
+}
+
+// TestLeanToolNames_CoversBootstrap states the invariant the union exists for:
+// a client-side allowlist must never be able to strip a bootstrap tool, since
+// the client — not plumb — enforces it, and plumb's always-advertise guarantee
+// cannot reach that far.
+func TestLeanToolNames_CoversBootstrap(t *testing.T) {
+	in := map[string]bool{}
+	for _, name := range LeanToolNames() {
+		in[name] = true
+	}
+	for name := range BootstrapTools {
+		if !in[name] {
+			t.Errorf("bootstrap tool %q is absent from the client-side allowlist", name)
 		}
 	}
 }

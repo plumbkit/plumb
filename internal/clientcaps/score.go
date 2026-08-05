@@ -53,11 +53,9 @@ const perCallOverhead = 80
 // more than a single get_definition.
 var toolModels = map[string]toolModel{
 	// Capability-gated reads / listings.
-	"read_file":      {cat: catRead, content: ContentCode},
-	"read_symbol":    {cat: catRead, content: ContentCode},
-	"find_files":     {cat: catRead, content: ContentProse},
-	"list_files":     {cat: catRead, content: ContentProse},
-	"list_directory": {cat: catRead, content: ContentProse},
+	"read_file":   {cat: catRead, content: ContentCode},
+	"read_symbol": {cat: catRead, content: ContentCode},
+	"find_files":  {cat: catRead, content: ContentProse},
 
 	// Content search.
 	"search_in_files": {cat: catSearch, content: ContentCode},
@@ -71,9 +69,8 @@ var toolModels = map[string]toolModel{
 	"type_hierarchy":    {cat: catSemantic, content: ContentCode, reconstruct: 800},
 	"find_references":   {cat: catSemantic, content: ContentCode, reconstruct: 800},
 	"workspace_symbols": {cat: catSemantic, content: ContentCode, reconstruct: 800},
-	"list_symbols":      {cat: catSemantic, content: ContentCode, reconstruct: 800},
+	"file_outline":      {cat: catSemantic, content: ContentCode, reconstruct: 800},
 	"explain_symbol":    {cat: catSemantic, content: ContentCode, reconstruct: 400},
-	"find_symbol":       {cat: catSemantic, content: ContentCode, reconstruct: 400},
 	"get_definition":    {cat: catSemantic, content: ContentCode, reconstruct: 250},
 	"diagnostics":       {cat: catSemantic, content: ContentProse, reconstruct: 100},
 }

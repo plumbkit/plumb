@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -120,7 +121,8 @@ func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
 	return "Returns metadata about the current MCP session and daemon process: " +
-		"session name (e.g. swift-falcon), session ID, daemon version, start timestamp, and uptime, " +
+		"session name (e.g. swift-falcon), session ID, daemon version, Go runtime, OS/arch, " +
+		"start timestamp, and uptime, " +
 		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
 		"for a pending restart-bound change), and — when available — this connection's workspace-pin " +
 		"provenance (how, when, and from where the pin was last set). " +
@@ -156,11 +158,17 @@ func formatUptime(up time.Duration) string {
 }
 
 func (t *daemonInfo) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	// The go runtime and os/arch rows are the two facts the retired `version`
+	// tool reported that daemon_info lacked; they are unconditional so a bug
+	// report can be filed from this one call.
 	out := fmt.Sprintf(
-		"session name:   %s\nsession id:     %s\ndaemon version: %s\nstarted at:     %s\nuptime:         %s",
+		"session name:   %s\nsession id:     %s\ndaemon version: %s\ngo runtime:     %s\nos/arch:        %s/%s\nstarted at:     %s\nuptime:         %s",
 		t.name(),
 		t.sessID,
 		t.daemonVersion,
+		runtime.Version(),
+		runtime.GOOS,
+		runtime.GOARCH,
 		t.startedAt.Format(time.RFC3339),
 		formatUptime(time.Since(t.startedAt)),
 	)

@@ -24,7 +24,7 @@ import (
 // that are NOT in tools.LeanTools. Checking these stay hidden under lean (and
 // visible under full) is what proves the admitted set is exactly LeanTools —
 // not merely a superset of it.
-var nonLeanSample = []string{"copy_file", "list_files", "list_directory", "call_hierarchy", "workspace_search"}
+var nonLeanSample = []string{"copy_file", "find_files", "file_diff", "call_hierarchy", "workspace_search"}
 
 func init() {
 	// Guard the fixture: if one of these is ever promoted into LeanTools, the
@@ -105,6 +105,21 @@ func TestClientProfileContractMatrix(t *testing.T) {
 
 	t.Run("auto + claude-code", func(t *testing.T) {
 		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "claude-code")
+		profile, reason := s.resolveToolProfile()
+		if profile != "full" || reason != "schema-discovery-only-client" {
+			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"full\", \"schema-discovery-only-client\")", profile, reason)
+		}
+		assertBootstrapAlwaysVisible(t, s)
+		assertFullAdmitsEverything(t, s)
+	})
+
+	t.Run("auto + kimi-code", func(t *testing.T) {
+		// Kimi Code has strong native file/search/shell tooling but is
+		// schema-discovery-only, so auto must resolve to full for the SAME reason
+		// Claude Code does — not the weaker "unverified-deferred-discovery" a
+		// registry entry without SchemaDiscoveryOnly would produce, and not the
+		// "unknown-deferred-discovery" of an unregistered client.
+		s := newProfileSession(t, config.ToolsConfig{Profile: "auto"}, "kimi-code")
 		profile, reason := s.resolveToolProfile()
 		if profile != "full" || reason != "schema-discovery-only-client" {
 			t.Fatalf("resolveToolProfile() = (%q, %q), want (\"full\", \"schema-discovery-only-client\")", profile, reason)

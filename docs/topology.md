@@ -79,7 +79,9 @@ flowchart LR
 - **Topology is the Map.** Use it for discovery: "where is the routing logic?",
   "what's around this symbol?", "what does changing this touch?". It answers
   immediately, tolerates broken code, and has a tiny memory footprint — but it
-  is syntactic (Go AST; pure-Go tree-sitter for Python/JavaScript/Rust/Zig/Kotlin/Java/Bash/HCL/SQL/Dockerfile/TOML/YAML/Markdown; and canonical-grammar WASM for TypeScript/TSX/JSX and Swift), so it offers
+  is syntactic (Go AST; pure-Go tree-sitter for TypeScript/TSX/JSX, Python,
+  JavaScript, Rust, Zig, Kotlin, Java, Bash, HCL, SQL, Dockerfile, TOML, YAML
+  and Markdown; and canonical-grammar WASM for Swift), so it offers
   *broad recall*, not compiler-level precision or type resolution.
 - **LSP is the GPS.** Once you know *where* to work, the language-server tools
   (`get_definition`, `find_references`, `rename_symbol`, `diagnostics`) make and
@@ -96,13 +98,11 @@ pipeline has four parts:
 1. **Extractors read your source.** Per language, a lightweight extractor turns
    a file into a list of *entities* (functions, types, methods, imports, tests)
    and *edges* (calls, imports, containment). Go uses the standard library's
-   `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin and
-   Java use the pure-Go gotreesitter runtime, as does JavaScript
-   (`.js`/`.mjs`/`.cjs`); and TypeScript (`.ts`), TSX/JSX (`.tsx`/`.jsx`) and
-   Swift use the canonical tree-sitter grammars compiled to WASM and run via
-   wazero (gotreesitter's TSX grammar cascades on typed-arrow params, so the
-   canonical grammar parses them cleanly). The old line-by-line regex TS/JS
-   scanner survives only as a wasm-init-failure fallback.
+   `go/parser` + `go/ast` (precise, no cgo); Python, Rust, Zig, Kotlin, Java,
+   JavaScript (`.js`/`.mjs`/`.cjs`), TypeScript (`.ts`) and TSX/JSX
+   (`.tsx`/`.jsx`) use the pure-Go gotreesitter runtime; Swift uses the
+   canonical tree-sitter grammar compiled to WASM and run via wazero, until
+   the remaining upstream gotreesitter Swift parse gaps close.
    None of this requires the code to compile.
 2. **A SQLite + FTS5 database stores the graph.** Entities and edges live in
    tables in `<workspace>/.plumb/topology.db`; an FTS5 (full-text search) virtual
@@ -140,8 +140,8 @@ treat it as an optional, rebuildable index.
 A common flow: `topology_search` to locate → `topology_explore`/`topology_impact`
 to scope → LSP tools to read and edit precisely → `diagnostics` to verify.
 
-When topology is enabled, the name-lookup tools `find_symbol`,
-`workspace_symbols`, and `list_symbols` also **fall back** to the topology index
+When topology is enabled, the name-lookup tools `workspace_symbols`
+and `file_outline` also **fall back** to the topology index
 if the language server errors or times out, returning approximate results
 annotated `source=topology, mode=indexed-approximate` rather than failing.
 
@@ -178,7 +178,7 @@ All `[topology]` fields (see the
 | `resync_on_attach` | `false` | Full resync each time the workspace attaches. |
 | `exclude_patterns` | `[]` | Path globs to skip during indexing. |
 | `max_file_size_bytes` | `524288` | Largest file considered (512 KiB). GLR-heavy markup grammars (Markdown, HTML, YAML) carry a tighter built-in 256 KiB inner cap — a file above it is indexed with zero symbols rather than parsed, since a full parse of a large markup file is expensive and low-value. |
-| `extract_timeout_seconds` | `10` | Longest one file's parse may run before it is abandoned and recorded as a file error. The size caps above bound how much source a grammar sees, not how long it spends: error recovery can go superlinear on a small file, and the indexer runs a single worker, so an unbounded parse would stall every file behind it. `0` disables. |
+| `extract_timeout_seconds` | `10` | Longest one file's parse may run before it is abandoned and recorded as a file error. The size caps above bound how much source a grammar sees, not how long it spends: error recovery can go superlinear on a small file, and the indexer runs a single worker, so an unbounded parse would stall every file behind it. `0` disables. A file that times out is recorded with its mtime (not a content hash), so every full resync re-attempts it and re-pays the full timeout — a pathological file costs one timeout per resync cycle. |
 | `resync_batch` | `100` | Files extracted before the full resync pauses (CPU throttle). `0` disables pacing. |
 | `resync_pause_ms` | `25` | Pause after each `resync_batch` files, in milliseconds. `0` disables pacing. |
 | `resync_interval_minutes` | `60` | Periodic full-resync **fallback** (used only when `watch = false` or the watcher can't start); suppressed while the watcher is live; `0` disables. |

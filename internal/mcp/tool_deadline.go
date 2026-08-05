@@ -14,6 +14,9 @@ import (
 // unresponsive mount cannot hang the call until the MCP client's own multi-minute
 // timeout. Tools that already self-bound — the LSP tools, search_in_files,
 // find_files — do NOT implement this; they manage their own deadline internally.
+// That is a trade, not an equivalence: a self-imposed context deadline is
+// cooperative and cannot interrupt a blocked syscall, which only this marker's
+// goroutine offload escapes. See findFilesDefaultDeadline for the reasoning.
 // The marker method carries no behaviour; its presence is the opt-in.
 type ExecTimeoutBounded interface {
 	ExecTimeoutBounded()

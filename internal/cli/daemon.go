@@ -382,8 +382,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 
 	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid(), "log", daemonLogPath())
 
-	tools.Version = Version
-
 	// The fsync-before-ack knob gates free functions (safeWrite and friends)
 	// shared by every session, so it is daemon-global and installed exactly once,
 	// here, from the GLOBAL config store — store.Current() is re-read per write,

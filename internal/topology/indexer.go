@@ -222,6 +222,16 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 	reclaimed := false
 	var lastErr error
 	for _, o := range ops {
+		// Background() is deliberate: the per-file extract timeout wraps the
+		// parse itself (extractFile), so it does not need an upstream deadline,
+		// and under a parent cancel every remaining op in the drain would fail
+		// individually (the loop continues past errors). If a cancellable
+		// parent is ever threaded through here (and into processResync below),
+		// processUpsert — the caller that decides whether to record — must
+		// first distinguish errors.Is(err, context.Canceled) (the worker is
+		// stopping; the file did not earn an error row) from
+		// context.DeadlineExceeded, which it did; otherwise every in-flight
+		// file is recorded as an error on shutdown.
 		err := idx.dispatch(context.Background(), o)
 		if err != nil {
 			slog.Warn("topology: indexer error", "op", o.kind, "path", o.path, "err", err)

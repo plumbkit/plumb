@@ -37,7 +37,7 @@ func wrap(name string) aliasTarget     { return aliasTarget{name: name, xf: wrap
 // only applies a mapping when the canonical name is an actual parameter of the
 // tool being called and isn't already set — so the same alias is safe across
 // tools with different shapes (e.g. "path" maps to "file_path" on read_file,
-// but stays canonical on list_directory where "path" is the real parameter).
+// but stays canonical on find_files where "path" is the real parameter).
 //
 // plumb's canonical names follow Claude Code's native tools (file_path,
 // old_string, new_string for file-content tools; path/pattern for search/dir
@@ -47,8 +47,9 @@ func wrap(name string) aliasTarget     { return aliasTarget{name: name, xf: wrap
 // Candidate order is most-preferred-first; the first one that is a real,
 // unset parameter of the called tool whose transform (if any) fits the given
 // value wins, so a single alias serves tools with different shapes (e.g.
-// "path" → uri on get_definition, → root on list_files, and stays canonical on
-// search_in_files where "path" is the real parameter). New entries are
+// "path" → uri on get_definition, and stays canonical on search_in_files where
+// "path" is the real parameter; "root" — the retired list_files spelling —
+// reaches find_files' "path"). New entries are
 // empirically driven (the parameter names agents actually send, mined from
 // the stats DB) and must be unambiguous — never a semantic flip
 // (include≠exclude) or a safety-critical guess (no git subcommand/confirm).
@@ -123,8 +124,8 @@ var paramAliases = map[string][]aliasTarget{
 	"limit":      {plain("max_results"), plain("max_matches"), plain("recent_limit")},
 	"maxmatches": {plain("max_matches"), plain("max_results")},
 	"maxcount":   {plain("max_matches"), plain("max_results")},
-	// Traversal depth: list_files/find_files call it max_depth, the topology
-	// tools call it depth — both directions.
+	// Traversal depth: find_files calls it max_depth, the topology tools call it
+	// depth — both directions.
 	"depth":    {plain("max_depth")},
 	"maxdepth": {plain("depth")},
 	// Find/filter.

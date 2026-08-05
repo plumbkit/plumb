@@ -109,3 +109,31 @@ func TestSessionGuidance_LeanProfileOmitsColdLSPLadder(t *testing.T) {
 		t.Errorf("lean guidance must not name hidden tools:\n%s", out)
 	}
 }
+
+// The discovery line has the same obligation as the cold-LSP ladder above:
+// workspace_search is not in the lean set, so a lean client must be pointed at
+// topology_search instead. Advertising an unreachable tool in the orientation
+// packet wastes the very budget the lean profile exists to save.
+func TestSessionGuidance_LeanDiscoveryLineAvoidsHiddenTool(t *testing.T) {
+	render := func(profile string) string {
+		s := &SessionStart{
+			clientNameFn: func() string { return "claude-code" },
+			toolProfile:  func() (string, int, string) { return profile, 33, "verified-deferred-discovery" },
+			topo:         func() *topology.Store { return &topology.Store{} },
+		}
+		var sb strings.Builder
+		s.writeSessionGuidance(&sb)
+		return sb.String()
+	}
+
+	lean := render("lean")
+	if strings.Contains(lean, "workspace_search") {
+		t.Errorf("lean guidance names workspace_search, which the lean profile hides:\n%s", lean)
+	}
+	if !strings.Contains(lean, "topology_search") {
+		t.Errorf("lean guidance must still offer a discovery entry point:\n%s", lean)
+	}
+	if full := render("full"); !strings.Contains(full, "workspace_search") {
+		t.Errorf("full guidance should lead discovery with workspace_search:\n%s", full)
+	}
+}

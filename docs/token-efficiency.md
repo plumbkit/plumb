@@ -15,7 +15,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 
 ### 1. Surgical Reads
 *   **Never read a whole file** if you only need one function.
-*   Use `list_symbols` or `find_symbol` to get line numbers first.
+*   Use `file_outline` or `workspace_symbols` to get line numbers first.
 *   Use the `start_line` and `end_line` parameters in `read_file` to request only the necessary slice.
 
 ### 2. Optimistic Verification
@@ -31,7 +31,7 @@ The cost of an agent session is driven by the volume of text held in the convers
 
 ### 5. Batch Reads Within a Turn
 *   If you know up front that you need to read four files to plan an edit, use `read_multiple_files` once instead of four sequential `read_file` calls. One tool result is cheaper than four headers, and Anthropic's prompt cache hits the next turn either way.
-*   Same rule for the LSP queries: a single `list_symbols` is cheaper than calling `find_symbol` four times.
+*   Same rule for the LSP queries: a single `file_outline` is cheaper than calling `workspace_symbols` four times.
 
 ### 6. Don't Read to Confirm What `git` or `diagnostics` Already Tells You
 *   After a write, `diagnostics(uri)` reports whether the LSP server flagged anything. If it returns no errors and you trust the language server, that *is* the verification — re-reading the file just to "check it looks right" doubles your token cost on the round trip.
@@ -45,7 +45,7 @@ These are mistakes Claude (and other LLM agents) actually make in practice — c
 The single most common failure mode. The post-write response says "wrote 142 bytes", which feels too thin to "trust", so the agent calls `read_file` again to look at the result. This doubles the token cost of every write. On plumb's side, `edit_file`/`write_file` already return a unified diff by default (`[edits] show_write_diff`), so the success response shows exactly what changed; on the agent's side, the discipline is to stop reading unless an error was returned.
 
 ### Reading a 5 KB file to change one line
-A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `list_symbols → find_symbol → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
+A diff that touches three lines doesn't justify reading 200 lines of surrounding code into the context window. `file_outline → workspace_symbols → read_file(start_line=X, end_line=Y)` is the right ladder. The middle step exists precisely so the agent doesn't need a wide read.
 
 ### Calling `search_in_files` with a vague pattern, then reading every hit
 A loose grep that returns 60 matches × ~200 bytes of context each is 12 KB of output that the agent will then partially re-read by opening files. Either tighten the pattern (often a quoted phrase or a regex anchor fixes it), or use `find_references` on the symbol — the LSP knows what the grep doesn't.
@@ -82,11 +82,11 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 |---|---|---|
 | `read_file` | ~1 token per byte (text) | Always pass `start_line` / `end_line` once you know them. Stream in slices, not full files. |
 | `read_multiple_files` | Sum of per-file costs | Prefer over many sequential `read_file` calls when you know the set up front. |
-| `list_files` | Linear in file count | Pair with a tight `pattern` glob. `**/*.go` is cheaper than dumping the whole tree. |
+| `find_files` | Linear in file count | Pair with a tight `pattern` glob. `**/*.go` is cheaper than dumping the whole tree. Add `max_depth` to stay shallow, and leave `include_details` off unless you need sizes/mtimes. |
 | `search_in_files` | Hit count × ~200 bytes per hit | Use a quoted phrase or anchored regex. Use `find_references` for symbol-shaped queries. |
 | `find_replace` | Doubles in dry-run + commit cycle | Run dry-run *only when* you don't trust your pattern. For deterministic patterns, go straight to commit. |
 | `workspace_symbols` | Compact (one line per symbol) | Almost always cheaper than the grep+read alternative. Use this first when navigating by name. |
-| `list_symbols` | Compact tree per file | Use to plan a surgical `read_file` slice. |
+| `file_outline` | Compact signature skeleton per file | Use to plan a surgical `read_file` slice. |
 | `get_definition` | Small (location only) | Don't chain into `read_file` unless you actually need the body. |
 | `diagnostics` | Linear in error count | Pass a `uri` to scope to one file. Workspace-wide is for "give me the picture", not for routine verification. |
 | `edit_file` | Cost of `old_str + new_str` | Far cheaper than `write_file` for any change under ~80% of file size. |
@@ -99,7 +99,7 @@ Quick reference for the highest-traffic tools. Pick the parameter or pattern tha
 
 Anthropic's prompt cache has a 5-minute TTL on the conversation prefix. Plumb's design intersects with this in three ways:
 
-1.  **Tool schemas are stable across turns.** Plumb registers the same 62 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
+1.  **Tool schemas are stable across turns.** Plumb registers the same 57 tools at session start; their schemas don't mutate during a conversation. This means the bulk of the system prompt (tool definitions) caches reliably across the whole session, and the per-turn marginal cost is dominated by *new* content (your messages + tool outputs).
 2.  **Tool outputs do not cache.** Anything plumb returns is part of the conversation, not the cached prefix. Returning shorter outputs is *always* a direct win — there's no "cached call" rebate.
 3.  **`session_start` output is not cached.** It runs once at session start, but its output sits in the conversation thereafter. Keep it lean by default and lazy-load (a roadmap item) for the heavy bits.
 
@@ -115,13 +115,13 @@ Features that would shift token efficiency from "the agent has to remember to be
 *   **Error payloads designed for one-round recovery.** Today, `edit_file` failures like "old_str matched twice" send back the error and force the agent to re-read the file to figure out where. Instead: include the surrounding 5 lines of *each* match in the error, plus the file's current mtime. The agent gets enough to retry with a more specific `old_str` without burning a `read_file` call.
 *   **`stat` tool (shipped — `file_status`).** A lightweight, content-free probe returning per-path `git_dirty`/`changed_since_plumb_wrote`/`last_writer`/mtime/size. Used by agents recovering from concurrent-write errors so they don't have to re-read the body just to grab a fresh mtime.
 *   **Mtime auto-propagation within a session.** Plumb already tracks per-session `ReadTracker` state including mtime. `edit_file` could default to the last-read mtime for that path automatically; the agent only needs to override it explicitly. Removes the verbose `expected_mtime` copy step from every edit.
-*   **Smart output truncation with continuation handles.** Large `search_in_files`, `list_files`, or `find_references` results return the first N hits + a `next_page_token`. The token is short and lets the agent decide whether to spend more context on the rest. No need to truncate silently or dump everything.
+*   **Smart output truncation with continuation handles.** Large `search_in_files`, `find_files`, or `find_references` results return the first N hits + a `next_page_token`. The token is short and lets the agent decide whether to spend more context on the rest. No need to truncate silently or dump everything.
 
 ### Medium impact
 
 *   **Lazy memory loading.** `session_start` currently includes memories. Switch to descriptions only; the agent calls `read_memory(name)` if it actually needs the body. Pairs well with MCP Resources — memories already are resources, so this is mostly tuning what gets pulled vs referenced.
 *   **Output-format hints.** A `format: "compact" | "default" | "verbose"` parameter on read tools, list tools, and diagnostics. Compact strips repeated path prefixes, drops surrounding context lines in search hits, and uses YAML-style key:value instead of indented JSON where appropriate. The agent opts into compact when it's running tight on context.
-*   **Relative-path output mode.** Every output today repeats the workspace's absolute prefix. A connection-level "use relative paths" toggle would shave 30-60 bytes off every path mentioned in a tool result. Especially valuable for `list_files`, `find_files`, `git diff`.
+*   **Relative-path output mode.** Every output today repeats the workspace's absolute prefix. A connection-level "use relative paths" toggle would shave 30-60 bytes off every path mentioned in a tool result. Especially valuable for `find_files`, `search_in_files`, `git diff`.
 *   **Context pruning advisories.** Plumb's stats DB knows the input/output sizes per tool call. Surface a "your last 10 `read_file` calls averaged 4 KB output — try `start_line/end_line`" hint inside `session_start`'s footer when the average is high. Self-correcting feedback for agents.
 *   **Cap on session_start orientation packet.** Currently includes recent commits, recently-modified files, top-5 tool stats, active diagnostics, memory list. Each section is useful for *some* tasks and noise for others. A `sections: ["git", "memories"]` parameter lets the agent ask for what it needs.
 
@@ -130,7 +130,7 @@ Features that would shift token efficiency from "the agent has to remember to be
 *   **Tool-subset registration.** A Go-only project doesn't need pyright-shaped tools in the schema. Conditional tool registration based on the resolved workspace language would cut the cached prompt prefix by ~5% (small per-call but compounds across all sessions). Note: a related but distinct mechanism has since shipped — the `[tools]` client-aware profile (`auto`/`lean`/`full`) trims the non-lean remainder for clients that have declared verified deferred-tool discovery (an explicit opt-in — see [tools] in docs/configuration.md). This item is specifically about language-conditional trimming, which is still unshipped.
 *   **Result-handle returns.** A `find_replace` dry-run returns a short handle (e.g. `"fr-94a3e"`); committing references the handle rather than re-sending the pattern + paths. Saves a full duplication of the dry-run input on the commit call.
 *   **`recent_edits()` tool.** A per-session record of writes the agent has made, returned as a compact list. Cheaper than scrolling back in the conversation to remember "what did I just do."
-*   **Bundled symbol-explainer mega-tool.** `explain_full(symbol)` runs `find_symbol → get_definition → find_references → explain_symbol` in one tool call and returns a unified report. One tool-call round trip instead of four, with deduplicated output.
+*   **Bundled symbol-explainer mega-tool.** `explain_full(symbol)` runs `workspace_symbols → get_definition → find_references → explain_symbol` in one tool call and returns a unified report. One tool-call round trip instead of four, with deduplicated output.
 *   **Streaming / partial outputs.** For tools that can produce results incrementally (search, list), supporting incremental delivery would let the agent abort early if it has what it needs. Requires MCP protocol-level support — listed here as a watch-this-space item.
 
 ### Considered but rejected

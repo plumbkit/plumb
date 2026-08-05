@@ -4,6 +4,51 @@
 
 ### Added
 
+- **Kimi Code support completed, with a client-side tool allowlist.** Kimi Code
+  had a `plumb setup` target but no capability entry, so plumb treated it as an
+  unrecognised client. It now has one in `internal/clientcaps` — native
+  file/search/shell, `SchemaDiscoveryOnly`, tokeniser `FamilyGPT` (Kimi K2's BPE
+  is tiktoken-lineage; a `FamilyKimi` with invented ratios would be fake
+  precision) — so `auto` resolves it to **full** for the accurate reason
+  `schema-discovery-only-client` rather than `unknown-deferred-discovery`.
+  `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
+  evidence-gated lean opt-in, never an inference from native tooling.
+  Because a schema-discovery-only client cannot reach a tool plumb hid, the
+  ~97 KB of advertised schemas has to be trimmed on the client side instead:
+  **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
+  (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
+  client-enforced allowlist can never strip a bootstrap tool) into the
+  `enabledTools` key of the plumb entry in Kimi's own `mcp.json`, loading 21
+  schemas instead of 57. The idempotence predicate is lean-aware, which is the
+  whole trick: without it `mergeServerEntry`'s "already points at this binary"
+  short-circuit would make `--lean` a silent no-op on every machine that
+  already had plumb registered. A later bare re-register (and `plumb setup
+  --all`) preserves the key — the same merge-onto-existing contract that keeps
+  Codex's approval tables — while `--lean` over a hand-edited list replaces it;
+  there is deliberately no `--full` un-set flag. `plumb doctor` adds an
+  informational line (never a warning — a full registration is a valid default)
+  when Kimi registers plumb with no allowlist, plus a **warning** when the key
+  is present but degenerate (`[]`, null, or not a list): only a non-empty list
+  is an allowlist, and a degenerate one loads zero plumb tools, so grading on
+  key presence alone would call a dead integration healthy. `session_start` now
+  emits Kimi-specific guidance: a soft edit-lane recommendation (not the Claude Code
+  warning, which quotes harness errors a Kimi user never sees) plus the
+  topology trio and `run_task`, restricted to lean-set tools **unconditionally**
+  — plumb cannot observe a client-side filter, so naming a non-lean tool would
+  be a broken pointer for anyone who took the `--lean` advice.
+  Guarded by `TestKimiCodeInto_Lean` (six cases: fresh, already-registered,
+  repeat, bare-preserves, repoint-preserves, replaces-custom),
+  `TestKimiLeanHintAt` (including the degenerate-allowlist shapes),
+  `TestKimiLeanFlagOnTheCommand` / `TestRunSetupTargetPrintsTheNote` (the CLI
+  seam: the flag is registered on the generated command, bound to the var the
+  target reads, absent from a control client, and the note prints on both of
+  `runSetupTarget`'s exits), `TestLeanToolNames_SortedUnion` /
+  `TestLeanToolNames_CoversBootstrap` (computed from the maps, never a literal
+  21), `TestKimiCodeGuidance_LeanSetOnly` (forbidden set derived from
+  `nonLeanToolSet()`), `TestKimiCodeHasNoNativeEditConflict`, the `auto +
+  kimi-code` row of `TestClientProfileContractMatrix`, and the extended
+  `clientcaps` prefix/`SchemaDiscoveryOnly` tables.
+
 - **Pin-drift observability: every workspace re-pin now explains itself.** A
   client that multiplexes several logical agent sessions over one `plumb
   serve` connection can have a peer's `session_start` silently re-pin the
@@ -25,6 +70,30 @@
   changed'` keeps working. No behaviour changes: groundwork for #182, not the
   fix.
 
+- **Regression nets under the nine LSP adapters, ahead of the base-adapter
+  extraction (#60).** The adapters duplicate ~2,400 lines of identical
+  plumbing and the planned fix embeds a shared base in each; three things that
+  refactor could change silently had nothing pinning them.
+  `conformance.RunErrorContract` now drives every `lsp.Client` method against
+  an always-failing transport and asserts the exact `"<server> <label>:
+  <cause>"` string plus `errors.Is`, across all nine adapters — 21 labels each,
+  22 or 23 where an optional pull surface exists — guarded by a golden label
+  set that fails in BOTH directions, so a case cannot be deleted quietly and a
+  newly added error-returning method cannot arrive unpinned.
+  `conformance.RunLazyOpenErrorContract` pins the `open <uri>` label the three
+  lazy-open adapters (sourcekit-lsp, zls, vscode-html-language-server) emit for
+  an unreadable document, and the HTML adapter's hand-rolled symbol-union
+  decode — the one wrapping a transport failure can never reach — carries its
+  own pin. `TestAdapters_OptionalInterfaceSurface` pins which adapters expose
+  the optional pull surfaces, in both directions: an embedded base promotes
+  every exported method into all nine embedders, so one stray method there
+  would opt six language servers into pull diagnostics with no visible diff at
+  any call site. All nine adapter packages now assert `lsp.Client` at build
+  time, and the six with no conformance suite gained one. Both harnesses are
+  proven load-bearing by meta-tests that run deliberately broken adapters — one
+  mislabelled, one whose message renders correctly but no longer unwraps —
+  against a clean control, and assert the doomed runs fail. Tests and
+  compile-time assertions only; no behaviour change.
 - **The wasm runtime discard now has a test that dies without it.** Dropping
   the wasm runtime when a parse overruns its deadline is the whole reason one
   slow file cannot serialise every later file behind its parse lock, and it
@@ -41,6 +110,227 @@
 
 ### Changed
 
+- **Tool descriptions and `session_start` guidance stop restating the workflows
+  the skills teach.** A description and an orientation packet are paid for on
+  every session whether or not they are read, and a workflow spelled out in
+  three places drifts in three places. The skills `plumb setup claude-code`
+  installs are now the canonical, expanded home for anything that spans more
+  than one tool; the always-on channels keep the tool *contract* (semantics,
+  caps, formats, safety mechanics) plus a pointer, and drop the comparative
+  routing.
+
+  **A fourth skill, `plumb-testing`**, gives the post-edit loop a home:
+  `topology_affected` for which tests the change touches, `run_task` to run
+  them, `diagnostics` / `await_diagnostics` for compile truth, and the cases
+  where a heuristic over an index earns a full-suite run anyway (mostly `low`
+  confidence, a cross-cutting change, an index that may be behind the tree).
+  **`plumb-explore`** is re-based on `workspace_search`, which postdated it: it
+  now opens with that tool and states the discovery ladder
+  (`workspace_search` → topology/LSP → `search_in_files` → bounded `read_file`)
+  with the signal for leaving each rung. **`plumb-refactor`**'s illustrative
+  `rename_symbol` call was looser than the real schema — it showed a `name`
+  parameter that does not exist and implied a call that applies, when `dry_run`
+  defaults to true — and is now accurate.
+
+  On the always-on side: the Claude Code edit-lane warning is ~47% shorter,
+  keeping both harness error strings verbatim (they are the recognition hook
+  for an agent that has already hit one) and deferring the rest to
+  `plumb-refactor`; the topology and topology-off guidance blocks drop from ~12
+  and ~8 tool bullets to four lines each; and twenty-odd descriptions lose their
+  comparative-routing sentences — the `No native Claude Code equivalent`
+  openers, `Prefer this over shelling out to grep/rg`, `THE headline topology
+  tool`, `Essential for clients without shell access` — while every contract
+  fact and one-clause scope statement stays (`edit_file` keeps its native-edit
+  parenthetical, `read_file` its mtime/sha mechanics, `rename_file` its
+  `copy_file`/`rename_symbol` disambiguation). `search_in_files` reads ~32%
+  shorter with nothing about its behaviour left undocumented. Claude Desktop's
+  and Kimi Code's blocks are deliberately left long for the same reason: those
+  clients install no skills, so their guidance blocks *are* their condensed
+  channel.
+
+  **A known gap, taken deliberately.** Skills install for `claude-code` only,
+  and a `session_start` guidance block is written for only `claude-code`,
+  `claude-desktop` and `kimi-code`. The other eleven `plumb setup` targets —
+  codex, gemini, cursor, augment, qwen, antigravity, antigravity-desktop,
+  opencode, crush, goose, hermes — receive neither, so tool descriptions were
+  their only steering channel and the routing prose removed here has no
+  replacement they can see. That is a steering regression for those clients
+  until per-client skill rendering lands in `plumb setup`; it is not covered by
+  the sentence above.
+
+  Guarded by `TestNativeEditLaneWarning_LoadBearingPhrases` (both harness
+  strings survive the trim), `TestClaudeCodeSkills_HaveValidFrontmatter` (the
+  pinned skill set gains `plumb-testing`),
+  `TestSessionGuidance_LeanDiscoveryLineAvoidsHiddenTool` (new — a lean client's
+  discovery line names `topology_search`, never the lean-hidden
+  `workspace_search`), `TestSessionGuidance_NamesColdLSPLadder` /
+  `TestSessionGuidance_LeanProfileOmitsColdLSPLadder`,
+  `TestSessionStart_TopologyLedGuidance` /
+  `TestSessionStart_LSPLedGuidanceWhenTopologyOff`,
+  `TestSessionStart_EditLaneWarning_ClaudeCode`, and `TestLeanProfileBudget`
+  (lean stays ~46% of the full `tools/list` payload, against its 52% cap).
+
+- **Five tools folded into four survivors behind a permanent unadvertised alias
+  layer — the advertised surface drops 62 → 57 with no capability removed.**
+  Five registered tools were commodity duplicates of a neighbour: `version`
+  reported a strict subset of `daemon_info`; `list_symbols` and `file_outline`
+  shared a documentSymbol cache key and answered the same question in two
+  shapes; `find_symbol` was `workspace_symbols` scoped to one file, and its
+  uri-less form did nothing but print a redirect *to* `workspace_symbols`;
+  `list_files` and `list_directory` were `find_files` with a different default
+  and a different renderer. Each duplicate cost a schema in every `tools/list`
+  and a choice the agent had to get right. They are now one tool each —
+  `version → daemon_info`, `list_symbols → file_outline`, `find_symbol →
+  workspace_symbols`, `list_files` + `list_directory` → `find_files`.
+
+  The survivors absorbed what was distinct rather than dropping it.
+  `daemon_info` gained the `go runtime` and `os/arch` rows `version` reported.
+  `workspace_symbols` gained an optional `uri`: with one it runs the
+  single-document search `find_symbol` owned, without one the workspace-wide
+  search the old redirect merely pointed at — so the call that used to fail now
+  answers. `find_files` gained an optional `pattern` (omit it to list
+  everything), `include_details` (`list_directory`'s rendering: a
+  `[FILE]`/`[DIR]`/`[LINK]` marker, size, and modified time per entry, symlinks
+  as `name -> target`), and `sort_by` (`name`/`size`/`modified`, applied to the
+  whole — possibly recursive — result list; a size/modified ranking lifts the
+  walk's early stop to a 5000-entry scan ceiling before truncating to
+  `max_results`, because "largest first" over whichever entries the traversal
+  happened to reach first is not largest-first at all). `max_depth: 1` now means
+  one level and no more: the shared walk prunes strictly (it no longer reads the
+  directory it used to descend into just to discard the contents) and
+  `find_files` keeps its own depth check over that. Three more honesty fixes
+  ride along, all of them things the merged tool would otherwise have said
+  wrongly to a caller who could not tell: pointing at a FILE still lists its
+  parent — long-standing `find_files` behaviour — but now says so in a leading
+  `note:` line, where `list_directory` used to hard-error; a result set that
+  lands exactly on `max_results` having exhausted the tree is no longer labelled
+  truncated (truncation now means the walk really stopped short), and the
+  truncation line reports the tally alongside the note instead of replacing it;
+  and `sort_by: "size"` no longer ranks directories by their inode size, a
+  number the listing leaves blank. `plumb diagnostics` moved to `find_files` for
+  its workspace warm-up, and its result parser now skips the tool's prose lines
+  — the trailing `N result(s)` summary it had been counting as a source file,
+  plus the `note:` and timeout sentences.
+
+  **The retired names stay callable, permanently.** `internal/mcp/toolalias.go`
+  resolves an old name onto its survivor BEFORE the registry lookup — so the
+  canonical name is what the hooks, the parameter-alias resolver, `execTool`,
+  and the recorded stats all see — adapts the arguments where the shapes differ
+  (`list_symbols` drops `include_signatures`; `list_files`' `root` becomes
+  `path` and its depth default of 8 is pinned, since `find_files` descends
+  without limit; `list_directory` becomes `max_depth:1, type:"any",
+  include_details:true`; both listing aliases lift `max_results` to the schema
+  maximum, since neither retired tool capped its output and `find_files` stops
+  at 500), and prepends a one-line notice naming the survivor — on the error
+  path too, so a failure that reports the survivor's name is never the first the
+  caller hears of the redirect. What an adapter injects is a DEFAULT, not a
+  mandate: a caller who names one of those parameters keeps their value
+  (`list_directory({max_depth: 3})` gets three levels), and an injected default
+  consults the parameter-alias table before it lands, so a caller's own spelling
+  (`list_files({depth: 1})`) is never shut out of the canonical slot either. The
+  one value an adapter overrides is a non-positive `max_depth`, which
+  `find_files` reads as unlimited — the inversion of what the old caller meant.
+  `list_files` given BOTH `root` and `path` resolves neither: two values for one
+  slot is left to the argument guard to reject, matching the parameter layer's
+  own policy. Aliases are absent from `tools/list`, from the self-test
+  coverage groups, and from every advertised schema — hidden-but-callable, the
+  semantics the lean profile already had — so they cost no schema budget and no
+  client learns a retired name from plumb. Matching is exact: a near-miss falls
+  through to the unknown-tool rejection, which now offers a "did you mean" hint
+  over the union of registered names and aliases, reusing the parameter guard's
+  `closest` — and reports the CANONICAL when the closest match is an alias, so
+  the hint never teaches a name that appears in no tool list.
+
+  **Breaking:** `find_files`' `max_depth` now means exactly N levels —
+  previously files one level deeper leaked through, because the shared walker
+  pruned directories at the limit but still visited the files inside the last
+  one it entered. That is a real change for CANONICAL `find_files` callers, not
+  only for the aliased lists: a `max_depth: 2` call that used to return three
+  levels of files now returns two. (It is also what makes the `list_directory`
+  alias genuinely single-level, and the walk no longer reads the directory it
+  used to descend into just to discard the contents.) A non-positive
+  `max_depth`, which the schema never allowed and which read as "unlimited", is
+  now a clean rejection. Otherwise only the advertised lists change: harness-side
+  callers see canonical names only, and a stale client-side permission or
+  allowlist rule naming a retired tool goes inert rather than wrong — the call
+  still runs, under the survivor's name. Tool count 62 → 57; `README.md`,
+  `docs/`, `AGENTS.md`, and `site/index.html` move with it.
+
+  **Migration:** three behaviours genuinely change for old-name callers.
+  (1) `list_files`' hardcoded exclude list (`vendor`, `node_modules`,
+  `__pycache__`, `.pytest_cache`) died with the tool: `find_files`' `.gitignore`
+  confinement is now the only exclusion mechanism, so `vendor/` is visible
+  unless it is gitignored and gitignored build output is no longer listed.
+  `list_directory` excluded nothing at all, so it tightens the same way. The
+  one-line fix either direction is to gitignore the directories you want hidden.
+  `.git/` is the exception and needs no gitignore rule: the shared walk now
+  excludes it outright, for `find_files`, `search_in_files`, and `find_replace`
+  alike, even under `include_hidden: true`. (2) `list_symbols`'
+  `include_signatures` is dropped — the outline always renders signature lines,
+  so the flag has no counterpart to carry. (3) `list_files` and `list_directory`
+  both implemented `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
+  is not a shorter budget — the dispatcher runs `Execute` on a child goroutine
+  and returns when its timer fires, so the caller escapes even a blocked
+  syscall, whereas `find_files`' own 30s deadline is cooperative and cannot
+  interrupt `os.Stat`/`os.ReadDir`. On a stalled network/FUSE mount an old-name
+  caller used to get an actionable error in 10s and now waits for the syscall.
+  The trade is deliberate: opting in would newly time out broad walks over large
+  healthy trees.
+
+  Two further differences are announced rather than silent, so they are not in
+  the list above: both listing aliases pin `max_results: 5000`, and a result
+  above that is reported as truncated rather than silently cut; and
+  `list_directory`'s once-required `path` is optional on `find_files`, which
+  defaults it to the workspace root, so `list_directory({})` now answers where
+  it used to error.
+
+  Guarded by `TestToolAliases_ExactMembership` (the whole table, so adding or
+  retiring a name is a reviewable event, never silent drift),
+  `TestToolAliases_CanonicalsAreRegistered`,
+  `TestToolAliases_AliasesAreNotRegistered`, `TestResolveToolAlias`,
+  `TestToolAliasNotice_Format`, the full-dispatch `TestToolsCall_*Alias*` set
+  (every alias driven through `tools/call` against the REAL survivor, so an
+  adapter that does not fit the survivor's actual schema fails here rather than
+  in the field — including the set-if-absent policy, the lifted result cap, the
+  `root`+`path` rejection, the `max_depth: 0` inversion, the file-path note, and
+  the notice on the error path), `TestToolsCall_BothAliasLayersComposeInOrder`
+  (which of the two notices leads, the one thing a "both are present" assertion
+  cannot see), `TestToolsList_OmitsAliases`,
+  `TestToolsCall_UnknownTool_DidYouMean`, the ported
+  `list_files`/`list_directory` coverage in `TestFindFiles_*` (optional pattern,
+  hidden handling, the depth contract, the detailed rendering, symlink targets,
+  the three sort orders) plus `TestFindFiles_FilePathListsParentWithANote` /
+  `_FilePathNoteSurvivesAnEmptyResult` / `_MaxDepthRejectsNonPositive` /
+  `_ExcludesDotGitEvenWhenHidden` / `_TruncationReportsTheTally` /
+  `_ExactlyMaxResultsIsNotTruncated` / `_TruncationNoteIsSingularAtOne`,
+  `TestNewFindFileHit_DirectorySizeIsZero`, `TestWalk_MaxDepth` (now an exact
+  set per depth, which is also the pruning proof) and
+  `TestWalk_NeverEntersDotGit`, `TestParseFileList_SkipsFindFilesProse`,
+  `TestWorkspaceSymbols_InFileSearch` /
+  `_URIOptional` / `_ModeSelectedByURI`, `TestDaemonInfo_ReportsRuntimeAndArch`,
+  `TestSmoke_ToolListParity`, `TestAgentsToolCount`, and
+  `TestDocToolCountMatchesRegistry`.
+
+- **TypeScript and TSX/JSX now index through the pure-Go gotreesitter
+  extractor — the per-language WASM-retirement flip, part 1.** On v0.48.0 the
+  492-file parity corpus shows 435/435 TS/TSX files at full extraction parity
+  with the canonical-grammar WASM path and zero parse failures, so the WASM
+  detour for TS/TSX is over. Swift deliberately stays on `wasmts` until its
+  six remaining upstream parse residuals clear. The wiring is pinned by
+  `TestExtractorCtors_EngineWiring`; the wasmts TS bundle and the legacy regex
+  fallback remain in-tree only as the parity-sweep reference until wasmts
+  retires entirely. Two behavioural notes: the regex fallback is no longer
+  reachable for TS on any failure (wasmts also degraded to it on parse faults;
+  the pure-Go path records an unparseable file with zero symbols instead —
+  zero such files in the 492-file corpus), and TS/TSX declarations now carry
+  doc-comment spans, which the wasm walk could not provide. Review hardening:
+  the independent review caught the pure-Go extractor emitting no byte-precise
+  spans — invisible to the sweep because its node key omitted the span fields.
+  Both fixed: spans now match the wasm walk byte-for-byte across all 435
+  TS/TSX corpus files under an extended key that includes them, and
+  `TestExtractorsEmitByteSpans` tables the setSpan discipline over all 17
+  extractors so the next extractor cannot repeat the miss.
+
 - **gotreesitter bumped v0.47.1 → v0.48.0 — the twelve filed parser fixes
   land.** Every user-filed parse divergence (#539–#544, #556–#561; all Swift
   or TypeScript) ships in this tag. On the 492-file parity corpus the drift
@@ -52,6 +342,26 @@
   this moves the fallback and the WASM-retirement gate.
 
 ### Fixed
+
+- **A wasm runtime rebuilt after a discard now announces its own failure.**
+  The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
+  lifetime — so a runtime rebuilt after a timeout discard that then failed to
+  initialise degraded to the fallback extractor in permanent silence. The
+  latch is now per runtime lifetime (an `atomic.Bool` the discard re-arms),
+  pinned by `TestExtract_DiscardReArmsTheFallbackWarning`. (#216)
+
+- **A cancelled context no longer costs the wasm extractor its runtime — and
+  the deadline tests are scheduler-independent.** `wasmts.Extract` now refuses
+  a context that is already dead before starting the parse (matching the
+  treesitter envelope's expired-budget contract), instead of spawning a parse
+  doomed to be abandoned — discarding a warm runtime and leaking the parse
+  goroutine for nothing — and, when a fast parse won the `select` against the
+  already-closed `ctx.Done()`, returning a result where the caller was
+  promised `ctx.Err()`. That race was real: on a loaded race-detector runner
+  the parse goroutine starved the selecting goroutine for the parse's full
+  duration and `TestExtract_ExpiredContextReturnsPromptly` failed with a nil
+  error. Both deadline tests now wedge the runtime's parse lock so the select
+  has exactly one reachable arm in either implementation.
 
 - **The gotreesitter Swift fallback extracts the full member surface.** The
   pure-Go Swift walk — live in production whenever the wasm runtime fails to
@@ -130,6 +440,42 @@
   recorded as failed instead.
 
 ### Changed
+
+- **The nine LSP adapters now share one base: ~2,240 lines of duplicated
+  plumbing deleted, with no behaviour change (#60).** Each adapter hand-wrote
+  all 23 `lsp.Client` methods, the negotiated-capability cache, the
+  notification fan-out, the server-request handler and the error labelling —
+  ~280 near-identical lines apiece, which the adapter guide actively told the
+  next author to "copy verbatim from gopls or pyright". That half now lives in
+  `internal/lsp/adapters/base`; an adapter embeds `*base.Adapter` and shadows
+  only what its server genuinely does differently (rust is down to 46 lines).
+  `base.New` installs BOTH transport handlers and keeps `dispatch` /
+  `handleServerRequest` unexported, so the "forgot `SetRequestHandler`, server
+  stalls" bug is now unrepresentable rather than merely documented.
+  Server-specific behaviour is preserved exactly: gopls keeps its
+  `lsp.PullInitializer` and workspace-pull surface, typescript and zls their
+  document-pull surface, swift/zig/html their lazy `didOpen` (now
+  `base.OpenTracker`) and union decodes.
+  **The constraint that shapes the design:** `base.Adapter`'s exported surface
+  is exactly `lsp.Client` and nothing more, because Go promotes an embedded
+  type's exported methods into every embedder and `internal/cli` resolves
+  optional adapter capabilities *structurally* — one stray
+  `SupportsPullDiagnostics` on the base would opt six servers that answer
+  `-32601` into pull diagnostics, compiling cleanly and changing no call site.
+  So every escape hatch is a package-level FUNCTION (`base.Call`, `CallPtr`,
+  `CallRaw`, `Notify`, `Wrap`) and `base.OpenTracker` is held as a named field,
+  never embedded. Guarded in both directions by
+  `TestExportedSurface_IsExactlyLSPClient`,
+  `TestAdapters_OptionalInterfaceSurface`,
+  `TestLazyOpenAdapters_LanguageIDAndExportedSurface` and
+  `TestLazyOpenAdapters_DidOpenMatrix` — the last pinning the per-method
+  `didOpen` count of every lazy-open adapter, so the deliberately asymmetric
+  ensure-open set cannot be "made consistent" as tidying — on top of the
+  error-contract and conformance harnesses landed ahead of the refactor. The
+  nine pre-existing adapter suites were left untouched through the migration as
+  the behaviour proof. `docs/adding-an-lsp.md` and the `add-lsp-adapter` skill
+  were rewritten for the new shape — the old copy-verbatim recipe was the
+  direct cause of the duplication.
 
 - **One home for `.gitignore` writing, held by a new rule shape.** Four
   hand-rolled gitignore appenders had accumulated by the time the July 2026

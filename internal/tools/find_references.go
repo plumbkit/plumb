@@ -97,7 +97,6 @@ func (t *FindReferences) Name() string                 { return "find_references
 func (t *FindReferences) InputSchema() json.RawMessage { return findReferencesSchema }
 func (t *FindReferences) Description() string {
 	return "Find all references to a symbol across the entire workspace. " +
-		"No native Claude Code equivalent for workspace-wide semantic reference lookup. " +
 		"Returns file path, line number, and the source line at each reference site. " +
 		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position " +
 		"for you, avoiding off-by-one errors; a raw file position (uri + line + character) " +

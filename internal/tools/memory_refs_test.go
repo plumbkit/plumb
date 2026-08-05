@@ -29,7 +29,7 @@ func TestStaleSymbolsNote(t *testing.T) {
 	if note := staleSymbolsNote(ctx, store, memory.Record{SourceSymbols: []string{"DocumentedExport"}}); note != "" {
 		t.Errorf("all-live symbols should produce no note, got %q", note)
 	}
-	// A dotted reference (the form read_symbol/find_symbol args accept) must
+	// A dotted reference (the form read_symbol/get_definition args accept) must
 	// resolve by its base segment, not be falsely flagged stale.
 	if note := staleSymbolsNote(ctx, store, memory.Record{SourceSymbols: []string{"demo.DocumentedExport"}}); note != "" {
 		t.Errorf("dotted reference to a live symbol must not be flagged, got %q", note)

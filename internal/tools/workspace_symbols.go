@@ -20,24 +20,34 @@ var workspaceSymbolsSchema = json.RawMessage(`{
   "properties": {
     "query": {
       "type": "string",
-      "description": "Symbol name or substring to search for across the entire workspace"
+      "description": "Symbol name or substring to search for (case-insensitive)"
+    },
+    "uri": {
+      "type": "string",
+      "description": "Optional: restrict the search to this ONE document (absolute path, file:// URI, or workspace-relative path). Omit it to search the whole workspace."
     }
   },
   "required": ["query"],
   "additionalProperties": false
 }`)
 
-// WorkspaceSymbols searches for symbols by name across the entire workspace.
+// WorkspaceSymbols searches for symbols by name across the entire workspace,
+// or — when a uri is given — within that one document.
 type WorkspaceSymbols struct {
 	client  lsp.Client
 	cache   *cache.Cache
 	ttl     time.Duration
 	timeout time.Duration
-	ws      WorkspaceFn // used to filter out dependency-cache hits
-	topo    topologyStoreFn
-	warmup  LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
-	xcode   XcodeHintFn
-	proof   XcodeProofFn
+	// ws resolves the pinned workspace root and serves BOTH modes, in two
+	// distinct ways: the workspace-wide search filters results to the root
+	// (dropping dependency-cache and stdlib hits), while a uri-scoped call
+	// anchors a workspace-relative uri against it. Nil-safe — no filtering, no
+	// anchoring.
+	ws     WorkspaceFn
+	topo   topologyStoreFn
+	warmup LSPWarmupFn // may be nil; distinguishes a warming server from an unavailable one in the fallback note
+	xcode  XcodeHintFn
+	proof  XcodeProofFn
 }
 
 // WithXcodeHint wires guidance for empty SourceKit-LSP results in bare Xcode projects.
@@ -76,14 +86,14 @@ func NewWorkspaceSymbols(client lsp.Client, c *cache.Cache, ttl, timeout time.Du
 func (t *WorkspaceSymbols) Name() string                 { return "workspace_symbols" }
 func (t *WorkspaceSymbols) InputSchema() json.RawMessage { return workspaceSymbolsSchema }
 func (t *WorkspaceSymbols) Description() string {
-	return "No native Claude Code equivalent. " +
-		"Search for symbols (functions, types, variables, constants) by name or substring across the entire workspace — instant, uses the LSP index. " +
-		"Prefer this over search_in_files or grep when looking up a symbol by name. " +
+	return "Search for symbols (functions, types, variables, constants) by name or substring across the entire workspace — instant, uses the LSP index. " +
+		"Pass uri to restrict the search to that one document instead. " +
 		"Returns names, kinds, and source locations."
 }
 
 type workspaceSymbolsArgs struct {
 	Query string `json:"query"`
+	URI   string `json:"uri"`
 }
 
 // topologyFallback answers a workspace-wide symbol search from the topology
@@ -154,6 +164,9 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 	if a.Query == "" {
 		return "", errors.New("workspace_symbols: query must not be empty")
 	}
+	if a.URI != "" {
+		return t.inFile(ctx, toFileURIAnchored(a.URI, t.ws), a.Query)
+	}
 
 	key := "wsSymbols:" + a.Query
 	if t.cache != nil {
@@ -207,4 +220,84 @@ func (t *WorkspaceSymbols) Execute(ctx context.Context, args json.RawMessage) (s
 		t.cache.Set(key, result, t.ttl)
 	}
 	return result, nil
+}
+
+// inFile serves the uri-scoped mode: a single-document symbol search over the
+// language server's documentSymbol tree, with the topology index as the
+// fallback when the server errors or times out.
+func (t *WorkspaceSymbols) inFile(ctx context.Context, uri, query string) (string, error) {
+	lspCtx, cancel := withLSPDeadline(ctx, t.timeout)
+	defer cancel()
+	out, err := t.inDocument(lspCtx, uri, query)
+	if err != nil {
+		if IsWorkspaceBoundaryError(err) {
+			return "", err
+		}
+		if fb, ok := t.topologyFallbackInFile(ctx, uri, query); ok {
+			return fb, nil
+		}
+		return "", err
+	}
+	return out, nil
+}
+
+// topologyFallbackInFile answers an in-file symbol search from the topology
+// index. ok is false when topology is unavailable or has not indexed the file,
+// so the caller surfaces the original LSP error instead. It is the file-scoped
+// counterpart of topologyFallback, which searches the whole index.
+func (t *WorkspaceSymbols) topologyFallbackInFile(ctx context.Context, uri, query string) (string, bool) {
+	store := activeTopology(t.topo)
+	if store == nil {
+		return "", false
+	}
+	nodes, err := store.SymbolsInFile(ctx, uri)
+	if err != nil || len(nodes) == 0 {
+		return "", false
+	}
+	matches := filterTopologyByName(nodes, query)
+	note := topologyFallbackNoteFor(t.warmup, uri)
+	return formatTopologyMatches(note, fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
+}
+
+func (t *WorkspaceSymbols) inDocument(ctx context.Context, uri, query string) (string, error) {
+	// Cache the full symbol list per document; filtering is client-side.
+	key := uri + ":docSymbols"
+	var syms []protocol.DocumentSymbol
+
+	if t.cache != nil {
+		if v, ok := t.cache.Get(key); ok {
+			syms = v.([]protocol.DocumentSymbol)
+		}
+	}
+	if syms == nil {
+		var err error
+		syms, err = t.client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		})
+		if err != nil {
+			return "", lspTimeoutErr("workspace_symbols", t.timeout, err)
+		}
+		if t.cache != nil {
+			t.cache.Set(key, syms, t.ttl)
+		}
+	}
+
+	if len(syms) == 0 {
+		// Server answered empty — fall back to the structural Map for file types
+		// the workspace LSP does not cover (e.g. .html in a Go repo).
+		if fb, ok := t.topologyFallbackInFile(ctx, uri, query); ok {
+			return fb, nil
+		}
+	}
+	matches := flatFilterSymbols(syms, query)
+	if len(matches) == 0 {
+		return fmt.Sprintf("No symbols matching %q in %s.", query, uri), nil
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Symbols matching %q in %s:\n\n", query, uri)
+	for _, s := range matches {
+		fmt.Fprintf(&sb, "- %s (%s) at line %d\n",
+			s.Name, symbolKindName(s.Kind), s.Range.Start.Line+1)
+	}
+	return sb.String(), nil
 }

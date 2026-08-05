@@ -254,6 +254,8 @@ reports the resolved path, or warns with a fix hint when there is none.
 | `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
 | `watch` | bool | `true` | OS-level file watching ([`fswatcher`](https://github.com/sgtdi/fswatcher)): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
 
+Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` means *use the default*, while `extract_timeout_seconds = 0` means *disabled*.
+
 ## `[session]` — idle detection & eviction
 
 | Field | Type | Default | Env | Effect |
@@ -397,7 +399,14 @@ in Xcode; Plumb will not do that automatically.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (39 tools today). Project-overridable.
+the non-lean remainder (41 tools today). Project-overridable.
+
+A *schema-discovery-only* client cannot use this knob at all — it can only
+invoke what `tools/list` advertised, so hiding a tool removes the capability
+rather than the schema. Kimi Code is one, and takes the same saving on the
+client side instead: `plumb setup kimi-code --lean` writes plumb's lean tool
+names into the `enabledTools` allowlist of its own `mcp.json`. See
+[CLI reference → `plumb setup`](cli-reference.md#plumb-setup).
 
 **Auto resolution is capability-gated, not a config setting.** `auto` resolves
 to **lean** only when the connecting client's entry in `internal/clientcaps`

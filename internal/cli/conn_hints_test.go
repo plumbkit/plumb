@@ -97,7 +97,7 @@ func TestMatchingMemoryNames_UserAuthoredClaimSlotsFirst(t *testing.T) {
 // TestMatchingMemoryNames_SymbolRefs: a memory whose provenance references a
 // symbol present in the edited file matches even when no paths glob does; a
 // nil symbol set skips the symbol pass entirely; a dotted stored reference
-// ("Model.renderDashboard" — the form read_symbol/find_symbol args accept)
+// ("Model.renderDashboard" — the form read_symbol/get_definition args accept)
 // still matches the bare node name.
 func TestMatchingMemoryNames_SymbolRefs(t *testing.T) {
 	mems := []memory.Memory{

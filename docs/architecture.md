@@ -2,7 +2,7 @@
 
 Plumb is an MCP (Model Context Protocol) server that exposes LSP (Language
 Server Protocol) capabilities to LLMs.  Instead of dumping raw source files
-into an LLM's context, clients call structured tools (`find_symbol`,
+into an LLM's context, clients call structured tools (`workspace_symbols`,
 `get_definition`, `explain_symbol`) and receive focused, language-aware
 answers from a real language server running under the hood.
 
@@ -28,20 +28,21 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `cmd/plumb` | Entry point — calls `cli.Execute()` |
 | `internal/cli` | Cobra subcommands: `serve`, `daemon`, `stop`, `init`, `setup`, `version`, `config`, `sessions`, `stats` (alias `status`), `diagnostics`, `doctor`, `log-level`; per-connection session wiring; workspace + topology pools |
 | `internal/tui` | Bubble Tea v2 TUI: dashboard widgets, sessions, memory, logs, settings, stats, and recent calls |
-| `internal/tools` | MCP tool implementations (62 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
+| `internal/tools` | MCP tool implementations (57 tools — see `docs/tools.md`); `WriteDeps` bundles write-tool dependencies; the `txlog` subpackage is the transaction rollback WAL |
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
 | `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 13); also holds the `episodic_memories` table for idle-session summaries |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
-| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter, many languages) + canonical-grammar WASM via wazero for TypeScript/TSX/JSX + Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
+| `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter — most languages incl. TypeScript/TSX/JSX) + canonical-grammar WASM via wazero for Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
 | `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
 | `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
-| `internal/lsp` | `LSPClient` interface, process supervisor |
+| `internal/lsp` | `lsp.Client` interface (23 methods), process supervisor |
 | `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio (server-request support); mock for testing |
 | `internal/lsp/protocol` | LSP types and method-name constants |
+| `internal/lsp/adapters/base` | The half of every adapter that is identical across servers: all 23 `lsp.Client` methods, capability cache, notification fan-out, server-request handler, error labelling. Adapters embed `*base.Adapter` |
 | `internal/lsp/adapters/gopls` | Validated Go adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/pyright` | Validated Python adapter (unit- + integration-tested) |
 | `internal/lsp/adapters/jdtls` | Java adapter (validated, experimental tier); activates automatically when `jdtls` (+ a Java 21+ runtime) is on PATH; set `[lsp.java] enabled = false` to exclude |
@@ -69,7 +70,7 @@ flowchart LR
 ```
 
 ### 1. Plumb Topology (The Map)
-Topology uses **Go AST plus pure-Go tree-sitter (gotreesitter) and canonical-grammar WASM (wazero) extractors** spanning many languages, and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). **On by default** (opt out with `[topology] enabled = false`). It is exposed through the `topology_*` tools (`topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`) plus `structural_query`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
+Topology uses **Go AST plus pure-Go tree-sitter (gotreesitter) extractors for most languages, and a canonical-grammar WASM (wazero) extractor for Swift,** and a local **SQLite/FTS5** database to maintain a persistent semantic graph of the codebase (symbols, calls, imports). **On by default** (opt out with `[topology] enabled = false`). It is exposed through the `topology_*` tools (`topology_status`, `topology_search`, `topology_explore`, `topology_impact`, `topology_affected`, `topology_routes`) plus `structural_query`. See the dedicated [Topology guide](topology.md) for an accessible overview of what it is, why it exists, and how it works.
 *   **Strengths:** Instant availability (no LSP boot time), minimal memory footprint, handles broken code gracefully, FTS5 ranked search, BFS neighbourhood exploration.
 *   **Role in Plumb:** Discovery engine. When an agent asks "Where is the routing logic?" or needs to see a symbol's neighbourhood, Topology handles it without waiting for the language server to index.
 *   **Trade-offs:** Syntactic extraction only — no type resolution. "Broad" recall, not compiler-level precision.
@@ -255,7 +256,7 @@ CREATE TABLE tool_calls (
     session_id   TEXT    NOT NULL DEFAULT '',  -- session.Info.ID
     session_name TEXT    NOT NULL DEFAULT '',  -- session.Info.Name
     workspace    TEXT    NOT NULL DEFAULT '',  -- absolute project root
-    tool         TEXT    NOT NULL,              -- e.g. "find_symbol"
+    tool         TEXT    NOT NULL,              -- e.g. "workspace_symbols"
     called_at    INTEGER NOT NULL,              -- Unix milliseconds
     duration_ms  INTEGER NOT NULL DEFAULT 0,    -- wall-clock execution time
     input_bytes  INTEGER NOT NULL DEFAULT 0,    -- raw JSON arg length

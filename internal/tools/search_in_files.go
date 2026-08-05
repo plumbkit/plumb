@@ -122,11 +122,7 @@ func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSche
 func (t *SearchInFiles) Description() string {
 	return "Exact scan of current file contents — literal text by default, regex when use_regex=true. " +
 		"Use search_in_files when you need every occurrence, exact verification, audits, or safe replacement prep. " +
-		"For broad conceptual discovery (\"where is daemon locking handled?\"), prefer workspace_search (ranked, across code/docs/memories) or topology_search instead. " +
-		"For symbol name lookups (finding a function, type, or variable by name), prefer workspace_symbols — " +
-		"it uses the LSP index and returns results instantly. " +
-		"Prefer this over shelling out to grep/rg: " +
-		"results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
+		"Unlike shell grep/rg, results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
 		"binary files are skipped (null-byte sniff of the first 8 KB), files larger than max_file_bytes (50 MiB default) are skipped before opening, " +
 		"globs with a literal directory prefix (e.g. \"src/**/*.go\") prune sibling directories from the walk. " +
 		"Smart-case (case-insensitive when the pattern is all lowercase), supports context lines and glob file filters."

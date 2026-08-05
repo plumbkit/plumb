@@ -92,8 +92,7 @@ func NewTransactionApply(deps WriteDeps) *TransactionApply {
 func (*TransactionApply) Name() string                 { return "transaction_apply" }
 func (*TransactionApply) InputSchema() json.RawMessage { return transactionApplySchema }
 func (*TransactionApply) Description() string {
-	return "No native Claude Code equivalent. " +
-		"Apply str_replace edits across multiple files atomically. Every operation is " +
+	return "Apply str_replace edits across multiple files atomically. Every operation is " +
 		"validated against the on-disk content first; if any old_string is missing or " +
 		"ambiguous, NO files are written. If writes start succeeding but one fails partway, " +
 		"the already-written files are rolled back to their pre-transaction content. " +
