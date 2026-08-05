@@ -20,7 +20,8 @@ func TestLookupPrefixSpecificity(t *testing.T) {
 		{"kimi-code/1.2", "kimi-code", true},
 		{"Kimi-Code", "kimi-code", true},         // case-insensitive
 		{"kimi", "kimi-code", true},              // bare alias (Kimi Desktop) resolves to the same entry
-		{"kimchi-bot", "unknown", true},          // near-miss must NOT match the kimi prefix
+		{"kimiko", "kimi-code", true},            // any kimi* client matches the bare alias, by design
+		{"kimchi-bot", "unknown", true},          // diverges at the 4th char, so no prefix matches
 		{"totally-unknown-xyz", "unknown", true}, // conservative default
 		{"", "unknown", true},
 	}

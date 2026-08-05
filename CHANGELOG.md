@@ -14,7 +14,7 @@
   `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
   evidence-gated lean opt-in, never an inference from native tooling.
   Because a schema-discovery-only client cannot reach a tool plumb hid, the
-  ~99 KB of advertised schemas has to be trimmed on the client side instead:
+  ~97 KB of advertised schemas has to be trimmed on the client side instead:
   **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
   (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
   client-enforced allowlist can never strip a bootstrap tool) into the
