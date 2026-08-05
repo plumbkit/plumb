@@ -154,7 +154,8 @@ func kimiFullSurfaceHint() checkResult {
 	return checkResult{
 		name: kimiToolSurfaceCheck,
 		ok:   true,
-		detail: fmt.Sprintf("every plumb tool advertised — `plumb setup kimi-code --lean` writes an "+
+		detail: fmt.Sprintf("no client-side allowlist, so Kimi loads whatever plumb advertises "+
+			"(every tool under the default profile) — `plumb setup kimi-code --lean` writes an "+
 			"enabledTools allowlist trimming it to the %d-tool lean set", len(tools.LeanToolNames())),
 	}
 }
