@@ -298,6 +298,21 @@ export function g(b) {
 	assertDocSpans(t, src, nodes, map[string]string{"g": "/** Documents g. */"})
 }
 
+// TestJavaScript_CommentInsideExportWrapperKeepsItsSpan is the other side of
+// the export anchor: a comment written between `export` and the declaration is
+// a sibling of the DECLARATION, never of the export_statement, so climbing to
+// the wrapper unconditionally would lose it. jsDocSpan scans the declaration
+// first and only climbs on the empty sentinel.
+func TestJavaScript_CommentInsideExportWrapperKeepsItsSpan(t *testing.T) {
+	src := []byte(`export /** Documents Inner. */ class Inner {}
+`)
+	nodes, _, err := NewJavaScript().Extract(context.Background(), "inner.js", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{"Inner": "/** Documents Inner. */"})
+}
+
 // docNodeNamed returns the first extracted node called name, or nil.
 func docNodeNamed(nodes []topology.Node, name string) *topology.Node {
 	for i := range nodes {

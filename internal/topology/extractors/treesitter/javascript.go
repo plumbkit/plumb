@@ -389,18 +389,29 @@ func jsIsComment(typ string) bool { return typ == "comment" }
 // declaration, and is the seam both walks use instead of calling docSpanBefore
 // directly.
 //
-// The anchor is the outermost `export` wrapper, not the declaration itself: an
-// exported declaration is a CHILD of its export_statement, so its own previous
-// siblings are the `export`/`default` keywords and the comment above the
-// statement is never reached. Anchoring on the wrapper is what makes
-// `/** … */ export function f() {}` carry the same doc span as the unexported
-// form — which matters more here than in any other language, since TS/TSX
-// declarations are exported far more often than not.
+// The declaration is scanned first, and the outermost `export` wrapper only as
+// a fallback. The wrapper is what makes `/** … */ export function f() {}` carry
+// the same doc span as the unexported form — an exported declaration is a CHILD
+// of its export_statement, so its own previous siblings are the
+// `export`/`default` keywords and the comment above the statement is never
+// reached, which matters more here than in any other language since TS/TSX
+// declarations are exported far more often than not. But climbing
+// unconditionally would lose the rarer comment written INSIDE the wrapper
+// (`export /** … */ class Inner {}`), whose only sibling relationship is with
+// the declaration. Trying the declaration first keeps both: the inner comment
+// wins where it exists, and the empty sentinel is the signal to climb.
 func jsDocSpan(decl *tsg.Node, lang *tsg.Language, src []byte) (start, end int) {
-	for p := decl.Parent(); p != nil && p.Type(lang) == "export_statement"; p = p.Parent() {
-		decl = p
+	if start, end = docSpanBefore(decl, lang, src, jsIsComment); end > start {
+		return start, end
 	}
-	return docSpanBefore(decl, lang, src, jsIsComment)
+	wrapper := decl
+	for p := wrapper.Parent(); p != nil && p.Type(lang) == "export_statement"; p = p.Parent() {
+		wrapper = p
+	}
+	if wrapper == decl {
+		return 0, 0
+	}
+	return docSpanBefore(wrapper, lang, src, jsIsComment)
 }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in
