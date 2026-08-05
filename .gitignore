@@ -58,7 +58,12 @@ coverage.out
 coverage.html
 
 # golangci-lint cache
+# GOLANGCI_LINT_CACHE points here in some setups and at .lintcache/ in others;
+# ignore both names anywhere in the tree, because a cache dir that lands inside
+# the repo is thousands of files and tens of megabytes of committed garbage.
 .golangci-cache/
+.lintcache/
+**/.lintcache/
 
 # Test binary cache (used to satisfy Airlock Digital whitelisting)
 .testcache/
