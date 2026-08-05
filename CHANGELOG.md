@@ -14,7 +14,7 @@
   `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
   evidence-gated lean opt-in, never an inference from native tooling.
   Because a schema-discovery-only client cannot reach a tool plumb hid, the
-  ~90 KB of advertised schemas has to be trimmed on the client side instead:
+  ~92 KB of advertised schemas has to be trimmed on the client side instead:
   **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
   (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
   client-enforced allowlist can never strip a bootstrap tool) into the
@@ -253,7 +253,7 @@
   second canonical change rides the same walk: a `.git` DIRECTORY is pruned
   unconditionally, so `find_files` and `search_in_files` skip it even under
   `include_hidden: true` — a flag that used to walk them straight into the
-  object database, and no gitignore rule could stop it. The guard is
+  object database unless a repo carried its own `.git/` ignore rule. The guard is
   directory-only on purpose: a submodule's or linked worktree's `.git` *file*
   is an ordinary one-line pointer and is still listed. (`find_replace` declares
   no `include_hidden` and has always walked with hidden entries off, so nothing
