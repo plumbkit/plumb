@@ -14,7 +14,7 @@
   `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
   evidence-gated lean opt-in, never an inference from native tooling.
   Because a schema-discovery-only client cannot reach a tool plumb hid, the
-  ~97 KB of advertised schemas has to be trimmed on the client side instead:
+  ~90 KB of advertised schemas has to be trimmed on the client side instead:
   **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
   (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
   client-enforced allowlist can never strip a bootstrap tool) into the
@@ -171,7 +171,8 @@
   (lean stays ~46% of the full `tools/list` payload, against its 52% cap).
 
 - **Five tools folded into four survivors behind a permanent unadvertised alias
-  layer — the advertised surface drops 62 → 57 with no capability removed.**
+  layer — the advertised surface drops 62 → 57 with no question becoming
+  unanswerable.**
   Five registered tools were commodity duplicates of a neighbour: `version`
   reported a strict subset of `daemon_info`; `list_symbols` and `file_outline`
   shared a documentSymbol cache key and answered the same question in two
@@ -247,10 +248,16 @@
   one it entered. That is a real change for CANONICAL `find_files` callers, not
   only for the aliased lists: a `max_depth: 2` call that used to return three
   levels of files now returns two. (It is also what makes the `list_directory`
-  alias genuinely single-level, and the walk no longer reads the directory it
-  used to descend into just to discard the contents.) A non-positive
-  `max_depth`, which the schema never allowed and which read as "unlimited", is
-  now a clean rejection. Otherwise only the advertised lists change: harness-side
+  alias genuinely single-level.) A non-positive `max_depth`, which the schema
+  never allowed and which read as "unlimited", is now a clean rejection. A
+  second canonical change rides the same walk: a `.git` DIRECTORY is pruned
+  unconditionally, so `find_files` and `search_in_files` skip it even under
+  `include_hidden: true` — a flag that used to walk them straight into the
+  object database, and no gitignore rule could stop it. The guard is
+  directory-only on purpose: a submodule's or linked worktree's `.git` *file*
+  is an ordinary one-line pointer and is still listed. (`find_replace` declares
+  no `include_hidden` and has always walked with hidden entries off, so nothing
+  changes for it.) Beyond those, only the advertised lists change: harness-side
   callers see canonical names only, and a stale client-side permission or
   allowlist rule naming a retired tool goes inert rather than wrong — the call
   still runs, under the survivor's name. Tool count 62 → 57; `README.md`,
@@ -262,13 +269,12 @@
   confinement is now the only exclusion mechanism, so `vendor/` is visible
   unless it is gitignored and gitignored build output is no longer listed.
   `list_directory` excluded nothing at all, so it tightens the same way. The
-  one-line fix either direction is to gitignore the directories you want hidden.
-  `.git/` is the exception and needs no gitignore rule: the shared walk now
-  excludes it outright, for `find_files`, `search_in_files`, and `find_replace`
-  alike, even under `include_hidden: true`. (2) `list_symbols`'
-  `include_signatures` is dropped — the outline always renders signature lines,
-  so the flag has no counterpart to carry. (3) `list_files` and `list_directory`
-  both implemented `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
+  one-line fix either direction is to gitignore the directories you want hidden
+  (`.git/` is the exception that needs no rule — the shared walk prunes it, see
+  **Breaking** above). (2) `list_symbols`' `include_signatures` is dropped —
+  the outline always renders signature lines, so the flag has no counterpart to
+  carry. (3) `list_files` and `list_directory` both implemented
+  `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
   is not a shorter budget — the dispatcher runs `Execute` on a child goroutine
   and returns when its timer fires, so the caller escapes even a blocked
   syscall, whereas `find_files`' own 30s deadline is cooperative and cannot
