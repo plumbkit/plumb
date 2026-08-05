@@ -435,16 +435,7 @@ func writeKimiAllowlist(t *testing.T, path, bin string, allowlist any) {
 func TestKimiTargetWiresTheNoteHook(t *testing.T) {
 	t.Cleanup(func() { setupKimiLeanFlag = false })
 
-	var kimi setupTarget
-	for _, tgt := range allSetupClients() {
-		if tgt.use == "kimi-code" {
-			kimi = tgt
-			break
-		}
-	}
-	if kimi.use == "" {
-		t.Fatal("no kimi-code entry in allSetupClients()")
-	}
+	kimi := shippedKimiTarget(t)
 	if kimi.note == nil {
 		t.Fatal("the kimi-code target must wire a note hook — without it `plumb setup kimi-code --lean` confirms nothing on the already-registered path")
 	}
@@ -461,6 +452,58 @@ func TestKimiTargetWiresTheNoteHook(t *testing.T) {
 			t.Errorf("the target's note hook must be kimiLeanNote; missing %q in %q", want, got)
 		}
 	}
+}
+
+// TestKimiTargetWiresTheLeanFlag pins the other half of the shipped target: its
+// intoFn must READ setupKimiLeanFlag, not merely exist. Every other --lean test
+// either calls kimiCodeInto directly with an explicit lean argument or checks
+// the cobra flag binding, so replacing the target's closure with
+// `kimiCodeInto(cfgPath, plumbBin, false)` leaves the whole suite green while
+// `plumb setup kimi-code --lean` silently stops writing the allowlist — and
+// kimiLeanNote still prints "enabledTools now pins the N lean plumb tools",
+// telling the user something that did not happen.
+//
+// It drives the SHIPPED target end to end (allSetupClients → intoFn → a real
+// config on disk) in both flag states, because only the pair proves the wiring:
+// the true case alone would pass a hardcoded `true`, the false case alone a
+// hardcoded `false`.
+func TestKimiTargetWiresTheLeanFlag(t *testing.T) {
+	t.Cleanup(func() { setupKimiLeanFlag = false })
+	const bin = "/usr/local/bin/plumb"
+	kimi := shippedKimiTarget(t)
+
+	setupKimiLeanFlag = false
+	barePath := filepath.Join(t.TempDir(), "mcp.json")
+	if _, _, err := kimi.intoFn(barePath, bin); err != nil {
+		t.Fatalf("bare register through the shipped target: %v", err)
+	}
+	if _, has := readKimiPlumbEntry(t, barePath)["enabledTools"]; has {
+		t.Error("the shipped target wrote an allowlist without --lean — its intoFn ignores setupKimiLeanFlag")
+	}
+
+	setupKimiLeanFlag = true
+	leanPath := filepath.Join(t.TempDir(), "mcp.json")
+	added, _, err := kimi.intoFn(leanPath, bin)
+	if err != nil {
+		t.Fatalf("lean register through the shipped target: %v", err)
+	}
+	if !added {
+		t.Error("expected added=true for a fresh --lean registration")
+	}
+	assertLeanAllowlist(t, leanPath)
+}
+
+// shippedKimiTarget returns the kimi-code entry as `plumb setup` actually ships
+// it, so a test drives the real wiring rather than a locally-built lookalike.
+func shippedKimiTarget(t *testing.T) setupTarget {
+	t.Helper()
+	for _, tgt := range allSetupClients() {
+		if tgt.use == "kimi-code" {
+			return tgt
+		}
+	}
+	t.Fatal("no kimi-code entry in allSetupClients()")
+	return setupTarget{}
 }
 
 // TestCheckMCPClientsIncludesTheKimiHint pins the doctor call site. Every

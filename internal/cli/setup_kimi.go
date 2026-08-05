@@ -19,6 +19,28 @@ import (
 // side, where a filtered-out tool is a deliberate user choice rather than a
 // capability plumb silently removed: Kimi's mcp.json supports a per-server
 // "enabledTools" allowlist, and --lean writes tools.LeanToolNames() into it.
+//
+// PROVENANCE OF THE enabledTools CONTRACT. This is OBSERVED behaviour, recorded
+// when Kimi Code support landed (2026-08-03) — not a contract quoted from
+// published Kimi documentation, and there is no upstream reference to cite here.
+// Treat it as unverified against any particular Kimi build. Two things make the
+// assumption safe to ship on that footing:
+//
+//   - The failure mode is BENIGN and equals the status quo. If a Kimi build does
+//     not implement the key, it is an unknown field on the server entry, which
+//     JSON config readers ignore — Kimi then loads plumb's full advertised
+//     surface, exactly what it does without --lean. Nothing plumb needs is
+//     removed and no capability is lost; only the token saving fails to happen.
+//   - Nothing plumb does depends on the key working. plumb never reads its own
+//     effect: the profile Kimi is served is decided by clientcaps
+//     (SchemaDiscoveryOnly ⇒ "full"), never by what the allowlist contains, so a
+//     key that is ignored cannot desynchronise the server from the client.
+//
+// `plumb doctor` therefore grades the key's CONTENT (does it name registered
+// tools, is it plumb's own aged snapshot) and never asserts an outcome it cannot
+// observe — see kimiDegenerateAllowlistResult in doctor_allowlist.go, which
+// hedges precisely where this contract is uncertain. If upstream documentation
+// appears, cite it here and the hedging can tighten.
 
 // setupKimiLeanFlag backs `plumb setup kimi-code --lean`. It is a package-level
 // flag var like setupClaudeCodeProjectFlag, read at registration time by the

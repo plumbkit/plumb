@@ -2,8 +2,46 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestClientConfigThatWillNotParseFails pins the one config fault every doctor
+// check used to miss. A client config with broken syntax is unloadable — the
+// client itself cannot read it, so plumb is not running there at all — yet the
+// extractor's error was swallowed into a clean "registered" pass, and the Kimi
+// tool-surface check stayed silent for the same reason. `plumb doctor` reported
+// a fully healthy machine for a file no client could load.
+func TestClientConfigThatWillNotParseFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	// Truncated mid-object: contains the word "plumb" (so checkOneClient gets
+	// past its registered-at-all scan) and is not valid JSON.
+	if err := os.WriteFile(path, []byte(`{"mcpServers": {"plumb": {"command": "/usr/local/bin/plumb"`), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	target := setupTarget{
+		use: "kimi-code", name: "Kimi Code",
+		pathFn:    func() (string, error) { return path, nil },
+		extractFn: claudeDesktopCommandExtractor,
+	}
+
+	res := classifyClientBinary(target, path, "/usr/local/bin/plumb")
+	if res.ok {
+		t.Errorf("an unparseable config must fail the check, got %+v", res)
+	}
+	if res.fix == "" {
+		t.Error("the failure must carry a fix line — the user has to know which file to repair")
+	}
+	if !strings.Contains(res.detail, "parse") {
+		t.Errorf("detail should say the config cannot be parsed: %q", res.detail)
+	}
+
+	if got := checkOneClient(target, "/usr/local/bin/plumb"); got.ok {
+		t.Errorf("checkOneClient must surface the parse failure, got %+v", got)
+	}
+}
 
 func TestJsonCheckResultMarshaling(t *testing.T) {
 	checks := []checkResult{

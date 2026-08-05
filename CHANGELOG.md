@@ -27,10 +27,11 @@
   Codex's approval tables — while `--lean` over a hand-edited list replaces it;
   there is deliberately no `--full` un-set flag. `plumb doctor` adds an
   informational line (never a warning — a full registration is a valid default)
-  when Kimi registers plumb with no allowlist, plus a **warning** when the key
-  is present but degenerate (`[]`, null, or not a list): only a non-empty list
-  is an allowlist, and a degenerate one loads zero plumb tools, so grading on
-  key presence alone would call a dead integration healthy. `session_start` now
+  when Kimi registers plumb with no allowlist, and grades a key that IS present
+  on its content rather than its shape (see *Fixed*): a warning with a fix when
+  no listed name is a tool plumb registers, an informational drift hint when the
+  list is plumb's own aged snapshot, and a warning worded per shape when the
+  value cannot be an allowlist at all. `session_start` now
   emits Kimi-specific guidance: a soft edit-lane recommendation (not the Claude Code
   warning, which quotes harness errors a Kimi user never sees) plus the
   topology trio and `run_task`, restricted to lean-set tools **unconditionally**
@@ -575,6 +576,101 @@
   and the result it had just started — returning that result, where the caller
   was promised `ctx.Err()`, whenever the extractor was fast; it now refuses a
   dead context up front. Both new tests are scheduler-independent.
+
+- **`plumb doctor` graded Kimi's `enabledTools` allowlist on JSON shape, so a
+  dead integration passed as healthy.** The check accepted any non-empty list,
+  which meant `["", ""]`, `[null]`, `[1, 2, 3]` and `["not_a_plumb_tool"]` — all
+  well-formed, all leaving Kimi with zero plumb tools — were reported clean.
+  That is the one failure mode of a client-side allowlist a user cannot see from
+  the outside, and it was the one the check missed. `gradeToolAllowlist` now
+  grades content: at least one entry must be a non-empty string naming a tool
+  plumb registers, or it is a warning with a fix. The same pass folds in the
+  staleness check the allowlist always needed — a list that reads as plumb's own
+  older snapshot (majority overlap with the lean set, rather than a deliberate
+  hand-picked subset, which stays the user's business) earns an informational
+  drift hint naming what it is missing, since the list is written once and never
+  refreshed. Grader and messages are parameterised over the registered and
+  pinned name sets, so the next client to grow an allowlist reuses them.
+
+- **A client config that will not parse was graded healthy by every doctor
+  check.** `classifyClientBinary` swallowed the JSON decode error into `ok:
+  true`, so a syntactically broken `mcp.json` — the exact state a hand-edit
+  produces, and the one that stops the client loading plumb at all — passed the
+  run with a reassuring tick and a comment claiming the opposite. It is now a
+  failure naming the file.
+
+- **Doctor's unusable-allowlist warning asserted a client behaviour plumb
+  cannot observe.** One sentence covered `[]`, `null`, and a wrong-typed value:
+  "Kimi loads NO plumb tools at all". Only the empty list plausibly means that.
+  A `null` option is most likely read as *unset* — the full tool surface — so
+  the warning told the user the opposite of what is probably happening, and for
+  a wrong-typed value plumb cannot know whether the key is ignored, coerced, or
+  the whole server entry rejected. The message is now per shape: `[]` (and a
+  list holding no tool name) keeps the strong claim; `null` reports that it
+  most likely means no allowlist at all and offers deleting the key as the
+  unambiguous fix; anything else names the value and admits the parse is
+  unpredictable. Values are named in JSON's vocabulary (`a number`, `an
+  object`) rather than Go's `%T`, which leaked `float64` and
+  `map[string]interface {}` into a message about the reader's JSON file.
+
+- **The unknown-parameter rejection now explains an alias rejected for
+  colliding, and closes its sentence.** Passing an alias *and* its canonical —
+  `find_files({path, root})`, realistic since `root` is the retired `list_files`
+  spelling — is correctly refused rather than silently dropping one of two
+  supplied values, but it was reported as `unknown parameter "root"` for a name
+  the tool understands, followed by `did you mean "path"?` pointing at the
+  parameter just supplied. There was no action to take from that. The message
+  now names both keys and which to drop — and names only keys the caller
+  actually typed. The other collision is two *aliases* of one canonical
+  (`write_file({body, text})`, both meaning `content`), where the canonical is
+  in the arguments only because the rewrite put it there; quoting it as
+  something the caller "supplied" and should "keep" named a parameter that
+  appears nowhere in their call, so that case now reads "you supplied both
+  `body` and `text`, which both name `content` here — remove one". Separately,
+  the valid-parameter list was appended with a bare space, running the complaint
+  into its own inventory; it now takes a proper separator.
+
+- **Test guards that could not fail.** Three anti-rot checks were mutation-
+  tested and found to pass their own defects. `skill_examples_test.go` verified
+  only that a named argument exists in the schema, so an out-of-enum value, a
+  call missing a required argument, and a misspelt tool name in a roster bullet
+  all passed — the last being ~20 tool names across the shipped skills with no
+  coverage at all; it now decodes `required` and `enum`, asserts backticked
+  roster bullets against the live registry, and pins example counts exactly
+  rather than as minima (a minimum is silent exactly when a skill *gains*
+  unchecked examples). `TestSelftestPrompt_CoversEveryTool` asserted that each
+  tool name appears in the playbook, but every name is rendered into a roster
+  line from that same list, so it was reading back its own input; it now
+  requires each group's roster to carry hand-written instruction once the
+  generated text is removed — which caught two shipped groups listed with no
+  instruction at all (memory-read, and the harness-only entry whose SKIP
+  disposition lived only in a section preamble), both now fixed in the
+  playbook. The tool-description floor rose from 120 to 170 bytes, measured
+  against the three shortest shipped descriptions (195/197/198) rather than
+  guessed: at 120 it could only catch a description deleted outright, never one
+  hollowed to a clause.
+
+- **The shell-vs-plumb routing steering was deleted rather than moved.** The
+  DRY pass removed "reach for plumb search instead of Bash grep/find/ls" from
+  the tool descriptions on the premise that the skills were its expanded home,
+  but `find_files` appeared in no skill and the imperative existed nowhere for
+  the destination client. `plumb-explore` now opens with it and the routing it
+  implies (`grep` → `search_in_files`, `find`/`ls` → `find_files`), and gains
+  the missing `find_files` bullet carrying the lister contract that
+  `list_files`/`list_directory` used to document. Kept skill-side on purpose:
+  both tools are non-lean, so restoring the clause to their descriptions would
+  cost every full client bytes while staying invisible to the lean client that
+  needs it most. Its rung-3 lean claim was also overstated — lean `read_file`
+  takes `pattern`/`use_regex`/`max_matches` — and is now scoped.
+
+- **`root` is no longer a dead alias target.** No tool has declared a `root`
+  parameter since `list_files` folded into `find_files` (which calls it
+  `path`), yet `plain("root")` still trailed five `paramAliases` rows where
+  `eligible()` could never let it resolve. Dead rows with a live cost:
+  `publishSchema` drops every alias target from the published `required` list,
+  so a tool later declaring `root` as required would have been advertised
+  optional because of them. Removed as a target; `root` remains an alias
+  *source*, so `find_files({root: …})` still reaches `path`.
 
 ## 0.16.0 (2026-07-31)
 

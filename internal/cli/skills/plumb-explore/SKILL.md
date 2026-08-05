@@ -9,9 +9,11 @@ When asked to understand, explore, or navigate a codebase that has plumb availab
 
 Each rung is broader and cheaper than the one below it. Start at the top and drop down only when the note under the rung applies.
 
-Under a lean tool profile several of the tools named below are not advertised. If one of them is not offered to you, use the nearest alternative on the same rung — for rung 0's opening move that is **`topology_search`**. Rung 3 is the exception: `search_in_files` is the whole rung, so a lean client has no plumb alternative there and falls back to its own native search.
+Under a lean tool profile several of the tools named below are not advertised. If one of them is not offered to you, use the nearest alternative on the same rung — for rung 0's opening move that is **`topology_search`**. Rung 3 is the thinnest: both its tools are hidden under lean, so a lean client falls back to its own native search — though lean `read_file` still takes `pattern`, `use_regex`, and `max_matches`, which covers scanning a file you have already located without leaving plumb.
 
 ## 0. Ranked discovery — start here
+
+**Before reaching for a shell `grep`, `find`, or `ls`, start on this ladder.** Those three moves are what it replaces: a conceptual question belongs on this rung, `grep` belongs on rung 3's `search_in_files`, and `find`/`ls` belong on `find_files`. Prefer them whenever they are offered to you — they are workspace-bounded, `.gitignore`-aware, and bounded in output, none of which a shell scan is.
 
 One query across every indexed corpus at once — code symbols, doc sections, and project memories — with each hit labelled by corpus, score, and why it matched.
 
@@ -46,7 +48,8 @@ Drop down when what you are after is not a symbol at all — a literal string, a
 
 ## 3. Exact scan
 
-- **`search_in_files`** — every occurrence in current file contents; the lane for audits, verification, and replacement prep.
+- **`search_in_files`** — every occurrence in current file contents; the lane for audits, verification, and replacement prep. This is the `grep` replacement.
+- **`find_files`** — locate files by name or path pattern, and the directory lister: `pattern` is optional, `max_depth: 1` lists one level like `ls`, and `include_details` adds a `[FILE]`/`[DIR]`/`[LINK]` marker with size and modified time. This is the `find` and `ls` replacement — the name lane, where `search_in_files` is the content lane.
 
 Drop down when matching lines are not enough and you need the surrounding code.
 

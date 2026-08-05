@@ -56,10 +56,14 @@ func kimiGuidance(topologyOn bool) string {
 // nonLeanToolSet(), not a hand-picked sample, so a tool moving out of LeanTools
 // fails this test instead of silently creating a broken pointer.
 //
-// Matching is plain substring, which also bans the bare English words that
-// happen to be tool names (`version`). That is a feature, not a nuisance: the
-// block is short, and a reader cannot tell a prose "version" from a tool
-// reference any better than this test can.
+// Matching is plain substring, so a bare English word that also happened to be
+// a non-lean tool name would be banned from the prose too. That was a live
+// constraint when `version` was still a tool; the 0.16 tool-surface pass folded
+// it into `daemon_info`, and every non-lean name is snake_case today, so the
+// substring match can no longer fire on ordinary prose. The behaviour is kept
+// rather than narrowed because it is a feature if it ever fires again: the block
+// is short, and a reader cannot tell a prose word from a tool reference any
+// better than this test can.
 func TestKimiCodeGuidance_LeanSetOnly(t *testing.T) {
 	for _, topologyOn := range []bool{true, false} {
 		out := kimiGuidance(topologyOn)
