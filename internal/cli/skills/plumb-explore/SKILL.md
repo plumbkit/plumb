@@ -9,7 +9,7 @@ When asked to understand, explore, or navigate a codebase that has plumb availab
 
 Each rung is broader and cheaper than the one below it. Start at the top and drop down only when the note under the rung applies.
 
-Under a lean tool profile several of the tools named below are not advertised. If one of them is not offered to you, use the nearest alternative on the same rung — for rung 0's opening move that is **`topology_search`**.
+Under a lean tool profile several of the tools named below are not advertised. If one of them is not offered to you, use the nearest alternative on the same rung — for rung 0's opening move that is **`topology_search`**. Rung 3 is the exception: `search_in_files` is the whole rung, so a lean client has no plumb alternative there and falls back to its own native search.
 
 ## 0. Ranked discovery — start here
 

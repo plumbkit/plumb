@@ -58,14 +58,22 @@ func TestAgentsSkillListMatchesEmbedded(t *testing.T) {
 	brief := string(b)
 
 	countPhrase := fmt.Sprintf("installs %s idempotent user-scoped skills", numberToWords(len(skills)))
-	if !strings.Contains(brief, countPhrase) {
-		t.Errorf("AGENTS.md does not state the current skill count (%d).\nExpected to find: %q",
+	start := strings.Index(brief, countPhrase)
+	if start < 0 {
+		t.Fatalf("AGENTS.md does not state the current skill count (%d).\nExpected to find: %q",
 			len(skills), countPhrase)
 	}
+	// Scope the name check to the paragraph that makes the claim. Searching the
+	// whole brief would pass on a name that had drifted into an unrelated
+	// section, which is the drift this test exists to catch.
+	para := brief[start:]
+	if end := strings.Index(para, "\n\n"); end >= 0 {
+		para = para[:end]
+	}
 	for _, s := range skills {
-		if needle := "`" + s.Name + "`"; !strings.Contains(brief, needle) {
-			t.Errorf("AGENTS.md does not name the embedded skill %q — expected %s in the setup paragraph",
-				s.Name, needle)
+		if needle := "`" + s.Name + "`"; !strings.Contains(para, needle) {
+			t.Errorf("AGENTS.md's setup paragraph does not name the embedded skill %q — expected %s "+
+				"alongside the count, not merely somewhere in the file", s.Name, needle)
 		}
 	}
 }
