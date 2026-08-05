@@ -506,7 +506,10 @@ func TestClaudeCodeSkills_HaveValidFrontmatter(t *testing.T) {
 	// Pin the expected skill set so a new skills/<name>/ directory added
 	// without an embedded SKILL.md — or one accidentally dropped — is
 	// caught here rather than silently missing at install time.
-	wantNames := []string{"plumb-explore", "plumb-minimal-change", "plumb-refactor", "plumb-testing"}
+	wantNames := []string{
+		"plumb-diagnose", "plumb-explore", "plumb-git", "plumb-memory",
+		"plumb-minimal-change", "plumb-refactor", "plumb-testing",
+	}
 	gotNames := make([]string, 0, len(skills))
 	for _, skill := range skills {
 		gotNames = append(gotNames, skill.Name)
