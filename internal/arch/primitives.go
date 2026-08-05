@@ -59,7 +59,6 @@ var PrimitiveRules = []PrimitiveRule{
 		Exact:     []string{"clampbytes", "clamptobytes", "ellipsis"},
 		Allowed: map[string]string{
 			"internal/tools.truncateLines":          "caps output by LINE count with a caller-supplied suffix — a different budget from textfmt's rune and byte helpers, and it never splits a line",
-			"internal/cli.truncateNames":            "caps a SLICE by element count and appends a \"+N more\" remainder — it truncates a list, never a string, so no rune or byte budget applies and every name it keeps is intact",
 			"internal/tui.contractPathTruncateLeft": "path abbreviation: keeps the RIGHTMOST runes and prefixes the ellipsis, the opposite end from textfmt.Ellipsis",
 			"cmd/clientsmoke.truncate":              "operates on []byte for harness log output, in a build-tagged test-only package that ships in no binary",
 		},

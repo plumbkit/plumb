@@ -146,7 +146,7 @@ func kimiUnknownAllowlistResult(g allowlistGrade) checkResult {
 		warn: true,
 		detail: fmt.Sprintf("enabledTools lists %d name(s), none of which plumb registers (%s) — "+
 			"Kimi loads NO plumb tools at all; the server connects but nothing it offers is callable",
-			len(g.names), strings.Join(truncateNames(g.unknown, 3), ", ")),
+			len(g.names), strings.Join(capNames(g.unknown, 3), ", ")),
 		fix: kimiAllowlistFix(),
 	}
 }
@@ -164,10 +164,10 @@ func kimiStaleAllowlistResult(g allowlistGrade) checkResult {
 	fmt.Fprintf(&b, "enabledTools is a snapshot of an older lean set (%d name(s) listed, %d today)",
 		len(g.names), len(tools.LeanToolNames()))
 	if len(g.missing) > 0 {
-		fmt.Fprintf(&b, "; missing: %s", strings.Join(truncateNames(g.missing, 3), ", "))
+		fmt.Fprintf(&b, "; missing: %s", strings.Join(capNames(g.missing, 3), ", "))
 	}
 	if len(g.unknown) > 0 {
-		fmt.Fprintf(&b, "; no longer registered: %s", strings.Join(truncateNames(g.unknown, 3), ", "))
+		fmt.Fprintf(&b, "; no longer registered: %s", strings.Join(capNames(g.unknown, 3), ", "))
 	}
 	b.WriteString(" — re-run `plumb setup kimi-code --lean` to refresh it")
 	return checkResult{name: kimiToolSurfaceCheck, ok: true, detail: b.String()}
@@ -178,9 +178,13 @@ func kimiAllowlistFix() string {
 		"or delete the enabledTools key to restore the full tool surface", len(tools.LeanToolNames()))
 }
 
-// truncateNames renders at most n names, appending "+N more" for the rest, so a
-// detail line cannot grow with the size of a hand-edited list.
-func truncateNames(names []string, n int) []string {
+// capNames renders at most n names, appending "+N more" for the rest, so a
+// detail line cannot grow with the size of a hand-edited list. It caps a SLICE
+// by element count and never touches a name it keeps — deliberately not spelt
+// truncate*, which internal/arch reserves for string truncation (textfmt's rune
+// and byte budgets); an allowlist entry saying "this one is different" is upkeep
+// a name that is already different does not need.
+func capNames(names []string, n int) []string {
 	if len(names) <= n {
 		return names
 	}
