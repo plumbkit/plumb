@@ -14,7 +14,7 @@
   `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
   evidence-gated lean opt-in, never an inference from native tooling.
   Because a schema-discovery-only client cannot reach a tool plumb hid, the
-  ~97 KB of advertised schemas has to be trimmed on the client side instead:
+  ~92 KB of advertised schemas has to be trimmed on the client side instead:
   **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
   (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
   client-enforced allowlist can never strip a bootstrap tool) into the
@@ -171,7 +171,8 @@
   (lean stays ~46% of the full `tools/list` payload, against its 52% cap).
 
 - **Five tools folded into four survivors behind a permanent unadvertised alias
-  layer — the advertised surface drops 62 → 57 with no capability removed.**
+  layer — the advertised surface drops 62 → 57 with no question becoming
+  unanswerable.**
   Five registered tools were commodity duplicates of a neighbour: `version`
   reported a strict subset of `daemon_info`; `list_symbols` and `file_outline`
   shared a documentSymbol cache key and answered the same question in two
@@ -247,10 +248,16 @@
   one it entered. That is a real change for CANONICAL `find_files` callers, not
   only for the aliased lists: a `max_depth: 2` call that used to return three
   levels of files now returns two. (It is also what makes the `list_directory`
-  alias genuinely single-level, and the walk no longer reads the directory it
-  used to descend into just to discard the contents.) A non-positive
-  `max_depth`, which the schema never allowed and which read as "unlimited", is
-  now a clean rejection. Otherwise only the advertised lists change: harness-side
+  alias genuinely single-level.) A non-positive `max_depth`, which the schema
+  never allowed and which read as "unlimited", is now a clean rejection. A
+  second canonical change rides the same walk: a `.git` DIRECTORY is pruned
+  unconditionally, so `find_files` and `search_in_files` skip it even under
+  `include_hidden: true` — a flag that used to walk them straight into the
+  object database unless a repo carried its own `.git/` ignore rule. The guard is
+  directory-only on purpose: a submodule's or linked worktree's `.git` *file*
+  is an ordinary one-line pointer and is still listed. (`find_replace` declares
+  no `include_hidden` and has always walked with hidden entries off, so nothing
+  changes for it.) Beyond those, only the advertised lists change: harness-side
   callers see canonical names only, and a stale client-side permission or
   allowlist rule naming a retired tool goes inert rather than wrong — the call
   still runs, under the survivor's name. Tool count 62 → 57; `README.md`,
@@ -262,13 +269,12 @@
   confinement is now the only exclusion mechanism, so `vendor/` is visible
   unless it is gitignored and gitignored build output is no longer listed.
   `list_directory` excluded nothing at all, so it tightens the same way. The
-  one-line fix either direction is to gitignore the directories you want hidden.
-  `.git/` is the exception and needs no gitignore rule: the shared walk now
-  excludes it outright, for `find_files`, `search_in_files`, and `find_replace`
-  alike, even under `include_hidden: true`. (2) `list_symbols`'
-  `include_signatures` is dropped — the outline always renders signature lines,
-  so the flag has no counterpart to carry. (3) `list_files` and `list_directory`
-  both implemented `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
+  one-line fix either direction is to gitignore the directories you want hidden
+  (`.git/` is the exception that needs no rule — the shared walk prunes it, see
+  **Breaking** above). (2) `list_symbols`' `include_signatures` is dropped —
+  the outline always renders signature lines, so the flag has no counterpart to
+  carry. (3) `list_files` and `list_directory` both implemented
+  `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
   is not a shorter budget — the dispatcher runs `Execute` on a child goroutine
   and returns when its timer fires, so the caller escapes even a blocked
   syscall, whereas `find_files`' own 30s deadline is cooperative and cannot
@@ -340,6 +346,65 @@
   ERROR/MISSING nodes — upstream residual shapes, not walk gaps. No
   production parse changes: Swift/TS/TSX still index through the wasm path;
   this moves the fallback and the WASM-retirement gate.
+
+- **The nine LSP adapters now share one base: ~2,240 lines of duplicated
+  plumbing deleted, with no behaviour change (#60).** Each adapter hand-wrote
+  all 23 `lsp.Client` methods, the negotiated-capability cache, the
+  notification fan-out, the server-request handler and the error labelling —
+  ~280 near-identical lines apiece, which the adapter guide actively told the
+  next author to "copy verbatim from gopls or pyright". That half now lives in
+  `internal/lsp/adapters/base`; an adapter embeds `*base.Adapter` and shadows
+  only what its server genuinely does differently (rust is down to 46 lines).
+  `base.New` installs BOTH transport handlers and keeps `dispatch` /
+  `handleServerRequest` unexported, so the "forgot `SetRequestHandler`, server
+  stalls" bug is now unrepresentable rather than merely documented.
+  Server-specific behaviour is preserved exactly: gopls keeps its
+  `lsp.PullInitializer` and workspace-pull surface, typescript and zls their
+  document-pull surface, swift/zig/html their lazy `didOpen` (now
+  `base.OpenTracker`) and union decodes.
+  **The constraint that shapes the design:** `base.Adapter`'s exported surface
+  is exactly `lsp.Client` and nothing more, because Go promotes an embedded
+  type's exported methods into every embedder and `internal/cli` resolves
+  optional adapter capabilities *structurally* — one stray
+  `SupportsPullDiagnostics` on the base would opt six servers that answer
+  `-32601` into pull diagnostics, compiling cleanly and changing no call site.
+  So every escape hatch is a package-level FUNCTION (`base.Call`, `CallPtr`,
+  `CallRaw`, `Notify`, `Wrap`) and `base.OpenTracker` is held as a named field,
+  never embedded. Guarded in both directions by
+  `TestExportedSurface_IsExactlyLSPClient`,
+  `TestAdapters_OptionalInterfaceSurface`,
+  `TestLazyOpenAdapters_LanguageIDAndExportedSurface` and
+  `TestLazyOpenAdapters_DidOpenMatrix` — the last pinning the per-method
+  `didOpen` count of every lazy-open adapter, so the deliberately asymmetric
+  ensure-open set cannot be "made consistent" as tidying — on top of the
+  error-contract and conformance harnesses landed ahead of the refactor. The
+  nine pre-existing adapter suites were left untouched through the migration as
+  the behaviour proof. `docs/adding-an-lsp.md` and the `add-lsp-adapter` skill
+  were rewritten for the new shape — the old copy-verbatim recipe was the
+  direct cause of the duplication.
+
+- **One home for `.gitignore` writing, held by a new rule shape.** Four
+  hand-rolled gitignore appenders had accumulated by the time the July 2026
+  consolidation extracted `paths.EnsureGitignoreEntries`: the audit named two
+  (topology, memory), a third (the provenance sidecar's — see Fixed) already
+  existed unnoticed, and a fourth (the collab store's) was written while the
+  fix waited. The extraction migrated only the two the audit named, so the
+  other two carried on — one of them defective. Both now delegate, closing
+  the last item of the audit batch (#69). Because neither an audit nor an
+  extraction demonstrably finds every copy, `internal/arch` gains a third
+  rule kind, `DelegationRule`: a production function containing the string
+  literal `".gitignore"` outside `internal/paths` must call
+  `paths.EnsureGitignoreEntries`, or carry an allowlist entry stating why it
+  is genuinely different (two exist: the directory walker, which only *reads*
+  ignore files, and the rule's own declaration, which must spell the literal
+  it pins). The existing name- and call-based rules cannot see this shape — a
+  hand-rolled copy shares no name family with the helper and open-codes no
+  pinned stdlib call, but it cannot avoid naming the file. A literal matches
+  exactly, or as a path ending in `/.gitignore` — never on a bare substring,
+  so `.gitignore` inside prose (tool descriptions, error wraps, log messages)
+  never matches. The checker was verified red against both copies before they
+  were migrated, and the collab copy's source is frozen into the test suite
+  so the red case stays pinned rather than verified once and forgotten.
 
 ### Fixed
 
@@ -438,67 +503,6 @@
   nil error, which would record a truncated symbol set as though it were the
   whole file; the early stop is now surfaced as an error so the file is
   recorded as failed instead.
-
-### Changed
-
-- **The nine LSP adapters now share one base: ~2,240 lines of duplicated
-  plumbing deleted, with no behaviour change (#60).** Each adapter hand-wrote
-  all 23 `lsp.Client` methods, the negotiated-capability cache, the
-  notification fan-out, the server-request handler and the error labelling —
-  ~280 near-identical lines apiece, which the adapter guide actively told the
-  next author to "copy verbatim from gopls or pyright". That half now lives in
-  `internal/lsp/adapters/base`; an adapter embeds `*base.Adapter` and shadows
-  only what its server genuinely does differently (rust is down to 46 lines).
-  `base.New` installs BOTH transport handlers and keeps `dispatch` /
-  `handleServerRequest` unexported, so the "forgot `SetRequestHandler`, server
-  stalls" bug is now unrepresentable rather than merely documented.
-  Server-specific behaviour is preserved exactly: gopls keeps its
-  `lsp.PullInitializer` and workspace-pull surface, typescript and zls their
-  document-pull surface, swift/zig/html their lazy `didOpen` (now
-  `base.OpenTracker`) and union decodes.
-  **The constraint that shapes the design:** `base.Adapter`'s exported surface
-  is exactly `lsp.Client` and nothing more, because Go promotes an embedded
-  type's exported methods into every embedder and `internal/cli` resolves
-  optional adapter capabilities *structurally* — one stray
-  `SupportsPullDiagnostics` on the base would opt six servers that answer
-  `-32601` into pull diagnostics, compiling cleanly and changing no call site.
-  So every escape hatch is a package-level FUNCTION (`base.Call`, `CallPtr`,
-  `CallRaw`, `Notify`, `Wrap`) and `base.OpenTracker` is held as a named field,
-  never embedded. Guarded in both directions by
-  `TestExportedSurface_IsExactlyLSPClient`,
-  `TestAdapters_OptionalInterfaceSurface`,
-  `TestLazyOpenAdapters_LanguageIDAndExportedSurface` and
-  `TestLazyOpenAdapters_DidOpenMatrix` — the last pinning the per-method
-  `didOpen` count of every lazy-open adapter, so the deliberately asymmetric
-  ensure-open set cannot be "made consistent" as tidying — on top of the
-  error-contract and conformance harnesses landed ahead of the refactor. The
-  nine pre-existing adapter suites were left untouched through the migration as
-  the behaviour proof. `docs/adding-an-lsp.md` and the `add-lsp-adapter` skill
-  were rewritten for the new shape — the old copy-verbatim recipe was the
-  direct cause of the duplication.
-
-- **One home for `.gitignore` writing, held by a new rule shape.** Four
-  hand-rolled gitignore appenders had accumulated by the time the July 2026
-  consolidation extracted `paths.EnsureGitignoreEntries`: the audit named two
-  (topology, memory), a third (the provenance sidecar's — see Fixed) already
-  existed unnoticed, and a fourth (the collab store's) was written while the
-  fix waited. The extraction migrated only the two the audit named, so the
-  other two carried on — one of them defective. Both now delegate, closing
-  the last item of the audit batch (#69). Because neither an audit nor an
-  extraction demonstrably finds every copy, `internal/arch` gains a third
-  rule kind, `DelegationRule`: a production function containing the string
-  literal `".gitignore"` outside `internal/paths` must call
-  `paths.EnsureGitignoreEntries`, or carry an allowlist entry stating why it
-  is genuinely different (two exist: the directory walker, which only *reads*
-  ignore files, and the rule's own declaration, which must spell the literal
-  it pins). The existing name- and call-based rules cannot see this shape — a
-  hand-rolled copy shares no name family with the helper and open-codes no
-  pinned stdlib call, but it cannot avoid naming the file. A literal matches
-  exactly, or as a path ending in `/.gitignore` — never on a bare substring,
-  so `.gitignore` inside prose (tool descriptions, error wraps, log messages)
-  never matches. The checker was verified red against both copies before they
-  were migrated, and the collab copy's source is frozen into the test suite
-  so the red case stays pinned rather than verified once and forgotten.
 
 ## 0.16.0 (2026-07-31)
 

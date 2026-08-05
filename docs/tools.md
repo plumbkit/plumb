@@ -111,6 +111,11 @@ restart is needed); and this session's tool-call count plus its slowest calls
 (per-call durations from recorded stats).
 **Inputs:** none.
 
+`version` was merged into this tool: the old name still works as an
+unadvertised alias (it took no arguments, and the answer is a superset — the Go
+runtime and OS/arch rows `version` reported are here) and the result carries a
+notice pointing at `daemon_info`.
+
 ### `rename_session`
 Rename the current MCP session. **Inputs:** `name` (string — letters, digits,
 and `-` only; user-provided case is preserved; max 25 chars).
