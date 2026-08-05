@@ -156,6 +156,7 @@ func (w *bashWalk) maybeImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      target,
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "bash",
 		Path:      w.path,
 	}

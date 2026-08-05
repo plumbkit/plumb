@@ -302,6 +302,7 @@ func (w *tsWalk) appendImport(target string, rng *tsg.Node) {
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
+		EndLine:   line(rng.EndPoint()),
 		Language:  "typescript",
 		Path:      w.path,
 	}
@@ -322,7 +323,7 @@ func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) 
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	return idx
 }

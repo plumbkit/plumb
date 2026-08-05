@@ -1,6 +1,7 @@
 package treesitter
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -32,6 +33,13 @@ import (
 // would record a truncated symbol set as though it were the whole file — so the
 // early stop is turned into an error for the caller to record.
 //
+// A dead context starts no parse, whether it died of cancellation or of its
+// deadline — the same contract wasmts.Extract and the safeExtract watchdog above
+// it enforce. The two checks are not redundant: ctx.Err() is the only one that
+// sees a cancelled context (which usually carries no deadline at all), and the
+// budget check is the only one that sees a deadline that has passed but whose
+// context has not been marked yet.
+//
 // walk returns the nodes and edges it collected; a nil edge slice is fine for a
 // language that emits none.
 func extractWith(
@@ -40,11 +48,14 @@ func extractWith(
 	src []byte,
 	walk func(root *tsg.Node) ([]topology.Node, []topology.Edge),
 ) ([]topology.Node, []topology.Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	parser := tsg.NewParser(lang)
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, nil, ctx.Err()
+			return nil, nil, context.DeadlineExceeded
 		}
 		//nolint:gosec // G115: remaining is > 0 per the check above, so the conversion cannot wrap.
 		parser.SetTimeoutMicros(uint64(remaining.Microseconds()))
@@ -149,22 +160,101 @@ func setSpan(node *topology.Node, tn *tsg.Node) {
 
 // docSpanBefore returns the byte span of a contiguous comment block immediately
 // preceding decl (its previous siblings of a comment type, with no intervening
-// non-comment node). Returns (0, 0) — the "no doc span" sentinel — when there is
-// no such block. isComment reports whether a node type is a comment in the
-// grammar (it varies: "comment", "line_comment", "block_comment", …).
-func docSpanBefore(decl *tsg.Node, lang *tsg.Language, isComment func(typ string) bool) (start, end int) {
-	var first *tsg.Node
-	for sib := decl.PrevSibling(); sib != nil; sib = sib.PrevSibling() {
-		if !isComment(sib.Type(lang)) {
+// non-comment node and no blank line anywhere in the run). Returns (0, 0) — the
+// "no doc span" sentinel — when there is no such block. isComment reports
+// whether a node type is a comment in the grammar (it varies: "comment",
+// "line_comment", "block_comment", …).
+//
+// Flushness is not decoration, it is the whole safety property. Everything
+// downstream treats a doc span as part of the symbol —
+// docCommentStartPreferTopology prefers it over the line-scan heuristic, and
+// move_symbol's include_doc_comment defaults true — so a span that reaches back
+// across a blank line to a file-leading SPDX/licence banner is a silently
+// deleted licence header on the next replace_symbol_body. Both ends of the run
+// are therefore checked: the closest comment must be flush against the
+// declaration, and the backward walk stops at the first separation, so
+// `banner / blank line / doc-block / decl` keeps only the doc-block.
+//
+// The backward walk goes through the DECLARATION's sibling list by index rather
+// than by chaining PrevSibling off each comment, because a comment cannot be
+// relied on to know where it sits. In the tree-sitter JavaScript grammar a
+// comment that precedes every other top-level node reports a nil Parent, so
+// PrevSibling — which resolves through the parent link — returns nil from the
+// first hop and the run collapses to its last line: a three-line `//` doc block
+// above the first declaration in a .js file yielded only its third line, which
+// include_doc_comment then split, moving half a comment. The declaration's own
+// parent link is sound (that is how last was found at all), and its child list
+// contains the whole run, so resolving the run there is immune to the quirk in
+// every grammar.
+func docSpanBefore(decl *tsg.Node, lang *tsg.Language, src []byte, isComment func(typ string) bool) (start, end int) {
+	last := decl.PrevSibling() // the comment closest to the declaration
+	if last == nil || !isComment(last.Type(lang)) || !commentFlushBefore(src, last, decl.StartByte()) {
+		return 0, 0
+	}
+	first := last
+	sibs := siblingsOf(decl)
+	for j := nodeIndexIn(sibs, last) - 1; j >= 0; j-- {
+		sib := sibs[j]
+		if !isComment(sib.Type(lang)) || !commentFlushBefore(src, sib, first.StartByte()) {
 			break
 		}
 		first = sib
 	}
-	if first == nil {
-		return 0, 0
-	}
-	last := decl.PrevSibling() // the comment closest to the declaration
 	return clampU32(first.StartByte()), clampU32(last.EndByte())
+}
+
+// siblingsOf returns the child list n belongs to — its parent's children, n
+// included — or nil when n has no parent.
+func siblingsOf(n *tsg.Node) []*tsg.Node {
+	parent := n.Parent()
+	if parent == nil {
+		return nil
+	}
+	return parent.Children()
+}
+
+// nodeIndexIn returns target's position in sibs, or -1 when it is not there (in
+// particular for a nil sibs, which makes every caller's index walk a no-op).
+//
+// Nodes are matched on their byte span, not by pointer: gotreesitter
+// materializes node structs lazily and on demand, so the same syntactic node
+// reached two different ways is not guaranteed to be the same *Node. A span is
+// a safe key here because siblings never overlap.
+func nodeIndexIn(sibs []*tsg.Node, target *tsg.Node) int {
+	for i, s := range sibs {
+		if s.StartByte() == target.StartByte() && s.EndByte() == target.EndByte() {
+			return i
+		}
+	}
+	return -1
+}
+
+// commentFlushBefore reports whether comment sits directly above whatever starts
+// at byte offset next, with no blank line between the two.
+//
+// The blank line is invisible to the node tree, and in two different ways. No
+// grammar emits a node for it, so a bare previous-sibling scan walks past one
+// without noticing; and several grammars let a comment node swallow the newlines
+// that follow it, which defeats a raw byte gap too. Rust is the sharp case:
+// `/// banner\n\npub fn f()` parses as a line_comment spanning [1:0]–[3:0] whose
+// EndByte IS the function's StartByte — blank line and all, inside the comment
+// node. Only the source text can answer the question, so the comment's trailing
+// whitespace is trimmed off first and everything from there to next must hold at
+// most one newline. Same row (`export /** … */ class C {}`) and the row directly
+// above both pass; anything further does not.
+func commentFlushBefore(src []byte, comment *tsg.Node, next uint32) bool {
+	lo, hi, to := clampU32(comment.StartByte()), clampU32(comment.EndByte()), clampU32(next)
+	if hi > len(src) {
+		hi = len(src)
+	}
+	if to > len(src) || lo > hi || to < lo {
+		return false
+	}
+	hi = lo + len(bytes.TrimRight(src[lo:hi], " \t\r\n\v\f"))
+	if to < hi {
+		return false
+	}
+	return bytes.Count(src[hi:to], []byte{'\n'}) <= 1
 }
 
 // clampU32 narrows a tree-sitter uint32 offset/column into int range.

@@ -168,6 +168,7 @@ func (w *javaWalk) addImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      strings.TrimSpace(name),
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "java",
 		Path:      w.path,
 	}
@@ -196,7 +197,7 @@ func (w *javaWalk) addNode(n *tsg.Node, kind topology.NodeKind, name string, enc
 	}
 	setSpan(&node, n)
 	if withDoc {
-		node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, javaIsComment)
+		node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, javaIsComment)
 	}
 	w.nodes = append(w.nodes, node)
 	if enclosing >= 0 {

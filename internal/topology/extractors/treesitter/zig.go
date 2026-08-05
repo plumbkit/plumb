@@ -162,7 +162,7 @@ func (w *zigWalk) addType(n *tsg.Node, name string) int64 {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, zigIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, zigIsComment)
 	w.nodes = append(w.nodes, node)
 	return idx
 }
@@ -242,7 +242,7 @@ func (w *zigWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, zigIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, zigIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
@@ -279,6 +279,7 @@ func (w *zigWalk) addImport(bf *tsg.Node, decl *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(decl.StartPoint()),
+		EndLine:   line(decl.EndPoint()),
 		Language:  "zig",
 		Path:      w.path,
 	}

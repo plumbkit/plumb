@@ -118,7 +118,7 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
@@ -148,7 +148,7 @@ func (w *jsWalk) addClass(n *tsg.Node) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, jsIsComment)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	if body := childByType(n, "class_body", w.lang); body != nil {
 		w.addClassMembers(body, idx)
@@ -313,6 +313,7 @@ func (w *jsWalk) appendImport(target string, rng *tsg.Node) {
 		Name:      target,
 		Qualified: target,
 		StartLine: line(rng.StartPoint()),
+		EndLine:   line(rng.EndPoint()),
 		Language:  "javascript",
 		Path:      w.path,
 	}
@@ -383,6 +384,35 @@ func (w *jsWalk) maybeTest(call *tsg.Node) {
 
 // jsIsComment reports whether a JavaScript grammar node type is a comment.
 func jsIsComment(typ string) bool { return typ == "comment" }
+
+// jsDocSpan returns the doc-comment span of a JavaScript/TypeScript
+// declaration, and is the seam both walks use instead of calling docSpanBefore
+// directly.
+//
+// The declaration is scanned first, and the outermost `export` wrapper only as
+// a fallback. The wrapper is what makes `/** … */ export function f() {}` carry
+// the same doc span as the unexported form — an exported declaration is a CHILD
+// of its export_statement, so its own previous siblings are the
+// `export`/`default` keywords and the comment above the statement is never
+// reached, which matters more here than in any other language since TS/TSX
+// declarations are exported far more often than not. But climbing
+// unconditionally would lose the rarer comment written INSIDE the wrapper
+// (`export /** … */ class Inner {}`), whose only sibling relationship is with
+// the declaration. Trying the declaration first keeps both: the inner comment
+// wins where it exists, and the empty sentinel is the signal to climb.
+func jsDocSpan(decl *tsg.Node, lang *tsg.Language, src []byte) (start, end int) {
+	if start, end = docSpanBefore(decl, lang, src, jsIsComment); end > start {
+		return start, end
+	}
+	wrapper := decl
+	for p := wrapper.Parent(); p != nil && p.Type(lang) == "export_statement"; p = p.Parent() {
+		wrapper = p
+	}
+	if wrapper == decl {
+		return 0, 0
+	}
+	return docSpanBefore(wrapper, lang, src, jsIsComment)
+}
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in
 // the file. The call site is syntactically certain but the callee is resolved

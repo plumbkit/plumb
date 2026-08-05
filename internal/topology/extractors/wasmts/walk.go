@@ -261,6 +261,7 @@ func (w *walk) appendImport(target string, rng node) {
 		Name:      target,
 		Qualified: target,
 		StartLine: w.lines.at(rng.startByte()),
+		EndLine:   w.lines.at(rng.endByte()),
 		Language:  w.lang,
 		Path:      w.path,
 	}

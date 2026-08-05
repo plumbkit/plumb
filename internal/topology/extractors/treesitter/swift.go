@@ -153,7 +153,7 @@ func (w *swiftWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, en
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, swiftIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, swiftIsComment)
 	w.nodes = append(w.nodes, node)
 	if c := w.typeConformance(n); c != "" {
 		w.conf[idx] = c
@@ -189,7 +189,7 @@ func (w *swiftWalk) addFunc(n *tsg.Node, enclosing int64, testCtx bool) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, swiftIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, swiftIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
@@ -218,7 +218,7 @@ func (w *swiftWalk) addNamedMember(n *tsg.Node, enclosing int64, name string) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, swiftIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, swiftIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
@@ -341,6 +341,7 @@ func (w *swiftWalk) addImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "swift",
 		Path:      w.path,
 	}

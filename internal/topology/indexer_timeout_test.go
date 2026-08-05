@@ -2,7 +2,9 @@ package topology
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -155,5 +157,125 @@ func TestIndexer_ExtractTimeoutZero_DisablesTheDeadline(t *testing.T) {
 	}
 	if msg != "" {
 		t.Errorf("error_msg = %q, want empty — a disabled timeout must never abandon a parse", msg)
+	}
+}
+
+// failingExtractor returns the error shape safeExtract produces when it
+// abandons a parse at the deadline — deterministically, with no real timeout
+// and no goroutine to schedule.
+type failingExtractor struct{}
+
+func (failingExtractor) Language() string     { return "go" }
+func (failingExtractor) Extensions() []string { return []string{".go"} }
+
+func (failingExtractor) Extract(_ context.Context, relPath string, _ []byte) ([]Node, []Edge, error) {
+	return nil, nil, fmt.Errorf("extract %s: %w", relPath, context.DeadlineExceeded)
+}
+
+// TestIndexer_TimedOutTouchedFileIsRetried pins the retry contract for the one
+// shape that used to escape it: a file that was indexed cleanly, then touched
+// without a byte changing, then failed to extract.
+//
+// recordFileError deliberately stores no content hash so the staleness check
+// re-attempts the file on the next cycle — but its ON CONFLICT clause updated
+// only mtime and error_msg, so the hash left by the earlier SUCCESSFUL index
+// survived. With the mtime now current and the hash still matching the
+// unchanged bytes, isStale said "fresh" and the file was never re-attempted:
+// one transient timeout retired it from indexing until its content changed.
+func TestIndexer_TimedOutTouchedFileIsRetried(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topo.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	abs := filepath.Join(dir, "a.go")
+	if err := os.WriteFile(abs, []byte("package p"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	good := newIndexer(dir, db, []Extractor{&slowExtractor{}}, 512*1024, 0)
+	if err := good.processUpsert(context.Background(), "a.go"); err != nil {
+		t.Fatalf("first index: %v", err)
+	}
+
+	// Touch it: a new mtime, byte-identical content — a `git checkout` of the
+	// same revision, a formatter that changed nothing, a restored backup.
+	touched := time.Now().Add(time.Minute)
+	if err := os.Chtimes(abs, touched, touched); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	bad := newIndexer(dir, db, []Extractor{failingExtractor{}}, 512*1024, 0)
+	if err := bad.processUpsert(context.Background(), "a.go"); err != nil {
+		t.Fatalf("failing index: %v", err)
+	}
+	if msg := fileErrorMsg(t, db, "a.go"); msg == "" {
+		t.Fatal("the failed extract was not recorded; the rest of this test would be vacuous")
+	}
+
+	// Nothing about the file changes now — same mtime, same bytes. The only
+	// thing that can make it stale again is the record the error path left.
+	if err := good.processUpsert(context.Background(), "a.go"); err != nil {
+		t.Fatalf("retry index: %v", err)
+	}
+	if msg := fileErrorMsg(t, db, "a.go"); msg != "" {
+		t.Errorf("error_msg = %q after the retry cycle, want empty — a touched-but-identical file "+
+			"that timed out once is never re-attempted", msg)
+	}
+}
+
+func fileErrorMsg(t *testing.T, db *sql.DB, relPath string) string {
+	t.Helper()
+	var msg string
+	if err := db.QueryRow(`SELECT error_msg FROM topology_files WHERE path = ?`, relPath).Scan(&msg); err != nil {
+		t.Fatalf("query file row: %v", err)
+	}
+	return msg
+}
+
+// armedContext reports itself cancelled through Err() from the outset but only
+// closes Done() once the extractor has been entered. That inversion is illegal
+// for a real context and deliberate here: it is what makes the test below
+// scheduler-independent. In an implementation that spawns the extract before
+// checking Err(), safeExtract's select has exactly one reachable arm and cannot
+// return until the extract has started — so observing afterwards that it did
+// NOT start is a fact about the implementation, not a sample of the scheduler.
+type armedContext struct{ entered chan struct{} }
+
+func (armedContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c armedContext) Done() <-chan struct{}     { return c.entered }
+func (armedContext) Err() error                  { return context.Canceled }
+func (armedContext) Value(any) any               { return nil }
+
+// enteringExtractor closes entered as its first act, so entering it is what
+// arms the context above.
+type enteringExtractor struct{ entered chan struct{} }
+
+func (enteringExtractor) Language() string     { return "go" }
+func (enteringExtractor) Extensions() []string { return []string{".go"} }
+
+func (e enteringExtractor) Extract(_ context.Context, relPath string, _ []byte) ([]Node, []Edge, error) {
+	close(e.entered)
+	return []Node{{Path: relPath, Name: "Fast", Kind: KindFunction, Language: "go"}}, nil, nil
+}
+
+func TestSafeExtract_DeadContextStartsNoExtract(t *testing.T) {
+	entered := make(chan struct{})
+	ctx := armedContext{entered: entered}
+
+	nodes, edges, err := safeExtract(ctx, enteringExtractor{entered: entered}, "dead.go", []byte("package p"))
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want a context.Canceled wrapper", err)
+	}
+	if nodes != nil || edges != nil {
+		t.Errorf("nodes/edges = %v/%v, want none — a dead context must not return a result", nodes, edges)
+	}
+	select {
+	case <-entered:
+		t.Fatal("a dead context still started an extract; the watchdog spawned work it had already given up on")
+	default:
 	}
 }

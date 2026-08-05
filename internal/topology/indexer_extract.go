@@ -138,7 +138,16 @@ func skipOversizedGrammar(relPath, lang string, srcLen int) bool {
 // get a fresh runtime rather than serialising behind the stuck parse's lock.
 // This watchdog is the backstop for an engine that honours neither: it frees
 // the indexer worker to keep going while the orphan winds down on its own.
+//
+// A context that is already dead starts no extract at all — the same contract
+// both engines below enforce (wasmts.Extract, treesitter.extractWith). Without
+// the guard the select below races an already-closed ctx.Done() against a
+// goroutine this call itself spawned, so a fast extractor could win and return
+// a result where the caller was promised ctx.Err().
 func safeExtract(ctx context.Context, ex Extractor, relPath string, src []byte) (nodes []Node, edges []Edge, err error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, nil, fmt.Errorf("extract %s: %w", relPath, ctxErr)
+	}
 	type result struct {
 		nodes []Node
 		edges []Edge

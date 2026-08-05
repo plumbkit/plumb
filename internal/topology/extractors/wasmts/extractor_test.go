@@ -223,3 +223,48 @@ func TestTS_ByteSpanReconstructsDeclaration(t *testing.T) {
 		t.Errorf("StartLine = %d, want 2", fn.StartLine)
 	}
 }
+
+// TestExtractorsEmitNonInvertedRanges is the wasmts half of the import-range
+// contract the pure-Go extractors carry (treesitter's test of the same name).
+// Both walks in this package set an import's StartLine and left EndLine at its
+// zero value, so an import on line 3 was emitted as the range 3–0 — inverted,
+// and byte-identical to the defect on the gotreesitter side, which is what made
+// the parity sweep blind to it. Both grammars are covered because the walks are
+// separate code: swift_walk.go is the production Swift path, walk.go the TS
+// parity reference.
+func TestExtractorsEmitNonInvertedRanges(t *testing.T) {
+	cases := []struct {
+		name       string
+		ex         *Extractor
+		path       string
+		src        string
+		wantImport string
+	}{
+		{
+			"swift", NewSwift(), "a.swift",
+			"import Foundation\n\nstruct Point {\n    let x: Double\n}\n", "Foundation",
+		},
+		{
+			"typescript", NewTypeScript(), "a.ts",
+			"import { readFile } from 'fs';\nexport function go(): number { return 1; }\n", "fs",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			nodes, _, err := c.ex.Extract(context.Background(), c.path, []byte(c.src))
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			for _, n := range nodes {
+				if n.EndLine < n.StartLine {
+					t.Errorf("%s %q has an inverted line range %d-%d",
+						n.Kind, n.Name, n.StartLine, n.EndLine)
+				}
+			}
+			if !has(nodes, topology.KindImport, c.wantImport) {
+				t.Errorf("sample no longer yields import %q — the guard would go vacuous; imports=%v",
+					c.wantImport, names(nodes, topology.KindImport))
+			}
+		})
+	}
+}

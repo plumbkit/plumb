@@ -289,3 +289,67 @@ func TestRust_ByteSpanAndDocSpan(t *testing.T) {
 		t.Errorf("doc span %d should precede decl %d", fn.DocStartByte, fn.StartByte)
 	}
 }
+
+// TestRust_BannerAcrossBlankLineIsNotADocSpan is the non-JS half of the
+// flushness contract: docSpanBefore is shared by all seven tree-sitter
+// extractors, so the licence-banner hazard is not a TS/JS problem, and Rust is
+// where it is hardest to see. The Rust grammar lets a `///` line_comment swallow
+// the newlines after it — `/// banner\n\npub fn f()` parses as a comment whose
+// EndByte IS the function's StartByte, blank line included — so neither a row
+// comparison nor a byte gap between the nodes can tell the two cases apart. Only
+// the source text can, which is what commentFlushBefore reads.
+func TestRust_BannerAcrossBlankLineIsNotADocSpan(t *testing.T) {
+	src := []byte(`// Copyright 2026 The Plumb Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+pub fn detached(a: i32) -> i32 {
+    a
+}
+
+/// Banner-style, detached.
+
+/// Documents attached.
+pub fn attached(b: i32) -> i32 {
+    b
+}
+`)
+	nodes, _, err := NewRust().Extract(context.Background(), "banner.rs", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		want string // "" means: must carry no doc span at all
+	}{
+		{"detached", ""},
+		{"attached", "/// Documents attached."},
+	} {
+		var fn *topology.Node
+		for i := range nodes {
+			if nodes[i].Name == tc.name {
+				fn = &nodes[i]
+				break
+			}
+		}
+		if fn == nil {
+			t.Errorf("%q not extracted", tc.name)
+			continue
+		}
+		if tc.want == "" {
+			if fn.HasDocSpan() {
+				t.Errorf("%q claims %q as its doc span; a blank line separates them",
+					tc.name, string(src[fn.DocStartByte:fn.DocEndByte]))
+			}
+			continue
+		}
+		if !fn.HasDocSpan() {
+			t.Errorf("%q lost its real doc comment to the flushness check", tc.name)
+			continue
+		}
+		// The line_comment node may carry its trailing newline(s); the span must
+		// cover the attached doc line and nothing above the blank line.
+		if got := strings.TrimSpace(string(src[fn.DocStartByte:fn.DocEndByte])); got != tc.want {
+			t.Errorf("%q doc span = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

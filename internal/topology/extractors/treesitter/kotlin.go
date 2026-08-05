@@ -139,7 +139,7 @@ func (w *kotlinWalk) addType(n *tsg.Node, name string, kind topology.NodeKind, e
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, kotlinIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, kotlinIsComment)
 	w.nodes = append(w.nodes, node)
 	w.containedBy(enclosing, idx)
 	return idx
@@ -173,7 +173,7 @@ func (w *kotlinWalk) addFunc(n *tsg.Node, enclosing int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, kotlinIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, kotlinIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	w.containedBy(enclosing, idx)
@@ -242,6 +242,7 @@ func (w *kotlinWalk) addImport(n *tsg.Node) {
 		Kind:      topology.KindImport,
 		Name:      name,
 		StartLine: line(n.StartPoint()),
+		EndLine:   line(n.EndPoint()),
 		Language:  "kotlin",
 		Path:      w.path,
 	}

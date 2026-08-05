@@ -43,10 +43,16 @@ func (idx *Indexer) persistFile(fileID int64, relPath string, info os.FileInfo, 
 // hash, so the staleness check re-attempts the file on every resync — a
 // pathological file whose parse keeps timing out re-pays its full extract
 // timeout each cycle (intended: a transient engine fault should be retried).
+//
+// The conflict clause has to clear content_hash explicitly, not just leave it
+// out: on a file that HAD indexed cleanly, the hash from that success survives
+// the update, and a re-index triggered by a touch that changed no bytes then
+// matches both the refreshed mtime and the stale hash — so one transient
+// failure would retire the file from indexing until its content changed.
 func (idx *Indexer) recordFileError(relPath string, info os.FileInfo, extractErr error) error {
 	_, err := idx.db.Exec(
 		`INSERT INTO topology_files(path, mtime_ns, error_msg) VALUES (?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns, error_msg=excluded.error_msg`,
+         ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns, content_hash='', error_msg=excluded.error_msg`,
 		relPath, info.ModTime().UnixNano(), extractErr.Error())
 	return err
 }

@@ -504,6 +504,78 @@
   whole file; the early stop is now surfaced as an error so the file is
   recorded as failed instead.
 
+- **Exported TypeScript/JavaScript declarations carry their doc-comment span.**
+  An exported declaration is a child of its `export_statement`, so scanning its
+  own previous siblings for the preceding comment block only ever reached the
+  `export`/`default` keywords: `/** … */ export function f() {}` got no doc
+  span while the unexported form got one. Since TS/TSX declarations are
+  exported far more often than not, that was most of a real codebase. The scan
+  now falls back to the outermost export wrapper (`jsDocSpan`, shared by both
+  walks) when the declaration itself yields nothing, which also keeps the span
+  of a comment written inside the wrapper
+  (`export /** … */ class Inner {}`). (#215–#217 follow-up)
+
+- **A doc-comment span stops at the first blank line, so licence banners are
+  no longer deleted.** The comment scan collected any run of previous comment
+  siblings, and a tree-sitter grammar emits no node for a blank line — so a
+  file-leading SPDX/licence banner was indistinguishable from a doc comment.
+  Reaching the export wrapper (above) made that reachable for every exported
+  symbol, and `include_doc_comment` — which defaults **true** on `move_symbol`
+  — prefers the topology span over the line-scan heuristic that does stop at
+  blank lines, so `replace_symbol_body` would quietly take the banner with the
+  symbol. The rule is now flushness at both ends of the run: the closest
+  comment must sit directly above the declaration (or inline on the same row),
+  and the backward walk stops at the first separation, so `banner / blank line
+  / doc-block / decl` keeps only the doc-block. It lives in the shared helper,
+  so all seven tree-sitter languages get it. Flushness is read from the source
+  text rather than from node positions, because a grammar may let a comment
+  node swallow the newlines after it — Rust's `///` does, leaving a comment
+  whose end offset *is* the following declaration's start offset, blank line
+  included. The backward walk itself is resolved through the declaration's
+  sibling list by index rather than by chaining `PrevSibling` off each comment,
+  which repairs a second, older defect the export climb had just made reachable
+  on the write path: the JavaScript grammar reports a nil parent for a comment
+  that precedes every other top-level node, so the chain stopped after one hop
+  and a multi-line `//` block above the first declaration in a `.js` file
+  collapsed to its LAST line — `include_doc_comment` then cut the block in half
+  and left an orphaned comment above the replacement.
+
+- **Import nodes no longer carry an inverted line range.** Every extractor that
+  emits a `KindImport` set `StartLine` and left `EndLine` at zero, so an import
+  on line 12 was persisted as the range 12–0. The byte span was correct, but
+  any consumer reading the line range saw it inverted. The defect was
+  byte-identical on both engines — nine gotreesitter walks and both wasmts
+  walks — which is exactly why the parity sweep never flagged it (its node key
+  compares the two engines' line ranges, and 12–0 equals 12–0). Both are fixed
+  together, so extraction parity is unchanged, and a table-driven guard over
+  the package's single extractor enumeration keeps it that way.
+
+- **A file that fails to extract is re-attempted even when nothing about it
+  changed.** `recordFileError` deliberately stores no content hash so the
+  staleness check retries on the next cycle, but its conflict clause updated
+  only the mtime and the error — so the hash written by an earlier *successful*
+  index survived the failure. A file that had indexed cleanly, was then touched
+  without a byte changing (a `git checkout` of the same revision, a formatter
+  that changed nothing, a restored backup) and then timed out ended up with a
+  current mtime and a matching hash: reported fresh, and never re-attempted
+  until its content changed. The failure path now clears the hash; the file's
+  existing nodes are still left in place, so the last good symbol set keeps
+  serving reads while the file waits for its retry.
+
+- **One dead-context contract across all three extract layers.** The
+  `wasmts.Extract` guard added above was stronger than the envelope it cited,
+  and the layer above it carried the same race. `treesitter.extractWith` only
+  consulted `ctx.Deadline()`, and a cancelled context usually has none — so it
+  parsed the file to completion and returned the symbols of a file its caller
+  had abandoned; it now checks `ctx.Err()` before constructing the parser, and
+  the expired-budget branch returns `context.DeadlineExceeded` outright rather
+  than `ctx.Err()`, which is nil in the window before the context is marked.
+  `safeExtract` still spawned its extract goroutine under a pre-cancelled
+  context and let the `select` choose between an already-closed `ctx.Done()`
+  and the result it had just started — returning that result, where the caller
+  was promised `ctx.Err()`, whenever the extractor was fast; it now refuses a
+  dead context up front. Both new tests are scheduler-independent.
+
 ## 0.16.0 (2026-07-31)
 
 ### Added
