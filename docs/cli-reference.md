@@ -25,6 +25,7 @@ language `none`.
 | [`plumb restart`](#plumb-restart) | Restart the daemon (stop + fresh spawn) |
 | [`plumb init`](#plumb-init) | Create a `.plumb/` workspace marker |
 | [`plumb setup`](#plumb-setup) | Register plumb as an MCP server for a client |
+| [`plumb skills`](#plumb-skills) | Show or sync plumb's embedded skills per client |
 | [`plumb doctor`](#plumb-doctor) | Run health checks |
 | [`plumb config`](#plumb-config) | Inspect resolved configuration |
 | [`plumb sessions`](#plumb-sessions) | List active sessions |
@@ -181,19 +182,21 @@ plumb setup <client>
 Register the current `plumb` binary as a stdio MCP server in a client's config.
 Setup helpers preserve any existing MCP servers (and any extra keys on an existing
 plumb entry, such as Codex's per-tool approval tables) and back up the config
-before modifying it.
+before modifying it. Registration is **config-only** — it never installs skill
+files; those come from [`plumb skills sync`](#plumb-skills), and a named
+registration prints a hint when it notices the client's skills missing or stale.
 
 | Subcommand | Config target |
 |---|---|
 | `plumb setup claude-desktop` | Claude Desktop's platform-specific JSON config |
-| `plumb setup claude-code` | `~/.claude.json` (user scope) + `~/.claude/skills/` |
-| `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) + `~/.claude/skills/` |
-| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (or `~/.codex/skills/`) |
+| `plumb setup claude-code` | `~/.claude.json` (user scope) |
+| `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) |
+| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) |
 | `plumb setup gemini` | `~/.gemini/settings.json` |
 | `plumb setup cursor` | `~/.cursor/mcp.json` |
 | `plumb setup augment` | `~/.augment/settings.json` |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
-| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`) + `$KIMI_CODE_HOME/skills/` (or `~/.kimi-code/skills/`) |
+| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`) |
 | `plumb setup kimi-code --lean` | Same, plus an `enabledTools` allowlist pinning plumb's lean tool set |
 | `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads) |
 | `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config) |
@@ -205,10 +208,41 @@ before modifying it.
 | Flag | Applies to | Effect |
 |---|---|---|
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
-| `--no-skill` | `claude-code`, `codex`, `kimi-code`, `plumb setup` | Skip installing plumb's skill files. Those three clients read `SKILL.md`, so registering one also installs and refreshes plumb's seven skills into its user-scoped skills directory — on a fresh registration, on a re-run over an existing one, and during the bulk `--all` / `--install-missing` sweep. Every other client has no skills directory and never receives files; its copy of the same routing is the condensed `session_start` guidance block. |
 | `--lean` | `kimi-code` | Also write an `enabledTools` allowlist on the plumb entry, pinning the ~21 tools of plumb's lean set so Kimi loads those schemas instead of all 57. Kimi Code can only invoke tools it was advertised, so plumb's own `[tools] profile = "lean"` would remove capability rather than schemas — this takes the same saving client-side, where it is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup kimi-code --lean` after upgrading plumb to refresh it. A later bare `plumb setup kimi-code` (and `plumb setup --all`) **preserves** an existing `enabledTools` key; re-running with `--lean` **replaces** a hand-edited list with plumb's. There is no flag to remove the key — delete it from `mcp.json` by hand to go back to the full surface. `plumb doctor` mentions the flag when Kimi registers plumb without it, and grades an `enabledTools` key that *is* present on its content rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves Kimi with no plumb tools at all, however well-formed the JSON), an aged snapshot of the lean set earns an informational drift hint, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict Kimi's handling of). |
-| `--all` | `plumb setup` | Repoint **every** already-registered client at the current `plumb` binary, skipping clients that aren't installed or don't use plumb. The bulk repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check. Re-points only; never adds plumb to a client that didn't have it. When installed-but-unregistered clients are found, it prints a hint pointing at `--install-missing`. |
-| `--install-missing` | `plumb setup` | Like `--all`, but also **registers** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with one exception: Kimi Code is detected via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`) because its `mcp.json` only exists once an MCP server is configured, so `--install-missing` creates it fresh. Triggers the bulk run on its own, so `plumb setup --install-missing` is the one-shot first-time setup for every client already present on the machine. |
+| `--repair` | `plumb setup` | Repoint **every** already-registered client at the current `plumb` binary, skipping clients that aren't installed or don't use plumb. The bulk repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check. Re-points only; never adds plumb to a client that didn't have it. When installed-but-unregistered clients are found, it prints a hint pointing at `--all`. |
+| `--all` | `plumb setup` | `--repair`, plus **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with one exception: Kimi Code is detected via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`) because its `mcp.json` only exists once an MCP server is configured, so `--all` creates it fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine. `--install-missing` survives one release as a hidden, deprecated alias with the same behaviour. |
+
+---
+
+## `plumb skills`
+
+```
+plumb skills
+plumb skills sync [client]
+```
+
+Bare `plumb skills` is **read-only**: a status table over the clients with a
+verified skills directory (Claude Code `~/.claude/skills/`, Codex
+`$CODEX_HOME/skills/` or `~/.codex/skills/`, Kimi Code `$KIMI_CODE_HOME/skills/`
+or `~/.kimi-code/skills/`), showing each embedded skill as `installed`,
+`missing`, or `stale` (content differs from the copy compiled into this
+binary). A skill-capable client whose config does not register plumb is shown
+as `not registered` — the reason `sync` would skip it. Every other client has
+no skills directory and receives the same routing as the condensed
+`session_start` guidance block instead.
+
+`plumb skills sync` installs or refreshes the seven embedded skills into the
+skills directories of every skill-capable client that **registers plumb**, or
+only the named client with `plumb skills sync <client>` (an unknown name is a
+usage error listing the valid ones; naming an unregistered client is an error
+pointing at `plumb setup <client>`). A changed skill is backed up before being
+overwritten, an unchanged one is left alone, and a per-skill error is a
+warning, not a failure. Sync is the only writer of skill files —
+`plumb setup` is config-only.
+
+Re-run `plumb skills sync` after upgrading plumb to pick up new skill content;
+`plumb doctor` prints an informational line (never a warning) for any
+registered client whose skills are missing or stale.
 
 ---
 
@@ -230,7 +264,7 @@ non-zero if any check fails. Sections:
   running executable. A registered binary that no longer exists is a failure; a
   binary that exists but differs from the current one (e.g. after moving or
   rebuilding plumb elsewhere) is a non-fatal **warning** (`!`). Both carry a
-  `plumb setup <client>` fix hint — or run `plumb setup --all` to repoint every
+  `plumb setup <client>` fix hint — or run `plumb setup --repair` to repoint every
   client at once.
 - **Configuration** — global and project `config.toml` parse cleanly.
 - **Data** — the global stats database is readable.

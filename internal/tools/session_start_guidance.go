@@ -106,7 +106,7 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			"once you know where to work.\n\n")
 		sb.WriteString("- **topology_affected** — which tests to run after an edit (dependency edges + " +
 			"co-location, recall-biased, confidence-labelled); the plumb-testing skill has the post-edit flow " +
-			"(skills install via `plumb setup claude-code`).\n")
+			"(skills install via `plumb skills sync`).\n")
 		// workspace_search is not in the lean set, so a lean client is pointed at
 		// topology_search instead — guidance must never name a hidden tool.
 		if t.leanProfile() {
@@ -138,7 +138,7 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 	sb.WriteString("- **workspace_symbols** / **get_definition** / **find_references** — find a symbol by name, " +
 		"jump to its definition, list every call site (scope-aware, not text search).\n")
 	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename; the plumb-refactor skill has the rest of the edit lane " +
-		"(skills install via `plumb setup claude-code`).\n")
+		"(skills install via `plumb skills sync`).\n")
 	sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) without reading it.\n")
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +

@@ -162,10 +162,9 @@
   target's `skillsDirFn` stays nil and `TestSkillCapableClients_ArePinned`
   keeps it that way — a claim about someone else's product rots fast, and
   writing files into a guessed directory is a worse failure than not writing
-  them. `--no-skill` is registered off `skillsDirFn`, so it covers all three
-  clients and the bulk sweep, and skills refresh on the already-registered path
-  too (otherwise re-running setup after an upgrade — the documented way to pick
-  up new skill content — would be a no-op on every machine plumb is already on).
+  them. (The delivery side of this seam changed within the same release:
+  installation moved from `plumb setup` to `plumb skills sync` — see the
+  *Changed* entry below.)
 
 - **A condensed `session_start` guidance block for every client without a
   bespoke one.** `writeSessionGuidance` branched on three clients and let the
@@ -188,6 +187,56 @@
   block of their own do not also receive it.
 
 ### Changed
+
+- **`plumb setup` is config-only; skills move to the new `plumb skills`
+  command.** Registering a client used to install plumb's seven embedded
+  skills as a side effect — on the named commands, on their already-registered
+  re-run, and as a `skills current` / `skills updated` row of the bulk sweep —
+  which meant a config repair could not run without also writing into skills
+  directories, and a stale skill set had no command of its own. Registration
+  now touches only the client's MCP config, and the skill surface is a first-
+  class command: bare **`plumb skills`** is a read-only status table over the
+  skill-capable clients (claude-code, codex, kimi-code), showing each skill as
+  `installed` / `missing` / `stale` with a `not registered` marker for a
+  capable client whose config lacks plumb (the reason sync would skip it);
+  **`plumb skills sync [client]`** is the only writer, installing or refreshing
+  the embedded skills into every registered skill-capable client, or just the
+  named one — an unknown name is a usage error listing the valid ones, and
+  naming an unregistered client is an error pointing at `plumb setup <client>`.
+  Sync keeps the old installer's contract exactly (backup before overwrite,
+  unchanged left alone, per-skill errors are warnings) — only the trigger
+  moved.
+
+  The bulk flags are renamed to match what they do, because the old names had
+  the repair and the first-time setup backwards in users' heads. **`--repair`**
+  is the repoint-every-registered-client sweep `plumb doctor` recommends —
+  what `--all` used to do. **`--all`** is the repair plus registering
+  installed-but-unregistered clients — what `--all --install-missing` used to
+  do — and `--install-missing` survives one release as a hidden, deprecated
+  alias for it. **`--no-skill` is removed outright** (no shim): the side
+  effect it gated no longer exists, and skills are now opt-IN via `sync`
+  rather than opt-out. A repair-only run that finds unregistered clients
+  points at `--all`; a named registration whose skill-capable client's skills
+  are missing or stale prints a one-line drift hint ("Skills missing/outdated
+  — run `plumb skills sync <client>`") on both the registered and
+  already-current exits, detection only; and `plumb doctor` grades the same
+  drift as an informational line per registered client — never a warning,
+  since stale skills are a repair, not a broken integration.
+
+  Guarded by `TestRefreshClient_NeverTouchesSkills` (the sweep writes no skill
+  files, registered or not — the inverse of the old
+  `TestRefreshClient_RefreshesSkillsForARegisteredClient`, which is deleted
+  along with `TestInstallSkillsFor_NoSkillFlagSkips`),
+  `TestSkillCapableClients_ArePinned` (unchanged),
+  `TestSkillStateAt` / `TestPlumbRegisteredIn` (the status classification and
+  the sync gate), `TestRunSkillsSync_UnknownClientIsAUsageError` /
+  `TestRunSkillsSync_NamedUnregisteredClientErrors` /
+  `TestRunSkillsSync_SweepInstallsForRegisteredClientsOnly`,
+  `TestPrintSkillsDriftHint` (fires on drift, silent when current or no
+  channel), `TestSetupBulkFlags` / `TestPrintSetupAllSummary_PointsRepairAtAll`
+  (the flag surface and the repair→all hint), and `TestSkillFreshnessResult` /
+  `TestDoctorSeesSkillDrift` (the doctor grade is informational and reads the
+  same classification as the status table).
 
 - **Tool descriptions and `session_start` guidance stop restating the workflows
   the skills teach.** A description and an orientation packet are paid for on

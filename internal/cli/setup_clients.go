@@ -30,14 +30,15 @@ import (
 // Kimi Code sets it because its mcp.json only appears once an MCP server is
 // configured, so an absent file does not imply an absent client. When it
 // reports installed, the bulk paths and doctor treat the client as
-// installed-but-unregistered (and --install-missing may create the config).
+// installed-but-unregistered (and --all may create the config).
 // flags and note are the per-target hooks for a client whose registration takes
 // an option: flags registers extra command-line flags on the generated cobra
 // command, and note returns an extra hint line printed after the registration
 // report (empty for nothing). Only Kimi Code sets them today, for --lean.
 // skillsDirFn is the per-client SKILL.md capability check: when set, the client
 // consumes plumb's embedded skills and this resolves the user-scoped directory
-// they install into, so registering the client also installs and refreshes them.
+// they live in — the set `plumb skills` reports on and `plumb skills sync`
+// writes to. Registration itself never writes skill files.
 // nil means the client has no verified skill channel — its steering arrives as
 // the condensed session_start guidance block instead. See setup_skills.go, which
 // holds the resolvers and the per-client verification evidence.
@@ -93,10 +94,10 @@ var extraSetupTargets = []setupTarget{
 // setup.go and the bulk paths here drive them from one description.
 //
 // claudeCodeTarget and claudeDesktopTarget still have hand-written command
-// bodies: Claude Code adds --project scoping and skill installation, and Claude
-// Desktop writes several config paths (its sibling-profile heuristic) with
-// per-path reporting. geminiTarget and codexTarget do not — their commands were
-// line-for-line copies of runSetupTarget and now call it directly.
+// bodies: Claude Code adds --project scoping, and Claude Desktop writes several
+// config paths (its sibling-profile heuristic) with per-path reporting.
+// geminiTarget and codexTarget do not — their commands were line-for-line
+// copies of runSetupTarget and now call it directly.
 var (
 	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: claudeSkillsDir}
 	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
@@ -183,9 +184,6 @@ func init() {
 		if t.flags != nil {
 			t.flags(cmd)
 		}
-		if t.skillsDirFn != nil {
-			registerNoSkillFlag(cmd)
-		}
 		setupCmd.AddCommand(cmd)
 	}
 }
@@ -214,11 +212,7 @@ func runSetupTarget(t setupTarget) error {
 		fmt.Printf("plumb is already registered in %s — no changes made.\n", t.name)
 		fmt.Printf("Config: %s\n", cfgPath)
 		printSetupNote(t)
-		// Skills are refreshed on the already-registered path too: re-running
-		// setup after an upgrade is the documented way to pick up new skill
-		// content, and it would be a no-op on every machine plumb is already
-		// registered on if this returned first.
-		installAndPrintSkills(t)
+		printSkillsDriftHint(t)
 		return nil
 	}
 
@@ -231,7 +225,7 @@ func runSetupTarget(t setupTarget) error {
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
 	printSetupNote(t)
-	installAndPrintSkills(t)
+	printSkillsDriftHint(t)
 	return nil
 }
 
@@ -253,11 +247,13 @@ func printSetupNote(t setupTarget) {
 // binary, leaving clients that aren't installed or don't use plumb untouched. It
 // is the bulk repair for a moved or rebuilt binary — the fix `plumb doctor`
 // points at when a client's registered binary no longer matches the running one.
-// With --install-missing it also registers plumb in installed-but-unregistered
-// clients (config file present but no plumb entry), covering first-time setup in
-// one command. Either flag triggers the bulk run; bare `plumb setup` prints help.
+// --repair is exactly that. --all additionally registers plumb in
+// installed-but-unregistered clients (config file present but no plumb entry),
+// covering first-time setup in one command; --install-missing is its deprecated
+// hidden alias. Any of the three flags triggers the bulk run; bare `plumb setup`
+// prints help.
 func runSetupAll(cmd *cobra.Command, _ []string) error {
-	if !setupAllFlag && !setupInstallMissingFlag {
+	if !setupRepairFlag && !setupAllFlag && !setupInstallMissingFlag {
 		return cmd.Help()
 	}
 	PrintLogo()
@@ -275,7 +271,7 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 		Headers("Client", "Status", "Config")
 	changed, unregistered := 0, 0
 	for _, c := range allSetupClients() {
-		rows, didChange := refreshClient(c, plumbBin, setupInstallMissingFlag)
+		rows, didChange := refreshClient(c, plumbBin, bulkRegistersMissing())
 		if didChange {
 			changed++
 		}
@@ -292,13 +288,20 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// printSetupAllSummary prints the trailing summary line(s) for `plumb setup
-// --all`. When some clients are installed-but-unregistered and --install-missing
-// was not passed, it points at the flag that would register them — the fix for
-// the "I ran --all and nothing happened" first-time-setup confusion.
+// bulkRegistersMissing reports whether the bulk run registers
+// installed-but-unregistered clients (true under --all and its deprecated alias
+// --install-missing) or only repoints existing registrations (--repair).
+func bulkRegistersMissing() bool {
+	return setupAllFlag || setupInstallMissingFlag
+}
+
+// printSetupAllSummary prints the trailing summary line(s) for the bulk run.
+// When a repair-only run finds installed-but-unregistered clients, it points at
+// --all — the fix for the "I ran --repair and nothing happened" first-time-setup
+// confusion.
 func printSetupAllSummary(changed, unregistered int) {
 	if changed == 0 {
-		if setupInstallMissingFlag {
+		if bulkRegistersMissing() {
 			fmt.Println("\nNo changes — every installed client already has this binary registered.")
 		} else {
 			fmt.Println("\nNo changes — every registered client already points at this binary.")
@@ -306,8 +309,8 @@ func printSetupAllSummary(changed, unregistered int) {
 	} else {
 		fmt.Printf("\nUpdated %d client(s). Restart them to apply.\n", changed)
 	}
-	if !setupInstallMissingFlag && unregistered > 0 {
-		fmt.Printf("\n%d installed client(s) don't have plumb yet — run `plumb setup --install-missing` to register them.\n", unregistered)
+	if !bulkRegistersMissing() && unregistered > 0 {
+		fmt.Printf("\n%d installed client(s) don't have plumb yet — run `plumb setup --all` to register them.\n", unregistered)
 	}
 }
 
@@ -339,32 +342,16 @@ func refreshClient(c setupTarget, plumbBin string, installMissing bool) (rows []
 		return []clientRow{{name: c.name, status: "error", detail: err.Error()}}, false
 	}
 
-	registered := false
 	for i, cfgPath := range paths {
 		status, detail, didChange := refreshClientAt(c, cfgPath, plumbBin, installMissing)
 		if didChange {
 			changed = true
-		}
-		if plumbIsRegistered(status) {
-			registered = true
 		}
 		name := c.name
 		if i > 0 {
 			name = ""
 		}
 		rows = append(rows, clientRow{name: name, status: status, detail: detail})
-	}
-
-	// Skills are part of what a repoint has to bring back into line. `--all` is
-	// the post-rebuild repair, and session_start points the agent at skills that
-	// only the named per-client command used to refresh — so a rebuilt binary
-	// left them stale, or, for a client registered by --install-missing, absent
-	// entirely while the guidance still cited them.
-	if registered {
-		if status, detail, didChange := refreshSkills(c); status != "" {
-			rows = append(rows, clientRow{status: status, detail: detail})
-			changed = changed || didChange
-		}
 	}
 	return rows, changed
 }

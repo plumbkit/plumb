@@ -5,16 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/cobra"
-
 	"github.com/plumbkit/plumb/internal/fsync"
-	"github.com/plumbkit/plumb/internal/render"
 )
 
 // This file is the whole skill-delivery seam: which clients consume plumb's
-// embedded SKILL.md files, where each one keeps them, and the install/refresh
-// that both the named `plumb setup <client>` commands and the bulk
-// --all/--install-missing sweep drive.
+// embedded SKILL.md files, where each one keeps them, and the install that
+// `plumb skills sync` drives. Registration (`plumb setup`) is deliberately
+// config-only: it never writes skill files, it only points at `plumb skills
+// sync` when it detects drift (see printSkillsDriftHint in skills_cmd.go).
 //
 // WHICH CLIENTS. Skill capability is a per-client fact carried as
 // setupTarget.skillsDirFn, and it is verified per client rather than inferred.
@@ -25,17 +23,16 @@ import (
 // condensed session_start guidance block instead — not a directory plumb
 // guessed at.
 
-// setupNoSkillFlag backs --no-skill. It is shared by every skill-capable
-// client's command and by the bulk sweep, so opting out is one flag rather than
-// one per client.
-var setupNoSkillFlag bool
-
-// registerNoSkillFlag adds --no-skill to a command whose target installs skills.
-// It is driven off skillsDirFn rather than hand-registered per command, so a
-// client that gains a skills directory gains the opt-out with it.
-func registerNoSkillFlag(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&setupNoSkillFlag, "no-skill", false,
-		"Skip installing plumb's skill files")
+// skillCapableClients returns the setup targets that declare a skills
+// directory — the set `plumb skills` reports on and `plumb skills sync` sweeps.
+func skillCapableClients() []setupTarget {
+	var out []setupTarget
+	for _, c := range allSetupClients() {
+		if c.skillsDirFn != nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // claudeSkillsDir returns the user-scoped Claude Code skills directory
@@ -79,25 +76,6 @@ func kimiCodeSkillsDir() (string, error) {
 	return homeRelConfigPath(".kimi-code", "skills")
 }
 
-// installAndPrintSkills installs the embedded skills into t's skills directory
-// and prints one line per skill that changed. It is a no-op for a target with no
-// skills directory and under --no-skill.
-//
-// Errors are non-fatal by design: a failed skill install must not fail a
-// registration that otherwise succeeded, because the MCP entry is the part the
-// client cannot work without.
-func installAndPrintSkills(t setupTarget) {
-	dir, results := installSkillsFor(t)
-	for _, r := range results {
-		switch {
-		case r.err != nil:
-			fmt.Fprintf(os.Stderr, "warning: installing skill %q: %v\n", r.name, r.err)
-		case r.action != "unchanged":
-			fmt.Printf("Skill %-20s %s → %s\n", r.name, r.action, filepath.Join(dir, r.name, "SKILL.md"))
-		}
-	}
-}
-
 // skillResult is one skill's outcome: the action installSkill reported
 // ("installed"/"updated"/"unchanged"), or the error that stopped it.
 type skillResult struct {
@@ -107,15 +85,16 @@ type skillResult struct {
 }
 
 // installSkillsFor is the shared, non-printing body: it installs every embedded
-// skill into t's skills directory and reports what happened to each. Both the
-// named-command path (installAndPrintSkills) and the bulk sweep (refreshSkills)
-// drive it, so the two can never diverge on which skills are installed or where.
+// skill into t's skills directory and reports what happened to each. `plumb
+// skills sync` drives it for every registered skill-capable client (or one named
+// client), so the sweep and the named form can never diverge on which skills
+// are installed or where.
 //
-// A target with no skills directory, or a --no-skill run, yields no results at
-// all — distinct from "results that all say unchanged", which is what a
-// no-op refresh of a skill-capable client looks like.
+// A target with no skills directory yields no results at all — distinct from
+// "results that all say unchanged", which is what a no-op refresh of a
+// skill-capable client looks like.
 func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
-	if t.skillsDirFn == nil || setupNoSkillFlag {
+	if t.skillsDirFn == nil {
 		return "", nil
 	}
 	dir, err := t.skillsDirFn()
@@ -127,46 +106,6 @@ func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
 		results = append(results, skillResult{name: skill.Name, action: action, err: err})
 	}
 	return dir, results
-}
-
-// plumbIsRegistered reports whether a refreshClientAt status means the client
-// now carries a plumb entry. It gates the skill refresh: "not installed", "not
-// registered", and "error" all mean plumb is not in that config, and writing
-// skills for a client that does not use plumb would populate a directory the
-// user never pointed at plumb.
-func plumbIsRegistered(status string) bool {
-	switch status {
-	case "already current", "updated", "registered":
-		return true
-	default:
-		return false
-	}
-}
-
-// refreshSkills installs or refreshes one client's skills during the bulk sweep
-// and reports a table row's worth of outcome. An empty status means there was
-// nothing to report — the client has no skill channel, or --no-skill was passed.
-func refreshSkills(c setupTarget) (status, detail string, changed bool) {
-	dir, results := installSkillsFor(c)
-	if len(results) == 0 {
-		return "", "", false
-	}
-	var failed error
-	for _, r := range results {
-		switch {
-		case r.err != nil:
-			failed = r.err
-		case r.action != "unchanged":
-			changed = true
-		}
-	}
-	if failed != nil {
-		return "skills error", failed.Error(), changed
-	}
-	if changed {
-		return "skills updated", render.ContractPath(dir), true
-	}
-	return "skills current", render.ContractPath(dir), false
 }
 
 // installSkill writes content to <skillsDir>/<name>/SKILL.md, creating

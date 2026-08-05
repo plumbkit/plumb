@@ -83,6 +83,7 @@ func checkMCPClients() []checkResult {
 	if r, ok := checkKimiLeanHint(); ok {
 		results = append(results, r)
 	}
+	results = append(results, checkSkillFreshness()...)
 	return results
 }
 

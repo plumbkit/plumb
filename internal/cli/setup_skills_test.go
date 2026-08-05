@@ -8,17 +8,6 @@ import (
 	"testing"
 )
 
-// skillCapableClients returns the setup targets that declare a skills directory.
-func skillCapableClients() []setupTarget {
-	var out []setupTarget
-	for _, c := range allSetupClients() {
-		if c.skillsDirFn != nil {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
 // TestSkillCapableClients_ArePinned pins WHICH clients receive SKILL.md files.
 //
 // This is the one fact in the skill seam that cannot be derived: "client X reads
@@ -141,7 +130,7 @@ func TestInstallSkillsFor_EveryCapableClientGetsEverySkill(t *testing.T) {
 			}
 
 			// Idempotence: the same run again must report every skill unchanged,
-			// which is what makes `plumb setup --all` safe to run repeatedly.
+			// which is what makes `plumb skills sync` safe to run repeatedly.
 			_, second := installSkillsFor(c)
 			for _, r := range second {
 				if r.err != nil || r.action != "unchanged" {
@@ -154,8 +143,8 @@ func TestInstallSkillsFor_EveryCapableClientGetsEverySkill(t *testing.T) {
 
 // TestInstallSkillsFor_SkipsClientsWithNoSkillChannel is the negative half: a
 // target with no skills directory must write nothing at all. Returning no
-// results (rather than results that all say "unchanged") is what lets the bulk
-// sweep tell "this client has no skill channel" from "its skills were already
+// results (rather than results that all say "unchanged") is what lets `plumb
+// skills` tell "this client has no skill channel" from "its skills were already
 // current".
 func TestInstallSkillsFor_SkipsClientsWithNoSkillChannel(t *testing.T) {
 	root := pointClientHomesAt(t)
@@ -168,23 +157,6 @@ func TestInstallSkillsFor_SkipsClientsWithNoSkillChannel(t *testing.T) {
 		if dir != "" || results != nil {
 			t.Errorf("%s: got (%q, %d results), want no skill install for a client with no channel",
 				c.use, dir, len(results))
-		}
-	}
-
-	assertNoSkillsWritten(t, root)
-}
-
-// TestInstallSkillsFor_NoSkillFlagSkips pins --no-skill for every capable
-// client, not just Claude Code: the flag is registered off skillsDirFn, so the
-// opt-out has to hold wherever the install does.
-func TestInstallSkillsFor_NoSkillFlagSkips(t *testing.T) {
-	root := pointClientHomesAt(t)
-	setupNoSkillFlag = true
-	t.Cleanup(func() { setupNoSkillFlag = false })
-
-	for _, c := range skillCapableClients() {
-		if dir, results := installSkillsFor(c); dir != "" || results != nil {
-			t.Errorf("%s: --no-skill still produced (%q, %d results)", c.use, dir, len(results))
 		}
 	}
 
@@ -228,59 +200,50 @@ func isUnder(path, root string) bool {
 	return rel == "." || !strings.HasPrefix(rel, "..")
 }
 
-// TestRefreshClient_RefreshesSkillsForARegisteredClient is the #221 review
-// major: `plumb setup --all` is the post-rebuild repair, and it never touched
-// skills. So a rebuilt binary left them stale — and a client registered by
-// --install-missing got none at all — while session_start went on pointing the
-// agent at them.
-func TestRefreshClient_RefreshesSkillsForARegisteredClient(t *testing.T) {
+// TestRefreshClient_NeverTouchesSkills pins the split that made registration
+// config-only: the bulk sweep (`plumb setup --repair` / `--all`) must not write
+// skill files even for a skill-capable client it just registered, and must not
+// refresh stale ones — skills moved to `plumb skills sync` so a config repair
+// can never surprise a user by touching their skills directory.
+func TestRefreshClient_NeverTouchesSkills(t *testing.T) {
 	root := pointClientHomesAt(t)
 	cfg := filepath.Join(root, "kimi-home", "mcp.json")
 	target := kimiTargetAt(cfg)
 
-	// --install-missing on an installed-but-unregistered client: registers
-	// plumb AND installs the skills it will be told about.
+	// Registering an installed-but-unregistered client: config written, skills
+	// directory untouched.
 	rows, changed := refreshClient(target, "/opt/plumb", true)
 	if !changed {
 		t.Fatal("expected the registration to count as a change")
 	}
 	assertRowStatus(t, rows, "registered")
-	assertRowStatus(t, rows, "skills updated")
+	assertNoSkillsWritten(t, root)
 
+	// A stale skill from an earlier install is left alone too — drift is
+	// reported (printSkillsDriftHint, doctor), never repaired by setup.
 	skillsDir := filepath.Join(root, "kimi-home", "skills")
-	for _, s := range embeddedSkills() {
-		if _, err := os.Stat(filepath.Join(skillsDir, s.Name, "SKILL.md")); err != nil {
-			t.Errorf("skill %q not installed by the bulk sweep: %v", s.Name, err)
-		}
-	}
-
-	// A second sweep is a no-op: skills current, and nothing reported changed.
-	rows, changed = refreshClient(target, "/opt/plumb", true)
-	if changed {
-		t.Error("second sweep reported a change with nothing to do")
-	}
-	assertRowStatus(t, rows, "skills current")
-
-	// A stale skill (the post-rebuild case) is brought back into line.
 	stale := filepath.Join(skillsDir, embeddedSkills()[0].Name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(stale, []byte("stale\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rows, changed = refreshClient(target, "/opt/plumb", true)
-	if !changed {
-		t.Error("a stale skill must make the sweep report a change")
+	if changed {
+		t.Error("a second sweep with nothing to repoint must report no change — stale skills do not count")
 	}
-	assertRowStatus(t, rows, "skills updated")
+	assertRowStatus(t, rows, "already current")
 	got, err := os.ReadFile(stale)
-	if err != nil || string(got) != embeddedSkills()[0].Content {
-		t.Errorf("stale skill not refreshed (err=%v)", err)
+	if err != nil || string(got) != "stale\n" {
+		t.Errorf("refreshClient rewrote a stale skill (content %q, err %v) — that is `plumb skills sync`'s job", got, err)
 	}
 }
 
 // TestRefreshClient_NoSkillsForAnUnregisteredClient is the guard on the other
-// side. A bare `--all` finds an installed client that does not use plumb and
-// leaves it alone; writing skills into its tree anyway would put plumb's files
-// in a directory the user never pointed at plumb.
+// side. A bare `--repair` finds an installed client that does not use plumb and
+// leaves it alone; writing skills into its tree would put plumb's files in a
+// directory the user never pointed at plumb.
 func TestRefreshClient_NoSkillsForAnUnregisteredClient(t *testing.T) {
 	root := pointClientHomesAt(t)
 	cfg := filepath.Join(root, "kimi-home", "mcp.json")
@@ -304,8 +267,10 @@ func TestRefreshClient_NoSkillsForAnUnregisteredClient(t *testing.T) {
 	assertNoSkillsWritten(t, root)
 }
 
-// TestRefreshClient_NoSkillRowWithoutASkillChannel pins that a client with no
-// skills directory produces no skills row at all, however it was registered.
+// TestRefreshClient_NoSkillRowWithoutASkillChannel pins that the sweep's table
+// carries no skills rows at all: not for a client with no skill channel (this
+// case), and — per TestRefreshClient_NeverTouchesSkills — not for one that has
+// one either.
 func TestRefreshClient_NoSkillRowWithoutASkillChannel(t *testing.T) {
 	root := pointClientHomesAt(t)
 	cfg := filepath.Join(root, "cursor", "mcp.json")

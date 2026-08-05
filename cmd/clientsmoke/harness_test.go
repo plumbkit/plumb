@@ -172,7 +172,7 @@ func clientSpecs() []clientSpec {
 			promptArgs: func(p string) []string { return []string{"-z", p} },
 		},
 		{
-			name: "claude-code", binary: "claude", setupArgs: []string{"setup", "claude-code", "--no-skill"},
+			name: "claude-code", binary: "claude", setupArgs: []string{"setup", "claude-code"},
 			connect: true, connectArgs: []string{"mcp", "list"}, wantOut: []string{"plumb"},
 			authKeys:   []string{"ANTHROPIC_API_KEY"},
 			promptArgs: func(p string) []string { return []string{"-p", p, "--dangerously-skip-permissions"} },

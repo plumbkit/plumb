@@ -17,22 +17,31 @@ var setupCmd = &cobra.Command{
 	Short: "Configure plumb with external tools",
 	Long: `Register plumb as an MCP server in an external client's config.
 
-Run a subcommand (e.g. ` + "`plumb setup claude-code`" + `) to register a single
-client, or ` + "`plumb setup --all`" + ` to repoint every already-registered client
-at the current plumb binary — the repair after the binary moves or is rebuilt
-elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).
+Registration is config-only: it never installs skill files. Skill-capable
+clients (claude-code, codex, kimi-code) get their skills from
+` + "`plumb skills sync`" + ` — setup prints a hint when it notices them missing or
+stale, and bare ` + "`plumb skills`" + ` shows the full status table.
 
-Add ` + "`--install-missing`" + ` to also register plumb in installed clients that do
-not have it yet (config file present but no plumb entry). Clients with no config
-file at all are left untouched — plumb cannot tell an absent config from an
-uninstalled client, so use the client's named subcommand to create one. The one
-exception is Kimi Code, detected via its data dir ($KIMI_CODE_HOME, or
-~/.kimi-code): its mcp.json only exists once an MCP server is configured, so
---install-missing creates it fresh.`,
+Run a subcommand (e.g. ` + "`plumb setup claude-code`" + `) to register a single
+client, or use a bulk flag:
+
+  --repair  Repoint every already-registered client at the current plumb
+            binary — the repair after the binary moves or is rebuilt
+            elsewhere (see the registered-binary check in ` + "`plumb doctor`" + `).
+            It never adds plumb to a client that lacked it.
+  --all     --repair, plus register plumb in installed clients that do not
+            have it yet (config file present but no plumb entry). Clients
+            with no config file at all are left untouched — plumb cannot
+            tell an absent config from an uninstalled client, so use the
+            client's named subcommand to create one. The one exception is
+            Kimi Code, detected via its data dir ($KIMI_CODE_HOME, or
+            ~/.kimi-code): its mcp.json only exists once an MCP server is
+            configured, so --all creates it fresh.`,
 	RunE: runSetupAll,
 }
 
 var (
+	setupRepairFlag         bool
 	setupAllFlag            bool
 	setupInstallMissingFlag bool
 )
@@ -82,16 +91,18 @@ var setupCodexCmd = &cobra.Command{
 }
 
 func init() {
+	setupCmd.Flags().BoolVar(&setupRepairFlag, "repair", false,
+		"Repoint every already-registered client at the current plumb binary (no new registrations)")
 	setupCmd.Flags().BoolVar(&setupAllFlag, "all", false,
-		"Repoint every already-registered client at the current plumb binary")
+		"--repair, plus register plumb in installed clients that don't have it yet")
 	setupCmd.Flags().BoolVar(&setupInstallMissingFlag, "install-missing", false,
-		"Also register plumb in installed clients that don't have it yet (config present but no plumb entry)")
-	// The bulk sweep refreshes skills for every client it finds plumb registered
-	// in, so it needs the same opt-out the named commands have.
-	registerNoSkillFlag(setupCmd)
+		"Also register plumb in installed clients that don't have it yet")
+	// One-release bridge: --install-missing used to be the only way to get the
+	// behaviour --all now has. It still works but warns and stays out of help.
+	_ = setupCmd.Flags().MarkHidden("install-missing")
+	_ = setupCmd.Flags().MarkDeprecated("install-missing", "use --all instead")
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
-	registerNoSkillFlag(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupGeminiCmd)
 	setupCmd.AddCommand(setupCodexCmd)
@@ -201,7 +212,7 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 		fmt.Println("\nReload Claude Code (or open a new session) to apply the change.")
 	}
 
-	installAndPrintSkills(claudeCodeTarget)
+	printSkillsDriftHint(claudeCodeTarget)
 	return nil
 }
 
