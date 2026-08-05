@@ -267,18 +267,53 @@ function helper() {}
 	})
 }
 
+// TestJavaScript_BannerAcrossBlankLineIsNotADocSpan pins the adjacency half of
+// docSpanBefore, on the export path that made it reachable. A grammar emits no
+// node for a blank line, so a bare previous-sibling scan walks straight past
+// one and a file-leading licence banner becomes the first export's "doc
+// comment" — which every consumer then treats as part of the symbol
+// (replace_symbol_body / move_symbol with include_doc_comment both prefer the
+// topology span), i.e. a silently deleted licence header. `g` is the mixed case
+// the walk has to split correctly: banner, blank line, real doc block.
+func TestJavaScript_BannerAcrossBlankLineIsNotADocSpan(t *testing.T) {
+	src := []byte(`// Copyright 2026 The Plumb Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+export function f(a) {
+  return a;
+}
+
+// A banner-ish note, detached.
+
+/** Documents g. */
+export function g(b) {
+  return b;
+}
+`)
+	nodes, _, err := NewJavaScript().Extract(context.Background(), "banner.js", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertNoDocSpan(t, src, nodes, "f")
+	assertDocSpans(t, src, nodes, map[string]string{"g": "/** Documents g. */"})
+}
+
+// docNodeNamed returns the first extracted node called name, or nil.
+func docNodeNamed(nodes []topology.Node, name string) *topology.Node {
+	for i := range nodes {
+		if nodes[i].Name == name {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
 // assertDocSpans checks that each named node carries exactly the given doc
 // comment, and that the span precedes the declaration it documents.
 func assertDocSpans(t *testing.T, src []byte, nodes []topology.Node, want map[string]string) {
 	t.Helper()
 	for name, doc := range want {
-		var n *topology.Node
-		for i := range nodes {
-			if nodes[i].Name == name {
-				n = &nodes[i]
-				break
-			}
-		}
+		n := docNodeNamed(nodes, name)
 		if n == nil {
 			t.Errorf("%q not extracted", name)
 			continue
@@ -293,5 +328,20 @@ func assertDocSpans(t *testing.T, src []byte, nodes []topology.Node, want map[st
 		if n.DocStartByte >= n.StartByte {
 			t.Errorf("%q doc span start %d should precede decl start %d", name, n.DocStartByte, n.StartByte)
 		}
+	}
+}
+
+// assertNoDocSpan checks that the named node was extracted and claims no doc
+// comment at all — the sentinel a detached comment block must produce.
+func assertNoDocSpan(t *testing.T, src []byte, nodes []topology.Node, name string) {
+	t.Helper()
+	n := docNodeNamed(nodes, name)
+	if n == nil {
+		t.Errorf("%q not extracted", name)
+		return
+	}
+	if n.HasDocSpan() {
+		t.Errorf("%q claims the detached comment %q as its doc span; a blank line separates them",
+			name, string(src[n.DocStartByte:n.DocEndByte]))
 	}
 }

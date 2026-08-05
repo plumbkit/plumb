@@ -118,7 +118,7 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
-	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
@@ -148,7 +148,7 @@ func (w *jsWalk) addClass(n *tsg.Node) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = jsDocSpan(n, w.lang)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	if body := childByType(n, "class_body", w.lang); body != nil {
 		w.addClassMembers(body, idx)
@@ -396,11 +396,11 @@ func jsIsComment(typ string) bool { return typ == "comment" }
 // `/** … */ export function f() {}` carry the same doc span as the unexported
 // form — which matters more here than in any other language, since TS/TSX
 // declarations are exported far more often than not.
-func jsDocSpan(decl *tsg.Node, lang *tsg.Language) (start, end int) {
+func jsDocSpan(decl *tsg.Node, lang *tsg.Language, src []byte) (start, end int) {
 	for p := decl.Parent(); p != nil && p.Type(lang) == "export_statement"; p = p.Parent() {
 		decl = p
 	}
-	return docSpanBefore(decl, lang, jsIsComment)
+	return docSpanBefore(decl, lang, src, jsIsComment)
 }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in

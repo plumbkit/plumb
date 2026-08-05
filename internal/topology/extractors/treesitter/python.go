@@ -160,7 +160,7 @@ func (w *pyWalk) addClass(n *tsg.Node) int64 {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, pyIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, pyIsComment)
 	w.nodes = append(w.nodes, node)
 	return idx
 }
@@ -191,7 +191,7 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, pyIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, pyIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingClass >= 0 {

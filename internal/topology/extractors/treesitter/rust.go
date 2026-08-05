@@ -149,7 +149,7 @@ func (w *rustWalk) addType(n *tsg.Node) int64 {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, rustIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, rustIsComment)
 	w.nodes = append(w.nodes, node)
 	w.typeIdx[name] = idx
 	return idx
@@ -178,7 +178,7 @@ func (w *rustWalk) addFunc(n *tsg.Node, enclosingType int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, rustIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, rustIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
@@ -318,7 +318,7 @@ func (w *rustWalk) addMethod(n *tsg.Node) int64 {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, rustIsComment)
+	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, w.src, rustIsComment)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	return idx

@@ -13,6 +13,7 @@ import (
 	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/topology"
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // fallbackFixture writes a small Go file and opens a topology store over it.
@@ -397,4 +398,91 @@ func TestReplaceSymbolBody_Fallback_IncludeDocComment_PreciseSpan(t *testing.T) 
 	if !strings.Contains(content, "func Alpha() int { return 2 }") {
 		t.Errorf("new declaration missing:\n%s", content)
 	}
+}
+
+// tsDocFixture writes src to a .ts file and opens a topology store over it with
+// the tree-sitter TypeScript extractor — the write path the doc-span hazard
+// lives on, since TS/TSX declarations are exported far more often than not.
+func tsDocFixture(t *testing.T, src string) (store *topology.Store, fpath, uri string) {
+	t.Helper()
+	ws := t.TempDir()
+	fpath = filepath.Join(ws, "mod.ts")
+	if err := os.WriteFile(fpath, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{treesitter.NewTypeScript()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, fpath, "file://" + fpath
+}
+
+// TestReplaceSymbolBody_IncludeDocComment_BannerSurvives is the end-to-end pin
+// for the doc-span flushness rule, on the exact path that made it dangerous.
+// docCommentStartPreferTopology prefers the topology span over the line-scan
+// heuristic, and the line-scan stops at a blank line while the extractor's
+// previous-sibling scan did not — so a file-leading licence banner became the
+// first export's "doc comment" and include_doc_comment (default TRUE on
+// move_symbol) quietly deleted it. Both halves are asserted together, because
+// the fix is only correct if it keeps the real doc comment attached.
+func TestReplaceSymbolBody_IncludeDocComment_BannerSurvives(t *testing.T) {
+	const banner = "// Copyright 2026 The Plumb Authors.\n// SPDX-License-Identifier: Apache-2.0\n"
+
+	t.Run("a banner separated by a blank line is not the symbol's doc comment", func(t *testing.T) {
+		store, fpath, uri := tsDocFixture(t, banner+`
+export function detached(a: number): number {
+  return a;
+}
+`)
+		tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+			WithTopologyFallback(func() *topology.Store { return store })
+		args, _ := json.Marshal(map[string]any{
+			"uri": uri, "name_path": "detached",
+			"content": "export function detached(a: number): number { return a + 1; }",
+			"dry_run": false, "include_doc_comment": true,
+		})
+		if _, err := tool.Execute(context.Background(), args); err != nil {
+			t.Fatalf("replace with include_doc_comment failed: %v", err)
+		}
+		got, _ := os.ReadFile(fpath)
+		content := string(got)
+		if !strings.HasPrefix(content, banner) {
+			t.Errorf("the licence banner was consumed as a doc comment:\n%s", content)
+		}
+		if !strings.Contains(content, "return a + 1;") {
+			t.Errorf("body not replaced:\n%s", content)
+		}
+	})
+
+	t.Run("a doc comment flush against the export still travels with it", func(t *testing.T) {
+		store, fpath, uri := tsDocFixture(t, banner+`
+/** Documents attached. */
+export function attached(b: number): number {
+  return b;
+}
+`)
+		tool := tools.NewReplaceSymbolBody(brokenLSP(), 0).
+			WithTopologyFallback(func() *topology.Store { return store })
+		args, _ := json.Marshal(map[string]any{
+			"uri": uri, "name_path": "attached",
+			"content": "export function attached(b: number): number { return b + 1; }",
+			"dry_run": false, "include_doc_comment": true,
+		})
+		if _, err := tool.Execute(context.Background(), args); err != nil {
+			t.Fatalf("replace with include_doc_comment failed: %v", err)
+		}
+		got, _ := os.ReadFile(fpath)
+		content := string(got)
+		if strings.Contains(content, "/** Documents attached. */") {
+			t.Errorf("the flush doc comment should have been replaced with its symbol:\n%s", content)
+		}
+		if !strings.HasPrefix(content, banner) {
+			t.Errorf("the licence banner must still survive the flush-doc case:\n%s", content)
+		}
+		if !strings.Contains(content, "return b + 1;") {
+			t.Errorf("body not replaced:\n%s", content)
+		}
+	})
 }
