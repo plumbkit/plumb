@@ -131,13 +131,27 @@ func TestAliasTargetSet_CoversCanonicals(t *testing.T) {
 // the hint). Adding an alias is fine; doing it knowingly is the point. If this
 // fails, update the list and confirm you are happy for the named canonicals to
 // be published as optional.
+//
+// It also enforces, by exact membership, the rule an alias target must satisfy:
+// SOME shipped tool has to declare it. `root` did not, and the cost is the whole
+// reason this list is exact. list_files folded into find_files, which calls the
+// parameter `path`, so nothing declared `root` any more — yet it still trailed
+// the path/uri/dir/directory/folder rows as a candidate. eligible() requires the
+// canonical to be a real parameter of the called tool, so those five could never
+// fire. Dead rows, and not free ones: a tool later declaring `root` as required
+// would have been published as optional on the strength of candidates that had
+// not resolved since the fold. They are gone; re-adding one turns this red.
+//
+// `root` remains an alias SOURCE ("root": {plain("path")}) — a direct
+// find_files({root: …}) is a call agents make, and it must still reach `path`.
+// Sources are unconstrained by this list; only targets appear here.
 func TestAliasTargetSet_ExactMembership(t *testing.T) {
 	want := []string{
 		"case_sensitive", "content", "depth", "dry_run", "edits", "end_line",
 		"extension", "file_path", "from", "glob", "include_hidden", "kinds",
 		"limit", "max_depth", "max_matches", "max_results", "message", "name",
 		"new_string", "old_string", "path", "paths", "pattern", "query",
-		"recent_limit", "replacement", "repo", "root", "slot", "sort_by",
+		"recent_limit", "replacement", "repo", "slot", "sort_by",
 		"start_line", "subcommand", "symbol_name", "to", "uri", "uris",
 		"use_regex", "workspace",
 	}

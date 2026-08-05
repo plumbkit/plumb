@@ -143,16 +143,6 @@ func TestResolveArgs(t *testing.T) {
 			wantArgsSub: []string{`"path":"/tmp/dir"`},
 		},
 		{
-			// root-canonical shape: a "uri" reaches "root". No shipped tool declares
-			// "root" since list_files was folded into find_files, but the mapping is
-			// table-covered and must keep resolving for any tool that adopts it.
-			name:        "alias uri → root (a root-canonical shape)",
-			schema:      `{"type":"object","properties":{"root":{"type":"string"}},"required":[],"additionalProperties":false}`,
-			args:        `{"uri":"/tmp/dir"}`,
-			wantWarn:    []string{`interpreted "uri" as "root"`},
-			wantArgsSub: []string{`"root":"/tmp/dir"`},
-		},
-		{
 			name:        "alias symbol → name (read_symbol)",
 			schema:      `{"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},"required":["path","name"],"additionalProperties":false}`,
 			args:        `{"path":"/tmp/x.go","symbol":"Foo"}`,

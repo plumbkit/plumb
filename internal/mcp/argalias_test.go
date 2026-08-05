@@ -40,11 +40,13 @@ func TestResolveArgs_ExpandedAliases(t *testing.T) {
 			wantArgsSub: `"use_regex":true`,
 		},
 		{
-			name:        "path → root (a root-canonical shape)",
-			schema:      `{"type":"object","properties":{"root":{"type":"string"},"pattern":{"type":"string"}},"additionalProperties":false}`,
-			args:        `{"path":"/dir"}`,
-			wantWarn:    `interpreted "path" as "root"`,
-			wantArgsSub: `"root":"/dir"`,
+			// The reciprocal of the row above, on find_files' real shape: "root" is
+			// the retired list_files spelling and must still reach "path".
+			name:        "root → path (the retired list_files spelling)",
+			schema:      `{"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"}},"additionalProperties":false}`,
+			args:        `{"root":"/dir"}`,
+			wantWarn:    `interpreted "root" as "path"`,
+			wantArgsSub: `"path":"/dir"`,
 		},
 		{
 			name:        "file_paths → paths (read_multiple_files)",
@@ -270,8 +272,8 @@ func TestResolveArgs_ExpandedTable(t *testing.T) {
 	}{
 		{
 			name:        "depth → max_depth (find_files)",
-			schema:      `{"type":"object","properties":{"root":{"type":"string"},"max_depth":{"type":"integer"}},"additionalProperties":false}`,
-			args:        `{"root":"/d","depth":2}`,
+			schema:      `{"type":"object","properties":{"path":{"type":"string"},"max_depth":{"type":"integer"}},"additionalProperties":false}`,
+			args:        `{"path":"/d","depth":2}`,
 			wantWarn:    `interpreted "depth" as "max_depth"`,
 			wantArgsSub: `"max_depth":2`,
 		},

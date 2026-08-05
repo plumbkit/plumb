@@ -48,8 +48,7 @@ func wrap(name string) aliasTarget     { return aliasTarget{name: name, xf: wrap
 // unset parameter of the called tool whose transform (if any) fits the given
 // value wins, so a single alias serves tools with different shapes (e.g.
 // "path" → uri on get_definition, and stays canonical on search_in_files where
-// "path" is the real parameter; "root" — the retired list_files spelling —
-// reaches find_files' "path"). New entries are
+// "path" is the real parameter). New entries are
 // empirically driven (the parameter names agents actually send, mined from
 // the stats DB) and must be unambiguous — never a semantic flip
 // (include≠exclude) or a safety-critical guess (no git subcommand/confirm).
@@ -64,16 +63,26 @@ var paramAliases = map[string][]aliasTarget{
 	// (read_file({uri: …}) previously errored because no "uri" key existed). The
 	// trailing wrap candidate lets a scalar stand in for the array-typed `uris`
 	// (diagnostics) wherever no scalar location parameter exists.
-	"path":      {plain("file_path"), plain("uri"), plain("root"), wrap("uris"), plain("uris")},
-	"uri":       {plain("file_path"), plain("path"), plain("root")},
+	"path":      {plain("file_path"), plain("uri"), wrap("uris"), plain("uris")},
+	"uri":       {plain("file_path"), plain("path")},
 	"filepath":  {plain("file_path"), plain("path"), plain("uri")},
 	"filename":  {plain("file_path"), plain("uri")},
 	"file":      {plain("file_path"), plain("path"), plain("uri"), wrap("uris"), plain("uris")},
 	"filepaths": {plain("paths"), plain("file_path")},
-	"dir":       {plain("path"), plain("root")},
-	"directory": {plain("path"), plain("root")},
-	"folder":    {plain("path"), plain("root")},
-	"root":      {plain("path")},
+	"dir":       {plain("path")},
+	"directory": {plain("path")},
+	"folder":    {plain("path")},
+	// "root" survives as a SOURCE only. It is the retired list_files spelling, so
+	// a direct find_files({root: …}) is a call agents really make and it must
+	// reach `path`. It is gone as a TARGET (it used to trail the path/uri/dir/
+	// directory/folder rows): no shipped tool has declared a `root` parameter
+	// since list_files was folded into find_files, and eligible() requires the
+	// canonical to be a real parameter of the called tool, so those five
+	// candidates could never fire. Carrying them was not free — every alias
+	// target is dropped from the published `required` list by publishSchema, so
+	// a future tool declaring `root` as required would have been advertised as
+	// optional on the strength of five dead rows.
+	"root": {plain("path")},
 	// Edit content.
 	"oldstr":  {plain("old_string")},
 	"newstr":  {plain("new_string")},
