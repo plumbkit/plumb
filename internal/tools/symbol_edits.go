@@ -223,7 +223,7 @@ func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
 func (*InsertBeforeSymbol) Description() string {
 	return `Insert text immediately before a symbol's declaration.
 
-Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting) — prefer this over computing an insertion line in edit_file. Provide the full text to insert in 'content' — include trailing newline if appropriate.
+Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.
 
 Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.
 
@@ -327,7 +327,7 @@ func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
 func (*InsertAfterSymbol) Description() string {
 	return `Insert text immediately after a symbol's declaration.
 
-Useful for adding a new method to a struct (insert after an existing one), or appending a related helper — prefer this over computing an insertion line in edit_file. Provide the full text to insert in 'content' — include leading newline if appropriate.
+Useful for adding a new method to a struct (insert after an existing one), or appending a related helper. Provide the full text to insert in 'content' — include leading newline if appropriate.
 
 The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
 
@@ -422,9 +422,7 @@ func (t *ReplaceSymbolBody) WithShowWriteDiff(fn func() bool) *ReplaceSymbolBody
 func (*ReplaceSymbolBody) Name() string { return "replace_symbol_body" }
 
 func (*ReplaceSymbolBody) Description() string {
-	return `No native Claude Code equivalent.
-
-Replace the entire declaration of a symbol with new content.
+	return `Replace the entire declaration of a symbol with new content.
 
 The replacement spans the symbol's full Range as reported by the LSP — for a function, this is from 'func' keyword through the closing '}'. Provide the complete new declaration (signature + body) in 'content'.
 

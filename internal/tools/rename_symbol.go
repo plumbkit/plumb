@@ -110,7 +110,7 @@ func (t *RenameSymbol) WithWriteDeps(deps WriteDeps) *RenameSymbol {
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 
 func (*RenameSymbol) Description() string {
-	return `No native Claude Code equivalent. Rename a symbol throughout the workspace using LSP semantic refactoring.
+	return `Rename a symbol throughout the workspace using LSP semantic refactoring.
 
 The language server identifies every reference across all files and applies a precise edit set atomically. Safer than text find-and-replace: it understands scope, shadowing, and types, so it won't rename unrelated identifiers that share the name.
 

@@ -65,7 +65,7 @@ When the [edits].show_write_diff config flag is on (the default), the response a
 
 Skips binary files (detected via null-byte sniff of the first 8 KB). Skips files larger than max_file_bytes (50 MiB default). Honours .gitignore. Use 'glob' to limit which files to touch (e.g. "*.go", "**/*.md"); a glob with a literal directory prefix (e.g. "src/**/*.go") prunes sibling directories from the walk entirely. Files are processed in parallel; output is sorted by path.
 
-PREFER LSP semantic tools (rename_symbol, etc.) when refactoring identifiers — they understand scope and types. Use find_replace for plain-text edits like updating doc strings, license headers, hostnames, version strings, or non-code files.`
+For identifier refactors use rename_symbol (scope- and type-aware); find_replace is for plain-text edits (doc strings, license headers, hostnames, version strings, non-code files).`
 }
 
 func (*findReplaceTool) InputSchema() json.RawMessage {

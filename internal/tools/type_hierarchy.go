@@ -67,8 +67,7 @@ func (t *TypeHierarchy) WithWorkspace(ws WorkspaceFn) *TypeHierarchy {
 func (t *TypeHierarchy) Name() string                 { return "type_hierarchy" }
 func (t *TypeHierarchy) InputSchema() json.RawMessage { return typeHierarchySchema }
 func (t *TypeHierarchy) Description() string {
-	return "No native Claude Code equivalent. " +
-		"Show the type hierarchy for a type: its supertypes (interfaces it implements, embedded types) and subtypes (types that implement or embed it). " +
+	return "Show the type hierarchy for a type: its supertypes (interfaces it implements, embedded types) and subtypes (types that implement or embed it). " +
 		"Useful for understanding inheritance and polymorphism."
 }
 

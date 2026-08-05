@@ -86,10 +86,8 @@ func NewWorkspaceSymbols(client lsp.Client, c *cache.Cache, ttl, timeout time.Du
 func (t *WorkspaceSymbols) Name() string                 { return "workspace_symbols" }
 func (t *WorkspaceSymbols) InputSchema() json.RawMessage { return workspaceSymbolsSchema }
 func (t *WorkspaceSymbols) Description() string {
-	return "No native Claude Code equivalent. " +
-		"Search for symbols (functions, types, variables, constants) by name or substring across the entire workspace — instant, uses the LSP index. " +
+	return "Search for symbols (functions, types, variables, constants) by name or substring across the entire workspace — instant, uses the LSP index. " +
 		"Pass uri to restrict the search to that one document instead. " +
-		"Prefer this over search_in_files or grep when looking up a symbol by name. " +
 		"Returns names, kinds, and source locations."
 }
 

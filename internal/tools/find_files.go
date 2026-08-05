@@ -108,13 +108,12 @@ func (t *FindFiles) WithBoundary(guard BoundaryGuard) *FindFiles {
 func (t *FindFiles) Name() string                 { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
 func (t *FindFiles) Description() string {
-	return "Workspace-scoped file/directory finder and directory lister. Prefer this over shelling out to find/fd/ls: " +
+	return "Workspace-scoped file/directory finder and directory lister. Unlike shell find/fd/ls, " +
 		"results are confined to the active project (no .git/, node_modules/, build output, or anything else .gitignore excludes), " +
 		"every call is recorded in the project's stats, and the pattern semantics are consistent across hosts. " +
 		"pattern is optional — omit it to list everything. Supports glob and regex patterns, extension and type (file/dir/any) filters, " +
 		"depth limits (max_depth=1 lists one level, like ls), sort_by name/size/modified, and include_details for a per-entry " +
-		"[FILE]/[DIR]/[LINK] marker, size, and modified time. " +
-		"Essential for clients without filesystem access of their own (Claude Desktop, Cursor MCP, etc.)."
+		"[FILE]/[DIR]/[LINK] marker, size, and modified time."
 }
 
 type findFilesArgs struct {
