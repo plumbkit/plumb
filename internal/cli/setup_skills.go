@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/fsync"
+	"github.com/plumbkit/plumb/internal/render"
 )
 
 // This file is the whole skill-delivery seam: which clients consume plumb's
@@ -126,6 +127,46 @@ func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
 		results = append(results, skillResult{name: skill.Name, action: action, err: err})
 	}
 	return dir, results
+}
+
+// plumbIsRegistered reports whether a refreshClientAt status means the client
+// now carries a plumb entry. It gates the skill refresh: "not installed", "not
+// registered", and "error" all mean plumb is not in that config, and writing
+// skills for a client that does not use plumb would populate a directory the
+// user never pointed at plumb.
+func plumbIsRegistered(status string) bool {
+	switch status {
+	case "already current", "updated", "registered":
+		return true
+	default:
+		return false
+	}
+}
+
+// refreshSkills installs or refreshes one client's skills during the bulk sweep
+// and reports a table row's worth of outcome. An empty status means there was
+// nothing to report — the client has no skill channel, or --no-skill was passed.
+func refreshSkills(c setupTarget) (status, detail string, changed bool) {
+	dir, results := installSkillsFor(c)
+	if len(results) == 0 {
+		return "", "", false
+	}
+	var failed error
+	for _, r := range results {
+		switch {
+		case r.err != nil:
+			failed = r.err
+		case r.action != "unchanged":
+			changed = true
+		}
+	}
+	if failed != nil {
+		return "skills error", failed.Error(), changed
+	}
+	if changed {
+		return "skills updated", render.ContractPath(dir), true
+	}
+	return "skills current", render.ContractPath(dir), false
 }
 
 // installSkill writes content to <skillsDir>/<name>/SKILL.md, creating

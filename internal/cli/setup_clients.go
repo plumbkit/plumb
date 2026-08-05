@@ -339,16 +339,32 @@ func refreshClient(c setupTarget, plumbBin string, installMissing bool) (rows []
 		return []clientRow{{name: c.name, status: "error", detail: err.Error()}}, false
 	}
 
+	registered := false
 	for i, cfgPath := range paths {
 		status, detail, didChange := refreshClientAt(c, cfgPath, plumbBin, installMissing)
 		if didChange {
 			changed = true
+		}
+		if plumbIsRegistered(status) {
+			registered = true
 		}
 		name := c.name
 		if i > 0 {
 			name = ""
 		}
 		rows = append(rows, clientRow{name: name, status: status, detail: detail})
+	}
+
+	// Skills are part of what a repoint has to bring back into line. `--all` is
+	// the post-rebuild repair, and session_start points the agent at skills that
+	// only the named per-client command used to refresh — so a rebuilt binary
+	// left them stale, or, for a client registered by --install-missing, absent
+	// entirely while the guidance still cited them.
+	if registered {
+		if status, detail, didChange := refreshSkills(c); status != "" {
+			rows = append(rows, clientRow{status: status, detail: detail})
+			changed = changed || didChange
+		}
 	}
 	return rows, changed
 }

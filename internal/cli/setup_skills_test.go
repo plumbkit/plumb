@@ -227,3 +227,132 @@ func isUnder(path, root string) bool {
 	}
 	return rel == "." || !strings.HasPrefix(rel, "..")
 }
+
+// TestRefreshClient_RefreshesSkillsForARegisteredClient is the #221 review
+// major: `plumb setup --all` is the post-rebuild repair, and it never touched
+// skills. So a rebuilt binary left them stale — and a client registered by
+// --install-missing got none at all — while session_start went on pointing the
+// agent at them.
+func TestRefreshClient_RefreshesSkillsForARegisteredClient(t *testing.T) {
+	root := pointClientHomesAt(t)
+	cfg := filepath.Join(root, "kimi-home", "mcp.json")
+	target := kimiTargetAt(cfg)
+
+	// --install-missing on an installed-but-unregistered client: registers
+	// plumb AND installs the skills it will be told about.
+	rows, changed := refreshClient(target, "/opt/plumb", true)
+	if !changed {
+		t.Fatal("expected the registration to count as a change")
+	}
+	assertRowStatus(t, rows, "registered")
+	assertRowStatus(t, rows, "skills updated")
+
+	skillsDir := filepath.Join(root, "kimi-home", "skills")
+	for _, s := range embeddedSkills() {
+		if _, err := os.Stat(filepath.Join(skillsDir, s.Name, "SKILL.md")); err != nil {
+			t.Errorf("skill %q not installed by the bulk sweep: %v", s.Name, err)
+		}
+	}
+
+	// A second sweep is a no-op: skills current, and nothing reported changed.
+	rows, changed = refreshClient(target, "/opt/plumb", true)
+	if changed {
+		t.Error("second sweep reported a change with nothing to do")
+	}
+	assertRowStatus(t, rows, "skills current")
+
+	// A stale skill (the post-rebuild case) is brought back into line.
+	stale := filepath.Join(skillsDir, embeddedSkills()[0].Name, "SKILL.md")
+	if err := os.WriteFile(stale, []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rows, changed = refreshClient(target, "/opt/plumb", true)
+	if !changed {
+		t.Error("a stale skill must make the sweep report a change")
+	}
+	assertRowStatus(t, rows, "skills updated")
+	got, err := os.ReadFile(stale)
+	if err != nil || string(got) != embeddedSkills()[0].Content {
+		t.Errorf("stale skill not refreshed (err=%v)", err)
+	}
+}
+
+// TestRefreshClient_NoSkillsForAnUnregisteredClient is the guard on the other
+// side. A bare `--all` finds an installed client that does not use plumb and
+// leaves it alone; writing skills into its tree anyway would put plumb's files
+// in a directory the user never pointed at plumb.
+func TestRefreshClient_NoSkillsForAnUnregisteredClient(t *testing.T) {
+	root := pointClientHomesAt(t)
+	cfg := filepath.Join(root, "kimi-home", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(`{"mcpServers":{"other":{"command":"other-bin"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, changed := refreshClient(kimiTargetAt(cfg), "/opt/plumb", false)
+	if changed {
+		t.Error("bare --all must not change an unregistered client")
+	}
+	assertRowStatus(t, rows, "not registered")
+	for _, r := range rows {
+		if strings.HasPrefix(r.status, "skills") {
+			t.Errorf("unregistered client got a skills row: %+v", r)
+		}
+	}
+	assertNoSkillsWritten(t, root)
+}
+
+// TestRefreshClient_NoSkillRowWithoutASkillChannel pins that a client with no
+// skills directory produces no skills row at all, however it was registered.
+func TestRefreshClient_NoSkillRowWithoutASkillChannel(t *testing.T) {
+	root := pointClientHomesAt(t)
+	cfg := filepath.Join(root, "cursor", "mcp.json")
+	target := setupTarget{
+		use: "cursor", name: "Cursor",
+		pathFn:    func() (string, error) { return cfg, nil },
+		intoFn:    setupClaudeDesktopInto,
+		extractFn: claudeDesktopCommandExtractor,
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, _ := refreshClient(target, "/opt/plumb", true)
+	assertRowStatus(t, rows, "registered")
+	for _, r := range rows {
+		if strings.HasPrefix(r.status, "skills") {
+			t.Errorf("client with no skill channel got a skills row: %+v", r)
+		}
+	}
+	assertNoSkillsWritten(t, root)
+}
+
+// kimiTargetAt is the Kimi Code target pointed at a test config path, keeping
+// its real intoFn and skills resolver.
+func kimiTargetAt(cfg string) setupTarget {
+	return setupTarget{
+		use: "kimi-code", name: "Kimi Code",
+		pathFn:      func() (string, error) { return cfg, nil },
+		installedFn: func() bool { return true },
+		intoFn: func(cfgPath, plumbBin string) (bool, []string, error) {
+			return kimiCodeInto(cfgPath, plumbBin, false)
+		},
+		extractFn:   claudeDesktopCommandExtractor,
+		skillsDirFn: kimiCodeSkillsDir,
+	}
+}
+
+func assertRowStatus(t *testing.T, rows []clientRow, want string) {
+	t.Helper()
+	for _, r := range rows {
+		if r.status == want {
+			return
+		}
+	}
+	t.Errorf("no row with status %q; got %+v", want, rows)
+}

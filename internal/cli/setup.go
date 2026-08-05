@@ -86,6 +86,9 @@ func init() {
 		"Repoint every already-registered client at the current plumb binary")
 	setupCmd.Flags().BoolVar(&setupInstallMissingFlag, "install-missing", false,
 		"Also register plumb in installed clients that don't have it yet (config present but no plumb entry)")
+	// The bulk sweep refreshes skills for every client it finds plumb registered
+	// in, so it needs the same opt-out the named commands have.
+	registerNoSkillFlag(setupCmd)
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	registerNoSkillFlag(setupClaudeCodeCmd)
