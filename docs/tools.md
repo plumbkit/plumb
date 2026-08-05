@@ -699,9 +699,11 @@ safer-to-deny higher tier:
   an unknown `stash` sub-subcommand is rejected with the valid list.
 
 `add` and `commit` are **typed, not pass-through**: `commit` only ever runs
-`commit -m <message>` (so `--amend`, `--no-verify`, `-F`, and the editor are
-unreachable) and `add` only runs `add -- <files>` (no globs, no free-form
-paths). Pre-commit hooks always run. Every non-read call consumes one
+`commit -m <message>`, plus `-- <files>` when `files` is passed to limit the
+commit to those paths (so `--amend`, `--no-verify`, `-F`, and the editor are
+unreachable) and `add` only runs `add -A -- <files>` (no globs, no free-form
+paths; `-A` stages deletions of the named paths, which is why removing a tracked
+file needs no `git rm`). Pre-commit hooks always run. Every non-read call consumes one
 write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.

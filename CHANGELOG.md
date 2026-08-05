@@ -183,8 +183,9 @@
   `TestGenericGuidance_LeanSetOnly` walks `nonLeanToolSet()`, so a tool leaving
   `LeanTools` fails the test instead of silently turning a line of guidance
   into a pointer at a hidden tool. `TestGenericGuidance_CoversEveryClientWithNoBespokeBlock`
-  pins both halves: twelve clients gain the block, and the three with their own
-  do not also receive it.
+  pins both halves: the eleven silent `plumb setup` targets gain the block (as
+  do an empty and an unrecognised client name), and the three clients with a
+  block of their own do not also receive it.
 
 ### Changed
 

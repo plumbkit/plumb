@@ -3,20 +3,31 @@ name: plumb-git
 description: Run git through plumb's policy-gated git tool — what each tier allows, why a subcommand was refused, and which narrower plumb tool to reach for instead of a destructive git command. Use for any git work in a plumb workspace.
 ---
 
-Plumb's `git` tool is a policy-gated wrapper, not a shell. The subcommand leads the argv, nothing is interpolated by a shell, and global flags that could re-target the repository — `-c`, `--git-dir`, `--work-tree` — are rejected outright. Prefer it over shelling out: the shell path bypasses the policy and plumb's per-path write locks.
+Plumb's `git` tool is a policy-gated wrapper, not a shell. The subcommand leads the argv, nothing is interpolated by a shell, and eight global flags that could re-target the repository or inject config are refused wherever they appear in `args`: `-c`, `-C`, `--exec-path`, `--git-dir`, `--work-tree`, `--namespace`, `--upload-pack`, `--receive-pack`. The one exception is `switch`, where `-c` / `-C` mean create-branch rather than anything global: they are rewritten to `--create` / `--force-create` before the denylist runs, and the response says so. Prefer this tool over shelling out — the shell path bypasses the policy and plumb's per-repository git lock.
 
-Under a lean tool profile `file_status` and `minimal_diff_review` are not advertised; set `[tools] profile = "full"` in `.plumb/config.toml` to reach them.
+Under a lean tool profile `file_status` and `minimal_diff_review` are not advertised; set `[tools] profile = "full"` in `.plumb/config.toml` to see them.
 
 ## The four tiers
 
 | Tier | Subcommands | Gate |
 |---|---|---|
-| read | `status`, `log`, `diff`, `show`, `blame` | always allowed |
-| write | `add`, `commit`, `switch`, `branch`, `tag`, `stash` | `[git] allow_writes` |
-| destructive | `reset`, `clean`, `checkout`, `restore`, `rebase` | `[git] allow_destructive` **and** a confirmation |
+| read | `status`, `log`, `diff`, `show`, `blame`, `shortlog`, `check-ignore` | always allowed |
+| write | `add`, `commit`, `mv` | `[git] allow_writes` |
+| destructive | `reset`, `clean`, `rebase`, `revert` | `[git] allow_destructive` **and** a confirmation |
 | network | `push`, `fetch`, `pull` | `[git] allow_push` **and** a confirmation |
 
-Classification rounds **up** when a subcommand is ambiguous: `checkout -b` is a write, every other `checkout` is destructive. `session_start` prints the live policy — read it there rather than discovering a tier by being refused.
+`rm` is refused at every tier: delete the file with `delete_file`, then stage the deletion with `add`.
+
+**Six subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls:
+
+- `checkout -b` / `-B` (branch creation) is **write**; every other `checkout` is **destructive**, since it can discard the working tree or detach HEAD. Prefer `switch` for a safe branch change.
+- `switch` is **write**, but `switch -f` / `--force` / `--discard-changes` is **destructive**.
+- `restore`: with `--staged` (the index only) it is **write**; with `--worktree`, or with no flag at all, it is **destructive**.
+- `branch`: `--list` / `-l` / `-a` / `-r` / `-v` / `--show-current` / `--contains` / `--merged`, and a bare `branch`, are **read**; creating, `-m` / `-M` / `--move` / `--copy` are **write**; `-d` / `-D` / `--delete` is **destructive**.
+- `tag`: `-l` / `--list` / `-n` / `--contains` / `--merged`, and a bare `tag`, are **read**; creating is **write**; `-d` / `--delete` is **destructive**.
+- `stash`: `list` / `show` are **read**; a bare `stash` plus `push` / `save` / `pop` / `apply` / `create` / `store` are **write**; `drop` / `clear` are **destructive**; any other sub-subcommand is refused with the permitted list.
+
+`session_start` prints the live policy — read it there rather than discovering a tier by being refused.
 
 ## Reading history
 
@@ -27,7 +38,7 @@ Output is capped — 200 lines for `log` and `blame`, 100 KiB overall — so ask
 
 ## Staging and committing
 
-`add` and `commit` are typed rather than pass-through: `add` runs `add -- <files>`, `commit` runs `commit -m <message>`, so the argv cannot be widened into something else.
+`add` and `commit` are typed rather than pass-through, so the argv cannot be widened into something else. `add` runs `add -A -- <files>` — the `-A` matters: it stages **deletions** of the named paths as well as modifications, which is why removing a tracked file needs no `git rm` (which is refused anyway). `commit` runs `commit -m <message>`, optionally `-- <files>` when you pass `files`, which commits only those paths and ignores unrelated staged changes.
 
     git(subcommand="add", files=["internal/tools/git.go"])
     git(subcommand="commit", message="fix: bound the diagnostics wait")
@@ -36,10 +47,12 @@ Pre-commit hooks always run, so a commit can fail on a hook. Read that output be
 
 ## Destructive and network subcommands
 
-    git(subcommand="restore", args=["--staged", "internal/tools/git.go"], confirm=true)
+    git(subcommand="restore", args=["internal/tools/git.go"], confirm=true)
     git(subcommand="push", confirm=true)
 
 The confirmation is required on **every** call in those two tiers, not once per session, and `[git] protected_branches` are never force-pushable whatever the rest of the policy says.
+
+Check the tier before adding a confirmation. `restore --staged` is a **write**, so it needs `[git] allow_writes` and no confirmation — passing one there is inert, and reaching for it is a sign you have the tier wrong.
 
 ## Prefer the narrower tool
 

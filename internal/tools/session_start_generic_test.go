@@ -34,9 +34,11 @@ func genericGuidance(clientName, profile string, topologyOn bool) string {
 // the generic block is a fallback, not an addition, and emitting both would pay
 // for the same advice twice in every session.
 func TestGenericGuidance_CoversEveryClientWithNoBespokeBlock(t *testing.T) {
+	// The eleven `plumb setup` targets with no bespoke block, then the two
+	// no-client cases: an empty clientInfo.name and one plumb does not know.
 	fallsThrough := []string{
 		"codex", "gemini", "cursor", "augment", "qwen",
-		"antigravity", "opencode", "crush", "goose", "hermes",
+		"antigravity", "antigravity-desktop", "opencode", "crush", "goose", "hermes",
 		"", "some-agent-nobody-has-heard-of",
 	}
 	for _, name := range fallsThrough {

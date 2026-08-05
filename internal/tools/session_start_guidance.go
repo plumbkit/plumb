@@ -17,10 +17,11 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 	}
 }
 
-// writeGenericGuidance is the block for every client with no bespoke one —
-// Codex, Gemini CLI, Cursor, Augment, Qwen, Antigravity, OpenCode, Crush, Goose,
-// Hermes, and anything unrecognised. Eleven of plumb's fourteen setup targets
-// fell through to nothing before it existed.
+// writeGenericGuidance is the block for every client with no bespoke one — the
+// eleven `plumb setup` targets that fell through to nothing before it existed
+// (Codex, Gemini CLI, Cursor, Augment, Qwen, Antigravity, Antigravity Desktop,
+// OpenCode, Crush, Goose, Hermes), plus any client plumb does not recognise at
+// all.
 //
 // WHY IT EXISTS. Those clients used to be steered by the tool descriptions
 // themselves: ~21 of them carried comparative routing ("prefer workspace_symbols

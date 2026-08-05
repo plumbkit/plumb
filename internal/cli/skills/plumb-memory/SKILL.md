@@ -22,14 +22,14 @@ Re-deriving a constraint someone already recorded is the failure this lane exist
 
     search_memories(pattern="essio", mode="grep")
 
-`mode` is `auto` (the default), `fts`, or `grep`. FTS5 tokenises whole words, so a substring inside an identifier — `essio` within `UserSession` — never matches it. Auto notices an empty FTS result and greps; a literal `fts` keeps the empty answer. `case_sensitive` always greps, because FTS5 is case-insensitive.
+`mode` is `auto` (the default), `fts`, or `grep`. FTS5 tokenises whole words, so a substring inside an identifier — `essio` within `UserSession` — never matches it. Auto notices an empty FTS result and greps; a literal `fts` keeps the empty answer. Setting `case_sensitive` to true also forces grep, because FTS5 is case-insensitive; leaving it unset keeps the default smart-case behaviour. `use_regex` forces grep too.
 
 ## 3. Read the one you want, whole
 
     list_memories()
     read_memory(name="topology-resync-pacing")
 
-`read_memory` prints a provenance footer for a generated memory. Weigh it: user-authored memories are the high-confidence tier; generated and episodic ones are the daemon's own rule-based summaries.
+`read_memory` prints a provenance footer for a memory that is not user-authored. Weigh it: `confidence` is one of `user`, `generated`, `imported`, or `inferred`, and only `user` means a person wrote it deliberately. `generated` covers both the daemon's rule-based idle summaries (named `episodic-*`) and anything an agent handed over with `share_findings` (named `finding-*`) — a name prefix, not a tier of its own. Ranking and hint injection already prefer `user`; your reading should too.
 
 ## 4. Write when the next session would have to rediscover it
 
