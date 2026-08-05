@@ -132,7 +132,7 @@
   parameter that does not exist and implied a call that applies, when `dry_run`
   defaults to true — and is now accurate.
 
-  On the always-on side: the Claude Code edit-lane warning is ~40% shorter,
+  On the always-on side: the Claude Code edit-lane warning is ~47% shorter,
   keeping both harness error strings verbatim (they are the recognition hook
   for an agent that has already hit one) and deferring the rest to
   `plumb-refactor`; the topology and topology-off guidance blocks drop from ~12
@@ -142,11 +142,21 @@
   tool`, `Essential for clients without shell access` — while every contract
   fact and one-clause scope statement stays (`edit_file` keeps its native-edit
   parenthetical, `read_file` its mtime/sha mechanics, `rename_file` its
-  `copy_file`/`rename_symbol` disambiguation). `search_in_files` reads ~35%
+  `copy_file`/`rename_symbol` disambiguation). `search_in_files` reads ~32%
   shorter with nothing about its behaviour left undocumented. Claude Desktop's
   and Kimi Code's blocks are deliberately left long for the same reason: those
   clients install no skills, so their guidance blocks *are* their condensed
   channel.
+
+  **A known gap, taken deliberately.** Skills install for `claude-code` only,
+  and a `session_start` guidance block is written for only `claude-code`,
+  `claude-desktop` and `kimi-code`. The other eleven `plumb setup` targets —
+  codex, gemini, cursor, augment, qwen, antigravity, antigravity-desktop,
+  opencode, crush, goose, hermes — receive neither, so tool descriptions were
+  their only steering channel and the routing prose removed here has no
+  replacement they can see. That is a steering regression for those clients
+  until per-client skill rendering lands in `plumb setup`; it is not covered by
+  the sentence above.
 
   Guarded by `TestNativeEditLaneWarning_LoadBearingPhrases` (both harness
   strings survive the trim), `TestClaudeCodeSkills_HaveValidFrontmatter` (the

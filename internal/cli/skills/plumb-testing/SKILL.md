@@ -19,10 +19,10 @@ It is biased toward recall — a missed test is worse than an extra one — so e
 
 **`run_task`** runs the project's stored `[tasks.<lang>]` command with no shell and bounded output:
 
-    run_task(slot="test", target="./internal/tools/")
+    run_task(slot="test")      # the stored test command, whole
     run_task(slot="verify")    # build, then test
 
-`slot` is `build` / `lint` / `test` / `e2e` / `verify`; `target` fills a `{target}` placeholder in the stored command with one shell-safe argument. When the project configures no command for the slot, use the client's own runner — but keep the scope `topology_affected` gave you. A project-supplied command that is not yet trusted is refused with a pointer to `plumb trust`: that is a gate, not a missing command — surface it rather than shelling around it.
+`slot` is `build` / `lint` / `test` / `e2e` / `verify`. `target` fills a `{target}` placeholder with one shell-safe argument, but only when the stored command has that placeholder — none of the shipped defaults do (`go test ./...`, `pytest`, `cargo test`, `npm test`, `swift test`, `zig build test`), and a target passed to a command without it is refused. So narrowing the run to what `topology_affected` named needs either a project that put `{target}` in its own stored command, or the client's own runner. When the project configures no command for the slot, use the client's runner too — but keep the scope `topology_affected` gave you. A project-supplied command that is not yet trusted is refused with a pointer to `plumb trust`: that is a gate, not a missing command — surface it rather than shelling around it.
 
 ## 3. Confirm it still compiles
 

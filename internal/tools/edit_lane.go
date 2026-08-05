@@ -6,8 +6,9 @@ import "fmt"
 // read_file both surface. It is deliberately only that line: the expanded
 // workflow — read → mtime → edit, atomic multi-file edits, semantic rename —
 // belongs to the plumb-refactor skill, which is the canonical source for it.
-// What stays here is the minimum every client must see whether or not it has
-// the skills installed.
+// What stays here is the minimum a client with the native-edit conflict must
+// see whether or not it has the skills installed — today that is Claude Code
+// alone, per clientHasNativeEditConflict below.
 //
 // Why it exists at all: Claude Code (and any MCP client that ships its own
 // native file Read/Edit tools) maintains a file read-state tracker independent

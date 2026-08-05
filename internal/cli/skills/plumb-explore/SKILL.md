@@ -9,11 +9,13 @@ When asked to understand, explore, or navigate a codebase that has plumb availab
 
 Each rung is broader and cheaper than the one below it. Start at the top and drop down only when the note under the rung applies.
 
+Under a lean tool profile several of the tools named below are not advertised. If one of them is not offered to you, use the nearest alternative on the same rung — for rung 0's opening move that is **`topology_search`**.
+
 ## 0. Ranked discovery — start here
 
 One query across every indexed corpus at once — code symbols, doc sections, and project memories — with each hit labelled by corpus, score, and why it matched.
 
-- **`workspace_search`** — the opening move for a conceptual question ("where is daemon locking handled?"). Under a lean tool profile it is not advertised — open with **`topology_search`** instead.
+- **`workspace_search`** — the opening move for a conceptual question ("where is daemon locking handled?").
 
 Drop down once a hit gives you a symbol or file worth following — or straight away when you already know the name. This rung is approximate by design and never proof of absence.
 

@@ -39,6 +39,37 @@ func TestDocToolCountMatchesRegistry(t *testing.T) {
 	}
 }
 
+// TestAgentsSkillListMatchesEmbedded guards AGENTS.md's prose enumeration of the
+// installed skills against the embedded set. The set itself is pinned by
+// TestClaudeCodeSkills_HaveValidFrontmatter, but nothing tied it to the sentence
+// that counts and names them — so adding a skill desynchronised the brief
+// silently, exactly the drift TestDocToolCountMatchesRegistry exists to stop.
+func TestAgentsSkillListMatchesEmbedded(t *testing.T) {
+	root := repoRootFromCaller(t)
+	skills := claudeCodeSkills()
+	if len(skills) == 0 {
+		t.Fatal("claudeCodeSkills() returned nothing — the embed is broken")
+	}
+
+	b, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("reading AGENTS.md: %v", err)
+	}
+	brief := string(b)
+
+	countPhrase := fmt.Sprintf("installs %s idempotent user-scoped skills", numberToWords(len(skills)))
+	if !strings.Contains(brief, countPhrase) {
+		t.Errorf("AGENTS.md does not state the current skill count (%d).\nExpected to find: %q",
+			len(skills), countPhrase)
+	}
+	for _, s := range skills {
+		if needle := "`" + s.Name + "`"; !strings.Contains(brief, needle) {
+			t.Errorf("AGENTS.md does not name the embedded skill %q — expected %s in the setup paragraph",
+				s.Name, needle)
+		}
+	}
+}
+
 // TestLanguageAndClientSourceCountsPinned pins the source-of-truth counts for
 // supported languages and `plumb setup` clients. The website restates these as
 // exact figures, but the displayed numbers are editorial: the language stat folds
