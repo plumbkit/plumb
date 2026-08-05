@@ -186,14 +186,14 @@ before modifying it.
 | Subcommand | Config target |
 |---|---|
 | `plumb setup claude-desktop` | Claude Desktop's platform-specific JSON config |
-| `plumb setup claude-code` | `~/.claude.json` (user scope) |
-| `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) |
-| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) |
+| `plumb setup claude-code` | `~/.claude.json` (user scope) + `~/.claude/skills/` |
+| `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) + `~/.claude/skills/` |
+| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (or `~/.codex/skills/`) |
 | `plumb setup gemini` | `~/.gemini/settings.json` |
 | `plumb setup cursor` | `~/.cursor/mcp.json` |
 | `plumb setup augment` | `~/.augment/settings.json` |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
-| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`) |
+| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`) + `$KIMI_CODE_HOME/skills/` (or `~/.kimi-code/skills/`) |
 | `plumb setup kimi-code --lean` | Same, plus an `enabledTools` allowlist pinning plumb's lean tool set |
 | `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads) |
 | `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config) |
@@ -205,6 +205,7 @@ before modifying it.
 | Flag | Applies to | Effect |
 |---|---|---|
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
+| `--no-skill` | `claude-code`, `codex`, `kimi-code`, `plumb setup` | Skip installing plumb's skill files. Those three clients read `SKILL.md`, so registering one also installs and refreshes plumb's seven skills into its user-scoped skills directory — on a fresh registration, on a re-run over an existing one, and during the bulk `--all` / `--install-missing` sweep. Every other client has no skills directory and never receives files; its copy of the same routing is the condensed `session_start` guidance block. |
 | `--lean` | `kimi-code` | Also write an `enabledTools` allowlist on the plumb entry, pinning the ~21 tools of plumb's lean set so Kimi loads those schemas instead of all 57. Kimi Code can only invoke tools it was advertised, so plumb's own `[tools] profile = "lean"` would remove capability rather than schemas — this takes the same saving client-side, where it is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup kimi-code --lean` after upgrading plumb to refresh it. A later bare `plumb setup kimi-code` (and `plumb setup --all`) **preserves** an existing `enabledTools` key; re-running with `--lean` **replaces** a hand-edited list with plumb's. There is no flag to remove the key — delete it from `mcp.json` by hand to go back to the full surface. `plumb doctor` mentions the flag when Kimi registers plumb without it, and grades an `enabledTools` key that *is* present on its content rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves Kimi with no plumb tools at all, however well-formed the JSON), an aged snapshot of the lean set earns an informational drift hint, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict Kimi's handling of). |
 | `--all` | `plumb setup` | Repoint **every** already-registered client at the current `plumb` binary, skipping clients that aren't installed or don't use plumb. The bulk repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check. Re-points only; never adds plumb to a client that didn't have it. When installed-but-unregistered clients are found, it prints a hint pointing at `--install-missing`. |
 | `--install-missing` | `plumb setup` | Like `--all`, but also **registers** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with one exception: Kimi Code is detected via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`) because its `mcp.json` only exists once an MCP server is configured, so `--install-missing` creates it fresh. Triggers the bulk run on its own, so `plumb setup --install-missing` is the one-shot first-time setup for every client already present on the machine. |

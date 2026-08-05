@@ -431,52 +431,8 @@ func mergeServerEntry(
 	return true, preserved, nil
 }
 
-// claudeSkillsDir returns the user-level Claude Code skills directory
-// (~/.claude/skills). It does not create the directory.
-func claudeSkillsDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".claude", "skills"), nil
-}
-
-// installSkill writes content to <skillsDir>/<name>/SKILL.md, creating
-// the directory if needed. Returns "installed", "updated", or "unchanged".
-// If the file already exists with different content it is backed up first.
-// Atomic write via temp-file + rename.
-func installSkill(skillsDir, name, content string) (string, error) {
-	dir := filepath.Join(skillsDir, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("creating skill directory: %w", err)
-	}
-
-	dst := filepath.Join(dir, "SKILL.md")
-	existing, readErr := os.ReadFile(dst)
-
-	switch {
-	case readErr == nil && string(existing) == content:
-		return "unchanged", nil
-	case readErr == nil:
-		// File exists but content differs — back up before overwriting.
-		if err := backupFile(dst); err != nil {
-			return "", fmt.Errorf("backing up %s: %w", dst, err)
-		}
-	case os.IsNotExist(readErr):
-		// File does not exist — fresh install, no backup needed.
-	default:
-		return "", fmt.Errorf("reading %s: %w", dst, readErr)
-	}
-
-	if err := fsync.AtomicWrite(dst, []byte(content), setupWriteOptions(".plumb_skill_*.md")); err != nil {
-		return "", fmt.Errorf("installing skill: %w", err)
-	}
-
-	if os.IsNotExist(readErr) {
-		return "installed", nil
-	}
-	return "updated", nil
-}
+// The skills-directory resolvers and installSkill live in setup_skills.go, the
+// one home for the skill-delivery seam.
 
 func stringSliceEqual(got any, want []string) bool {
 	gotSlice, ok := got.([]any)

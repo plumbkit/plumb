@@ -109,6 +109,84 @@
   the wedged runtime and built a fresh one. Confirmed red against a neutered
   discard (it times out on the lock convoy) and green with it restored.
 
+- **The skill library is complete: `plumb-memory`, `plumb-diagnose`,
+  `plumb-git`.** The three recipes planned alongside `plumb-testing` and never
+  written, each owning a lane the four shipped skills do not reach.
+  `plumb-memory` is the durable-knowledge lane — search the per-workspace
+  memories before re-deriving a constraint, the search modes and when `auto`
+  quietly saves you from FTS5's whole-word tokeniser, `paths` globs as the
+  routing key rather than decoration, and deleting a memory that has gone false
+  (a wrong memory is retrieved and believed). `plumb-diagnose` is refusal
+  triage — plumb's contract errors and the fix each one names, the two harness
+  errors that are *not* plumb's, compile truth via `diagnostics` /
+  `await_diagnostics`, and telling a broken tool from a language server that
+  has not warmed up. `plumb-git` is the tiered git policy from the caller's
+  side — what each tier gates, typed `add`/`commit`, the per-call confirmation,
+  `repo` for nested repositories, and the narrower plumb tool to prefer over a
+  destructive git command (`undo_edit` instead of a file `checkout`,
+  `file_status` instead of a diff, `minimal_diff_review` before committing).
+
+  **Seven skills against a stated cap of 4-6, with the argument written down.**
+  The cap was arithmetic — three shipped plus three planned — set before
+  `plumb-minimal-change` landed, and what it protects is trigger quality rather
+  than context: only a skill's `name` and `description` are always loaded. The
+  three added here are trigger-disjoint from the four before them, so folding
+  them into an existing skill would file each description under a phrase that
+  does not match it — the failure the cap exists to prevent, not an instance of
+  respecting it. The reasoning lives on `skillsFS` in `internal/cli/skills.go`;
+  seven is the new stated ceiling and an eighth has to argue against it.
+  Every example is written in call form and every tool named in a roster
+  bullet is a registered tool, so the hardened `skillContentCounts` guard
+  checks all of it: 8 calls for `plumb-memory`, 6 calls + 2 bullets for
+  `plumb-diagnose`, 10 calls + 3 bullets for `plumb-git`.
+
+- **Cross-client skill rendering: Codex and Kimi Code get the skills, everyone
+  else gets the condensed block.** Which clients received plumb's workflow
+  knowledge used to be an accident of where the code sat — `installAndPrintSkills`
+  was hard-wired to `~/.claude/skills` at one call site inside the
+  hand-written `claude-code` command. It is now a fact about the clients:
+  `setupTarget` grows `skillsDirFn`, and `internal/cli/setup_skills.go` is the
+  one home for the seam. **Kimi Code** was the sharp case — it reads `SKILL.md`
+  and was already given a `session_start` block pointing *at* the skills, while
+  `plumb setup kimi-code` installed none of them. **Codex** came out of doing
+  the research pass rather than assuming: it was on the list of clients
+  receiving no steering at all, and it turns out to have had a skill channel
+  the whole time.
+
+  Both directories were verified against a live install, not asserted from
+  memory: Kimi Code 0.32.0 resolves user-scoped skills under
+  `$KIMI_CODE_HOME/skills` (else `~/.kimi-code/skills`), Codex 0.145.0 under
+  `$CODEX_HOME/skills` (else `~/.codex/skills`), both in the
+  `<name>/SKILL.md` bundle shape plumb already writes, both requiring the
+  frontmatter `name` + `description` plumb's skills already carry. Every other
+  target's `skillsDirFn` stays nil and `TestSkillCapableClients_ArePinned`
+  keeps it that way — a claim about someone else's product rots fast, and
+  writing files into a guessed directory is a worse failure than not writing
+  them. `--no-skill` is registered off `skillsDirFn`, so it covers all three
+  clients and the bulk sweep, and skills refresh on the already-registered path
+  too (otherwise re-running setup after an upgrade — the documented way to pick
+  up new skill content — would be a no-op on every machine plumb is already on).
+
+- **A condensed `session_start` guidance block for every client without a
+  bespoke one.** `writeSessionGuidance` branched on three clients and let the
+  other eleven `plumb setup` targets fall through to nothing but the profile
+  note. That was survivable while ~21 tool descriptions each carried their own
+  comparative routing; moving that routing into the skills is right for a
+  client that installs them and leaves nothing at all for one that does not.
+  `writeGenericGuidance` is the replacement — the "thinned, not deleted" render
+  of the same authored source: the discovery ladder, the read-before-edit lane
+  and `expected_mtime`, `rename_symbol`, `diagnostics`, `run_task`, and
+  `topology_affected` when the index is live. Deliberately blander than the
+  client-specific blocks, because it can assume nothing about the client: no
+  claims about native tooling, and it never quotes another product's harness
+  error strings. Lean-aware, and derived rather than hand-checked —
+  `TestGenericGuidance_LeanSetOnly` walks `nonLeanToolSet()`, so a tool leaving
+  `LeanTools` fails the test instead of silently turning a line of guidance
+  into a pointer at a hidden tool. `TestGenericGuidance_CoversEveryClientWithNoBespokeBlock`
+  pins both halves: the eleven silent `plumb setup` targets gain the block (as
+  do an empty and an unrecognised client name), and the three clients with a
+  block of their own do not also receive it.
+
 ### Changed
 
 - **Tool descriptions and `session_start` guidance stop restating the workflows
@@ -149,19 +227,20 @@
   clients install no skills, so their guidance blocks *are* their condensed
   channel.
 
-  **A known gap, taken deliberately.** Skills install for `claude-code` only,
-  and a `session_start` guidance block is written for only `claude-code`,
-  `claude-desktop` and `kimi-code`. The other eleven `plumb setup` targets —
-  codex, gemini, cursor, augment, qwen, antigravity, antigravity-desktop,
-  opencode, crush, goose, hermes — receive neither, so tool descriptions were
-  their only steering channel and the routing prose removed here has no
-  replacement they can see. That is a steering regression for those clients
-  until per-client skill rendering lands in `plumb setup`; it is not covered by
-  the sentence above.
+  **A known gap, taken deliberately — now closed.** Skills installed for
+  `claude-code` only, and a `session_start` guidance block was written for only
+  `claude-code`, `claude-desktop` and `kimi-code`. The other eleven `plumb
+  setup` targets — codex, gemini, cursor, augment, qwen, antigravity,
+  antigravity-desktop, opencode, crush, goose, hermes — received neither, so
+  tool descriptions were their only steering channel and the routing prose
+  removed here had no replacement they could see. Both halves are fixed in this
+  release by the cross-client rendering entry below: Codex and Kimi Code now
+  receive the skills themselves, and every remaining client receives the
+  condensed `session_start` block.
 
   Guarded by `TestNativeEditLaneWarning_LoadBearingPhrases` (both harness
-  strings survive the trim), `TestClaudeCodeSkills_HaveValidFrontmatter` (the
-  pinned skill set gains `plumb-testing`),
+  strings survive the trim), `TestEmbeddedSkills_HaveValidFrontmatter` (the
+  pinned skill set gains `plumb-testing`; renamed with the set below),
   `TestSessionGuidance_LeanDiscoveryLineAvoidsHiddenTool` (new — a lean client's
   discovery line names `topology_search`, never the lean-hidden
   `workspace_search`), `TestSessionGuidance_NamesColdLSPLadder` /
@@ -671,6 +750,25 @@
   so a tool later declaring `root` as required would have been advertised
   optional because of them. Removed as a target; `root` remains an alias
   *source*, so `find_files({root: …})` still reaches `path`.
+
+- **`plumb setup --all` and `--install-missing` refresh skills too.** `--all` is
+  the repair `plumb doctor` recommends after the binary moves or is rebuilt, and
+  it touched only the MCP entry: `installAndPrintSkills` had exactly one call
+  site, inside the `claude-code` command, and `refreshClientAt` had none. So the
+  bulk sweep brought a registration up to date and left the skills behind it
+  stale, while `session_start` went on citing them; `--install-missing` was
+  worse, registering plumb in a client and handing it guidance that pointed at
+  skills never installed at all. `refreshClient` now refreshes skills once per
+  client and reports them as a continuation row in the same table (`skills
+  current` / `skills updated` / `skills error`, with the skills directory as the
+  detail cell), and a skill change counts toward the sweep's changed total. The
+  gate is `plumbIsRegistered`: only a client the sweep found — or just made —
+  plumb-registered has its skills touched, because populating a directory the
+  user never pointed at plumb would be a worse failure than the stale skills
+  this fixes. Guarded by `TestRefreshClient_RefreshesSkillsForARegisteredClient`
+  (install on registration, a second sweep reporting no change, a corrupted
+  skill brought back into line), `TestRefreshClient_NoSkillsForAnUnregisteredClient`,
+  and `TestRefreshClient_NoSkillRowWithoutASkillChannel`.
 
 ## 0.16.0 (2026-07-31)
 

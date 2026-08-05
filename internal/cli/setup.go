@@ -52,10 +52,7 @@ mechanism, so an unusually-named profile may be missed.`,
 	RunE: runSetupClaudeDesktop,
 }
 
-var (
-	setupClaudeCodeProjectFlag bool
-	setupClaudeCodeNoSkillFlag bool
-)
+var setupClaudeCodeProjectFlag bool
 
 var setupClaudeCodeCmd = &cobra.Command{
 	Use:   "claude-code",
@@ -89,9 +86,12 @@ func init() {
 		"Repoint every already-registered client at the current plumb binary")
 	setupCmd.Flags().BoolVar(&setupInstallMissingFlag, "install-missing", false,
 		"Also register plumb in installed clients that don't have it yet (config present but no plumb entry)")
+	// The bulk sweep refreshes skills for every client it finds plumb registered
+	// in, so it needs the same opt-out the named commands have.
+	registerNoSkillFlag(setupCmd)
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
-	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeNoSkillFlag, "no-skill", false, "Skip installing Claude Code skill files")
+	registerNoSkillFlag(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupClaudeCodeCmd)
 	setupCmd.AddCommand(setupGeminiCmd)
 	setupCmd.AddCommand(setupCodexCmd)
@@ -201,32 +201,8 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 		fmt.Println("\nReload Claude Code (or open a new session) to apply the change.")
 	}
 
-	if !setupClaudeCodeNoSkillFlag {
-		installAndPrintSkills()
-	}
+	installAndPrintSkills(claudeCodeTarget)
 	return nil
-}
-
-// installAndPrintSkills installs the embedded Claude Code skill files to the
-// user's ~/.claude/skills directory and prints one line per skill action.
-// Errors are non-fatal — a skill install failure does not abort setup.
-func installAndPrintSkills() {
-	skillsDir, err := claudeSkillsDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: resolving Claude skills directory: %v\n", err)
-		return
-	}
-	for _, skill := range claudeCodeSkills() {
-		action, err := installSkill(skillsDir, skill.Name, skill.Content)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: installing skill %q: %v\n", skill.Name, err)
-			continue
-		}
-		if action != "unchanged" {
-			fmt.Printf("Skill %-20s %s → %s\n", skill.Name,
-				action, filepath.Join(skillsDir, skill.Name, "SKILL.md"))
-		}
-	}
 }
 
 // setupClaudeCodeInto merges the plumb entry into a Claude Code config file.

@@ -3,7 +3,7 @@ name: plumb-refactor
 description: Rename symbols, move files, and make cross-file edits safely using plumb MCP tools
 ---
 
-When asked to rename, move, or edit code across files in a codebase that has plumb available, use these tools rather than grep/sed or the native Edit tool.
+When asked to rename, move, or edit code across files in a codebase that has plumb available, use these tools rather than grep/sed or your client's own file-editing tool.
 
 ## Semantic rename
 
@@ -36,7 +36,7 @@ Use **`rename_file`** for file moves — atomic, refuses to overwrite without `o
 1. Call `read_file` and copy the `mtime=` value from the response header.
 2. Call `edit_file` with `expected_mtime` set to that value.
 
-**Never use the native Edit tool after a plumb `read_file`.** Plumb and the Claude Code harness track read-state separately — mixing them always fails with "File has not been read yet" or "File has been modified since read". Stay in one lane: `read_file` → `edit_file`.
+**Do not switch to your client's own edit tool after a plumb `read_file`.** Plumb tracks read-state per session and a client with its own read-before-edit tracking keeps a separate record; a read taken in one lane does not satisfy the other, so the edit is refused as unread or stale even though you just read the file. Some clients say so with an error naming a file that "has not been read yet" or "has been modified since read"; others simply bypass plumb's per-path locks, the language-server notification, and `undo_edit`. Stay in one lane: `read_file` → `edit_file`.
 
 ## Quick reference
 

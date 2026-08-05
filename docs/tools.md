@@ -270,7 +270,10 @@ plus a position (`line` + `character`).
 ### `diagnostics`
 LSP errors, warnings, and hints. **Inputs:** `uris` (array of `file://` URIs —
 omit or pass `[]` for all files with issues; one URI for a single file; many
-URIs to batch). A single call replaces multiple per-file calls.
+URIs to batch). A single call replaces multiple per-file calls. The
+`plumb-diagnose` skill puts this in the wider triage loop: reading a refusal,
+getting compile truth, and telling a broken tool from a server that has not
+warmed up.
 
 Mode-aware: on a connection negotiated for `pull`/`hybrid`
 (`[lsp.<lang>] diagnostics = "pull"`, see
@@ -555,7 +558,10 @@ source of truth; `<workspace>/.plumb/memory.db` is only a rebuildable search ind
 Agents should call `write_memory` for durable project knowledge: conventions,
 architecture decisions, gotchas, validation commands, or resolved bugs. Pass
 workspace-relative `paths` globs when the note applies to specific files; those
-frontmatter globs drive `relevant_memories` and automatic path hints.
+frontmatter globs drive `relevant_memories` and automatic path hints. The
+`plumb-memory` skill walks the whole lane — search before re-deriving, the
+search modes and when each is wrong, what belongs in a memory, and deleting one
+that has gone false.
 
 | Tool | Purpose | Inputs |
 |---|---|---|
@@ -671,7 +677,10 @@ branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
 `checkout`, `restore`, `rebase`, …) needs `allow_destructive` + `confirm:true`.
 **Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
 Force-push to a protected branch and ad-hoc URL pushes are always refused. See
-[Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
+[Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating). The
+`plumb-git` skill covers the tiers from the caller's side, including the
+narrower plumb tool to prefer over a destructive git command (`undo_edit`,
+`file_status`, `minimal_diff_review`).
 
 **Ambiguous subcommands are classified by their arguments**, biased towards the
 safer-to-deny higher tier:
@@ -690,9 +699,11 @@ safer-to-deny higher tier:
   an unknown `stash` sub-subcommand is rejected with the valid list.
 
 `add` and `commit` are **typed, not pass-through**: `commit` only ever runs
-`commit -m <message>` (so `--amend`, `--no-verify`, `-F`, and the editor are
-unreachable) and `add` only runs `add -- <files>` (no globs, no free-form
-paths). Pre-commit hooks always run. Every non-read call consumes one
+`commit -m <message>`, plus `-- <files>` when `files` is passed to limit the
+commit to those paths (so `--amend`, `--no-verify`, `-F`, and the editor are
+unreachable) and `add` only runs `add -A -- <files>` (no globs, no free-form
+paths; `-A` stages deletions of the named paths, which is why removing a tracked
+file needs no `git rm`). Pre-commit hooks always run. Every non-read call consumes one
 write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.
