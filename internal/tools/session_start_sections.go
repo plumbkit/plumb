@@ -38,6 +38,30 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	sb.WriteString("\n")
 }
 
+// writeSessionRecommendedStart picks the one next step that fits the session's
+// actual state.
+//
+// ON NAMING NON-LEAN TOOLS HERE. The no-LSP fallbacks below steer to
+// `find_files` and `search_in_files`, neither of which is in LeanTools — which
+// looks like it contradicts the "never name a hidden tool" rule the Kimi
+// guidance block follows (TestKimiCodeGuidance_LeanSetOnly). The two situations
+// are not the same, and only one of them can strand an agent:
+//
+//   - The Kimi block is written for a CLIENT-SIDE allowlist. Kimi's enabledTools
+//     key removes the tool from the client before plumb is ever called, plumb
+//     cannot see that filter, and Kimi is schema-discovery-only — so a named
+//     non-lean tool is genuinely uncallable, and the rule is load-bearing.
+//   - The lean PROFILE only hides a tool from tools/list; it stays callable by
+//     name (see "Hidden ≠ unregistered"), and auto mode serves lean solely to a
+//     client whose clientcaps entry declares ReliableDeferredToolDiscovery —
+//     i.e. one demonstrated to invoke a tool it was never advertised. A client
+//     that cannot do that (Claude Code, Kimi Code, anything unrecognised) is
+//     served full, where both tools are advertised anyway.
+//
+// So every client that can reach this text can act on it. Restricting these
+// fallbacks to the lean set would cost the case they exist for — a workspace
+// with no language server and no topology index, where `find_files` and
+// `search_in_files` are the only discovery left.
 func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErrors bool, lang, lspKey string) {
 	sb.WriteString("## Recommended first step\n\n")
 	switch {
