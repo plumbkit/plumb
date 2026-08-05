@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // TestDocToolCountMatchesRegistry guards the human-written tool count in the
@@ -36,6 +37,24 @@ func TestDocToolCountMatchesRegistry(t *testing.T) {
 	}
 	for _, c := range checks {
 		assertFileContains(t, root, c.path, c.needle, n)
+	}
+
+	// The lean profile's REMAINDER — the schemas a lean client stops paying for
+	// — is restated in prose too, and drifted on its own: the 62 → 57 fold
+	// updated AGENTS.md and missed docs/configuration.md, which went on claiming
+	// 41 against a real 36. It is derived, not independent: registry minus the
+	// lean set.
+	remainder := n - len(tools.LeanToolNames())
+	needle := fmt.Sprintf("(%d tools today", remainder)
+	for _, rel := range []string{"AGENTS.md", "docs/configuration.md"} {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		if !strings.Contains(string(b), needle) {
+			t.Errorf("%s does not state the current non-lean remainder (%d = %d registered - %d lean).\n"+
+				"Expected to find: %q", rel, remainder, n, len(tools.LeanToolNames()), needle)
+		}
 	}
 }
 

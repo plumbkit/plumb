@@ -399,7 +399,7 @@ in Xcode; Plumb will not do that automatically.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (41 tools today). Project-overridable.
+the non-lean remainder (36 tools today). Project-overridable.
 
 A *schema-discovery-only* client cannot use this knob at all — it can only
 invoke what `tools/list` advertised, so hiding a tool removes the capability
