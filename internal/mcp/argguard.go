@@ -410,7 +410,7 @@ func wrappableScalar(sh *shape, key string, v any) bool {
 func validateObject(sh *shape, obj map[string]any, path, toolName string) error {
 	if sh.rejectExtra {
 		if unknown := firstUnknown(sh, obj); unknown != "" {
-			return unknownErr(sh, joinPath(path, unknown), toolName)
+			return unknownErr(sh, obj, joinPath(path, unknown), toolName)
 		}
 	}
 	for _, req := range sh.required {
@@ -463,7 +463,11 @@ func firstUnknown(sh *shape, obj map[string]any) string {
 	return unknown[0]
 }
 
-func unknownErr(sh *shape, key, toolName string) error {
+// unknownErr renders the rejection for an undeclared parameter. obj is the
+// object the key was found in, so the message can distinguish the two reasons a
+// key reaches here — a name the tool never had, and a name it DOES understand
+// but could not apply because the caller also supplied its canonical.
+func unknownErr(sh *shape, obj map[string]any, key, toolName string) error {
 	prefix := ""
 	if toolName != "" {
 		prefix = toolName + ": "
@@ -473,11 +477,44 @@ func unknownErr(sh *shape, key, toolName string) error {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%sunknown parameter %q", prefix, key)
-	if suggestion := closest(baseName(key), sh.order); suggestion != "" {
+	if collided := collidingCanonical(sh, obj, baseName(key)); collided != "" {
+		// The alias resolver refused this key on purpose: its canonical was
+		// already supplied, and rewriting would have silently dropped one of two
+		// values the caller explicitly passed. Without saying so the message is
+		// actively misleading — it calls a name the tool understands "unknown",
+		// and the "did you mean" hint would point at the parameter already
+		// present, reading as nonsense.
+		fmt.Fprintf(&b, ": you supplied both %q and %q, which name the same parameter here — "+
+			"remove %q and keep %q", key, collided, key, collided)
+	} else if suggestion := closest(baseName(key), sh.order); suggestion != "" {
 		fmt.Fprintf(&b, "; did you mean %q?", suggestion)
 	}
-	fmt.Fprintf(&b, " valid parameters: %s", strings.Join(sh.order, ", "))
-	return errors.New(b.String())
+	// The separator is load-bearing: without it the sentence ran straight into
+	// its own parameter list ("unknown parameter \"foo\" valid parameters: …"),
+	// which reads as one clause and hides where the message ends. A "did you
+	// mean" clause already terminates itself, so it takes a space rather than a
+	// second stop.
+	msg, sep := b.String(), ". "
+	if strings.HasSuffix(msg, "?") {
+		sep = " "
+	}
+	return fmt.Errorf("%s%sValid parameters: %s", msg, sep, strings.Join(sh.order, ", "))
+}
+
+// collidingCanonical returns the canonical parameter key is a curated alias of
+// when the caller ALSO supplied that canonical — the one case where an alias is
+// rejected despite being understood. It returns "" for an ordinary unknown key,
+// and only ever names a parameter this level actually declares.
+func collidingCanonical(sh *shape, obj map[string]any, key string) string {
+	for _, cand := range paramAliases[normaliseKey(key)] {
+		if _, declared := sh.props[cand.name]; !declared {
+			continue
+		}
+		if _, present := obj[cand.name]; present {
+			return cand.name
+		}
+	}
+	return ""
 }
 
 // joinPath builds a readable dotted path for nested keys (e.g. edits[].old_str).

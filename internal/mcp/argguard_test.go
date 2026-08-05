@@ -92,7 +92,7 @@ func TestResolveArgs(t *testing.T) {
 			name:    "nested unknown key rejected (additionalProperties:false on items)",
 			schema:  editsRejectSchema,
 			args:    `{"edits":[{"old_string":"a","new_string":"b","foo":1}]}`,
-			wantErr: []string{`unknown parameter "edits[].foo"`, `valid parameters: old_string, new_string`},
+			wantErr: []string{`unknown parameter "edits[].foo"`, `Valid parameters: old_string, new_string`},
 		},
 		{
 			// file_path-canonical tool (read_file family): "path" is accepted.
@@ -165,7 +165,7 @@ func TestResolveArgs(t *testing.T) {
 			name:    "genuine unknown is rejected with a suggestion",
 			schema:  nameSchema,
 			args:    `{"naem": "x"}`,
-			wantErr: []string{`unknown parameter "naem"`, `did you mean "name"`, `valid parameters: name`},
+			wantErr: []string{`unknown parameter "naem"`, `did you mean "name"`, `Valid parameters: name`},
 		},
 		{
 			// distance 1, unique, eligible — auto-corrected with a typo warning.
@@ -333,7 +333,7 @@ func TestResolveArgs_PreservesDeclarationOrderInError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown key")
 	}
-	if !strings.Contains(err.Error(), "valid parameters: zebra, alpha, mike") {
+	if !strings.Contains(err.Error(), "Valid parameters: zebra, alpha, mike") {
 		t.Errorf("declaration order not preserved: %q", err.Error())
 	}
 }

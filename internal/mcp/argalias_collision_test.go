@@ -80,6 +80,96 @@ func TestResolveArgs_AliasCollision_SecondKeyRejectedNotDropped(t *testing.T) {
 	}
 }
 
+// TestUnknownErr_NamesTheCollisionAndSeparatesTheParameterList covers what the
+// rejection above SAYS, which the tests around it only spot-check for the losing
+// key's name.
+//
+// A both-supplied collision is not an ordinary unknown parameter, and reporting
+// it as one is actively misleading: the tool understands the name, and the
+// generic "did you mean" hint points at the parameter the caller has already
+// supplied, which reads as nonsense ("unknown parameter \"root\"; did you mean
+// \"path\"?" — they passed path). The caller cannot act on that. Naming both
+// keys and saying which to drop is the whole fix.
+//
+// The separator is checked here too because it is the same sentence: the list
+// used to be appended with a bare space, so a message ended "... unknown
+// parameter \"root\" valid parameters: pattern, path, ..." — one run-on clause
+// with no boundary between the complaint and the inventory.
+func TestUnknownErr_NamesTheCollisionAndSeparatesTheParameterList(t *testing.T) {
+	// find_files' real shape: `path` is canonical and `root` is the retired
+	// list_files spelling that aliases onto it.
+	const findFiles = `{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"max_depth":{"type":"integer"}},"additionalProperties":false}`
+
+	t.Run("both supplied names both keys and the one to drop", func(t *testing.T) {
+		sh, ok := parseShape(json.RawMessage(findFiles))
+		if !ok {
+			t.Fatal("parseShape failed")
+		}
+		_, _, err := resolveArgs(sh, json.RawMessage(`{"path":"/a","root":"/b"}`), "find_files")
+		if err == nil {
+			t.Fatal("supplying both an alias and its canonical must be rejected, not silently resolved")
+		}
+		msg := err.Error()
+		for _, want := range []string{
+			`you supplied both "root" and "path"`,
+			`remove "root" and keep "path"`,
+		} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("message must contain %q, got: %s", want, msg)
+			}
+		}
+		if strings.Contains(msg, "did you mean") {
+			t.Errorf(`a both-supplied collision must not fall back to the "did you mean" hint — it `+
+				`would point at the parameter already supplied: %s`, msg)
+		}
+	})
+
+	t.Run("a genuine unknown keeps the suggestion and is not called a collision", func(t *testing.T) {
+		sh, ok := parseShape(json.RawMessage(findFiles))
+		if !ok {
+			t.Fatal("parseShape failed")
+		}
+		_, _, err := resolveArgs(sh, json.RawMessage(`{"maxdepht":2}`), "find_files")
+		if err == nil {
+			t.Fatal("an undeclared parameter must be rejected")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "you supplied both") {
+			t.Errorf("a key whose canonical was NOT supplied is not a collision: %s", msg)
+		}
+		if !strings.Contains(msg, `did you mean "max_depth"?`) {
+			t.Errorf("a near-miss must keep its suggestion: %s", msg)
+		}
+	})
+
+	t.Run("the parameter list is separated from the complaint", func(t *testing.T) {
+		sh, ok := parseShape(json.RawMessage(findFiles))
+		if !ok {
+			t.Fatal("parseShape failed")
+		}
+		for _, args := range []string{
+			`{"zzzzzzzzzz":1}`,       // no suggestion, no collision
+			`{"maxdepht":2}`,         // suggestion
+			`{"path":"/a","root":1}`, // collision
+		} {
+			_, _, err := resolveArgs(sh, json.RawMessage(args), "find_files")
+			if err == nil {
+				t.Fatalf("%s: want a rejection", args)
+			}
+			msg := err.Error()
+			i := strings.Index(msg, "Valid parameters:")
+			if i <= 0 {
+				t.Fatalf("%s: message must end with the parameter list: %s", args, msg)
+			}
+			// Whatever the branch, the clause before the list must close: a stop
+			// for a statement, a question mark for the "did you mean" hint.
+			if before := strings.TrimSpace(msg[:i]); !strings.HasSuffix(before, ".") && !strings.HasSuffix(before, "?") {
+				t.Errorf("%s: no separator before the parameter list — %q runs straight into it", args, before)
+			}
+		}
+	})
+}
+
 // The same collision on a level that TOLERATES extras: validation cannot reject
 // the loser there, so the guard's job is simply to leave it alone rather than
 // let it overwrite the winner's value.

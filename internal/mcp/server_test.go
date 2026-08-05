@@ -439,7 +439,7 @@ func TestServer_ToolsCall_AliasesAndGuardsParameters(t *testing.T) {
 	if !r2["isError"].(bool) {
 		t.Fatalf("genuine unknown should be rejected, got: %s", toolText(r2))
 	}
-	for _, sub := range []string{`unknown parameter "zzz"`, "valid parameters: name"} {
+	for _, sub := range []string{`unknown parameter "zzz"`, "Valid parameters: name"} {
 		if !strings.Contains(toolText(r2), sub) {
 			t.Errorf("rejection %q missing %q", toolText(r2), sub)
 		}
