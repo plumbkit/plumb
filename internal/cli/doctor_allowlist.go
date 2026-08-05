@@ -72,7 +72,7 @@ func registeredToolNames() []string { return mcp.SelftestToolNames() }
 func kimiAllowlistResult(g allowlistGrade) (checkResult, bool) {
 	switch g.verdict {
 	case allowlistDegenerate:
-		return kimiDegenerateAllowlistResult(g.shape), true
+		return kimiDegenerateAllowlistResult(g), true
 	case allowlistUnrecognised:
 		return kimiUnknownAllowlistResult(g), true
 	case allowlistStale:
@@ -99,25 +99,39 @@ func kimiFullSurfaceHint() checkResult {
 }
 
 // kimiDegenerateAllowlistResult grades an enabledTools key that cannot function
-// as an allowlist — null, not a list, empty, or holding no usable name.
+// as an allowlist. All three shapes are a WARNING (ok=true, warn=true, with a
+// fix) — none is a value plumb ever writes, and each leaves the integration in a
+// state the user cannot see from the outside. It stays non-fatal because
+// doctor's exit code is reserved for plumb itself being broken, and this is a
+// hand-edited client config plumb can rewrite in one command.
 //
-// This is a WARNING (ok=true, warn=true, with a fix), not the informational line
-// above and not a failure. It is a real misconfiguration, not a preference: the
-// server still starts, but Kimi filters every plumb tool out of it, so the whole
-// integration is silently inert — the same shape as the golangci-lint check,
-// where a capability quietly disappears and only doctor can say why. It stays
-// non-fatal because doctor's exit code is reserved for plumb itself being
-// broken, and this is a hand-edited client config plumb can rewrite in one
-// command.
-func kimiDegenerateAllowlistResult(shape string) checkResult {
-	return checkResult{
-		name: kimiToolSurfaceCheck,
-		ok:   true,
-		warn: true,
-		detail: "enabledTools is " + shape + " — Kimi loads NO plumb tools at all; " +
-			"the server connects but nothing it offers is callable",
-		fix: kimiAllowlistFix(),
+// The message is per-shape because the shapes do not mean the same thing, and
+// one sentence for all three asserted a client behaviour only the empty list
+// plausibly has:
+//
+//   - EMPTY LIST — the definite case. An allowlist that permits nothing
+//     filters every plumb tool out, so the server connects with nothing callable.
+//   - NULL — most clients read a null option as "unset", i.e. the full tool
+//     surface, so claiming it loads nothing is probably wrong. plumb cannot
+//     verify which way Kimi takes it, and says so rather than guessing.
+//   - NOT A LIST — plumb cannot verify how Kimi parses a value of the wrong
+//     type at all: ignored, coerced, or the whole server entry rejected.
+func kimiDegenerateAllowlistResult(g allowlistGrade) checkResult {
+	res := checkResult{name: kimiToolSurfaceCheck, ok: true, warn: true, fix: kimiAllowlistFix()}
+	switch g.shape {
+	case shapeNull:
+		res.detail = "enabledTools is null — a client most likely reads that as no allowlist at all " +
+			"(the full tool surface), but plumb cannot verify how Kimi takes it"
+		res.fix = fmt.Sprintf("delete the enabledTools key to mean the full tool surface unambiguously, "+
+			"or run `plumb setup kimi-code --lean` to pin the %d-tool lean allowlist", len(tools.LeanToolNames()))
+	case shapeWrongType:
+		res.detail = "enabledTools is " + g.found + ", not a list — plumb cannot verify how Kimi parses " +
+			"that: it may ignore the key, or refuse the whole server entry"
+	default: // shapeEmpty
+		res.detail = "enabledTools is " + g.found + " — Kimi loads NO plumb tools at all; " +
+			"the server connects but nothing it offers is callable"
 	}
+	return res
 }
 
 // kimiUnknownAllowlistResult grades a list that is shaped correctly and still
@@ -194,13 +208,25 @@ const (
 	allowlistStale
 )
 
+// allowlistShape distinguishes the three ways an allowlist value can fail to be
+// one. They are graded together but described separately: only the empty list
+// definitely leaves the client with no tools (see kimiDegenerateAllowlistResult).
+type allowlistShape int
+
+const (
+	shapeEmpty     allowlistShape = iota // [] or a list holding no tool name
+	shapeNull                            // an explicit JSON null
+	shapeWrongType                       // any non-list value
+)
+
 // allowlistGrade is a verdict plus the facts a message needs to be specific.
 type allowlistGrade struct {
 	verdict allowlistVerdict
-	shape   string   // degenerate only: how the value is shaped, in JSON vocabulary
-	names   []string // the usable (non-empty string) entries
-	unknown []string // entries naming no registered tool
-	missing []string // pinned names the list lacks
+	shape   allowlistShape // degenerate only: which way the value fails
+	found   string         // degenerate only: the value in JSON vocabulary
+	names   []string       // the usable (non-empty string) entries
+	unknown []string       // entries naming no registered tool
+	missing []string       // pinned names the list lacks
 }
 
 // gradeToolAllowlist grades one client-side tool allowlist against what plumb
@@ -217,12 +243,15 @@ type allowlistGrade struct {
 // client-side allowlist that a user cannot see from the outside.
 func gradeToolAllowlist(raw any, registered, pinned []string) allowlistGrade {
 	list, isList := raw.([]any)
-	if !isList || len(list) == 0 {
-		return allowlistGrade{verdict: allowlistDegenerate, shape: allowlistShape(raw)}
+	if !isList {
+		return degenerate(shapeOf(raw), jsonTypeName(raw))
+	}
+	if len(list) == 0 {
+		return degenerate(shapeEmpty, "an empty list")
 	}
 	g := allowlistGrade{names: usableNames(list)}
 	if len(g.names) == 0 {
-		return allowlistGrade{verdict: allowlistDegenerate, shape: "a list holding no tool name"}
+		return degenerate(shapeEmpty, "a list holding no tool name")
 	}
 
 	known := nameSet(registered)
@@ -287,15 +316,39 @@ func nameSet(names []string) map[string]bool {
 	return out
 }
 
-// allowlistShape names a value that cannot be an allowlist, so the detail line
-// says which hand-edit produced it.
-func allowlistShape(raw any) string {
-	switch v := raw.(type) {
+func degenerate(shape allowlistShape, found string) allowlistGrade {
+	return allowlistGrade{verdict: allowlistDegenerate, shape: shape, found: found}
+}
+
+// shapeOf classifies a non-list value: null is its own case because a client
+// almost certainly reads it as "unset", where any other wrong type is anyone's
+// guess.
+func shapeOf(raw any) allowlistShape {
+	if raw == nil {
+		return shapeNull
+	}
+	return shapeWrongType
+}
+
+// jsonTypeName names a decoded value in JSON's vocabulary. The message is about
+// the user's JSON file, so %T was the wrong alphabet entirely: it reported
+// "not a list (float64)" or "map[string]interface {}" — Go type names for a
+// language the reader is not writing in.
+func jsonTypeName(raw any) string {
+	switch raw.(type) {
 	case nil:
 		return "null"
+	case bool:
+		return "a boolean"
+	case float64, json.Number:
+		return "a number"
+	case string:
+		return "a string"
 	case []any:
-		return "an empty list"
+		return "a list"
+	case map[string]any:
+		return "an object"
 	default:
-		return fmt.Sprintf("not a list (%T)", v)
+		return "a value plumb does not recognise"
 	}
 }
