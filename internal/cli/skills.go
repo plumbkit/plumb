@@ -33,9 +33,10 @@ type embeddedSkill struct {
 	Content string
 }
 
-// claudeCodeSkills returns the list of skills to install for Claude Code.
-// Each skill maps to a subdirectory of the embedded skills/ tree.
-func claudeCodeSkills() []embeddedSkill {
+// embeddedSkills returns the shipped skills, one per subdirectory of the
+// embedded skills/ tree. The set is client-independent: WHICH clients receive it
+// is setup_skills.go's question (setupTarget.skillsDirFn), not this file's.
+func embeddedSkills() []embeddedSkill {
 	entries, err := skillsFS.ReadDir("skills")
 	if err != nil {
 		return nil

@@ -35,6 +35,12 @@ import (
 // an option: flags registers extra command-line flags on the generated cobra
 // command, and note returns an extra hint line printed after the registration
 // report (empty for nothing). Only Kimi Code sets them today, for --lean.
+// skillsDirFn is the per-client SKILL.md capability check: when set, the client
+// consumes plumb's embedded skills and this resolves the user-scoped directory
+// they install into, so registering the client also installs and refreshes them.
+// nil means the client has no verified skill channel — its steering arrives as
+// the condensed session_start guidance block instead. See setup_skills.go, which
+// holds the resolvers and the per-client verification evidence.
 type setupTarget struct {
 	use         string
 	name        string
@@ -45,6 +51,7 @@ type setupTarget struct {
 	extractFn   func(cfgPath string) (binPath string, registered bool, err error)
 	flags       func(cmd *cobra.Command)
 	note        func() string
+	skillsDirFn func() (string, error)
 }
 
 // claudeDesktopCommandExtractor reads the plumb launch binary back from a
@@ -69,9 +76,10 @@ var extraSetupTargets = []setupTarget{
 		intoFn: func(cfgPath, plumbBin string) (bool, []string, error) {
 			return kimiCodeInto(cfgPath, plumbBin, setupKimiLeanFlag)
 		},
-		extractFn: claudeDesktopCommandExtractor,
-		flags:     registerKimiLeanFlag,
-		note:      kimiLeanNote,
+		extractFn:   claudeDesktopCommandExtractor,
+		flags:       registerKimiLeanFlag,
+		note:        kimiLeanNote,
+		skillsDirFn: kimiCodeSkillsDir,
 	},
 	{use: "antigravity", name: "Antigravity CLI", pathFn: AntigravityConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
 	{use: "antigravity-desktop", name: "Antigravity Desktop", pathFn: AntigravityDesktopConfigPath, intoFn: setupAntigravityInto, extractFn: antigravityCommandExtractor},
@@ -90,10 +98,10 @@ var extraSetupTargets = []setupTarget{
 // per-path reporting. geminiTarget and codexTarget do not — their commands were
 // line-for-line copies of runSetupTarget and now call it directly.
 var (
-	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor}
+	claudeCodeTarget    = setupTarget{use: "claude-code", name: "Claude Code", pathFn: claudeCodeConfigPath, intoFn: setupClaudeCodeInto, extractFn: claudeDesktopCommandExtractor, skillsDirFn: claudeSkillsDir}
 	claudeDesktopTarget = setupTarget{use: "claude-desktop", name: "Claude Desktop", pathFn: claudeDesktopConfigPath, pathsFn: claudeDesktopConfigPaths, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
 	geminiTarget        = setupTarget{use: "gemini", name: "Gemini CLI", pathFn: GeminiConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor}
-	codexTarget         = setupTarget{use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto, extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command")}
+	codexTarget         = setupTarget{use: "codex", name: "Codex", pathFn: CodexConfigPath, intoFn: setupCodexInto, extractFn: mapCommandExtractor(readOrInitCodexConfig, "mcp_servers", "command"), skillsDirFn: codexSkillsDir}
 )
 
 // allSetupClients lists every client `plumb setup` supports, for the `config show`
@@ -175,6 +183,9 @@ func init() {
 		if t.flags != nil {
 			t.flags(cmd)
 		}
+		if t.skillsDirFn != nil {
+			registerNoSkillFlag(cmd)
+		}
 		setupCmd.AddCommand(cmd)
 	}
 }
@@ -203,6 +214,11 @@ func runSetupTarget(t setupTarget) error {
 		fmt.Printf("plumb is already registered in %s — no changes made.\n", t.name)
 		fmt.Printf("Config: %s\n", cfgPath)
 		printSetupNote(t)
+		// Skills are refreshed on the already-registered path too: re-running
+		// setup after an upgrade is the documented way to pick up new skill
+		// content, and it would be a no-op on every machine plumb is already
+		// registered on if this returned first.
+		installAndPrintSkills(t)
 		return nil
 	}
 
@@ -215,6 +231,7 @@ func runSetupTarget(t setupTarget) error {
 	fmt.Println(render.ContextBox(tui.MutedStyle.Render(ctxStr), tui.SepStyle))
 	fmt.Printf("\nRestart %s to apply the change.\n", t.name)
 	printSetupNote(t)
+	installAndPrintSkills(t)
 	return nil
 }
 

@@ -497,8 +497,8 @@ func TestInstallSkill_Updated(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeSkills_HaveValidFrontmatter(t *testing.T) {
-	skills := claudeCodeSkills()
+func TestEmbeddedSkills_HaveValidFrontmatter(t *testing.T) {
+	skills := embeddedSkills()
 	if len(skills) == 0 {
 		t.Fatal("expected at least one embedded skill")
 	}

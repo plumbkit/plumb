@@ -60,14 +60,14 @@ func TestDocToolCountMatchesRegistry(t *testing.T) {
 
 // TestAgentsSkillListMatchesEmbedded guards AGENTS.md's prose enumeration of the
 // installed skills against the embedded set. The set itself is pinned by
-// TestClaudeCodeSkills_HaveValidFrontmatter, but nothing tied it to the sentence
+// TestEmbeddedSkills_HaveValidFrontmatter, but nothing tied it to the sentence
 // that counts and names them — so adding a skill desynchronised the brief
 // silently, exactly the drift TestDocToolCountMatchesRegistry exists to stop.
 func TestAgentsSkillListMatchesEmbedded(t *testing.T) {
 	root := repoRootFromCaller(t)
-	skills := claudeCodeSkills()
+	skills := embeddedSkills()
 	if len(skills) == 0 {
-		t.Fatal("claudeCodeSkills() returned nothing — the embed is broken")
+		t.Fatal("embeddedSkills() returned nothing — the embed is broken")
 	}
 
 	b, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
