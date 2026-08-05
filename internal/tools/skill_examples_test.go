@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -17,22 +19,41 @@ const skillsSourceDir = "../cli/skills"
 
 var (
 	skillCallRe   = regexp.MustCompile(`\b([a-z][a-z0-9_]*)\(([^)]*)\)`)
-	skillArgRe    = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=`)
+	skillArgRe    = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*("[^"]*"|[^,\s]*)`)
 	skillQuotedRe = regexp.MustCompile(`"[^"]*"`)
+	// A roster bullet: a list item whose first element is a bolded, backticked
+	// identifier. That is the skills' own convention for "this names a tool", and
+	// anchoring to it is what keeps the guard free of false positives — a bare
+	// backticked `expected_mtime` in prose is a parameter, not a tool, and is not
+	// matched here.
+	skillBulletRe = regexp.MustCompile("(?m)^\\s*-\\s+\\*\\*`([a-z][a-z0-9_]*)`\\*\\*")
+	// An enum value is always a plain word. Anything else in an example is a
+	// placeholder (`…`, `<slot>`, a list, an expression) and is not a claim about
+	// a concrete value, so it is not checked against the enum.
+	skillLiteralRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 )
 
-// minCallsPerSkill pins how many tool calls each shipped skill expresses in
-// call form. Without it the only emptiness check is "did every skill go dark at
-// once", which is useless: two of these skills contribute nothing today, so a
-// regression that silenced the extractor for plumb-testing alone would reduce
-// real coverage to a quarter and still pass. Raise a number when a skill gains
-// examples; lowering one is a deliberate statement that the skill genuinely
-// stopped using call form, not a way to make a red test green.
-var minCallsPerSkill = map[string]int{
-	"plumb-explore":        0,
-	"plumb-minimal-change": 0,
-	"plumb-refactor":       5,
-	"plumb-testing":        4,
+// skillCounts pins how much checkable content each shipped skill carries, per
+// form. Without it the only emptiness check is "did every skill go dark at
+// once", which is useless: some of these skills contribute nothing in one form,
+// so a regression that silenced an extractor for a single skill would gut real
+// coverage and still pass.
+//
+// The counts are EXACT (compared with !=), not minima. A minimum only catches
+// the extractor breaking; it says nothing when a skill gains examples, which is
+// precisely when the numbers should be re-read — under a minimum, five new
+// unchecked call examples and zero new ones are indistinguishable. Updating a
+// number is a one-line statement that the new content was looked at.
+type skillCounts struct {
+	calls   int // worked examples in `tool(arg=value)` form
+	bullets int // roster bullets of the form "- **`tool_name`** — …"
+}
+
+var skillContentCounts = map[string]skillCounts{
+	"plumb-explore":        {calls: 0, bullets: 14},
+	"plumb-minimal-change": {calls: 0, bullets: 0},
+	"plumb-refactor":       {calls: 5, bullets: 0},
+	"plumb-testing":        {calls: 4, bullets: 0},
 }
 
 // TestSkillExamplesUseRealToolArguments ties worked examples in a shipped skill
@@ -41,45 +62,44 @@ var minCallsPerSkill = map[string]int{
 // Both review rounds on the skills work found the same defect class — a skill
 // teaching a call the code refuses (await_diagnostics named on tools that do not
 // declare it; a run_task target no shipped command can take) — and both were
-// caught by a human reading the file, not by a test. This catches one shape of
-// it: an argument the tool does not declare. Many schemas set
+// caught by a human reading the file, not by a test. Many schemas set
 // "additionalProperties": false and argument validation hard-rejects extras, so
-// an undeclared argument in a skill is not a style problem, it is a guaranteed
-// failed call for whichever agent follows the example.
+// a wrong argument in a skill is not a style problem, it is a guaranteed failed
+// call for whichever agent follows the example.
 //
-// Two limits, both real, stated because a guard that looks broader than it is
-// costs more than no guard at all:
+// Four facts are checked, three of them added after a mutation pass found the
+// name-only version passing an out-of-enum value, a call missing a required
+// argument, and a misspelt tool name in backticked prose:
 //
-//   - SYNTACTIC. It only sees arguments written inside `tool(arg=…)`. The
-//     await_diagnostics defect that motivated this test was written as prose
-//     with an inline backticked `arg=value` and is NOT caught here; nor is a
-//     misspelt tool name, nor an argument in a JSON-shaped example. Keeping
-//     argument facts in call form is what makes them checkable.
-//   - SEMANTIC. A declared argument refused for the state it is used in
-//     (run_task's target against a command with no {target} placeholder) is a
-//     runtime precondition, not a schema fact, and stays a review obligation.
+//   - UNDECLARED ARGUMENT — the argument is not in the schema's properties.
+//   - OUT-OF-ENUM VALUE — the property declares an enum and the example's
+//     concrete value is not one of its members.
+//   - MISSING REQUIRED ARGUMENT — see the fragment rule below.
+//   - UNREGISTERED TOOL NAME — a roster bullet naming a tool plumb does not
+//     register, which is how a rename or a typo produces a skill pointing at
+//     nothing. This is the hole that mattered most: plumb-explore names its
+//     tools in bullets rather than call form, so before this it had no coverage
+//     at all beyond "the file is non-empty".
+//
+// THE FRAGMENT RULE. A call naming none of its tool's required parameters is
+// prose illustrating one argument (`edit_file(expected_mtime=…)`), not a worked
+// example, and demanding the rest would only push authors out of call form —
+// where the arguments stop being checkable at all. A call that names at least
+// one required parameter is presenting itself as a call, and must name them all.
+//
+// The remaining limit is stated because a guard that looks broader than it is
+// costs more than no guard: a tool named in ordinary backticked prose, outside
+// both call form and a roster bullet, is still unchecked. Keeping tool facts in
+// one of the two checkable forms is what makes them checkable.
 func TestSkillExamplesUseRealToolArguments(t *testing.T) {
-	declared := map[string]map[string]bool{}
-	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
-		var schema struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-		}
-		if err := json.Unmarshal(tl.InputSchema(), &schema); err != nil {
-			t.Fatalf("%s: InputSchema is not valid JSON: %v", tl.Name(), err)
-		}
-		set := make(map[string]bool, len(schema.Properties))
-		for name := range schema.Properties {
-			set[name] = true
-		}
-		declared[tl.Name()] = set
-	}
+	declared, required, enums := toolSchemaFacts(t)
 
 	entries, err := os.ReadDir(skillsSourceDir)
 	if err != nil {
 		t.Fatalf("reading %s: %v", skillsSourceDir, err)
 	}
 
-	seen := map[string]int{}
+	seen := map[string]skillCounts{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -89,37 +109,142 @@ func TestSkillExamplesUseRealToolArguments(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		if _, pinned := minCallsPerSkill[e.Name()]; !pinned {
-			t.Errorf("%s: new skill has no entry in minCallsPerSkill — add one stating how many "+
-				"call-form examples it carries, so its coverage cannot silently be zero", e.Name())
+		if _, pinned := skillContentCounts[e.Name()]; !pinned {
+			t.Errorf("%s: new skill has no entry in skillContentCounts — add one stating how many "+
+				"call-form examples and roster bullets it carries, so its coverage cannot silently be zero", e.Name())
 		}
-		// Strip quoted values from the WHOLE body before matching calls: a ")"
-		// inside a string literal would otherwise end the argument list early and
-		// hide every argument after it.
-		stripped := skillQuotedRe.ReplaceAllString(string(body), "")
+		got := seen[e.Name()]
+
+		for _, b := range skillBulletRe.FindAllStringSubmatch(string(body), -1) {
+			got.bullets++
+			if _, isTool := declared[b[1]]; !isTool {
+				t.Errorf("%s: roster bullet names %q, which plumb does not register — a renamed or "+
+					"misspelt tool leaves the skill steering an agent at nothing", path, b[1])
+			}
+		}
+
+		// Neutralise parentheses INSIDE string literals before matching calls: a
+		// ")" in a value would otherwise end the argument list early and hide
+		// every argument after it. The literal's TEXT is preserved — the previous
+		// version deleted whole literals, which is exactly why an out-of-enum
+		// value could never have been caught here.
+		stripped := skillQuotedRe.ReplaceAllStringFunc(string(body), func(lit string) string {
+			return strings.NewReplacer("(", "", ")", "").Replace(lit)
+		})
 		for _, call := range skillCallRe.FindAllStringSubmatch(stripped, -1) {
 			tool, args := call[1], call[2]
 			props, isTool := declared[tool]
 			if !isTool {
 				continue // prose, a shell command, or a non-plumb code sample
 			}
-			seen[e.Name()]++
+			got.calls++
+			supplied := map[string]bool{}
 			for _, arg := range skillArgRe.FindAllStringSubmatch(args, -1) {
-				if !props[arg[1]] {
+				name, value := arg[1], strings.Trim(arg[2], `"`)
+				supplied[name] = true
+				if !props[name] {
 					t.Errorf("%s: %s(%s) passes %q, which %s does not declare in its InputSchema — "+
 						"argument validation rejects undeclared parameters, so this example cannot work",
-						path, tool, args, arg[1], tool)
+						path, tool, args, name, tool)
+					continue
+				}
+				if allowed := enums[tool][name]; len(allowed) > 0 && skillLiteralRe.MatchString(value) && !allowed[value] {
+					t.Errorf("%s: %s(%s) passes %s=%q, which is not in that parameter's enum (%s) — "+
+						"the call is rejected before it reaches the tool", path, tool, args, name, value,
+						strings.Join(sortedKeys(allowed), ", "))
 				}
 			}
+			assertRequiredSatisfied(t, path, tool, args, required[tool], supplied)
+		}
+		seen[e.Name()] = got
+	}
+
+	for skill, want := range skillContentCounts {
+		if got := seen[skill]; got != want {
+			t.Errorf("%s: found %d call-form examples and %d roster bullets, pinned at %d and %d — if the "+
+				"skill gained or lost content, re-read the new lines and update the pin; if it did not, the "+
+				"extractor regressed and the checks below it are running on less than they appear to",
+				skill, got.calls, got.bullets, want.calls, want.bullets)
 		}
 	}
-	for skill, want := range minCallsPerSkill {
-		if got := seen[skill]; got < want {
-			t.Errorf("%s: found %d call-form tool examples, expected at least %d — either the "+
-				"extractor regressed or the skill moved argument facts out of call form, where "+
-				"they stop being checkable", skill, got, want)
+}
+
+// assertRequiredSatisfied applies the fragment rule: a call that names no
+// required parameter is illustrating one argument, not teaching a call.
+func assertRequiredSatisfied(t *testing.T, path, tool, args string, req []string, supplied map[string]bool) {
+	t.Helper()
+	var namesOne bool
+	for _, r := range req {
+		if supplied[r] {
+			namesOne = true
+			break
 		}
 	}
+	if !namesOne {
+		return
+	}
+	for _, r := range req {
+		if !supplied[r] {
+			t.Errorf("%s: %s(%s) omits the required parameter %q — the example reads as a complete call "+
+				"(it names other required parameters), and this one is rejected before the tool runs",
+				path, tool, args, r)
+		}
+	}
+}
+
+// toolSchemaFacts decodes the three schema facts the guard needs from every
+// registered tool: declared property names, the required list, and the enum
+// members of any property that constrains its values.
+func toolSchemaFacts(t *testing.T) (declared map[string]map[string]bool, required map[string][]string, enums map[string]map[string]map[string]bool) {
+	t.Helper()
+	declared = map[string]map[string]bool{}
+	required = map[string][]string{}
+	enums = map[string]map[string]map[string]bool{}
+
+	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
+		var schema struct {
+			Required   []string                   `json:"required"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(tl.InputSchema(), &schema); err != nil {
+			t.Fatalf("%s: InputSchema is not valid JSON: %v", tl.Name(), err)
+		}
+		set := make(map[string]bool, len(schema.Properties))
+		perTool := map[string]map[string]bool{}
+		for name, raw := range schema.Properties {
+			set[name] = true
+			var prop struct {
+				Enum []any `json:"enum"`
+			}
+			if err := json.Unmarshal(raw, &prop); err != nil || len(prop.Enum) == 0 {
+				continue
+			}
+			members := make(map[string]bool, len(prop.Enum))
+			for _, v := range prop.Enum {
+				if s, ok := v.(string); ok {
+					members[s] = true
+				}
+			}
+			if len(members) > 0 {
+				perTool[name] = members
+			}
+		}
+		declared[tl.Name()] = set
+		required[tl.Name()] = schema.Required
+		if len(perTool) > 0 {
+			enums[tl.Name()] = perTool
+		}
+	}
+	return declared, required, enums
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestToolDescriptionsAreNotStubs is the backstop for a wide mechanical prose
@@ -128,8 +253,17 @@ func TestSkillExamplesUseRealToolArguments(t *testing.T) {
 // enforced by review, not by code. What it does is convert a gutted description
 // from a silent pass into a loud failure, which is the failure mode a sweeping
 // rewrite actually risks.
+//
+// The floor was 120 bytes, which no shipped description came within 75 bytes of
+// — a backstop that far below the real distribution catches only a description
+// deleted outright, not one hollowed to a single clause. It is 170 now, measured
+// rather than guessed: the three shortest descriptions today are read_memory
+// (195), type_hierarchy (197) and delete_memory (198), so 170 leaves the tightest
+// of them 25 bytes of headroom while ruling out anything under two sentences.
+// Raise it if the short tail moves up; do not lower it to make a red build green
+// — a description that short is the bug the test names.
 func TestToolDescriptionsAreNotStubs(t *testing.T) {
-	const floor = 120
+	const floor = 170
 	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
 		if n := len(tl.Description()); n < floor {
 			t.Errorf("%s: Description() is %d bytes, under the %d-byte floor — a tool description "+
