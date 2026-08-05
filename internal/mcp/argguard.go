@@ -156,7 +156,10 @@ func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessa
 	}
 
 	var warnings []string
-	changed := rewriteObject(sh, obj, "", &warnings)
+	// Which canonical names the rewrite SYNTHESISED, so a later rejection can say
+	// who supplied what without inventing a key the caller never typed.
+	synth := aliasSynth{}
+	changed := rewriteObject(sh, obj, "", &warnings, synth)
 	// After alias/typo resolution, repair a parameter placed at the wrong level
 	// (hoist out of an array element, or wrap scattered top-level keys into an
 	// absent array param). Only touches keys validation would otherwise reject.
@@ -169,7 +172,7 @@ func resolveArgs(sh *shape, raw json.RawMessage, toolName string) (json.RawMessa
 	if coerceTypes(sh, obj, "", &warnings) {
 		changed = true
 	}
-	if err := validateObject(sh, obj, "", toolName); err != nil {
+	if err := validateObject(sh, obj, "", toolName, synth); err != nil {
 		return raw, nil, err
 	}
 	if !changed {
@@ -203,10 +206,18 @@ func decodeArgsObject(raw json.RawMessage) (map[string]any, error) {
 	return obj, nil
 }
 
+// aliasSynth records every canonical parameter name the rewrite SYNTHESISED
+// from a supplied alias: keyed by the canonical's full dotted path (the same
+// path scheme validation walks), valued by the key the caller actually typed.
+// Validation reads it so a collision rejection can never claim the caller
+// supplied a name they never wrote — in write_file({body, text}) both keys mean
+// "content" and neither of them IS "content".
+type aliasSynth map[string]string
+
 // rewriteObject renames recognised alias keys to their canonical names at this
-// level and recurses into nested object/array-of-object properties. Returns
-// true if any key was renamed.
-func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]string) bool {
+// level and recurses into nested object/array-of-object properties, recording
+// each synthesised canonical in synth. Returns true if any key was renamed.
+func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]string, synth aliasSynth) bool {
 	changed := false
 	type rename struct {
 		from, to string
@@ -251,11 +262,15 @@ func rewriteObject(sh *shape, obj map[string]any, path string, warnings *[]strin
 		}
 		obj[r.to] = v
 		delete(obj, r.from)
+		synth[joinPath(path, r.to)] = r.from
 		*warnings = append(*warnings, renameWarning(joinPath(path, r.from), r.to, r.fuzzy, r.xf))
 		changed = true
 	}
 	for key, child := range sh.children {
-		if v, ok := obj[key]; ok && descend(child, v, joinPath(path, key), warnings, rewriteObject) {
+		rewrite := func(s *shape, o map[string]any, p string, w *[]string) bool {
+			return rewriteObject(s, o, p, w, synth)
+		}
+		if v, ok := obj[key]; ok && descend(child, v, joinPath(path, key), warnings, rewrite) {
 			changed = true
 		}
 	}
@@ -407,10 +422,10 @@ func wrappableScalar(sh *shape, key string, v any) bool {
 // validateObject checks one object level: no undeclared properties (when this
 // level rejects extras), every required property present, then recurses into
 // declared object/array children.
-func validateObject(sh *shape, obj map[string]any, path, toolName string) error {
+func validateObject(sh *shape, obj map[string]any, path, toolName string, synth aliasSynth) error {
 	if sh.rejectExtra {
 		if unknown := firstUnknown(sh, obj); unknown != "" {
-			return unknownErr(sh, obj, joinPath(path, unknown), toolName)
+			return unknownErr(sh, obj, joinPath(path, unknown), toolName, synth)
 		}
 	}
 	for _, req := range sh.required {
@@ -423,21 +438,21 @@ func validateObject(sh *shape, obj map[string]any, path, toolName string) error 
 		if !ok {
 			continue
 		}
-		if err := validateChild(child, v, joinPath(path, key), toolName); err != nil {
+		if err := validateChild(child, v, joinPath(path, key), toolName, synth); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateChild(child *shape, v any, path, toolName string) error {
+func validateChild(child *shape, v any, path, toolName string, synth aliasSynth) error {
 	switch t := v.(type) {
 	case map[string]any:
-		return validateObject(child, t, path, toolName)
+		return validateObject(child, t, path, toolName, synth)
 	case []any:
 		for _, e := range t {
 			if m, ok := e.(map[string]any); ok {
-				if err := validateObject(child, m, path+"[]", toolName); err != nil {
+				if err := validateObject(child, m, path+"[]", toolName, synth); err != nil {
 					return err
 				}
 			}
@@ -467,7 +482,7 @@ func firstUnknown(sh *shape, obj map[string]any) string {
 // object the key was found in, so the message can distinguish the two reasons a
 // key reaches here — a name the tool never had, and a name it DOES understand
 // but could not apply because the caller also supplied its canonical.
-func unknownErr(sh *shape, obj map[string]any, key, toolName string) error {
+func unknownErr(sh *shape, obj map[string]any, key, toolName string, synth aliasSynth) error {
 	prefix := ""
 	if toolName != "" {
 		prefix = toolName + ": "
@@ -479,13 +494,26 @@ func unknownErr(sh *shape, obj map[string]any, key, toolName string) error {
 	fmt.Fprintf(&b, "%sunknown parameter %q", prefix, key)
 	if collided := collidingCanonical(sh, obj, baseName(key)); collided != "" {
 		// The alias resolver refused this key on purpose: its canonical was
-		// already supplied, and rewriting would have silently dropped one of two
+		// already taken, and rewriting would have silently dropped one of two
 		// values the caller explicitly passed. Without saying so the message is
 		// actively misleading — it calls a name the tool understands "unknown",
 		// and the "did you mean" hint would point at the parameter already
 		// present, reading as nonsense.
-		fmt.Fprintf(&b, ": you supplied both %q and %q, which name the same parameter here — "+
-			"remove %q and keep %q", key, collided, key, collided)
+		//
+		// Which of two wordings is TRUE depends on how the canonical got there.
+		// The rewrite runs before validation, so an alias-vs-alias collision
+		// reaches this point with a canonical the caller never typed: for
+		// write_file({body, text}) obj holds "content" only because "body" was
+		// rewritten to it, and telling the caller they "supplied content" — let
+		// alone to keep it — names a key that is nowhere in their call.
+		parent := parentPath(key)
+		if via, synthesised := synth[joinPath(parent, collided)]; synthesised {
+			fmt.Fprintf(&b, ": you supplied both %q and %q, which both name %q here — remove one",
+				joinPath(parent, via), key, collided)
+		} else {
+			fmt.Fprintf(&b, ": you supplied both %q and %q, which name the same parameter here — "+
+				"remove %q and keep %q", key, collided, key, collided)
+		}
 	} else if suggestion := closest(baseName(key), sh.order); suggestion != "" {
 		fmt.Fprintf(&b, "; did you mean %q?", suggestion)
 	}
@@ -502,9 +530,14 @@ func unknownErr(sh *shape, obj map[string]any, key, toolName string) error {
 }
 
 // collidingCanonical returns the canonical parameter key is a curated alias of
-// when the caller ALSO supplied that canonical — the one case where an alias is
-// rejected despite being understood. It returns "" for an ordinary unknown key,
-// and only ever names a parameter this level actually declares.
+// when that canonical is already PRESENT at this level — the one case where an
+// alias is rejected despite being understood. It returns "" for an ordinary
+// unknown key, and only ever names a parameter this level actually declares.
+//
+// Presence is not the same as "the caller supplied it": obj has already been
+// through rewriteObject, so the canonical may have been synthesised from a
+// different alias. Only aliasSynth can tell the two apart, which is why the
+// wording decision lives in unknownErr and not here.
 func collidingCanonical(sh *shape, obj map[string]any, key string) string {
 	for _, cand := range paramAliases[normaliseKey(key)] {
 		if _, declared := sh.props[cand.name]; !declared {
@@ -531,4 +564,14 @@ func baseName(path string) string {
 		return path[i+1:]
 	}
 	return path
+}
+
+// parentPath returns everything before the final dotted segment ("" for a
+// top-level key) — baseName's counterpart, used to rebuild a sibling key's full
+// path at the level a rejection happened on.
+func parentPath(path string) string {
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		return path[:i]
+	}
+	return ""
 }

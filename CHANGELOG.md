@@ -620,9 +620,15 @@
   supplied values, but it was reported as `unknown parameter "root"` for a name
   the tool understands, followed by `did you mean "path"?` pointing at the
   parameter just supplied. There was no action to take from that. The message
-  now names both keys and which to drop. Separately, the valid-parameter list
-  was appended with a bare space, running the complaint into its own inventory;
-  it now takes a proper separator.
+  now names both keys and which to drop — and names only keys the caller
+  actually typed. The other collision is two *aliases* of one canonical
+  (`write_file({body, text})`, both meaning `content`), where the canonical is
+  in the arguments only because the rewrite put it there; quoting it as
+  something the caller "supplied" and should "keep" named a parameter that
+  appears nowhere in their call, so that case now reads "you supplied both
+  `body` and `text`, which both name `content` here — remove one". Separately,
+  the valid-parameter list was appended with a bare space, running the complaint
+  into its own inventory; it now takes a proper separator.
 
 - **Test guards that could not fail.** Three anti-rot checks were mutation-
   tested and found to pass their own defects. `skill_examples_test.go` verified
