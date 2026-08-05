@@ -14,7 +14,7 @@
   `ReliableDeferredToolDiscovery` stays unset: it is the reviewed,
   evidence-gated lean opt-in, never an inference from native tooling.
   Because a schema-discovery-only client cannot reach a tool plumb hid, the
-  ~99 KB of advertised schemas has to be trimmed on the client side instead:
+  ~97 KB of advertised schemas has to be trimmed on the client side instead:
   **`plumb setup kimi-code --lean`** writes the new `tools.LeanToolNames()`
   (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
   client-enforced allowlist can never strip a bootstrap tool) into the
@@ -246,7 +246,7 @@
   still runs, under the survivor's name. Tool count 62 → 57; `README.md`,
   `docs/`, `AGENTS.md`, and `site/index.html` move with it.
 
-  **Migration:** two behaviours genuinely change for old-name callers.
+  **Migration:** three behaviours genuinely change for old-name callers.
   (1) `list_files`' hardcoded exclude list (`vendor`, `node_modules`,
   `__pycache__`, `.pytest_cache`) died with the tool: `find_files`' `.gitignore`
   confinement is now the only exclusion mechanism, so `vendor/` is visible
@@ -257,7 +257,22 @@
   excludes it outright, for `find_files`, `search_in_files`, and `find_replace`
   alike, even under `include_hidden: true`. (2) `list_symbols`'
   `include_signatures` is dropped — the outline always renders signature lines,
-  so the flag has no counterpart to carry.
+  so the flag has no counterpart to carry. (3) `list_files` and `list_directory`
+  both implemented `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
+  is not a shorter budget — the dispatcher runs `Execute` on a child goroutine
+  and returns when its timer fires, so the caller escapes even a blocked
+  syscall, whereas `find_files`' own 30s deadline is cooperative and cannot
+  interrupt `os.Stat`/`os.ReadDir`. On a stalled network/FUSE mount an old-name
+  caller used to get an actionable error in 10s and now waits for the syscall.
+  The trade is deliberate: opting in would newly time out broad walks over large
+  healthy trees.
+
+  Two further differences are announced rather than silent, so they are not in
+  the list above: both listing aliases pin `max_results: 5000`, and a result
+  above that is reported as truncated rather than silently cut; and
+  `list_directory`'s once-required `path` is optional on `find_files`, which
+  defaults it to the workspace root, so `list_directory({})` now answers where
+  it used to error.
 
   Guarded by `TestToolAliases_ExactMembership` (the whole table, so adding or
   retiring a name is a reviewable event, never silent drift),

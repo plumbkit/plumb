@@ -423,3 +423,78 @@ func writeKimiAllowlist(t *testing.T, path, bin string, allowlist any) {
 		t.Fatalf("writing config: %v", err)
 	}
 }
+
+// TestKimiTargetWiresTheNoteHook pins the SHIPPED target, which
+// TestRunSetupTargetPrintsTheNote does not: that test builds its own
+// setupTarget, so it proves runSetupTarget honours a note hook rather than that
+// the kimi-code entry has one. Delete `note: kimiLeanNote` from
+// extraSetupTargets and the whole suite stays green while
+// `plumb setup kimi-code --lean` silently stops confirming the allowlist on the
+// already-registered path — the path where it writes nothing else, so the note
+// is the user's only evidence the allowlist is in place.
+func TestKimiTargetWiresTheNoteHook(t *testing.T) {
+	t.Cleanup(func() { setupKimiLeanFlag = false })
+
+	var kimi setupTarget
+	for _, tgt := range allSetupClients() {
+		if tgt.use == "kimi-code" {
+			kimi = tgt
+			break
+		}
+	}
+	if kimi.use == "" {
+		t.Fatal("no kimi-code entry in allSetupClients()")
+	}
+	if kimi.note == nil {
+		t.Fatal("the kimi-code target must wire a note hook — without it `plumb setup kimi-code --lean` confirms nothing on the already-registered path")
+	}
+
+	setupKimiLeanFlag = false
+	if got := kimi.note(); got != "" {
+		t.Errorf("the target's note must stay silent without --lean, got %q", got)
+	}
+
+	setupKimiLeanFlag = true
+	got := kimi.note()
+	for _, want := range []string{"enabledTools", "plumb setup kimi-code --lean", "snapshot"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the target's note hook must be kimiLeanNote; missing %q in %q", want, got)
+		}
+	}
+}
+
+// TestCheckMCPClientsIncludesTheKimiHint pins the doctor call site. Every
+// TestKimiLeanHintAt subtest drives the body directly, so all of them stay green
+// if the three-line `checkKimiLeanHint` block is deleted from checkMCPClients —
+// and both the informational hint and the degenerate-allowlist WARNING vanish
+// from `plumb doctor` with nothing failing. The degenerate case is the one
+// failure mode of this feature a user cannot see from the outside, so its only
+// surfacing path must be pinned. The fixture uses that case deliberately.
+func TestCheckMCPClientsIncludesTheKimiHint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", home)
+
+	seed := map[string]any{"mcpServers": map[string]any{
+		"plumb": map[string]any{"command": "/usr/local/bin/plumb", "enabledTools": []any{}},
+	}}
+	if err := writeJSON(filepath.Join(home, "mcp.json"), seed); err != nil {
+		t.Fatalf("seeding config: %v", err)
+	}
+
+	var found *checkResult
+	for _, r := range checkMCPClients() {
+		if r.name == kimiToolSurfaceCheck {
+			found = &r
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("checkMCPClients must surface the Kimi tool-surface check — it is the only path that reports a degenerate enabledTools allowlist")
+	}
+	if !found.warn {
+		t.Errorf("an empty enabledTools list must raise attention, not pass quietly: %+v", *found)
+	}
+	if found.fix == "" {
+		t.Error("the degenerate case must carry a fix line — it is the user's only route out")
+	}
+}

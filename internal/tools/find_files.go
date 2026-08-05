@@ -17,10 +17,16 @@ import (
 // context has no deadline. Matches search_in_files: prevents a runaway walk
 // over a giant tree from outliving the MCP client's own timeout.
 //
-// find_files deliberately does NOT implement mcp.ExecTimeoutBounded: it already
-// self-bounds here and the walk aborts cooperatively on ctx cancellation at
-// every directory and entry, so opting in would only replace this budget with
-// the dispatcher's shorter one and newly time out broad walks over large trees.
+// find_files deliberately does NOT implement mcp.ExecTimeoutBounded, and the
+// two are not equivalent. That marker is not merely a shorter budget: the
+// dispatcher runs Execute on a child goroutine and returns to the caller when
+// its timer fires, so the call escapes even a blocked syscall. This deadline is
+// cooperative only — the root os.Stat in buildFindFilesConfig and os.ReadDir
+// inside the walk are uninterruptible — so a stalled network/FUSE mount can
+// outlast it. The trade is deliberate: opting in would newly time out broad
+// walks over large healthy trees. Note that the retired list_files and
+// list_directory did carry the bound, so old-name callers lose it; revisit if
+// stalled-mount reports arrive.
 const findFilesDefaultDeadline = 30 * time.Second
 
 // findFilesSortScanCap bounds the walk when a size/modified ranking is asked

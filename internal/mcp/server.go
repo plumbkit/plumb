@@ -34,12 +34,12 @@ const maxMessageBytes = 4 << 20 // 4 MiB per newline-delimited JSON-RPC message
 const DefaultWriteTimeout = 30 * time.Second
 
 // DefaultToolExecTimeout bounds a single Execute call for tools that opt in via
-// ExecTimeoutBounded (the filesystem read/list tools, which perform blocking
-// syscalls with no internal deadline). Without it a stat/open/readdir on a slow
-// or unresponsive mount (a stalled network/iCloud/FUSE volume) runs unbounded
-// until the MCP client abandons the call at its own multi-minute timeout. 10s is
-// far longer than any healthy local read yet short enough to fail fast; the
-// daemon overrides it from PLUMB_TOOL_EXEC_TIMEOUT. 0 disables the bound.
+// ExecTimeoutBounded (read_file, which performs blocking syscalls with no
+// internal deadline). Without it a stat/open/readdir on a slow or unresponsive
+// mount (a stalled network/iCloud/FUSE volume) runs unbounded until the MCP
+// client abandons the call at its own multi-minute timeout. 10s is far longer
+// than any healthy local read yet short enough to fail fast; the daemon
+// overrides it from PLUMB_TOOL_EXEC_TIMEOUT. 0 disables the bound.
 const DefaultToolExecTimeout = 10 * time.Second
 
 // JSON-RPC 2.0 standard error codes.
