@@ -181,6 +181,7 @@ func selftestPreflight(ws string) []string {
 		"The first call may take up to ~2 minutes while the language server cold-starts —",
 		"this is expected; do not abort. Record from the output: the **workspace root**, the",
 		"**language**, and whether **topology** is enabled (a topology line appears when it is).",
+		"Then call `daemon_info`.",
 		"This step covers " + toolList(selftestBootstrap) + ".",
 	}
 }
