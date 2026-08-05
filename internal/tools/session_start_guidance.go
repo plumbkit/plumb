@@ -12,6 +12,70 @@ func (t *SessionStart) writeSessionGuidance(sb *strings.Builder) {
 		t.writeClaudeDesktopGuidance(sb)
 	case isKimiCode(t.clientNameFn):
 		t.writeKimiCodeGuidance(sb)
+	default:
+		t.writeGenericGuidance(sb)
+	}
+}
+
+// writeGenericGuidance is the block for every client with no bespoke one —
+// Codex, Gemini CLI, Cursor, Augment, Qwen, Antigravity, OpenCode, Crush, Goose,
+// Hermes, and anything unrecognised. Eleven of plumb's fourteen setup targets
+// fell through to nothing before it existed.
+//
+// WHY IT EXISTS. Those clients used to be steered by the tool descriptions
+// themselves: ~21 of them carried comparative routing ("prefer workspace_symbols
+// for symbol lookups", "prefer this over search_in_files or grep", the discovery
+// ladder). The DRY pass moved that routing into the skills, which is the right
+// home for a client that installs them and no home at all for a client that does
+// not — so for these clients the routing was removed with nothing put in its
+// place. This is the replacement the plan always specified and had not built:
+// the condensed render of the same authored source, "thinned, not deleted".
+//
+// WHY IT IS BLANDER than the client-specific blocks. It cannot assume anything
+// about the client — native file tools, a read-tracking harness, a client-side
+// allowlist — so it states plumb's own routing rather than arguing against an
+// alternative it cannot see, and it never quotes another product's error
+// strings. A client that earns specific advice should get its own branch above.
+//
+// Lean-aware throughout: under the lean profile the tools it names are hidden
+// from tools/list, so naming one would be a broken pointer.
+func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
+	sb.WriteString("## Tool guidance\n\n")
+
+	if t.topologyActive() {
+		if t.leanProfile() {
+			sb.WriteString("- Discovery: start with **topology_search** (ranked, works while the language " +
+				"server warms), then **get_definition** / **find_references** for exact, type-aware answers.\n")
+		} else {
+			sb.WriteString("- Discovery ladder: **workspace_search** (ranked, across code, docs, and memories) " +
+				"→ the topology tools and **get_definition** / **find_references** for exact answers → " +
+				"**search_in_files** when you need every occurrence. The plumb-explore skill has the full " +
+				"version, with the signal for leaving each rung.\n")
+		}
+		sb.WriteString("- **topology_affected** — which tests an edit touches (dependency edges + co-location, " +
+			"recall-biased and confidence-labelled). No language server gives this.\n")
+	} else if t.leanProfile() {
+		sb.WriteString("- Discovery: **workspace_symbols** to find a symbol by name, then **get_definition** / " +
+			"**find_references** for exact, type-aware answers.\n")
+	} else {
+		sb.WriteString("- Discovery: **workspace_search** (ranked, across code, docs, and memories), then " +
+			"**get_definition** / **find_references** for exact, type-aware answers; **search_in_files** " +
+			"when you need every occurrence.\n")
+	}
+
+	sb.WriteString("- Edit lane: **read_file** returns an mtime/sha header that **edit_file** takes back as " +
+		"`expected_mtime`, so the write is concurrency-checked against exactly what you read, per-path " +
+		"locked, announced to the language server, and reversible with **undo_edit**. **transaction_apply** " +
+		"is one atomic multi-file change.\n")
+	sb.WriteString("- **rename_symbol** — workspace-wide semantic rename; scope-aware, so it does what a " +
+		"text find-and-replace cannot.\n")
+	sb.WriteString("- **diagnostics** — live errors and warnings without running a build.\n")
+	sb.WriteString("- **run_task** — the project's stored `[tasks.<lang>]` build/test/lint command, no shell " +
+		"and bounded output.\n\n")
+
+	if !t.topologyActive() {
+		sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) " +
+			"for ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
 	}
 }
 
