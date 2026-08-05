@@ -504,6 +504,51 @@
   whole file; the early stop is now surfaced as an error so the file is
   recorded as failed instead.
 
+- **Exported TypeScript/JavaScript declarations carry their doc-comment span.**
+  An exported declaration is a child of its `export_statement`, so scanning its
+  own previous siblings for the preceding comment block only ever reached the
+  `export`/`default` keywords: `/** … */ export function f() {}` got no doc
+  span while the unexported form got one. Since TS/TSX declarations are
+  exported far more often than not, that was most of a real codebase. The scan
+  now anchors on the outermost export wrapper (`jsDocSpan`, shared by both
+  walks); every other language is unaffected. (#215–#217 follow-up)
+
+- **Import nodes no longer carry an inverted line range.** Every extractor that
+  emits a `KindImport` set `StartLine` and left `EndLine` at zero, so an import
+  on line 12 was persisted as the range 12–0. The byte span was correct, but
+  any consumer reading the line range saw it inverted. The defect was
+  byte-identical on both engines — nine gotreesitter walks and both wasmts
+  walks — which is exactly why the parity sweep never flagged it (its node key
+  compares the two engines' line ranges, and 12–0 equals 12–0). Both are fixed
+  together, so extraction parity is unchanged, and a table-driven guard over
+  the package's single extractor enumeration keeps it that way.
+
+- **A file that fails to extract is re-attempted even when nothing about it
+  changed.** `recordFileError` deliberately stores no content hash so the
+  staleness check retries on the next cycle, but its conflict clause updated
+  only the mtime and the error — so the hash written by an earlier *successful*
+  index survived the failure. A file that had indexed cleanly, was then touched
+  without a byte changing (a `git checkout` of the same revision, a formatter
+  that changed nothing, a restored backup) and then timed out ended up with a
+  current mtime and a matching hash: reported fresh, and never re-attempted
+  until its content changed. The failure path now clears the hash; the file's
+  existing nodes are still left in place, so the last good symbol set keeps
+  serving reads while the file waits for its retry.
+
+- **One dead-context contract across all three extract layers.** The
+  `wasmts.Extract` guard added above was stronger than the envelope it cited,
+  and the layer above it carried the same race. `treesitter.extractWith` only
+  consulted `ctx.Deadline()`, and a cancelled context usually has none — so it
+  parsed the file to completion and returned the symbols of a file its caller
+  had abandoned; it now checks `ctx.Err()` before constructing the parser, and
+  the expired-budget branch returns `context.DeadlineExceeded` outright rather
+  than `ctx.Err()`, which is nil in the window before the context is marked.
+  `safeExtract` still spawned its extract goroutine under a pre-cancelled
+  context and let the `select` choose between an already-closed `ctx.Done()`
+  and the result it had just started — returning that result, where the caller
+  was promised `ctx.Err()`, whenever the extractor was fast; it now refuses a
+  dead context up front. Both new tests are scheduler-independent.
+
 ## 0.16.0 (2026-07-31)
 
 ### Added
