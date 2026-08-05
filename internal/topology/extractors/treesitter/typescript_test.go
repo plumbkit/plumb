@@ -483,3 +483,41 @@ class Box {
 		}
 	}
 }
+
+// TestTypeScript_ExportedDeclarationsCarryDocSpans is the TypeScript half of the
+// export-anchor contract (see the JavaScript test of the same name): TS/TSX
+// declarations are exported far more often than not, so anchoring the doc scan
+// on the declaration rather than its export_statement wrapper left most of a
+// real codebase's symbols with no doc span at all.
+func TestTypeScript_ExportedDeclarationsCarryDocSpans(t *testing.T) {
+	src := []byte(`/** Adds two numbers. */
+export function add(a: number, b: number): number {
+  return a + b;
+}
+
+/** A widget. */
+export class Widget {}
+
+/** A shape. */
+export interface Shape {
+  side: number;
+}
+
+/** A limit. */
+export const LIMIT = 10;
+
+/** Not exported. */
+function helper(): void {}
+`)
+	nodes, _, err := NewTypeScript().Extract(context.Background(), "d.ts", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{
+		"add":    "/** Adds two numbers. */",
+		"Widget": "/** A widget. */",
+		"Shape":  "/** A shape. */",
+		"LIMIT":  "/** A limit. */",
+		"helper": "/** Not exported. */",
+	})
+}

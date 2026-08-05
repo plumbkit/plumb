@@ -118,7 +118,7 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
 	if enclosingType >= 0 {
@@ -148,7 +148,7 @@ func (w *jsWalk) addClass(n *tsg.Node) {
 		Path:      w.path,
 	}
 	setSpan(&node, n)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(n, w.lang, jsIsComment)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(n, w.lang)
 	w.nodes = append(w.nodes, node)
 	if body := childByType(n, "class_body", w.lang); body != nil {
 		w.addClassMembers(body, idx)
@@ -383,6 +383,24 @@ func (w *jsWalk) maybeTest(call *tsg.Node) {
 
 // jsIsComment reports whether a JavaScript grammar node type is a comment.
 func jsIsComment(typ string) bool { return typ == "comment" }
+
+// jsDocSpan returns the doc-comment span of a JavaScript/TypeScript
+// declaration, and is the seam both walks use instead of calling docSpanBefore
+// directly.
+//
+// The anchor is the outermost `export` wrapper, not the declaration itself: an
+// exported declaration is a CHILD of its export_statement, so its own previous
+// siblings are the `export`/`default` keywords and the comment above the
+// statement is never reached. Anchoring on the wrapper is what makes
+// `/** … */ export function f() {}` carry the same doc span as the unexported
+// form — which matters more here than in any other language, since TS/TSX
+// declarations are exported far more often than not.
+func jsDocSpan(decl *tsg.Node, lang *tsg.Language) (start, end int) {
+	for p := decl.Parent(); p != nil && p.Type(lang) == "export_statement"; p = p.Parent() {
+		decl = p
+	}
+	return docSpanBefore(decl, lang, jsIsComment)
+}
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in
 // the file. The call site is syntactically certain but the callee is resolved

@@ -322,7 +322,7 @@ func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) 
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
-	node.DocStartByte, node.DocEndByte = docSpanBefore(rng, w.lang, jsIsComment)
+	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang)
 	w.nodes = append(w.nodes, node)
 	return idx
 }

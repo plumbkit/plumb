@@ -233,3 +233,65 @@ func TestJavaScript_ClassFields(t *testing.T) {
 		t.Errorf("field count should be contained at 1.0; got conf=%v ok=%v", conf, ok)
 	}
 }
+
+// TestJavaScript_ExportedDeclarationsCarryDocSpans pins the doc-comment anchor
+// across the `export` wrapper. An exported declaration is a CHILD of its
+// export_statement, so scanning the declaration's own previous siblings only
+// ever reaches the `export`/`default` keywords — every exported symbol lost its
+// doc span while the unexported control kept one, which is the asymmetry this
+// table proves is gone.
+func TestJavaScript_ExportedDeclarationsCarryDocSpans(t *testing.T) {
+	src := []byte(`/** Adds two numbers. */
+export function add(a, b) {
+  return a + b;
+}
+
+/** A widget. */
+export class Widget {}
+
+/** The default one. */
+export default function main() {}
+
+/** Not exported. */
+function helper() {}
+`)
+	nodes, _, err := NewJavaScript().Extract(context.Background(), "d.js", src)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	assertDocSpans(t, src, nodes, map[string]string{
+		"add":    "/** Adds two numbers. */",
+		"Widget": "/** A widget. */",
+		"main":   "/** The default one. */",
+		"helper": "/** Not exported. */",
+	})
+}
+
+// assertDocSpans checks that each named node carries exactly the given doc
+// comment, and that the span precedes the declaration it documents.
+func assertDocSpans(t *testing.T, src []byte, nodes []topology.Node, want map[string]string) {
+	t.Helper()
+	for name, doc := range want {
+		var n *topology.Node
+		for i := range nodes {
+			if nodes[i].Name == name {
+				n = &nodes[i]
+				break
+			}
+		}
+		if n == nil {
+			t.Errorf("%q not extracted", name)
+			continue
+		}
+		if !n.HasDocSpan() {
+			t.Errorf("%q carries no doc span", name)
+			continue
+		}
+		if got := string(src[n.DocStartByte:n.DocEndByte]); got != doc {
+			t.Errorf("%q doc span = %q, want %q", name, got, doc)
+		}
+		if n.DocStartByte >= n.StartByte {
+			t.Errorf("%q doc span start %d should precede decl start %d", name, n.DocStartByte, n.StartByte)
+		}
+	}
+}
