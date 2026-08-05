@@ -510,8 +510,28 @@
   `export`/`default` keywords: `/** … */ export function f() {}` got no doc
   span while the unexported form got one. Since TS/TSX declarations are
   exported far more often than not, that was most of a real codebase. The scan
-  now anchors on the outermost export wrapper (`jsDocSpan`, shared by both
-  walks); every other language is unaffected. (#215–#217 follow-up)
+  now falls back to the outermost export wrapper (`jsDocSpan`, shared by both
+  walks) when the declaration itself yields nothing, which also keeps the span
+  of a comment written inside the wrapper
+  (`export /** … */ class Inner {}`). (#215–#217 follow-up)
+
+- **A doc-comment span stops at the first blank line, so licence banners are
+  no longer deleted.** The comment scan collected any run of previous comment
+  siblings, and a tree-sitter grammar emits no node for a blank line — so a
+  file-leading SPDX/licence banner was indistinguishable from a doc comment.
+  Reaching the export wrapper (above) made that reachable for every exported
+  symbol, and `include_doc_comment` — which defaults **true** on `move_symbol`
+  — prefers the topology span over the line-scan heuristic that does stop at
+  blank lines, so `replace_symbol_body` would quietly take the banner with the
+  symbol. The rule is now flushness at both ends of the run: the closest
+  comment must sit directly above the declaration (or inline on the same row),
+  and the backward walk stops at the first separation, so `banner / blank line
+  / doc-block / decl` keeps only the doc-block. It lives in the shared helper,
+  so all seven tree-sitter languages get it. Flushness is read from the source
+  text rather than from node positions, because a grammar may let a comment
+  node swallow the newlines after it — Rust's `///` does, leaving a comment
+  whose end offset *is* the following declaration's start offset, blank line
+  included.
 
 - **Import nodes no longer carry an inverted line range.** Every extractor that
   emits a `KindImport` set `StartLine` and left `EndLine` at zero, so an import
