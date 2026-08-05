@@ -81,7 +81,7 @@ func topologyDisabledMessage() string {
 }
 
 // filterTopologyByName returns nodes whose name contains query (case-insensitive),
-// mirroring the substring matching of find_symbol's LSP path.
+// mirroring the substring matching of workspace_symbols' in-file LSP path.
 func filterTopologyByName(nodes []topology.Node, query string) []topology.Node {
 	q := strings.ToLower(query)
 	out := make([]topology.Node, 0, len(nodes))
@@ -189,19 +189,4 @@ func symbolBaseSegment(name string) string {
 		return name[i+1:]
 	}
 	return name
-}
-
-// formatTopologyOutline renders a single-file outline fallback result prefixed
-// with note (topologyFallbackNote or its warming variant).
-func formatTopologyOutline(note, uri string, nodes []topology.Node) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\nSymbols in %s (%d, source: topology)\n\n", note, uri, len(nodes))
-	for _, n := range nodes {
-		if n.EndLine == 0 || n.StartLine == n.EndLine {
-			fmt.Fprintf(&sb, "%s (%s) line %d\n", n.Name, string(n.Kind), n.StartLine)
-		} else {
-			fmt.Fprintf(&sb, "%s (%s) lines %d–%d\n", n.Name, string(n.Kind), n.StartLine, n.EndLine)
-		}
-	}
-	return sb.String()
 }

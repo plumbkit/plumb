@@ -63,24 +63,12 @@ func TestWorkspaceSymbols_TopologyFallback(t *testing.T) {
 	}
 }
 
-func TestListSymbols_TopologyFallback(t *testing.T) {
+// TestWorkspaceSymbols_InFileTopologyFallback covers the uri-scoped mode's
+// fallback: a broken server on a single-document search still answers from the
+// index, annotated.
+func TestWorkspaceSymbols_InFileTopologyFallback(t *testing.T) {
 	store, uri := newIndexedStore(t)
-	tool := tools.NewListSymbols(brokenLSP(), nil, 0, 0).
-		WithTopologyFallback(func() *topology.Store { return store })
-	args, _ := json.Marshal(map[string]any{"uri": uri})
-
-	out, err := tool.Execute(context.Background(), args)
-	if err != nil {
-		t.Fatalf("expected topology fallback to succeed, got error: %v", err)
-	}
-	if !strings.Contains(out, "topology fallback") || !strings.Contains(out, "HandleRequest") {
-		t.Errorf("expected annotated outline naming HandleRequest, got:\n%s", out)
-	}
-}
-
-func TestFindSymbol_TopologyFallback(t *testing.T) {
-	store, uri := newIndexedStore(t)
-	tool := tools.NewFindSymbol(brokenLSP(), nil, 0, 0).
+	tool := tools.NewWorkspaceSymbols(brokenLSP(), nil, 0, 0, nil).
 		WithTopologyFallback(func() *topology.Store { return store })
 	args, _ := json.Marshal(map[string]any{"query": "Handle", "uri": uri})
 
@@ -97,12 +85,13 @@ func TestFindSymbol_TopologyFallback(t *testing.T) {
 // language server — the pre-warming-awareness text, which must never drift.
 const legacyFallbackNote = "[topology fallback — LSP unavailable; results are approximate and may be stale. source=topology, mode=indexed-approximate]"
 
-// TestFindSymbol_TopologyFallback_WarmingNote proves that when the warm-up
-// probe reports the server as still warming, the fallback note says so instead
-// of the misleading "LSP unavailable".
-func TestFindSymbol_TopologyFallback_WarmingNote(t *testing.T) {
+// TestWorkspaceSymbols_InFileTopologyFallback_WarmingNote proves that when the
+// warm-up probe reports the server as still warming, the fallback note says so
+// instead of the misleading "LSP unavailable". The warm-up probe is fed the
+// target uri, which only the file-scoped mode has.
+func TestWorkspaceSymbols_InFileTopologyFallback_WarmingNote(t *testing.T) {
 	store, uri := newIndexedStore(t)
-	tool := tools.NewFindSymbol(brokenLSP(), nil, 0, 0).
+	tool := tools.NewWorkspaceSymbols(brokenLSP(), nil, 0, 0, nil).
 		WithTopologyFallback(func() *topology.Store { return store }).
 		WithLSPWarmup(func(string) (bool, time.Duration) { return true, 4 * time.Second })
 	args, _ := json.Marshal(map[string]any{"query": "Handle", "uri": uri})
@@ -119,11 +108,11 @@ func TestFindSymbol_TopologyFallback_WarmingNote(t *testing.T) {
 	}
 }
 
-// TestFindSymbol_TopologyFallback_LegacyNoteWhenUnwired proves a tool without a
-// warm-up probe still emits the historical note byte-for-byte.
-func TestFindSymbol_TopologyFallback_LegacyNoteWhenUnwired(t *testing.T) {
+// TestWorkspaceSymbols_InFileTopologyFallback_LegacyNoteWhenUnwired proves a
+// tool without a warm-up probe still emits the historical note byte-for-byte.
+func TestWorkspaceSymbols_InFileTopologyFallback_LegacyNoteWhenUnwired(t *testing.T) {
 	store, uri := newIndexedStore(t)
-	tool := tools.NewFindSymbol(brokenLSP(), nil, 0, 0).
+	tool := tools.NewWorkspaceSymbols(brokenLSP(), nil, 0, 0, nil).
 		WithTopologyFallback(func() *topology.Store { return store })
 	args, _ := json.Marshal(map[string]any{"query": "Handle", "uri": uri})
 

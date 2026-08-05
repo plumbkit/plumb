@@ -246,11 +246,19 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		return errResp(req.ID, codeInvalidParams, "invalid params: "+err.Error())
 	}
 
+	// A retired tool name is resolved onto its canonical tool BEFORE the registry
+	// lookup, so the canonical name is what the hooks, the parameter-alias
+	// resolver, execTool, and the recorded stats all see. See toolalias.go.
+	aliasUsed := ""
+	if canonical, adapted, ok := resolveToolAlias(params.Name, params.Arguments); ok {
+		aliasUsed, params.Name, params.Arguments = params.Name, canonical, adapted
+	}
+
 	s.mu.RLock()
 	t, ok := s.tools[params.Name]
 	s.mu.RUnlock()
 	if !ok {
-		return errResp(req.ID, codeMethodNotFound, "unknown tool: "+params.Name)
+		return errResp(req.ID, codeMethodNotFound, s.unknownToolMessage(params.Name))
 	}
 
 	if s.OnBeforeTool != nil {
@@ -290,13 +298,24 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	}
 	if err != nil {
 		slog.Warn("mcp: tool error", "tool", params.Name, "err", err)
+		// The notice leads the FAILURE too. An aliased call that errors reports a
+		// tool the caller never named ("find_files: …" from a list_directory call),
+		// which reads as plumb answering a different question; without the notice
+		// there is nothing in the response tying the two names together.
+		msg := "error: " + err.Error()
+		if aliasUsed != "" {
+			msg = toolAliasNotice(aliasUsed, params.Name) + msg
+		}
 		return okResp(req.ID, callResult{
-			Content: []content{{Type: "text", Text: "error: " + err.Error()}},
+			Content: []content{{Type: "text", Text: msg}},
 			IsError: true,
 		})
 	}
 	if len(warnings) > 0 {
 		text = aliasNotice(warnings) + text
+	}
+	if aliasUsed != "" {
+		text = toolAliasNotice(aliasUsed, params.Name) + text
 	}
 	if s.EnrichToolOutput != nil {
 		runHookSafely("EnrichToolOutput", func() {

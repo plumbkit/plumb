@@ -278,7 +278,7 @@ func (t *SessionStart) lspRouted() []string {
 // WithLSPWarmup wires an accessor reporting whether the session's primary
 // language server is still warming (handshake incomplete) and for how long. When
 // it reports warming, session_start softens "LSP is ready" into a warming
-// advisory that steers the agent to topology/find_symbol meanwhile. Nil-safe:
+// advisory that steers the agent to topology/workspace_symbols meanwhile. Nil-safe:
 // unset means never warming. Returns the receiver for chaining.
 func (t *SessionStart) WithLSPWarmup(fn func() (bool, time.Duration)) *SessionStart {
 	t.lspWarmingFn = fn

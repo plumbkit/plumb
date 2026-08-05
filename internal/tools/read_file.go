@@ -239,7 +239,7 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("read_file: %w", err)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("read_file: %q is a directory — use list_files to browse directories", fpath)
+		return "", fmt.Errorf("read_file: %q is a directory — use find_files to browse directories", fpath)
 	}
 	mtime := info.ModTime()
 	concurrentNote := t.concurrentEditNote(fpath, mtime)

@@ -55,13 +55,9 @@ func leanToolSet() []describable {
 // payload reduction.
 func nonLeanToolSet() []describable {
 	return []describable{
-		NewFindSymbol(nil, nil, 0, 0),
 		NewExplainSymbol(nil, nil, 0, 0),
-		NewListSymbols(nil, nil, 0, 0),
 		NewCallHierarchy(nil, 0),
 		NewTypeHierarchy(nil, 0),
-		NewListFiles(nil),
-		NewListDirectory(nil),
 		NewMinimalDiffReview(nil),
 		NewReadMultipleFiles(),
 		NewFileStatus(nil),
@@ -72,7 +68,6 @@ func nonLeanToolSet() []describable {
 		NewAgentConfig(AgentConfigDeps{}),
 		NewFileDiff(),
 		NewFindReplace(),
-		NewVersion(),
 		NewDaemonInfoFunc("", nil, "", time.Time{}),
 		NewRenameSession(nil),
 		NewWorkspaceSessions(nil, ""),

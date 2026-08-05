@@ -67,7 +67,7 @@ func TestBuildEpisodic_EmptyWhenNoActivity(t *testing.T) {
 // symbol name carrying a token must not survive redaction of the summary.
 func TestBuildEpisodic_RedactionComposes(t *testing.T) {
 	calls := []stats.Call{
-		{Tool: "find_symbol", InputJSON: `{"name":"ghp_0123456789abcdefghijklmnopqrstuvwxyz1"}`},
+		{Tool: "workspace_symbols", InputJSON: `{"name":"ghp_0123456789abcdefghijklmnopqrstuvwxyz1"}`},
 		{Tool: "edit_file", InputJSON: `{"file_path":"/ws/a.go"}`, Success: true},
 	}
 	summary := buildEpisodicDetail(calls, "").Summary

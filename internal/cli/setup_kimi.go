@@ -11,7 +11,7 @@ import (
 // Kimi Code's registration is the one that takes an option, so it lives here
 // rather than in the generic setup_clients.go table.
 //
-// WHY A CLIENT-SIDE ALLOWLIST. plumb advertises its full 62-tool registry to
+// WHY A CLIENT-SIDE ALLOWLIST. plumb advertises its full 57-tool registry to
 // Kimi Code, because Kimi is schema-discovery-only (internal/clientcaps): it
 // builds its tool set purely from tools/list, with no deferred-schema mechanism,
 // so plumb's own lean profile would make the hidden tools unreachable rather
@@ -50,7 +50,7 @@ func kimiLeanNote() string {
 // kimiCodeInto registers plumb in Kimi Code's mcp.json (the plain mcpServers
 // JSON shape, shared with Kimi Desktop). With lean set it additionally writes
 // the "enabledTools" allowlist — tools.LeanToolNames(), the same set plumb's own
-// lean profile advertises — so Kimi loads ~21 schemas instead of all 62.
+// lean profile advertises — so Kimi loads ~21 schemas instead of all 57.
 //
 // The idempotence predicate is lean-aware, and that is the subtle part. Without
 // it, mergeServerEntry's "already points at this binary" short-circuit would

@@ -80,9 +80,7 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 		sb.WriteString("- **type_hierarchy** — supertypes and subtypes of a class or interface.\n")
 	}
 	sb.WriteString("- **rename_symbol** — workspace-wide LSP rename (updates all references; safer than find+replace).\n")
-	if !t.leanProfile() {
-		sb.WriteString("- **list_symbols** with include_signatures=true — outline a file without reading it.\n")
-	}
+	sb.WriteString("- **file_outline** — a file's shape (signatures, bodies collapsed) without reading it.\n")
 	sb.WriteString("- **diagnostics** — live LSP errors and warnings without running a build.\n\n")
 	sb.WriteString("Tip: enable the topology index (`[topology] enabled = true` in `.plumb/config.toml`) to add " +
 		"ranked search, file outlines, and `topology_affected` — which tests to run after a change.\n\n")
@@ -145,7 +143,7 @@ func (t *SessionStart) writeClaudeDesktopGuidance(sb *strings.Builder) {
 	sb.WriteString("**All file operations go through plumb** — there is no fallback:\n\n")
 	sb.WriteString("- **read_file** / **read_multiple_files** — read any file or slice of a file.\n")
 	sb.WriteString("- **write_file** / **edit_file** — create or modify files atomically.\n")
-	sb.WriteString("- **list_files** / **find_files** / **search_in_files** — discover and search the codebase.\n")
+	sb.WriteString("- **find_files** / **search_in_files** — discover, list, and search the codebase.\n")
 	sb.WriteString("- **git** — read-only git queries (status, log, diff, blame).\n\n")
 	if t.topologyActive() {
 		sb.WriteString("**Topology (the Map)** — in-process, always-on structural index:\n\n")

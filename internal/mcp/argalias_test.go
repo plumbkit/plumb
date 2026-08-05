@@ -40,7 +40,7 @@ func TestResolveArgs_ExpandedAliases(t *testing.T) {
 			wantArgsSub: `"use_regex":true`,
 		},
 		{
-			name:        "path → root (list_files)",
+			name:        "path → root (a root-canonical shape)",
 			schema:      `{"type":"object","properties":{"root":{"type":"string"},"pattern":{"type":"string"}},"additionalProperties":false}`,
 			args:        `{"path":"/dir"}`,
 			wantWarn:    `interpreted "path" as "root"`,
@@ -269,7 +269,7 @@ func TestResolveArgs_ExpandedTable(t *testing.T) {
 		wantArgsSub string
 	}{
 		{
-			name:        "depth → max_depth (list_files/find_files)",
+			name:        "depth → max_depth (find_files)",
 			schema:      `{"type":"object","properties":{"root":{"type":"string"},"max_depth":{"type":"integer"}},"additionalProperties":false}`,
 			args:        `{"root":"/d","depth":2}`,
 			wantWarn:    `interpreted "depth" as "max_depth"`,
@@ -297,7 +297,7 @@ func TestResolveArgs_ExpandedTable(t *testing.T) {
 			wantArgsSub: `"extension":"go"`,
 		},
 		{
-			name:        "sort → sort_by (list_directory)",
+			name:        "sort → sort_by (find_files)",
 			schema:      `{"type":"object","properties":{"path":{"type":"string"},"sort_by":{"type":"string"}},"additionalProperties":false}`,
 			args:        `{"path":"/d","sort":"size"}`,
 			wantWarn:    `interpreted "sort" as "sort_by"`,

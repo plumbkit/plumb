@@ -19,7 +19,7 @@
   (the sorted union of `LeanTools` and `BootstrapTools` — union, so a
   client-enforced allowlist can never strip a bootstrap tool) into the
   `enabledTools` key of the plumb entry in Kimi's own `mcp.json`, loading 21
-  schemas instead of 62. The idempotence predicate is lean-aware, which is the
+  schemas instead of 57. The idempotence predicate is lean-aware, which is the
   whole trick: without it `mergeServerEntry`'s "already points at this binary"
   short-circuit would make `--lean` a silent no-op on every machine that
   already had plumb registered. A later bare re-register (and `plumb setup
@@ -109,6 +109,147 @@
   discard (it times out on the lock convoy) and green with it restored.
 
 ### Changed
+
+- **Five tools folded into four survivors behind a permanent unadvertised alias
+  layer — the advertised surface drops 62 → 57 with no capability removed.**
+  Five registered tools were commodity duplicates of a neighbour: `version`
+  reported a strict subset of `daemon_info`; `list_symbols` and `file_outline`
+  shared a documentSymbol cache key and answered the same question in two
+  shapes; `find_symbol` was `workspace_symbols` scoped to one file, and its
+  uri-less form did nothing but print a redirect *to* `workspace_symbols`;
+  `list_files` and `list_directory` were `find_files` with a different default
+  and a different renderer. Each duplicate cost a schema in every `tools/list`
+  and a choice the agent had to get right. They are now one tool each —
+  `version → daemon_info`, `list_symbols → file_outline`, `find_symbol →
+  workspace_symbols`, `list_files` + `list_directory` → `find_files`.
+
+  The survivors absorbed what was distinct rather than dropping it.
+  `daemon_info` gained the `go runtime` and `os/arch` rows `version` reported.
+  `workspace_symbols` gained an optional `uri`: with one it runs the
+  single-document search `find_symbol` owned, without one the workspace-wide
+  search the old redirect merely pointed at — so the call that used to fail now
+  answers. `find_files` gained an optional `pattern` (omit it to list
+  everything), `include_details` (`list_directory`'s rendering: a
+  `[FILE]`/`[DIR]`/`[LINK]` marker, size, and modified time per entry, symlinks
+  as `name -> target`), and `sort_by` (`name`/`size`/`modified`, applied to the
+  whole — possibly recursive — result list; a size/modified ranking lifts the
+  walk's early stop to a 5000-entry scan ceiling before truncating to
+  `max_results`, because "largest first" over whichever entries the traversal
+  happened to reach first is not largest-first at all). `max_depth: 1` now means
+  one level and no more: the shared walk prunes strictly (it no longer reads the
+  directory it used to descend into just to discard the contents) and
+  `find_files` keeps its own depth check over that. Three more honesty fixes
+  ride along, all of them things the merged tool would otherwise have said
+  wrongly to a caller who could not tell: pointing at a FILE still lists its
+  parent — long-standing `find_files` behaviour — but now says so in a leading
+  `note:` line, where `list_directory` used to hard-error; a result set that
+  lands exactly on `max_results` having exhausted the tree is no longer labelled
+  truncated (truncation now means the walk really stopped short), and the
+  truncation line reports the tally alongside the note instead of replacing it;
+  and `sort_by: "size"` no longer ranks directories by their inode size, a
+  number the listing leaves blank. `plumb diagnostics` moved to `find_files` for
+  its workspace warm-up, and its result parser now skips the tool's prose lines
+  — the trailing `N result(s)` summary it had been counting as a source file,
+  plus the `note:` and timeout sentences.
+
+  **The retired names stay callable, permanently.** `internal/mcp/toolalias.go`
+  resolves an old name onto its survivor BEFORE the registry lookup — so the
+  canonical name is what the hooks, the parameter-alias resolver, `execTool`,
+  and the recorded stats all see — adapts the arguments where the shapes differ
+  (`list_symbols` drops `include_signatures`; `list_files`' `root` becomes
+  `path` and its depth default of 8 is pinned, since `find_files` descends
+  without limit; `list_directory` becomes `max_depth:1, type:"any",
+  include_details:true`; both listing aliases lift `max_results` to the schema
+  maximum, since neither retired tool capped its output and `find_files` stops
+  at 500), and prepends a one-line notice naming the survivor — on the error
+  path too, so a failure that reports the survivor's name is never the first the
+  caller hears of the redirect. What an adapter injects is a DEFAULT, not a
+  mandate: a caller who names one of those parameters keeps their value
+  (`list_directory({max_depth: 3})` gets three levels), and an injected default
+  consults the parameter-alias table before it lands, so a caller's own spelling
+  (`list_files({depth: 1})`) is never shut out of the canonical slot either. The
+  one value an adapter overrides is a non-positive `max_depth`, which
+  `find_files` reads as unlimited — the inversion of what the old caller meant.
+  `list_files` given BOTH `root` and `path` resolves neither: two values for one
+  slot is left to the argument guard to reject, matching the parameter layer's
+  own policy. Aliases are absent from `tools/list`, from the self-test
+  coverage groups, and from every advertised schema — hidden-but-callable, the
+  semantics the lean profile already had — so they cost no schema budget and no
+  client learns a retired name from plumb. Matching is exact: a near-miss falls
+  through to the unknown-tool rejection, which now offers a "did you mean" hint
+  over the union of registered names and aliases, reusing the parameter guard's
+  `closest` — and reports the CANONICAL when the closest match is an alias, so
+  the hint never teaches a name that appears in no tool list.
+
+  **Breaking:** `find_files`' `max_depth` now means exactly N levels —
+  previously files one level deeper leaked through, because the shared walker
+  pruned directories at the limit but still visited the files inside the last
+  one it entered. That is a real change for CANONICAL `find_files` callers, not
+  only for the aliased lists: a `max_depth: 2` call that used to return three
+  levels of files now returns two. (It is also what makes the `list_directory`
+  alias genuinely single-level, and the walk no longer reads the directory it
+  used to descend into just to discard the contents.) A non-positive
+  `max_depth`, which the schema never allowed and which read as "unlimited", is
+  now a clean rejection. Otherwise only the advertised lists change: harness-side
+  callers see canonical names only, and a stale client-side permission or
+  allowlist rule naming a retired tool goes inert rather than wrong — the call
+  still runs, under the survivor's name. Tool count 62 → 57; `README.md`,
+  `docs/`, `AGENTS.md`, and `site/index.html` move with it.
+
+  **Migration:** three behaviours genuinely change for old-name callers.
+  (1) `list_files`' hardcoded exclude list (`vendor`, `node_modules`,
+  `__pycache__`, `.pytest_cache`) died with the tool: `find_files`' `.gitignore`
+  confinement is now the only exclusion mechanism, so `vendor/` is visible
+  unless it is gitignored and gitignored build output is no longer listed.
+  `list_directory` excluded nothing at all, so it tightens the same way. The
+  one-line fix either direction is to gitignore the directories you want hidden.
+  `.git/` is the exception and needs no gitignore rule: the shared walk now
+  excludes it outright, for `find_files`, `search_in_files`, and `find_replace`
+  alike, even under `include_hidden: true`. (2) `list_symbols`'
+  `include_signatures` is dropped — the outline always renders signature lines,
+  so the flag has no counterpart to carry. (3) `list_files` and `list_directory`
+  both implemented `mcp.ExecTimeoutBounded`; `find_files` does not. That marker
+  is not a shorter budget — the dispatcher runs `Execute` on a child goroutine
+  and returns when its timer fires, so the caller escapes even a blocked
+  syscall, whereas `find_files`' own 30s deadline is cooperative and cannot
+  interrupt `os.Stat`/`os.ReadDir`. On a stalled network/FUSE mount an old-name
+  caller used to get an actionable error in 10s and now waits for the syscall.
+  The trade is deliberate: opting in would newly time out broad walks over large
+  healthy trees.
+
+  Two further differences are announced rather than silent, so they are not in
+  the list above: both listing aliases pin `max_results: 5000`, and a result
+  above that is reported as truncated rather than silently cut; and
+  `list_directory`'s once-required `path` is optional on `find_files`, which
+  defaults it to the workspace root, so `list_directory({})` now answers where
+  it used to error.
+
+  Guarded by `TestToolAliases_ExactMembership` (the whole table, so adding or
+  retiring a name is a reviewable event, never silent drift),
+  `TestToolAliases_CanonicalsAreRegistered`,
+  `TestToolAliases_AliasesAreNotRegistered`, `TestResolveToolAlias`,
+  `TestToolAliasNotice_Format`, the full-dispatch `TestToolsCall_*Alias*` set
+  (every alias driven through `tools/call` against the REAL survivor, so an
+  adapter that does not fit the survivor's actual schema fails here rather than
+  in the field — including the set-if-absent policy, the lifted result cap, the
+  `root`+`path` rejection, the `max_depth: 0` inversion, the file-path note, and
+  the notice on the error path), `TestToolsCall_BothAliasLayersComposeInOrder`
+  (which of the two notices leads, the one thing a "both are present" assertion
+  cannot see), `TestToolsList_OmitsAliases`,
+  `TestToolsCall_UnknownTool_DidYouMean`, the ported
+  `list_files`/`list_directory` coverage in `TestFindFiles_*` (optional pattern,
+  hidden handling, the depth contract, the detailed rendering, symlink targets,
+  the three sort orders) plus `TestFindFiles_FilePathListsParentWithANote` /
+  `_FilePathNoteSurvivesAnEmptyResult` / `_MaxDepthRejectsNonPositive` /
+  `_ExcludesDotGitEvenWhenHidden` / `_TruncationReportsTheTally` /
+  `_ExactlyMaxResultsIsNotTruncated` / `_TruncationNoteIsSingularAtOne`,
+  `TestNewFindFileHit_DirectorySizeIsZero`, `TestWalk_MaxDepth` (now an exact
+  set per depth, which is also the pruning proof) and
+  `TestWalk_NeverEntersDotGit`, `TestParseFileList_SkipsFindFilesProse`,
+  `TestWorkspaceSymbols_InFileSearch` /
+  `_URIOptional` / `_ModeSelectedByURI`, `TestDaemonInfo_ReportsRuntimeAndArch`,
+  `TestSmoke_ToolListParity`, `TestAgentsToolCount`, and
+  `TestDocToolCountMatchesRegistry`.
 
 - **TypeScript and TSX/JSX now index through the pure-Go gotreesitter
   extractor — the per-language WASM-retirement flip, part 1.** On v0.48.0 the

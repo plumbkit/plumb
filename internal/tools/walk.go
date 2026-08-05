@@ -227,10 +227,20 @@ func isHidden(name string) bool {
 
 // ── walker ───────────────────────────────────────────────────────────────────
 
+// gitDirName is the one directory the shared walk NEVER enters, whatever the
+// hidden-file policy says. include_hidden means "show me dotfiles", not "show
+// me the object database": a repository's .git/ is thousands of loose objects
+// and packfiles that no caller of find_files, search_in_files, or find_replace
+// has ever wanted — and find_replace rewriting inside it would corrupt the
+// repository. Both search tools already advertise "no .git/" in their
+// descriptions; this is what makes that true rather than an accident of .git
+// happening to start with a dot.
+const gitDirName = ".git"
+
 // walkOptions controls the filesystem traversal shared by both tools.
 type walkOptions struct {
 	root          string
-	maxDepth      int  // 0 = unlimited
+	maxDepth      int  // 0 = unlimited; N visits entries at depths 0..N-1
 	includeHidden bool // include dot-files/dirs
 	respectIgnore bool // honour .gitignore / .ignore
 }
@@ -254,8 +264,12 @@ func walk(ctx context.Context, opts walkOptions, fn walkFn) error {
 	return walkDir(ctx, opts.root, 0, st, opts, fn)
 }
 
-// shouldVisitEntry reports whether an entry passes the hidden-file and gitignore filters.
+// shouldVisitEntry reports whether an entry passes the .git, hidden-file, and
+// gitignore filters.
 func shouldVisitEntry(name, absPath string, isDir bool, opts walkOptions, st ignoreStack) bool {
+	if isDir && name == gitDirName {
+		return false // unconditional — see gitDirName
+	}
 	if !opts.includeHidden && isHidden(name) {
 		return false
 	}
@@ -291,22 +305,46 @@ func walkDir(ctx context.Context, dir string, depth int, st ignoreStack, opts wa
 			continue
 		}
 
-		relDepth := depth
 		if d.IsDir() {
-			if opts.maxDepth > 0 && relDepth >= opts.maxDepth {
-				continue
-			}
-			if err := fn(absPath, d, relDepth); errors.Is(err, fs.SkipDir) {
-				continue
-			}
-			if err := walkDir(ctx, absPath, depth+1, st, opts, fn); err != nil {
+			if err := walkSubdir(ctx, absPath, d, depth, st, opts, fn); err != nil {
 				return err
 			}
-		} else {
-			if err := fn(absPath, d, relDepth); err != nil {
-				return err
-			}
+			continue
+		}
+		if err := fn(absPath, d, depth); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// walkSubdir visits one directory entry and descends into it unless the depth
+// limit or the callback says otherwise. Split out of walkDir's loop to keep
+// that loop flat.
+//
+// A non-SkipDir error from fn on a DIRECTORY is deliberately discarded, as it
+// always has been: pruning is the only signal a directory visit is allowed to
+// send, and a callback that reports a real problem does so from the file visit.
+func walkSubdir(ctx context.Context, absPath string, d fs.DirEntry, depth int, st ignoreStack, opts walkOptions, fn walkFn) error {
+	if pastDepthLimit(opts, depth) {
+		return nil // the directory itself sits at or past the limit
+	}
+	if err := fn(absPath, d, depth); errors.Is(err, fs.SkipDir) {
+		return nil
+	}
+	// Prune STRICTLY: this directory's children sit at depth+1, so once that is
+	// past the limit there is nothing inside worth reading. The old check
+	// descended one level too far and then discarded everything it found — a
+	// ReadDir plus a .gitignore load per top-level directory for a max_depth=1
+	// listing.
+	if pastDepthLimit(opts, depth+1) {
+		return nil
+	}
+	return walkDir(ctx, absPath, depth+1, st, opts, fn)
+}
+
+// pastDepthLimit reports whether an entry at this depth is outside the walk's
+// maxDepth. maxDepth 0 means unlimited, so nothing is ever past it.
+func pastDepthLimit(opts walkOptions, depth int) bool {
+	return opts.maxDepth > 0 && depth >= opts.maxDepth
 }

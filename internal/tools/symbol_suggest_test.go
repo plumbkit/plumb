@@ -118,7 +118,7 @@ func TestDidYouMean(t *testing.T) {
 		t.Errorf("didYouMean(nil) = %q, want empty", got)
 	}
 	got := didYouMean([]string{"fsWatcher", "WatcherConfig"})
-	want := " Did you mean: `fsWatcher`, `WatcherConfig`? Use find_symbol for a fuzzy search."
+	want := " Did you mean: `fsWatcher`, `WatcherConfig`? Use workspace_symbols for a fuzzy search."
 	if got != want {
 		t.Errorf("didYouMean = %q, want %q", got, want)
 	}

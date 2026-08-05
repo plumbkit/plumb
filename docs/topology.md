@@ -140,8 +140,8 @@ treat it as an optional, rebuildable index.
 A common flow: `topology_search` to locate → `topology_explore`/`topology_impact`
 to scope → LSP tools to read and edit precisely → `diagnostics` to verify.
 
-When topology is enabled, the name-lookup tools `find_symbol`,
-`workspace_symbols`, and `list_symbols` also **fall back** to the topology index
+When topology is enabled, the name-lookup tools `workspace_symbols`
+and `file_outline` also **fall back** to the topology index
 if the language server errors or times out, returning approximate results
 annotated `source=topology, mode=indexed-approximate` rather than failing.
 

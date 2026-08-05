@@ -86,7 +86,7 @@ func suggestionCandidates(syms []protocol.DocumentSymbol) []string {
 
 // didYouMean renders suggestions as a fragment appended to a not-found
 // message (leading space; empty when there are no suggestions), pointing at
-// find_symbol for anything beyond a near miss.
+// workspace_symbols for anything beyond a near miss.
 func didYouMean(suggestions []string) string {
 	if len(suggestions) == 0 {
 		return ""
@@ -95,7 +95,7 @@ func didYouMean(suggestions []string) string {
 	for i, s := range suggestions {
 		quoted[i] = "`" + s + "`"
 	}
-	return " Did you mean: " + strings.Join(quoted, ", ") + "? Use find_symbol for a fuzzy search."
+	return " Did you mean: " + strings.Join(quoted, ", ") + "? Use workspace_symbols for a fuzzy search."
 }
 
 // levenshtein is the classic two-row edit distance. Deliberately duplicated

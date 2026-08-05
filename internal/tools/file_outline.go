@@ -62,7 +62,8 @@ type FileOutline struct {
 }
 
 // NewFileOutline constructs the tool. It shares the documentSymbol cache key
-// with list_symbols, so a warm outline reuses an existing symbol query.
+// with the other symbol queries, so a warm outline reuses an existing
+// documentSymbol result.
 func NewFileOutline(client lsp.Client, c *cache.Cache, ttl, timeout time.Duration) *FileOutline {
 	return &FileOutline{client: client, cache: c, ttl: ttl, timeout: timeout}
 }
@@ -303,7 +304,7 @@ func readSourceLines(path string) ([]string, error) {
 		return nil, err
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("%q is a directory — use list_directory to browse directories", path)
+		return nil, fmt.Errorf("%q is a directory — use find_files to browse directories", path)
 	}
 	if info.Size() > outlineMaxBytes {
 		return nil, fmt.Errorf("file too large for an outline (%d bytes > %d)", info.Size(), outlineMaxBytes)

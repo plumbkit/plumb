@@ -53,11 +53,11 @@ func TestLSPTimeoutErr_RewritesDeadlineExceeded(t *testing.T) {
 
 func TestLSPTimeoutErr_WrapsOtherErrors(t *testing.T) {
 	sentinel := errors.New("boom")
-	err := lspTimeoutErr("find_symbol", time.Second, sentinel)
+	err := lspTimeoutErr("workspace_symbols", time.Second, sentinel)
 	if !errors.Is(err, sentinel) {
 		t.Errorf("expected the underlying error to be wrapped, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "find_symbol") {
+	if !strings.Contains(err.Error(), "workspace_symbols") {
 		t.Errorf("expected the tool name in the message, got: %v", err)
 	}
 }

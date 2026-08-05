@@ -154,9 +154,9 @@ Run `plumb` with no arguments for a live dashboard — see what your agent is do
 
 ## Core capabilities
 
-Plumb exposes **62 tools**. The ones you'll use constantly:
+Plumb exposes **57 tools**. The ones you'll use constantly:
 
-`session_start` · `find_symbol` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
+`session_start` · `workspace_symbols` · `get_definition` · `find_references` · `rename_symbol` · `edit_file` · `transaction_apply` · `diagnostics`
 
 The rest cover filesystem reads/writes, LSP hierarchies, tiered git, an optional local **Topology** index (ranked search + blast-radius/route analysis, no language server needed), and durable per-project memory. Full API reference: [**docs/tools.md**](docs/tools.md).
 

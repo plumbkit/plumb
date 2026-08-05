@@ -125,7 +125,7 @@ func TestSeedPathFromArgs(t *testing.T) {
 			want: "/tmp/foo.go",
 		},
 		{
-			name: "root field (list_files)",
+			name: "root field (the retired list_files spelling)",
 			args: `{"root":"/tmp/proj"}`,
 			want: "/tmp/proj",
 		},
