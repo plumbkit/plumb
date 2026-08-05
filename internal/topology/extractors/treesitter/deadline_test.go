@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tsg "github.com/odvcencio/gotreesitter"
+
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // The extractors are the pure-Go gotreesitter path, whose GLR error recovery can
@@ -88,5 +92,32 @@ func TestExtractWith_MidParseDeadlineReturnsError(t *testing.T) {
 	}
 	if nodes != nil || edges != nil {
 		t.Error("expected no nodes/edges from a parse that stopped early — a partial symbol set must not be returned")
+	}
+}
+
+func TestExtractWith_CancelledContextDoesNotParse(t *testing.T) {
+	// The other half of the dead-context contract. A cancelled context usually
+	// carries no deadline at all, so the budget check above cannot see it: the
+	// envelope parsed the file to completion and handed back the symbols of a
+	// file its caller had already abandoned. The walk sentinel is what
+	// discriminates — the parse runs before it, so a walk that never ran means
+	// no parse was started.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	walked := false
+	nodes, edges, err := extractWith(ctx, NewPython().lang.get(), []byte("def f():\n    pass\n"),
+		func(*tsg.Node) ([]topology.Node, []topology.Edge) {
+			walked = true
+			return []topology.Node{{Name: "f"}}, nil
+		})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled — a dead context must not start a parse", err)
+	}
+	if walked {
+		t.Error("the walk ran, so the parse did too: a cancelled context started work")
+	}
+	if nodes != nil || edges != nil {
+		t.Error("expected no nodes/edges from a cancelled extract")
 	}
 }

@@ -32,6 +32,13 @@ import (
 // would record a truncated symbol set as though it were the whole file — so the
 // early stop is turned into an error for the caller to record.
 //
+// A dead context starts no parse, whether it died of cancellation or of its
+// deadline — the same contract wasmts.Extract and the safeExtract watchdog above
+// it enforce. The two checks are not redundant: ctx.Err() is the only one that
+// sees a cancelled context (which usually carries no deadline at all), and the
+// budget check is the only one that sees a deadline that has passed but whose
+// context has not been marked yet.
+//
 // walk returns the nodes and edges it collected; a nil edge slice is fine for a
 // language that emits none.
 func extractWith(
@@ -40,11 +47,14 @@ func extractWith(
 	src []byte,
 	walk func(root *tsg.Node) ([]topology.Node, []topology.Edge),
 ) ([]topology.Node, []topology.Edge, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	parser := tsg.NewParser(lang)
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, nil, ctx.Err()
+			return nil, nil, context.DeadlineExceeded
 		}
 		//nolint:gosec // G115: remaining is > 0 per the check above, so the conversion cannot wrap.
 		parser.SetTimeoutMicros(uint64(remaining.Microseconds()))

@@ -234,3 +234,48 @@ func fileErrorMsg(t *testing.T, db *sql.DB, relPath string) string {
 	}
 	return msg
 }
+
+// armedContext reports itself cancelled through Err() from the outset but only
+// closes Done() once the extractor has been entered. That inversion is illegal
+// for a real context and deliberate here: it is what makes the test below
+// scheduler-independent. In an implementation that spawns the extract before
+// checking Err(), safeExtract's select has exactly one reachable arm and cannot
+// return until the extract has started — so observing afterwards that it did
+// NOT start is a fact about the implementation, not a sample of the scheduler.
+type armedContext struct{ entered chan struct{} }
+
+func (armedContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c armedContext) Done() <-chan struct{}     { return c.entered }
+func (armedContext) Err() error                  { return context.Canceled }
+func (armedContext) Value(any) any               { return nil }
+
+// enteringExtractor closes entered as its first act, so entering it is what
+// arms the context above.
+type enteringExtractor struct{ entered chan struct{} }
+
+func (enteringExtractor) Language() string     { return "go" }
+func (enteringExtractor) Extensions() []string { return []string{".go"} }
+
+func (e enteringExtractor) Extract(_ context.Context, relPath string, _ []byte) ([]Node, []Edge, error) {
+	close(e.entered)
+	return []Node{{Path: relPath, Name: "Fast", Kind: KindFunction, Language: "go"}}, nil, nil
+}
+
+func TestSafeExtract_DeadContextStartsNoExtract(t *testing.T) {
+	entered := make(chan struct{})
+	ctx := armedContext{entered: entered}
+
+	nodes, edges, err := safeExtract(ctx, enteringExtractor{entered: entered}, "dead.go", []byte("package p"))
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want a context.Canceled wrapper", err)
+	}
+	if nodes != nil || edges != nil {
+		t.Errorf("nodes/edges = %v/%v, want none — a dead context must not return a result", nodes, edges)
+	}
+	select {
+	case <-entered:
+		t.Fatal("a dead context still started an extract; the watchdog spawned work it had already given up on")
+	default:
+	}
+}
