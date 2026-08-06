@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.16.3 (unreleased)
+
+### Fixed
+
+- **A failed git command no longer presents hook stdout as the error.** A
+  commit blocked by a pre-commit hook that wrote only to stdout surfaced as
+  `git commit: 0 issues. file-size: OK` — the hook's chatter standing in for
+  the real cause, with the exit code and stderr nowhere in sight. The failure
+  response now leads with the exit code and quotes each captured stream under
+  its own label (`stderr:` verbatim, `stdout (last 40 lines):` trailing),
+  both bounded; a truncated stream says so and names the exact `git` command
+  to re-run directly for the complete output. The stderr text still flows
+  through the actionable-hint rewrites (stale `index.lock`, submodule and
+  untracked pathspecs), and success-path output is unchanged. Guarded by
+  `TestGit_CommitFailingHookReportsStreams` (a real temp repo whose
+  pre-commit hook prints to both streams and exits non-zero) plus unit tests
+  for the labelled shape, the stdout-only failure, the no-output failure, and
+  truncation.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed
