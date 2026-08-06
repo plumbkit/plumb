@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.2 (unreleased)
+## 0.16.2 (2026-08-06)
 
 ### Fixed
 
@@ -13,6 +13,29 @@
   line's shape, including the failure bucket) and
   `TestRunSkillsSync_NeverSilent` (first run summarises the installs, the
   no-op re-run still says so).
+
+- **The paid-client smoke harness no longer kills unrelated plumb daemons or
+  reports a successful tool call as a red run.** Each isolated test now reads
+  and terminates only the PID written beneath its own temporary HOME instead of
+  invoking `plumb stop`, whose deliberate pgrep fallback targets every daemon.
+  Isolation also strips inherited `TSM_ORIG_XDG_*` recovery companions so the
+  deliberate temporary XDG roots cannot be redirected back to the developer's
+  real data directory. Because real clients may filter XDG variables before
+  launching MCP, stats/session evidence and exact-PID teardown probe both the
+  explicit XDG and OS-native layouts beneath that temporary HOME. The auth tier
+  polls the live stats writer before teardown; a free raw-MCP regression proves
+  `find_files` becomes queryable in both layouts without a provider key.
+  Failed cases preserve only plumb's daemon log, session JSON, PID, and stats
+  database/WAL beneath a reported temporary evidence path; client configs and
+  credentials are explicitly excluded.
+
+- **`git add` once again stages tracked deletions passed as absolute paths.**
+  The unmatched-path preflight sent absolute names to `git ls-files`, which
+  reports no index match, and `os.Stat` hid the error only while the file still
+  existed. Paths are now made repository-relative after canonicalising their
+  existing parent, covering both deleted leaves and macOS `/var` → `/private/var`
+  aliases. The existing tracked-deletion, typo-warning, and subdirectory-root
+  regressions pin all three behaviours together.
 
 ## 0.16.1 (2026-08-06)
 
@@ -550,29 +573,6 @@
   so the red case stays pinned rather than verified once and forgotten.
 
 ### Fixed
-
-- **The paid-client smoke harness no longer kills unrelated plumb daemons or
-  reports a successful tool call as a red run.** Each isolated test now reads
-  and terminates only the PID written beneath its own temporary HOME instead of
-  invoking `plumb stop`, whose deliberate pgrep fallback targets every daemon.
-  Isolation also strips inherited `TSM_ORIG_XDG_*` recovery companions so the
-  deliberate temporary XDG roots cannot be redirected back to the developer's
-  real data directory. Because real clients may filter XDG variables before
-  launching MCP, stats/session evidence and exact-PID teardown probe both the
-  explicit XDG and OS-native layouts beneath that temporary HOME. The auth tier
-  polls the live stats writer before teardown; a free raw-MCP regression proves
-  `find_files` becomes queryable in both layouts without a provider key.
-  Failed cases preserve only plumb's daemon log, session JSON, PID, and stats
-  database/WAL beneath a reported temporary evidence path; client configs and
-  credentials are explicitly excluded.
-
-- **`git add` once again stages tracked deletions passed as absolute paths.**
-  The unmatched-path preflight sent absolute names to `git ls-files`, which
-  reports no index match, and `os.Stat` hid the error only while the file still
-  existed. Paths are now made repository-relative after canonicalising their
-  existing parent, covering both deleted leaves and macOS `/var` → `/private/var`
-  aliases. The existing tracked-deletion, typo-warning, and subdirectory-root
-  regressions pin all three behaviours together.
 
 - **A wasm runtime rebuilt after a discard now announces its own failure.**
   The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
