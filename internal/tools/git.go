@@ -279,7 +279,8 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 	if err != nil {
 		return a.Files, nil
 	}
-	lsArgs := gitReadArgv(append([]string{"ls-files", "--"}, a.Files...))
+	canonicalRoot, canonicalFiles, pathspecs := canonicalAddPaths(repoRoot, a.Files)
+	lsArgs := gitReadArgv(append([]string{"ls-files", "--"}, pathspecs...))
 	cmd := exec.CommandContext(ctx, "git", lsArgs...)
 	cmd.Dir = repoRoot
 	out, lsErr := cmd.Output()
@@ -291,19 +292,14 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 		if line == "" {
 			continue
 		}
-		tracked[filepath.Clean(filepath.Join(repoRoot, line))] = true
+		tracked[filepath.Clean(filepath.Join(canonicalRoot, line))] = true
 	}
-	for _, f := range a.Files {
-		abs := f
-		if !filepath.IsAbs(abs) {
-			// Relative inputs must resolve against repoRoot (the git toplevel),
-			// the same base the tracked map above is keyed against — not
-			// a.Repo, which may be a subdirectory of the repo. Joining against
-			// a.Repo here would silently misclassify a valid root-relative
-			// tracked path as unmatched and drop it from the add.
-			abs = filepath.Join(repoRoot, f)
-		}
-		abs = filepath.Clean(abs)
+	for i, f := range a.Files {
+		// Relative inputs resolve against the git toplevel, not a.Repo, which may
+		// be a subdirectory. canonicalPathForBoundary also resolves an existing
+		// parent when the leaf was deleted, so macOS /var and /private/var aliases
+		// compare equal to git ls-files output.
+		abs := canonicalFiles[i]
 		if tracked[abs] {
 			valid = append(valid, f)
 			continue
@@ -315,6 +311,38 @@ func (t *Git) partitionAddPaths(ctx context.Context, a gitToolArgs) (valid, unma
 		unmatched = append(unmatched, f)
 	}
 	return valid, unmatched
+}
+
+func canonicalAddPaths(repoRoot string, files []string) (string, []string, []string) {
+	canonicalRoot := filepath.Clean(repoRoot)
+	if resolved, err := canonicalPathForBoundary(repoRoot); err == nil {
+		canonicalRoot = resolved
+	}
+
+	canonicalFiles := make([]string, len(files))
+	pathspecs := make([]string, 0, len(files))
+	for i, f := range files {
+		abs := f
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(canonicalRoot, f)
+		}
+		if resolved, err := canonicalPathForBoundary(abs); err == nil {
+			abs = resolved
+		} else {
+			abs = filepath.Clean(abs)
+		}
+		canonicalFiles[i] = abs
+
+		if !filepath.IsAbs(f) {
+			pathspecs = append(pathspecs, f)
+			continue
+		}
+		rel, err := filepath.Rel(canonicalRoot, abs)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			pathspecs = append(pathspecs, rel)
+		}
+	}
+	return canonicalRoot, canonicalFiles, pathspecs
 }
 
 func parseGitArgs(raw json.RawMessage) (gitToolArgs, error) {

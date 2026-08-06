@@ -552,6 +552,14 @@
   database/WAL beneath a reported temporary evidence path; client configs and
   credentials are explicitly excluded.
 
+- **`git add` once again stages tracked deletions passed as absolute paths.**
+  The unmatched-path preflight sent absolute names to `git ls-files`, which
+  reports no index match, and `os.Stat` hid the error only while the file still
+  existed. Paths are now made repository-relative after canonicalising their
+  existing parent, covering both deleted leaves and macOS `/var` → `/private/var`
+  aliases. The existing tracked-deletion, typo-warning, and subdirectory-root
+  regressions pin all three behaviours together.
+
 - **A wasm runtime rebuilt after a discard now announces its own failure.**
   The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
   lifetime — so a runtime rebuilt after a timeout discard that then failed to
