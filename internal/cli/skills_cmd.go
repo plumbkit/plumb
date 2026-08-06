@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tui"
 )
 
@@ -94,7 +95,7 @@ func runSkillsSync(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("plumb is not registered in %s — run `plumb setup %s` first, then re-run `plumb skills sync %s`",
 				t.name, t.use, t.use)
 		}
-		installAndPrintSkills(t)
+		fmt.Println(skillSyncSummaryLine(t.name, installAndPrintSkills(t)))
 		return nil
 	}
 	for _, c := range capable {
@@ -102,7 +103,7 @@ func runSkillsSync(_ *cobra.Command, args []string) error {
 			fmt.Printf("Skipping %s — plumb is not registered (`plumb setup %s`).\n", c.name, c.use)
 			continue
 		}
-		installAndPrintSkills(c)
+		fmt.Println(skillSyncSummaryLine(c.name, installAndPrintSkills(c)))
 	}
 	return nil
 }
@@ -126,22 +127,66 @@ func skillCapableNames(capable []setupTarget) string {
 	return strings.Join(names, ", ")
 }
 
-// installAndPrintSkills installs the embedded skills into t's skills directory
-// and prints one line per skill that changed. It is a no-op for a target with
-// no skills directory.
+// skillSyncTally is one client's sync outcome, aggregated for the summary
+// line runSkillsSync prints per client.
+type skillSyncTally struct {
+	installed, updated, current, failed int
+}
+
+// installAndPrintSkills installs the embedded skills into t's skills directory,
+// prints one line per skill that changed, and tallies the outcome. It is a
+// no-op for a target with no skills directory.
 //
 // Errors are non-fatal by design: a failed skill install must not fail the rest
 // of the sync, because one unwritable directory should not strand the others.
-func installAndPrintSkills(t setupTarget) {
+func installAndPrintSkills(t setupTarget) (tally skillSyncTally) {
 	dir, results := installSkillsFor(t)
 	for _, r := range results {
 		switch {
 		case r.err != nil:
+			tally.failed++
 			fmt.Fprintf(os.Stderr, "warning: installing skill %q: %v\n", r.name, r.err)
-		case r.action != "unchanged":
+		case r.action == "unchanged":
+			tally.current++
+		default:
+			if r.action == "installed" {
+				tally.installed++
+			} else {
+				tally.updated++
+			}
 			fmt.Printf("Skill %-20s %s → %s\n", r.name, r.action, filepath.Join(dir, r.name, "SKILL.md"))
 		}
 	}
+	return tally
+}
+
+// skillSyncSummaryLine renders one client's sync outcome as a single line. It
+// is printed UNCONDITIONALLY: a writer command that succeeds silently is
+// indistinguishable from a broken one, so "no output" may only ever mean the
+// command did not run — never that it no-opped.
+func skillSyncSummaryLine(client string, t skillSyncTally) string {
+	total := t.installed + t.updated + t.current + t.failed
+	if total == 0 {
+		return client + ": nothing to sync"
+	}
+	if t.installed == 0 && t.updated == 0 && t.failed == 0 {
+		return fmt.Sprintf("%s: %d %s current", client, t.current, textfmt.Plural(t.current, "skill", "skills"))
+	}
+	parts := make([]string, 0, 4)
+	for _, p := range []struct {
+		n    int
+		word string
+	}{
+		{t.installed, "installed"},
+		{t.updated, "updated"},
+		{t.current, "current"},
+		{t.failed, "failed"},
+	} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))
+		}
+	}
+	return fmt.Sprintf("%s: %d %s — %s", client, total, textfmt.Plural(total, "skill", "skills"), strings.Join(parts, ", "))
 }
 
 // The three states a skill file can be in relative to the embedded copy. The

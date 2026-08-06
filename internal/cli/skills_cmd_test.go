@@ -159,6 +159,61 @@ func TestRunSkillsSync_SweepInstallsForRegisteredClientsOnly(t *testing.T) {
 	}
 }
 
+// TestSkillSyncSummaryLine pins the per-client summary's shape: an
+// all-current client collapses to the short form, a mixed outcome lists every
+// non-zero bucket, and a failed install is never hidden.
+func TestSkillSyncSummaryLine(t *testing.T) {
+	cases := []struct {
+		name  string
+		tally skillSyncTally
+		want  string
+	}{
+		{"all current", skillSyncTally{current: 7}, "Test: 7 skills current"},
+		{"singular", skillSyncTally{current: 1}, "Test: 1 skill current"},
+		{"fresh install", skillSyncTally{installed: 7}, "Test: 7 skills — 7 installed"},
+		{"mixed", skillSyncTally{installed: 1, updated: 2, current: 4}, "Test: 7 skills — 1 installed, 2 updated, 4 current"},
+		{"failure is visible", skillSyncTally{current: 6, failed: 1}, "Test: 7 skills — 6 current, 1 failed"},
+		{"empty", skillSyncTally{}, "Test: nothing to sync"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := skillSyncSummaryLine("Test", tc.tally); got != tc.want {
+				t.Errorf("skillSyncSummaryLine = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunSkillsSync_NeverSilent pins the property the summary line exists
+// for: a sync over a registered client always says what happened — on the
+// first run that installs, and on the no-op re-run that changes nothing.
+func TestRunSkillsSync_NeverSilent(t *testing.T) {
+	root := pointClientHomesAt(t)
+	codexCfg := filepath.Join(root, "codex-home", "config.toml")
+	if _, _, err := setupCodexInto(codexCfg, "/opt/plumb"); err != nil {
+		t.Fatal(err)
+	}
+
+	n := strconv.Itoa(len(embeddedSkills()))
+	out := captureStdout(t, func() {
+		if err := runSkillsSync(nil, nil); err != nil {
+			t.Errorf("first sync: %v", err)
+		}
+	})
+	if want := "Codex: " + n + " skills — " + n + " installed"; !strings.Contains(out, want) {
+		t.Errorf("first sync must summarise the installs (%q):\n%s", want, out)
+	}
+
+	out = captureStdout(t, func() {
+		if err := runSkillsSync(nil, nil); err != nil {
+			t.Errorf("no-op re-sync: %v", err)
+		}
+	})
+	if want := "Codex: " + n + " skills current"; !strings.Contains(out, want) {
+		t.Errorf("a no-op re-sync must still say so (%q):\n%s", want, out)
+	}
+}
+
 // TestPrintSkillsDriftHint pins the post-registration hint to its trigger: it
 // fires on missing or stale skills with the sync command named, and stays
 // silent when the skills are current or the client has no skill channel —

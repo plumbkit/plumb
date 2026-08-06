@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.2 (unreleased)
+
+### Fixed
+
+- **`plumb skills sync` is never silent again.** A sweep that found every
+  skill already current printed nothing at all — indistinguishable from a
+  command that had not run. Each synced client now gets an unconditional
+  summary line (`Codex: 7 skills current`, or the `N installed, M updated, K
+  current, F failed` breakdown when anything changed), keeping the per-skill
+  detail lines for actual changes. Guarded by `TestSkillSyncSummaryLine` (the
+  line's shape, including the failure bucket) and
+  `TestRunSkillsSync_NeverSilent` (first run summarises the installs, the
+  no-op re-run still says so).
+
 ## 0.16.1 (2026-08-06)
 
 ### Added
