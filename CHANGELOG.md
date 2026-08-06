@@ -537,6 +537,21 @@
 
 ### Fixed
 
+- **The paid-client smoke harness no longer kills unrelated plumb daemons or
+  reports a successful tool call as a red run.** Each isolated test now reads
+  and terminates only the PID written beneath its own temporary HOME instead of
+  invoking `plumb stop`, whose deliberate pgrep fallback targets every daemon.
+  Isolation also strips inherited `TSM_ORIG_XDG_*` recovery companions so the
+  deliberate temporary XDG roots cannot be redirected back to the developer's
+  real data directory. Because real clients may filter XDG variables before
+  launching MCP, stats/session evidence and exact-PID teardown probe both the
+  explicit XDG and OS-native layouts beneath that temporary HOME. The auth tier
+  polls the live stats writer before teardown; a free raw-MCP regression proves
+  `find_files` becomes queryable in both layouts without a provider key.
+  Failed cases preserve only plumb's daemon log, session JSON, PID, and stats
+  database/WAL beneath a reported temporary evidence path; client configs and
+  credentials are explicitly excluded.
+
 - **A wasm runtime rebuilt after a discard now announces its own failure.**
   The wasmts fallback warning was a `sync.Once` — spent once for the daemon's
   lifetime — so a runtime rebuilt after a timeout discard that then failed to

@@ -63,7 +63,7 @@ func TestClientsAuth_GutterRoundTrip(t *testing.T) {
 			if spec.probeEnv != nil {
 				env = append(env, spec.probeEnv(realHome)...)
 			}
-			t.Cleanup(func() { stopDaemon(env) })
+			t.Cleanup(func() { stopDaemon(tmpHome) })
 
 			runPlumbSetup(t, env, spec.setupArgs...)
 			if spec.prep != nil {
@@ -79,8 +79,6 @@ func TestClientsAuth_GutterRoundTrip(t *testing.T) {
 			out, runErr := cmd.CombinedOutput()
 			t.Logf("gutter round-trip via %s\n$ %s %s  (exit=%v)\n%s",
 				keyName, spec.binary, strings.Join(args, " "), runErr, truncate(out, 3000))
-
-			stopDaemon(env)
 
 			final, err := os.ReadFile(target)
 			if err != nil {

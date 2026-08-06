@@ -39,6 +39,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -224,14 +226,20 @@ func mkTmpHome(t *testing.T) string {
 		t.Fatal("create tmpHome:", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tmpHome) })
+	t.Cleanup(func() {
+		if t.Failed() {
+			preserveFailureEvidence(t, tmpHome)
+		}
+	})
 	return tmpHome
 }
 
 // isolatedEnv overrides HOME, every XDG base dir, and client-specific config
 // roots so the daemon a client spawns uses a fresh socket / data / config tree —
-// leaving the developer's real daemon and client configs untouched. All other
-// environment (notably API keys) is inherited, which is what lets the auth tier
-// reach the provider.
+// leaving the developer's real daemon and client configs untouched. Session-
+// manager recovery companions are scrubbed too, or plumb correctly interprets
+// the deliberate temp XDG roots as a hijack and restores the real directories.
+// All other environment (notably API keys) is inherited for the auth tier.
 func isolatedEnv(tmpHome string, extra ...string) []string {
 	base := os.Environ()
 	out := make([]string, 0, len(base)+9)
@@ -242,6 +250,7 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 			strings.HasPrefix(e, "XDG_CACHE_HOME="),
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "XDG_STATE_HOME="),
+			strings.HasPrefix(e, "TSM_ORIG_XDG_"),
 			strings.HasPrefix(e, "CODEX_HOME="):
 			continue
 		default:
@@ -279,6 +288,27 @@ func TestIsolatedEnv_ScrubsCodexHome(t *testing.T) {
 	}
 }
 
+func TestIsolatedEnv_ScrubsSessionManagerOrigins(t *testing.T) {
+	t.Setenv("TSM_ORIG_XDG_DATA_HOME", "/real/data")
+	for _, e := range isolatedEnv(t.TempDir()) {
+		if strings.HasPrefix(e, "TSM_ORIG_XDG_") {
+			t.Fatalf("session-manager recovery companion leaked into isolated env: %q", e)
+		}
+	}
+}
+
+func TestDaemonPIDPathsCoverClientEnvironmentFiltering(t *testing.T) {
+	tmpHome := t.TempDir()
+	got := daemonPIDPaths(tmpHome)
+	want := []string{filepath.Join(tmpHome, ".cache", "plumb", "plumb.pid")}
+	if runtime.GOOS == "darwin" {
+		want = append(want, filepath.Join(tmpHome, "Library", "Caches", "plumb", "plumb.pid"))
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("daemonPIDPaths = %q, want %q", got, want)
+	}
+}
+
 // makeBareFixture creates a temp workspace with just a .plumb/ marker — enough
 // for plumb to attach, no language server needed.
 func makeBareFixture(t *testing.T) string {
@@ -295,8 +325,85 @@ func makeBareFixture(t *testing.T) string {
 
 // ─── plumb-side signals ──────────────────────────────────────────────────────
 
-func dataDir(tmpHome string) string {
-	return filepath.Join(tmpHome, ".local", "share", "plumb")
+func dataDirs(tmpHome string) []string {
+	dirs := []string{filepath.Join(tmpHome, ".local", "share", "plumb")}
+	if runtime.GOOS == "darwin" {
+		dirs = append(dirs, filepath.Join(tmpHome, "Library", "Application Support", "plumb"))
+	}
+	return dirs
+}
+
+func daemonPIDPaths(tmpHome string) []string {
+	paths := []string{filepath.Join(tmpHome, ".cache", "plumb", "plumb.pid")}
+	if runtime.GOOS == "darwin" {
+		paths = append(paths, filepath.Join(tmpHome, "Library", "Caches", "plumb", "plumb.pid"))
+	}
+	return paths
+}
+
+func daemonLogPath(tmpHome string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(tmpHome, "Library", "Logs", "plumb", "daemon.log")
+	}
+	return filepath.Join(tmpHome, ".local", "state", "plumb", "daemon.log")
+}
+
+// preserveFailureEvidence copies only plumb runtime evidence — never client
+// config or auth state — outside the test's temporary HOME before it is removed.
+func preserveFailureEvidence(t *testing.T, tmpHome string) {
+	t.Helper()
+	dst, err := os.MkdirTemp("", "clientsmoke-failure-")
+	if err != nil {
+		t.Logf("preserve failure evidence: %v", err)
+		return
+	}
+
+	copied := 0
+	if copyEvidenceFile(daemonLogPath(tmpHome), filepath.Join(dst, "daemon.log")) {
+		copied++
+	}
+	for i, src := range daemonPIDPaths(tmpHome) {
+		if copyEvidenceFile(src, filepath.Join(dst, fmt.Sprintf("runtime-%d", i), "plumb.pid")) {
+			copied++
+		}
+	}
+	for i, dir := range dataDirs(tmpHome) {
+		evidenceDir := filepath.Join(dst, fmt.Sprintf("data-%d", i))
+		for _, name := range []string{"stats.db", "stats.db-wal", "stats.db-shm"} {
+			if copyEvidenceFile(filepath.Join(dir, name), filepath.Join(evidenceDir, name)) {
+				copied++
+			}
+		}
+		sessions := filepath.Join(dir, "sessions")
+		if entries, readErr := os.ReadDir(sessions); readErr == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				if copyEvidenceFile(filepath.Join(sessions, entry.Name()), filepath.Join(evidenceDir, "sessions", entry.Name())) {
+					copied++
+				}
+			}
+		}
+	}
+
+	if copied == 0 {
+		_ = os.RemoveAll(dst)
+		t.Log("no plumb runtime evidence was available to preserve")
+		return
+	}
+	t.Logf("plumb failure evidence preserved at %s (%d files; client credentials excluded)", dst, copied)
+}
+
+func copyEvidenceFile(src, dst string) bool {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return false
+	}
+	return os.WriteFile(dst, data, 0o600) == nil
 }
 
 // sessionEvidence is the subset of a plumb session file we assert on.
@@ -312,25 +419,24 @@ type sessionEvidence struct {
 // per-test data dir is fresh, so any such file belongs to this run.
 func findClientSession(t *testing.T, tmpHome string) (sessionEvidence, bool) {
 	t.Helper()
-	dir := filepath.Join(dataDir(tmpHome), "sessions")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return sessionEvidence{}, false
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+	for _, dataDir := range dataDirs(tmpHome) {
+		dir := filepath.Join(dataDir, "sessions")
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
 		}
-		var s sessionEvidence
-		if json.Unmarshal(b, &s) != nil {
-			continue
-		}
-		if s.ClientName != "" {
-			return s, true
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var s sessionEvidence
+			if json.Unmarshal(b, &s) == nil && s.ClientName != "" {
+				return s, true
+			}
 		}
 	}
 	return sessionEvidence{}, false
@@ -340,9 +446,25 @@ func findClientSession(t *testing.T, tmpHome string) (sessionEvidence, bool) {
 // distinct tool names — the auth-tier proof that the agent drove a plumb tool.
 func countToolCalls(t *testing.T, tmpHome string) (int, string) {
 	t.Helper()
-	path := filepath.Join(dataDir(tmpHome), "stats.db")
+	total := 0
+	var names []string
+	for _, dataDir := range dataDirs(tmpHome) {
+		n, tools, ok := countToolCallsAt(t, filepath.Join(dataDir, "stats.db"))
+		if !ok {
+			continue
+		}
+		total += n
+		if tools != "" {
+			names = append(names, tools)
+		}
+	}
+	return total, strings.Join(names, ",")
+}
+
+func countToolCallsAt(t *testing.T, path string) (int, string, bool) {
+	t.Helper()
 	if _, err := os.Stat(path); err != nil {
-		return 0, ""
+		return 0, "", false
 	}
 	// Was `path+"?mode=ro&_busy_timeout=2000"`, which got both halves wrong:
 	// modernc ignores the mattn-style _busy_timeout= spelling (leaving it at 0)
@@ -357,7 +479,22 @@ func countToolCalls(t *testing.T, tmpHome string) (int, string) {
 	if err := db.QueryRow(`SELECT COUNT(*), GROUP_CONCAT(DISTINCT tool) FROM tool_calls`).Scan(&n, &tools); err != nil {
 		t.Fatalf("query tool_calls: %v", err)
 	}
-	return n, tools.String
+	return n, tools.String, true
+}
+
+// pollToolCalls reads the stats DB until a tool_calls row appears or timeout
+// elapses, absorbing the async writer's small commit lag while the daemon stays
+// alive.
+func pollToolCalls(t *testing.T, tmpHome string, timeout time.Duration) (int, string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		n, tools := countToolCalls(t, tmpHome)
+		if n > 0 || time.Now().After(deadline) {
+			return n, tools
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 // ─── process helpers ─────────────────────────────────────────────────────────
@@ -373,11 +510,42 @@ func runPlumbSetup(t *testing.T, env []string, args ...string) {
 	}
 }
 
-// stopDaemon tears down the isolated daemon a client may have spawned.
-func stopDaemon(env []string) {
-	cmd := exec.Command(plumbBin, "stop", "--force")
-	cmd.Env = env
-	_ = cmd.Run()
+// stopDaemon tears down only the daemon recorded in this test's isolated
+// runtime directory. Calling `plumb stop` here is unsafe because its pgrep
+// fallback deliberately finds every plumb daemon owned by the user.
+func stopDaemon(tmpHome string) {
+	seen := make(map[int]bool)
+	for _, pidPath := range daemonPIDPaths(tmpHome) {
+		data, err := os.ReadFile(pidPath)
+		if err != nil {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		stopDaemonPID(pidPath, pid)
+	}
+}
+
+func stopDaemonPID(pidPath string, pid int) {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	if err := proc.Signal(os.Interrupt); err != nil {
+		return
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pidPath); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	_ = proc.Kill()
 }
 
 // seedFolderTrust returns a prep hook that marks the fixture trusted for

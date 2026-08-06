@@ -3,7 +3,10 @@
 package clientsmoke
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
@@ -33,7 +36,7 @@ func TestClientsConnect(t *testing.T) {
 			tmpHome := mkTmpHome(t)
 			fixture := makeBareFixture(t)
 			env := isolatedEnv(tmpHome)
-			t.Cleanup(func() { stopDaemon(env) })
+			t.Cleanup(func() { stopDaemon(tmpHome) })
 
 			runPlumbSetup(t, env, spec.setupArgs...)
 			if spec.prep != nil {
@@ -66,4 +69,124 @@ func TestClientsConnect(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRawMCPStatsEvidence is the free, deterministic regression for the auth
+// tier's success signal: a real MCP tools/call must become visible in stats while
+// the isolated daemon is still running. It needs no client CLI or provider key.
+func TestRawMCPStatsEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stripXDG bool
+	}{
+		{name: "explicit-xdg"},
+		{name: "client-filtered-xdg", stripXDG: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runRawMCPStatsEvidence(t, tc.stripXDG)
+		})
+	}
+}
+
+func runRawMCPStatsEvidence(t *testing.T, stripXDG bool) {
+	t.Helper()
+	tmpHome := mkTmpHome(t)
+	fixture := makeBareFixture(t)
+	env := isolatedEnv(tmpHome)
+	if stripXDG {
+		filtered := make([]string, 0, len(env))
+		for _, e := range env {
+			if !strings.HasPrefix(e, "XDG_") {
+				filtered = append(filtered, e)
+			}
+		}
+		env = filtered
+	}
+	t.Cleanup(func() { stopDaemon(tmpHome) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	cmd := exec.CommandContext(ctx, plumbBin, "serve")
+	cmd.Env = env
+	cmd.Dir = fixture
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal("raw MCP stdin:", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal("raw MCP stdout:", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal("start raw MCP proxy:", err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		cancel()
+		_ = cmd.Wait()
+	})
+
+	enc := json.NewEncoder(stdin)
+	scan := bufio.NewScanner(stdout)
+	if err := enc.Encode(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "clientsmoke-raw", "version": "1"},
+		},
+	}); err != nil {
+		t.Fatal("send initialize:", err)
+	}
+	readRawResponse(t, scan, "1", &stderr)
+	if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized", "params": map[string]any{}}); err != nil {
+		t.Fatal("send initialized:", err)
+	}
+	if err := enc.Encode(map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{"name": "find_files", "arguments": map[string]any{"path": fixture}},
+	}); err != nil {
+		t.Fatal("send find_files:", err)
+	}
+	readRawResponse(t, scan, "2", &stderr)
+
+	n, tools := pollToolCalls(t, tmpHome, 8*time.Second)
+	if n == 0 {
+		t.Fatalf("raw MCP tools/call succeeded but stats stayed empty; stderr:\n%s", stderr.String())
+	}
+	if !strings.Contains(tools, "find_files") {
+		t.Fatalf("stats tools = %q, want find_files", tools)
+	}
+	t.Logf("raw MCP evidence: %d tool call(s) [%s] recorded before daemon teardown", n, tools)
+}
+
+type rawMCPResponse struct {
+	ID     json.RawMessage `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func readRawResponse(t *testing.T, scan *bufio.Scanner, wantID string, stderr *bytes.Buffer) rawMCPResponse {
+	t.Helper()
+	for scan.Scan() {
+		var msg rawMCPResponse
+		if json.Unmarshal(scan.Bytes(), &msg) != nil || string(msg.ID) != wantID {
+			continue
+		}
+		if msg.Error != nil {
+			t.Fatalf("raw MCP response %s: %s\nstderr:\n%s", wantID, msg.Error.Message, stderr.String())
+		}
+		var result struct {
+			IsError bool `json:"isError"`
+		}
+		if len(msg.Result) > 0 && json.Unmarshal(msg.Result, &result) == nil && result.IsError {
+			t.Fatalf("raw MCP tools/call %s returned isError=true: %s", wantID, msg.Result)
+		}
+		return msg
+	}
+	t.Fatalf("raw MCP response %s not received: %v\nstderr:\n%s", wantID, scan.Err(), stderr.String())
+	return rawMCPResponse{}
 }

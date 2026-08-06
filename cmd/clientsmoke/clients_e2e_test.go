@@ -57,7 +57,7 @@ func TestClientsAuth(t *testing.T) {
 			if spec.probeEnv != nil {
 				env = append(env, spec.probeEnv(realHome)...)
 			}
-			t.Cleanup(func() { stopDaemon(env) })
+			t.Cleanup(func() { stopDaemon(tmpHome) })
 
 			runPlumbSetup(t, env, spec.setupArgs...)
 			if spec.prep != nil {
@@ -74,31 +74,24 @@ func TestClientsAuth(t *testing.T) {
 			t.Logf("auth via %s\n$ %s %s  (exit=%v)\n%s",
 				keyName, spec.binary, strings.Join(args, " "), runErr, truncate(out, 3000))
 
-			// plumb's stats Writer is async/batched; a graceful daemon stop drains it
-			// (stats.TestWriter_DrainsOnClose), making the tool_calls row durable before
-			// we read — otherwise the row can lag the client's exit and read as 0.
-			stopDaemon(env)
+			// Poll while the isolated daemon is still alive. Stopping first used the
+			// global pgrep fallback and could kill unrelated developer daemons; it also
+			// turned a small async-writer lag into a misleading red harness exit.
 			n, tools := pollToolCalls(t, tmpHome, 8*time.Second)
 			if n == 0 {
-				t.Fatalf("FAIL %s: agent ran but plumb recorded no tool call — the model did not invoke a plumb tool.\noutput:\n%s",
-					spec.name, truncate(out, 3000))
+				switch {
+				case ctx.Err() != nil:
+					t.Fatalf("FAIL %s: client timed out after %s before plumb recorded a tool call.\noutput:\n%s",
+						spec.name, authTimeout, truncate(out, 3000))
+				case runErr != nil:
+					t.Fatalf("FAIL %s: client exited before plumb recorded a tool call (%v).\noutput:\n%s",
+						spec.name, runErr, truncate(out, 3000))
+				default:
+					t.Fatalf("FAIL %s: agent ran but plumb recorded no tool call — the model did not invoke a plumb tool.\noutput:\n%s",
+						spec.name, truncate(out, 3000))
+				}
 			}
 			t.Logf("PASS %s: plumb recorded %d tool call(s) [%s]", spec.name, n, tools)
 		})
-	}
-}
-
-// pollToolCalls reads the stats DB until a tool_calls row appears or timeout
-// elapses, absorbing the small lag between the daemon stop and the WAL becoming
-// visible to a fresh read-only handle.
-func pollToolCalls(t *testing.T, tmpHome string, timeout time.Duration) (int, string) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		n, tools := countToolCalls(t, tmpHome)
-		if n > 0 || time.Now().After(deadline) {
-			return n, tools
-		}
-		time.Sleep(300 * time.Millisecond)
 	}
 }
