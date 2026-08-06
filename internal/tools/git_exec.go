@@ -110,20 +110,108 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier) 
 		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
 			return postProcessGit(ctx, repoRoot, sub, stdout.String())
 		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = strings.TrimSpace(stdout.String())
-		}
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("git %s: %s", sub, enhanceGitError(repoRoot, msg))
+		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String())
 	}
 	out := stdout.String()
 	if strings.TrimSpace(out) == "" {
 		out = stderr.String() // switch/push and friends report on stderr
 	}
 	return postProcessGit(ctx, repoRoot, sub, out)
+}
+
+const (
+	// maxGitErrStreamBytes bounds each stream quoted in a failure response.
+	maxGitErrStreamBytes = 16 * 1024
+	// maxGitErrStdoutLines bounds the trailing stdout lines quoted on failure.
+	maxGitErrStdoutLines = 40
+)
+
+// gitCommandError builds the tool-facing error for a failed git subprocess.
+// The exit code leads, then stderr and stdout are each quoted under their own
+// label (bounded). Previously whichever stream was non-empty became the error
+// string itself — so a failing pre-commit hook that wrote only to stdout
+// surfaced as `git commit: 0 issues. file-size: OK`, the hook's chatter
+// standing in for the real cause. Success-path output is unaffected; this
+// runs only on a non-zero exit.
+func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "git %s: %s", sub, gitExitDescription(runErr))
+	truncated := false
+	if msg, cut := boundGitErrStream(stderr); msg != "" {
+		// The hint rewrites (index.lock, pathspec, submodule) all match git's
+		// own diagnostics, which git writes to stderr — enhancing this stream
+		// preserves their behaviour exactly.
+		fmt.Fprintf(&b, "\nstderr:\n%s", enhanceGitError(repoRoot, msg))
+		truncated = truncated || cut
+	}
+	if out, cut := tailGitErrStdout(stdout); out != "" {
+		fmt.Fprintf(&b, "\nstdout (last %d lines):\n%s", maxGitErrStdoutLines, out)
+		truncated = truncated || cut
+	}
+	if truncated {
+		b.WriteString("\n" + gitRerunNote(argv, repoRoot))
+	}
+	return errors.New(b.String())
+}
+
+// gitExitDescription describes how the git child ended: its exit code when it
+// ran to a non-zero exit, or the raw error when there is no exit code (a
+// start failure or context cancellation).
+func gitExitDescription(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("exit code %d", ee.ExitCode())
+	}
+	return err.Error()
+}
+
+// boundGitErrStream trims a captured stream and caps it at
+// maxGitErrStreamBytes, keeping the tail — the most recent output, where the
+// diagnosis lives. The second return reports whether truncation cut anything.
+func boundGitErrStream(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxGitErrStreamBytes {
+		return s, false
+	}
+	s = s[len(s)-maxGitErrStreamBytes:]
+	// Drop the partial first line so the quote starts on a line boundary.
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	return s, true
+}
+
+// tailGitErrStdout keeps the trailing lines of stdout for a failure report,
+// capped at maxGitErrStdoutLines lines on top of the shared byte cap.
+func tailGitErrStdout(s string) (string, bool) {
+	s, truncated := boundGitErrStream(s)
+	lines := strings.Split(s, "\n")
+	if len(lines) > maxGitErrStdoutLines {
+		lines = lines[len(lines)-maxGitErrStdoutLines:]
+		truncated = true
+	}
+	return strings.Join(lines, "\n"), truncated
+}
+
+// gitRerunNote points at the way to see the complete output of a failed
+// command whose quoted streams were truncated: run the same git invocation
+// directly in the repository.
+func gitRerunNote(argv []string, repoRoot string) string {
+	return fmt.Sprintf("… (output truncated — re-run `git %s` in %s for the complete output)",
+		quoteGitArgv(argv), repoRoot)
+}
+
+// quoteGitArgv renders an argv as a copy-pasteable command line, quoting any
+// argument that contains whitespace or a single quote.
+func quoteGitArgv(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, a := range argv {
+		if strings.ContainsAny(a, " \t'") {
+			a = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		}
+		quoted[i] = a
+	}
+	return strings.Join(quoted, " ")
 }
 
 // beginSerialisedGit prepares a non-read git op: it refuses new work while the
