@@ -94,7 +94,12 @@ func gitReadArgv(argv []string) []string {
 // between the check and this operation; postExec records the session's post-op
 // HEAD/branch observation after a successful run. Both hooks are nil-safe, so
 // the guardless path adds no branching here.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard) (string, error) {
+//
+// intentWarn (may be nil) is the repo-level peer-intent check
+// (git_intent_warn.go): non-nil only for repo-state verbs with the warning
+// wired, it runs right after the guard's pre-execution check — a refused op
+// never warns — and its advisory block leads the successful response.
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
@@ -110,6 +115,10 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	}
 	if err := guardRefPreExec(execCtx, guard, repoRoot, sub); err != nil {
 		return "", err
+	}
+	warning := ""
+	if intentWarn != nil {
+		warning = intentWarn(execCtx, repoRoot)
 	}
 	if tier == tierRead {
 		argv = gitReadArgv(argv)
@@ -133,7 +142,8 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	if strings.TrimSpace(out) == "" {
 		out = stderr.String() // switch/push and friends report on stderr
 	}
-	return postProcessGit(ctx, repoRoot, sub, out)
+	processed, err := postProcessGit(ctx, repoRoot, sub, out)
+	return warning + processed, err
 }
 
 const (
