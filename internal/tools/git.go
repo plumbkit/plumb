@@ -101,7 +101,10 @@ func (t *Git) Description() string {
 		"op, if a DIFFERENT plumb session moved it since this session's last observation, the op is refused unless " +
 		"re-run with confirm:true, and the response names the peer session and the old→new refs (movement by this " +
 		"session, an external tool, or an unknown mover adds no friction). " +
-		"expected_head pins the exact HEAD commit for write/destructive ops — a mismatch refuses the call outright."
+		"expected_head pins the exact HEAD commit for write/destructive ops — a mismatch refuses the call outright. " +
+		"Attribution: with [git] commit_trailer = true (default off) every plumb-mediated commit is stamped with a " +
+		"Plumb-Session: <session-name> trailer; regardless of that knob, workspace_sessions lists recent commits per " +
+		"session (short SHA, subject, repository) from its recent-writes feed."
 }
 
 type gitToolArgs struct {
@@ -160,7 +163,23 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err := t.checkBoundary(a); err != nil {
 		return "", err
 	}
-	return t.runGitCommand(ctx, a, tier, switchNote)
+	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(policy, a.Subcommand))
+}
+
+// commitTrailerToken returns the `Plumb-Session: <session-name>` trailer to
+// stamp on this call's commit, or "" when the call is not a commit, the [git]
+// commit_trailer knob is off (the default), or the connection has no session
+// name to attribute. The trailer is attribution metadata only — it never
+// gates the operation.
+func (t *Git) commitTrailerToken(p GitPolicy, sub string) string {
+	if sub != "commit" || !p.CommitTrailer || t.sessNameFn == nil {
+		return ""
+	}
+	name := strings.TrimSpace(t.sessNameFn())
+	if name == "" {
+		return ""
+	}
+	return "Plumb-Session: " + name
 }
 
 // runGitCommand builds argv (filtering unmatched "add" paths, see
@@ -172,8 +191,8 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 //
 // runGit serialises every non-read tier; a read (status/log/diff) must never
 // queue behind a slow commit.
-func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote string) (string, error) {
-	argv, err := buildGitArgv(a)
+func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote, trailer string) (string, error) {
+	argv, err := buildGitArgv(a, trailer)
 	if err != nil {
 		return "", err
 	}
@@ -253,7 +272,7 @@ func (t *Git) resolveAddArgv(ctx context.Context, a gitToolArgs, argv []string) 
 	}
 	filtered := a
 	filtered.Files = valid
-	newArgv, err = buildGitArgv(filtered)
+	newArgv, err = buildGitArgv(filtered, "")
 	if err != nil {
 		return nil, "", "", false, err
 	}

@@ -265,6 +265,12 @@ type GitConfig struct {
 	// ProtectedBranches are branch names that may never be force-pushed, even
 	// when AllowPush is true and confirm is set. Default ["main", "master"].
 	ProtectedBranches []string `toml:"protected_branches"`
+	// CommitTrailer stamps every plumb-mediated commit with a
+	// `Plumb-Session: <session-name>` git trailer, so `git log` can attribute
+	// a commit to the agent session that authored it. Default false — trailer
+	// noise is opt-in. Session→commit attribution is always queryable via
+	// workspace_sessions regardless of this knob.
+	CommitTrailer bool `toml:"commit_trailer"`
 }
 
 // TopologyConfig controls the persistent semantic index.

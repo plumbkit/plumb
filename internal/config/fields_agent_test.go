@@ -27,6 +27,7 @@ func TestRegistry_DenyListNeverWritable(t *testing.T) {
 		"git.allow_destructive",
 		"git.allow_push",
 		"git.protected_branches",
+		"git.commit_trailer",
 		"workspace.extra_roots",
 		"workspace.read_roots",
 		"workspace.auto_attach",

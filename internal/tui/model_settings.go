@@ -64,6 +64,7 @@ const (
 	skGitWrites
 	skGitDestructive
 	skGitPush
+	skGitCommitTrailer
 	skCacheTTL
 	skCacheMaxSize
 	skLSPTimeout
@@ -279,6 +280,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Git", label: "Git allow writes", kind: settingToggle, key: skGitWrites, value: onOff(cfg.Git.AllowWrites)},
 		{group: "Git", label: "Git allow destructive", kind: settingToggle, key: skGitDestructive, value: onOff(cfg.Git.AllowDestructive)},
 		{group: "Git", label: "Git allow push", kind: settingToggle, key: skGitPush, value: onOff(cfg.Git.AllowPush)},
+		{group: "Git", label: "Git commit trailer", kind: settingToggle, key: skGitCommitTrailer, value: onOff(cfg.Git.CommitTrailer)},
 		{group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches), list: cfg.Git.ProtectedBranches},
 
 		{group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes)},

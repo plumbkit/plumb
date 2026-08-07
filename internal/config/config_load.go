@@ -177,6 +177,9 @@ func applyGitEnv(cfg *Config) {
 	if v, ok := envBool("PLUMB_GIT_ALLOW_PUSH"); ok {
 		cfg.Git.AllowPush = v
 	}
+	if v, ok := envBool("PLUMB_GIT_COMMIT_TRAILER"); ok {
+		cfg.Git.CommitTrailer = v
+	}
 }
 
 // envBool reads key from the environment. ok is true when the variable is

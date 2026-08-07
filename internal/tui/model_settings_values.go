@@ -302,12 +302,6 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Workspace.AllowDependencyReads
 	case skAgentConfigWrites:
 		return &c.AgentConfigWrites
-	case skGitWrites:
-		return &c.Git.AllowWrites
-	case skGitDestructive:
-		return &c.Git.AllowDestructive
-	case skGitPush:
-		return &c.Git.AllowPush
 	case skAutoAttach:
 		return &c.Workspace.AutoAttach
 	case skSemEnabled:
@@ -324,6 +318,23 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Rastro.Enabled
 	case skXcodeAutoBuildServer:
 		return &c.Xcode.AutoBuildServer
+	default:
+		return boolFieldGit(c, key)
+	}
+}
+
+// boolFieldGit returns a pointer to the bool config field a [git] toggle row
+// edits. Split out from boolFieldMore to stay within the gocyclo-15 contract.
+func boolFieldGit(c *config.Config, key settingKey) *bool {
+	switch key {
+	case skGitWrites:
+		return &c.Git.AllowWrites
+	case skGitDestructive:
+		return &c.Git.AllowDestructive
+	case skGitPush:
+		return &c.Git.AllowPush
+	case skGitCommitTrailer:
+		return &c.Git.CommitTrailer
 	default:
 		return boolFieldCollab(c, key)
 	}
@@ -454,16 +465,27 @@ func toggleLabel(key settingKey) string {
 		return "auto_attach_persist"
 	case skAllowDependencyReads:
 		return "allow_dependency_reads"
+	case skAutoAttach:
+		return "workspace auto-attach"
+	case skSemEnabled:
+		return "semantics"
+	default:
+		return toggleLabelGit(key)
+	}
+}
+
+// toggleLabelGit labels the [git] toggle rows. Split out from toggleLabel to
+// stay within the gocyclo-15 contract.
+func toggleLabelGit(key settingKey) string {
+	switch key {
 	case skGitWrites:
 		return "git allow writes"
 	case skGitDestructive:
 		return "git allow destructive"
 	case skGitPush:
 		return "git allow push"
-	case skAutoAttach:
-		return "workspace auto-attach"
-	case skSemEnabled:
-		return "semantics"
+	case skGitCommitTrailer:
+		return "git commit trailer"
 	default:
 		return toggleLabelMore(key)
 	}

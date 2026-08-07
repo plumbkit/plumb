@@ -185,6 +185,42 @@ func TestLoadProject_GitEnvOverridesProject(t *testing.T) {
 	}
 }
 
+func TestLoadProject_GitCommitTrailer(t *testing.T) {
+	// Default off: no project config leaves the knob unset.
+	got, err := LoadProject(defaults, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Git.CommitTrailer {
+		t.Error("CommitTrailer should default to false")
+	}
+
+	// A project may opt in.
+	ws := t.TempDir()
+	plumbDir := filepath.Join(ws, ".plumb")
+	_ = os.MkdirAll(plumbDir, 0o755)
+	_ = os.WriteFile(filepath.Join(plumbDir, "config.toml"),
+		[]byte("[git]\ncommit_trailer = true\n"), 0o644)
+	got, err = LoadProject(defaults, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Git.CommitTrailer {
+		t.Error("CommitTrailer should be true after project override")
+	}
+}
+
+func TestLoadProject_GitCommitTrailerEnv(t *testing.T) {
+	t.Setenv("PLUMB_GIT_COMMIT_TRAILER", "1")
+	got, err := LoadProject(defaults, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Git.CommitTrailer {
+		t.Error("env should have forced CommitTrailer to true")
+	}
+}
+
 func TestLoadProject_EnvOverridesProject(t *testing.T) {
 	ws := t.TempDir()
 	plumbDir := filepath.Join(ws, ".plumb")
