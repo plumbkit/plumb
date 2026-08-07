@@ -121,6 +121,9 @@ func (*WorkspaceSessions) Description() string {
 		"**recent_writes** — the last N mutating operations (write_file, edit_file, " +
 		"rename_file, git commit, …) by all sessions on this workspace. " +
 		"The file path (when available), session name, operation, and age are shown. " +
+		"A successful git commit is attributed in full: its line carries the session " +
+		"name, the commit's short SHA and subject, and the repository, so a peer's " +
+		"commit is traceable to the session that authored it. " +
 		"When [collab] peer_awareness is on and the topology index has the file, each " +
 		"entry is annotated with its enclosing package/symbol (best-effort, source=topology).\n\n" +
 		"Use this before editing a file that another session may have recently " +
@@ -412,6 +415,10 @@ func writeRecentWrites(sb *strings.Builder, workspace string, writes []stats.Rec
 	}
 	for _, w := range writes {
 		age := humaniseAge(now.Sub(w.CalledAt))
+		if w.Tool == "git" {
+			writeGitWriteEntry(sb, w, workspace, age)
+			continue
+		}
 		file := fileFromInputJSON(w.InputJSON)
 		if file == "" {
 			fmt.Fprintf(sb, "  %-20s  %-18s  (%s ago)\n", w.SessionName, w.Tool, age)

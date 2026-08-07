@@ -161,6 +161,10 @@ var registryData = []Field{
 		Key: "git.protected_branches", Type: FieldList, ReloadTier: ReloadLive,
 		Description: "Branches that may never be force-pushed, even with allow_push. Enter to edit.",
 	},
+	{
+		Key: "git.commit_trailer", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Stamp each plumb-mediated commit with a Plumb-Session: <session-name> trailer.",
+	},
 
 	// --- Session ---
 	{

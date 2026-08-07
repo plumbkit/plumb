@@ -180,3 +180,53 @@ func TestFormatWorkspaceSessions_UnknownSelf(t *testing.T) {
 		t.Errorf("missing self should render as (unknown):\n%s", out)
 	}
 }
+
+// TestFormatWorkspaceSessions_CommitAttribution covers the git feed entries:
+// a successful commit renders a full attribution line (session, short SHA,
+// subject, repo); a failed commit or a non-commit git op keeps the bare line.
+func TestFormatWorkspaceSessions_CommitAttribution(t *testing.T) {
+	now := time.Now()
+	peers := []session.Info{
+		{ID: "self-1", Name: "me-fox", Folder: "/ws", LastSeenAt: now},
+		{ID: "peer-2", Name: "brave-lake", Folder: "/ws", LastSeenAt: now},
+	}
+	writes := []stats.RecentCall{
+		{
+			Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-time.Minute), Success: true,
+			InputJSON:  `{"subcommand":"commit","message":"feat: add guard","repo":"/ws/plumb"}`,
+			OutputText: "a1b2c3d feat: add guard",
+		},
+		// A commit whose output carried a leading cross-session guard warning
+		// still attributes — the commit identity is the LAST line.
+		{
+			Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-2 * time.Minute), Success: true,
+			InputJSON:  `{"subcommand":"commit","message":"fix: typo"}`,
+			OutputText: "# plumb-warning: HEAD/branch moved …\ne5f6a7b fix: typo",
+		},
+		{
+			Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-3 * time.Minute), Success: false,
+			InputJSON: `{"subcommand":"commit","message":"blocked"}`,
+		},
+		{
+			Tool: "git", SessionName: "brave-lake", CalledAt: now.Add(-4 * time.Minute), Success: true,
+			InputJSON: `{"subcommand":"add","files":["x.go"]}`,
+		},
+	}
+	out := formatWorkspaceSessions("/ws", "self-1", peers, writes, nil, now)
+
+	if !strings.Contains(out, "a1b2c3d feat: add guard") {
+		t.Errorf("expected the commit's short SHA and subject:\n%s", out)
+	}
+	if !strings.Contains(out, "[repo: plumb]") {
+		t.Errorf("expected the repo rendered relative to the workspace:\n%s", out)
+	}
+	if !strings.Contains(out, "e5f6a7b fix: typo") || !strings.Contains(out, "[repo: .]") {
+		t.Errorf("a warning-prefixed commit output must still attribute; a missing repo key renders \".\":\n%s", out)
+	}
+	if strings.Contains(out, "blocked") {
+		t.Errorf("a failed commit must not render an attribution line:\n%s", out)
+	}
+	if got := strings.Count(out, "git commit"); got != 2 {
+		t.Errorf("expected exactly 2 attributed commits (failed commit and add stay bare), got %d:\n%s", got, out)
+	}
+}

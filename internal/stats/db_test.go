@@ -788,3 +788,52 @@ func TestSavingsAxesAndPerToolSplit(t *testing.T) {
 		t.Fatalf("read_file ToolStat axes = (%d,%d), want (100,50)", rf.CapabilityTokens, rf.EfficiencyTokens)
 	}
 }
+
+// TestRecentWritesByWorkspace_GitRowsCarryOutput pins the feed query's one
+// payload exception: a git row keeps its output_text (it carries the commit
+// attribution workspace_sessions renders) while every other tool's row comes
+// back with output_text empty.
+func TestRecentWritesByWorkspace_GitRowsCarryOutput(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	db, err := Open()
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	calls := []Call{
+		{
+			SessionID: "s1", SessionName: "swift-falcon", Workspace: "/w", Tool: "git", CalledAt: now, Success: true,
+			InputJSON: `{"subcommand":"commit","message":"x"}`, OutputText: "a1b2c3d x",
+		},
+		{
+			SessionID: "s1", SessionName: "swift-falcon", Workspace: "/w", Tool: "edit_file", CalledAt: now, Success: true,
+			InputJSON: `{"file_path":"/w/a.go"}`, OutputText: "large write response",
+		},
+	}
+	for _, c := range calls {
+		if err := db.Record(c); err != nil {
+			t.Fatalf("Record %s: %v", c.Tool, err)
+		}
+	}
+
+	got, err := db.RecentWritesByWorkspace("/w", []string{"git", "edit_file"}, 10)
+	if err != nil {
+		t.Fatalf("RecentWritesByWorkspace: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("RecentWritesByWorkspace returned %d rows, want 2", len(got))
+	}
+	byTool := map[string]RecentCall{}
+	for _, c := range got {
+		byTool[c.Tool] = c
+	}
+	if byTool["git"].OutputText != "a1b2c3d x" {
+		t.Errorf("git row OutputText = %q, want the commit result carried", byTool["git"].OutputText)
+	}
+	if byTool["edit_file"].OutputText != "" {
+		t.Errorf("edit_file row OutputText = %q, want omitted from the feed", byTool["edit_file"].OutputText)
+	}
+}

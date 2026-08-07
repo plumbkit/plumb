@@ -136,7 +136,9 @@ recent-write entries to return.
   authoritative.
 - `recent_writes` — the last N write/edit/rename/git/… operations by any
   session on this workspace, showing the session name, tool, relative file path,
-  and age. If a file you are about to edit appears here, re-read it first. When
+  and age. A successful git commit is attributed in full: its line carries the
+  session name, the commit's short SHA and subject, and the repository. If a
+  file you are about to edit appears here, re-read it first. When
   `[collab] peer_awareness` is on and the topology index has the file, each entry
   is annotated with its enclosing package/symbol (best-effort, `source=topology`).
 
