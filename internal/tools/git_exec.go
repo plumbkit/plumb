@@ -81,7 +81,14 @@ func gitReadArgv(argv []string) []string {
 // a cancellation-decoupled, bounded context (see beginSerialisedGit) so a daemon
 // shutdown or connection eviction mid-commit lets git finish and release the
 // lock rather than SIGKILLing it and stranding the lock.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier) (string, error) {
+//
+// guard (may be nil) is the cross-session ref-movement guard
+// (git_ref_guard.go): its preExec check runs here, after the per-repo lock is
+// held for the mutating tiers, so a peer's in-flight commit cannot slip
+// between the check and this operation; postExec records the session's post-op
+// HEAD/branch observation after a successful run. Both hooks are nil-safe, so
+// the guardless path adds no branching here.
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
@@ -94,6 +101,9 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier) 
 			return "", err
 		}
 		defer cleanup()
+	}
+	if err := guardRefPreExec(execCtx, guard, repoRoot, sub); err != nil {
+		return "", err
 	}
 	if tier == tierRead {
 		argv = gitReadArgv(argv)
@@ -112,6 +122,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier) 
 		}
 		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String())
 	}
+	guard.postExec(execCtx)
 	out := stdout.String()
 	if strings.TrimSpace(out) == "" {
 		out = stderr.String() // switch/push and friends report on stderr

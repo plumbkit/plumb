@@ -2,6 +2,35 @@
 
 ## 0.16.3 (unreleased)
 
+### Added
+
+- **The git tool now guards write/destructive operations against cross-session
+  HEAD movement, and gains an `expected_head` optimistic-concurrency pin.** Two
+  agents sharing one repository could previously race commits, branch switches,
+  and resets with no warning — a peer could commit another session's staged
+  changes, or switch the branch between that session's verify and commit.
+  Plumb now keeps a per-repository ledger (in the daemon, alongside the repo
+  serialisation locks) of the HEAD+branch each session last observed, recorded
+  after every successful git call. Before a write/destructive op — checked
+  while holding the per-repo lock, so a peer's in-flight commit cannot slip
+  between check and run — a HEAD/branch that moved since this session's last
+  observation AND is confidently attributable to a DIFFERENT plumb session
+  refuses the call until re-run with `confirm: true`, and the response names
+  the peer session and the old→new refs. Movement by the session itself, by an
+  external (non-plumb) actor, or by an untraceable chain stays friction-free,
+  so single-session use is unchanged; a read (status/log/diff) never warns and
+  re-baselines the session. Attribution only credits a session whose own op
+  actually changed the ref state, so an `add` that left HEAD untouched cannot
+  take the blame for someone else's move. Separately, `expected_head` (any
+  revision — full/short SHA, branch, tag) pins the exact commit HEAD must be
+  at for a write/destructive op: a mismatch — or an unresolvable value —
+  refuses the call outright, regardless of sessions. Documented in the tool's
+  schema and description. Guarded by `TestGitRefGuard_*` (two-session temp-repo
+  interleavings: the refused-then-confirmed commit, stale/unresolvable/matching
+  `expected_head` including without a session identity, self-move and
+  external-move silence, read-tier re-baselining, and same-SHA branch-switch
+  detection) plus pure-ledger attribution and sweep unit tests.
+
 ### Fixed
 
 - **A failed git command no longer presents hook stdout as the error.** A
