@@ -175,7 +175,9 @@ the rate limiter — avoid `internal/tools/ratelimit*`"). You have at most one l
 intent — a new call replaces it — and it is cleared automatically when your
 session ends. Peers see it in `workspace_sessions`, and a peer whose write touches
 a path matching your `path_globs` gets a bounded advisory hint labelled
-`[Peer intent (claim, unverified): …]`. Requires `[collab] intents = true`.
+`[Peer intent (claim, unverified): …]`; a peer about to run a repo-state git op
+(`switch`/`rebase`/`reset`/`commit`/…) on a repository your intent covers gets a
+similar warning. Requires `[collab] intents = true`.
 
 **Inputs:** `body` (string, required — free text); `path_globs` (array of
 strings, optional — workspace-relative globs for the area you are working on);
@@ -715,6 +717,15 @@ plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
 trailer; regardless of that knob, `workspace_sessions` always lists recent
 commits per session (short SHA, subject, repository) from its recent-writes
 feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
+
+With `[collab] intents = true`, a **repo-state op** — every destructive-tier op,
+plus the write-tier HEAD movers `commit`/`switch`/`checkout` — also surfaces any
+live peer `share_intent` claims covering the repository (an unscoped broadcast
+always covers it; a scoped intent covers it when its globs match the repo root,
+or when the repo is the workspace root) as an advisory `# plumb-warning:` block
+naming the peer and the claim. Informational only: it never blocks the op, never
+requires `confirm`, and index-only writes (`add`, `restore --staged`) stay
+silent.
 
 **Inputs:** `subcommand` (required), `args` (array), `files` (array, for `add`),
 `message` (string, for `commit`), `confirm` (bool).

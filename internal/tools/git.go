@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/collab"
 )
 
 var gitSchema = json.RawMessage(`{
@@ -67,6 +69,10 @@ type Git struct {
 	policy     GitPolicyFn
 	sessID     string
 	sessNameFn func() string
+	// Peer repo-intent warning wiring (git_intent_warn.go), both nil-safe and
+	// consulted lazily per call: unwired means no warning is ever computed.
+	intentsOn   func() bool
+	collabStore func() *collab.Store
 }
 
 func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
@@ -79,6 +85,18 @@ func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
 func (t *Git) WithSession(id string, name func() string) *Git {
 	t.sessID = id
 	t.sessNameFn = name
+	return t
+}
+
+// WithPeerIntents wires the repo-level peer-intent warning
+// (git_intent_warn.go): before a repo-state verb runs, live peer intents
+// covering the repository are surfaced in the response as an advisory warning.
+// on is the [collab] intents snapshot; store opens the workspace's collab.db
+// ONLY when it already exists (a git call never creates one). Both are
+// nil-safe: unwired means no warnings. Returns the receiver for chaining.
+func (t *Git) WithPeerIntents(on func() bool, store func() *collab.Store) *Git {
+	t.intentsOn = on
+	t.collabStore = store
 	return t
 }
 
@@ -104,7 +122,10 @@ func (t *Git) Description() string {
 		"expected_head pins the exact HEAD commit for write/destructive ops — a mismatch refuses the call outright. " +
 		"Attribution: with [git] commit_trailer = true (default off) every plumb-mediated commit is stamped with a " +
 		"Plumb-Session: <session-name> trailer; regardless of that knob, workspace_sessions lists recent commits per " +
-		"session (short SHA, subject, repository) from its recent-writes feed."
+		"session (short SHA, subject, repository) from its recent-writes feed. " +
+		"Peer intents: with [collab] intents = true, a repo-state op (any destructive-tier op, plus commit/switch/checkout) " +
+		"also surfaces live peer share_intent claims covering this repository as an advisory warning naming the peer and " +
+		"the claim — informational only: it never blocks the op and never requires confirm."
 }
 
 type gitToolArgs struct {
@@ -229,7 +250,7 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 		}
 	}
 	guard := t.armRefGuard(a, tier)
-	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard)
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier))
 	if err != nil {
 		return "", err
 	}
