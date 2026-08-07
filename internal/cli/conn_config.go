@@ -58,7 +58,8 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		projectCfg.Walk.RefuseHomeRoots != base.Walk.RefuseHomeRoots ||
 		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
 		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
-		projectCfg.Git.AllowPush != base.Git.AllowPush {
+		projectCfg.Git.AllowPush != base.Git.AllowPush ||
+		projectCfg.Git.CommitTrailer != base.Git.CommitTrailer {
 		s.log().Info("daemon: project config applied",
 			"workspace", workspace,
 			"strict", projectCfg.Edits.Strict,
@@ -66,7 +67,8 @@ func (s *connSession) applyProjectConfig(workspace string) {
 			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots,
 			"git.allow_writes", projectCfg.Git.AllowWrites,
 			"git.allow_destructive", projectCfg.Git.AllowDestructive,
-			"git.allow_push", projectCfg.Git.AllowPush)
+			"git.allow_push", projectCfg.Git.AllowPush,
+			"git.commit_trailer", projectCfg.Git.CommitTrailer)
 	}
 	// The workspace is now known (attach / re-pin / reload all funnel here), so
 	// link the per-(client, workspace) shared write budget. Idempotent.

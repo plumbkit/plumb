@@ -376,7 +376,10 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 // co-worker session touched recently and re-read them before editing.
 //
 // Only the small columns needed for the feed are selected (input_json carries
-// the file path); output_text is deliberately omitted. The tool-name set is
+// the file path); output_text is deliberately omitted EXCEPT for git rows,
+// where it is small and carries the commit attribution ("<short-sha>
+// <subject>") that workspace_sessions renders — a commit's identity is not
+// recoverable from its input args. The tool-name set is
 // passed in (the tools package owns the write-tool list) and rendered as a
 // parameterised IN clause, so no caller value is ever interpolated. Returns nil
 // when writeTools is empty or d is nil.
@@ -396,7 +399,8 @@ func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limi
 	args = append(args, limit)
 	//nolint:gosec // G202: placeholders is only "?,?,.."; every value is a bound arg
 	q := `SELECT tool, session_id, session_name, workspace, called_at, duration_ms, success,
-	             error_msg, input_bytes, output_bytes, input_json, ''
+	             error_msg, input_bytes, output_bytes, input_json,
+	             CASE WHEN tool = 'git' THEN output_text ELSE '' END
 	      FROM tool_calls
 	      WHERE workspace = ? AND tool IN (` + placeholders + `)
 	      ORDER BY called_at DESC LIMIT ?`

@@ -15,6 +15,10 @@ type GitPolicy struct {
 	AllowDestructive  bool
 	AllowPush         bool
 	ProtectedBranches []string
+	// CommitTrailer stamps each plumb-mediated commit with a
+	// `Plumb-Session: <session-name>` trailer ([git] commit_trailer, default
+	// off). Not a gate — an attribution opt-in.
+	CommitTrailer bool
 }
 
 // GitPolicyFn resolves the current GitPolicy at call time. nil falls back to a

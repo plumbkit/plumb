@@ -38,6 +38,7 @@ var defaults = Config{
 		AllowDestructive:  false,
 		AllowPush:         false,
 		ProtectedBranches: []string{"main", "master"},
+		CommitTrailer:     false,
 	},
 	Quality: QualityConfig{
 		Enabled:            false,
