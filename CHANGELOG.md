@@ -4,6 +4,31 @@
 
 ### Added
 
+- **The git tool now surfaces peer `share_intent` claims that cover the
+  repository before a repo-state op runs.** `share_intent`'s advisory channel
+  was path-glob based, so a peer whose intent covers the whole repo
+  ("rebasing ops main") was invisible to another session about to run
+  `git switch`/`rebase`/`reset`. With `[collab] intents = true`, a repo-state
+  op — every destructive-tier op, plus the write-tier HEAD movers
+  `commit`/`switch`/`checkout` — now leads its response with an advisory
+  `# plumb-warning:` block naming the peer session and its claim (and when it
+  expires) whenever a live peer intent covers the repository: an unscoped
+  broadcast always covers it; a scoped intent covers it when its globs match
+  the repo root's workspace-relative path, or when the repo is the workspace
+  root. Index-only writes (`add`, `restore --staged`, `stash push`) and purely
+  additive ones (branch/tag create) stay silent, as do all read and network
+  ops. It reuses the collab intent store and glob matcher (no new storage),
+  reads only an already-existing `collab.db` under a bounded timeout, and is
+  purely informational — it never blocks the op and never requires `confirm`
+  (the cross-session ref-movement guard already owns confirmed friction; the
+  session's own and expired intents are excluded). Documented in the `git` and
+  `share_intent` tool descriptions and `docs/tools.md`. Guarded by
+  `TestGitPeerIntentWarning_*` (real temp repos: state verbs warn with a peer
+  intent, reads/index-only/no-intent baselines stay silent, own-intent
+  exclusion, unwired and intents-off silence, nested-repo glob scoping) plus
+  pure `TestFormatRepoIntentWarning` / `TestRepoStateVerb` /
+  `TestIntentCoversRepo` units.
+
 - **Plumb-mediated commits are now attributable to the session that authored
   them — in the git history (opt-in) and in `workspace_sessions` (always).**
   When a peer session commits, there was previously no way to learn afterwards
