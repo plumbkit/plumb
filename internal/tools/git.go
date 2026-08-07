@@ -38,7 +38,11 @@ var gitSchema = json.RawMessage(`{
     },
     "confirm": {
       "type": "boolean",
-      "description": "Required (true) for destructive and network subcommands. Acknowledges the operation may discard work or contact a remote."
+      "description": "Required (true) for destructive and network subcommands. Also required to override the cross-session ref-movement guard: when a DIFFERENT plumb session moved this repo's HEAD/branch since this session last observed it, a write/destructive op is refused until re-run with confirm:true."
+    },
+    "expected_head": {
+      "type": "string",
+      "description": "Optimistic-concurrency guard for write/destructive subcommands (mirrors edit_file's expected_mtime): any git revision (full/short SHA, branch, tag) naming the commit HEAD must be at. When supplied and HEAD resolves elsewhere — or resolves to nothing — the operation is refused before running, regardless of which session (or external tool) moved it. Ignored by read and network subcommands. Omit for no check."
     }
   },
   "required": ["subcommand"],
@@ -55,14 +59,27 @@ var gitSchema = json.RawMessage(`{
 // in git_policy.go; argv assembly, execution, and output formatting in
 // git_exec.go. This file holds the MCP Tool surface and request orchestration.
 //
-// Concurrency: Execute is safe for concurrent use (no shared mutable state).
+// Concurrency: Execute is safe for concurrent use. sessID/sessNameFn are set
+// once at registration (WithSession); the cross-session ledger itself lives in
+// the process-global gitRefStates map (git_ref_guard.go).
 type Git struct {
-	deps   WriteDeps
-	policy GitPolicyFn
+	deps       WriteDeps
+	policy     GitPolicyFn
+	sessID     string
+	sessNameFn func() string
 }
 
 func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
 	return &Git{deps: deps, policy: policy}
+}
+
+// WithSession wires the connection's session identity for the cross-session
+// ref-movement guard (git_ref_guard.go). Returns the receiver for chaining.
+// Without it the ledger is untracked and only expected_head is enforced.
+func (t *Git) WithSession(id string, name func() string) *Git {
+	t.sessID = id
+	t.sessNameFn = name
+	return t
 }
 
 func (t *Git) Name() string                 { return "git" }
@@ -79,16 +96,22 @@ func (t *Git) Description() string {
 		"relies on the current branch is refused, since it may target a protected branch). " +
 		"Typed parameters: add uses files (staged with -A semantics — new/modified/deleted); commit uses message " +
 		"(plus an optional files list for a path-limited commit, the safe way to commit just your change in a shared " +
-		"worktree); every other subcommand uses args."
+		"worktree); every other subcommand uses args. " +
+		"Cross-session guard: plumb tracks the HEAD+branch each session last observed per repo; before a write/destructive " +
+		"op, if a DIFFERENT plumb session moved it since this session's last observation, the op is refused unless " +
+		"re-run with confirm:true, and the response names the peer session and the old→new refs (movement by this " +
+		"session, an external tool, or an unknown mover adds no friction). " +
+		"expected_head pins the exact HEAD commit for write/destructive ops — a mismatch refuses the call outright."
 }
 
 type gitToolArgs struct {
-	Subcommand string   `json:"subcommand"`
-	Args       []string `json:"args"`
-	Files      []string `json:"files"`
-	Message    string   `json:"message"`
-	Repo       string   `json:"repo"`
-	Confirm    bool     `json:"confirm"`
+	Subcommand   string   `json:"subcommand"`
+	Args         []string `json:"args"`
+	Files        []string `json:"files"`
+	Message      string   `json:"message"`
+	Repo         string   `json:"repo"`
+	Confirm      bool     `json:"confirm"`
+	ExpectedHead string   `json:"expected_head"`
 }
 
 func (a gitToolArgs) validate() error {
@@ -168,11 +191,38 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 			return switchNote + shortCircuit, nil
 		}
 	}
-	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier)
+	guard := t.armRefGuard(a, tier)
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard)
 	if err != nil {
 		return "", err
 	}
+	if guard != nil && guard.warning != "" {
+		return guard.warning + switchNote + out + warning, nil
+	}
 	return switchNote + out + warning, nil
+}
+
+// armRefGuard builds the per-call ref-movement guard (git_ref_guard.go). It
+// returns nil — the zero-overhead path — only when the call has neither a
+// session identity to track nor an expected_head to enforce. The guard checks
+// write/destructive tiers before they run and records this session's
+// HEAD/branch observation after every successful call (reads included), which
+// is what keeps single-session use friction-free: a session's own moves are
+// always its latest observation.
+func (t *Git) armRefGuard(a gitToolArgs, tier gitTier) *gitRefGuard {
+	if t.sessID == "" && a.ExpectedHead == "" {
+		return nil
+	}
+	g := &gitRefGuard{
+		sessID:       t.sessID,
+		expectedHead: a.ExpectedHead,
+		confirm:      a.Confirm,
+		check:        tier == tierWrite || tier == tierDestructive,
+	}
+	if t.sessNameFn != nil {
+		g.sessName = t.sessNameFn()
+	}
+	return g
 }
 
 // resolveAddArgv adjusts argv for the "add" subcommand to exclude any
