@@ -157,9 +157,12 @@ allow_writes = true                     # add, commit, switch, branch/tag create
 allow_destructive = false               # reset, clean, checkout, restore, rebase, … (each call also needs confirm:true)
 allow_push = false                      # push/fetch/pull (each call also needs confirm:true)
 protected_branches = ["main", "master"] # never force-pushable, even with allow_push + confirm
+commit_trailer = false                  # stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer
 ```
 
 Layered and hot-reloaded (`gitPolicyFn`). Classification is *safe-biased* (`classifyGit`, `internal/tools/git.go`): ambiguous subcommands round **up** a tier (`checkout -b` is a write, any other `checkout` is destructive). `add`/`commit` are typed, not pass-through — `commit` only runs `commit -m <message>`, `add` only `add -- <files>`; pre-commit hooks always run. The subcommand leads argv and a denylist rejects `-c`/`-C`/`--git-dir`/`--work-tree`/etc., so global flags can't reconfigure git; no shell. Output is capped (200 lines for `log`/`blame`, 100 KiB overall).
+
+`commit_trailer` (env `PLUMB_GIT_COMMIT_TRAILER`) opts into **commit attribution in the git history**: every plumb-mediated commit is stamped with a `Plumb-Session: <session-name>` trailer (git ≥ 2.32), so `git log --format=%(trailers)` attributes a commit to the agent session that authored it. Off by default — the trailer is per-commit noise, and attribution is always queryable without it: `workspace_sessions` renders recent commits per session (short SHA, subject, repository) from its stats-backed recent-writes feed.
 
 ### `[ui]` — TUI theme (global config only)
 

@@ -15,14 +15,20 @@ const maxGitBytes = 100 * 1024 // 100 KiB
 
 // buildGitArgv assembles the full git argv. add and commit use typed params so
 // free-form path args and commit footguns (-F, editor, --no-verify, --amend)
-// are unreachable; all other subcommands pass args through.
-func buildGitArgv(a gitToolArgs) ([]string, error) {
+// are unreachable; all other subcommands pass args through. trailer, when
+// non-empty, is stamped on a commit via --trailer (the [git] commit_trailer
+// session-attribution knob); it is inserted BEFORE the `--` pathspec
+// separator so a path-limited commit keeps working.
+func buildGitArgv(a gitToolArgs, trailer string) ([]string, error) {
 	switch a.Subcommand {
 	case "commit":
 		if strings.TrimSpace(a.Message) == "" {
 			return nil, errors.New("git commit: message is required")
 		}
 		argv := []string{"commit", "-m", a.Message}
+		if trailer != "" {
+			argv = append(argv, "--trailer", trailer)
+		}
 		// Path-limited commit: `git commit -m <msg> -- <files>` commits ONLY the
 		// named paths, ignoring unrelated staged changes in the index — the
 		// multi-agent / shared-worktree workflow agents asked for repeatedly.

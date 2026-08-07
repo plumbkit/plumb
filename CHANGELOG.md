@@ -4,6 +4,31 @@
 
 ### Added
 
+- **Plumb-mediated commits are now attributable to the session that authored
+  them — in the git history (opt-in) and in `workspace_sessions` (always).**
+  When a peer session commits, there was previously no way to learn afterwards
+  which session the commit came from. Two complementary mechanisms close that:
+  (1) a new `[git] commit_trailer` knob (default **off**, env
+  `PLUMB_GIT_COMMIT_TRAILER`) stamps every plumb-mediated commit with a
+  `Plumb-Session: <session-name>` git trailer (git ≥ 2.32), so
+  `git log --format=%(trailers)` attributes the commit in the history itself —
+  opt-in because a trailer is per-commit noise; (2) regardless of the knob,
+  `workspace_sessions`' recent-writes feed now renders a successful git commit
+  as a full attribution line — session name, short SHA, subject, and
+  repository — recovered from the stats record every tool call already gets
+  (the feed query now selects `output_text` for git rows only, so no parallel
+  store and no payload change for the file tools). A failed commit or a
+  non-commit git op keeps the previous bare line. Documented in the `git` and
+  `workspace_sessions` tool descriptions, the `[git]` config section, and
+  `docs/configuration.md`. Guarded by `TestGit_CommitSessionTrailer` /
+  `…DefaultOff` (real temp repos, trailer asserted via `%(trailers)`),
+  `TestBuildGitArgv_CommitTrailer` and `TestCommitTrailerToken` (argv shape
+  and the gate matrix), `TestFormatWorkspaceSessions_CommitAttribution`
+  (attributed, guard-warning-prefixed, failed, and non-commit entries), and
+  `TestRecentWritesByWorkspace_GitRowsCarryOutput` (the query's git-only
+  `output_text` exception), plus config load/env-override tests for the new
+  key.
+
 - **The git tool now guards write/destructive operations against cross-session
   HEAD movement, and gains an `expected_head` optimistic-concurrency pin.** Two
   agents sharing one repository could previously race commits, branch switches,

@@ -537,6 +537,7 @@ func (s *connSession) gitPolicy() tools.GitPolicy {
 		AllowDestructive:  c.AllowDestructive,
 		AllowPush:         c.AllowPush,
 		ProtectedBranches: c.ProtectedBranches,
+		CommitTrailer:     c.CommitTrailer,
 	}
 }
 

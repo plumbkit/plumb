@@ -212,6 +212,7 @@ and network calls additionally require `confirm: true` per call.
 | `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
+| `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer (git ≥ 2.32), attributing it to the authoring agent session. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
 
 Ambiguous subcommands (`checkout`, `switch`, `restore`, `branch`, `tag`,
 `stash`) are classified by their arguments and biased towards the higher tier —
@@ -715,6 +716,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_GIT_ALLOW_WRITES` | `git.allow_writes` |
 | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | `git.allow_destructive` |
 | `PLUMB_GIT_ALLOW_PUSH` | `git.allow_push` |
+| `PLUMB_GIT_COMMIT_TRAILER` | `git.commit_trailer` |
 | `PLUMB_AUTO_ATTACH` | `workspace.auto_attach` |
 | `PLUMB_AUTO_ATTACH_PERSIST` | `workspace.auto_attach_persist` |
 | `PLUMB_LSP_QUERY_TIMEOUT` | `lsp_query.timeout` |
@@ -778,6 +780,7 @@ allow_writes       = true                   # add, commit, switch, branch/tag cr
 allow_destructive  = false                  # reset, clean, checkout… (also needs confirm:true)
 allow_push         = false                  # push, fetch, pull (also needs confirm:true)
 protected_branches = ["main", "master"]     # never force-pushable
+commit_trailer     = false                  # stamp commits with a Plumb-Session: <name> trailer
 
 [quality]
 enabled               = false               # post-write offline analysers
