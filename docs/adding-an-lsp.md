@@ -117,9 +117,25 @@ ensure-open set — including your own adapter's.
 | **Validated** | Integration tests spawn the real binary and pass. | `internal/lsp/adapters/gopls`, `.../rust` |
 | **Experimental** | Real Go code, unit-tested with a mocked transport; the integration test exists but has not run green against a real binary. | `internal/lsp/adapters/kotlin`, `.../html` |
 
+Real-binary validation has been exercised on macOS only; Linux integration runs
+in CI and is being hardened pre-v1; Windows is not yet supported. Current status
+of every shipped adapter (details in the *Adapter reference* below):
+
+| Adapter | Language | Status |
+|---|---|---|
+| `gopls` | Go | **Validated** — mock-transport unit tests + real-binary integration; `client/registerCapability` answered, `workspace/didChangeWatchedFiles` confirmed. |
+| `pyright` | Python | **Validated** — same coverage as gopls, against the real pyright-langserver binary. |
+| `jdtls` | Java | **Validated** — needs *both* `DidChangeWatchedFiles` and `DidOpen` (sent after the server's `ServiceReady`) for reliable diagnostics after external writes. |
+| `rust-analyzer` | Rust | **Validated** — cold start loads the sysroot + runs `cargo metadata` (minutes on a large workspace); the topology fallback keeps Rust symbol queries working while it warms. |
+| `sourcekit-lsp` | Swift | **Validated** — ships with the Swift toolchain / Xcode. |
+| `zls` | Zig | **Validated** — real-binary retest (2026-06-17, zls 0.16) passes both integration tests once the `publishDiagnostics` client capability is advertised. |
+| `typescript-language-server` | TypeScript / JavaScript | **Validated** — publishes nothing unless the client advertises `textDocument.publishDiagnostics` (now in `DefaultClientCapabilities`); does not implement pull diagnostics. |
+| `kotlin-language-server` | Kotlin | **Experimental** — passes document symbols against a real binary, fails `TestIntegration_DidChangeWatchedFiles` (needs a real Gradle/Maven project to publish diagnostics). |
+| `vscode-html-language-server` | HTML | **Experimental** — no filesystem access; answers only from documents the client has opened. |
+
 Promote from experimental to validated by getting the integration test (step 6)
 green against a real server binary, then updating the adapter's `doc.go` status
-comment and the validation table in `AGENTS.md`.
+comment and the status table above.
 
 ---
 

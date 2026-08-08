@@ -66,6 +66,17 @@ those as restart-needed.
 | `path_style` | string | `"compact"` | How workspace folder paths are abbreviated in the Sessions sidebar: `compact`, `truncate-middle`, or `full`. |
 | `keys` | table | `{}` | Rebinds TUI keyboard shortcuts — an action-name → key-string map. See below. |
 
+Built-in themes: `nordico`, `darcula`, `dracula`, `gruvbox`, `plumb` (dark);
+`github-light`, `solarized-light`, `plumb-light` (light). The `plumb`/
+`plumb-light` pair is derived from the project website's own terracotta/sage
+palette (`site/index.html`). The theme picker writes the setting live via a
+sparse `SetGlobalValue(["ui", "theme"])` that rewrites only the `[ui].theme` key
+(preserving the rest of the file and never baking in `PLUMB_*` env overrides);
+the whole-file `config.Save` path that other global Settings writes use still
+rewrites the file, so user TOML comments are lost on first save there. The
+palette catalogue lives in the UI-agnostic `internal/theme` package (hex
+strings, no bubbletea import), consumed by both the TUI and the web UI.
+
 ### `[ui.keys]` — keyboard shortcuts
 
 Rebind TUI actions by mapping a stable **action name** to a **key string**.
@@ -141,7 +152,7 @@ config. `plumb web --port` overrides it for a single launch.
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
 | `strict` | bool | `false` | `PLUMB_STRICT_EDITS` | Require every content-authoring write target — `edit_file` and the four symbol-edit tools (`replace_symbol_body`, `insert_before_symbol`, `insert_after_symbol`, `safe_delete_symbol`) — to have been read via `read_file` this session, with a matching mtime. `rename_symbol` is exempt (see below). |
-| `rate_limit_per_minute` | int | `120` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. |
+| `rate_limit_per_minute` | int | `120` | `PLUMB_WRITE_RATE_LIMIT` | Sliding-window cap on writes per session. `0` disables. A shared parent budget (keyed by (client, workspace)) caps the combined rate across connections from the same client to one project. |
 | `post_write_diagnostics_ms` | int | `300` | `PLUMB_POST_WRITE_DIAG_MS` | Ceiling on how long to wait for the LSP server to re-publish diagnostics after a write; the effective wait adapts down to the server's observed latency. `0` disables. |
 | `post_write_cross_file` | bool | `true` | `PLUMB_POST_WRITE_CROSS_FILE` | After a write, compare workspace diagnostics against a pre-write baseline and flag NEW errors the edit introduced in OTHER files (the "edit A silently breaks B" case). The edited file's own diagnostics block keeps priority. |
 | `post_write_cross_file_settle_ms` | int | `200` | `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | Bounded grace the cross-file sweep waits, after the edited file's own diagnostics land, for dependent-file re-publishes before comparing. `0` compares immediately. |
@@ -149,6 +160,10 @@ config. `plumb web --port` overrides it for a single launch.
 | `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
 | `block_dirty_writes` | bool | `true` | `PLUMB_BLOCK_DIRTY_WRITES` | Refuse a destructive write (`write_file`, `edit_file`, `delete_file`, `find_replace`, `rename_file`, `copy_file`, `transaction_apply`) to a file with uncommitted git changes that plumb did not write this session, unless `dirty_ok: true`. Set false to disable the guard — for a workflow that iterates on uncommitted WIP. Re-editing a file plumb wrote this session is never blocked either way. |
 | `fsync` | bool | `true` | `PLUMB_FSYNC` | Fsync-before-ack: fsync the staged temp file before the atomic rename and the parent directory after it, so an acknowledged write (and plumb's own state files) survive a hard crash or power cut. Set false to skip both fsyncs — restores the old behaviour for benchmarks and exotic filesystems that refuse fsync. **Daemon-global** (the only `[edits]` key that is): it gates write primitives shared by every session, so it is resolved from global config (or `PLUMB_FSYNC`) once at daemon start and re-read live on a global reload; a per-project `.plumb/config.toml` override is ignored, because honouring it would let the last workspace to attach set the durability contract for every other live session. |
+
+### Cross-file diagnostics honesty
+
+The cross-file sweep is honest by construction: it only reports a file whose error count ROSE versus the pre-write baseline AND that the language server re-published after the write, so pre-existing errors and untouched files are never mis-attributed; the edited file's own block is unaffected and returned first, and the heads-up hedges the mid-series case rather than claiming "the build is broken".
 
 ### Strict mode and `rename_symbol`
 
@@ -183,9 +198,10 @@ project.
 |---|---|---|---|---|
 | `auto_attach` | bool | `false` | `PLUMB_AUTO_ATTACH` | When detection finds no marker at all (no `.plumb/`, language marker, or `.git/`), fall back to a synthetic root (the seed directory). Stats, TUI, and project config work; LSP is unavailable. |
 | `auto_attach_persist` | bool | `false` | `PLUMB_AUTO_ATTACH_PERSIST` | Create `.plumb/` at the synthetic root on first attach so later sessions resolve normally. **Implies `auto_attach`.** |
-| `allow_dependency_reads` | bool | `true` | — | For a Go session, allow read/search (never write) into the module cache (`GOMODCACHE`) + `GOROOT`. |
+| `allow_dependency_reads` | bool | `true` | — | Allow read/search (never write) to reach the session language's toolchain stdlib + dependency cache read-only (Go: GOMODCACHE/GOROOT; Zig: stdlib + cache; Rust: rust-src + cargo registry; Python: stdlib + site-packages; Swift: SDK; JVM: Gradle/Maven caches). TypeScript is intentionally excluded (node_modules is in-workspace). |
 | `extra_roots` | []string | `[]` | — | Additional read-**write** directories, additive to the workspace (`$VAR`-expanded). Honoured from **global** config only (see below). |
 | `read_roots` | []string | `[]` | — | Additional read-**only** directories — vendored deps, shared libs (`$VAR`-expanded). Honoured from **global** config only (see below). |
+| `child_scan_depth` | int | `2` | — | Levels below a markerless `.plumb/` root to scan for language markers in subdirectories (multi-language monorepo). `0` disables. See [Architecture → Workspace detection](architecture.md#workspace-detection). |
 
 ### Per-workspace roots (trusted grants)
 
@@ -200,6 +216,14 @@ Read roots rows). Such a grant is recorded in plumb's own data dir
 granted path after the fact (the VS Code "workspace trust" model). The grants are
 additive to the global config roots and shown by `plumb config show --workspace
 <dir>` with a `data-dir grant` source.
+
+The workspace boundary itself is enforced per-connection by a **`PathPolicy`**
+(`internal/tools/pathpolicy.go`): an allowlist of roots tagged read-only or
+read-write. The detected workspace is always read-write; `extra_roots` add
+read-write roots; `read_roots` (and, with `allow_dependency_reads`, the session
+language's toolchain stdlib + dependency cache) add read-only roots. Read/search
+tools admit any allowed root; write tools demand read-write, so a write outside
+the workspace is refused by construction.
 
 ## `[git]` — tiered git-tool gating
 
@@ -219,7 +243,10 @@ Ambiguous subcommands (`checkout`, `switch`, `restore`, `branch`, `tag`,
 e.g. `checkout -b` is a write but any other `checkout` is destructive, and
 `restore --staged` is a write but `restore --worktree` is destructive. `add` and
 `commit` are typed (only `commit -m <message>` / `add -- <files>` ever run, so
-`--amend`/`--no-verify`/globs are unreachable; pre-commit hooks always run). See
+`--amend`/`--no-verify`/globs are unreachable; pre-commit hooks always run). A
+denylist rejects global flags that would reconfigure git (`-c`/`-C`/`--git-dir`/
+`--work-tree`/etc.), and no shell is involved; output is capped (200 lines for
+`log`/`blame`, 100 KiB overall). See
 [Tools → `git`](tools.md#git) for the full behavioural contract.
 
 ## `[quality]` — post-write code analysis
@@ -257,6 +284,11 @@ reports the resolved path, or warns with a fix hint when there is none.
 
 Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` means *use the default*, while `extract_timeout_seconds = 0` means *disabled*.
 
+`topology.db` (+ `-wal`/`-shm`) is auto-added to `<workspace>/.plumb/.gitignore`,
+and `.plumb/` itself is excluded from watching. Per-project `[topology]` config
+is honoured on attach and re-applied on reload. Only the full resync walk is
+paced; write-triggered upserts are never delayed.
+
 ## `[session]` — idle detection & eviction
 
 | Field | Type | Default | Env | Effect |
@@ -267,6 +299,8 @@ Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` 
 | `persist_state_ttl_minutes` | int | `1440` | — | How long persisted session state is honoured on restart before it's treated as stale and discarded. |
 
 Global or per-project; no environment override except `persist_state`. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
+
+`persist_state` (default on; env `PLUMB_PERSIST_SESSION_STATE`) makes a **daemon restart transparent to a connected agent**: strict-mode read-tracking, the pinned workspace, and the session name are written to `session_state.db` (in the data dir, beside `stats.db`), keyed by a stable proxy session ID that `plumb serve` injects into the `initialize` handshake `_meta` and replays on every reconnect. On reconnect the fresh daemon rehydrates that state, so a strict-mode `edit_file` of a file read before the restart is not refused, a client that reports no roots (e.g. Claude Desktop) comes back pinned without an explicit `session_start`, and the connection keeps its session name (mailbox notes are addressed by name, so a fresh random name on every reconnect would orphan them). Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads. `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers; it is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate).
 
 ## `[memory]` — per-workspace memory engine
 
@@ -283,6 +317,31 @@ Markdown memories under `<workspace>/.plumb/memories/` are the source of truth;
 | `max_hints` | int | `3` | Max memories hinted per response. |
 | `idle_summary_minutes` | int | `0` | Idle threshold before an episodic summary; `0` falls back to `[session] idle_threshold_minutes`. |
 | `generated_memory_keep` | int | `50` | Newest generated episodic memories retained per workspace; `0` disables pruning. |
+
+Generated and episodic memories are always redaction-scrubbed and clearly
+lower-confidence than user-authored ones. Hint injection reads only frontmatter
+(never bodies) on the hot path via a per-connection snapshot of the resolved
+`[memory]` config (no per-call config read); when user-authored and generated
+memories compete for the capped hint slots, user-authored ones always win.
+Hybrid memory v1 (0.9.16): `write_memory` accepts `paths` globs (stored as
+frontmatter, driving `relevant_memories` and hints), and an idle session that
+wrote workspace files also leaves a durable `episodic-*` markdown memory —
+redacted, provenance-stamped, indexed, and pruned to the newest
+`generated_memory_keep`.
+
+Three behaviours worth knowing (settled in 0.9.16): **per-project
+`generated_summaries` is honoured both ways** — a project may enable episodic
+summaries under a global opt-out *or* disable them under a global opt-in; only
+the idle *threshold* is global-resolved (`idle_summary_minutes` → `[session]
+idle_threshold_minutes`), and a session is always summarised before it is
+evicted, even when `eviction_ttl_minutes` is shorter than the threshold.
+**`search_memories` auto mode greps when FTS finds nothing** — a fresh index
+that returns zero FTS5 hits (the tokeniser is whole-token, so a substring like
+`essio` inside `UserSession` won't match) falls through to substring grep;
+`case_sensitive: true` always uses grep (FTS5 is case-insensitive); a literal
+`mode: fts` keeps the empty FTS result. **Hint and episodic budgets are byte
+caps** (`*_bytes`), enforced in bytes on a UTF-8 boundary, so a multi-byte
+summary cannot overrun.
 
 ## `[collab]` — cross-agent sharing
 
@@ -331,6 +390,36 @@ When `peer_awareness` is on it adds three signals:
 | `knowledge_handoff` | bool | `false` | Tier 3, opt-in: the `share_findings` tool — hand findings to peers now as a generated memory, instead of waiting for the idle episodic summary. |
 | `intent_ttl_minutes` | int | `120` | Expiry applied to a new intent or note. Rows past expiry are pruned on the reaper tick and filtered from every read. `0` uses the default. |
 
+A session holds at most **one live intent** — a new `share_intent` replaces it,
+and it is cleared when the session ends. A `next` note is consumed on first
+delivery; an addressed note persists until its TTL. Delivery is polling plus
+hint injection only — plumb cannot push to a peer. `share_findings` writes its
+memory as `finding-<timestamp>-<session>`, retention-shared with the idle
+`episodic-*` summaries under `[memory] generated_memory_keep`, and it never
+displaces a user-authored memory in a capped hint slot. Rule-based only — the
+agent supplies the text; no LLM summary.
+
+## `[rastro]` — Rastro associative-memory integration
+
+```toml
+[rastro]
+enabled = false     # off by default; nothing is looked up or executed while disabled
+path    = "rastro"  # executable name resolved on PATH, or an absolute path
+```
+
+Project-overridable; no env override; both fields are `ReloadNextSession` in the
+field registry, so the TUI Settings screen marks them `²`. Surfaced in the TUI
+under a **Rastro** group (Enabled toggle, Path text) and written scope-aware
+like every other row — a workspace row lands in `<workspace>/.plumb/config.toml`,
+a global row in the global config.
+
+`plumb doctor`'s **Integrations** section reports the integration's state:
+`disabled in config` when off; the resolved executable path (via
+`exec.LookPath`) when on and found; a **failure** naming the binary and how to
+fix it when on and absent. An unloadable config is reported there as a
+*warning*, not a second failure — the Configuration section already fails the
+run for that fault. `plumb` never executes the binary; it only resolves it.
+
 ## `[semantics]` — opt-in semantic re-rank for `topology_search`
 
 Off by default — zero cost until enabled. When on, `topology_search` re-ranks its
@@ -353,6 +442,14 @@ it needs an embedding endpoint you supply; nothing about it is provisional.
 | `api_key_env` | string | `""` | Env var holding the key, used when `api_key` is empty; `""` uses the preset default (e.g. `OPENAI_API_KEY`). |
 | `rerank_candidates` | int | `50` | How many FTS5 hits to re-rank. |
 | `timeout` | duration | `"10s"` | Per embedding HTTP call. |
+
+One OpenAI-compatible client (`internal/semantics`) covers `openai`, `voyage`
+(`voyage-code-3`), `jina`, `mistral`, and any self-run OpenAI-compatible server
+(Ollama / llama.cpp / LM Studio / TEI / vLLM) via `provider = "custom"` +
+`base_url`; `cohere` uses a small adapter. A local-model spike found a bundled
+model does not beat FTS5, which is why plumb never bundles, downloads, or
+supervises one. Embeddings are cached lazily in `topology.db`
+(`topology_embeddings`, keyed by content hash).
 
 ## `[xcode]` — trusted Build Server Protocol setup
 
@@ -395,6 +492,28 @@ in Xcode; Plumb will not do that automatically.
 |---|---|---|---|---|
 | `timeout` | duration | `"30s"` | `PLUMB_LSP_QUERY_TIMEOUT` | Caps a single LSP tool operation when the caller's context carries no deadline, so a wedged language server can't hang a request. `0` disables. |
 
+The timeout is applied at the tool layer (`withLSPDeadline`) and is a no-op when
+the context already carries a deadline, so the cold-start handshake is never
+shortened.
+
+**LSP → topology fallback:** on LSP error/timeout, `workspace_symbols` and
+`file_outline` fall back to the topology index (when enabled), annotated
+`source=topology, mode=indexed-approximate`; a no-op when topology is disabled
+or has no match. `get_definition` **by name** (`symbol_name`) also falls back to
+the index when the server is unavailable — approximate (the declaration line
+resolved by name, annotated `source=topology, mode=indexed-approximate`), since
+the index has no position-level go-to-definition. The raw-position form of
+`get_definition` and the other position/semantic tools (`find_references`, the
+call/type hierarchies, `rename_symbol`) have no equivalent and surface the error
+unchanged — they need a precise position or a whole-workspace reference graph
+the index does not hold. **Empty-result fill:** `workspace_symbols` additionally
+supplements an *empty-but-no-error* LSP answer from the index for **tree-sitter**
+languages (annotated `topology fill … source=topology, mode=indexed-approximate`)
+— lazy servers like zls only answer for files they have already analysed, so a
+freshly-attached session would otherwise report "No symbols found" for a symbol
+the Map knows. Native-AST languages (Go via gopls, which indexes eagerly) are
+excluded so an authoritative empty answer is never supplanted.
+
 ## `[tools]` — tool advertisement profile
 
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
@@ -428,6 +547,42 @@ always advertised regardless of the resolved profile.
 |---|---|---|---|---|
 | `profile` | string | `"auto"` | `PLUMB_TOOLS_PROFILE` | `auto` (capability-gated — lean only for a client with a verified deferred-discovery capability, full otherwise; see above) \| `lean` (non-bootstrap commodity tools hidden) \| `full` (every tool advertised). |
 | `client_profiles` | map | `{}` | — | Per-client override, keyed by a case-insensitive `clientInfo.name` prefix (e.g. `"claude-code"`); each value is `auto`\|`lean`\|`full`. An empty or absent entry falls through to `profile`. |
+
+**The lean set and the mutation-lane rule.** The lean set
+(`internal/tools/profile.go` `LeanTools`, the single source of truth) keeps
+`session_start`, the read/edit/write/transaction file tools, `git`,
+`diagnostics`, the core LSP-semantic tools, the headline topology tools,
+`search_memories`, and `run_task`. The **mutation-lane rule** governs it: a
+read-only commodity tool may be hidden freely, but a mutation tool whose native
+fallback is unsafe (`mv`/`rm`/`sed` bypass plumb's per-path locks, the LSP
+notify, and the transaction WAL) stays lean; `read_file`/`read_symbol` stay lean
+too because the edit lane needs their mtime/sha headers. `run_task` is lean for
+the same reason: its only "native equivalent" is a raw shell `go test`/
+`zig build`, so hiding it just routes a recognised CLI client to the shell-build
+anti-pattern the profile exists to avoid. Under the lean profile `session_start`
+prints a one-line note with the hidden count and how to restore `full`.
+
+**Mid-session profile changes.** The server advertises the `tools.listChanged`
+capability and emits a `notifications/tools/list_changed` whenever a config
+reload changes the connection's resolved profile (e.g. a per-project `[tools]`
+override loaded at attach, or a hot-reloaded global setting). The resilient
+proxy forwards that server-initiated frame to the client unchanged, so a client
+that honours the notification re-lists and picks up the new profile mid-session;
+a client that lists only once still won't (its choice).
+
+**Always-loaded (pinned) tools — Claude Code MCP tool search.** Claude Code
+defers MCP tool *schemas* by default (only tool names load at session start; the
+model must call `ToolSearch` to page a schema in before invoking it — otherwise
+it guesses parameter names and the call is rejected client-side, before it ever
+reaches plumb). plumb exempts its highest-frequency tools from that deferral by
+advertising them with `_meta["anthropic/alwaysLoad"] = true` in `tools/list`
+(`MetaAlwaysLoadKey`, `internal/mcp/server.go`; emitted in `handleToolsList`
+when `Server.AlwaysLoad` accepts the name, wired to `tools.IsLean` in
+`conn_register.go`). The pinned set is **exactly `LeanTools`** — one list
+serving double duty: the lean-profile visibility set *and* the never-deferred
+set. Clients that predate the convention ignore the unknown `_meta` and are
+unaffected; no config knob is exposed (a per-machine override is
+`alwaysLoad: true` on the plumb server entry in the client's own MCP config).
 
 ## `[lsp.<language>]` — language servers
 
@@ -471,8 +626,8 @@ these servers are installed):
 | `html` | `vscode-html-language-server --stdio` | weak: `index.html` |
 
 Go and Python are first-class; Java, Rust, Swift, Zig, and TypeScript/JavaScript
-are validated; Kotlin and HTML are experimental (see the *Adapter validation
-status* table in `AGENTS.md`).
+are validated; Kotlin and HTML are experimental (see the status table under
+*Validation levels* in [Adding an LSP Adapter](adding-an-lsp.md#validation-levels)).
 
 jdtls is heavyweight (~0.8–1.5 GB RSS); it defaults to `idle_timeout = "20m"` and
 `max_workspaces = 2` so idle JVMs are hibernated and concurrent JVMs are capped.
@@ -570,8 +725,12 @@ server. So to add HTML support to a Go project:
 enabled = true   # gopls stays primary; the HTML server handles .html files
 ```
 
-`workspace_symbols` and the call/type hierarchies still consult the primary
-language only; `diagnostics` aggregates across every server bound to the root.
+`workspace_symbols` consults the primary for a single-language root but **fans
+out** across every server for a multi-language monorepo root (the child-marker
+discovery case — see [Architecture → Workspace
+detection](architecture.md#workspace-detection)), merging and deduplicating
+results; the call/type hierarchies are URI-bearing and route per-file.
+`diagnostics` aggregates across every server bound to the root.
 
 ---
 
@@ -590,7 +749,9 @@ e2e   = "go test -tags=integration ./..."
 ```
 
 A command is a **single argv executed without a shell** — shell metacharacters
-(`&&`, `;`, `|`, `$(`, backtick, redirects) are rejected. Shipped defaults exist
+(`&&`, `;`, `|`, `$(`, backtick, redirects) are rejected (`config.ParseTaskCommand`).
+The only agent-supplied input that reaches the argv is a shell-safe `{target}`
+(`^[A-Za-z0-9._/:@-]+$`). Shipped defaults exist
 for common languages (Go fully populated; a slot is left empty rather than guess
 an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
 

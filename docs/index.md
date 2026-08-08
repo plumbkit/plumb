@@ -29,7 +29,7 @@ New here? Start with the [README](../README.md), then
 
 - [**Contributing**](contributing.md) — build/test/lint workflow, code style, commit conventions.
 - [**Adding an LSP adapter**](adding-an-lsp.md) — the worked example for a new language.
-- [`AGENTS.md`](../AGENTS.md) — the canonical architecture and style brief for contributors and AI agents.
+- [`AGENTS.md`](../AGENTS.md) — the canonical brief for contributors and AI agents: the rules, plus pointers into the pages above for reference detail.
 
 ## Help
 
