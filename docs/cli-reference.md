@@ -53,7 +53,7 @@ theme is read from `[ui].theme` in the global config.
 In the **Sessions** section, press `r` to rename the selected session and `a`
 to refresh; both are also listed in the right panel's footer and the in-app help
 overlay (`ctrl+h`). Press `q` or `ctrl+c` to quit. See the
-[TUI conventions in AGENTS.md](../AGENTS.md) for navigation details.
+[TUI conventions in CONTRIBUTING.md](contributing.md#tui-conventions-bubble-tea-v2) for navigation details.
 
 ---
 
@@ -188,22 +188,27 @@ registration prints a hint when it notices the client's skills missing or stale.
 
 | Subcommand | Config target |
 |---|---|
-| `plumb setup claude-desktop` | Claude Desktop's platform-specific JSON config |
-| `plumb setup claude-code` | `~/.claude.json` (user scope) |
-| `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) |
-| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) |
+| `plumb setup claude-desktop` | Claude Desktop's platform-specific JSON config (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`); also heuristically repoints any sibling `Claude*/claude_desktop_config.json` profile that already exists (e.g. `Claude-Personal`) |
+| `plumb setup claude-code` | `~/.claude.json` (user scope) + `~/.claude/skills/` (skills via `plumb skills sync`) |
+| `plumb setup claude-code --project` | `.mcp.json` in the current directory (project scope) + `~/.claude/skills/` (skills via `plumb skills sync`) |
+| `plumb setup codex` | `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) + `$CODEX_HOME/skills/` (skills via `plumb skills sync`) |
 | `plumb setup gemini` | `~/.gemini/settings.json` |
-| `plumb setup cursor` | `~/.cursor/mcp.json` |
-| `plumb setup augment` | `~/.augment/settings.json` |
+| `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
+| `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
 | `plumb setup qwen` | `~/.qwen/settings.json` |
-| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`) |
+| `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`; `mcpServers` key — Kimi Desktop reads the same file, so one registration covers both) + `$KIMI_CODE_HOME/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code --lean` | Same, plus an `enabledTools` allowlist pinning plumb's lean tool set |
-| `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads) |
-| `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config) |
-| `plumb setup opencode` | `~/.config/opencode/opencode.json` |
-| `plumb setup crush` | `~/.config/crush/crush.json` |
-| `plumb setup goose` | `~/.config/goose/config.yaml` |
-| `plumb setup hermes` | `~/.hermes/config.yaml` |
+| `plumb setup antigravity` | `~/.gemini/config/mcp_config.json` (shared `mcpServers` config Antigravity reads); also repoints existing per-surface `~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/mcp_config.json` |
+| `plumb setup antigravity-desktop` | `~/.gemini/config/mcp_config.json` (same shared config; Antigravity regenerates the per-server `mcp/` dirs from it) |
+| `plumb setup opencode` | `~/.config/opencode/opencode.json` (`mcp` key; `type:"local"`, command array) |
+| `plumb setup crush` | `~/.config/crush/crush.json` (`mcp` key; `type:"stdio"`) |
+| `plumb setup goose` | `~/.config/goose/config.yaml` (`extensions` key; YAML) |
+| `plumb setup hermes` | `~/.hermes/config.yaml` (`mcp_servers` key; YAML) |
+
+All clients funnel through one format-agnostic merge (`mergeServerEntry`)
+backed by JSON, TOML, or YAML serialisers; config locations are resolved via
+OS/user-home helpers — no hardcoded paths. (Aider is intentionally absent — it
+has no native MCP **client**, only third-party servers that wrap it.)
 
 | Flag | Applies to | Effect |
 |---|---|---|

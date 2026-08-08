@@ -35,3 +35,5 @@ fi
 "$GOLANGCI_LINT" run --fix ./...
 # Enforce the ~600-line file-size rule (grandfather baseline in scripts/).
 scripts/check-file-size.sh
+# Enforce the AGENTS.md brief budget (200 lines / 32 KiB).
+scripts/check-agents-brief.sh
