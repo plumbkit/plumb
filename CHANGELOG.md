@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.16.3 (unreleased)
+
+### Changed
+
+- **`AGENTS.md` is a brief again — 527 lines / 91 KB down to under 200
+  lines.** The engineering brief had absorbed the full per-section config
+  reference, the client-setup tables, the adapter validation matrix, the
+  workspace-detection rules, daemon internals, and TUI conventions — an
+  onboarding tax paid on every agent session that loads it. All of it now
+  lives in the docs pages that already covered most of the same ground: the
+  config reference merged into `docs/configuration.md` (which also gains the
+  previously undocumented `[rastro]` section and the `child_scan_depth` row),
+  client-setup detail into `docs/cli-reference.md`, the adapter status table
+  into `docs/adding-an-lsp.md`, daemon/proxy/memory-limit and
+  workspace-detection detail into `docs/architecture.md`, and TUI conventions
+  into `docs/contributing.md`. The brief keeps the rules (tool priority,
+  layered architecture, style, testing, commit/build commands, quick
+  reference) plus pointers to the new homes, and a new guard —
+  `scripts/check-agents-brief.sh`, wired into `make verify` as
+  `make check-brief` and into the pre-commit hook — fails the build if the
+  brief grows past 200 lines / 32 KiB again.
+
+### Fixed
+
+- **`docs/configuration.md` no longer claims `workspace_symbols` consults only
+  the primary language server** — it fans out across every server for a
+  multi-language monorepo root (the child-marker discovery case), merging and
+  deduplicating results.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed

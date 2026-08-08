@@ -63,15 +63,16 @@ history over squashed PRs.
 
 ## Adding things
 
-- **A new MCP tool** — follow the checklist in
-  [`AGENTS.md` → "How to add an MCP tool"](../AGENTS.md). Implement the `Tool`
+- **A new MCP tool** — follow the `add-mcp-tool` project skill in
+  `.claude/skills/` (the checklist, including the thin-orchestrator `Execute()`
+  pattern and the lean-profile decision). Implement the `Tool`
   interface, take `WriteDeps` for write tools, register it in
   `registerAllTools` (`internal/cli/conn_register.go`), add tests, and document it in
   [`docs/tools.md`](tools.md).
 - **A new LSP adapter** — see [`docs/adding-an-lsp.md`](adding-an-lsp.md).
 - **A new config field** — add it to `config.Config`, update `defaults`,
   validate in `validate()`, and document it in
-  [`docs/configuration.md`](configuration.md) and `AGENTS.md`.
+  [`docs/configuration.md`](configuration.md).
 
 ## Testing
 
@@ -82,3 +83,13 @@ history over squashed PRs.
 - Integration tests requiring external binaries (gopls, pyright) are gated with
   `//go:build integration`.
 - Don't chase TUI coverage.
+
+## TUI conventions (Bubble Tea v2)
+
+- Import paths are **v2 only**: `charm.land/bubbletea/v2`, `charm.land/lipgloss/v2`, `charm.land/bubbles/v2`. Never mix in the v1 packages — type/API incompatibilities.
+- `Model` is exported; `NewModel(logPath)` constructs, `Run(logPath)` is the entry point. `View()` returns `tea.View` (`v.AltScreen = true`). Keys: `tea.KeyPressMsg`, match via `msg.String()`.
+- Sections (opened with `/`): `Dashboard`, `Sessions`, `Memory`, `Logs`, `Settings` (0–4). Settings (`internal/tui/model_settings.go`) is a two-pane editor: a left **Scope** column (Global + each workspace) and a right rows pane with **General**/**LSP** tabs; `tab`/`shift+tab` cycle focus, `[`/`]` resize.
+- Settings persistence is scope-aware: Global rows write global config (`config.Save`), workspace rows write a sparse override to `.plumb/config.toml`. Each row carries a reload-tier numeral (`¹` live / `²` next session / `³` restart) and a `⁴` override / `⁵` inherited mark; only **Theme** and **Log level** apply live. `ctrl+t` opens the theme picker.
+- List and `[lsp.<lang>]` rows open shared pop-up editors (`model_settings_listeditor.go`, `model_settings_texteditor.go`), auto-saving on close; overlays dim via `dimLines()` + `spliceOverlay()`.
+- **Rebindable keys:** the twelve navigation/action keys are configurable via the global-only `[ui.keys]` table (unknown actions and key conflicts are warned at startup with deterministic resolution; overlay/popup keys and the vim aliases stay fixed). The help overlay and Sessions footer render the live bindings. See the [`[ui.keys]` config section](configuration.md#ukeys--keyboard-shortcuts).
+- **Theme system:** `ActiveTheme`/`ActiveThemeName` are globals in `internal/tui/theme.go`; lipgloss style vars are rebuilt by `RebuildStyles()` after any mutation. Adding a `Theme` field means updating every theme literal — `TestTheme_AllFieldsSet` catches omissions.
