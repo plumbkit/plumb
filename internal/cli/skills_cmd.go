@@ -190,7 +190,9 @@ func skillSyncSummaryLine(client string, t skillSyncTally) string {
 }
 
 // The three states a skill file can be in relative to the embedded copy. The
-// strings double as the status table's cell text.
+// strings double as the status table's cell text; a stale state may carry a
+// provenance suffix (see skillStateAt), so code that classifies rather than
+// prints must match the prefix, not the whole string.
 const (
 	skillStateInstalled = "installed"
 	skillStateMissing   = "missing"
@@ -199,16 +201,32 @@ const (
 
 // skillStateAt classifies <dir>/<name>/SKILL.md against the embedded content.
 // An unreadable file reports missing: sync's response to either is a write,
-// which is where a genuine read error surfaces properly.
+// which is where a genuine read error surfaces properly. The comparison
+// strips plumb's provenance marker first, so a version bump alone (content
+// identical) still reads "installed" — the marker is metadata, not content.
+// A differing skill reports its provenance when there is any: "installed by
+// <version>" when the marker records a strictly older plumb than the running
+// binary, "unknown version / hand-edited" when there is no marker, and plain
+// "stale" when the marker matches or exceeds the running version or cannot
+// be parsed (see versionOlder) — a marker at the running version means the
+// content drifted after installation, which the version cannot explain.
 func skillStateAt(dir, name, content string) string {
 	data, err := os.ReadFile(filepath.Join(dir, name, "SKILL.md"))
 	switch {
 	case err != nil:
 		return skillStateMissing
-	case string(data) != content:
-		return skillStateStale
-	default:
+	case stripSkillMarker(string(data)) == content:
 		return skillStateInstalled
+	default:
+		marker, ok := skillMarkerVersion(string(data))
+		switch {
+		case !ok:
+			return skillStateStale + " (unknown version / hand-edited)"
+		case versionOlder(marker, Version):
+			return fmt.Sprintf("%s (installed by %s)", skillStateStale, marker)
+		default:
+			return skillStateStale
+		}
 	}
 }
 
@@ -244,17 +262,34 @@ func skillsDrift(t setupTarget) (dir string, drifted bool) {
 }
 
 // skillDriftCounts tallies the non-current skills in dir, for the doctor
-// grade's message (skillsDrift only answers whether there is anything to say).
+// grade's message (skillsDrift only answers whether there is anything to
+// say). The stale states carry provenance suffixes, hence the prefix match.
 func skillDriftCounts(dir string) (missing, stale int) {
 	for _, s := range embeddedSkills() {
-		switch skillStateAt(dir, s.Name, s.Content) {
-		case skillStateMissing:
+		switch state := skillStateAt(dir, s.Name, s.Content); {
+		case state == skillStateMissing:
 			missing++
-		case skillStateStale:
+		case strings.HasPrefix(state, skillStateStale):
 			stale++
 		}
 	}
 	return missing, stale
+}
+
+// skillStaleDetails lists one entry per stale skill in dir — the skill name
+// plus its provenance suffix, e.g. "plumb-git (installed by 0.15.1)" — so the
+// doctor detail carries the same source-version information as the status
+// table. A plain "stale" state (marker at/above the running version) yields
+// the bare name.
+func skillStaleDetails(dir string) []string {
+	var out []string
+	for _, s := range embeddedSkills() {
+		state := skillStateAt(dir, s.Name, s.Content)
+		if strings.HasPrefix(state, skillStateStale) {
+			out = append(out, s.Name+strings.TrimPrefix(state, skillStateStale))
+		}
+	}
+	return out
 }
 
 // plumbRegisteredIn reports whether t's canonical user-scoped config registers

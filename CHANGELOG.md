@@ -86,6 +86,28 @@
   external-move silence, read-tier re-baselining, and same-SHA branch-switch
   detection) plus pure-ledger attribution and sweep unit tests.
 
+- **Installed skills now carry a provenance stamp, and stale skills name the
+  plumb version that installed them.** `plumb skills sync` writes a single
+  HTML-comment marker — `<!-- plumb: <version> -->` — into each installed
+  SKILL.md, placed after the YAML frontmatter block (inside it the marker
+  would corrupt the metadata claude-code, codex, and kimi-code parse; after
+  it the line is ordinary markdown that renders as nothing). The status
+  table's classification strips the marker before comparing content, so a
+  version bump alone still reads `installed` — the stamp is metadata, never
+  content. When the content does differ, the marker explains the drift:
+  `stale (installed by 0.15.1)` when the marker records a strictly older
+  plumb than the running binary, `stale (unknown version / hand-edited)`
+  when there is no marker, and plain `stale` when the marker is equal to,
+  newer than, or unparseable against the running version — in those cases
+  the version cannot explain the drift. `plumb doctor`'s skill-freshness
+  detail carries the same per-skill source-version information. A sync over
+  identical content refreshes a stale or missing stamp in place and still
+  reports the skill unchanged. Guarded by `TestStampSkillContent` (marker
+  placement and strip round-trip), `TestVersionOlder` (the semver-ish
+  comparison, including its unparseable fallback), `TestSkillStateAt` and
+  `TestSkillStateAt_Provenance` (the wording matrix), and
+  `TestSkillFreshnessResult` (doctor's detail).
+
 ### Fixed
 
 - **The repo-intent peer warning now honours `[collab] hint_budget_bytes`

@@ -98,7 +98,7 @@ func TestInstallSkill_PreservesExistingMode(t *testing.T) {
 		t.Errorf("mode = %04o after update, want 0644", got)
 	}
 	body, _ := os.ReadFile(dst)
-	if string(body) != "new content\n" {
-		t.Errorf("content = %q, want the new content", body)
+	if want := stampSkillContent("new content\n"); string(body) != want {
+		t.Errorf("content = %q, want %q", body, want)
 	}
 }
