@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/fsync"
 )
@@ -110,6 +112,9 @@ func installSkillsFor(t setupTarget) (dir string, results []skillResult) {
 
 // installSkill writes content to <skillsDir>/<name>/SKILL.md, creating
 // the directory if needed. Returns "installed", "updated", or "unchanged".
+// The written copy carries plumb's provenance marker (see stampSkillContent);
+// a re-run over identical content reports "unchanged" regardless of the
+// marker's age, refreshing only the stamp when it is missing or outdated.
 // If the file already exists with different content it is backed up first.
 // Atomic write via temp-file + rename.
 func installSkill(skillsDir, name, content string) (string, error) {
@@ -119,10 +124,19 @@ func installSkill(skillsDir, name, content string) (string, error) {
 	}
 
 	dst := filepath.Join(dir, "SKILL.md")
+	stamped := stampSkillContent(content)
 	existing, readErr := os.ReadFile(dst)
 
 	switch {
-	case readErr == nil && string(existing) == content:
+	case readErr == nil && string(existing) == stamped:
+		return "unchanged", nil
+	case readErr == nil && stripSkillMarker(string(existing)) == content:
+		// Same skill with a stale or missing stamp — refresh the marker in
+		// place. The content is untouched, so this is not an "update" and
+		// needs no backup.
+		if err := fsync.AtomicWrite(dst, []byte(stamped), setupWriteOptions(".plumb_skill_*.md")); err != nil {
+			return "", fmt.Errorf("restamping skill: %w", err)
+		}
 		return "unchanged", nil
 	case readErr == nil:
 		// File exists but content differs — back up before overwriting.
@@ -135,7 +149,7 @@ func installSkill(skillsDir, name, content string) (string, error) {
 		return "", fmt.Errorf("reading %s: %w", dst, readErr)
 	}
 
-	if err := fsync.AtomicWrite(dst, []byte(content), setupWriteOptions(".plumb_skill_*.md")); err != nil {
+	if err := fsync.AtomicWrite(dst, []byte(stamped), setupWriteOptions(".plumb_skill_*.md")); err != nil {
 		return "", fmt.Errorf("installing skill: %w", err)
 	}
 
@@ -143,4 +157,110 @@ func installSkill(skillsDir, name, content string) (string, error) {
 		return "installed", nil
 	}
 	return "updated", nil
+}
+
+// skillMarkerPrefix opens plumb's provenance marker — one HTML comment line,
+// "<!-- plumb: <version> -->", recording which plumb build installed the
+// skill. An HTML comment renders as nothing in markdown, so the line is
+// invisible to every client's SKILL.md presentation.
+const skillMarkerPrefix = "<!-- plumb: "
+
+// stampSkillContent returns content with the provenance marker recorded. When
+// the skill opens with a YAML frontmatter block (--- lines) the marker goes
+// immediately AFTER its closing delimiter — the verified consumers
+// (claude-code, codex, kimi-code) parse frontmatter as the block between the
+// leading --- lines, so anything inside it would corrupt the metadata, while
+// anything after it is ordinary markdown. Without frontmatter the marker
+// leads the file.
+func stampSkillContent(content string) string {
+	marker := skillMarkerPrefix + Version + " -->\n"
+	if strings.HasPrefix(content, "---\n") {
+		if i := strings.Index(content[len("---\n"):], "\n---\n"); i >= 0 {
+			pos := len("---\n") + i + len("\n---\n")
+			return content[:pos] + marker + content[pos:]
+		}
+	}
+	return marker + content
+}
+
+// parseSkillMarker reports whether line is plumb's provenance marker and, if
+// so, the version it records.
+func parseSkillMarker(line string) (string, bool) {
+	if !strings.HasPrefix(line, skillMarkerPrefix) || !strings.HasSuffix(line, " -->") {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(line, skillMarkerPrefix), " -->"), true
+}
+
+// skillMarkerVersion returns the version recorded by the first provenance
+// marker in data, if one is present.
+func skillMarkerVersion(data string) (string, bool) {
+	for _, line := range strings.Split(data, "\n") {
+		if v, ok := parseSkillMarker(line); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// stripSkillMarker removes the first provenance marker line from data, so
+// content comparisons see the skill itself rather than its stamp. A version
+// bump alone must never read as drift.
+func stripSkillMarker(data string) string {
+	lines := strings.Split(data, "\n")
+	for i, line := range lines {
+		if _, ok := parseSkillMarker(line); ok {
+			return strings.Join(append(lines[:i], lines[i+1:]...), "\n")
+		}
+	}
+	return data
+}
+
+// versionOlder reports whether a is an older release than b. The comparison
+// is semver-ish: a leading "v" and any pre-release/build suffix are ignored
+// and numeric segments are compared in order, with missing segments read as
+// zero. An unparseable side (a hand-typed marker, the "dev" build stamp) is
+// never "older" — the caller falls back to plain wording rather than
+// inventing an ordering. Equal and newer are both false; only strictly older
+// earns the "installed by" phrasing.
+func versionOlder(a, b string) bool {
+	pa, okA := parseVersionSegments(a)
+	pb, okB := parseVersionSegments(b)
+	if !okA || !okB {
+		return false
+	}
+	for i := range max(len(pa), len(pb)) {
+		var x, y int
+		if i < len(pa) {
+			x = pa[i]
+		}
+		if i < len(pb) {
+			y = pb[i]
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
+}
+
+// parseVersionSegments splits v into its numeric release segments.
+func parseVersionSegments(v string) ([]int, bool) {
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	if v == "" {
+		return nil, false
+	}
+	parts := strings.Split(v, ".")
+	nums := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		nums[i] = n
+	}
+	return nums, true
 }
