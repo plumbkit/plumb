@@ -215,20 +215,24 @@ func serverInfoVersion(frame []byte) string {
 
 // reconnectNoteText builds the reconnect note. The daemon's own reported
 // version leads; when it differs from this proxy's compiled version the note
-// also says so — a long-lived `plumb serve` keeps running the old binary
+// may also say so — a long-lived `plumb serve` keeps running the old binary
 // after a daemon upgrade, and the agent/user otherwise has no in-band signal
-// of that lag. The mismatch is harmless (the proxy reconnected transparently
-// and tools stay registered), so the note reports it without prescribing an
-// action an autonomous agent cannot take. An unknown daemon version falls back
-// to the proxy's.
-func reconnectNoteText(daemonVersion, proxyVersion string) string {
+// of that lag. warnMismatch selects that wording: the mismatch is harmless
+// (the proxy reconnected transparently and tools stay registered), so the
+// caller (annotateReconnect) passes true only once per daemon version per
+// proxy — repeating the clause on every reconnect is alarm fatigue — and the
+// suppressed form falls back to the plain note naming the daemon's version.
+// The clause itself reports the lag without prescribing an action an
+// autonomous agent cannot take. An unknown daemon version falls back to the
+// proxy's.
+func reconnectNoteText(daemonVersion, proxyVersion string, warnMismatch bool) string {
 	const tail = " — your session state (read-tracking, caches, and the pinned " +
 		"workspace) was rebuilt. The daemon restores an explicit session_start " +
 		"workspace, but if you have not set one, a relative path may now resolve " +
 		"against a different project — confirm the pin before a relative-path " +
 		"write, and re-read a file before editing it (or pass dirty_ok:true for a " +
 		"file you wrote earlier this session)."
-	if daemonVersion == "" || daemonVersion == proxyVersion {
+	if daemonVersion == "" || daemonVersion == proxyVersion || !warnMismatch {
 		v := daemonVersion
 		if v == "" {
 			v = proxyVersion
@@ -243,14 +247,15 @@ func reconnectNoteText(daemonVersion, proxyVersion string) string {
 // content item to a tools/call result frame, so the agent learns its plumb
 // daemon was transparently reconnected (and may have changed behaviour) on the
 // first response after a reconnect. The note reports the daemon's own version
-// (see reconnectNoteText).
+// (see reconnectNoteText); warnMismatch carries annotateReconnect's
+// once-per-daemon-version decision for the version-mismatch clause.
 //
 // It is deliberately additive — it only *appends* a content item, never edits
 // existing text — and fully fail-safe: any frame that is not a well-formed MCP
 // tools/call result (an error response, a result with no content array,
 // anything that does not round-trip) is returned unchanged with ok=false, so a
 // malformed injection can never corrupt a real tool result.
-func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string) (out []byte, ok bool) {
+func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string, warnMismatch bool) (out []byte, ok bool) {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(frame, &full); err != nil {
 		return frame, false
@@ -274,7 +279,7 @@ func injectReconnectNote(frame []byte, daemonVersion, proxyVersion string) (out 
 	}
 	note, err := json.Marshal(map[string]string{
 		"type": "text",
-		"text": reconnectNoteText(daemonVersion, proxyVersion),
+		"text": reconnectNoteText(daemonVersion, proxyVersion, warnMismatch),
 	})
 	if err != nil {
 		return frame, false

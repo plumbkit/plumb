@@ -117,6 +117,15 @@ type reconnectingProxy struct {
 	// Version must never stand in for the daemon's; "" until a handshake
 	// response has been seen.
 	daemonVersion string
+	// notifiedMismatch is the daemon version this proxy last attached the
+	// version-mismatch clause to a reconnect note for. The mismatch is
+	// harmless, so repeating the warning on EVERY reconnect is alarm fatigue:
+	// it fires once per daemon version per proxy and re-arms only when the
+	// daemon's version changes (a restart/upgrade — daemonVersion is
+	// re-captured from the replayed initialize response). Per-process by
+	// design: a proxy's lifecycle is the `plumb serve` process, and there is
+	// no proxy-side state file to persist this in. Guarded by hsMu.
+	notifiedMismatch string
 
 	reqMu       sync.Mutex
 	outstanding map[string]outstandingReq
@@ -414,10 +423,21 @@ func (p *reconnectingProxy) annotateReconnect(frame []byte) []byte {
 	}
 	p.hsMu.Lock()
 	daemonV := p.daemonVersion
+	// The version-mismatch clause fires ONCE per daemon version per proxy —
+	// the mismatch is harmless, so warning on every reconnect is alarm
+	// fatigue. A daemon version change re-arms it. The flag is recorded only
+	// after a successful injection, so a frame the note could not attach to
+	// keeps the warning armed rather than silently consuming it.
+	warnMismatch := daemonV != "" && daemonV != Version && p.notifiedMismatch != daemonV
 	p.hsMu.Unlock()
-	annotated, ok := injectReconnectNote(frame, daemonV, Version)
+	annotated, ok := injectReconnectNote(frame, daemonV, Version, warnMismatch)
 	if !ok {
 		return frame // not a tool result — keep the note armed for the next response
+	}
+	if warnMismatch {
+		p.hsMu.Lock()
+		p.notifiedMismatch = daemonV
+		p.hsMu.Unlock()
 	}
 	p.reconnected.Store(false)
 	return annotated
