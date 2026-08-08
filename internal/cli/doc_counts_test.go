@@ -120,7 +120,7 @@ func TestLanguageAndClientSourceCountsPinned(t *testing.T) {
 		t.Errorf("plumb has %d setup clients, pinned at %d.\n"+
 			"If intended, update the website's client count (site/index.html — the \"AI clients\" "+
 			"stat and the \"Fourteen agents\" heading/chips, currently 14) "+
-			"and the docs/cli-reference.md + AGENTS.md setup tables, then bump wantClients.", got, wantClients)
+			"and the docs/cli-reference.md setup table, then bump wantClients.", got, wantClients)
 	}
 }
 

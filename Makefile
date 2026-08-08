@@ -29,7 +29,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint lint-cross check-size cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui test test-race integration-test build-integration lint lint-cross check-size check-brief cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -155,6 +155,12 @@ lint-cross:
 check-size:
 	./scripts/check-file-size.sh
 
+# check-brief fails if AGENTS.md grows past its budget (200 lines / 32 KiB) —
+# the brief is rules + pointers; reference detail lives in docs/. See
+# scripts/check-agents-brief.sh.
+check-brief:
+	./scripts/check-agents-brief.sh
+
 # cover measures statement coverage and fails below the floor in
 # scripts/check-coverage.sh. Not in `verify` — it re-runs the whole suite with
 # instrumentation, so it would roughly double the local edit loop; CI runs it on
@@ -249,11 +255,11 @@ blog:
 	python3 scripts/build-blog.py
 
 # verify is the definition of "ready to commit": build + test + lint + an
-# integration-tag compile pass (build-integration) + the file-size guard +
-# go.mod tidiness. Coverage (`make cover`) and vulnerabilities (`make vuln`) are
-# deliberately NOT here — the first doubles the suite runtime, the second needs
-# the network; CI runs both on every push.
-verify: build test lint build-integration build-clients check-size tidy-check
+# integration-tag compile pass (build-integration) + the file-size and brief
+# guards + go.mod tidiness. Coverage (`make cover`) and vulnerabilities (`make
+# vuln`) are deliberately NOT here — the first doubles the suite runtime, the
+# second needs the network; CI runs both on every push.
+verify: build test lint build-integration build-clients check-size check-brief tidy-check
 
 # hooks is an alias for install-hooks — the ops-root Makefile uses `hooks-ops`
 # for its own hook, and the asymmetry is a recurring stumble.

@@ -15,7 +15,7 @@ import (
 
 // adapterTier classifies how thoroughly a language-server adapter has been
 // exercised. It is presentation metadata for `plumb config show --adapters`,
-// mirroring the "Adapter validation status" table in AGENTS.md.
+// mirroring the adapter status table in docs/adding-an-lsp.md.
 type adapterTier int
 
 const (
