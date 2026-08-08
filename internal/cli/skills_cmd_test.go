@@ -23,8 +23,20 @@ func skillsTestTarget(cfgPath, skillsDir string) setupTarget {
 	}
 }
 
+// pinVersion sets the build version for a marker-comparison test and
+// restores it on cleanup.
+func pinVersion(t *testing.T, v string) {
+	t.Helper()
+	old := Version
+	Version = v
+	t.Cleanup(func() { Version = old })
+}
+
 // TestSkillStateAt pins the three-way classification the status table, the
-// post-registration hint, and the doctor grade all share.
+// post-registration hint, and the doctor grade all share — including the
+// provenance wording: the marker is stripped before the content comparison,
+// so a version bump alone is not drift, and a differing skill with no marker
+// reports its provenance as unknown rather than inventing one.
 func TestSkillStateAt(t *testing.T) {
 	const content = "# Skill\n"
 	dir := t.TempDir()
@@ -36,7 +48,8 @@ func TestSkillStateAt(t *testing.T) {
 	}{
 		{"absent is missing", "", skillStateMissing},
 		{"identical is installed", content, skillStateInstalled},
-		{"different is stale", "old content\n", skillStateStale},
+		{"stamped identical is installed", stampSkillContent(content), skillStateInstalled},
+		{"different without a marker is stale, unknown version", "old content\n", skillStateStale + " (unknown version / hand-edited)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,6 +64,43 @@ func TestSkillStateAt(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(tc.write), 0o600); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if got := skillStateAt(dir, "demo", content); got != tc.want {
+				t.Errorf("skillStateAt = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSkillStateAt_Provenance pins the marker-aware wording for a stale
+// skill: a strictly older installing version is named, an equal or newer (or
+// unparseable) marker falls back to the plain form because the version
+// cannot explain the drift, and identical content with any marker stays
+// "installed" — the marker is metadata, never content.
+func TestSkillStateAt_Provenance(t *testing.T) {
+	pinVersion(t, "0.16.3")
+	const content = "# Skill\n"
+	dir := t.TempDir()
+
+	cases := []struct {
+		name  string
+		write string
+		want  string
+	}{
+		{"older marker is named", "<!-- plumb: 0.15.1 -->\nold\n", "stale (installed by 0.15.1)"},
+		{"equal marker stays plain", "<!-- plumb: 0.16.3 -->\nold\n", skillStateStale},
+		{"newer marker stays plain", "<!-- plumb: 0.17.0 -->\nold\n", skillStateStale},
+		{"unparseable marker stays plain", "<!-- plumb: dev -->\nold\n", skillStateStale},
+		{"old marker with identical content is installed", "<!-- plumb: 0.15.1 -->\n# Skill\n", skillStateInstalled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			skillDir := filepath.Join(dir, "demo")
+			if err := os.MkdirAll(skillDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(tc.write), 0o600); err != nil {
+				t.Fatal(err)
 			}
 			if got := skillStateAt(dir, "demo", content); got != tc.want {
 				t.Errorf("skillStateAt = %q, want %q", got, tc.want)

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/render"
 )
@@ -35,11 +36,15 @@ func skillFreshnessResult(t setupTarget) (checkResult, bool) {
 		return checkResult{}, false
 	}
 	missing, stale := skillDriftCounts(dir)
+	detail := describeSkillDrift(missing, stale)
+	if info := skillStaleDetails(dir); len(info) > 0 {
+		detail += " (" + strings.Join(info, ", ") + ")"
+	}
 	return checkResult{
 		name: t.name + " (skills)",
 		ok:   true,
 		detail: fmt.Sprintf("%s in %s — run `plumb skills sync %s`",
-			describeSkillDrift(missing, stale), render.ContractPath(dir), t.use),
+			detail, render.ContractPath(dir), t.use),
 	}, true
 }
 

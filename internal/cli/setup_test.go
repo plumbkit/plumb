@@ -436,8 +436,8 @@ func TestInstallSkill_Fresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading SKILL.md: %v", err)
 	}
-	if string(got) != content {
-		t.Errorf("content mismatch: got %q, want %q", string(got), content)
+	if want := stampSkillContent(content); string(got) != want {
+		t.Errorf("content mismatch: got %q, want %q", string(got), want)
 	}
 }
 
@@ -492,8 +492,8 @@ func TestInstallSkill_Updated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading SKILL.md after update: %v", err)
 	}
-	if string(got) != updated {
-		t.Errorf("content after update: got %q, want %q", string(got), updated)
+	if want := stampSkillContent(updated); string(got) != want {
+		t.Errorf("content after update: got %q, want %q", string(got), want)
 	}
 }
 
