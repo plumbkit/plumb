@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.16.3 (unreleased)
+
+### Fixed
+
+- **The daemon/proxy version-mismatch note now fires once per proxy per
+  daemon version, not on every reconnect.** After a daemon restart the
+  reconnect note told every attached session "this serve proxy is still
+  ‹v› — the mismatch is harmless" on EVERY subsequent reconnect,
+  indefinitely — a self-described harmless condition training agents to
+  ignore plumb notes. `annotateReconnect` now records the daemon version it
+  last warned about (`notifiedMismatch`, in-memory on the proxy — a proxy's
+  lifecycle is the `plumb serve` process, and there is no proxy-side state
+  file to persist it in): the clause fires once for a given daemon version,
+  and re-arms only when the daemon's version changes again (a restart or
+  upgrade, re-captured from the replayed initialize response). The plain
+  "daemon reconnected (now ‹v›)" note still fires once per reconnect, and
+  `plumb doctor`'s daemon check still reports the mismatch on demand.
+  Guarded by `TestProxyMismatchNote_OncePerDaemonVersion` (two reconnects
+  behind one daemon version → one clause; a version change re-arms), the
+  suppressed-form case in `TestReconnectNoteText`, and
+  `TestCheckDaemon_ReportsVersionMismatch` (doctor keeps failing the version
+  check on a stale daemon).
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed

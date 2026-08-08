@@ -77,13 +77,14 @@ func TestEnvelopeClassification(t *testing.T) {
 // mockDaemon serves the daemon side of a net.Pipe: it answers initialize, ping,
 // and generic requests. Behaviour is controllable to simulate crash and hang.
 type mockDaemon struct {
-	conn          net.Conn     // daemon side of the pipe
-	hangPing      *atomic.Bool // when true, ping requests get no reply (hung)
-	crashOnTool   bool         // close the connection on the first tool call (crash)
-	mcpToolResult bool         // answer tool calls with an MCP content-array result shape
-	version       string       // serverInfo.version in the initialize reply; default "1.0.0-mock"
-	noServerInfo  bool         // emit the legacy initialize shape without serverInfo
-	onInit        func([]byte) // when set, called with each initialize frame the daemon receives
+	conn            net.Conn     // daemon side of the pipe
+	hangPing        *atomic.Bool // when true, ping requests get no reply (hung)
+	crashOnTool     bool         // close the connection on the first tool call (crash)
+	crashAfterCalls int          // when >0, close the connection on the Nth tool call (delayed crash)
+	mcpToolResult   bool         // answer tool calls with an MCP content-array result shape
+	version         string       // serverInfo.version in the initialize reply; default "1.0.0-mock"
+	noServerInfo    bool         // emit the legacy initialize shape without serverInfo
+	onInit          func([]byte) // when set, called with each initialize frame the daemon receives
 }
 
 func startMockDaemon(m *mockDaemon) {
@@ -121,6 +122,13 @@ func startMockDaemon(m *mockDaemon) {
 				if m.crashOnTool {
 					_ = m.conn.Close()
 					return
+				}
+				if m.crashAfterCalls > 0 {
+					m.crashAfterCalls--
+					if m.crashAfterCalls == 0 {
+						_ = m.conn.Close()
+						return
+					}
 				}
 				if m.mcpToolResult {
 					_ = writeFrame(m.conn, fmt.Appendf(nil,
@@ -321,12 +329,89 @@ func TestProxyReconnectNote(t *testing.T) {
 	_ = h.clientIn.Close()
 }
 
+// TestProxyMismatchNote_OncePerDaemonVersion verifies the version-mismatch
+// clause of the reconnect note fires ONCE per proxy per daemon version: two
+// reconnects behind daemons at the same version produce one mismatch warning,
+// not two, and a daemon version change re-arms the single warning.
+func TestProxyMismatchNote_OncePerDaemonVersion(t *testing.T) {
+	t.Parallel()
+
+	_, initialProxySide := newPipeDaemon(func(m *mockDaemon) { m.crashOnTool = true })
+	h := startProxy(t, initialProxySide, 0, 0)
+
+	// Two replacement daemons at the same version — the second reconnect must
+	// NOT repeat the mismatch clause. A third at a new version re-arms it.
+	_, repl1Side := newPipeDaemon(func(m *mockDaemon) {
+		m.mcpToolResult = true
+		m.version = "2.0.0-mismatch" // differs from the proxy's Version ("dev" in tests)
+		m.crashAfterCalls = 2        // answers the first post-reconnect call, crashes on the next
+	})
+	h.dialQueue <- repl1Side
+	_, repl2Side := newPipeDaemon(func(m *mockDaemon) {
+		m.mcpToolResult = true
+		m.version = "2.0.0-mismatch" // same daemon version
+		m.crashAfterCalls = 2
+	})
+	h.dialQueue <- repl2Side
+	_, repl3Side := newPipeDaemon(func(m *mockDaemon) {
+		m.mcpToolResult = true
+		m.version = "3.0.0-mismatch" // daemon version change re-arms the clause
+	})
+	h.dialQueue <- repl3Side
+
+	h.start()
+	h.handshake()
+
+	// Crash the initial daemon; the in-flight id 5 gets the synthesised error.
+	h.write(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}`)
+	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":5`) || !strings.Contains(frame, "daemon restarted") {
+		t.Fatalf("expected synthesised error for in-flight id 5, got %q", frame)
+	}
+
+	// First reconnect: the note carries the mismatch clause (daemon 2.0.0 vs
+	// this proxy's dev build).
+	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
+	frame := h.read(10 * time.Second)
+	if !strings.Contains(frame, "daemon now 2.0.0-mismatch") ||
+		!strings.Contains(frame, "this serve proxy is still "+Version) {
+		t.Fatalf("first reconnect must carry the mismatch clause, got %q", frame)
+	}
+
+	// Second reconnect behind the SAME daemon version: the note fires (the
+	// reconnect itself is still news) but the mismatch clause does not repeat.
+	h.write(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}`)
+	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":7`) || !strings.Contains(frame, "daemon restarted") {
+		t.Fatalf("expected synthesised error for in-flight id 7, got %q", frame)
+	}
+	h.write(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{}}`)
+	frame = h.read(10 * time.Second)
+	if !strings.Contains(frame, "daemon reconnected (now 2.0.0-mismatch)") {
+		t.Fatalf("second reconnect must still carry the plain note, got %q", frame)
+	}
+	if strings.Contains(frame, "serve proxy") {
+		t.Fatalf("mismatch clause must fire once per daemon version, got %q", frame)
+	}
+
+	// Third reconnect behind a NEW daemon version: the clause re-arms once.
+	h.write(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{}}`)
+	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":9`) || !strings.Contains(frame, "daemon restarted") {
+		t.Fatalf("expected synthesised error for in-flight id 9, got %q", frame)
+	}
+	h.write(`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{}}`)
+	frame = h.read(10 * time.Second)
+	if !strings.Contains(frame, "daemon now 3.0.0-mismatch") ||
+		!strings.Contains(frame, "this serve proxy is still "+Version) {
+		t.Fatalf("a daemon version change must re-arm the mismatch clause, got %q", frame)
+	}
+	_ = h.clientIn.Close()
+}
+
 func TestInjectReconnectNote(t *testing.T) {
 	t.Parallel()
 
 	// Well-formed tools/call result: note appended, original content preserved.
 	good := []byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"hello"}]}}`)
-	out, ok := injectReconnectNote(good, "v9.9.9", "v9.9.9")
+	out, ok := injectReconnectNote(good, "v9.9.9", "v9.9.9", true)
 	if !ok {
 		t.Fatal("expected injection into a well-formed tools/call result")
 	}
@@ -347,7 +432,7 @@ func TestInjectReconnectNote(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := injectReconnectNote([]byte(c.frame), "v1", "v1")
+			got, ok := injectReconnectNote([]byte(c.frame), "v1", "v1", true)
 			if ok {
 				t.Fatalf("expected ok=false for %s", c.name)
 			}
@@ -362,7 +447,7 @@ func TestReconnectNoteText(t *testing.T) {
 	t.Parallel()
 
 	// Same versions: plain note, no proxy-lag hint.
-	same := reconnectNoteText("1.2.3", "1.2.3")
+	same := reconnectNoteText("1.2.3", "1.2.3", true)
 	if !strings.Contains(same, "(now 1.2.3)") || strings.Contains(same, "serve proxy") {
 		t.Errorf("same-version note wrong: %q", same)
 	}
@@ -373,17 +458,24 @@ func TestReconnectNoteText(t *testing.T) {
 		t.Errorf("note does not mention the workspace pin: %q", same)
 	}
 	// Unknown daemon version: fall back to the proxy's, no lag hint.
-	fallback := reconnectNoteText("", "1.2.3")
+	fallback := reconnectNoteText("", "1.2.3", true)
 	if !strings.Contains(fallback, "(now 1.2.3)") || strings.Contains(fallback, "serve proxy") {
 		t.Errorf("fallback note wrong: %q", fallback)
 	}
 	// Differing versions: daemon's version leads, proxy lag stated.
-	differ := reconnectNoteText("2.0.0", "1.2.3")
+	differ := reconnectNoteText("2.0.0", "1.2.3", true)
 	if !strings.Contains(differ, "daemon now 2.0.0") ||
 		!strings.Contains(differ, "this serve proxy is still 1.2.3") ||
 		!strings.Contains(differ, "restart `plumb serve`") ||
 		strings.Contains(differ, "start a new client session") {
 		t.Errorf("differ note wrong: %q", differ)
+	}
+	// Differing versions with the mismatch clause suppressed (the proxy already
+	// warned for this daemon version once): plain note naming the daemon's
+	// version, no proxy-lag hint.
+	suppressed := reconnectNoteText("2.0.0", "1.2.3", false)
+	if !strings.Contains(suppressed, "(now 2.0.0)") || strings.Contains(suppressed, "serve proxy") {
+		t.Errorf("suppressed-mismatch note wrong: %q", suppressed)
 	}
 }
 
