@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,67 @@ func TestClientConfigThatWillNotParseFails(t *testing.T) {
 
 	if got := checkOneClient(target, "/usr/local/bin/plumb"); got.ok {
 		t.Errorf("checkOneClient must surface the parse failure, got %+v", got)
+	}
+}
+
+// TestCheckDaemon_ReportsVersionMismatch pins doctor's visibility of the
+// daemon/proxy version lag: the reconnect note now warns only once per daemon
+// version per proxy, so `plumb doctor` is where the mismatch stays visible on
+// demand. A daemon reporting a different build must fail the version check;
+// the matching build must pass it.
+func TestCheckDaemon_ReportsVersionMismatch(t *testing.T) {
+	// Redirect the runtime dir (socket + version file) via HOME. The socket
+	// path must stay short (the ~104-char unix-domain limit), so build the
+	// temp home under /tmp rather than using the deeply nested t.TempDir().
+	home, err := os.MkdirTemp("/tmp", "plumb-doctor-") //nolint:usetesting // t.TempDir() nests too deep: the unix socket path inside would exceed the ~104-char domain limit
+	if err != nil {
+		t.Fatalf("creating temp home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	// On Linux os.UserCacheDir prefers XDG_CACHE_HOME over $HOME/.cache, so
+	// redirect it too — otherwise a CI environment that sets it would point
+	// the test at the developer's real runtime dir.
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	// checkDaemon dials the socket before reading the version file, so stand a
+	// listener up at the (redirected) path.
+	ln, err := net.Listen("unix", daemonSocketPath())
+	if err != nil {
+		t.Fatalf("listening on daemon socket: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	versionResult := func() checkResult {
+		t.Helper()
+		for _, r := range checkDaemon() {
+			if r.name == "version" {
+				return r
+			}
+		}
+		t.Fatal("checkDaemon returned no version result")
+		return checkResult{}
+	}
+
+	if err := os.WriteFile(daemonVersionPath(), []byte("0.0.0-stale"), 0o600); err != nil {
+		t.Fatalf("writing version file: %v", err)
+	}
+	stale := versionResult()
+	if stale.ok {
+		t.Errorf("a daemon version differing from the binary (%s) must fail the check, got %+v", Version, stale)
+	}
+	if !strings.Contains(stale.detail, "0.0.0-stale") || !strings.Contains(stale.detail, Version) {
+		t.Errorf("the mismatch detail must name both versions, got %q", stale.detail)
+	}
+	if stale.fix == "" {
+		t.Error("the mismatch must carry a fix line")
+	}
+
+	if err := os.WriteFile(daemonVersionPath(), []byte(Version), 0o600); err != nil {
+		t.Fatalf("writing version file: %v", err)
+	}
+	if current := versionResult(); !current.ok {
+		t.Errorf("a matching daemon version must pass the check, got %+v", current)
 	}
 }
 
