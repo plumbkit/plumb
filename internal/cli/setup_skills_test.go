@@ -124,8 +124,11 @@ func TestInstallSkillsFor_EveryCapableClientGetsEverySkill(t *testing.T) {
 				if err != nil {
 					t.Fatalf("reading installed skill %q: %v", r.name, err)
 				}
-				if string(got) != embedded[i].Content {
-					t.Errorf("%s: installed content differs from the embedded source", r.name)
+				if want := stampSkillContent(embedded[i].Content); string(got) != want {
+					t.Errorf("%s: installed content differs from the stamped embedded source", r.name)
+				}
+				if v, ok := skillMarkerVersion(string(got)); !ok || v != Version {
+					t.Errorf("%s: marker = (%q, %v), want the running version %q", r.name, v, ok, Version)
 				}
 			}
 
@@ -295,6 +298,66 @@ func TestRefreshClient_NoSkillRowWithoutASkillChannel(t *testing.T) {
 		}
 	}
 	assertNoSkillsWritten(t, root)
+}
+
+// TestStampSkillContent pins the marker's placement: after the closing
+// frontmatter delimiter when there is one (inside the block it would corrupt
+// the YAML the clients parse), leading the file otherwise, and always
+// strippable back to the exact source — the property the content comparison
+// relies on to keep a version bump from reading as drift.
+func TestStampSkillContent(t *testing.T) {
+	pinVersion(t, "9.9.9")
+	const marker = "<!-- plumb: 9.9.9 -->\n"
+
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			"after frontmatter", "---\nname: x\ndescription: y\n---\nbody\n",
+			"---\nname: x\ndescription: y\n---\n" + marker + "body\n",
+		},
+		{"no frontmatter leads the file", "body\n", marker + "body\n"},
+		{"unterminated frontmatter leads the file", "---\nname: x\nbody\n", marker + "---\nname: x\nbody\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stamped := stampSkillContent(tc.content)
+			if stamped != tc.want {
+				t.Errorf("stampSkillContent = %q, want %q", stamped, tc.want)
+			}
+			if got := stripSkillMarker(stamped); got != tc.content {
+				t.Errorf("stripSkillMarker(stampSkillContent(c)) = %q, want the original %q", got, tc.content)
+			}
+		})
+	}
+}
+
+// TestVersionOlder pins the semver-ish comparison behind the "installed by"
+// wording: only a strictly older marker is named; equal, newer, and
+// unparseable (either side, including the "dev" build stamp) all fall back
+// to the plain form rather than inventing an ordering.
+func TestVersionOlder(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"0.15.1", "0.16.3", true},
+		{"v0.15.1", "0.16.3", true},
+		{"0.15", "0.15.1", true},
+		{"0.16.3", "0.16.3", false},
+		{"0.17.0", "0.16.3", false},
+		{"0.16.3-rc.1", "0.16.3", false},
+		{"dev", "0.16.3", false},
+		{"0.15.1", "dev", false},
+		{"", "0.16.3", false},
+	}
+	for _, tc := range cases {
+		if got := versionOlder(tc.a, tc.b); got != tc.want {
+			t.Errorf("versionOlder(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
 }
 
 // kimiTargetAt is the Kimi Code target pointed at a test config path, keeping

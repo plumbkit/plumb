@@ -82,6 +82,28 @@ func TestSkillFreshnessResult(t *testing.T) {
 		if !strings.Contains(res.detail, "1 stale") {
 			t.Errorf("detail should count the stale skill: %q", res.detail)
 		}
+		if !strings.Contains(res.detail, "unknown version / hand-edited") {
+			t.Errorf("a markerless stale skill must report its provenance as unknown: %q", res.detail)
+		}
+	})
+
+	t.Run("stale skill reports its installing version", func(t *testing.T) {
+		pinVersion(t, "0.16.3")
+		target, skillsDir := register(t, t.TempDir())
+		if _, results := installSkillsFor(target); len(results) == 0 {
+			t.Fatal("expected the skills to install")
+		}
+		stale := filepath.Join(skillsDir, embeddedSkills()[0].Name, "SKILL.md")
+		if err := os.WriteFile(stale, []byte("<!-- plumb: 0.15.1 -->\nstale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res, ok := skillFreshnessResult(target)
+		if !ok {
+			t.Fatal("a stale skill must produce a line")
+		}
+		if !strings.Contains(res.detail, "installed by 0.15.1") {
+			t.Errorf("detail must name the installing version: %q", res.detail)
+		}
 	})
 
 	t.Run("no skill channel produces no line", func(t *testing.T) {
