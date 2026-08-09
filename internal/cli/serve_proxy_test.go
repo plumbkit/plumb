@@ -329,6 +329,47 @@ func TestProxyReconnectNote(t *testing.T) {
 	_ = h.clientIn.Close()
 }
 
+// readToolResult reads client frames until the tools/call RESULT for wantID
+// arrives, tolerating interleaved synthesised -32000 error frames regardless
+// of the id they name. That tolerance is required for determinism: a daemon
+// response that resolves before trackOutstanding runs (the track-after-write
+// gap) leaves a stale outstanding entry, and the NEXT reconnect's sweep then
+// synthesises an error naming that already-answered id — so WHICH id a
+// synthesised error carries after a crash is timing-dependent, and a test
+// asserting on it hard-codes a race. These tests assert the reconnect-note
+// contract; id bookkeeping on error frames is incidental.
+func readToolResult(t *testing.T, h *proxyHarness, wantID string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		frame := h.read(time.Until(deadline))
+		// Match id and result separately: an annotated frame is re-marshalled
+		// from a map, so its keys come back alphabetised (id, jsonrpc, result)
+		// rather than in the order the daemon sent them.
+		if strings.Contains(frame, `"id":`+wantID+`,`) && strings.Contains(frame, `"result"`) {
+			return frame
+		}
+		if !strings.Contains(frame, `"code":-32000`) {
+			t.Fatalf("expected the result for id %s (or a synthesised -32000 error to skip), got %q", wantID, frame)
+		}
+	}
+}
+
+// readSynthError reads client frames until a synthesised -32000
+// mid-request-restart error arrives, proving the proxy finished the reconnect
+// (the outstanding sweep runs after the new connection is published, so this
+// doubles as the barrier before writing the next request). The id the error
+// names is timing-dependent — the crash call's, or a stale entry for an
+// already-answered request swept by the same reconnect — so callers must not
+// assert on it. The crash call itself is always outstanding and unanswered,
+// so at least one such frame is guaranteed.
+func readSynthError(t *testing.T, h *proxyHarness) {
+	t.Helper()
+	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"code":-32000`) {
+		t.Fatalf("expected a synthesised -32000 error after the daemon crash, got %q", frame)
+	}
+}
+
 // TestProxyMismatchNote_OncePerDaemonVersion verifies the version-mismatch
 // clause of the reconnect note fires ONCE per proxy per daemon version: two
 // reconnects behind daemons at the same version produce one mismatch warning,
@@ -363,6 +404,8 @@ func TestProxyMismatchNote_OncePerDaemonVersion(t *testing.T) {
 	h.handshake()
 
 	// Crash the initial daemon; the in-flight id 5 gets the synthesised error.
+	// (Deterministic: id 5 is the only outstanding request and was never
+	// answered, so its sweep cannot race a stale entry.)
 	h.write(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}`)
 	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":5`) || !strings.Contains(frame, "daemon restarted") {
 		t.Fatalf("expected synthesised error for in-flight id 5, got %q", frame)
@@ -371,20 +414,21 @@ func TestProxyMismatchNote_OncePerDaemonVersion(t *testing.T) {
 	// First reconnect: the note carries the mismatch clause (daemon 2.0.0 vs
 	// this proxy's dev build).
 	h.write(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}`)
-	frame := h.read(10 * time.Second)
+	frame := readToolResult(t, h, "6")
 	if !strings.Contains(frame, "daemon now 2.0.0-mismatch") ||
 		!strings.Contains(frame, "this serve proxy is still "+Version) {
 		t.Fatalf("first reconnect must carry the mismatch clause, got %q", frame)
 	}
 
-	// Second reconnect behind the SAME daemon version: the note fires (the
-	// reconnect itself is still news) but the mismatch clause does not repeat.
+	// Second reconnect behind the SAME daemon version: id 7 crashes repl1.
+	// readSynthError waits out the reconnect (its sweep proves the new
+	// connection is live) before id 8 is written, so id 8 cannot land on the
+	// dying connection. The id-8 note fires — the reconnect itself is still
+	// news — but the mismatch clause does not repeat.
 	h.write(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}`)
-	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":7`) || !strings.Contains(frame, "daemon restarted") {
-		t.Fatalf("expected synthesised error for in-flight id 7, got %q", frame)
-	}
+	readSynthError(t, h)
 	h.write(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{}}`)
-	frame = h.read(10 * time.Second)
+	frame = readToolResult(t, h, "8")
 	if !strings.Contains(frame, "daemon reconnected (now 2.0.0-mismatch)") {
 		t.Fatalf("second reconnect must still carry the plain note, got %q", frame)
 	}
@@ -394,11 +438,9 @@ func TestProxyMismatchNote_OncePerDaemonVersion(t *testing.T) {
 
 	// Third reconnect behind a NEW daemon version: the clause re-arms once.
 	h.write(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{}}`)
-	if frame := h.read(10 * time.Second); !strings.Contains(frame, `"id":9`) || !strings.Contains(frame, "daemon restarted") {
-		t.Fatalf("expected synthesised error for in-flight id 9, got %q", frame)
-	}
+	readSynthError(t, h)
 	h.write(`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{}}`)
-	frame = h.read(10 * time.Second)
+	frame = readToolResult(t, h, "10")
 	if !strings.Contains(frame, "daemon now 3.0.0-mismatch") ||
 		!strings.Contains(frame, "this serve proxy is still "+Version) {
 		t.Fatalf("a daemon version change must re-arm the mismatch clause, got %q", frame)
