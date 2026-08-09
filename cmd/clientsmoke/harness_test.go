@@ -295,12 +295,11 @@ func isConformanceEnvKey(key string) bool {
 	switch key {
 	case "HOME", "PATH", "TMPDIR", "TMP", "TEMP", "SHELL", "TERM", "COLORTERM",
 		"LANG", "USER", "LOGNAME", "TZ", "CI", "NO_COLOR", "CODEX_HOME",
-		"OPENCODE_DISABLE_AUTOUPDATE":
+		"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+		"PLUMB_STRICT_EDITS", "OPENCODE_DISABLE_AUTOUPDATE":
 		return true
 	default:
-		return strings.HasPrefix(key, "LC_") ||
-			strings.HasPrefix(key, "XDG_") ||
-			strings.HasPrefix(key, "PLUMB_")
+		return strings.HasPrefix(key, "LC_")
 	}
 }
 
@@ -368,6 +367,18 @@ func TestConformanceEnv_UsesMinimalAllowlist(t *testing.T) {
 	for key, value := range credentials {
 		t.Setenv(key, value)
 	}
+	blockedStateAndPolicy := map[string]string{
+		"PLUMB_LOG_FILE":        "/real/plumb.log",
+		"PLUMB_ALLOWED_DIRS":    "/real/allowed",
+		"PLUMB_GIT_ALLOW_PUSH":  "1",
+		"PLUMB_PROXY_RECONNECT": "0",
+		"PLUMB_TOOLS_PROFILE":   "lean",
+		"XDG_RUNTIME_DIR":       "/real/runtime",
+		"XDG_CONFIG_DIRS":       "/real/config-dirs",
+	}
+	for key, value := range blockedStateAndPolicy {
+		t.Setenv(key, value)
+	}
 	t.Setenv("CLIENTSMOKE_INNOCUOUS", "not-allowlisted")
 
 	tmpHome := t.TempDir()
@@ -380,6 +391,11 @@ func TestConformanceEnv_UsesMinimalAllowlist(t *testing.T) {
 	for key := range credentials {
 		if _, ok := values[key]; ok {
 			t.Fatalf("credential leaked into conformance environment: %s", key)
+		}
+	}
+	for key := range blockedStateAndPolicy {
+		if _, ok := values[key]; ok {
+			t.Fatalf("developer state or policy leaked into conformance environment: %s", key)
 		}
 	}
 	if _, ok := values["CLIENTSMOKE_INNOCUOUS"]; ok {
