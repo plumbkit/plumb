@@ -36,10 +36,7 @@ type toolRef struct {
 type scriptedProvider struct {
 	mu              sync.Mutex
 	step            int
-	fixture         string
-	readPath        string
-	editPath        string
-	tmpHome         string
+	scenario        *conformanceScenario
 	toolNames       map[string]toolRef
 	advertisedTools int
 	err             error
@@ -47,10 +44,7 @@ type scriptedProvider struct {
 
 func newScriptedProvider(tmpHome, fixture string) *scriptedProvider {
 	return &scriptedProvider{
-		fixture:   fixture,
-		readPath:  filepath.Join(fixture, "read.txt"),
-		editPath:  filepath.Join(fixture, "edit.txt"),
-		tmpHome:   tmpHome,
+		scenario:  newConformanceScenario(tmpHome, fixture),
 		toolNames: make(map[string]toolRef),
 	}
 }
@@ -114,95 +108,31 @@ func (p *scriptedProvider) nextItem(req responsesRequest) (map[string]any, error
 		if len(missing) > 0 {
 			return nil, fmt.Errorf("discovery: tool_search did not return %v (returned %v)", missing, toolRefStrings(refs))
 		}
-		return functionCall("call-session-start", p.toolNames["session_start"], map[string]any{
-			"purpose": "client-conformance",
-		}), nil
-
-	case 2:
-		body := requestInputText(req.Input)
-		if !strings.Contains(body, "Workspace:") {
-			return nil, errors.New("invocation: session_start result was not returned to the model")
-		}
-		if !strings.Contains(body, "Tool profile: full") ||
-			!strings.Contains(body, "unverified-deferred-discovery") {
-			return nil, errors.New("discovery: session_start did not report the expected conservative Codex profile")
-		}
-		return functionCall("call-read-success", p.toolNames["read_file"], map[string]any{
-			"file_path": p.readPath,
-		}), nil
-
-	case 3:
-		body := requestInputText(req.Input)
-		if !strings.Contains(body, "clientsmoke-read-ok") {
-			return nil, errors.New("invocation: successful path-bearing read result was not returned")
-		}
-		return functionCall("call-edit-refusal", p.toolNames["edit_file"], map[string]any{
-			"file_path": p.editPath,
-			"edits": []map[string]string{{
-				"old_string": "before",
-				"new_string": "after",
-			}},
-		}), nil
-
-	case 4:
-		body := requestInputText(req.Input)
-		if !strings.Contains(body, "has not been read") {
-			return nil, errors.New("recovery: unread edit did not return the expected strict-mode refusal")
-		}
-		return functionCall("call-read-remediation", p.toolNames["read_file"], map[string]any{
-			"file_path": p.editPath,
-		}), nil
-
-	case 5:
-		body := requestInputText(req.Input)
-		mtime := extractHeaderToken(body, "mtime=")
-		if mtime == "" {
-			return nil, errors.New("recovery: remediation read did not return an mtime token")
-		}
-		return functionCall("call-edit-remediated", p.toolNames["edit_file"], map[string]any{
-			"file_path":      p.editPath,
-			"expected_mtime": mtime,
-			"edits": []map[string]string{{
-				"old_string": "before",
-				"new_string": "after",
-			}},
-		}), nil
-
-	case 6:
-		body := requestInputText(req.Input)
-		if !strings.Contains(body, "applied 1 edit") {
-			return nil, errors.New("recovery: edit did not succeed after the advertised read remediation")
-		}
-		return functionCall("call-read-before-reconnect", p.toolNames["read_file"], map[string]any{
-			"file_path": p.editPath,
-		}), nil
-
-	case 7:
-		body := requestInputText(req.Input)
-		mtime := extractHeaderToken(body, "mtime=")
-		if mtime == "" || !strings.Contains(body, "after") {
-			return nil, errors.New("reconnect: pre-restart read did not return the edited content and mtime")
-		}
-		stopDaemon(p.tmpHome)
-		return functionCall("call-edit-after-reconnect", p.toolNames["edit_file"], map[string]any{
-			"file_path":      p.editPath,
-			"expected_mtime": mtime,
-			"edits": []map[string]string{{
-				"old_string": "after",
-				"new_string": "after-reconnect",
-			}},
-		}), nil
-
-	case 8:
-		body := requestInputText(req.Input)
-		if !strings.Contains(body, "applied 1 edit") {
-			return nil, errors.New("reconnect: edit did not succeed from replayed pre-restart read state")
-		}
-		return assistantMessage("clientsmoke deterministic scenario complete"), nil
+		return p.nextScenarioItem("")
 
 	default:
-		return nil, fmt.Errorf("provider received unexpected request %d", p.step+1)
+		body := requestInputText(req.Input)
+		if p.step == 2 && !strings.Contains(body, "unverified-deferred-discovery") {
+			return nil, errors.New("discovery: session_start did not report the expected conservative Codex profile reason")
+		}
+		return p.nextScenarioItem(body)
 	}
+}
+
+func (p *scriptedProvider) nextScenarioItem(body string) (map[string]any, error) {
+	action, err := p.scenario.next(body)
+	if err != nil {
+		return nil, err
+	}
+	if action.complete {
+		return assistantMessage("clientsmoke deterministic scenario complete"), nil
+	}
+	ref := p.toolNames[action.stage.tool]
+	if ref.name == "" {
+		return nil, fmt.Errorf("%s: tool %s was not discovered", action.stage.name, action.stage.tool)
+	}
+	callID := "call-" + strings.ReplaceAll(action.stage.name, "_", "-")
+	return functionCall(callID, ref, action.arguments), nil
 }
 
 func (p *scriptedProvider) result() (step int, err error) {
