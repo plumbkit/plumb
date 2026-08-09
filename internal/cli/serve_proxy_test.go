@@ -156,9 +156,15 @@ func newPipeDaemon(opts func(*mockDaemon)) (*mockDaemon, net.Conn) {
 // proxyHarness wires a reconnectingProxy to in-memory client pipes and a queue
 // of replacement daemon connections handed out by the dial hook.
 type proxyHarness struct {
-	t         *testing.T
-	clientIn  *io.PipeWriter
-	clientOut *frameReader
+	t          *testing.T
+	clientIn   *io.PipeWriter
+	clientOutW *io.PipeWriter
+	// frames receives daemon→client frames from a dedicated drainer goroutine.
+	// Without it the proxy writes into an UNBUFFERED io.Pipe: a proxy goroutine
+	// blocked writing a frame the test has not read yet (e.g. a second
+	// synthesised reconnect error) while the test is itself blocked writing the
+	// next request is an AB-BA deadlock — observed hanging the suite in CI.
+	frames    chan string
 	dialQueue chan net.Conn
 	killCount *atomic.Int32
 	proxy     *reconnectingProxy
@@ -169,12 +175,26 @@ func startProxy(t *testing.T, initialProxySide net.Conn, hb, pingTO time.Duratio
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	h := &proxyHarness{
-		t:         t,
-		clientIn:  inW,
-		clientOut: newFrameReader(outR),
-		dialQueue: make(chan net.Conn, 8),
-		killCount: &atomic.Int32{},
+		t:          t,
+		clientIn:   inW,
+		clientOutW: outW,
+		frames:     make(chan string, 256),
+		dialQueue:  make(chan net.Conn, 8),
+		killCount:  &atomic.Int32{},
 	}
+	// Drain proxy→client frames into the buffered channel so a proxy write
+	// never waits on the test's read schedule.
+	go func() {
+		fr := newFrameReader(outR)
+		for {
+			b, err := fr.read()
+			if err != nil {
+				close(h.frames)
+				return
+			}
+			h.frames <- string(b)
+		}
+	}()
 	h.proxy = newReconnectingProxy(proxyDeps{
 		in:      inR,
 		out:     outW,
@@ -202,7 +222,10 @@ func startProxy(t *testing.T, initialProxySide net.Conn, hb, pingTO time.Duratio
 
 func (h *proxyHarness) start() <-chan error {
 	done := make(chan error, 1)
-	go func() { done <- h.proxy.run(context.Background()) }()
+	go func() {
+		done <- h.proxy.run(context.Background())
+		_ = h.clientOutW.Close() // unblock the drainer so it can exit
+	}()
 	return done
 }
 
@@ -215,18 +238,12 @@ func (h *proxyHarness) write(frame string) {
 
 func (h *proxyHarness) read(d time.Duration) string {
 	h.t.Helper()
-	type res struct {
-		b   []byte
-		err error
-	}
-	ch := make(chan res, 1)
-	go func() { b, err := h.clientOut.read(); ch <- res{b, err} }()
 	select {
-	case r := <-ch:
-		if r.err != nil {
-			h.t.Fatalf("reading client frame: %v", r.err)
+	case f, ok := <-h.frames:
+		if !ok {
+			h.t.Fatalf("client frame channel closed — proxy exited")
 		}
-		return string(r.b)
+		return f
 	case <-time.After(d):
 		h.t.Fatalf("timed out waiting for a client frame")
 		return ""
