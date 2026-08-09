@@ -276,6 +276,33 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 	return append(out, extra...)
 }
 
+// conformanceEnv removes provider credentials after applying the ordinary client
+// isolation. The deterministic tier must never expose a developer's credentials
+// to a real client process, even though the authenticated tier intentionally
+// inherits them through isolatedEnv.
+func conformanceEnv(tmpHome string, extra ...string) []string {
+	env := isolatedEnv(tmpHome, extra...)
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if isCredentialEnvKey(key) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func isCredentialEnvKey(key string) bool {
+	upper := strings.ToUpper(key)
+	return strings.HasSuffix(upper, "_API_KEY") ||
+		strings.HasSuffix(upper, "_TOKEN") ||
+		strings.HasSuffix(upper, "_SECRET") ||
+		strings.HasSuffix(upper, "_PASSWORD") ||
+		strings.HasSuffix(upper, "_CREDENTIALS") ||
+		strings.HasSuffix(upper, "_ACCESS_KEY_ID")
+}
+
 func TestIsolatedEnv_ScrubsCodexHome(t *testing.T) {
 	t.Setenv("CODEX_HOME", "/real/codex")
 	tmpHome := t.TempDir()
@@ -323,6 +350,30 @@ func TestIsolatedEnv_ReplacesPlumbPolicyOverrides(t *testing.T) {
 		if seen != 1 {
 			t.Fatalf("%s entries = %d, want 1", want, seen)
 		}
+	}
+}
+
+func TestConformanceEnv_ScrubsProviderCredentials(t *testing.T) {
+	for key, value := range map[string]string{
+		"OPENAI_API_KEY":                 "real-openai-key",
+		"ANTHROPIC_AUTH_TOKEN":           "real-anthropic-token",
+		"AWS_SECRET_ACCESS_KEY":          "real-aws-secret",
+		"AWS_ACCESS_KEY_ID":              "real-aws-id",
+		"GOOGLE_APPLICATION_CREDENTIALS": "/real/google-credentials.json",
+	} {
+		t.Setenv(key, value)
+	}
+	t.Setenv("CLIENTSMOKE_INNOCUOUS", "preserved")
+
+	env := conformanceEnv(t.TempDir(), "OPENAI_API_KEY=placeholder")
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if isCredentialEnvKey(key) {
+			t.Fatalf("credential leaked into conformance environment: %s", key)
+		}
+	}
+	if !slices.Contains(env, "CLIENTSMOKE_INNOCUOUS=preserved") {
+		t.Fatal("conformance environment removed an unrelated variable")
 	}
 }
 
@@ -516,10 +567,15 @@ func countToolCallsAt(t *testing.T, path string) (int, string, bool) {
 // alive.
 func pollToolCalls(t *testing.T, tmpHome string, timeout time.Duration) (int, string) {
 	t.Helper()
+	return pollToolCallsAtLeast(t, tmpHome, 1, timeout)
+}
+
+func pollToolCallsAtLeast(t *testing.T, tmpHome string, minimum int, timeout time.Duration) (int, string) {
+	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
 		n, tools := countToolCalls(t, tmpHome)
-		if n > 0 || time.Now().After(deadline) {
+		if n >= minimum || time.Now().After(deadline) {
 			return n, tools
 		}
 		time.Sleep(300 * time.Millisecond)

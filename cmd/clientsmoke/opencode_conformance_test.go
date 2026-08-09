@@ -27,12 +27,12 @@ type chatRequest struct {
 }
 
 type chatScriptedProvider struct {
-	mu        sync.Mutex
-	step      int
-	fixture   string
-	readPath  string
-	editPath  string
-	tmpHome   string
+	mu              sync.Mutex
+	step            int
+	fixture         string
+	readPath        string
+	editPath        string
+	tmpHome         string
 	toolNames       map[string]toolRef
 	advertisedTools int
 	err             error
@@ -88,14 +88,14 @@ func (p *chatScriptedProvider) nextItem(req chatRequest) (map[string]any, error)
 		refs := directChatToolRefs(req.Tools)
 		p.advertisedTools = len(refs)
 		for _, ref := range refs {
-			for _, base := range []string{"session_start", "read_file", "edit_file"} {
+			for _, base := range conformanceRequiredTools() {
 				if strings.HasSuffix(ref.name, base) {
 					p.toolNames[base] = ref
 				}
 			}
 		}
 		var missing []string
-		for _, base := range []string{"session_start", "read_file", "edit_file"} {
+		for _, base := range conformanceRequiredTools() {
 			if p.toolNames[base].name == "" {
 				missing = append(missing, base)
 			}
@@ -318,7 +318,7 @@ func TestOpenCodeDeterministicConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := isolatedEnv(tmpHome, "PLUMB_STRICT_EDITS=1", "OPENCODE_DISABLE_AUTOUPDATE=1")
+	env := conformanceEnv(tmpHome, "PLUMB_STRICT_EDITS=1", "OPENCODE_DISABLE_AUTOUPDATE=1")
 	t.Cleanup(func() { stopDaemon(tmpHome) })
 	runPlumbSetup(t, env, "setup", "opencode")
 
@@ -395,7 +395,7 @@ func TestOpenCodeDeterministicConformance(t *testing.T) {
 		t.Fatalf("session folder = %q, want %q", sess.Folder, fixture)
 	}
 
-	n, toolNames := pollToolCalls(t, tmpHome, 8*time.Second)
+	n, toolNames := pollToolCallsAtLeast(t, tmpHome, 7, 8*time.Second)
 	if n < 7 {
 		t.Fatalf("missing_stats: got %d calls [%s], want at least 7 scenario calls", n, toolNames)
 	}
