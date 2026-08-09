@@ -263,7 +263,6 @@
   `TestCheckDaemon_ReportsVersionMismatch` (doctor keeps failing the version
   check on a stale daemon).
 
-## 0.16.2 (2026-08-06)
 
 ### Added
 
@@ -276,12 +275,15 @@
   restart and edit again from replayed read state. Separate assertions cover
   discovery, invocation, recovery, reconnect, client exit/timeout, final
   session identity, and stats evidence. HOME, XDG roots, client configuration,
-  daemon/session/stat storage, and `GOCACHE` are isolated; preserved
-  failure evidence excludes credentials and client configs. The release and
-  nightly workflow pins exact clients, covers Linux and macOS, and repeats each
-  matrix three times. Passing this full-profile scenario deliberately does not
-  change `ReliableDeferredToolDiscovery`: PLAN-270 still requires proof that a
-  real client can invoke a tool Plumb itself omitted from a lean `tools/list`.
+  daemon/session/stat storage, and `GOCACHE` are isolated; provider credentials
+  are removed from the client process, and preserved failure evidence excludes
+  credentials and client configs. The release and nightly workflow pins exact
+  clients, covers Linux and macOS, and repeats each matrix three times. Passing
+  this full-profile scenario deliberately does not change
+  `ReliableDeferredToolDiscovery`: PLAN-270 still requires proof that a real
+  client can invoke a tool Plumb itself omitted from a lean `tools/list`.
+
+## 0.16.2 (2026-08-06)
 
 ### Fixed
 

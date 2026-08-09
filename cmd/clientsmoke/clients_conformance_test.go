@@ -34,12 +34,12 @@ type toolRef struct {
 }
 
 type scriptedProvider struct {
-	mu        sync.Mutex
-	step      int
-	fixture   string
-	readPath  string
-	editPath  string
-	tmpHome   string
+	mu              sync.Mutex
+	step            int
+	fixture         string
+	readPath        string
+	editPath        string
+	tmpHome         string
 	toolNames       map[string]toolRef
 	advertisedTools int
 	err             error
@@ -93,20 +93,20 @@ func (p *scriptedProvider) nextItem(req responsesRequest) (map[string]any, error
 		if direct := directPlumbTools(req.Tools); len(direct) > 0 {
 			return nil, fmt.Errorf("discovery: Plumb tools leaked onto the direct surface: %v", direct)
 		}
-		return toolSearchCall("search-1", "plumb session_start read_file edit_file"), nil
+		return toolSearchCall("search-1", "plumb "+strings.Join(conformanceRequiredTools(), " ")), nil
 
 	case 1:
 		refs := searchedToolRefs(req.Input)
 		p.advertisedTools = len(refs)
 		for _, ref := range refs {
-			for _, base := range []string{"session_start", "read_file", "edit_file"} {
+			for _, base := range conformanceRequiredTools() {
 				if strings.HasSuffix(ref.name, "__"+base) || ref.name == base {
 					p.toolNames[base] = ref
 				}
 			}
 		}
 		var missing []string
-		for _, base := range []string{"session_start", "read_file", "edit_file"} {
+		for _, base := range conformanceRequiredTools() {
 			if p.toolNames[base].name == "" {
 				missing = append(missing, base)
 			}
@@ -370,18 +370,6 @@ func requestInputText(input []any) string {
 	return string(encoded)
 }
 
-func extractHeaderToken(body, prefix string) string {
-	at := strings.LastIndex(body, prefix)
-	if at < 0 {
-		return ""
-	}
-	value := body[at+len(prefix):]
-	if end := strings.IndexAny(value, " \\n\\r\\t"); end >= 0 {
-		value = value[:end]
-	}
-	return strings.Trim(value, "\\\"")
-}
-
 func writeCodexConformanceProfile(t *testing.T, tmpHome, providerURL string) {
 	t.Helper()
 	dir := filepath.Join(tmpHome, ".codex")
@@ -411,7 +399,7 @@ omit_tools_from = ["direct"]
 func TestCodexDeterministicConformance(t *testing.T) {
 	codexPath, err := exec.LookPath("codex")
 	if err != nil {
-		t.Skip("codex is not installed; run scripts/install-clients.sh")
+		t.Fatal("codex is required; run scripts/install-clients.sh")
 	}
 
 	tmpHome := mkTmpHome(t)
@@ -429,7 +417,7 @@ func TestCodexDeterministicConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := isolatedEnv(tmpHome, "PLUMB_STRICT_EDITS=1")
+	env := conformanceEnv(tmpHome, "PLUMB_STRICT_EDITS=1")
 	t.Cleanup(func() { stopDaemon(tmpHome) })
 	runPlumbSetup(t, env, "setup", "codex")
 
@@ -503,7 +491,7 @@ func TestCodexDeterministicConformance(t *testing.T) {
 		t.Fatalf("session folder = %q, want %q", sess.Folder, fixture)
 	}
 
-	n, toolNames := pollToolCalls(t, tmpHome, 8*time.Second)
+	n, toolNames := pollToolCallsAtLeast(t, tmpHome, 7, 8*time.Second)
 	if n < 7 {
 		t.Fatalf("missing_stats: got %d calls [%s], want at least 7 scenario calls", n, toolNames)
 	}

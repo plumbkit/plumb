@@ -113,10 +113,12 @@ cursor-agent, codex, auggie, crush, and goose have no auth-free connecting probe
 skipped here (still drivable in the auth tier).
 
 **Deterministic real-client tier** — requires pinned Codex and OpenCode binaries, but
-no credentials. A loopback scripted provider drives exact discovery, invocation,
-strict-edit refusal and remediation, daemon reconnect/read-state replay, session
-identity, and stats assertions. HOME, XDG roots, client configs, plumb state, and the Go
-build cache are isolated; failure evidence excludes credentials and client configs:
+no credentials. Loopback scripted providers and raw MCP share one ordered scenario:
+exact discovery, invocation, strict-edit refusal and remediation, daemon
+reconnect/read-state replay, session identity, and stats assertions. HOME, XDG roots,
+client configs, Plumb state, and the Go build cache are isolated; provider credentials
+are removed from client processes, and failure evidence excludes credentials and client
+configs:
 
 ```sh
 make clients-test-conformance
