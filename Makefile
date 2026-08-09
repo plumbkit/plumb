@@ -29,7 +29,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui test test-race integration-test build-integration lint lint-cross check-size cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui test test-race integration-test build-integration lint lint-cross check-size cover cover-report vuln tidy-check verify run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -97,11 +97,21 @@ clients-test: $(TESTCACHE)
 clients-test-auth: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=clients_e2e -timeout=20m -v ./cmd/clientsmoke/...
 
-# build-clients compiles and vets both clientsmoke build tags, which test/lint
+# clients-test-conformance is the deterministic, API-key-free real-client tier.
+# It requires the pinned Codex and OpenCode binaries, drives both through a
+# loopback scripted provider, and isolates the Go cache as well as all client and
+# plumb state. Run it repeatedly before changing client capability evidence.
+clients-test-conformance: $(TESTCACHE)
+	@cache=$$(mktemp -d); trap 'rm -rf "$$cache"' EXIT; \
+		GOCACHE="$$cache" GOTMPDIR=$(CURDIR)/$(TESTCACHE) \
+		go test -tags=clients_conformance -timeout=10m -count=1 -v ./cmd/clientsmoke/...
+
+# build-clients compiles and vets every clientsmoke build tag, which test/lint
 # skip — keeping the on-demand harness from bitrotting (mirrors build-integration).
 build-clients: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients ./cmd/clientsmoke/...
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients_e2e ./cmd/clientsmoke/...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go vet -tags=clients_conformance ./cmd/clientsmoke/...
 
 # ── Docker-based Linux testing (opt-in; never part of `make verify`). ─────────
 # plumb is developed on macOS; these run the Linux suites in a container so a

@@ -1,10 +1,10 @@
-//go:build clients || clients_e2e
+//go:build clients || clients_e2e || clients_conformance
 
 // Package clientsmoke is an on-demand integration harness that verifies plumb
 // works as an MCP server through each supported client CLI, driven
 // non-interactively (no TUI ever blocks).
 //
-// Two tiers, selected by build tag:
+// Three tiers, selected by build tag:
 //
 //   - -tags=clients      (TestClientsConnect): the auth-free CONNECTION tier.
 //     For each client with an auth-free connecting probe (e.g. `gemini mcp
@@ -18,7 +18,12 @@
 //     plumb's stats DB — proof the agent actually invoked a plumb tool through
 //     the model. Skips any client whose key is unset. Costs money.
 //
-// Both tiers share this file: the binary build (TestMain), the per-test
+//   - -tags=clients_conformance (Codex and OpenCode): the local deterministic
+//     tier. Scripted loopback providers direct an exact sequence through each
+//     real client and separately assert discovery, invocation,
+//     refusal recovery, daemon reconnect, replay, session identity, and stats.
+//
+// All tiers share this file: the binary build (TestMain), the per-test
 // isolation (own HOME + XDG dirs, like cmd/smoke), the client table, and the
 // plumb-side readers (session files and stats.db) that supply the success
 // signal independent of each CLI's output format.
@@ -28,6 +33,7 @@
 // Run:
 //
 //	make clients-test                 # connection tier
+//	make clients-test-conformance     # deterministic real-client tier
 //	make clients-test-auth            # auth tier (needs API keys)
 package clientsmoke
 
@@ -251,7 +257,9 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "XDG_STATE_HOME="),
 			strings.HasPrefix(e, "TSM_ORIG_XDG_"),
-			strings.HasPrefix(e, "CODEX_HOME="):
+			strings.HasPrefix(e, "CODEX_HOME="),
+			strings.HasPrefix(e, "PLUMB_STRICT_EDITS="),
+			strings.HasPrefix(e, "PLUMB_TOOLS_PROFILE="):
 			continue
 		default:
 			out = append(out, e)
@@ -293,6 +301,27 @@ func TestIsolatedEnv_ScrubsSessionManagerOrigins(t *testing.T) {
 	for _, e := range isolatedEnv(t.TempDir()) {
 		if strings.HasPrefix(e, "TSM_ORIG_XDG_") {
 			t.Fatalf("session-manager recovery companion leaked into isolated env: %q", e)
+		}
+	}
+}
+
+func TestIsolatedEnv_ReplacesPlumbPolicyOverrides(t *testing.T) {
+	t.Setenv("PLUMB_STRICT_EDITS", "0")
+	t.Setenv("PLUMB_TOOLS_PROFILE", "lean")
+	env := isolatedEnv(t.TempDir(), "PLUMB_STRICT_EDITS=1", "PLUMB_TOOLS_PROFILE=full")
+
+	for _, want := range []string{"PLUMB_STRICT_EDITS=1", "PLUMB_TOOLS_PROFILE=full"} {
+		seen := 0
+		for _, entry := range env {
+			if strings.HasPrefix(entry, strings.SplitN(want, "=", 2)[0]+"=") {
+				seen++
+				if entry != want {
+					t.Fatalf("policy override = %q, want %q", entry, want)
+				}
+			}
+		}
+		if seen != 1 {
+			t.Fatalf("%s entries = %d, want 1", want, seen)
 		}
 	}
 }
