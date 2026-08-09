@@ -265,6 +265,24 @@
 
 ## 0.16.2 (2026-08-06)
 
+### Added
+
+- **Deterministic, API-key-free real-client conformance now gates releases and
+  runs nightly.** The new `clients_conformance` tier drives pinned Codex and
+  OpenCode binaries against loopback scripted Responses and Chat Completions
+  providers. Both clients must discover and invoke Plumb, complete a successful
+  path-bearing read, observe a strict unread-edit refusal, follow the advertised
+  read remediation and edit successfully, then survive an isolated daemon
+  restart and edit again from replayed read state. Separate assertions cover
+  discovery, invocation, recovery, reconnect, client exit/timeout, final
+  session identity, and stats evidence. HOME, XDG roots, client configuration,
+  daemon/session/stat storage, and `GOCACHE` are isolated; preserved
+  failure evidence excludes credentials and client configs. The release and
+  nightly workflow pins exact clients, covers Linux and macOS, and repeats each
+  matrix three times. Passing this full-profile scenario deliberately does not
+  change `ReliableDeferredToolDiscovery`: PLAN-270 still requires proof that a
+  real client can invoke a tool Plumb itself omitted from a lean `tools/list`.
+
 ### Fixed
 
 - **`plumb skills sync` is never silent again.** A sweep that found every

@@ -9,7 +9,11 @@ permissions:
   contents: write # create the GitHub release and upload artifacts
 
 jobs:
+  client-conformance:
+    uses: ./.github/workflows/client-conformance.yml
+
   goreleaser:
+    needs: client-conformance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

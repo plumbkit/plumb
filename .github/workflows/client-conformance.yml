@@ -1,0 +1,63 @@
+name: Client conformance
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 15 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CODEX_VERSION: 0.146.1
+  OPENCODE_VERSION: 1.18.0
+
+jobs:
+  deterministic:
+    name: deterministic clients (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install pinned clients
+        run: npm install --global "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}"
+
+      - name: Verify client versions
+        run: |
+          codex --version | grep -F "${CODEX_VERSION}"
+          test "$(opencode --version)" = "${OPENCODE_VERSION}"
+
+      - name: Run deterministic matrix three times
+        env:
+          TMPDIR: ${{ runner.temp }}/client-conformance
+        run: |
+          mkdir -p "$TMPDIR"
+          for attempt in 1 2 3; do
+            echo "conformance attempt $attempt/3"
+            make clients-test-conformance
+          done
+
+      - name: Upload failure-only evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: client-conformance-${{ matrix.os }}
+          path: ${{ runner.temp }}/client-conformance/clientsmoke-failure-*
+          if-no-files-found: warn
+          retention-days: 14

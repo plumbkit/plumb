@@ -86,9 +86,9 @@ lint failures.
 
 Plumb registers itself as a stdio MCP server for many client CLIs via
 `plumb setup <client>`. The on-demand **`cmd/clientsmoke` harness** verifies those
-clients actually work *through* plumb, non-interactively (no TUI blocks). It is gated
-behind its own build tags, so it never runs in CI or `make verify` beyond a compile
-check — run it yourself when you touch client setup or want to validate a new client.
+clients actually work *through* plumb, non-interactively (no TUI blocks). Each tier is
+gated behind its own build tag. `make verify` compile-checks all tiers; the deterministic
+real-client tier also gates releases and runs nightly.
 
 **Install the client CLIs** (idempotent; installs CLIs only, never API keys):
 
@@ -112,6 +112,20 @@ Verified-passing: gemini, qwen, opencode, hermes (needs its `[mcp]` extra), clau
 cursor-agent, codex, auggie, crush, and goose have no auth-free connecting probe and are
 skipped here (still drivable in the auth tier).
 
+**Deterministic real-client tier** — requires pinned Codex and OpenCode binaries, but
+no credentials. A loopback scripted provider drives exact discovery, invocation,
+strict-edit refusal and remediation, daemon reconnect/read-state replay, session
+identity, and stats assertions. HOME, XDG roots, client configs, plumb state, and the Go
+build cache are isolated; failure evidence excludes credentials and client configs:
+
+```sh
+make clients-test-conformance
+```
+
+This is the evidence gate for client capability flags. Passing the full-profile scenario
+does not prove a client can invoke a tool that Plumb omitted from `tools/list`; keep
+`ReliableDeferredToolDiscovery` false until that separate forced-lean case passes.
+
 **Auth tier** — drives a real headless LLM prompt to force a plumb tool call, then
 asserts a `tool_calls` row in the stats DB. It **costs money** and runs only the clients
 whose API key is exported; the rest skip automatically:
@@ -131,8 +145,8 @@ OPENAI_API_KEY=…  ANTHROPIC_API_KEY=…  GEMINI_API_KEY=…  make clients-test
 The auth tier is **nondeterministic** (it asserts the model *chose* to call a plumb
 tool): use it to confirm a new client integration works, not as a gate. Per-client
 auto-approve/auth flags are version-sensitive — see the spec table in
-`cmd/clientsmoke/harness_test.go`. `make build-clients` compile-checks both tiers and is
-folded into `make verify`. To add a client, add a `clientSpec` to `clientSpecs()`.
+`cmd/clientsmoke/harness_test.go`. `make build-clients` compile-checks every tier and
+is folded into `make verify`. To add a client, add a `clientSpec` to `clientSpecs()`.
 
 ## Commits
 
