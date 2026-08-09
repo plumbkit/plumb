@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,10 +28,7 @@ type chatRequest struct {
 type chatScriptedProvider struct {
 	mu              sync.Mutex
 	step            int
-	fixture         string
-	readPath        string
-	editPath        string
-	tmpHome         string
+	scenario        *conformanceScenario
 	toolNames       map[string]toolRef
 	advertisedTools int
 	err             error
@@ -40,10 +36,7 @@ type chatScriptedProvider struct {
 
 func newChatScriptedProvider(tmpHome, fixture string) *chatScriptedProvider {
 	return &chatScriptedProvider{
-		fixture:   fixture,
-		readPath:  filepath.Join(fixture, "read.txt"),
-		editPath:  filepath.Join(fixture, "edit.txt"),
-		tmpHome:   tmpHome,
+		scenario:  newConformanceScenario(tmpHome, fixture),
 		toolNames: make(map[string]toolRef),
 	}
 }
@@ -83,8 +76,7 @@ func (p *chatScriptedProvider) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 func (p *chatScriptedProvider) nextItem(req chatRequest) (map[string]any, error) {
 	body := requestInputText(req.Messages)
-	switch p.step {
-	case 0:
+	if p.step == 0 {
 		refs := directChatToolRefs(req.Tools)
 		p.advertisedTools = len(refs)
 		for _, ref := range refs {
@@ -103,87 +95,25 @@ func (p *chatScriptedProvider) nextItem(req chatRequest) (map[string]any, error)
 		if len(missing) > 0 {
 			return nil, fmt.Errorf("discovery: client did not advertise %v (returned %v)", missing, toolRefStrings(refs))
 		}
-		return functionCall("chat-session-start", p.toolNames["session_start"], map[string]any{
-			"purpose": "client-conformance",
-		}), nil
-
-	case 1:
-		if !strings.Contains(body, "Workspace:") {
-			return nil, errors.New("invocation: session_start result was not returned to the provider")
-		}
-		if !strings.Contains(body, "Tool profile: full") {
-			return nil, errors.New("discovery: session_start did not report the expected full profile")
-		}
-		return functionCall("chat-read-success", p.toolNames["read_file"], map[string]any{
-			"file_path": p.readPath,
-		}), nil
-
-	case 2:
-		if !strings.Contains(body, "clientsmoke-read-ok") {
-			return nil, errors.New("invocation: successful path-bearing read result was not returned")
-		}
-		return functionCall("chat-edit-refusal", p.toolNames["edit_file"], map[string]any{
-			"file_path": p.editPath,
-			"edits": []map[string]string{{
-				"old_string": "before",
-				"new_string": "after",
-			}},
-		}), nil
-
-	case 3:
-		if !strings.Contains(body, "has not been read") {
-			return nil, errors.New("recovery: unread edit did not return the expected strict-mode refusal")
-		}
-		return functionCall("chat-read-remediation", p.toolNames["read_file"], map[string]any{
-			"file_path": p.editPath,
-		}), nil
-
-	case 4:
-		mtime := extractHeaderToken(body, "mtime=")
-		if mtime == "" {
-			return nil, errors.New("recovery: remediation read did not return an mtime token")
-		}
-		return functionCall("chat-edit-remediated", p.toolNames["edit_file"], map[string]any{
-			"file_path":      p.editPath,
-			"expected_mtime": mtime,
-			"edits": []map[string]string{{
-				"old_string": "before",
-				"new_string": "after",
-			}},
-		}), nil
-
-	case 5:
-		if !strings.Contains(body, "applied 1 edit") {
-			return nil, errors.New("recovery: edit did not succeed after the advertised read remediation")
-		}
-		return functionCall("chat-read-before-reconnect", p.toolNames["read_file"], map[string]any{
-			"file_path": p.editPath,
-		}), nil
-
-	case 6:
-		mtime := extractHeaderToken(body, "mtime=")
-		if mtime == "" || !strings.Contains(body, "after") {
-			return nil, errors.New("reconnect: pre-restart read did not return the edited content and mtime")
-		}
-		stopDaemon(p.tmpHome)
-		return functionCall("chat-edit-after-reconnect", p.toolNames["edit_file"], map[string]any{
-			"file_path":      p.editPath,
-			"expected_mtime": mtime,
-			"edits": []map[string]string{{
-				"old_string": "after",
-				"new_string": "after-reconnect",
-			}},
-		}), nil
-
-	case 7:
-		if !strings.Contains(body, "applied 1 edit") {
-			return nil, errors.New("reconnect: edit did not succeed from replayed pre-restart read state")
-		}
-		return assistantMessage("clientsmoke deterministic scenario complete"), nil
-
-	default:
-		return nil, fmt.Errorf("provider received unexpected request %d", p.step+1)
+		body = ""
 	}
+	return p.nextScenarioItem(body)
+}
+
+func (p *chatScriptedProvider) nextScenarioItem(body string) (map[string]any, error) {
+	action, err := p.scenario.next(body)
+	if err != nil {
+		return nil, err
+	}
+	if action.complete {
+		return assistantMessage("clientsmoke deterministic scenario complete"), nil
+	}
+	ref := p.toolNames[action.stage.tool]
+	if ref.name == "" {
+		return nil, fmt.Errorf("%s: tool %s was not advertised", action.stage.name, action.stage.tool)
+	}
+	callID := "chat-" + strings.ReplaceAll(action.stage.name, "_", "-")
+	return functionCall(callID, ref, action.arguments), nil
 }
 
 func (p *chatScriptedProvider) result() (step int, err error) {

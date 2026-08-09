@@ -276,31 +276,32 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 	return append(out, extra...)
 }
 
-// conformanceEnv removes provider credentials after applying the ordinary client
-// isolation. The deterministic tier must never expose a developer's credentials
-// to a real client process, even though the authenticated tier intentionally
-// inherits them through isolatedEnv.
+// conformanceEnv keeps only the process environment needed to launch a local
+// client and Plumb. An allowlist is intentional: provider credential naming is
+// open-ended, so a denylist would eventually leak a key it did not recognise.
 func conformanceEnv(tmpHome string, extra ...string) []string {
 	env := isolatedEnv(tmpHome, extra...)
 	out := make([]string, 0, len(env))
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
-		if isCredentialEnvKey(key) {
-			continue
+		if isConformanceEnvKey(key) {
+			out = append(out, entry)
 		}
-		out = append(out, entry)
 	}
 	return out
 }
 
-func isCredentialEnvKey(key string) bool {
-	upper := strings.ToUpper(key)
-	return strings.HasSuffix(upper, "_API_KEY") ||
-		strings.HasSuffix(upper, "_TOKEN") ||
-		strings.HasSuffix(upper, "_SECRET") ||
-		strings.HasSuffix(upper, "_PASSWORD") ||
-		strings.HasSuffix(upper, "_CREDENTIALS") ||
-		strings.HasSuffix(upper, "_ACCESS_KEY_ID")
+func isConformanceEnvKey(key string) bool {
+	switch key {
+	case "HOME", "PATH", "TMPDIR", "TMP", "TEMP", "SHELL", "TERM", "COLORTERM",
+		"LANG", "USER", "LOGNAME", "TZ", "CI", "NO_COLOR", "CODEX_HOME",
+		"OPENCODE_DISABLE_AUTOUPDATE":
+		return true
+	default:
+		return strings.HasPrefix(key, "LC_") ||
+			strings.HasPrefix(key, "XDG_") ||
+			strings.HasPrefix(key, "PLUMB_")
+	}
 }
 
 func TestIsolatedEnv_ScrubsCodexHome(t *testing.T) {
@@ -353,27 +354,39 @@ func TestIsolatedEnv_ReplacesPlumbPolicyOverrides(t *testing.T) {
 	}
 }
 
-func TestConformanceEnv_ScrubsProviderCredentials(t *testing.T) {
-	for key, value := range map[string]string{
+func TestConformanceEnv_UsesMinimalAllowlist(t *testing.T) {
+	credentials := map[string]string{
 		"OPENAI_API_KEY":                 "real-openai-key",
 		"ANTHROPIC_AUTH_TOKEN":           "real-anthropic-token",
 		"AWS_SECRET_ACCESS_KEY":          "real-aws-secret",
 		"AWS_ACCESS_KEY_ID":              "real-aws-id",
+		"AWS_SESSION_TOKEN":              "real-aws-token",
+		"AWS_SHARED_CREDENTIALS_FILE":    "/real/aws-credentials",
+		"AUGMENT_SESSION_AUTH":           "real-augment-auth",
 		"GOOGLE_APPLICATION_CREDENTIALS": "/real/google-credentials.json",
-	} {
+	}
+	for key, value := range credentials {
 		t.Setenv(key, value)
 	}
-	t.Setenv("CLIENTSMOKE_INNOCUOUS", "preserved")
+	t.Setenv("CLIENTSMOKE_INNOCUOUS", "not-allowlisted")
 
-	env := conformanceEnv(t.TempDir(), "OPENAI_API_KEY=placeholder")
+	tmpHome := t.TempDir()
+	env := conformanceEnv(tmpHome, "OPENAI_API_KEY=placeholder")
+	values := make(map[string]string, len(env))
 	for _, entry := range env {
-		key, _, _ := strings.Cut(entry, "=")
-		if isCredentialEnvKey(key) {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	for key := range credentials {
+		if _, ok := values[key]; ok {
 			t.Fatalf("credential leaked into conformance environment: %s", key)
 		}
 	}
-	if !slices.Contains(env, "CLIENTSMOKE_INNOCUOUS=preserved") {
-		t.Fatal("conformance environment removed an unrelated variable")
+	if _, ok := values["CLIENTSMOKE_INNOCUOUS"]; ok {
+		t.Fatal("non-allowlisted variable leaked into conformance environment")
+	}
+	if values["HOME"] != tmpHome || values["PATH"] == "" {
+		t.Fatalf("required launch environment missing: HOME=%q PATH=%q", values["HOME"], values["PATH"])
 	}
 }
 
