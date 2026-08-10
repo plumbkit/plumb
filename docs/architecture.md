@@ -32,7 +32,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/quality` | Offline post-write code analysers (golangci-lint, ruff, …) against changed files; findings appended to write responses; `golangcilint` subpackage |
 | `internal/cache` | Sharded TTL cache + LSP invalidator |
 | `internal/session` | Per-connection session registry with client identity tracking |
-| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 13); also holds the `episodic_memories` table for idle-session summaries |
+| `internal/stats` | Global SQLite tool-call statistics, row-scoped by workspace and session (WAL, per-tool summary, P95, client-aware, `user_version` 16); also holds the `episodic_memories` table for idle-session summaries |
 | `internal/memory` | Per-workspace markdown memory store (`<workspace>/.plumb/memories/`) |
 | `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter — most languages incl. TypeScript/TSX/JSX) + canonical-grammar WASM via wazero for Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
@@ -260,7 +260,7 @@ conversation, so global state lives in one file keyed by `workspace` and
 
 | Database | Scope | Location (Linux / macOS) | Tables | Lifecycle |
 |---|---|---|---|---|
-| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 13) |
+| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 16) |
 | `topology.db` | **Per project** | `<workspace>/.plumb/` | `topology_files`, `topology_nodes`, `topology_edges`, `topology_fts`, `topology_embeddings` | Rebuildable index; dropped & recreated on a version bump |
 | `memory.db` | **Per project** | `<workspace>/.plumb/` | `memory_files`, `memory_records`, `memory_fts` | Rebuildable index over the markdown memories |
 
@@ -365,7 +365,7 @@ workspace, session, timing, and I/O sizes. The workspace and session fields are
 required row attributes because the single stats database contains all projects
 served by the single daemon.
 
-Schema versioning is driven by `PRAGMA user_version` (currently 13). `stats.Open()`
+Schema versioning is driven by `PRAGMA user_version` (currently 16). `stats.Open()`
 (the daemon — the single writer) applies forward migrations (`ALTER TABLE ADD
 COLUMN`) when the on-disk version is older, then stamps the current version, so
 existing history is preserved across upgrades. `OpenReadOnly()` (TUI, `plumb

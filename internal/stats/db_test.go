@@ -424,7 +424,7 @@ func TestOpenCreatesCurrentGlobalSchema(t *testing.T) {
 	if v != SchemaVersion {
 		t.Errorf("user_version = %d, want %d", v, SchemaVersion)
 	}
-	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version", "tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens", "purpose"} {
+	for _, col := range []string{"session_id", "session_name", "workspace", "input_json", "output_text", "client_name", "client_version", "tokens_saved", "savings_model_version", "capability_tokens", "efficiency_tokens", "purpose", "error_kind", "error_retryable", "remediation_class"} {
 		has, err := hasColumn(db.db, "tool_calls", col)
 		if err != nil {
 			t.Fatalf("hasColumn(%s): %v", col, err)
