@@ -87,6 +87,8 @@
   never reach a tool — malformed params and an unknown tool name — carry the
   same envelope under the JSON-RPC `error.data` instead, with `code` and
   `message` untouched; every other `errResp` caller still emits no `data` field.
+  Both paths render through one `envelope` helper, so the key set cannot drift
+  between them, and both derive `retryable` from the remediation class.
   The envelope rides `_meta`, which is valid in the negotiated `2024-11-05`
   revision; `structuredContent` (a 2025-06-18 field) is deliberately not used.
   The MCP-side seams are classified to match: the per-tool execution deadline
