@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -377,41 +378,53 @@ func validateCall(c Call) error {
 // the answer to that is to drop the LABEL, not the row. The classification is
 // the optional part of a telemetry row; the duration, the savings, the tool and
 // the client identity are not, and refusing the whole row over a bad label would
-// trade a large certain loss for a small one. A dropped label also takes the
-// retryability derived from it, which would otherwise be a claim with nothing
-// behind it.
+// trade a large certain loss for a small one.
+//
+// An undeclared KIND takes the whole classification with it, remedy and
+// retryability included. A row with no kind makes no structured claim at all, so
+// a row sitting in the `unclassified` bucket while still reporting a retryable
+// call is not a half-truth, it is two truths: the CLI renders that bucket's
+// retryability as unknown while the TUI sums the stored flag, and the two
+// surfaces would then disagree about the same rows. An undeclared CLASS is
+// narrower — the kind survives, because knowing WHAT went wrong is useful
+// without knowing what to do — but the retryability derived from the class does
+// not, since it would be a claim with nothing behind it.
 //
 // Nothing can trigger this today — every classified seam uses a declared
 // constant — so it is a guard against a future typo, not a live path. That is
-// exactly why it must not be silent: see the slog.Warn at its call sites.
+// exactly why it must not be silent: its callers log what it reports.
 func normaliseCall(c Call) (Call, string) {
-	var dropped string
-	if c.ErrorKind != "" && !c.ErrorKind.Valid() {
-		dropped = "error_kind=" + string(c.ErrorKind)
+	badKind := c.ErrorKind != "" && !c.ErrorKind.Valid()
+	badClass := c.RemediationClass != "" && !c.RemediationClass.Valid()
+	if !badKind && !badClass {
+		return c, ""
+	}
+	// Record both labels before either is cleared, so a row that is wrong twice
+	// does not report only its first fault.
+	var parts []string
+	if badKind {
+		parts = append(parts, "error_kind="+string(c.ErrorKind))
+	}
+	if badClass {
+		parts = append(parts, "remediation_class="+string(c.RemediationClass))
+	}
+	if badKind {
 		c.ErrorKind = ""
 	}
-	if c.RemediationClass != "" && !c.RemediationClass.Valid() {
-		if dropped != "" {
-			dropped += " "
-		}
-		dropped += "remediation_class=" + string(c.RemediationClass)
-		c.RemediationClass = ""
-		c.ErrorRetryable = false
-	}
-	return c, dropped
+	c.RemediationClass = ""
+	c.ErrorRetryable = false
+	return c, strings.Join(parts, " ")
 }
 
-// storableCall is the one gate every insert path goes through: it normalises
-// the classification, says so when it drops one, and then applies the
-// required-field check. Sharing it is what keeps Record and RecordBatch from
-// disagreeing about which rows are storable.
-func storableCall(c Call) (Call, error) {
+// storableCall is the one gate every insert path goes through: it normalises the
+// classification and then applies the required-field check, returning whatever
+// label it dropped so the CALLER can decide how to report it. It does not log:
+// RecordBatch runs it once per row on the single writer goroutine, and a
+// per-row warning there would be the log spam the Writer's own drop accounting
+// exists to avoid (see logDropped).
+func storableCall(c Call) (Call, string, error) {
 	c, dropped := normaliseCall(c)
-	if dropped != "" {
-		slog.Warn("stats: dropped an undeclared failure classification; the row is stored without it",
-			"tool", c.Tool, "dropped", dropped)
-	}
-	return c, validateCall(c)
+	return c, dropped, validateCall(c)
 }
 
 // callArgs returns the positional bind arguments for insertCallSQL.
@@ -443,9 +456,13 @@ func (d *DB) Record(c Call) error {
 	if d == nil {
 		return nil
 	}
-	c, err := storableCall(c)
+	c, dropped, err := storableCall(c)
 	if err != nil {
 		return err
+	}
+	if dropped != "" {
+		slog.Warn("stats: dropped an undeclared failure classification; the row is stored without it",
+			"tool", c.Tool, "dropped", dropped)
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -475,16 +492,28 @@ func (d *DB) RecordBatch(calls []Call) (skipped int, err error) {
 		return 0, fmt.Errorf("stats: prepare batch: %w", err)
 	}
 	defer stmt.Close()
+	// Counted across the batch and logged once, rather than per row: this runs on
+	// the single writer goroutine, where a line per row is the spam the Writer's
+	// own drop accounting is careful to avoid.
+	demoted, example := 0, ""
 	for _, c := range calls {
-		c, err := storableCall(c)
+		c, dropped, err := storableCall(c)
 		if err != nil {
 			skipped++
 			continue
+		}
+		if dropped != "" {
+			demoted++
+			example = dropped
 		}
 		if _, err := stmt.Exec(callArgs(c)...); err != nil {
 			_ = tx.Rollback()
 			return skipped, fmt.Errorf("stats: insert batch: %w", err)
 		}
+	}
+	if demoted > 0 {
+		slog.Warn("stats: dropped undeclared failure classifications; the rows are stored without them",
+			"rows", demoted, "example", example)
 	}
 	if err := tx.Commit(); err != nil {
 		return skipped, fmt.Errorf("stats: commit batch: %w", err)

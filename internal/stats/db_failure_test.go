@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -335,6 +336,65 @@ func TestDeclaredClassificationsAllSurvive(t *testing.T) {
 		got, dropped := normaliseCall(in)
 		if dropped != "" || got.RemediationClass != c || got.ErrorRetryable != c.Retryable() {
 			t.Errorf("declared class %q was blanked (dropped=%q)", c, dropped)
+		}
+	}
+}
+
+// TestUndeclaredKindClearsTheWholeClassification pins the invariant the two
+// surfaces depend on: a row in the `unclassified` bucket carries no retryable
+// call. The CLI renders that bucket's retryability as unknown while the TUI sums
+// the stored flag, so a surviving `error_retryable=1` would have them reporting
+// different things about the same rows.
+func TestUndeclaredKindClearsTheWholeClassification(t *testing.T) {
+	in := Call{
+		SessionID: "s", Workspace: "/w", Tool: "edit_file",
+		ErrorKind:        "made_up",
+		RemediationClass: toolerror.ClassPassDirtyOk, // declared, and retryable
+		ErrorRetryable:   true,
+	}
+	got, dropped := normaliseCall(in)
+	if got.ErrorKind != "" || got.RemediationClass != "" || got.ErrorRetryable {
+		t.Errorf("an undeclared kind left (%q, %q, retryable=%v); a row with no kind makes no "+
+			"structured claim at all", got.ErrorKind, got.RemediationClass, got.ErrorRetryable)
+	}
+	if !strings.Contains(dropped, "made_up") {
+		t.Errorf("dropped = %q, want it to name the offending kind", dropped)
+	}
+}
+
+// TestUndeclaredClassKeepsTheKind is the narrower half: knowing WHAT went wrong
+// survives not knowing what to do about it. Only the retryability, which is
+// derived from the class, goes with it.
+func TestUndeclaredClassKeepsTheKind(t *testing.T) {
+	in := Call{
+		SessionID: "s", Workspace: "/w", Tool: "edit_file",
+		ErrorKind:        toolerror.KindDirtyFile,
+		RemediationClass: "do_a_barrel_roll",
+		ErrorRetryable:   true,
+	}
+	got, dropped := normaliseCall(in)
+	if got.ErrorKind != toolerror.KindDirtyFile {
+		t.Errorf("an undeclared class took the kind with it: %q", got.ErrorKind)
+	}
+	if got.RemediationClass != "" || got.ErrorRetryable {
+		t.Errorf("undeclared class left (%q, retryable=%v)", got.RemediationClass, got.ErrorRetryable)
+	}
+	if !strings.Contains(dropped, "do_a_barrel_roll") {
+		t.Errorf("dropped = %q, want it to name the offending class", dropped)
+	}
+}
+
+// TestBothLabelsUndeclaredAreBothReported guards the report itself: clearing the
+// kind before reading the class would leave a row that is wrong twice naming
+// only its first fault, and the log line is the only trace this path leaves.
+func TestBothLabelsUndeclaredAreBothReported(t *testing.T) {
+	_, dropped := normaliseCall(Call{
+		SessionID: "s", Workspace: "/w", Tool: "edit_file",
+		ErrorKind: "made_up", RemediationClass: "do_a_barrel_roll",
+	})
+	for _, want := range []string{"made_up", "do_a_barrel_roll"} {
+		if !strings.Contains(dropped, want) {
+			t.Errorf("dropped = %q, want it to name %q", dropped, want)
 		}
 	}
 }
