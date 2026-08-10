@@ -15,10 +15,14 @@
   deliberate split from `git_policy`: plumb refusing by policy and a git child
   exiting non-zero (a failing pre-commit hook, a rejected push) have different
   recovery paths, and conflating them would advise a policy change for a
-  problem entirely inside the repository. `Retryable` means "this operation can
-  succeed after the stated remediation is performed" — never "a client may
-  replay this call", which for the non-idempotent write guards would perform
-  exactly the clobber the guard prevents. The classification is a side-car, not
+  problem entirely inside the repository. `Retryable` is **derived from the
+  remediation class**, never set per call site: it means "the calling agent can
+  make this same operation succeed by acting on the remediation itself, with no
+  out-of-band human action", so `enable_policy` (a human must edit
+  configuration), `inspect_output` and `none` are the only non-retryable
+  classes. It never means "a client may replay this call", which for the
+  non-idempotent write guards would perform exactly the clobber the guard
+  prevents. The classification is a side-car, not
   a replacement: `Error()` returns the wrapped cause's text **byte-for-byte**,
   and `Unwrap` keeps `errors.Is`/`errors.As` reaching the cause, so no existing
   message or error check changes. Registered as a Foundation package in

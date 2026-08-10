@@ -186,5 +186,5 @@ func rateLimitError(tool string, lim *RateLimiter) error {
 		"%s: rate limit exceeded — %d writes in the last %s (limit %d). "+
 			"Slow down or set PLUMB_WRITE_RATE_LIMIT=0 to disable",
 		tool, count, window, limit)},
-		toolerror.KindRateLimited, toolerror.ClassRetryAfterWait, toolerror.Retry())
+		toolerror.KindRateLimited, toolerror.ClassRetryAfterWait)
 }

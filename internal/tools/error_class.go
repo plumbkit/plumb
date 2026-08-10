@@ -24,29 +24,26 @@ import (
 // because replaying the identical write is the clobber the guard prevents.
 func staleRead(err error) error {
 	return toolerror.Wrap(err, toolerror.KindUnreadOrStale, toolerror.ClassReRead,
-		toolerror.WithTool("read_file"), toolerror.Retry())
+		toolerror.WithTool("read_file"))
 }
 
 // dirtyWrite classifies the uncommitted-changes guard on a write.
 func dirtyWrite(err error) error {
-	return toolerror.Wrap(err, toolerror.KindDirtyFile, toolerror.ClassPassDirtyOk,
-		toolerror.Retry())
+	return toolerror.Wrap(err, toolerror.KindDirtyFile, toolerror.ClassPassDirtyOk)
 }
 
 // lspTimedOut classifies a language server that did not answer within the
 // operation's deadline. Retryable: a server that is indexing answers the same
 // question once it is done.
 func lspTimedOut(err error) error {
-	return toolerror.Wrap(err, toolerror.KindLSPTimeout, toolerror.ClassRetryWhenReady,
-		toolerror.Retry())
+	return toolerror.Wrap(err, toolerror.KindLSPTimeout, toolerror.ClassRetryWhenReady)
 }
 
 // lspNotReady classifies a hard failure against a still-warming language
 // server — distinct from a timeout in that plumb never asked: it knows the
 // server cannot answer yet.
 func lspNotReady(err error) error {
-	return toolerror.Wrap(err, toolerror.KindLSPUnavailable, toolerror.ClassRetryWhenReady,
-		toolerror.Retry())
+	return toolerror.Wrap(err, toolerror.KindLSPUnavailable, toolerror.ClassRetryWhenReady)
 }
 
 // ClassifyPathRefusal attaches the workspace-boundary classification to a
