@@ -52,7 +52,11 @@
   its exit code as data.** A disabled tier reports `git_policy` +
   `enable_policy`; a missing confirmation `git_policy` + `pass_confirm`
   (retryable); a protected-branch force push, an ad-hoc remote, and an unknown
-  tier `git_policy` + `none`; the cross-session ref-movement guard
+  tier `git_policy` + `none`; an ad-hoc URL/remote and a force push with no
+  named destination `git_policy` + `fix_arguments` (both messages name the
+  corrected invocation, so a terminal class would contradict the prose beside
+  it and abandon a push a one-token change completes); the cross-session
+  ref-movement guard
   `concurrent_ref_move` + `pass_confirm`; a drain refusal during daemon
   shutdown `daemon_transport` + `retry_after_wait`. `expected_head` refusals
   are `concurrent_ref_move` but remediate as `fix_arguments`, not

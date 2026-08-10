@@ -40,6 +40,22 @@ func TestGitCommandError_RenderedTextIsPinned(t *testing.T) {
 	}
 }
 
+// TestGitCommandError_WarningLeadsTheMessage pins the one clause that comes
+// BEFORE the exit code: the repo-intent advisory. Every other case passes ""
+// for warning, so without this the prefix — the whole point of attaching the
+// advisory to the failure path — is unpinned.
+func TestGitCommandError_WarningLeadsTheMessage(t *testing.T) {
+	const warning = "# plumb-warning: peer session \"amber-fox\" claims: rebasing ops main.\n"
+	err := gitCommandError("/r", "commit", []string{"commit", "-m", "x"}, exitError(t),
+		"", "hook: lint failed\n", warning)
+
+	want := warning + "git commit: exit code 1\nstderr:\nhook: lint failed"
+	if got := err.Error(); got != want {
+		t.Errorf("rendered text drifted.\n got: %q\nwant: %q", got, want)
+	}
+	assertClassified(t, err, toolerror.KindGitCommandFailed, toolerror.ClassInspectOutput, false)
+}
+
 func TestGitCommandError_Classification(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -118,21 +134,50 @@ func TestGateGit_Classified(t *testing.T) {
 	}
 }
 
+// TestCheckPushProtection_Classified keeps each guard's remediation separate on
+// purpose. Grouping them once let the two RECOVERABLE refusals — both of whose
+// messages name the corrected invocation — ship as ClassNone, which tells a
+// client to give up on a push a one-token change completes.
 func TestCheckPushProtection_Classified(t *testing.T) {
 	protected := GitPolicy{AllowPush: true, ProtectedBranches: []string{"main"}}
 
 	tests := []struct {
-		name string
-		args gitToolArgs
+		name      string
+		args      gitToolArgs
+		wantClass toolerror.RemediationClass
+		wantRetry bool
+		wantText  string
 	}{
-		{"ad-hoc remote", gitToolArgs{Subcommand: "fetch", Args: []string{"ext::sh -c whoami"}}},
-		{"protected branch force push", gitToolArgs{Subcommand: "push", Args: []string{"-f", "origin", "main"}}},
-		{"force push with no destination", gitToolArgs{Subcommand: "push", Args: []string{"--force"}}},
+		{
+			name:      "ad-hoc remote is fixed by naming a remote",
+			args:      gitToolArgs{Subcommand: "fetch", Args: []string{"ext::sh -c whoami"}},
+			wantClass: toolerror.ClassFixArguments,
+			wantRetry: true,
+			wantText:  "use a named remote",
+		},
+		{
+			name:      "unnamed force push is fixed by naming the branch",
+			args:      gitToolArgs{Subcommand: "push", Args: []string{"--force"}},
+			wantClass: toolerror.ClassFixArguments,
+			wantRetry: true,
+			wantText:  "name the branch",
+		},
+		{
+			name:      "force-pushing a protected branch has no remedy",
+			args:      gitToolArgs{Subcommand: "push", Args: []string{"-f", "origin", "main"}},
+			wantClass: toolerror.ClassNone,
+			wantRetry: false,
+			wantText:  "is not permitted",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := checkPushProtection(tt.args, protected, tierNetwork)
-			assertClassified(t, err, toolerror.KindGitPolicy, toolerror.ClassNone, false)
+			assertClassified(t, err, toolerror.KindGitPolicy, tt.wantClass, tt.wantRetry)
+			// The class must agree with what the message already tells a reader.
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Errorf("message %q lost the remedy it advertises (%q)", err.Error(), tt.wantText)
+			}
 		})
 	}
 }
