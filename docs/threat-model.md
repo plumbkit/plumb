@@ -1,0 +1,260 @@
+# Threat model
+
+plumb is a high-trust local control plane. It reads and writes source code,
+mediates git, can run configured project commands, drives language servers, and
+persists per-project data — often with several agents live on one workspace at
+once.
+
+This document names what plumb protects, who it protects it from, where its
+trust boundaries sit, and — just as importantly — what it does **not** defend
+against, so nobody mistakes an unclaimed property for a guaranteed one.
+
+Scope: local stdio operation, which is the only mode plumb supports today.
+Remote MCP and tunnelling are deliberately out of scope (see
+[Out of scope](#out-of-scope)).
+
+## Assets
+
+What an attacker would want, roughly in order of severity.
+
+| Asset | Where it lives | Why it matters |
+|---|---|---|
+| Workspace source code | the project tree | plumb can read and write it |
+| Credentials in reach of the user | `~/.ssh`, env, config files, keychains | a command plumb runs inherits the user's ability to read them |
+| Git history and remotes | `.git`, configured remotes | plumb mediates commits, resets, force pushes |
+| Project data plumb persists | `.plumb/` (topology, memories, collab), the stats DB, session state | contains file paths, symbol names, tool arguments, error text |
+| Configuration | global config, `.plumb/config.toml` | decides which commands may run and which git tiers are open |
+| Daemon control | the daemon socket | full authority over every attached workspace |
+| Diagnostic artefacts | logs, heap profiles, support bundles | aggregate the above into one shareable object |
+
+## Actors
+
+- **The user.** Fully trusted. plumb's job is to do what they asked and refuse
+  what they did not.
+- **The agent/model.** *Semi-trusted.* It issues tool calls on the user's behalf
+  but is influenced by whatever it reads — including file contents, commit
+  messages, and other agents' shared intents. plumb must not let a persuaded
+  agent do more than the user's configuration permits.
+- **Peer agents on the same workspace.** Semi-trusted, mutually. They can race
+  writes and git state; they can post advisory intents and notes.
+- **The project's own content.** *Untrusted input.* Source files, `.plumb/`
+  config committed by a repository, filenames, git output, and LSP responses are
+  all attacker-controllable in a hostile repository.
+- **Local processes owned by the user.** Trusted to the extent the OS trusts
+  them; plumb does not defend against a process already running as the user.
+
+## Trust boundaries
+
+```
+┌────────────┐   stdio    ┌────────────┐  unix socket  ┌────────────┐
+│ MCP client │───────────▶│ plumb serve│──────────────▶│   daemon   │
+│  + model   │            │  (proxy)   │               │ (singleton)│
+└────────────┘            └────────────┘               └─────┬──────┘
+                                                             │
+                       ┌──────────────┬───────────────┬──────┴──────┐
+                       ▼              ▼               ▼             ▼
+                  workspace fs      git            LSP servers   stores
+                                                                (.plumb, stats)
+```
+
+**B1 — client → proxy.** The proxy inherits the client's process credentials.
+It does not authenticate the client: anything that can spawn `plumb serve` is
+already running as the user. The proxy's security-relevant job is *pin
+integrity* — carrying the workspace pin, the allowed directories, and the proxy
+session ID across reconnects without letting a reconnect widen them.
+
+**B2 — proxy → daemon.** A unix socket with filesystem permissions as the only
+gate. The daemon is a **singleton shared across workspaces**, which makes this
+the highest-consequence boundary in the system: a connection that resolves to
+the wrong workspace can write to a project the user never opened. This is not
+theoretical — issue #182 was exactly that, and the sticky-pin guard and the
+`findGitRoot` refusal to fall back to the daemon's own working directory both
+exist because of it.
+
+**B3 — daemon → workspace filesystem.** Enforced by the path policy: every
+path-bearing call is resolved and boundary-checked against the connection's
+pinned root plus explicitly granted `allow_dir` roots. Alias spellings
+(symlinks, macOS firmlinks, case-insensitive paths) are canonicalised before the
+check, because a boundary test on an unresolved path is not a boundary test.
+
+**B4 — daemon → git.** Tiered policy: read, write, destructive, network. Each
+tier is separately enabled; destructive and network additionally require
+`confirm: true`. Force-pushing a protected branch and using an ad-hoc URL or
+remote are refused outright. Argument construction for `add` and `commit` is
+typed rather than free-form, so `-F`, `--no-verify`, `--amend` and editor
+invocation are unreachable by construction rather than by filtering.
+
+**B5 — daemon → configured commands.** The sharpest boundary, because it is the
+one that executes. `run_command` runs a **fixed argv** from an allow-list with at
+most one `{target}` substitution restricted to `[A-Za-z0-9._/:@-]`.
+`execute_shell_command` runs an arbitrary `sh -c` line and is **disabled by
+default**. A command supplied by a *project's* config requires `plumb trust`
+before it will run; a command in the user's global config always runs.
+
+**B6 — daemon → language servers.** LSP servers are separate processes that read
+the workspace and return structured data plumb parses. A malicious workspace can
+influence what they return.
+
+**B7 — daemon → persistent stores.** SQLite databases and markdown under
+`.plumb/`, plus the global stats DB. Content written here is secret-scrubbed
+(`internal/redact`) on the paths that carry free text.
+
+## Abuse cases and mitigations
+
+### A1 — Cross-workspace write
+
+*A connection is induced to resolve to a project the user is not working in, and
+a write lands there.*
+
+Mitigations: the workspace pin is sticky against a conflicting `session_start`
+re-pin (requires `force: true`); pin provenance is recorded and surfaced in
+`daemon_info`; the pin is replayed across reconnects rather than re-derived;
+`findGitRoot` refuses an empty path rather than falling back to the daemon's
+working directory; boundary violations mark session health.
+
+Residual: a client that multiplexes several logical agents over one connection
+shares one pin. plumb cannot currently distinguish them — see
+[Known gaps](#known-gaps).
+
+### A2 — Path escape via alias or traversal
+
+*A path outside the workspace is reached through `..`, a symlink, a firmlink, or
+a case variant.*
+
+Mitigations: canonicalisation before the boundary check; `WorkspaceBoundaryError`
+as a typed error with an `errors.As`-only contract — its doc comment explicitly
+forbids adding a substring fallback, because that would false-positive on
+unrelated errors that echo the message.
+
+### A3 — Prompt injection steering the agent
+
+*Repository content persuades the model to exfiltrate a file, run a command, or
+push to an attacker's remote.*
+
+This is the abuse case plumb's design leans on most, because plumb cannot judge
+the model's intent. The defence is that **capability is bounded by
+configuration, not by the model's judgement**: shell execution is off by
+default; project-supplied commands need `plumb trust`; git tiers are separately
+gated and ad-hoc remotes are refused; writes stay inside the pinned workspace.
+A persuaded agent can do damage inside what the user already permitted — it
+cannot exceed it.
+
+Residual: an agent *can* read any file inside the workspace and put its contents
+into a commit or a shared memory. plumb does not classify workspace content.
+
+### A4 — Command-trust bypass
+
+*A hostile repository ships a `.plumb/config.toml` whose `[[command]]` entry runs
+on the next agent invocation.*
+
+Mitigation: project-supplied commands are inert until `plumb trust` is run for
+that workspace. Safety-critical config keys (git tiers, workspace roots, strict
+mode, API keys, and the `agent_config_writes` enable knob itself) are never
+agent-writable, so an agent cannot widen its own permissions through
+`agent_config`.
+
+### A5 — Secret disclosure through persisted or shared data
+
+*A credential reaches a memory, a stats row, a collab note, or a support bundle.*
+
+Mitigations: `internal/redact` scrubs twelve credential shapes (PEM private keys,
+JWTs, AWS/GitHub/Slack/Stripe/Google/OpenAI key formats, URL userinfo,
+authorization headers, and generic `key = value` assignments) and is deliberately
+biased toward over-matching. It is applied on the generated-memory, episodic,
+collab, and shared-findings paths. Stored tool output is byte-capped.
+
+Residual: redaction is pattern-based and cannot catch a secret with no
+recognisable shape. Support bundles are covered by [Known gaps](#known-gaps).
+
+### A6 — Peer-agent interference
+
+*Two agents on one worktree race writes or git state.*
+
+Mitigations: per-path write locks; optimistic concurrency via
+`expected_mtime`/`expected_sha`; a dirty-file guard; per-repo serialisation of
+mutating git; a cross-session ref-movement guard with an `expected_head` hard
+check; commit attribution via a `Plumb-Session` trailer; advisory peer intents
+surfaced before repo-state operations.
+
+Note these are **safety** mitigations against accident, not **security**
+mitigations against a malicious peer. A peer agent running as the same user can
+do anything the user can.
+
+### A7 — Store corruption or downgrade
+
+*A persistent store is corrupted, truncated, or from a future schema.*
+
+Mitigations: idempotent, forward-only migrations that skip a step whose column
+already exists; a read-only open below the current schema fails loudly rather
+than reading a half-migrated database; transaction journals allow rollback of a
+partially applied multi-file edit; writes are atomic (temp file, fsync, rename,
+parent-directory fsync).
+
+### A8 — Denial of service against the user's own session
+
+*A tool call hangs, a language server stalls, a lock is stranded.*
+
+Mitigations: per-tool execution deadlines; LSP call deadlines; read-only git runs
+with `--no-optional-locks` so a cancelled query cannot strand `.git/index.lock`;
+mutating git runs under a cancellation-decoupled bounded context so a daemon
+shutdown mid-commit lets git finish and release its lock; stale locks are
+attributable to a recorded owner pid rather than removed blindly.
+
+## What plumb does not defend against
+
+Stated plainly, because an unclaimed property is not a guarantee:
+
+- **A process already running as the user.** plumb has no privilege boundary
+  against it and does not attempt one.
+- **The sandbox is integrity-only.** The OS sandbox around configured commands
+  confines *writes*. It does **not** confine reads: a sandboxed command runs with
+  the user's credentials and can read any file and any secret the user can,
+  including `~/.ssh` and API keys. Network egress is denied only when
+  `deny_network` is set on that command. This is documented at the tool surface
+  and is a deliberate design point, not an oversight.
+- **A malicious language server.** LSP binaries are chosen by the user and run
+  with their privileges.
+- **Content-based secret classification.** plumb redacts by pattern; it does not
+  understand which of your files are sensitive.
+- **Multi-user or multi-tenant isolation.** plumb is single-user by design.
+- **Supply-chain integrity of the binary you run.** Release artefacts carry
+  checksums; SBOM and signed provenance are not yet published (see
+  [Known gaps](#known-gaps)).
+
+## Known gaps
+
+Tracked, not hidden. Each is real today.
+
+1. **Logical-agent isolation.** State is per MCP *connection*. A client that
+   multiplexes several logical agents over one connection shares the pin, read
+   tracker, write budget, undo history and language selection. The honest
+   ceiling today is one `plumb serve` per logical agent for state-changing work.
+2. **Support-bundle redaction.** `plumb doctor --bundle` does not exist yet.
+   When it does, it aggregates config, logs, session state and failure data into
+   one shareable object — the single artefact most likely to leak, and the one
+   needing the strictest redaction tests.
+3. **No fuzzing.** MCP framing, the argument-correction and alias engine, path
+   canonicalisation, symlink traversal, workspace roots, and transaction journals
+   all parse attacker-influenced input and have no fuzz targets or retained
+   corpora.
+4. **No published retention or deletion controls** for stats, sessions,
+   generated memories, logs, heap profiles, or bundles.
+5. **No SBOM or signed provenance** on release artefacts; checksums only.
+6. **This document has not had an independent security review.** It is an
+   author's threat model, which is the weakest kind. Treat it as a starting
+   point for one, not as its result.
+
+## Out of scope
+
+**Remote MCP and tunnelling.** Exposing plumb beyond local stdio is a different
+product with a different security boundary. It requires identity,
+authentication, authorisation, tenancy, egress control and an audit log — none of
+which exist. It is deliberately not attempted until those designs are explicit.
+
+**Windows.** Not supported today. A future port must preserve reconnect,
+per-session isolation, path policy and write safety over its chosen transport
+rather than become a parallel implementation with parallel assumptions.
+
+## Reporting a vulnerability
+
+Open a security advisory on the repository rather than a public issue.

@@ -24,6 +24,7 @@ New here? Start with the [README](../README.md), then
 - [**Architecture**](architecture.md) — layers, the daemon/proxy model, data flow, and persistence (with diagrams).
 - [**Topology**](topology.md) — the optional semantic index and the dual-engine (Topology + LSP) model.
 - [**Token Efficiency**](token-efficiency.md) — how plumb keeps assistant context lean.
+- [**Threat model**](threat-model.md) — assets, trust boundaries, abuse cases, and what plumb deliberately does *not* defend against.
 
 ## Contributing
 
