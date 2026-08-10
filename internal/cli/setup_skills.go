@@ -165,18 +165,40 @@ func installSkill(skillsDir, name, content string) (string, error) {
 // invisible to every client's SKILL.md presentation.
 const skillMarkerPrefix = "<!-- plumb: "
 
+// skillLineEnding reports the line-ending sequence content appears to use:
+// "\r\n" if its first newline is preceded by \r, otherwise "\n" (also the
+// default for content with no newline at all, e.g. an empty file). A skill
+// file is consistent throughout, so the first newline determines the whole
+// file's convention. This codebase treats CRLF as first-class elsewhere
+// (edit_file is documented CRLF-tolerant); stampSkillContent must match that
+// norm rather than only ever matching a bare "\n" frontmatter delimiter —
+// a CRLF skill file would otherwise fall through to the no-frontmatter
+// branch and get its marker PREPENDED before the "---" line, corrupting the
+// very frontmatter block this placement logic exists to protect.
+func skillLineEnding(content string) string {
+	if i := strings.IndexByte(content, '\n'); i > 0 && content[i-1] == '\r' {
+		return "\r\n"
+	}
+	return "\n"
+}
+
 // stampSkillContent returns content with the provenance marker recorded. When
 // the skill opens with a YAML frontmatter block (--- lines) the marker goes
 // immediately AFTER its closing delimiter — the verified consumers
 // (claude-code, codex, kimi-code) parse frontmatter as the block between the
 // leading --- lines, so anything inside it would corrupt the metadata, while
 // anything after it is ordinary markdown. Without frontmatter the marker
-// leads the file.
+// leads the file. The inserted marker (and the frontmatter delimiters it is
+// matched against) use content's own line-ending style — an LF file is never
+// rewritten to CRLF or vice versa.
 func stampSkillContent(content string) string {
-	marker := skillMarkerPrefix + Version + " -->\n"
-	if strings.HasPrefix(content, "---\n") {
-		if i := strings.Index(content[len("---\n"):], "\n---\n"); i >= 0 {
-			pos := len("---\n") + i + len("\n---\n")
+	nl := skillLineEnding(content)
+	marker := skillMarkerPrefix + Version + " -->" + nl
+	open := "---" + nl
+	closeDelim := nl + "---" + nl
+	if strings.HasPrefix(content, open) {
+		if i := strings.Index(content[len(open):], closeDelim); i >= 0 {
+			pos := len(open) + i + len(closeDelim)
 			return content[:pos] + marker + content[pos:]
 		}
 	}
@@ -184,8 +206,11 @@ func stampSkillContent(content string) string {
 }
 
 // parseSkillMarker reports whether line is plumb's provenance marker and, if
-// so, the version it records.
+// so, the version it records. line may carry a trailing "\r" (skillMarkerVersion
+// and stripSkillMarker always split on bare "\n", so a CRLF file's lines keep
+// their "\r"); it is trimmed before matching so both line-ending styles parse.
 func parseSkillMarker(line string) (string, bool) {
+	line = strings.TrimSuffix(line, "\r")
 	if !strings.HasPrefix(line, skillMarkerPrefix) || !strings.HasSuffix(line, " -->") {
 		return "", false
 	}
@@ -205,7 +230,10 @@ func skillMarkerVersion(data string) (string, bool) {
 
 // stripSkillMarker removes the first provenance marker line from data, so
 // content comparisons see the skill itself rather than its stamp. A version
-// bump alone must never read as drift.
+// bump alone must never read as drift. Splitting on bare "\n" leaves any
+// "\r" attached to the surrounding lines, so removing the marker line and
+// rejoining with "\n" reconstructs a CRLF file's original line endings
+// without needing to special-case them here.
 func stripSkillMarker(data string) string {
 	lines := strings.Split(data, "\n")
 	for i, line := range lines {

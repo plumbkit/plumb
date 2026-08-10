@@ -2,6 +2,22 @@
 
 ## 0.16.3 (unreleased)
 
+### Fixed
+
+- **`plumb skills sync` no longer corrupts a CRLF-encoded skill's
+  frontmatter.** `stampSkillContent` only recognised a bare `\n`-delimited
+  YAML frontmatter block; a CRLF skill file (e.g. hand-edited in a CRLF
+  editor) failed the `---\n` prefix check, fell into the no-frontmatter
+  branch, and got its provenance marker PREPENDED before the `---` line —
+  corrupting the very block claude-code, codex, and kimi-code parse for
+  `name`/`description`, so the skill would silently vanish from that
+  client's catalogue on the next sync. `stampSkillContent` and
+  `parseSkillMarker` now detect and preserve the file's own line-ending
+  style, never rewriting LF to CRLF or vice versa. Guarded by
+  `TestStampSkillContent`'s CRLF case and
+  `TestStampSkillContent_CRLFFrontmatterNotCorrupted` (confirmed to fail
+  against the pre-fix placement logic).
+
 ### Added
 
 - **The git tool now surfaces peer `share_intent` claims that cover the
