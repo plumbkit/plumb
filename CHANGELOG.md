@@ -44,6 +44,24 @@
   pins each seam's kind, remediation and retry verdict together with the
   byte-identical text.
 
+- **The git tool's refusals are classified, and a failing git child now carries
+  its exit code as data.** A disabled tier reports `git_policy` +
+  `enable_policy`; a missing confirmation `git_policy` + `pass_confirm`
+  (retryable); a protected-branch force push, an ad-hoc remote, and an unknown
+  tier `git_policy` + `none`; the cross-session ref-movement guard
+  `concurrent_ref_move` + `pass_confirm`; a drain refusal during daemon
+  shutdown `daemon_transport` + `retry_after_wait`. `expected_head` refusals
+  are `concurrent_ref_move` but remediate as `fix_arguments`, not
+  `pass_confirm` — `confirm: true` deliberately does not bypass `expected_head`,
+  so advising it would send a caller round a loop that cannot terminate.
+  `gitCommandError` is now folded INTO the structured envelope rather than
+  wrapped opaquely: it returns `git_command_failed` + `inspect_output` carrying
+  `exit_code`, `subcommand` and `output_truncated` in `details` (never the
+  captured streams, which stay bounded in the message), and its rendered text is
+  pinned byte-for-byte by `TestGitCommandError_RenderedTextIsPinned` across the
+  full shape — exit code, labelled stderr, 40-line-capped stdout, and the
+  re-run note.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

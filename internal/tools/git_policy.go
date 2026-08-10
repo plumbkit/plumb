@@ -4,7 +4,33 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
+
+// policyDisabled classifies a git op refused because its tier is switched off
+// in configuration. Not retryable: the same call fails identically until the
+// configuration changes, which is a user action rather than a caller one.
+func policyDisabled(msg string) error {
+	return toolerror.Wrap(errors.New(msg), toolerror.KindGitPolicy, toolerror.ClassEnablePolicy)
+}
+
+// confirmRequired classifies a git op the policy permits but which withholds
+// its effect until the caller acknowledges the risk. Retryable, because the
+// caller alone can satisfy it — by re-checking the state and re-issuing with
+// confirm: true, never by replaying the identical call.
+func confirmRequired(msg string) error {
+	return toolerror.Wrap(errors.New(msg), toolerror.KindGitPolicy, toolerror.ClassPassConfirm,
+		toolerror.Retry())
+}
+
+// pushRefused classifies a network-tier guard that no argument can satisfy: an
+// ad-hoc remote (a remote-helper RCE vector) and a protected-branch force push
+// are refused outright, so the remediation class is none rather than a flag the
+// caller might otherwise go looking for.
+func pushRefused(err error) error {
+	return toolerror.Wrap(err, toolerror.KindGitPolicy, toolerror.ClassNone)
+}
 
 // GitPolicy is the resolved per-connection gating policy for the git tool.
 // It mirrors the [git] config section but lives in the tools package so the
@@ -31,27 +57,30 @@ func gateGit(tier gitTier, p GitPolicy, confirm bool) error {
 		return nil
 	case tierWrite:
 		if !p.AllowWrites {
-			return errors.New("git: write operations are disabled; set [git] allow_writes = true to enable")
+			return policyDisabled("git: write operations are disabled; set [git] allow_writes = true to enable")
 		}
 		return nil
 	case tierDestructive:
 		if !p.AllowDestructive {
-			return errors.New("git: destructive operations are disabled; set [git] allow_destructive = true to enable")
+			return policyDisabled("git: destructive operations are disabled; set [git] allow_destructive = true to enable")
 		}
 		if !confirm {
-			return errors.New("git: this destructive operation requires confirm: true")
+			return confirmRequired("git: this destructive operation requires confirm: true")
 		}
 		return nil
 	case tierNetwork:
 		if !p.AllowPush {
-			return errors.New("git: network operations (push/fetch/pull) are disabled; set [git] allow_push = true to enable")
+			return policyDisabled("git: network operations (push/fetch/pull) are disabled; set [git] allow_push = true to enable")
 		}
 		if !confirm {
-			return errors.New("git: this network operation requires confirm: true")
+			return confirmRequired("git: this network operation requires confirm: true")
 		}
 		return nil
 	default:
-		return errors.New("git: subcommand is not permitted")
+		// An unknown tier is not a disabled one — nothing the caller enables will
+		// make it run — so it takes the same "no remedy" shape as pushRefused.
+		return toolerror.Wrap(errors.New("git: subcommand is not permitted"),
+			toolerror.KindGitPolicy, toolerror.ClassNone)
 	}
 }
 
@@ -73,7 +102,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	}
 	for _, arg := range a.Args {
 		if looksLikeGitURL(arg) {
-			return fmt.Errorf("git %s: using an ad-hoc URL/remote is not permitted; use a named remote", a.Subcommand)
+			return pushRefused(fmt.Errorf("git %s: using an ad-hoc URL/remote is not permitted; use a named remote", a.Subcommand))
 		}
 	}
 	if a.Subcommand != "push" {
@@ -84,7 +113,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	}
 	for _, arg := range a.Args {
 		if isProtectedBranch(arg, p.ProtectedBranches) {
-			return fmt.Errorf("git push: force-pushing protected branch %q is not permitted", arg)
+			return pushRefused(fmt.Errorf("git push: force-pushing protected branch %q is not permitted", arg))
 		}
 	}
 	// A force push that targets the current branch (`+HEAD`, or no refspec) names
@@ -92,7 +121,7 @@ func checkPushProtection(a gitToolArgs, p GitPolicy, tier gitTier) error {
 	// a protected branch. Refuse it (safe-bias) when any branch is protected,
 	// rather than let a possible protected-branch force-push slip through.
 	if len(p.ProtectedBranches) > 0 && forcePushTargetsCurrentBranch(a.Args) {
-		return errors.New("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`")
+		return pushRefused(errors.New("git push: refusing a force push with no explicit destination branch (it may target a protected branch); name the branch, e.g. `git push --force origin <branch>`"))
 	}
 	return nil
 }
