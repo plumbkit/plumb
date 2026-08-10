@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -33,6 +34,7 @@ func leanWriters() []leanWriter {
 // decoded through that client's own parser (TOML for Codex, JSON for the rest).
 func readLeanPlumbEntry(t *testing.T, c leanClient, path string) map[string]any {
 	t.Helper()
+	assertNoSentinelOnDisk(t, path)
 	cfg, err := c.parse(path)
 	if err != nil {
 		t.Fatalf("parsing %s: %v", path, err)
@@ -46,6 +48,30 @@ func readLeanPlumbEntry(t *testing.T, c leanClient, path string) map[string]any 
 		t.Fatalf("plumb entry missing or not a table in %s: %v", path, servers)
 	}
 	return entry
+}
+
+// assertNoSentinelOnDisk is the canary for removeKey, mergeServerEntry's
+// "delete this key" value. The merge deletes rather than assigns it, so it never
+// reaches a serialiser — but it is now general vocabulary on a helper ten
+// clients and three serialisers share, and a sentinel that DID reach one would
+// not fail loudly: json.Marshal renders the empty struct as `{}` and TOML as an
+// empty inline table, i.e. a silently malformed config rather than an error.
+//
+// Every read in these tests runs through readLeanPlumbEntry, so this scans the
+// bytes of every config the writers produce. `{}` is the exact shape a leak
+// takes and no plumb-written config contains one otherwise, which makes it a
+// precise canary rather than a broad ban.
+func assertNoSentinelOnDisk(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // the caller's own read reports a missing file better than this can
+	}
+	for _, leak := range []string{"{}", "removeKey"} {
+		if strings.Contains(string(data), leak) {
+			t.Errorf("written config contains %q — the removeKey sentinel reached a serialiser:\n%s", leak, data)
+		}
+	}
 }
 
 // assertPinnedAllowlist is the load-bearing assertion of this whole feature: the
@@ -317,23 +343,34 @@ func TestShippedLeanTargetsReadTheirFlags(t *testing.T) {
 			target := shippedTarget(t, tc.use)
 			cfgName := filepath.Base(mustPath(t, tc.client.pathFn))
 
-			*tc.flag = false
-			barePath := filepath.Join(t.TempDir(), cfgName)
-			if _, _, err := target.intoFn(barePath, bin); err != nil {
-				t.Fatalf("bare register through the shipped target: %v", err)
-			}
-			assertNoAllowlist(t, tc.client, barePath)
+			// One config, driven through both flag states in turn. Asserting the
+			// bare run on a FRESH file would be vacuous — an absent key proves
+			// nothing about clearing — so the bare run has to land on a config that
+			// already carries the allowlist this test just wrote.
+			path := filepath.Join(t.TempDir(), cfgName)
 
 			*tc.flag = true
-			leanPath := filepath.Join(t.TempDir(), cfgName)
-			added, _, err := target.intoFn(leanPath, bin)
+			added, _, err := target.intoFn(path, bin)
 			if err != nil {
 				t.Fatalf("lean register through the shipped target: %v", err)
 			}
 			if !added {
 				t.Error("expected added=true for a fresh --lean registration")
 			}
-			assertPinnedAllowlist(t, tc.client, leanPath)
+			assertPinnedAllowlist(t, tc.client, path)
+
+			*tc.flag = false
+			if _, _, err := target.intoFn(path, bin); err != nil {
+				t.Fatalf("bare register through the shipped target: %v", err)
+			}
+			assertNoAllowlist(t, tc.client, path)
+
+			// Re-pin, so the bulk assertion below has something to preserve.
+			*tc.flag = true
+			if _, _, err := target.intoFn(path, bin); err != nil {
+				t.Fatalf("re-pinning through the shipped target: %v", err)
+			}
+			leanPath := path
 
 			// And the bulk sweep, through the same intoFn: a repoint must keep it.
 			setupRepairFlag = true

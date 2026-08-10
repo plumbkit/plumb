@@ -401,6 +401,13 @@ func writeYAML(path string, m map[string]any) error {
 // `plumb setup <client>` (no --lean), which must be able to take a client-side
 // tool allowlist back off. It never reaches a serialiser: the merge loop deletes
 // the key instead of assigning the sentinel.
+//
+// That holds at the TOP level of a server entry, which is the only place any
+// caller puts one. A sentinel NESTED inside a value would be marshalled like any
+// other empty struct — `{}` in JSON, an empty inline table in TOML — producing a
+// silently malformed config rather than an error. Nothing constructs one, and
+// the writer tests scan every config they produce for that shape
+// (assertNoSentinelOnDisk) so it stays that way.
 type removeKey struct{}
 
 // mergeServerEntry is the shared, format-agnostic merge used by every

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -291,7 +292,7 @@ type allowlistGrade struct {
 func gradeToolAllowlist(raw any, registered, pinned []string) allowlistGrade {
 	list, isList := raw.([]any)
 	if !isList {
-		return degenerate(shapeOf(raw), jsonTypeName(raw))
+		return degenerate(shapeOf(raw), configValueTypeName(raw))
 	}
 	if len(list) == 0 {
 		return degenerate(shapeEmpty, "an empty list")
@@ -377,23 +378,37 @@ func shapeOf(raw any) allowlistShape {
 	return shapeWrongType
 }
 
-// jsonTypeName names a decoded value in JSON's vocabulary. The message is about
-// the user's JSON file, so %T was the wrong alphabet entirely: it reported
-// "not a list (float64)" or "map[string]interface {}" — Go type names for a
-// language the reader is not writing in.
-func jsonTypeName(raw any) string {
+// configValueTypeName names a decoded value in the user's own vocabulary. The
+// message is about a config file they wrote, so %T was the wrong alphabet
+// entirely: it reported "not a list (float64)" or "map[string]interface {}" —
+// Go type names for a language the reader is not writing in.
+//
+// It serves BOTH decoders, which is why the integer cases matter. JSON numbers
+// all arrive as float64, but go-toml decodes `enabled_tools = 3` to an int64, so
+// a TOML-only shape used to fall through to the unhelpful default. TOML's
+// date-time values land as time.Time (offset date-times) or go-toml's Local*
+// types; the first is named, the rest are rare enough to take the default
+// honestly rather than be enumerated for their own sake.
+func configValueTypeName(raw any) string {
 	switch raw.(type) {
 	case nil:
 		return "null"
 	case bool:
 		return "a boolean"
-	case float64, json.Number:
+	case float64, float32, json.Number,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
 		return "a number"
 	case string:
 		return "a string"
+	case time.Time:
+		return "a date-time"
 	case []any:
 		return "a list"
 	case map[string]any:
+		// A TOML table reads as "an object" too: both name a keyed group, and the
+		// sentence it lands in ("… is an object, not a list") is unambiguous in
+		// either format.
 		return "an object"
 	default:
 		return "a value plumb does not recognise"
