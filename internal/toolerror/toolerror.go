@@ -251,10 +251,12 @@ type Remediation struct {
 	Reason string
 }
 
-// withDefaults fills an empty Reason from the class table. An unrecognised
+// WithDefaults fills an empty Reason from the class table. An unrecognised
 // class leaves Reason empty rather than inventing prose for a class this
-// package does not know.
-func (r Remediation) withDefaults() Remediation {
+// package does not know. Exported so a caller that builds a Remediation
+// without an Error — the MCP layer's pre-dispatch rejections, which have no
+// cause to wrap — still renders the same sentence a wrapped one would.
+func (r Remediation) WithDefaults() Remediation {
 	if r.Reason == "" {
 		r.Reason = defaultReasons[r.Class]
 	}
@@ -352,7 +354,7 @@ func New(kind Kind, cause error, r Remediation, opts ...Option) *Error {
 	for _, opt := range opts {
 		opt(e)
 	}
-	e.Remediation = e.Remediation.withDefaults()
+	e.Remediation = e.Remediation.WithDefaults()
 	e.Retryable = e.Remediation.Class.Retryable()
 	return e
 }

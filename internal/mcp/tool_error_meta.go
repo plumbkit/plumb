@@ -8,6 +8,10 @@ package mcp
 // is a machine-readable description alongside, and only when plumb actually has
 // one — an unclassified failure emits nothing at all, so a client can read the
 // key's absence as "no structured claim" instead of parsing a hollow object.
+//
+// envelope is the single renderer of that shape. Both entry points go through
+// it so the key set cannot drift between the tool-result path and the
+// pre-dispatch rejection path.
 
 import (
 	"maps"
@@ -41,16 +45,38 @@ func toolErrorEnvelope(err error, op string) map[string]any {
 	if te.Op == "" && op != "" {
 		te = te.WithOp(op)
 	}
+	return envelope(te.Kind, te.Op, te.Remediation, te.Details)
+}
+
+// invalidCallEnvelope renders the envelope for a tools/call plumb refused
+// before any tool ran — malformed params, an unknown tool name. These two never
+// reach the tool-result path, so they are the only failures whose envelope
+// travels as a JSON-RPC error rather than as `_meta` on a result.
+//
+// It names the classification directly instead of wrapping an error: the
+// rejection text is already on the wire as `error.message`, and the envelope
+// never renders a cause, so routing one through toolerror.Wrap would exist only
+// to satisfy an argument nothing reads.
+func invalidCallEnvelope(op string) map[string]any {
+	return envelope(toolerror.KindInvalidArguments, op,
+		toolerror.Remediation{Class: toolerror.ClassFixArguments}, nil)
+}
+
+// envelope is the one place the wire shape is written. retryable is derived
+// from the remediation class, exactly as toolerror.Error derives it, so the two
+// paths can never disagree about the same remedy.
+func envelope(kind toolerror.Kind, op string, r toolerror.Remediation, details map[string]string) map[string]any {
+	r = r.WithDefaults()
 	env := map[string]any{
-		"kind":        string(te.Kind),
-		"retryable":   te.Retryable,
-		"remediation": remediationWire(te.Remediation),
+		"kind":        string(kind),
+		"retryable":   r.Class.Retryable(),
+		"remediation": remediationWire(r),
 	}
-	if te.Op != "" {
-		env["operation"] = te.Op
+	if op != "" {
+		env["operation"] = op
 	}
-	if len(te.Details) > 0 {
-		env["details"] = maps.Clone(te.Details)
+	if len(details) > 0 {
+		env["details"] = maps.Clone(details)
 	}
 	return env
 }
@@ -65,22 +91,3 @@ func remediationWire(r toolerror.Remediation) map[string]any {
 	}
 	return out
 }
-
-// invalidCallEnvelope classifies a tools/call plumb refused before any tool
-// ran — malformed params, an unknown tool name — and renders it for
-// `error.data`. These two never reach the tool-result path, so they are the
-// only failures whose envelope travels as a JSON-RPC error rather than as
-// `_meta` on a result.
-func invalidCallEnvelope(msg, op string) map[string]any {
-	return toolErrorEnvelope(
-		toolerror.Wrap(invalidCallErr(msg), toolerror.KindInvalidArguments, toolerror.ClassFixArguments),
-		op,
-	)
-}
-
-// invalidCallErr carries the already-rendered rejection text. The message on
-// the wire is built by the call site and must not change, so the envelope is
-// derived from it rather than the other way round.
-type invalidCallErr string
-
-func (e invalidCallErr) Error() string { return string(e) }

@@ -258,8 +258,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		msg := "invalid params: " + err.Error()
-		return errRespData(req.ID, codeInvalidParams, msg, invalidCallEnvelope(msg, ""))
+		return errRespData(req.ID, codeInvalidParams, "invalid params: "+err.Error(), invalidCallEnvelope(""))
 	}
 
 	// A retired tool name is resolved onto its canonical tool BEFORE the registry
@@ -274,8 +273,8 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	t, ok := s.tools[params.Name]
 	s.mu.RUnlock()
 	if !ok {
-		msg := s.unknownToolMessage(params.Name)
-		return errRespData(req.ID, codeMethodNotFound, msg, invalidCallEnvelope(msg, params.Name))
+		return errRespData(req.ID, codeMethodNotFound, s.unknownToolMessage(params.Name),
+			invalidCallEnvelope(params.Name))
 	}
 
 	if s.OnBeforeTool != nil {
