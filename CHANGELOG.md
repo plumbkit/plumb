@@ -541,7 +541,9 @@
   undoing the promise. Every count a reader is shown comes from whole-filter
   totals rather than from the rendered rows, so the note stays right when the
   buckets are capped, and a bounded view announces itself with a footer naming
-  the buckets and calls it omits.
+  the buckets and calls it omits. The Client column truncates: the limit bounds
+  ROWS, not cell width, and one client reporting a several-hundred-character
+  version would otherwise wreck the table at a single bucket.
 
 - **`plumb stats --since <age>`.** Scopes the whole command — summary, recent
   calls and the failure view — to calls newer than the given age. It accepts

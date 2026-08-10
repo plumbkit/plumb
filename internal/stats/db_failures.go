@@ -90,10 +90,14 @@ type FailureReport struct {
 	UnclassifiedCalls int64
 }
 
-// Truncated reports whether Buckets omits a bucket the filter matched. A view
+// Incomplete reports whether Buckets omits a bucket the filter matched. A view
 // that is bounded must say so; a footer built on this is the only thing standing
 // between a reader and quietly reading 3 buckets of 505 as the whole picture.
-func (r FailureReport) Truncated() bool { return int64(len(r.Buckets)) < r.TotalBuckets }
+//
+// Named for the view rather than the cut ("Truncated") because the shared-
+// primitives rule reserves truncate-prefixed names for internal/textfmt's string
+// helpers, and this is a count comparison, not one of those.
+func (r FailureReport) Incomplete() bool { return int64(len(r.Buckets)) < r.TotalBuckets }
 
 // ShownCalls sums the calls covered by Buckets, for a footer that can state what
 // fraction of the failures the view actually accounts for.

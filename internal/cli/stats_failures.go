@@ -91,6 +91,14 @@ func retryableCell(f stats.FailureCount) string {
 	return strconv.FormatInt(f.Retryable, 10)
 }
 
+// maxClientCell bounds the Client column. The name and version are copied
+// verbatim out of the MCP handshake with no length cap (see stats.FailureCount),
+// and the LIMIT bounds ROWS, not cell width — one client reporting a
+// several-hundred-character version would wreck the table at a single bucket.
+// Truncating here is a rendering guard, not a substitute for capping what is
+// stored.
+const maxClientCell = 32
+
 // statsClientCell renders the client build that made the failing calls, or an
 // em dash when the client never identified itself.
 func statsClientCell(f stats.FailureCount) string {
@@ -98,9 +106,9 @@ func statsClientCell(f stats.FailureCount) string {
 	case f.ClientName == "":
 		return "—"
 	case f.ClientVersion == "":
-		return f.ClientName
+		return textfmt.Ellipsis(f.ClientName, maxClientCell)
 	}
-	return f.ClientName + " " + f.ClientVersion
+	return textfmt.Ellipsis(f.ClientName+" "+f.ClientVersion, maxClientCell)
 }
 
 // unclassifiedNote explains the unclassified bucket when one is present, so a
@@ -123,7 +131,7 @@ func unclassifiedNote(r stats.FailureReport) string {
 // the rows on screen for the whole picture — three buckets of five hundred and
 // five calls looks exactly like three buckets of three.
 func truncationNote(r stats.FailureReport) string {
-	if !r.Truncated() {
+	if !r.Incomplete() {
 		return ""
 	}
 	return fmt.Sprintf("↳ showing %d of %d %s (%d of %d failed calls); raise --limit, or narrow with --since.",
