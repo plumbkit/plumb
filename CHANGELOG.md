@@ -494,11 +494,19 @@
   `error_kind` or `remediation_class` outside its declared vocabulary: both are
   GROUP BY keys, and one invented label would split a bucket in every failure
   report that ever reads the table. An undeclared label costs the LABEL, not the
-  row: `normaliseCall` blanks it (and the retryability derived from it), logs
-  what it dropped, and stores everything else — the classification is the
+  row: `normaliseCall` blanks it and stores everything else — the classification is the
   optional part of a telemetry row, the duration, savings, tool and client
-  identity are not. `stats.Writer` now also logs rows a batch skipped, which it
-  previously discarded without a trace. `toolerror` gains
+  identity are not. An undeclared **kind** takes the whole
+  classification with it, remedy and retryability included — a row in the
+  `unclassified` bucket that still reported a retryable call would have the CLI
+  (which renders that bucket's retryability as unknown) and the TUI (which sums
+  the stored flag) telling a reader different things about the same rows. An
+  undeclared **class** is narrower: the kind survives, since knowing what went
+  wrong is useful without knowing what to do, but the retryability derived from
+  the class does not. Drops are counted per batch and logged once, matching the
+  Writer's own drop accounting rather than emitting a line per row on the
+  single writer goroutine. `stats.Writer` now also logs rows a batch skipped,
+  which it previously discarded without a trace. `toolerror` gains
   `RemediationClass.Valid()` to match `Kind.Valid()`; it reads the package's own
   list rather than cloning through `AllRemediationClasses()`, so checking every
   row on the write path allocates nothing.
