@@ -71,7 +71,7 @@ lint failures.
 - **Gocyclo ≤ 15** for every first-party non-test function. CI enforces.
 - **Thin `Execute()`** — every tool's `Execute()` is a thin orchestrator over named,
   individually-testable steps (parse/validate → domain logic → presentation). See the
-  pattern in `AGENTS.md`.
+  pattern in the `add-mcp-tool` project skill (`.claude/skills/`).
 
 ## Testing
 

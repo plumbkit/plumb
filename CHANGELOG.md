@@ -297,6 +297,16 @@
   `TestCheckDaemon_ReportsVersionMismatch` (doctor keeps failing the version
   check on a stale daemon).
 
+- **A fourth dangling `AGENTS.md` cross-reference.** `docs/architecture.md`'s
+  "Adding features" list sent MCP-tool authors to `docs/adding-an-lsp.md` (the
+  adapter guide) and then to an `AGENTS.md` → "How to add an MCP tool" heading
+  that no longer exists. Both halves now point at the real home: the
+  `add-mcp-tool` project skill, summarised in `docs/contributing.md`.
+  `CONTRIBUTING.md`'s thin-`Execute()` bullet is repointed at the same skill
+  while we are here — that one predates the brief slim-down (the pattern has
+  always lived in the skill, never in `AGENTS.md`), but it is the same class of
+  dead pointer this change exists to remove.
+
 - **`docs/configuration.md` no longer claims `workspace_symbols` consults only
   the primary language server** — it fans out across every server for a
   multi-language monorepo root (the child-marker discovery case), merging and
