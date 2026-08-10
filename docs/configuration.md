@@ -534,6 +534,15 @@ on `[mcp_servers.plumb]` in Codex's `config.toml`, `includeTools` on
 cannot be rescued by plumb's server-side bootstrap guarantee), and `plumb doctor`
 grades it. See [CLI reference → `plumb setup`](cli-reference.md#plumb-setup).
 
+plumb **cannot see** whether such an allowlist is in force: the client applies it
+before a call is ever made, and the daemon is shared and long-lived, so its
+environment is not reliably the connecting client's. `session_start` therefore
+writes guidance for these three clients that is correct either way — it names
+only lean-set tools, and its no-language-server fallbacks point at the client's
+own file search rather than at `search_in_files`/`find_files`, which an allowlist
+would have removed. The profile line still reports `full` for them, because that
+is what plumb *advertised*; the filtering happens after.
+
 **Auto resolution is capability-gated, not a config setting.** `auto` resolves
 to **lean** only when the connecting client's entry in `internal/clientcaps`
 declares `ReliableDeferredToolDiscovery = true` — reviewed, evidence-based proof
