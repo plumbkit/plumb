@@ -299,6 +299,16 @@
   `release.yml`) is untouched; only `pull_request`-triggered runs see the
   reduced matrix.
 
+- **The `deterministic` client conformance job now has an explicit
+  `timeout-minutes: 45`, replacing GitHub's 6-hour default.** The job runs
+  `make clients-test-conformance` three times per OS, each bounded by an
+  internal `-timeout=10m`, so 30 minutes is the worst case for the test loop
+  alone; 45 minutes leaves comfortable headroom for `npm install`ing the two
+  pinned client CLIs and the Go build/module warm-up on a cold runner, without
+  coming anywhere near the 6-hour ceiling. A hung client now fails the job in
+  under an hour instead of silently holding a release (or a PR check) for
+  hours.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed

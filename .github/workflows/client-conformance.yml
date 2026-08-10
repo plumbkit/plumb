@@ -37,6 +37,14 @@ jobs:
       matrix:
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
+    # Worst-case legitimate run per OS: 3 attempts x the internal 10m go test
+    # timeout (30m), plus npm installing the two pinned client CLIs and the Go
+    # module/build warm-up on a cold runner (call it another 10-15m of
+    # headroom, generously). 45 minutes leaves comfortable margin above that
+    # without drifting anywhere near GitHub's 6-hour default, so a hung client
+    # fails the job in under an hour instead of silently holding a release (or
+    # a PR check) for hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
