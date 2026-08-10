@@ -147,6 +147,19 @@
 
 ### Added
 
+- **A published threat model.** `docs/threat-model.md` names plumb's assets,
+  actors, trust boundaries (client → proxy → daemon → workspace/git/LSP/commands
+  /stores), abuse cases with their mitigations, and — deliberately — the
+  properties plumb does **not** claim: it has no privilege boundary against a
+  process already running as the user, the command sandbox is integrity-only
+  (it confines writes, not reads, so a sandboxed command can still read any
+  secret the user can), redaction is pattern-based rather than content-aware,
+  and there is no multi-tenant isolation. Known gaps are listed rather than
+  omitted, including the absence of fuzz targets, of support-bundle redaction,
+  of retention controls, and of signed release provenance. The document states
+  that it has not had an independent security review and is therefore a
+  starting point for one, not its result.
+
 - **Tool failures now carry a stable, machine-readable classification.** A new
   stdlib-only foundation package, `internal/toolerror`, gives every plumb
   refusal a `Kind` (thirteen closed values: `invalid_arguments`,
