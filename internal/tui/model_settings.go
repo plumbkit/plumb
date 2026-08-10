@@ -185,11 +185,19 @@ type settingItem struct {
 	value      string   // formatted current value
 	options    []string // option set for settingCycle
 	help       string   // one-line description, shown on the status bar's second line
-	overridden bool     // workspace scope: the key is set in the project config (not inherited)
-	lspLang    string   // non-empty for per-language [lsp.<lang>] rows; identifies the language
-	lspMissing bool     // enabled LSP server whose command is not on PATH
-	list       []string // raw entries for settingList rows; rendered one per line
-	tab        int      // which rows-pane tab owns this row (settingsTabGeneral/LSP/Semantics)
+	overridden bool     // workspace scope: the key is set in the project config AND in effect
+	// notInEffect marks a workspace row the project config sets but plumb is
+	// ignoring: a capability-granting key ([git], an exec-deciding [lsp.<lang>]
+	// field) on a root the user has not trusted. Mutually exclusive with
+	// overridden on purpose — an ignored override must never render as a live one,
+	// which is the whole complaint this state exists to answer. The row's value
+	// column shows what is ACTUALLY in effect (the global value), not what the
+	// project file says.
+	notInEffect bool
+	lspLang     string   // non-empty for per-language [lsp.<lang>] rows; identifies the language
+	lspMissing  bool     // enabled LSP server whose command is not on PATH
+	list        []string // raw entries for settingList rows; rendered one per line
+	tab         int      // which rows-pane tab owns this row (settingsTabGeneral/LSP/Semantics)
 }
 
 var (

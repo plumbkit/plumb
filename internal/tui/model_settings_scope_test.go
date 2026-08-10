@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,21 +22,40 @@ func TestTomlPath_ProjectVsGlobalOnly(t *testing.T) {
 			t.Errorf("key %v should be global-only (no project path)", k)
 		}
 	}
-	// The [git] tier policy is global-only: LoadProject forces the whole block
-	// back to base, so a workspace-scope row would write TOML plumb ignores.
-	// A regression here re-offers a control that silently does nothing.
+	// The [git] tier rows ARE project-overridable: LoadProject honours the block
+	// for a trusted workspace. They were withdrawn while no project config could
+	// ever have them honoured; the trust gate restored them. A row that cannot yet
+	// take effect is marked notInEffect (see the workspace-scope test below), not
+	// hidden — hiding it is what left a user unable to configure the setting at
+	// all, and hiding it now would additionally hide a setting that IS live on a
+	// trusted root.
 	for _, k := range []settingKey{skGitWrites, skGitDestructive, skGitPush, skGitCommitTrailer, skProtectedBranches} {
-		if _, ok := tomlPath(k); ok {
-			t.Errorf("git key %v must be global-only — LoadProject forces [git] back to base", k)
+		if _, ok := tomlPath(k); !ok {
+			t.Errorf("git key %v should be project-overridable (honoured on a trusted workspace)", k)
 		}
 	}
 }
 
 // TestBuildScopeItems_WorkspaceFiltersAndAnnotates verifies a workspace scope
-// hides global-only rows and marks the keys present in the project file.
+// hides global-only rows and marks the keys present in the project file, in the
+// three states a workspace row can be in: a live override, inherited, and
+// set-but-ignored.
+//
+// The third state is the one that matters. A capability-granting key ([git], an
+// exec-deciding [lsp.<lang>] field) on an untrusted root is written to the
+// project file and then disregarded by LoadProject; if that rendered as an
+// ordinary override, the editor would be asserting a value plumb is not using —
+// exactly the silent-no-op complaint the trust work exists to answer. It must
+// report notInEffect, must NOT report overridden, and its value column must show
+// what is actually in force.
 func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 	ws := t.TempDir()
 	if err := config.SetProjectValue(ws, []string{"topology", "watch"}, false); err != nil {
+		t.Fatal(err)
+	}
+	// A capability-granting key on an untrusted root. allow_push defaults to
+	// false, so "in effect" and "what the project asked for" differ visibly.
+	if err := config.SetProjectValue(ws, []string{"git", "allow_push"}, true); err != nil {
 		t.Fatal(err)
 	}
 	m := &Model{
@@ -44,6 +64,7 @@ func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 		settingsScopeCursor: 1,
 	}
 	items := m.buildScopeItems()
+	m.settingsItems = items
 	if len(items) == 0 {
 		t.Fatal("workspace scope produced no rows")
 	}
@@ -52,24 +73,64 @@ func TestBuildScopeItems_WorkspaceFiltersAndAnnotates(t *testing.T) {
 			t.Errorf("workspace scope leaked a global-only row: %v", it.key)
 		}
 	}
-	var found bool
+	var foundWatch, foundPush bool
 	for _, it := range items {
 		switch it.key {
 		case skTopoWatch:
-			found = true
-			if !it.overridden {
-				t.Error("topology watch should be marked overridden")
+			foundWatch = true
+			if !it.overridden || it.notInEffect {
+				t.Error("topology watch is not capability-granting: it should be a live override")
 			}
 		case skStrict:
-			if it.overridden {
+			if it.overridden || it.notInEffect {
 				t.Error("strict should be inherited, not overridden")
 			}
-		case skGitWrites, skGitDestructive, skGitPush, skGitCommitTrailer, skProtectedBranches:
-			t.Errorf("git tier row %v leaked into a workspace scope — [git] is global-only", it.key)
+		case skGitPush:
+			foundPush = true
+			if !it.notInEffect {
+				t.Error("git allow_push on an untrusted root must be marked NOT in effect")
+			}
+			if it.overridden {
+				t.Error("an ignored project override must not also report as a live override")
+			}
+			if it.value != "off" {
+				t.Errorf("git allow_push value = %q, want the global \"off\" that is actually in force", it.value)
+			}
+		case skGitWrites, skGitDestructive, skGitCommitTrailer, skProtectedBranches:
+			// Present, and inherited: the project sets only allow_push.
+			if it.notInEffect || it.overridden {
+				t.Errorf("git row %v should be inherited here", it.key)
+			}
 		}
 	}
-	if !found {
+	if !foundWatch {
 		t.Error("topology watch row missing from workspace scope")
+	}
+	if !foundPush {
+		t.Error("git allow_push row missing from workspace scope — the [git] tiers are project-overridable")
+	}
+	if !m.hasNotInEffectRow() {
+		t.Error("hasNotInEffectRow should be true so the legend explains the ⁶ mark")
+	}
+}
+
+// TestWorkspaceMark_ThreeStates pins the marker vocabulary each row state
+// renders, since the mark is the user's only at-a-glance signal that a setting
+// they wrote is not being used.
+func TestWorkspaceMark_ThreeStates(t *testing.T) {
+	cases := []struct {
+		name string
+		it   settingItem
+		want string
+	}{
+		{"live override", settingItem{overridden: true}, "⁴"},
+		{"inherited", settingItem{}, "⁵"},
+		{"set but ignored", settingItem{notInEffect: true}, "⁶"},
+	}
+	for _, tc := range cases {
+		if _, plain := workspaceMark(tc.it); plain != tc.want {
+			t.Errorf("%s: mark = %q, want %q", tc.name, plain, tc.want)
+		}
 	}
 }
 
@@ -262,10 +323,11 @@ func TestLSPRows_WorkspaceEditsWriteNestedKeys(t *testing.T) {
 	ws := t.TempDir()
 	m := Model{
 		settingsCfg:         config.Defaults(),
+		settingsTab:         settingsTabLSP,
 		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
 		settingsScopeCursor: 1,
 	}
-	m.settingsItems = m.buildScopeItems()
+	m.refreshSettingsItems()
 
 	// Find the first per-language enable row.
 	lang, enIdx := "", -1
@@ -297,21 +359,60 @@ func TestLSPRows_WorkspaceEditsWriteNestedKeys(t *testing.T) {
 		t.Errorf("merged lsp.%s.enabled = %v, want %v", lang, merged.LSP[lang].Enabled, want)
 	}
 
-	// command / args / root_markers must NOT be offered at a workspace scope.
-	// They decide which process the daemon spawns and with what, so LoadProject
-	// forces them back to the trusted global config — a row here would write TOML
-	// plumb ignores, leaving the user believing they had configured something.
-	// This is the UI half of the project-config trust boundary; the config half is
-	// TestLoadProject_ForcesLSPExecFieldsToBase.
-	m.settingsItems = m.buildScopeItems()
+	// Edit command via the text editor → writes lsp.<lang>.command only.
+	//
+	// command / args / root_markers ARE offered at a workspace scope: they decide
+	// which process the daemon spawns and with what, so LoadProject honours them
+	// only for a trusted root — but the row is meaningful, because trusting the
+	// root makes it live. The untrusted state is not hidden, it is DECLARED: the
+	// row comes back marked notInEffect with the value actually in force, and the
+	// edit's own status line says the write will not take effect until
+	// `plumb trust`. This is the UI half of the project-config trust boundary; the
+	// config half is TestLoadProject_TrustIsBoundToContent.
+	m.refreshSettingsItems()
+	cmdIdx := -1
+	for i, it := range m.settingsItems {
+		if it.lspLang == lang && it.key == skLSPCommand {
+			cmdIdx = i
+			break
+		}
+	}
+	if cmdIdx < 0 {
+		t.Fatalf("no command row for %s — the exec-deciding LSP rows are workspace-editable", lang)
+	}
+	m.settingsCursor = cmdIdx
+	m = m.activateSetting()
+	if m.settingsTextEditor == nil {
+		t.Fatal("activating command should open the text editor")
+	}
+	m.settingsTextEditor.input = "/custom/bin/server"
+	m = m.commitTextEditor()
+
+	if present, _ := config.ProjectValuePresent(ws, []string{"lsp", lang, "command"}); !present {
+		t.Errorf("editing the command row should write lsp.%s.command", lang)
+	}
+	// Untrusted: the write lands in the file, and plumb keeps using the global
+	// command. Both halves must be visible to the user.
+	merged, _ = config.LoadProject(config.Defaults(), ws)
+	if merged.LSP[lang].Command != config.Defaults().LSP[lang].Command {
+		t.Errorf("merged lsp.%s.command = %q, want the global command (root is untrusted)",
+			lang, merged.LSP[lang].Command)
+	}
+	var cmdRow settingItem
 	for _, it := range m.settingsItems {
-		if it.lspLang == "" {
-			continue
+		if it.lspLang == lang && it.key == skLSPCommand {
+			cmdRow = it
 		}
-		switch it.key {
-		case skLSPCommand, skLSPArgs, skLSPRootMarkers:
-			t.Errorf("lsp.%s.%v leaked into a workspace scope — exec-deciding LSP fields are global-only", it.lspLang, it.key)
-		}
+	}
+	if !cmdRow.notInEffect || cmdRow.overridden {
+		t.Error("the edited command row must be marked NOT in effect on an untrusted root")
+	}
+	if cmdRow.value == "/custom/bin/server" {
+		t.Error("the row shows the project file's value; it must show what is actually in effect")
+	}
+	if !strings.Contains(m.settingsStatus, "plumb trust") {
+		t.Errorf("status = %q, want a message naming `plumb trust` — an edit that will not take "+
+			"effect must not report plain success", m.settingsStatus)
 	}
 }
 

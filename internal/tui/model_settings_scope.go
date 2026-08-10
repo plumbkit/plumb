@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/plumbkit/plumb/internal/config"
 )
 
@@ -35,8 +37,13 @@ func (m Model) currentScope() settingScope {
 
 // buildScopeItems builds the settings rows for the selected scope. Global shows
 // every field from the global snapshot; a workspace shows only the
-// project-overridable fields, with effective values merged from global and an
-// `overridden` flag set when the key is present in that project's config file.
+// project-overridable fields, with effective values merged from global.
+//
+// Every row's value comes from the MERGED config, which is the config as plumb
+// actually resolves it — so a capability-granting key the project sets but plumb
+// is ignoring (an untrusted root) shows the global value that is really in
+// force, and is flagged notInEffect rather than overridden. A row must never
+// display the project file's value as though it were live.
 func (m *Model) buildScopeItems() []settingItem {
 	scope := m.currentScope()
 	if scope.global {
@@ -47,6 +54,7 @@ func (m *Model) buildScopeItems() []settingItem {
 		merged = m.settingsCfg
 	}
 	raw, _ := config.LoadProjectRaw(scope.folder)
+	policy, _ := config.ProjectPolicyStatusFor(scope.folder)
 	out := make([]settingItem, 0, len(buildSettingItems(merged)))
 	for _, it := range buildSettingItems(merged) {
 		if storeBackedWorkspaceKey(it.key) {
@@ -59,7 +67,16 @@ func (m *Model) buildScopeItems() []settingItem {
 		if !ok { // global-only setting: hidden in a workspace scope
 			continue
 		}
-		it.overridden = rawHasPath(raw, path)
+		if rawHasPath(raw, path) {
+			// A key the project sets but which is not trusted is set-and-ignored,
+			// never "override". Asked() is the authority: it is true exactly for the
+			// keys LoadProject gates on trust.
+			if policy.NeedsTrust() && policy.Asked(strings.Join(path, ".")) {
+				it.notInEffect = true
+			} else {
+				it.overridden = true
+			}
+		}
 		out = append(out, it)
 	}
 	return out
@@ -69,34 +86,23 @@ func (m *Model) buildScopeItems() []settingItem {
 // per-language [lsp.<lang>] rows (whose path depends on lspLang) and delegating
 // to the static tomlPath for everything else. The bool is false for global-only
 // settings (hidden in a workspace scope).
+//
+// Every named [lsp.<lang>] field is workspace-writable, including the
+// exec-deciding ones. They were withdrawn when a project config could never have
+// them honoured — a control that writes TOML plumb ignores is worse than no
+// control — and restored once `plumb trust` made a workspace-scope edit
+// meaningful. What was worse than no control is now handled honestly instead: an
+// untrusted row is marked notInEffect, shows the value actually in force, and
+// says so when edited.
 func itemTOMLPath(it settingItem) ([]string, bool) {
 	if it.lspLang != "" {
 		field, ok := lspFieldName(it.key)
-		if !ok || !lspProjectOverridable(it.key) {
+		if !ok {
 			return nil, false
 		}
 		return []string{"lsp", it.lspLang, field}, true
 	}
 	return tomlPath(it.key)
-}
-
-// lspProjectOverridable reports whether a per-language LSP row may be written
-// into a workspace's .plumb/config.toml and still take effect.
-//
-// config.LoadProject forces every [lsp.<lang>] field that decides WHICH process
-// runs, or with what, back to the trusted global config — a project file is an
-// untrusted surface, and command/args/env/initialization_options/root_markers
-// reach exec. Offering those rows at a workspace scope would write TOML that
-// plumb then ignores, which is worse than not offering them: the user would
-// believe they had configured something. Only the two fields that cannot change
-// the process survive the merge, so only those two are editable here.
-func lspProjectOverridable(key settingKey) bool {
-	switch key {
-	case skLSPEnabled, skLSPDiagnostics:
-		return true
-	default:
-		return false
-	}
 }
 
 // lspFieldName maps an LSP setting key to its TOML field name under [lsp.<lang>].
@@ -216,11 +222,31 @@ func (m Model) resetToInherit() Model {
 }
 
 // scopedStatus formats the post-change status for the current scope.
+//
+// A workspace-scope write that lands on a capability-granting key of an
+// untrusted root SAYS SO. Writing the file and reporting a plain success would
+// be the original complaint restored: the user would believe they had configured
+// something. The refresh inside applyScopedAt has already re-evaluated the row,
+// so the flag consulted here is the state after the write.
 func (m Model) scopedStatus(key settingKey, change string) string {
 	if m.currentScope().global {
 		return settingStatus(key, change)
 	}
+	if m.focusedRowNotInEffect() {
+		return change + " · written, NOT in effect — run `plumb trust` in this workspace"
+	}
 	return change + " · workspace override"
+}
+
+// focusedRowNotInEffect reports whether the highlighted row is a project
+// override plumb is currently ignoring. Every scoped edit is initiated from the
+// focused row, so this identifies the row just written without threading its
+// identity through each of the dozen apply paths.
+func (m Model) focusedRowNotInEffect() bool {
+	if m.settingsCursor < 0 || m.settingsCursor >= len(m.settingsItems) {
+		return false
+	}
+	return m.settingsItems[m.settingsCursor].notInEffect
 }
 
 // rawHasPath reports whether the dotted key path is present in a raw project
@@ -264,13 +290,17 @@ var settingTOMLPaths = map[settingKey][]string{
 	skQualityMode:                {"quality", "mode"},
 	skQualityTimeoutMs:           {"quality", "timeout_ms"},
 	skQualityMaxFindings:         {"quality", "max_findings_per_file"},
-	// The [git] rows are deliberately ABSENT: allow_writes / allow_destructive /
-	// allow_push / commit_trailer / protected_branches are the git tool's tiered
-	// safety policy, and LoadProject forces the whole block back to the global
-	// config because a cloned repo's .plumb/config.toml would otherwise grant
-	// itself history destruction and pushes to the user's remotes. Writing them at
-	// a workspace scope would produce TOML plumb ignores, so the rows are
-	// global-only.
+	// The [git] tier rows are project-overridable, but only take effect on a
+	// workspace the user has trusted with `plumb trust` — LoadProject forces the
+	// whole block back to the global config otherwise, because a cloned repo's
+	// .plumb/config.toml would else grant itself history destruction and pushes to
+	// the user's remotes. Until then the row renders notInEffect (see
+	// buildScopeItems), showing the global value that is actually in force.
+	skGitWrites:            {"git", "allow_writes"},
+	skGitDestructive:       {"git", "allow_destructive"},
+	skGitPush:              {"git", "allow_push"},
+	skGitCommitTrailer:     {"git", "commit_trailer"},
+	skProtectedBranches:    {"git", "protected_branches"},
 	skAutoAttach:           {"workspace", "auto_attach"},
 	skAutoAttachPersist:    {"workspace", "auto_attach_persist"},
 	skAllowDependencyReads: {"workspace", "allow_dependency_reads"},

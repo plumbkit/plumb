@@ -77,10 +77,7 @@ func clampSettingsValueW(valueW, labelW int, items []settingItem, rowsW int) int
 // settingsContLine renders a list-entry continuation line, padded so the entry
 // aligns under the value column of the row above. Missing-LSP rows render red.
 func settingsContLine(it settingItem, idx, labelW, valueW int, wsScope bool) string {
-	style := DetailStyle
-	if wsScope && !it.overridden {
-		style = FadedStyle
-	}
+	_, style := rowScopeStyles(it, wsScope)
 	if it.lspMissing {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	}
@@ -117,20 +114,15 @@ func settingsRowDisplay(it settingItem, focused, wsScope bool, labelW, valueW in
 
 	numeral, numeralPlain := reloadNumeral(it.key)
 	// Workspace scope: a superscript marker after the tier numeral flags the row
-	// as an override (⁴) or inherited (⁵).
+	// as an override (⁴), inherited (⁵), or set-but-ignored (⁶).
 	mark, markPlain := "", ""
 	if wsScope {
-		mark, markPlain = workspaceMark(it.overridden)
+		mark, markPlain = workspaceMark(it)
 	}
 	markers := numeralPlain + markPlain
 	pad := strings.Repeat(" ", max(labelW-lipgloss.Width(label)-lipgloss.Width(markers), 0))
 
-	// Dim inherited rows so workspace overrides stand out; flag a missing LSP
-	// server's whole block in red.
-	labelStyle, valueStyle := ItemStyle, DetailStyle
-	if wsScope && !it.overridden {
-		labelStyle, valueStyle = FadedStyle, FadedStyle
-	}
+	labelStyle, valueStyle := rowScopeStyles(it, wsScope)
 	if it.lspMissing {
 		red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 		labelStyle, valueStyle = red, red
@@ -160,13 +152,39 @@ func reloadNumeral(key settingKey) (coloured, plain string) {
 }
 
 // workspaceMark returns the coloured + plain superscript that flags a workspace
-// row as an override (⁴, green) or inherited (⁵, muted), shown right after the
-// reload-tier numeral on the label.
-func workspaceMark(overridden bool) (coloured, plain string) {
-	if overridden {
+// row as an override (⁴, green), inherited (⁵, muted), or set in the project
+// config but ignored because the workspace is not trusted (⁶, warning). It sits
+// right after the reload-tier numeral on the label.
+//
+// ⁶ is the whole point of the three-state scheme: without it a
+// capability-granting key the project sets would render as ⁵ inherited, which is
+// true of the VALUE and a lie about the FILE — leaving the user with a setting
+// they wrote, cannot see, and cannot explain.
+func workspaceMark(it settingItem) (coloured, plain string) {
+	switch {
+	case it.notInEffect:
+		return WarnStyle.Render("⁶"), "⁶"
+	case it.overridden:
 		return OkStyle.Render("⁴"), "⁴"
+	default:
+		return MutedStyle.Render("⁵"), "⁵"
 	}
-	return MutedStyle.Render("⁵"), "⁵"
+}
+
+// rowScopeStyles picks the label and value styles for a workspace row: inherited
+// rows are dimmed so real overrides stand out, and a set-but-ignored row takes
+// the warning colour so it reads as "look at me", not as background.
+func rowScopeStyles(it settingItem, wsScope bool) (labelStyle, valueStyle lipgloss.Style) {
+	switch {
+	case !wsScope:
+		return ItemStyle, DetailStyle
+	case it.notInEffect:
+		return WarnStyle, WarnStyle
+	case it.overridden:
+		return ItemStyle, DetailStyle
+	default:
+		return FadedStyle, FadedStyle
+	}
 }
 
 // settingsFooterRow renders one of the three pinned footer rows: a blank
@@ -175,7 +193,7 @@ func (m Model) settingsFooterRow(idx, innerW int, isOverlay bool) string {
 	contentW := max(innerW-4, 0)
 	switch idx {
 	case 1:
-		return statusBarLine(settingsHintContent(contentW, !m.currentScope().global), innerW, isOverlay)
+		return statusBarLine(settingsHintContent(contentW, !m.currentScope().global, m.hasNotInEffectRow()), innerW, isOverlay)
 	case 2:
 		return statusBarLine(settingsStatusContent(m.settingsStatusOrHelp(), contentW), innerW, isOverlay)
 	default:
@@ -207,11 +225,23 @@ func statusBarLine(content string, innerW int, isOverlay bool) string {
 	return " " + SettingsBarStyle.Render(" ") + content + SettingsBarStyle.Render(" ") + " "
 }
 
+// hasNotInEffectRow reports whether any visible row is set in the project config
+// but ignored, so the legend only spends its scarce width explaining ⁶ when a ⁶
+// is actually on screen.
+func (m Model) hasNotInEffectRow() bool {
+	for _, it := range m.settingsItems {
+		if it.notInEffect {
+			return true
+		}
+	}
+	return false
+}
+
 // settingsHintContent builds the hint bar: a legend on the left (the reload
 // tiers in Global scope, the inherit/override key in a workspace scope) and the
 // navigation shortcuts (brighter keys) on the right.
-func settingsHintContent(contentW int, wsScope bool) string {
-	legend := settingsLegend(wsScope)
+func settingsHintContent(contentW int, wsScope, untrusted bool) string {
+	legend := settingsLegend(wsScope, untrusted)
 	shortcut := SettingsBarKeyStyle.Render("↑↓") + SettingsBarStyle.Render(" move  ·  ") +
 		SettingsBarKeyStyle.Render("←→") + SettingsBarStyle.Render(" change  ·  ") +
 		SettingsBarKeyStyle.Render("tab") + SettingsBarStyle.Render(" panes  ·  ") +
@@ -225,7 +255,7 @@ func settingsHintContent(contentW int, wsScope bool) string {
 // explains the reload-tier numerals with matching colours (¹ green, ² yellow,
 // ³ purple); a workspace scope explains the override/inherit marks. All segments
 // carry the bar background.
-func settingsLegend(wsScope bool) string {
+func settingsLegend(wsScope, untrusted bool) string {
 	ok := SettingsBarStyle.Foreground(ActiveTheme.Success)
 	warn := SettingsBarStyle.Foreground(ActiveTheme.Warning)
 	restart := SettingsBarStyle.Foreground(lipgloss.Color("#9D7CD8"))
@@ -237,6 +267,10 @@ func settingsLegend(wsScope bool) string {
 		legend += SettingsBarStyle.Render("  ·  ") +
 			ok.Render("⁴") + SettingsBarStyle.Render(" override  ·  ") +
 			muted.Render("⁵") + SettingsBarStyle.Render(" inherited")
+	}
+	if wsScope && untrusted {
+		legend += SettingsBarStyle.Render("  ·  ") +
+			warn.Render("⁶") + SettingsBarStyle.Render(" set here, ignored — `plumb trust`")
 	}
 	return legend
 }
