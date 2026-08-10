@@ -730,9 +730,10 @@ only triggered on `textDocument/publishDiagnostics` notifications.
   see the checklist in `AGENTS.md` → "How to add an MCP tool".
 - **New LSP adapter**: see `docs/adding-an-lsp.md`.
 - **New config field**: add to `config.Config`, update `defaults`, add
-  validation in `validate()`, document in this file and in `AGENTS.md`. If the
-  daemon cannot apply the field without a restart (e.g. an LSP-process or cache
-  setting), add it to `config.RestartSensitiveEqual` so `Store.RestartNeeded()`
-  reports it; otherwise it is picked up live via the per-session store
-  subscription. Consider exposing it as a row in the TUI Settings screen
+  validation in `validate()`, document in this file and in
+  `docs/configuration.md`. If the daemon cannot apply the field without a
+  restart (e.g. an LSP-process or cache setting), add it to
+  `config.RestartSensitiveEqual` so `Store.RestartNeeded()` reports it;
+  otherwise it is picked up live via the per-session store subscription.
+  Consider exposing it as a row in the TUI Settings screen
   (`internal/tui/model_settings.go`).
