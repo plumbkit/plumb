@@ -78,7 +78,9 @@ func (m *Model) refreshDashboard() {
 		m.dashLifetimeTokens = m.dashLifetimeAxes.Total()
 		m.dashLifetimeFirstAt = m.globalDB.FirstCallAt()
 		m.dashLifetimeTopTools, _ = m.globalDB.Summary(globalFilter)
-		m.dashUptimeTopTools, _ = m.globalDB.Summary(stats.Filter{Since: m.dashboardUptimeStart(now)})
+		uptimeFilter := stats.Filter{Since: m.dashboardUptimeStart(now)}
+		m.dashUptimeTopTools, _ = m.globalDB.Summary(uptimeFilter)
+		m.dashUptimeFailures, _ = m.globalDB.FailureSummary(uptimeFilter)
 		m.refreshDashboardProject()
 	}
 	chartBuckets := max(m.dashChartWidth, activityBuckets)
@@ -213,6 +215,11 @@ func (m Model) dashboardBodyLines(width int) []string {
 	lines = append(lines, "")
 
 	lines = append(lines, m.dashTopToolsTables(width)...)
+
+	if failures := m.dashFailuresWidget(width); len(failures) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, failures...)
+	}
 
 	if m.dashProjectFolder != "" && m.dashProjectCalls > 0 {
 		lines = append(lines, "")
