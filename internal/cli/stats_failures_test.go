@@ -135,9 +135,24 @@ func TestSinceSuffix_NamesTheWindow(t *testing.T) {
 	if got := sinceSuffix(stats.Filter{}); got != "" {
 		t.Errorf("an unscoped view claimed a window: %q", got)
 	}
-	got := sinceSuffix(stats.Filter{Since: time.Now().Add(-7 * 24 * time.Hour)})
-	if got != " (last 7d)" {
-		t.Errorf("sinceSuffix = %q, want %q", got, " (last 7d)")
+	// Each window is measured back from now, exactly as runStats builds it, so
+	// the label is asserted against the real overshoot rather than a clean value.
+	for _, tc := range []struct {
+		window time.Duration
+		want   string
+	}{
+		{7 * 24 * time.Hour, " (last 7d)"},
+		{14 * 24 * time.Hour, " (last 14d)"},
+		{time.Hour, " (last 1h)"},
+		{90 * time.Minute, " (last 90m)"},
+		{45 * time.Second, " (last 45s)"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			got := sinceSuffix(stats.Filter{Since: time.Now().Add(-tc.window)})
+			if got != tc.want {
+				t.Errorf("sinceSuffix(%v) = %q, want %q", tc.window, got, tc.want)
+			}
+		})
 	}
 }
 
