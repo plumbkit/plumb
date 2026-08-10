@@ -56,12 +56,37 @@ func TestResolveProvenance(t *testing.T) {
 		},
 		{
 			// The whole point of the ldflags stamps: the embedded vcs.modified
-			// describes the outer module, so it must not fill this gap.
+			// describes the outer module, so it must not fill this gap. This is
+			// also the case the Makefile now relies on — it emits an EMPTY dirty
+			// stamp when `git status` fails, precisely so the answer lands here as
+			// unknown instead of being asserted clean.
 			name:         "revision stamped without a dirty stamp is dirty-unknown",
 			rev:          stamped,
 			settings:     map[string]string{"vcs.revision": embedded, "vcs.modified": "true"},
 			wantRevision: stamped,
 			wantRevKnown: true,
+			wantDirty:    false,
+			wantDirtyOK:  false,
+		},
+		{
+			// GoReleaser renders {{ .FullCommit }} as the literal "none" when it
+			// cannot resolve git info (a --snapshot build in a remote-less clone).
+			// A failed stamp is not a stamp: fall through to the next source.
+			name:         "placeholder revision stamp falls through to build info",
+			rev:          "none",
+			dirty:        "false",
+			settings:     map[string]string{"vcs.revision": embedded, "vcs.modified": "true"},
+			wantRevision: embedded,
+			wantRevKnown: true,
+			wantDirty:    true,
+			wantDirtyOK:  true,
+		},
+		{
+			name:         "placeholder revision stamp with no build info is unknown",
+			rev:          "none",
+			dirty:        "false",
+			wantRevision: "",
+			wantRevKnown: false,
 			wantDirty:    false,
 			wantDirtyOK:  false,
 		},
@@ -160,9 +185,13 @@ func TestVersionLineWithRevision(t *testing.T) {
 			want: "plumb " + Version + " (go1.26.4, rev 4c6e4da9d8fa-dirty)\n",
 		},
 		{
-			name: "dirty unknown carries no marker",
+			// Distinct from clean on purpose. This is the normal rendering when a
+			// stamper could not measure the tree (the Makefile's `git status`
+			// failing), and the human line must not be the one surface where dirty
+			// is readable without dirty_known.
+			name: "dirty unknown is marked, not silently clean",
 			prov: BuildProvenance{Revision: rev, RevisionKnown: true},
-			want: "plumb " + Version + " (go1.26.4, rev 4c6e4da9d8fa)\n",
+			want: "plumb " + Version + " (go1.26.4, rev 4c6e4da9d8fa-dirty?)\n",
 		},
 	}
 
@@ -224,6 +253,56 @@ func TestVersionJSONUnknownIsNotClean(t *testing.T) {
 	}
 	if report.BuildChannel != "" {
 		t.Errorf("build_channel = %q, want empty for an unstamped build", report.BuildChannel)
+	}
+}
+
+// TestVersionLineDistinguishesAllThreeDirtyStates asserts the human renderings
+// are mutually distinct. Clean and dirty-unknown rendering identically was the
+// original conflation; a future edit that collapses any pair goes red here.
+func TestVersionLineDistinguishesAllThreeDirtyStates(t *testing.T) {
+	t.Parallel()
+
+	const rev = "4c6e4da9d8fafc5ca36d762460caf6abf46c5ca6"
+	clean := versionLine(BuildProvenance{Revision: rev, RevisionKnown: true, DirtyKnown: true}, "go1.26.4")
+	dirty := versionLine(BuildProvenance{Revision: rev, RevisionKnown: true, Dirty: true, DirtyKnown: true}, "go1.26.4")
+	unknown := versionLine(BuildProvenance{Revision: rev, RevisionKnown: true}, "go1.26.4")
+
+	if clean == dirty || clean == unknown || dirty == unknown {
+		t.Fatalf("dirty states must render distinctly:\nclean:   %q\ndirty:   %q\nunknown: %q", clean, dirty, unknown)
+	}
+}
+
+// TestLooksLikeRevision guards the plausibility check that keeps a failed stamp
+// from being reported as a known revision.
+func TestLooksLikeRevision(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		"4c6e4da9d8fafc5ca36d762460caf6abf46c5ca6",                         // SHA-1
+		"4c6e4da9d8fafc5ca36d762460caf6abf46c5ca64c6e4da9d8fafc5ca36d7624", // SHA-256
+		"4C6E4DA9D8FA",
+		"4c6e4da", // shortest accepted abbreviation
+	}
+	for _, s := range valid {
+		if !looksLikeRevision(s) {
+			t.Errorf("looksLikeRevision(%q) = false, want true", s)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"none",    // GoReleaser's placeholder when git info is unresolvable
+		"unknown", // the other common placeholder
+		"dev",
+		"4c6e4d",     // too short to be a useful abbreviation
+		"v0.16.4",    // a tag, not a commit
+		"4c6e4da-x1", // hex-ish but not hex
+		"4c6e4da9d8fafc5ca36d762460caf6abf46c5ca64c6e4da9d8fafc5ca36d76245", // longer than SHA-256
+	}
+	for _, s := range invalid {
+		if looksLikeRevision(s) {
+			t.Errorf("looksLikeRevision(%q) = true, want false", s)
+		}
 	}
 }
 

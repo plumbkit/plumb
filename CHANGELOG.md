@@ -439,6 +439,37 @@
   `TestResolveProvenance` case covering that path now names this as the reason
   it exists.
 
+- **`plumb version` no longer renders "dirty state unknown" as clean.** The
+  human line appended `-dirty` only when the state was known AND dirty, so a
+  clean tree and an unmeasurable one printed identically — the one surface where
+  `dirty` was readable without `dirty_known`, which the JSON payload and
+  `daemon_info` both keep apart. Near-unreachable before, and the normal
+  rendering of the unknown case now that both stampers emit nothing when they
+  cannot measure. A third suffix, `-dirty?`, distinguishes it, and
+  `TestVersionLineDistinguishesAllThreeDirtyStates` fails if any two of the
+  three ever collapse again.
+
+- **A revision stamp that is not a plausible commit SHA is treated as no stamp.**
+  GoReleaser renders `{{ .FullCommit }}` as the literal string `none` when it
+  cannot resolve git information — reproducible with a `--snapshot` build in a
+  clone with no remote configured — which would have been reported as
+  `revision: "none"`, `revision_known: true`: unknown presented as known, the
+  precise failure this mechanism exists to prevent. `looksLikeRevision` now
+  requires seven or more hex digits and nothing else (git object names are hex
+  in both the SHA-1 and SHA-256 formats, so no real revision is rejected), and
+  an implausible stamp falls through to the next source rather than
+  short-circuiting to unknown — a failed stamp is not a stamp.
+
+### Changed
+
+- **`versionCmd` moved from `root.go` into `version.go`**, alongside the
+  provenance code it reports, matching how every other plumb subcommand
+  registers its own flags in its own file (`doctor.go`, `serve.go`, …); the
+  `--json` registration no longer sits wedged between two `AddCommand` blocks in
+  the root `init`. `Provenance()` is now memoised with `sync.OnceValue`: every
+  input is fixed at link time, so re-reading the build info and rebuilding a
+  settings map on each connection's tool registration was pure waste.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
