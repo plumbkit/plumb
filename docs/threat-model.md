@@ -121,10 +121,37 @@ shares one pin. plumb cannot currently distinguish them — see
 *A path outside the workspace is reached through `..`, a symlink, a firmlink, or
 a case variant.*
 
-Mitigations: canonicalisation before the boundary check; `WorkspaceBoundaryError`
-as a typed error with an `errors.As`-only contract — its doc comment explicitly
-forbids adding a substring fallback, because that would false-positive on
-unrelated errors that echo the message.
+Two distinct mechanisms, and the distinction matters — confusing them is how a
+real escape survived here until 2026-08-10:
+
+1. **Single-path calls** (`read_file`, the write tools) canonicalise the path,
+   resolving symlinks, before the boundary check. A boundary test on an
+   unresolved path is not a boundary test.
+2. **Walk-based calls** (`search_in_files`, `find_files`, `find_replace`, the
+   topology indexer) check the root, then check **every symlink the walk meets**,
+   because only a symlink can escape a tree whose root was already checked. The
+   walker consults the calling tool's own guard, so the access level follows the
+   tool.
+
+Until #244 the second mechanism did not exist: only `find_replace` carried a
+per-entry guard, and its comment claimed it was "the per-target guard every other
+write tool applies". It was not. A repository committing
+`innocent.env -> ~/.ssh/id_rsa` — which a clone plants, since git stores symlinks
+natively — had that file returned by `search_in_files` and its symbols indexed
+into `topology.db`.
+
+Withheld entries are reported rather than silently skipped, because a search that
+quietly under-reports lets a hostile repository steer an audit to a clean "no
+matches".
+
+`WorkspaceBoundaryError` is a typed error with an `errors.As`-only contract — its
+doc comment explicitly forbids adding a substring fallback, because that would
+false-positive on unrelated errors that echo the message.
+
+Residual: `.gitignore` and `.ignore` are repository-authored and honoured
+unconditionally by the walk, with no override exposed on the tools. A repository
+can therefore hide a file from every plumb search. plumb does not classify
+workspace content — and the workspace decides what plumb will even look at.
 
 ### A3 — Prompt injection steering the agent
 
@@ -164,16 +191,33 @@ it takes effect on attach with no prompt. So the merge cannot be uniform: a
 setting that expresses a *preference* may come from the project, but a setting
 that grants a *capability* must come from the user.
 
-Forced to the global config regardless of what the project file says:
+There are **two** tiers, and the difference is whether the user may delegate the
+setting to the project at all.
+
+**Tier 1 — never, not even with the user's approval.** No trust grant reaches
+these; a project value is discarded unconditionally.
 
 | Section | Why |
 |---|---|
 | `agent_config_writes` | otherwise an agent could enable its own config writes |
-| `[web]`, `[ui]` | daemon-global; a project must not rebind the listener |
+| `[web]` | daemon-global; a project must not rebind the listener |
+| `[ui]` | daemon-global presentation (theme, path style) |
 | `[semantics]` | provider/base URL/API-key env — an SSRF and secret-exfil primitive |
 | `workspace.extra_roots`, `read_roots` | widen filesystem access outside the workspace |
-| `[git]` | the whole tiered safety policy, including `protected_branches` |
-| `[lsp.<lang>]` exec fields | `command`, `args`, `env`, `initialization_options`, `root_markers`, `weak_root_markers` — these decide **which process the daemon spawns and with what** |
+
+**Tier 2 — forced back unless the workspace is trusted for exactly this content.**
+These are real per-project needs, so they are delegable — see below.
+
+| Section | Why it is gated |
+|---|---|
+| `[git]` | the whole tiered safety policy, including `protected_branches`. Taken key by key, unrecognised keys included |
+| `[lsp.<lang>]` | every key except `enabled`, `diagnostics`, `idle_timeout`, `max_workspaces` — the rest decide **which process the daemon spawns and with what** |
+
+The `[lsp.*]` rule is an **inclusion** list, not an exemption list, and the
+comparison is case-insensitive. That is deliberate: go-toml matches keys to
+struct fields case-insensitively, so an exemption list let `Command` through
+invisibly — undisclosed, unhashed, and honoured on a trusted root. An unknown
+key, a fold variant, a typo, or a field a future plumb adds all fail safe.
 
 The LSP row is the one that was missing. Its `command`/`args` reach
 `exec.CommandContext` through the workspace pool, so a repository shipping
