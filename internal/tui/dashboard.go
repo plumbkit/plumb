@@ -82,7 +82,8 @@ func (m *Model) refreshDashboard() {
 		m.dashUptimeTopTools, _ = m.globalDB.Summary(uptimeFilter)
 		// The widget shows at most ten kinds after collapsing; asking for more
 		// buckets than that only pays for rows nothing renders.
-		m.dashUptimeFailures, _ = m.globalDB.FailureSummary(dashFailureBucketLimit, uptimeFilter)
+		failures, _ := m.globalDB.FailureSummary(dashFailureBucketLimit, uptimeFilter)
+		m.dashUptimeFailures = failures.Buckets
 		m.refreshDashboardProject()
 	}
 	chartBuckets := max(m.dashChartWidth, activityBuckets)

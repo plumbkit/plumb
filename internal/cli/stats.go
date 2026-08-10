@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -82,6 +83,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	defer db.Close()
 
 	// Filter stats to the requested workspace, and to the requested window.
+	view := statsView{workspace: ws, limit: statsFlagLimit, since: statsFlagSince}
 	filter := stats.Filter{Workspace: ws}
 	if statsFlagSince != "" {
 		window, err := parseAge(statsFlagSince)
@@ -96,7 +98,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 		printCLIDiagnostic(os.Stdout, cliDiagnostic{
 			Kind:  "info",
 			Title: "No statistics recorded yet",
-			Body:  fmt.Sprintf("No statistics for workspace %s.", render.ContractPath(ws)),
+			Body:  fmt.Sprintf("No statistics for workspace %s%s.", render.ContractPath(ws), view.sinceSuffix()),
 		})
 		return nil
 	}
@@ -117,7 +119,7 @@ func runStats(_ *cobra.Command, _ []string) error {
 	fmt.Println()
 
 	if statsFlagFailures {
-		return printStatsFailures(os.Stdout, db, filter, statsFlagLimit, ws)
+		return printStatsFailures(os.Stdout, db, filter, view)
 	}
 
 	// Tool summary table
@@ -173,10 +175,10 @@ func runStats(_ *cobra.Command, _ []string) error {
 // stats history, because "168h" is not what anyone means by a week.
 func parseAge(s string) (time.Duration, error) {
 	if unit, ok := strings.CutSuffix(s, "d"); ok {
-		return scaledAge(s, unit, 24*time.Hour)
+		return scaledAge(s, unit, "days", 24*time.Hour)
 	}
 	if unit, ok := strings.CutSuffix(s, "w"); ok {
-		return scaledAge(s, unit, 7*24*time.Hour)
+		return scaledAge(s, unit, "weeks", 7*24*time.Hour)
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
@@ -188,10 +190,18 @@ func parseAge(s string) (time.Duration, error) {
 	return d, nil
 }
 
-func scaledAge(orig, n string, unit time.Duration) (time.Duration, error) {
+// scaledAge multiplies a whole number of units into a Duration, refusing a
+// product that would not fit one.
+//
+// The overflow check is on the PRODUCT, not just the input: a Duration is an
+// int64 of nanoseconds, so "9223372036854775807d" wraps to a NEGATIVE duration,
+// which would set the window's start in the FUTURE and report an empty database
+// on a full one — a wrong answer delivered confidently, which is worse than the
+// error the input deserves.
+func scaledAge(orig, n, unitName string, unit time.Duration) (time.Duration, error) {
 	v, err := strconv.Atoi(n)
-	if err != nil || v <= 0 {
-		return 0, fmt.Errorf("--since %q: expected a positive whole number of %s", orig, unit)
+	if err != nil || v <= 0 || int64(v) > int64(math.MaxInt64)/int64(unit) {
+		return 0, fmt.Errorf("--since %q: expected a positive whole number of %s, small enough to be a real age", orig, unitName)
 	}
 	return time.Duration(v) * unit, nil
 }

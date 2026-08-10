@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"time"
 
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -14,27 +13,54 @@ import (
 	"github.com/plumbkit/plumb/internal/tui"
 )
 
+// statsView carries the presentation choices runStats resolved from its flags.
+//
+// since is the RAW `--since` text the user typed, deliberately not a duration or
+// a timestamp. The window label has to echo the request; re-deriving it from
+// filter.Since at render time measures wall-clock instead, which grows by
+// however long the queries took — and on the never-pruned database `--since`
+// exists to tame, three full-table aggregates can easily exceed a second, at
+// which point "7d" renders as "604801s". Carrying the text cannot drift, and it
+// also keeps "2w" reading as 2w rather than 14d.
+type statsView struct {
+	workspace string
+	limit     int
+	since     string
+}
+
+// sinceSuffix names the window a view was scoped to, so a reader is never left
+// guessing whether a count covers an hour or the whole history of the database.
+func (v statsView) sinceSuffix() string {
+	if v.since == "" {
+		return ""
+	}
+	return " (last " + v.since + ")"
+}
+
 // printStatsFailures renders failures grouped by kind, tool and client build.
 // It replaces the default per-tool table rather than joining it: see the flag's
 // registration for why the two views do not share a grain.
-func printStatsFailures(w io.Writer, db *stats.DB, filter stats.Filter, limit int, ws string) error {
-	buckets, err := db.FailureSummary(limit, filter)
+func printStatsFailures(w io.Writer, db *stats.DB, filter stats.Filter, v statsView) error {
+	report, err := db.FailureSummary(v.limit, filter)
 	if err != nil {
 		return fmt.Errorf("querying failure summary: %w", err)
 	}
-	if len(buckets) == 0 {
+	if len(report.Buckets) == 0 {
 		printCLIDiagnostic(w, cliDiagnostic{
 			Kind:  "info",
 			Title: "No failures recorded",
-			Body:  fmt.Sprintf("Every recorded call for %s succeeded.", render.ContractPath(ws)) + sinceSuffix(filter),
+			Body: fmt.Sprintf("Every recorded call for %s succeeded%s.",
+				render.ContractPath(v.workspace), v.sinceSuffix()),
 		})
 		return nil
 	}
 
-	fmt.Fprintln(w, "Failures by Kind"+sinceSuffix(filter))
-	fmt.Fprintln(w, statsFailureTable(buckets))
-	if note := unclassifiedNote(buckets); note != "" {
-		fmt.Fprintln(w, tui.MutedStyle.Render(note))
+	fmt.Fprintln(w, "Failures by Kind"+v.sinceSuffix())
+	fmt.Fprintln(w, statsFailureTable(report.Buckets))
+	for _, note := range []string{unclassifiedNote(report), truncationNote(report)} {
+		if note != "" {
+			fmt.Fprintln(w, tui.MutedStyle.Render(note))
+		}
 	}
 	return nil
 }
@@ -65,39 +91,6 @@ func retryableCell(f stats.FailureCount) string {
 	return strconv.FormatInt(f.Retryable, 10)
 }
 
-// sinceSuffix names the window a view was scoped to, so a reader is never left
-// guessing whether a count covers an hour or the whole history of the database.
-func sinceSuffix(filter stats.Filter) string {
-	if filter.Since.IsZero() {
-		return ""
-	}
-	return " (last " + humanWindow(time.Since(filter.Since)) + ")"
-}
-
-// humanWindow labels a --since window in the largest unit that divides it
-// exactly, so "7d" comes back as "7d" rather than "168h0m0.0002s" — and "90m"
-// stays "90m" rather than rounding away to "1h".
-//
-// The duration is measured as time.Since(filter.Since), which overshoots the
-// requested window by however long the query took, so it is rounded to the
-// second before the divisibility test; without that no unit ever divides evenly.
-func humanWindow(d time.Duration) string {
-	d = d.Round(time.Second)
-	for _, u := range []struct {
-		size   time.Duration
-		suffix string
-	}{
-		{24 * time.Hour, "d"},
-		{time.Hour, "h"},
-		{time.Minute, "m"},
-	} {
-		if d >= u.size && d%u.size == 0 {
-			return strconv.FormatInt(int64(d/u.size), 10) + u.suffix
-		}
-	}
-	return strconv.FormatInt(int64(d/time.Second), 10) + "s"
-}
-
 // statsClientCell renders the client build that made the failing calls, or an
 // em dash when the client never identified itself.
 func statsClientCell(f stats.FailureCount) string {
@@ -112,17 +105,28 @@ func statsClientCell(f stats.FailureCount) string {
 
 // unclassifiedNote explains the unclassified bucket when one is present, so a
 // reader does not mistake it for a kind plumb chose. Silence otherwise.
-func unclassifiedNote(buckets []stats.FailureCount) string {
-	var n int64
-	for _, f := range buckets {
-		if f.Kind == "" {
-			n += f.Calls
-		}
-	}
+//
+// The count comes from the whole-filter total, never from the rendered buckets:
+// those are capped, so counting them would under-report the very thing the note
+// exists to be honest about.
+func unclassifiedNote(r stats.FailureReport) string {
+	n := r.UnclassifiedCalls
 	if n == 0 {
 		return ""
 	}
 	return fmt.Sprintf("↳ %d %s no classification: recorded before the failure columns "+
 		"existed, or a failure plumb makes no structured claim about. Nothing is "+
 		"inferred from the error text.", n, textfmt.Plural(n, "failure carries", "failures carry"))
+}
+
+// truncationNote says that a bounded view is bounded. Without it a reader takes
+// the rows on screen for the whole picture — three buckets of five hundred and
+// five calls looks exactly like three buckets of three.
+func truncationNote(r stats.FailureReport) string {
+	if !r.Truncated() {
+		return ""
+	}
+	return fmt.Sprintf("↳ showing %d of %d %s (%d of %d failed calls); raise --limit, or narrow with --since.",
+		len(r.Buckets), r.TotalBuckets, textfmt.Plural(r.TotalBuckets, "bucket", "buckets"),
+		r.ShownCalls(), r.TotalCalls)
 }
