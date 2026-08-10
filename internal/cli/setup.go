@@ -77,7 +77,9 @@ directory instead, scoping plumb to that project only.`,
 // Gemini CLI and Codex register through the shared runSetupTarget body (see
 // setup_clients.go). Their own command functions used to be line-for-line copies
 // of it, which meant a fix to the registration flow had to be made in three
-// places; the two clients differ only in the target description.
+// places; the two clients differ only in the target description. Both take
+// --lean, registered through their targets' flags hook (see setup_lean.go) so
+// the option travels with the target description rather than the command.
 var setupGeminiCmd = &cobra.Command{
 	Use:   "gemini",
 	Short: "Register plumb as an MCP server in Gemini CLI's config",
@@ -104,7 +106,9 @@ func init() {
 	setupCmd.AddCommand(setupClaudeDesktopCmd)
 	setupClaudeCodeCmd.Flags().BoolVar(&setupClaudeCodeProjectFlag, "project", false, "Write to .mcp.json in the current directory (project-scoped)")
 	setupCmd.AddCommand(setupClaudeCodeCmd)
+	registerTargetFlags(setupGeminiCmd, geminiTarget)
 	setupCmd.AddCommand(setupGeminiCmd)
+	registerTargetFlags(setupCodexCmd, codexTarget)
 	setupCmd.AddCommand(setupCodexCmd)
 }
 
@@ -225,12 +229,5 @@ func setupClaudeCodeInto(cfgPath, plumbBin string) (added bool, preserved []stri
 	)
 }
 
-// setupCodexInto merges the plumb entry into Codex's TOML config.
-func setupCodexInto(cfgPath, plumbBin string) (added bool, preserved []string, err error) {
-	return mergeServerEntry(cfgPath, "mcp_servers", readOrInitCodexConfig, writeTOML,
-		map[string]any{"command": plumbBin, "args": []string{"serve"}},
-		func(existing map[string]any) bool {
-			return existing["command"] == plumbBin && stringSliceEqual(existing["args"], []string{"serve"})
-		},
-	)
-}
+// setupCodexInto and setupGeminiInto live in setup_lean.go — both clients take
+// --lean, so their writers share the client-side allowlist seam.
