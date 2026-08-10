@@ -74,19 +74,28 @@ func sinceSuffix(filter stats.Filter) string {
 	return " (last " + humanWindow(time.Since(filter.Since)) + ")"
 }
 
-// humanWindow labels a --since window in the largest unit that still reads as a
-// whole number, so "7d" comes back as "7d" rather than "168h0m0.0002s".
+// humanWindow labels a --since window in the largest unit that divides it
+// exactly, so "7d" comes back as "7d" rather than "168h0m0.0002s" — and "90m"
+// stays "90m" rather than rounding away to "1h".
+//
+// The duration is measured as time.Since(filter.Since), which overshoots the
+// requested window by however long the query took, so it is rounded to the
+// second before the divisibility test; without that no unit ever divides evenly.
 func humanWindow(d time.Duration) string {
-	switch {
-	case d >= 48*time.Hour:
-		return strconv.Itoa(int(d.Hours()/24)) + "d"
-	case d >= 2*time.Hour:
-		return strconv.Itoa(int(d.Hours())) + "h"
-	case d >= 2*time.Minute:
-		return strconv.Itoa(int(d.Minutes())) + "m"
-	default:
-		return strconv.Itoa(int(d.Seconds())) + "s"
+	d = d.Round(time.Second)
+	for _, u := range []struct {
+		size   time.Duration
+		suffix string
+	}{
+		{24 * time.Hour, "d"},
+		{time.Hour, "h"},
+		{time.Minute, "m"},
+	} {
+		if d >= u.size && d%u.size == 0 {
+			return strconv.FormatInt(int64(d/u.size), 10) + u.suffix
+		}
 	}
+	return strconv.FormatInt(int64(d/time.Second), 10) + "s"
 }
 
 // statsClientCell renders the client build that made the failing calls, or an
