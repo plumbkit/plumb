@@ -11,9 +11,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
@@ -355,11 +355,8 @@ const insertCallSQL = `INSERT INTO tool_calls
 	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // validateCall reports the required-field error for c, or nil when storable.
-//
-// The classification fields are checked against their closed vocabularies
-// rather than stored as free text: error_kind and remediation_class exist to be
-// GROUPed, and one invented label would quietly split a bucket in every failure
-// report that ever reads the table.
+// These three are the row's identity: without them it cannot be attributed to a
+// workspace, a session, or a tool, and there is nothing to store.
 func validateCall(c Call) error {
 	switch {
 	case c.Workspace == "":
@@ -368,12 +365,53 @@ func validateCall(c Call) error {
 		return errors.New("stats: session_id is required")
 	case c.Tool == "":
 		return errors.New("stats: tool is required")
-	case c.ErrorKind != "" && !c.ErrorKind.Valid():
-		return fmt.Errorf("stats: %q is not a declared toolerror.Kind", c.ErrorKind)
-	case c.RemediationClass != "" && !slices.Contains(toolerror.AllRemediationClasses(), c.RemediationClass):
-		return fmt.Errorf("stats: %q is not a declared toolerror.RemediationClass", c.RemediationClass)
 	}
 	return nil
+}
+
+// normaliseCall blanks a classification that is not in toolerror's declared
+// vocabulary, and reports what it dropped.
+//
+// error_kind and remediation_class are GROUP BY keys, so an invented label would
+// quietly split a bucket in every failure report that ever reads the table — but
+// the answer to that is to drop the LABEL, not the row. The classification is
+// the optional part of a telemetry row; the duration, the savings, the tool and
+// the client identity are not, and refusing the whole row over a bad label would
+// trade a large certain loss for a small one. A dropped label also takes the
+// retryability derived from it, which would otherwise be a claim with nothing
+// behind it.
+//
+// Nothing can trigger this today — every classified seam uses a declared
+// constant — so it is a guard against a future typo, not a live path. That is
+// exactly why it must not be silent: see the slog.Warn at its call sites.
+func normaliseCall(c Call) (Call, string) {
+	var dropped string
+	if c.ErrorKind != "" && !c.ErrorKind.Valid() {
+		dropped = "error_kind=" + string(c.ErrorKind)
+		c.ErrorKind = ""
+	}
+	if c.RemediationClass != "" && !c.RemediationClass.Valid() {
+		if dropped != "" {
+			dropped += " "
+		}
+		dropped += "remediation_class=" + string(c.RemediationClass)
+		c.RemediationClass = ""
+		c.ErrorRetryable = false
+	}
+	return c, dropped
+}
+
+// storableCall is the one gate every insert path goes through: it normalises
+// the classification, says so when it drops one, and then applies the
+// required-field check. Sharing it is what keeps Record and RecordBatch from
+// disagreeing about which rows are storable.
+func storableCall(c Call) (Call, error) {
+	c, dropped := normaliseCall(c)
+	if dropped != "" {
+		slog.Warn("stats: dropped an undeclared failure classification; the row is stored without it",
+			"tool", c.Tool, "dropped", dropped)
+	}
+	return c, validateCall(c)
 }
 
 // callArgs returns the positional bind arguments for insertCallSQL.
@@ -405,7 +443,8 @@ func (d *DB) Record(c Call) error {
 	if d == nil {
 		return nil
 	}
-	if err := validateCall(c); err != nil {
+	c, err := storableCall(c)
+	if err != nil {
 		return err
 	}
 	d.mu.Lock()
@@ -437,7 +476,8 @@ func (d *DB) RecordBatch(calls []Call) (skipped int, err error) {
 	}
 	defer stmt.Close()
 	for _, c := range calls {
-		if validateCall(c) != nil {
+		c, err := storableCall(c)
+		if err != nil {
 			skipped++
 			continue
 		}

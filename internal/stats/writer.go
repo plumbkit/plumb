@@ -152,8 +152,16 @@ func (w *Writer) run() {
 		if len(batch) == 0 {
 			return
 		}
-		if _, err := w.db.RecordBatch(batch); err != nil {
+		skipped, err := w.db.RecordBatch(batch)
+		if err != nil {
 			slog.Warn("stats: batch insert failed", "n", len(batch), "err", err)
+		}
+		// A skipped row is telemetry that silently never existed. Nothing should
+		// reach here — the daemon always supplies a workspace, session and tool —
+		// so a non-zero count is a bug upstream, and the only way to learn of it
+		// is to say so.
+		if skipped > 0 {
+			slog.Warn("stats: dropped unstorable rows from a batch", "skipped", skipped, "n", len(batch))
 		}
 		batch = batch[:0]
 	}
