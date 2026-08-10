@@ -529,17 +529,33 @@
   folded into `internal`, which is a deliberate classification rather than an
   absence of one. Their retryable count renders as `—`, not `0`: the honest
   answer is "unknown", and a zero would read as "we checked". Because
-  `tool_calls` is never pruned, **classified buckets sort ahead of the
-  unclassified one regardless of size** — ordering purely by count would bury
+  `tool_calls` is never pruned, **classified buckets come ahead of the
+  unclassified ones regardless of size** — ordering purely by count would bury
   every actionable bucket, permanently, under a row whose only message is
   "this predates the feature".
+
+  The unclassified buckets are fetched by their own query with their own small
+  cap, so the limit **cannot** delete them: classified-first ordering means
+  classified buckets consume the limit, and a single `LIMIT` over the combined
+  ordering would have cut the unclassified bucket first — the fix quietly
+  undoing the promise. Every count a reader is shown comes from whole-filter
+  totals rather than from the rendered rows, so the note stays right when the
+  buckets are capped, and a bounded view announces itself with a footer naming
+  the buckets and calls it omits.
 
 - **`plumb stats --since <age>`.** Scopes the whole command — summary, recent
   calls and the failure view — to calls newer than the given age. It accepts
   Go's duration syntax plus the `d` and `w` suffixes, because `168h` is not
-  what anyone means by a week. The database is never pruned, so without a
-  window every view eventually reports mostly history;
-  `plumb stats --failures --since 7d` is the useful triage call.
+  what anyone means by a week — and the multiplication is overflow-checked, so
+  an absurd age is refused rather than wrapping to a negative duration that
+  would put the window's start in the future and report an empty database on a
+  full one. The window label echoes what was typed rather than re-deriving it
+  from wall-clock at render time, which drifts by however long the queries took
+  (`--since 7d` rendering as `604801s` after 600 ms of scans). Both empty
+  states name the window, so "nothing in your window" never reads as "no
+  history". The database is never pruned, so without a window every view
+  eventually reports mostly history; `plumb stats --failures --since 7d` is the
+  useful triage call.
 
 - **A "Failures by Kind (uptime)" widget on the TUI dashboard.** It appears only
   when this daemon run has recorded a failure, and collapses the buckets to the

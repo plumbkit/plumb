@@ -27,6 +27,13 @@ const UnclassifiedLabel = "unclassified"
 // should say so.
 const defaultFailureBuckets = 100
 
+// unclassifiedBucketCap bounds the unclassified side of the split. It is small
+// because the breakdown there is barely actionable — "40 failures in git that
+// plumb could not classify" is not a finding you can act on the way a kind is —
+// and because the honest total always comes from
+// FailureReport.UnclassifiedCalls rather than from these rows.
+const unclassifiedBucketCap = 10
+
 // FailureCount is one bucket of the failure breakdown.
 //
 // Two of the four grouping keys are low-cardinality by construction: Kind is a
@@ -62,22 +69,66 @@ func (f FailureCount) Label() string {
 	return string(f.Kind)
 }
 
-// FailureSummary returns the n busiest failure buckets matching filter, grouped
-// by kind, tool and client build. n <= 0 applies defaultFailureBuckets.
+// FailureReport is a BOUNDED view of the failures matching a filter, together
+// with the whole-filter totals it was bounded against.
 //
-// CLASSIFIED BUCKETS SORT FIRST, ahead of the unclassified one regardless of
+// The totals are not derived from Buckets and must not be: Buckets is truncated
+// by the limit, so counting it would silently under-report by exactly the amount
+// the limit removed. Every count a reader is shown — the unclassified note, the
+// truncation footer — comes from these fields, which are computed over the whole
+// filter regardless of what the view shows.
+type FailureReport struct {
+	Buckets []FailureCount
+
+	// TotalBuckets is how many buckets match the filter, before the limit.
+	TotalBuckets int64
+	// TotalCalls is how many failed calls match the filter, in all buckets.
+	TotalCalls int64
+	// UnclassifiedCalls is how many of TotalCalls carry no classification —
+	// counted over the whole filter, so it stays right even when the
+	// unclassified buckets themselves are truncated.
+	UnclassifiedCalls int64
+}
+
+// Truncated reports whether Buckets omits a bucket the filter matched. A view
+// that is bounded must say so; a footer built on this is the only thing standing
+// between a reader and quietly reading 3 buckets of 505 as the whole picture.
+func (r FailureReport) Truncated() bool { return int64(len(r.Buckets)) < r.TotalBuckets }
+
+// ShownCalls sums the calls covered by Buckets, for a footer that can state what
+// fraction of the failures the view actually accounts for.
+func (r FailureReport) ShownCalls() int64 {
+	var n int64
+	for _, f := range r.Buckets {
+		n += f.Calls
+	}
+	return n
+}
+
+// FailureSummary returns the n busiest CLASSIFIED failure buckets matching
+// filter, grouped by kind, tool and client build, plus the unclassified buckets
+// and the whole-filter totals. n <= 0 applies defaultFailureBuckets.
+//
+// CLASSIFIED BUCKETS COME FIRST, ahead of the unclassified ones regardless of
 // size. `tool_calls` is never pruned, so on any installation with history the
-// pre-v14 failures outnumber the classified ones for a long time — sorting
+// pre-v14 failures outnumber the classified ones for a long time — ordering
 // purely by count buries every actionable bucket under a row that says only
-// "this predates the feature", and the LIMIT would then spend itself on it. The
-// unclassified bucket is a known unknown, not a finding: it belongs last, where
-// its note explains it.
+// "this predates the feature".
 //
-// It is reported, never dropped: a report that silently omitted it would
-// understate the failure count by exactly the amount it understands least.
-func (d *DB) FailureSummary(n int, filter Filter) ([]FailureCount, error) {
+// THE UNCLASSIFIED BUCKETS ARE FETCHED SEPARATELY, so the limit cannot delete
+// them. Ordering classified-first and then applying one LIMIT would have made
+// the unclassified bucket the FIRST thing cut — the fix quietly undoing the
+// promise below. They carry their own small cap instead, because they are
+// grouped by tool and client too and are no more bounded than the classified
+// ones; when that cap bites, the counts a reader sees still come from
+// UnclassifiedCalls, which is computed over every matching row.
+//
+// So the unclassified failures are always reported, never dropped: a report that
+// silently omitted them would understate the failure count by exactly the amount
+// it understands least.
+func (d *DB) FailureSummary(n int, filter Filter) (FailureReport, error) {
 	if d == nil {
-		return nil, nil
+		return FailureReport{}, nil
 	}
 	if n <= 0 {
 		n = defaultFailureBuckets
@@ -88,17 +139,52 @@ func (d *DB) FailureSummary(n int, filter Filter) ([]FailureCount, error) {
 	} else {
 		where += " AND success = 0"
 	}
+
+	report, err := d.failureTotals(where, args)
+	if err != nil {
+		return FailureReport{}, err
+	}
+	classified, err := d.failureBuckets(where+" AND error_kind <> ''", args, n)
+	if err != nil {
+		return FailureReport{}, err
+	}
+	unclassified, err := d.failureBuckets(where+" AND error_kind = ''", args, unclassifiedBucketCap)
+	if err != nil {
+		return FailureReport{}, err
+	}
+	report.Buckets = append(classified, unclassified...)
+	return report, nil
+}
+
+// failureTotals counts the whole filter in one pass: buckets, failed calls, and
+// the unclassified share. The outer aggregate over the grouped subquery is what
+// makes the bucket count exact without concatenating the grouping keys into a
+// synthetic one.
+func (d *DB) failureTotals(where string, args []any) (FailureReport, error) {
+	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
+	q := `SELECT COUNT(*), COALESCE(SUM(calls), 0), COALESCE(SUM(unclassified), 0) FROM (
+	          SELECT COUNT(*) AS calls,
+	                 SUM(CASE WHEN error_kind = '' THEN 1 ELSE 0 END) AS unclassified
+	          FROM tool_calls` + where + `
+	          GROUP BY error_kind, tool, client_name, client_version)`
+	var r FailureReport
+	if err := d.db.QueryRow(q, args...).Scan(&r.TotalBuckets, &r.TotalCalls, &r.UnclassifiedCalls); err != nil {
+		return FailureReport{}, fmt.Errorf("stats: failure totals: %w", err)
+	}
+	return r, nil
+}
+
+// failureBuckets runs the grouped query for one side of the classified split.
+func (d *DB) failureBuckets(where string, args []any, limit int) ([]FailureCount, error) {
 	//nolint:gosec // G202: where is built by filter.where() using ? placeholders only; no user values interpolated
 	q := `SELECT error_kind, tool, client_name, client_version,
 	             COUNT(*) AS calls,
 	             COALESCE(SUM(error_retryable), 0) AS retryable
 	      FROM tool_calls` + where + `
 	      GROUP BY error_kind, tool, client_name, client_version
-	      ORDER BY (error_kind = '') ASC, calls DESC, error_kind, tool
+	      ORDER BY calls DESC, error_kind, tool
 	      LIMIT ?`
-	args = append(args, n)
-
-	rows, err := d.db.Query(q, args...)
+	rows, err := d.db.Query(q, append(append([]any{}, args...), limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("stats: failure summary: %w", err)
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestPrintStatsFailures_RendersEachBucket(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, 0, "/w"); err != nil {
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w"}); err != nil {
 		t.Fatalf("printStatsFailures: %v", err)
 	}
 	got := out.String()
@@ -72,7 +73,7 @@ func TestPrintStatsFailures_LabelsUnclassified(t *testing.T) {
 	db := failuresDB(t, stats.Call{Tool: "git", ClientName: "claude-code", ErrorMsg: "boom"})
 
 	var out bytes.Buffer
-	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, 0, "/w"); err != nil {
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w"}); err != nil {
 		t.Fatalf("printStatsFailures: %v", err)
 	}
 	got := out.String()
@@ -91,7 +92,7 @@ func TestPrintStatsFailures_NoFailuresSaysSo(t *testing.T) {
 	db := failuresDB(t, stats.Call{Tool: "read_file", Success: true})
 
 	var out bytes.Buffer
-	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, 0, "/w"); err != nil {
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w"}); err != nil {
 		t.Fatalf("printStatsFailures: %v", err)
 	}
 	if !strings.Contains(out.String(), "No failures recorded") {
@@ -131,26 +132,21 @@ func TestPrintStatsFailures_UnknownRetryabilityIsNotZero(t *testing.T) {
 	}
 }
 
-func TestSinceSuffix_NamesTheWindow(t *testing.T) {
-	if got := sinceSuffix(stats.Filter{}); got != "" {
+// TestSinceSuffix_EchoesTheRequest pins that the window label comes from what
+// the user asked for, not from wall-clock at render time. The filter's Since is
+// deliberately set NOWHERE NEAR the requested window: a renderer that measured
+// time.Since(filter.Since) would report ~30d here, and would in real use drift
+// by however long the queries took — three full-table aggregates run between
+// building the filter and printing the label.
+func TestSinceSuffix_EchoesTheRequest(t *testing.T) {
+	if got := (statsView{}).sinceSuffix(); got != "" {
 		t.Errorf("an unscoped view claimed a window: %q", got)
 	}
-	// Each window is measured back from now, exactly as runStats builds it, so
-	// the label is asserted against the real overshoot rather than a clean value.
-	for _, tc := range []struct {
-		window time.Duration
-		want   string
-	}{
-		{7 * 24 * time.Hour, " (last 7d)"},
-		{14 * 24 * time.Hour, " (last 14d)"},
-		{time.Hour, " (last 1h)"},
-		{90 * time.Minute, " (last 90m)"},
-		{45 * time.Second, " (last 45s)"},
-	} {
-		t.Run(tc.want, func(t *testing.T) {
-			got := sinceSuffix(stats.Filter{Since: time.Now().Add(-tc.window)})
-			if got != tc.want {
-				t.Errorf("sinceSuffix(%v) = %q, want %q", tc.window, got, tc.want)
+	for _, want := range []string{"7d", "2w", "1h", "90m", "45s"} {
+		t.Run(want, func(t *testing.T) {
+			v := statsView{since: want}
+			if got := v.sinceSuffix(); got != " (last "+want+")" {
+				t.Errorf("sinceSuffix() = %q, want %q", got, " (last "+want+")")
 			}
 		})
 	}
@@ -188,5 +184,98 @@ func TestParseAge(t *testing.T) {
 				t.Errorf("parseAge(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestPrintStatsFailures_TruncationIsAnnounced covers the reader-facing half of
+// the bound: a view showing three buckets of five hundred looks exactly like a
+// view showing three of three unless it says otherwise.
+func TestPrintStatsFailures_TruncationIsAnnounced(t *testing.T) {
+	calls := make([]stats.Call, 0, 20)
+	for i := range 20 {
+		calls = append(calls, stats.Call{
+			Tool: "edit_file", ClientName: "claude-code", ClientVersion: strconv.Itoa(i),
+			ErrorKind: toolerror.KindDirtyFile, RemediationClass: toolerror.ClassPassDirtyOk, ErrorRetryable: true,
+		})
+	}
+	db := failuresDB(t, calls...)
+
+	var out bytes.Buffer
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w", limit: 3}); err != nil {
+		t.Fatalf("printStatsFailures: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "showing 3 of 20 buckets") {
+		t.Errorf("a bounded view did not say it was bounded:\n%s", got)
+	}
+	if !strings.Contains(got, "3 of 20 failed calls") {
+		t.Errorf("the footer did not account for the calls the view omits:\n%s", got)
+	}
+
+	// The same data with room for every bucket must not claim to be partial.
+	out.Reset()
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w"}); err != nil {
+		t.Fatalf("printStatsFailures: %v", err)
+	}
+	if strings.Contains(out.String(), "showing") {
+		t.Errorf("a complete view claimed to be truncated:\n%s", out.String())
+	}
+}
+
+// TestPrintStatsFailures_UnclassifiedNoteCountsBeyondTheLimit is the CLI half of
+// the same guarantee: the note must report every unclassified failure, not just
+// the ones whose buckets survived the cap.
+func TestPrintStatsFailures_UnclassifiedNoteCountsBeyondTheLimit(t *testing.T) {
+	calls := make([]stats.Call, 0, 40)
+	for i := range 40 {
+		calls = append(calls, stats.Call{
+			Tool: "git", ClientName: "claude-code", ClientVersion: strconv.Itoa(i), ErrorMsg: "old prose",
+		})
+	}
+	db := failuresDB(t, calls...)
+
+	var out bytes.Buffer
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w", limit: 2}); err != nil {
+		t.Fatalf("printStatsFailures: %v", err)
+	}
+	if !strings.Contains(out.String(), "40 failures carry no classification") {
+		t.Errorf("the note counted only the rendered buckets:\n%s", out.String())
+	}
+}
+
+// TestPrintStatsFailures_EmptyStateNamesTheWindow guards the second empty state:
+// "every call succeeded" reads as "no failures ever" unless the window is named.
+func TestPrintStatsFailures_EmptyStateNamesTheWindow(t *testing.T) {
+	db := failuresDB(t, stats.Call{Tool: "read_file", Success: true})
+
+	var out bytes.Buffer
+	if err := printStatsFailures(&out, db, stats.Filter{Workspace: "/w"}, statsView{workspace: "/w", since: "30m"}); err != nil {
+		t.Fatalf("printStatsFailures: %v", err)
+	}
+	if !strings.Contains(out.String(), "(last 30m)") {
+		t.Errorf("the empty state did not name the window it was scoped to:\n%s", out.String())
+	}
+}
+
+// TestParseAgeRejectsOverflow guards the multiply. A Duration is an int64 of
+// nanoseconds, so a large day count wraps NEGATIVE, which would put the window's
+// start in the future and report an empty database on a full one — a confident
+// wrong answer, worse than the error the input deserves.
+func TestParseAgeRejectsOverflow(t *testing.T) {
+	for _, in := range []string{"9223372036854775807d", "100000000000d", "9223372036854775807w", "20000000000w"} {
+		t.Run(in, func(t *testing.T) {
+			got, err := parseAge(in)
+			if err == nil {
+				t.Errorf("parseAge(%q) = %v, want an error", in, got)
+			}
+			if got < 0 {
+				t.Errorf("parseAge(%q) returned a NEGATIVE age (%v): the window would start in the future", in, got)
+			}
+		})
+	}
+	// The largest value that still fits must keep working, so the guard is a
+	// bound rather than a blanket refusal of large ages.
+	if _, err := parseAge("100000d"); err != nil {
+		t.Errorf("parseAge(100000d): %v", err)
 	}
 }

@@ -371,9 +371,14 @@ is one row per (kind × tool × client). `--limit` caps how many buckets are sho
 Failures plumb makes no structured claim about — and every call recorded before
 the classification columns existed — appear under an explicit `unclassified`
 label, always last, with their retryable count shown as `—` because the honest
-answer is "unknown" rather than zero. Nothing is inferred from the stored error
-text, so that bucket is honest about what is unknown rather than folded into
-`internal`.
+answer is "unknown" rather than zero. They are fetched outside the `--limit`, so
+raising or lowering it never makes them disappear, and the note beneath the table
+counts **every** unclassified failure the filter matched, not just the rows on
+screen. Nothing is inferred from the stored error text, so that bucket is honest
+about what is unknown rather than folded into `internal`.
+
+A bounded view says so: when `--limit` cuts buckets, a footer reports how many
+buckets and failed calls the table is leaving out.
 
 > The database is never pruned, so on an installation with history the
 > pre-classification failures outnumber the classified ones for a long time.

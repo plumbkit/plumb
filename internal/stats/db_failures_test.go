@@ -67,7 +67,8 @@ func findBucket(t *testing.T, got []FailureCount, label, tool, version string) F
 func TestFailureSummaryGroupsByKindToolAndClient(t *testing.T) {
 	db := failureFixture(t)
 
-	got, err := db.FailureSummary(0, Filter{})
+	report, err := db.FailureSummary(0, Filter{})
+	got := report.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -99,7 +100,8 @@ func TestFailureSummaryGroupsByKindToolAndClient(t *testing.T) {
 func TestFailureSummaryReportsUnclassifiedSeparately(t *testing.T) {
 	db := failureFixture(t)
 
-	got, err := db.FailureSummary(0, Filter{})
+	report, err := db.FailureSummary(0, Filter{})
+	got := report.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -124,7 +126,8 @@ func TestFailureSummaryExcludesSuccessesAndHonoursFilter(t *testing.T) {
 	db := failureFixture(t)
 
 	var total int64
-	all, err := db.FailureSummary(0, Filter{})
+	allReport, err := db.FailureSummary(0, Filter{})
+	all := allReport.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -135,7 +138,8 @@ func TestFailureSummaryExcludesSuccessesAndHonoursFilter(t *testing.T) {
 		t.Errorf("counted %d failures, want 5 (the successful call must not appear)", total)
 	}
 
-	scoped, err := db.FailureSummary(0, Filter{Tool: "edit_file"})
+	scopedReport, err := db.FailureSummary(0, Filter{Tool: "edit_file"})
+	scoped := scopedReport.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary(Tool): %v", err)
 	}
@@ -148,7 +152,8 @@ func TestFailureSummaryExcludesSuccessesAndHonoursFilter(t *testing.T) {
 		t.Errorf("got %d buckets for edit_file, want 2 (one per client build): %+v", len(scoped), scoped)
 	}
 
-	empty, err := db.FailureSummary(0, Filter{Workspace: "/elsewhere"})
+	emptyReport, err := db.FailureSummary(0, Filter{Workspace: "/elsewhere"})
+	empty := emptyReport.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary(Workspace): %v", err)
 	}
@@ -191,7 +196,8 @@ func TestFailureSummaryPutsClassifiedFirst(t *testing.T) {
 		}
 	}
 
-	got, err := db.FailureSummary(0, Filter{})
+	report, err := db.FailureSummary(0, Filter{})
+	got := report.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
@@ -229,14 +235,16 @@ func TestFailureSummaryBoundsTheResultSet(t *testing.T) {
 		}
 	}
 
-	got, err := db.FailureSummary(0, Filter{})
+	report, err := db.FailureSummary(0, Filter{})
+	got := report.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
 	if len(got) != defaultFailureBuckets {
 		t.Errorf("got %d buckets with no explicit limit, want the %d default", len(got), defaultFailureBuckets)
 	}
-	got, err = db.FailureSummary(5, Filter{})
+	report, err = db.FailureSummary(5, Filter{})
+	got = report.Buckets
 	if err != nil {
 		t.Fatalf("FailureSummary(5): %v", err)
 	}
@@ -268,11 +276,14 @@ func TestFailureSummaryHonoursSince(t *testing.T) {
 		t.Fatalf("Record new: %v", err)
 	}
 
-	got, err := db.FailureSummary(0, Filter{Since: now.Add(-time.Hour)})
+	report, err := db.FailureSummary(0, Filter{Since: now.Add(-time.Hour)})
 	if err != nil {
 		t.Fatalf("FailureSummary: %v", err)
 	}
-	if len(got) != 1 || got[0].Kind != toolerror.KindDirtyFile {
-		t.Fatalf("Since did not exclude the 48h-old unclassified failure: %+v", got)
+	if len(report.Buckets) != 1 || report.Buckets[0].Kind != toolerror.KindDirtyFile {
+		t.Fatalf("Since did not exclude the 48h-old unclassified failure: %+v", report.Buckets)
+	}
+	if report.UnclassifiedCalls != 0 || report.TotalCalls != 1 {
+		t.Errorf("totals ignored the filter: %d unclassified of %d calls", report.UnclassifiedCalls, report.TotalCalls)
 	}
 }
