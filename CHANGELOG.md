@@ -457,8 +457,19 @@
   precise failure this mechanism exists to prevent. `looksLikeRevision` now
   requires seven or more hex digits and nothing else (git object names are hex
   in both the SHA-1 and SHA-256 formats, so no real revision is rejected), and
-  an implausible stamp falls through to the next source rather than
-  short-circuiting to unknown — a failed stamp is not a stamp.
+  such a stamp yields unknown. The **presence** of a stamp, not its
+  plausibility, decides which source answers: an implausible stamp must not
+  defer to `debug.ReadBuildInfo()`, because the only situations that produce one
+  are also situations where the embedded settings describe the OUTER module.
+  Deferring there was measured, with a real binary, to report plumb-ops' HEAD as
+  this repository's — `revision_known: true` and a `dirty` flag about the wrong
+  tree — which is strictly worse than the `"none"` it replaced. The costs are
+  asymmetric: short-circuiting forfeits a correct answer only for a hand-rolled
+  stamp nothing in this project produces, while deferring manufactures a wrong
+  one in the single case that occurs. Guarded by two `TestResolveProvenance`
+  cases (a placeholder stamp alongside foreign build info, and an implausible
+  stamp's dirty flag being discarded with it), both confirmed to fail against
+  the reintroduced fall-through.
 
 ### Changed
 

@@ -82,7 +82,8 @@ type BuildProvenance struct {
 // the three ldflags stamps and the already-flattened build-info settings — so
 // every branch is testable without mutating package-level state:
 //
-//  1. the ldflags stamps, when present and plausible, always win;
+//  1. the ldflags stamps, whenever a revision stamp is present at all — the
+//     presence of a stamp, not its plausibility, decides which source answers;
 //  2. otherwise debug.ReadBuildInfo()'s vcs.revision / vcs.modified settings;
 //  3. otherwise unknown, reported honestly as such — never guessed, and never
 //     blank-passed-off-as-clean.
@@ -94,9 +95,22 @@ type BuildProvenance struct {
 func resolveProvenance(revStamp, dirtyStamp, channelStamp string, settings map[string]string) BuildProvenance {
 	p := BuildProvenance{Channel: channelStamp}
 	switch {
-	case looksLikeRevision(revStamp):
-		p.Revision, p.RevisionKnown = revStamp, true
-		p.Dirty, p.DirtyKnown = parseBoolStamp(dirtyStamp)
+	case revStamp != "":
+		// A present stamp claims the answer outright. If it is not a plausible
+		// SHA the stamper malfunctioned, and the honest result is unknown — we do
+		// NOT then fall through to the embedded settings, because the only
+		// scenario that reaches this branch (GoReleaser unable to resolve git
+		// info, rendering {{ .FullCommit }} as "none") is precisely a scenario
+		// where those settings describe the OUTER module. Falling through there
+		// reports plumb-ops' HEAD as this repository's, confidently and wrongly,
+		// which is strictly worse than the placeholder it replaced. The costs are
+		// asymmetric: short-circuiting forfeits a correct answer only for a
+		// hand-rolled stamp that nothing in this project produces, while falling
+		// through manufactures a wrong one in the one case that occurs.
+		if looksLikeRevision(revStamp) {
+			p.Revision, p.RevisionKnown = revStamp, true
+			p.Dirty, p.DirtyKnown = parseBoolStamp(dirtyStamp)
+		}
 	case looksLikeRevision(settings["vcs.revision"]):
 		p.Revision, p.RevisionKnown = settings["vcs.revision"], true
 		p.Dirty, p.DirtyKnown = parseBoolStamp(settings["vcs.modified"])
@@ -113,9 +127,9 @@ func resolveProvenance(revStamp, dirtyStamp, channelStamp string, settings map[s
 // configured — and reporting revision "none" as revision_known would be exactly
 // the unknown-presented-as-known this mechanism exists to prevent. Git object
 // names are hex in both the SHA-1 and SHA-256 formats, so rejecting non-hex
-// rejects placeholders without rejecting any real revision. An implausible
-// stamp falls through to the next source rather than short-circuiting to
-// unknown: a failed stamp is not a stamp.
+// rejects placeholders without rejecting any real revision. See
+// resolveProvenance for why an implausible stamp yields unknown rather than
+// deferring to the embedded VCS settings.
 func looksLikeRevision(s string) bool {
 	if len(s) < 7 || len(s) > 64 {
 		return false

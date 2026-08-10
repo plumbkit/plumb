@@ -71,20 +71,40 @@ func TestResolveProvenance(t *testing.T) {
 		{
 			// GoReleaser renders {{ .FullCommit }} as the literal "none" when it
 			// cannot resolve git info (a --snapshot build in a remote-less clone).
-			// A failed stamp is not a stamp: fall through to the next source.
-			name:         "placeholder revision stamp falls through to build info",
+			// A failed stamp must NOT defer to the embedded settings: the only
+			// scenario that produces it is also one where those settings describe
+			// the OUTER module, so deferring would report plumb-ops' HEAD as this
+			// repository's — confidently wrong, and strictly worse than the
+			// placeholder. Verified with a real binary: a "none" stamp under the
+			// old fall-through reported the superproject's SHA with
+			// revision_known: true.
+			name:         "placeholder revision stamp is unknown, never the outer module",
 			rev:          "none",
 			dirty:        "false",
 			settings:     map[string]string{"vcs.revision": embedded, "vcs.modified": "true"},
-			wantRevision: embedded,
-			wantRevKnown: true,
-			wantDirty:    true,
-			wantDirtyOK:  true,
+			wantRevision: "",
+			wantRevKnown: false,
+			wantDirty:    false,
+			wantDirtyOK:  false,
 		},
 		{
 			name:         "placeholder revision stamp with no build info is unknown",
 			rev:          "none",
 			dirty:        "false",
+			wantRevision: "",
+			wantRevKnown: false,
+			wantDirty:    false,
+			wantDirtyOK:  false,
+		},
+		{
+			// The dirty stamp must not survive its revision either: reporting a
+			// tree state about a commit we cannot name is meaningless, and pairing
+			// it with the outer module's SHA is how the wrong-commit report was
+			// built in the first place.
+			name:         "implausible stamp discards its dirty flag too",
+			rev:          "HEAD",
+			dirty:        "true",
+			settings:     map[string]string{"vcs.revision": embedded, "vcs.modified": "false"},
 			wantRevision: "",
 			wantRevKnown: false,
 			wantDirty:    false,
