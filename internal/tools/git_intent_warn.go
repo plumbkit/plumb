@@ -66,6 +66,16 @@ func (t *Git) peerIntentWarnFn(sub string, tier gitTier) func(context.Context, s
 	}
 }
 
+// intentWarningBudget returns t.hintBudgetBytes(), or 0 (unbounded, matching
+// textfmt.ClampBytes' convention) when the connection never wired it — a test
+// double that only sets intentsOn/collabStore, say.
+func (t *Git) intentWarningBudget() int {
+	if t.hintBudgetBytes == nil {
+		return 0
+	}
+	return t.hintBudgetBytes()
+}
+
 // peerRepoIntentWarning renders the advisory warning for live peer intents
 // covering the repository rooted at repoRoot, tier-aware (see
 // intentCoversRepo). Best-effort: any query failure yields no warning — this
@@ -86,13 +96,17 @@ func (t *Git) peerRepoIntentWarning(ctx context.Context, repoRoot string, tier g
 	if err != nil {
 		return ""
 	}
-	return formatRepoIntentWarning(intents, ws, repoRoot, t.sessID, now, tier)
+	return formatRepoIntentWarning(intents, ws, repoRoot, t.sessID, now, tier, t.intentWarningBudget())
 }
 
-// formatRepoIntentWarning renders the warning block for the matching claims.
-// The session's own intent and expired rows (defensive — LiveIntents already
+// formatRepoIntentWarning renders the warning block for the matching claims,
+// clamped to budgetBytes (the [collab] hint_budget_bytes snapshot, threaded
+// through WithPeerIntents) on a UTF-8 boundary — the same budget and
+// convention every other injected peer-signal block uses (see
+// internal/cli/conn_peer.go's peerHint and conn_collab.go's intentHint). The
+// session's own intent and expired rows (defensive — LiveIntents already
 // filters them) never warn.
-func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, now time.Time, tier gitTier) string {
+func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, now time.Time, tier gitTier, budgetBytes int) string {
 	var matched []collab.Row
 	for _, r := range intents {
 		if r.AuthorID == selfID || !r.ExpiresAt.After(now) {
@@ -115,7 +129,7 @@ func formatRepoIntentWarning(intents []collab.Row, ws, repoRoot, selfID string, 
 		fmt.Fprintf(&sb, "#   peer %s claimed: %q (expires in %s)\n",
 			r.AuthorSession, textfmt.Ellipsis(r.Body, maxPeerIntentBodyRunes), humaniseTTL(r.ExpiresAt.Sub(now)))
 	}
-	return sb.String()
+	return textfmt.ClampBytes(sb.String(), budgetBytes)
 }
 
 // intentCoversRepo reports whether a peer intent's claim reaches the

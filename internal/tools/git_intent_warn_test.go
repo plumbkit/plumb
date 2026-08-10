@@ -12,13 +12,22 @@ import (
 
 // intentGitTool builds a git tool with a session identity and the peer-intent
 // warning wired to a real collab store, the way conn_register does for a live
-// connection.
+// connection. The hint budget is unbounded (0) — see
+// intentGitToolWithBudget for the Finding-2 budget test.
 func intentGitTool(ws, id, name string, store *collab.Store, intentsOn bool) *Git {
+	return intentGitToolWithBudget(ws, id, name, store, intentsOn, 0)
+}
+
+// intentGitToolWithBudget is intentGitTool with an explicit [collab]
+// hint_budget_bytes snapshot, for pinning that the git repo-intent warning is
+// clamped to it like every other injected peer-signal block.
+func intentGitToolWithBudget(ws, id, name string, store *collab.Store, intentsOn bool, hintBudgetBytes int) *Git {
 	return NewGit(
 		WriteDeps{WorkspaceFn: func() string { return ws }},
 		func() GitPolicy { return GitPolicy{AllowWrites: true, AllowDestructive: true} },
 	).WithSession(id, func() string { return name }).
-		WithPeerIntents(func() bool { return intentsOn }, func() *collab.Store { return store })
+		WithPeerIntents(func() bool { return intentsOn }, func() *collab.Store { return store },
+			func() int { return hintBudgetBytes })
 }
 
 // openIntentStore opens a real collab store for ws (creating collab.db, as the
@@ -338,7 +347,7 @@ func TestFormatRepoIntentWarning(t *testing.T) {
 	// tier only changes behaviour for a SCOPED intent at rel == "." or the
 	// ancestor layout, neither of which this table exercises; see
 	// TestIntentCoversRepo for the tier-specific cases.
-	out := formatRepoIntentWarning(intents, ws, repo, "self", now, tierDestructive)
+	out := formatRepoIntentWarning(intents, ws, repo, "self", now, tierDestructive, 0)
 	for _, want := range []string{`peer blue-heron claimed: "rebasing ops main"`, `peer eager-emu claimed: "covering glob"`, "expires in 40 min"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("warning missing %q:\n%s", want, out)
@@ -350,7 +359,7 @@ func TestFormatRepoIntentWarning(t *testing.T) {
 		}
 	}
 
-	if got := formatRepoIntentWarning(nil, ws, repo, "self", now, tierDestructive); got != "" {
+	if got := formatRepoIntentWarning(nil, ws, repo, "self", now, tierDestructive, 0); got != "" {
 		t.Errorf("no intents should render no warning, got %q", got)
 	}
 
@@ -359,12 +368,40 @@ func TestFormatRepoIntentWarning(t *testing.T) {
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		many = append(many, row("sess-"+id, "name-"+id, "claim "+id, nil, live))
 	}
-	out = formatRepoIntentWarning(many, ws, repo, "self", now, tierDestructive)
+	out = formatRepoIntentWarning(many, ws, repo, "self", now, tierDestructive, 0)
 	if !strings.Contains(out, "… and 2 more peer intent claim(s)") {
 		t.Errorf("expected the overflow count line, got:\n%s", out)
 	}
 	if strings.Contains(out, "name-d") || strings.Contains(out, "name-e") {
 		t.Errorf("claims past the cap must not be quoted, got:\n%s", out)
+	}
+}
+
+// TestFormatRepoIntentWarning_HonoursHintBudget is the Finding-2 test: a
+// configured small budget actually bounds the emitted block, clamped on a
+// UTF-8 boundary like every other injected peer-signal block.
+func TestFormatRepoIntentWarning_HonoursHintBudget(t *testing.T) {
+	now := time.Now()
+	ws := t.TempDir()
+	intents := []collab.Row{
+		{
+			Kind: collab.KindIntent, AuthorID: "sess-b", AuthorSession: "blue-heron",
+			Body:      "rebasing ops main across a long paragraph of free text that would normally blow well past a tight byte budget on its own",
+			CreatedAt: now, ExpiresAt: now.Add(40 * time.Minute),
+		},
+	}
+	const budget = 80
+	out := formatRepoIntentWarning(intents, ws, ws, "self", now, tierWrite, budget)
+	if out == "" {
+		t.Fatal("expected a non-empty (but clamped) warning")
+	}
+	if len(out) > budget {
+		t.Errorf("warning exceeds configured hint_budget_bytes: %d bytes > %d:\n%s", len(out), budget, out)
+	}
+	// Unbounded (0) stays unbounded — the default in every other test in this file.
+	unbounded := formatRepoIntentWarning(intents, ws, ws, "self", now, tierWrite, 0)
+	if len(unbounded) <= budget {
+		t.Fatalf("test setup: expected the unclamped warning to exceed %d bytes, got %d", budget, len(unbounded))
 	}
 }
 
