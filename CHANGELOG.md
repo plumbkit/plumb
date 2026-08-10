@@ -367,6 +367,40 @@
   description rather than sharing the fragment — gains the note in its own
   schema. Documentation only; no behaviour change.
 
+- **A plumb binary can now say which source commit it was built from.** Until
+  now `plumb version` printed one line and had no answer to "which commit is
+  this daemon running?" — a question the 0.16.1 → 0.16.2 cycle asked and could
+  not resolve. `debug.ReadBuildInfo()` alone gets it wrong here: the private
+  plumb-ops superproject mounts this repository as a submodule through
+  `go.work`, so a build launched from the ops root resolves `vcs.revision` and
+  `vcs.modified` against the OUTER module — naming the wrong commit (or none)
+  and marking a spotless public tree as modified. Three new link-time stamps
+  (`internal/cli.Revision`, `.RevisionDirty`, `.BuildChannel`) are now injected
+  by the `Makefile`, which always runs with its working directory inside this
+  repository and so resolves the right SHA even under `make -C plumb build`,
+  and by `.goreleaser.yml` for releases (`{{ .FullCommit }}`,
+  `BuildChannel=release`). Resolution order is fixed and documented: ldflags
+  stamps win, then Go's embedded VCS settings, then unknown — reported honestly
+  as unknown, never guessed and never blank-passed-off-as-clean; dirtiness is
+  always read from the same source as the revision, never mixed. **No build
+  timestamp is stamped, deliberately**, so development builds stay reproducible.
+  Guarded by table-driven `TestResolveProvenance` over the pure resolver (both
+  stamps present, stamps absent with build info, both absent, and the
+  unparseable/missing dirty-stamp cases).
+
+- **`plumb version --json`** prints a machine-readable report — `version`,
+  `revision`, `revision_known`, `dirty`, `dirty_known`, `go_version`, `os`,
+  `arch`, `build_channel`. The `*_known` booleans exist so a consumer can tell
+  "clean" from "we have no idea": an unstamped build reports `dirty: false` with
+  `dirty_known: false`, and reading the first without the second is exactly the
+  bug they prevent. The flag is named `json`, so the existing per-invocation
+  logo suppression applies and the payload starts on line 1. The default human
+  output stays **byte-identical** for an unstamped build (`plumb %s (%s)`); a
+  stamped build extends that same single line with `, rev <12-char sha>` and a
+  `-dirty` suffix — one line on purpose, because `make install` echoes
+  `plumb version | tail -1`. Guarded by `TestVersionJSONKeys` (pins the exact
+  key set), `TestVersionLineUnstampedIsUnchanged`, and `TestVersionLineWithRevision`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

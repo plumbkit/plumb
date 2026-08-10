@@ -133,7 +133,7 @@ Concise index only. Full behaviour, schemas, and per-tool steering live in each 
 
 ## Versioning
 
-Version is injected at build time: `-X .../internal/cli.Version=<version>` (defaults to `"dev"`); the Makefile resolves it from the exact git tag → `VERSION` file → short commit hash. To bump during development, edit `VERSION`; do not tag every iteration.
+Version is injected at build time: `-X .../internal/cli.Version=<version>` (defaults to `"dev"`); the Makefile resolves it from the exact git tag → `VERSION` file → short commit hash. To bump during development, edit `VERSION`; do not tag every iteration. The source commit is stamped alongside it and surfaced by `plumb version --json` and `daemon_info` — see [`docs/cli-reference.md`](docs/cli-reference.md#plumb-version).
 
 The daemon writes its build version to `~/Library/Caches/plumb/plumb.version`; `plumb serve` warns on mismatch. **If you've just rebuilt, restart the daemon** — new code never activates against the old process. `plumb restart` brings a fresh daemon straight back up (the resilient proxy reconnects clients); `--force` skips the confirmation prompt.
 

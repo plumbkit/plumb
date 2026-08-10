@@ -27,8 +27,16 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      # Mirrors the Makefile's version injection; GoReleaser supplies the tag.
-      - -s -w -X github.com/plumbkit/plumb/internal/cli.Version={{ .Version }}
+      # Mirrors the Makefile's version and provenance injection; GoReleaser
+      # supplies the tag and the commit. RevisionDirty is hard-coded false: a
+      # release is always cut from a tagged commit. No build timestamp is
+      # stamped, deliberately — it would make builds non-reproducible.
+      - >-
+        -s -w
+        -X github.com/plumbkit/plumb/internal/cli.Version={{ .Version }}
+        -X github.com/plumbkit/plumb/internal/cli.Revision={{ .FullCommit }}
+        -X github.com/plumbkit/plumb/internal/cli.RevisionDirty=false
+        -X github.com/plumbkit/plumb/internal/cli.BuildChannel=release
 
 archives:
   - id: plumb
