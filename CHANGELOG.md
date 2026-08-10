@@ -283,6 +283,22 @@
   `ReliableDeferredToolDiscovery`: PLAN-270 still requires proof that a real
   client can invoke a tool Plumb itself omitted from a lean `tools/list`.
 
+### Changed
+
+- **Client conformance now runs on relevant pull requests too, not only on
+  release/nightly.** `client-conformance.yml` gained a `pull_request` trigger
+  scoped to `cmd/clientsmoke/**`, the workflow file itself, and `Makefile`, so
+  a mistake in the workflow or a harness change that breaks the tier is caught
+  at review time instead of at release or overnight. PR runs use a single OS
+  (`ubuntu-latest`) rather than the full 2-OS matrix: cross-OS client
+  behaviour is exactly what the nightly run and release gate exist to prove,
+  and a broken harness or workflow edit is overwhelmingly OS-independent, so
+  doubling the PR cost buys little extra signal. The three-times-per-OS
+  determinism repeat is unchanged on every trigger — it is the point of the
+  tier, not matrix breadth. `workflow_call` behaviour (as used by
+  `release.yml`) is untouched; only `pull_request`-triggered runs see the
+  reduced matrix.
+
 ## 0.16.2 (2026-08-06)
 
 ### Fixed
