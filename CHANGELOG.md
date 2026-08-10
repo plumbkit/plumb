@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.16.4 (unreleased)
+
+### Added
+
+- **Tool failures now carry a stable, machine-readable classification.** A new
+  stdlib-only foundation package, `internal/toolerror`, gives every plumb
+  refusal a `Kind` (thirteen closed values: `invalid_arguments`,
+  `unread_or_stale`, `dirty_file`, `workspace_boundary`, `rate_limited`,
+  `git_policy`, `git_command_failed`, `concurrent_ref_move`,
+  `lsp_unavailable`, `lsp_timeout`, `daemon_transport`, `client_timeout`,
+  `internal`), a `Retryable` flag, and a structured `Remediation`
+  (class + optional tool + a short sentence). `git_command_failed` is a
+  deliberate split from `git_policy`: plumb refusing by policy and a git child
+  exiting non-zero (a failing pre-commit hook, a rejected push) have different
+  recovery paths, and conflating them would advise a policy change for a
+  problem entirely inside the repository. `Retryable` means "this operation can
+  succeed after the stated remediation is performed" — never "a client may
+  replay this call", which for the non-idempotent write guards would perform
+  exactly the clobber the guard prevents. The classification is a side-car, not
+  a replacement: `Error()` returns the wrapped cause's text **byte-for-byte**,
+  and `Unwrap` keeps `errors.Is`/`errors.As` reaching the cause, so no existing
+  message or error check changes. Registered as a Foundation package in
+  `internal/arch`.
+
 ## 0.16.3 (2026-08-10)
 
 ### Added
