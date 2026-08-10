@@ -369,9 +369,16 @@ func TestLeanSetupNote(t *testing.T) {
 				t.Fatalf("the %s target must wire a note hook — on the already-registered path it is the user's only confirmation", tc.use)
 			}
 
+			// Without --lean the note must NOT be silent: that run CLEARS the key,
+			// and the silence was the bug (TestBareSetupAnnouncesTheClearedAllowlist
+			// drives the whole path). Silence belongs to leanKeep — the bulk sweeps,
+			// which touch nothing.
 			*tc.flag = false
-			if got := note(); got != "" {
-				t.Errorf("the note must stay silent without --lean, got %q", got)
+			if got := note(); !strings.Contains(got, "cleared") {
+				t.Errorf("the bare run removes the allowlist, so its note must say so, got %q", got)
+			}
+			if got := leanSetupNote(tc.client, leanKeep); got != "" {
+				t.Errorf("a bulk sweep changes nothing, so it must announce nothing, got %q", got)
 			}
 
 			*tc.flag = true
@@ -426,4 +433,119 @@ func shippedTarget(t *testing.T, use string) setupTarget {
 	}
 	t.Fatalf("no %s entry in allSetupClients()", use)
 	return setupTarget{}
+}
+
+// TestBareRepointDoesNotSilentlyDropTheAllowlist is the regression test for the
+// review's reproduction: `--lean` writes 21 names, the binary moves, doctor
+// warns and prints a fix, the user runs exactly that fix — and their tool
+// surface silently widens back to 57 because a bare re-register clears the key.
+//
+// The fix line is doctor's only actionable output on that path, so it is the
+// place the allowlist has to survive: it must carry --lean whenever the client's
+// config holds an allowlist today, and must NOT suggest it otherwise (a flag
+// that appears unbidden would pin a surface the user never asked to narrow).
+func TestBareRepointDoesNotSilentlyDropTheAllowlist(t *testing.T) {
+	const (
+		movedBin   = "/nonexistent/moved-away/plumb"
+		currentBin = "/usr/local/bin/plumb"
+	)
+
+	for _, w := range leanWriters() {
+		t.Run(w.label, func(t *testing.T) {
+			target := shippedTarget(t, w.label)
+			cfgName := filepath.Base(mustPath(t, w.client.pathFn))
+
+			leanPath := filepath.Join(t.TempDir(), cfgName)
+			if _, _, err := w.into(leanPath, movedBin, leanPin); err != nil {
+				t.Fatalf("lean register: %v", err)
+			}
+			res := classifyClientBinary(target, leanPath, currentBin)
+			if res.fix == "" {
+				t.Fatalf("a missing registered binary must carry a fix line: %+v", res)
+			}
+			wantCmd := "plumb setup " + w.label + " --lean"
+			if !strings.Contains(res.fix, wantCmd) {
+				t.Errorf("doctor's repoint fix is %q — following it runs a bare re-register, which clears %s "+
+					"and widens the surface from %d tools back to the full registry. Want it to name %q.",
+					res.fix, w.client.key, len(tools.LeanToolNames()), wantCmd)
+			}
+
+			barePath := filepath.Join(t.TempDir(), cfgName)
+			if _, _, err := w.into(barePath, movedBin, leanClear); err != nil {
+				t.Fatalf("bare register: %v", err)
+			}
+			if bare := classifyClientBinary(target, barePath, currentBin); strings.Contains(bare.fix, "--lean") {
+				t.Errorf("a client with no allowlist must be repointed with the plain command, got %q", bare.fix)
+			}
+		})
+	}
+
+	// Kimi preserves the key on a bare re-register, so its repoint was never
+	// destructive — but --lean is still the better suggestion, because it also
+	// refreshes a snapshot that may have aged past the current lean set.
+	t.Run("kimi-code", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "mcp.json")
+		if _, _, err := kimiCodeInto(path, movedBin, true); err != nil {
+			t.Fatalf("lean register: %v", err)
+		}
+		res := classifyClientBinary(shippedTarget(t, "kimi-code"), path, currentBin)
+		if !strings.Contains(res.fix, "plumb setup kimi-code --lean") {
+			t.Errorf("repoint fix %q should refresh the allowlist it can see", res.fix)
+		}
+	})
+}
+
+// TestBareSetupAnnouncesTheClearedAllowlist is the other half of the same
+// finding: the clearing path must not be the silent one. It drives the SHIPPED
+// target end to end, so a note hook that short-circuits on "no --lean" fails
+// here rather than shipping a command that deletes user configuration quietly.
+func TestBareSetupAnnouncesTheClearedAllowlist(t *testing.T) {
+	t.Cleanup(func() { setupCodexLeanFlag, setupGeminiLeanFlag = false, false })
+
+	for _, tc := range []struct {
+		use    string
+		flag   *bool
+		client leanClient
+	}{
+		{"codex", &setupCodexLeanFlag, codexLeanClient},
+		{"gemini", &setupGeminiLeanFlag, geminiLeanClient},
+	} {
+		t.Run(tc.use, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), filepath.Base(mustPath(t, tc.client.pathFn)))
+			target := shippedTarget(t, tc.use)
+			target.pathFn = func() (string, error) { return path, nil }
+			target.skillsDirFn = nil // the skills hint is a separate concern
+
+			*tc.flag = true
+			if out := captureStdout(t, func() {
+				if err := runSetupTarget(target); err != nil {
+					t.Errorf("lean register: %v", err)
+				}
+			}); !strings.Contains(out, "now pins") {
+				t.Fatalf("expected the --lean run to confirm the allowlist:\n%s", out)
+			}
+			assertPinnedAllowlist(t, tc.client, path)
+
+			*tc.flag = false
+			out := captureStdout(t, func() {
+				if err := runSetupTarget(target); err != nil {
+					t.Errorf("bare re-register: %v", err)
+				}
+			})
+			assertNoAllowlist(t, tc.client, path)
+			for _, want := range []string{tc.client.key, "cleared", "plumb setup " + tc.use + " --lean"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the run removed the allowlist without saying %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+
+	// Kimi's bare re-register preserves the key, so it has nothing to announce —
+	// and must stay silent rather than claim a change it did not make.
+	t.Cleanup(func() { setupKimiLeanFlag = false })
+	setupKimiLeanFlag = false
+	if got := kimiLeanNote(); got != "" {
+		t.Errorf("Kimi preserves on a bare re-register, so its note must stay silent, got %q", got)
+	}
 }

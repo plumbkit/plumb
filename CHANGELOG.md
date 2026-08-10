@@ -146,6 +146,29 @@
   clients) and `TestCheckMCPClientsGradesEveryLeanClient`, which pins the
   doctor call site for each.
 
+### Fixed
+
+- **`plumb doctor`'s own repoint advice no longer deletes a client-side tool
+  allowlist, and the command that clears one no longer does it silently.** Two
+  halves of one reproduction: `plumb setup codex --lean` pins 21 tools, the
+  binary later moves (a `brew upgrade`, a rebuild elsewhere), doctor warns and
+  prints `run \`plumb setup codex\` to repoint at the current binary` — and
+  running exactly that cleared `enabled_tools`, widening the tool surface back
+  to the full registry with nothing said. The fix line now keeps `--lean`
+  whenever that client's config carries an allowlist today (`repointFix`), so
+  following doctor's advice preserves it; for Kimi Code, whose bare re-register
+  already preserved the key, it refreshes a snapshot that may have aged. And the
+  clearing path now speaks: `leanSetupNote` used to short-circuit on "no
+  `--lean`", making the one path that destroys user configuration the one silent
+  path, so it now reports the resulting state and how to pin the lean set again.
+  The note is worded from the end state rather than from a diff, because the
+  writer does not report whether a key was actually there and plumb will not
+  claim a removal it cannot substantiate. Guarded by
+  `TestBareRepointDoesNotSilentlyDropTheAllowlist` (the reproduction, plus the
+  negative: no `--lean` is suggested for a client that has no allowlist) and
+  `TestBareSetupAnnouncesTheClearedAllowlist` (end to end through the shipped
+  target; Kimi stays silent because it changes nothing).
+
 ## 0.16.3 (2026-08-10)
 
 ### Added

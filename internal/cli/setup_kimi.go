@@ -21,7 +21,7 @@ func registerKimiLeanFlag(cmd *cobra.Command) {
 }
 
 // kimiLeanNote is the setupTarget.note hook for Kimi Code.
-func kimiLeanNote() string { return leanSetupNote(kimiLeanClient, setupKimiLeanFlag) }
+func kimiLeanNote() string { return leanSetupNote(kimiLeanClient, kimiLeanChoice(setupKimiLeanFlag)) }
 
 // kimiCodeInto registers plumb in Kimi Code's mcp.json (the plain mcpServers
 // JSON shape, shared with Kimi Desktop). With lean set it additionally writes
@@ -37,12 +37,8 @@ func kimiLeanNote() string { return leanSetupNote(kimiLeanClient, setupKimiLeanF
 // later, take the symmetric contract instead (leanChoiceOf) so that the flag
 // state on the command line always matches what lands in the file.
 func kimiCodeInto(cfgPath, plumbBin string, lean bool) (added bool, preserved []string, err error) {
-	choice := leanKeep
-	if lean {
-		choice = leanPin
-	}
 	return mergeLeanEntry(kimiLeanClient, cfgPath,
-		map[string]any{"command": plumbBin, "args": []string{"serve"}}, choice,
+		map[string]any{"command": plumbBin, "args": []string{"serve"}}, kimiLeanChoice(lean),
 		func(existing map[string]any) bool { return existing["command"] == plumbBin },
 	)
 }
