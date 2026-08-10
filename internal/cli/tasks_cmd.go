@@ -6,6 +6,7 @@ package cli
 // the command's output (no cap — a CLI run is interactive, unlike the tool).
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,10 @@ import (
 
 	"github.com/plumbkit/plumb/internal/config"
 )
+
+// trustAssumeYes skips the confirmation prompt (`plumb trust --yes`). It is the
+// only way to grant without a terminal — see confirmTrust.
+var trustAssumeYes bool
 
 var taskCmds = func() []*cobra.Command {
 	out := make([]*cobra.Command, 0, len(config.TaskSlots))
@@ -55,6 +60,11 @@ agent) invalidates that part of the grant, and plumb falls back to your global
 config until you run this again.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runTrust,
+}
+
+func init() {
+	trustCmd.Flags().BoolVar(&trustAssumeYes, "yes", false,
+		"Skip the confirmation prompt (required to grant trust non-interactively)")
 }
 
 // resolveTaskWorkspace resolves the workspace root and its primary language for
@@ -140,7 +150,7 @@ func runTrust(_ *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		start = args[0]
 	}
-	root, _, _, err := resolveTaskWorkspace(start)
+	root, _, cfg, err := resolveTaskWorkspace(start)
 	if err != nil {
 		return err
 	}
@@ -159,9 +169,11 @@ func runTrust(_ *cobra.Command, args []string) error {
 	// to spot a hostile argv a project shipped, and re-running `plumb trust`
 	// after any of it changes re-confirms the current content.
 	printTrustedTaskCommands(root, cmds)
-	printTrustedPolicy(root, spec)
+	printTrustedPolicy(root, spec, cfg)
 	if len(cmds) == 0 && spec.IsEmpty() {
 		fmt.Printf("%s supplies nothing that needs trust; recording the grant anyway so a later addition re-prompts\n", root)
+	} else if err := confirmTrust(root); err != nil {
+		return err
 	}
 	if err := config.NewTrustStore().SetTrustedForProject(root, cmds, spec); err != nil {
 		return err
@@ -176,26 +188,119 @@ func runTrust(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+// policyDisclosureLimit caps the per-key listing. The key set is attacker-chosen
+// — a repository can pad [git] with any number of junk keys, all captured by the
+// deliberate whole-table extraction — so an uncapped listing is a way to push the
+// lines that matter off the user's scrollback.
+const policyDisclosureLimit = 40
+
 // printTrustedPolicy lists every capability-granting key the project's
 // .plumb/config.toml sets — the [git] safety tiers and the [lsp.<lang>] fields
 // that decide which process the daemon spawns and with what — as `key = value`,
-// with a per-key warning for the ones that are execution or a tier grant.
+// then the warnings.
 //
 // The values, not just the keys, are the point. A user approving a `command`
 // deserves to see the argv before approving it, since after this the daemon runs
-// it as them, unsandboxed, on every attach. A no-op when the project asks for
-// nothing (no prompt, nothing to show).
-func printTrustedPolicy(root string, spec config.ProjectPolicySpec) {
+// it as them, unsandboxed, on every attach.
+//
+// Warnings are grouped LAST rather than printed beside their key, and the key
+// listing is capped, so a padded key set cannot scroll the dangerous line out of
+// view: whatever the repository does to the listing, the warnings are the final
+// thing on screen above the prompt. A no-op when the project asks for nothing.
+func printTrustedPolicy(root string, spec config.ProjectPolicySpec, base config.Config) {
 	if spec.IsEmpty() {
 		return
 	}
-	fmt.Printf("about to trust these capability-granting settings in %s:\n", root)
-	for i, line := range spec.Describe() {
+	fmt.Printf("about to trust these %d capability-granting setting(s) in %s:\n", len(spec), root)
+	lines := spec.Describe()
+	for i, line := range lines {
+		if i == policyDisclosureLimit {
+			fmt.Printf("    … and %d more (see `plumb config show --workspace %s`)\n", len(lines)-i, root)
+			break
+		}
 		fmt.Printf("    %s\n", line)
-		if w := spec[i].Warning(); w != "" {
-			fmt.Printf("    %s\n", "!! WARNING: "+w)
+	}
+	printPolicyWarnings(spec, base)
+}
+
+// printPolicyWarnings prints the warned keys as a block of their own. Only a key
+// plumb recognises as dangerous warns, so this block is bounded by the real
+// capability surface rather than by how many keys the repository chose to write.
+func printPolicyWarnings(spec config.ProjectPolicySpec, base config.Config) {
+	type warned struct{ key, why string }
+	var ws []warned
+	for _, e := range spec {
+		if w := e.Warning(base); w != "" {
+			ws = append(ws, warned{e.Key, w})
 		}
 	}
+	if len(ws) == 0 {
+		return
+	}
+	fmt.Printf("\n!! %d of these grant capability:\n", len(ws))
+	for _, w := range ws {
+		fmt.Printf("    %s\n        %s\n", w.key, w.why)
+	}
+}
+
+// confirmTrust requires an explicit answer before the grant is recorded.
+//
+// Printing the disclosure and granting anyway made the "read it before answering
+// for it" instruction a fiction: there was nothing to answer, and
+// `plumb trust > /dev/null` granted in silence. That was arguable when the grant
+// covered task commands; it is not, now that one grant covers the argv of a
+// process spawned as the user on every attach and the destructive and network git
+// tiers.
+//
+// A non-interactive stdin is REFUSED rather than auto-accepted, so a script or an
+// agent pipeline cannot acquire the grant by side effect — --yes is the only way
+// to say yes without a terminal, and saying it is a deliberate act.
+func confirmTrust(root string) error {
+	if trustAssumeYes {
+		return nil
+	}
+	if !stdinIsTerminal() {
+		return nonInteractiveTrustError(root)
+	}
+	fmt.Print("\ntrust these settings? [y/N] ")
+	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	return trustAnswerDecision(answer)
+}
+
+// nonInteractiveTrustError is the refusal when there is no terminal to ask.
+func nonInteractiveTrustError(root string) error {
+	return fmt.Errorf("refusing to grant trust for %s without confirmation: stdin is not a terminal; "+
+		"re-run with --yes if you have reviewed the settings above", root)
+}
+
+// trustAnswerDecision maps the typed answer to grant (nil) or refuse.
+//
+// Everything that is not an explicit yes refuses, including an empty line and a
+// read that ended early — the prompt is [y/N], and a grant that can be obtained
+// by an unreadable or absent answer is the silent grant this prompt replaced.
+// The read error is deliberately not distinguished from a blank line: there is no
+// answer either way, and the outcome must not differ.
+//
+// An empty answer names --yes, because that is what a redirected stdin produces.
+// `/dev/null` is a character device, so it satisfies the terminal check and
+// reaches this path rather than the explicit non-interactive refusal; the outcome
+// is the same refusal, and the advice should be too.
+func trustAnswerDecision(answer string) error {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return nil
+	case "":
+		return errors.New("trust not granted (no answer); re-run with --yes to grant without a prompt")
+	default:
+		return errors.New("trust not granted")
+	}
+}
+
+// stdinIsTerminal reports whether stdin is an interactive terminal rather than a
+// pipe or file.
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // printTrustedTaskCommands lists every project-supplied task command in cmds

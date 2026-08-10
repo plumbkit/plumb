@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -51,6 +52,82 @@ func TestCheckProjectPolicyTrust_OmittedWhenNothingAsked(t *testing.T) {
 	}
 	if _, ok := checkProjectPolicyTrust(ws); ok {
 		t.Error("a project config with no capability-granting key must not produce a row")
+	}
+}
+
+// TestConfirmTrust_RefusesWithoutTTYOrYes pins that a grant covering the argv of
+// a process spawned as the user cannot be acquired by side effect. `plumb trust`
+// used to print the disclosure and grant unconditionally, so
+// `plumb trust > /dev/null` granted in silence and the "read it before answering
+// for it" instruction had nothing to answer.
+//
+// The decision halves are asserted directly: whether the test binary's own stdin
+// happens to be a terminal is an accident of how the suite was invoked, and must
+// not decide whether this is tested.
+func TestConfirmTrust_RefusesWithoutTTYOrYes(t *testing.T) {
+	t.Cleanup(func() { trustAssumeYes = false })
+
+	if err := nonInteractiveTrustError("/w"); err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("a non-interactive stdin must be refused with the --yes escape named, got %v", err)
+	}
+
+	trustAssumeYes = true
+	if err := confirmTrust("/w"); err != nil {
+		t.Errorf("--yes must grant non-interactively, got %v", err)
+	}
+}
+
+// TestTrustAnswerDecision_OnlyExplicitYesGrants pins the prompt's default. Every
+// answer that is not an explicit yes refuses — including an empty line and the
+// empty string a closed or unreadable stdin yields, since a grant obtainable by
+// an absent answer is the silent grant the prompt exists to replace.
+func TestTrustAnswerDecision_OnlyExplicitYesGrants(t *testing.T) {
+	for _, yes := range []string{"y\n", "Y\n", "yes\n", " YES \n", "y"} {
+		if err := trustAnswerDecision(yes); err != nil {
+			t.Errorf("%q should grant, got %v", yes, err)
+		}
+	}
+	for _, no := range []string{"", "\n", "n\n", "no\n", "maybe\n", "ye\n", "1\n", "  \n"} {
+		err := trustAnswerDecision(no)
+		if err == nil {
+			t.Errorf("%q must NOT grant", no)
+			continue
+		}
+		// A redirected stdin yields an empty answer — including from /dev/null,
+		// which is a character device and so passes the terminal check. The advice
+		// must still be there.
+		if strings.TrimSpace(no) == "" && !strings.Contains(err.Error(), "--yes") {
+			t.Errorf("an empty answer should name the --yes escape, got %q", err)
+		}
+	}
+}
+
+// TestPrintPolicyWarnings_SurvivesAPaddedKeySet pins the flooding defence. The
+// key set is attacker-chosen — [git] is taken whole, deliberately — so a
+// repository can pad it to push the dangerous line out of the scrollback. The
+// per-key listing is capped and the warnings are printed after it, so whatever
+// the repository writes, the warnings are the last thing above the prompt.
+func TestPrintPolicyWarnings_SurvivesAPaddedKeySet(t *testing.T) {
+	spec := make(config.ProjectPolicySpec, 0, 501)
+	spec = append(spec, config.PolicyEntry{Key: "lsp.go.command", Value: "/bin/sh"})
+	for i := range 500 {
+		spec = append(spec, config.PolicyEntry{Key: fmt.Sprintf("git.pad%03d", i), Value: true})
+	}
+	out := captureStdout(t, func() { printTrustedPolicy("/w", spec, config.Defaults()) })
+
+	lines := strings.Count(out, "\n")
+	if lines > policyDisclosureLimit+20 {
+		t.Errorf("disclosure ran to %d lines for a padded key set; the listing must be capped", lines)
+	}
+	if !strings.Contains(out, "/bin/sh") {
+		t.Error("the padded set scrolled the dangerous value out of the disclosure")
+	}
+	warnIdx := strings.Index(out, "grant capability")
+	if warnIdx < 0 {
+		t.Fatal("the warnings block is missing")
+	}
+	if strings.Index(out, "git.pad") > warnIdx {
+		t.Error("padding printed after the warnings; warnings must come last")
 	}
 }
 

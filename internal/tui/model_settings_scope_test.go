@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -460,4 +461,55 @@ func TestCollectSettingsScopes_GlobalFirst(t *testing.T) {
 	if scopes[1].folder != "/repo" {
 		t.Errorf("second scope folder = %q, want /repo", scopes[1].folder)
 	}
+}
+
+// TestScopeRowState_FailsClosedOnUnreadableStatus pins the display's direction of
+// failure. LoadProject fails closed when it cannot read trust state — it forces
+// the capability sections back — so a row that presented as a live override would
+// have the editor assert a value plumb is not using. An unreadable status must
+// therefore render a capability row as ignored, and leave an ordinary row alone.
+func TestScopeRowState_FailsClosedOnUnreadableStatus(t *testing.T) {
+	boom := errors.New("unreadable")
+	if overridden, notInEffect := scopeRowState(config.ProjectPolicyStatus{}, boom, []string{"lsp", "go", "command"}); overridden || !notInEffect {
+		t.Error("an unreadable status must render a capability row as ignored, not live")
+	}
+	if overridden, notInEffect := scopeRowState(config.ProjectPolicyStatus{}, boom, []string{"git", "allow_push"}); overridden || !notInEffect {
+		t.Error("an unreadable status must render a [git] row as ignored, not live")
+	}
+	if overridden, notInEffect := scopeRowState(config.ProjectPolicyStatus{}, boom, []string{"edits", "strict"}); !overridden || notInEffect {
+		t.Error("a non-capability row is unaffected by trust and stays a plain override")
+	}
+}
+
+// TestBuildScopeItems_UsesInjectedPolicyStatus verifies the rows read trust state
+// through the package seam rather than the developer's real
+// <DataDir>/trust.json, so the test's result does not depend on which workspaces
+// the machine running it happens to have trusted.
+func TestBuildScopeItems_UsesInjectedPolicyStatus(t *testing.T) {
+	ws := t.TempDir()
+	if err := config.SetProjectValue(ws, []string{"git", "allow_push"}, true); err != nil {
+		t.Fatal(err)
+	}
+	prev := projectPolicyStatus
+	t.Cleanup(func() { projectPolicyStatus = prev })
+	projectPolicyStatus = func(string) (config.ProjectPolicyStatus, error) {
+		return config.ProjectPolicyStatus{
+			Spec:    config.ProjectPolicySpec{{Key: "git.allow_push", Value: true}},
+			Trusted: true,
+		}, nil
+	}
+	m := &Model{
+		settingsCfg:         config.Defaults(),
+		settingsScopes:      []settingScope{{global: true, label: "Global"}, {folder: ws, label: "ws"}},
+		settingsScopeCursor: 1,
+	}
+	for _, it := range m.buildScopeItems() {
+		if it.key == skGitPush {
+			if !it.overridden || it.notInEffect {
+				t.Error("a TRUSTED capability key must render as a live override")
+			}
+			return
+		}
+	}
+	t.Error("git allow_push row missing")
 }

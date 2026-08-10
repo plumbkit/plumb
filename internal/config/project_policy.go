@@ -76,22 +76,23 @@ func (s ProjectPolicySpec) Describe() []string {
 }
 
 // Warning returns a short, plain-text reason this entry grants capability, or ""
-// when it does not warrant one. It is domain knowledge (which key is dangerous),
-// left for the caller to format — the same division as FlagsInlineInterpreter,
-// which `plumb trust` already uses to warn about a task command.
-func (e PolicyEntry) Warning() string {
-	if lang, field, ok := lspPolicyKey(e.Key); ok {
-		switch field {
-		case "command", "args", "env":
-			return "this is the argv/environment of a process plumb spawns as you, unsandboxed, on every attach"
-		case "initialization_options":
-			return "language servers treat initializationOptions as a command channel (rust-analyzer's check.overrideCommand runs an arbitrary argv; zls's enable_build_on_save runs this repo's build.zig)"
-		case "root_markers", "weak_root_markers":
-			return "this chooses whether the " + lang + " language server is elected for this repository"
-		}
-		return ""
+// when it does not warrant one. base is the trusted global config, needed to
+// judge a value that is dangerous only relative to what it replaces.
+//
+// The key is compared case-INSENSITIVELY. go-toml/v2 matches a TOML key to a
+// struct tag case-insensitively, so `[git] Allow_Push = true` reaches
+// GitConfig.AllowPush and is captured by the whole-table extraction — an exact
+// `switch e.Key` would print it with no warning at all.
+//
+// It is domain knowledge (which key is dangerous), left for the caller to format
+// — the same division as FlagsInlineInterpreter, which `plumb trust` already
+// uses to warn about a task command.
+func (e PolicyEntry) Warning(base Config) string {
+	key := strings.ToLower(e.Key)
+	if lang, field, ok := lspPolicyKey(key); ok {
+		return lspFieldWarning(lang, field)
 	}
-	switch e.Key {
+	switch key {
 	case "git.allow_destructive":
 		if v, ok := e.Value.(bool); ok && v {
 			return "opens the destructive git tier (reset, clean, checkout, rebase) for this repository"
@@ -101,28 +102,102 @@ func (e PolicyEntry) Warning() string {
 			return "opens the network git tier (push, fetch, pull) — pushes use your credentials"
 		}
 	case "git.protected_branches":
-		if a, ok := e.Value.([]any); ok && len(a) == 0 {
-			return "empties the never-force-push list"
-		}
+		return droppedBranchWarning(base.Git.ProtectedBranches, e.Value)
 	}
 	return ""
 }
 
-// policyLSPFields are the per-language [lsp.<lang>] fields that decide WHICH
-// process runs, or WITH WHAT. command/args/env are the literal argv and
-// environment of the spawned language server (setting env is execution too: PATH
-// re-points which binary a server invokes, DYLD_INSERT_LIBRARIES / LD_PRELOAD
-// inject into it); initialization_options is passed verbatim to the server,
-// which for real servers is a command channel; root_markers / weak_root_markers
-// elect which installed server is bound to a directory. Every other field in the
-// table (diagnostics, enabled, idle_timeout, max_workspaces) cannot change the
-// process and so is freely project-overridable, trusted or not.
-var policyLSPFields = []string{
-	"command", "args", "env", "initialization_options", "root_markers", "weak_root_markers",
+// lspFieldWarning explains why a gated [lsp.<lang>] field grants capability. A
+// field this does not recognise still returns a warning: it reached the spec
+// because it is NOT one of the four provably inert keys, so the honest thing to
+// say is that plumb cannot vouch for it (see projectLSPPolicyKeys).
+func lspFieldWarning(lang, field string) string {
+	switch field {
+	case "command", "args", "env":
+		return "this is the argv/environment of a process plumb spawns as you, unsandboxed, on every attach"
+	case "initialization_options":
+		return "language servers treat initializationOptions as a command channel (rust-analyzer's check.overrideCommand runs an arbitrary argv; zls's enable_build_on_save runs this repo's build.zig)"
+	case "root_markers", "weak_root_markers":
+		return "this chooses whether the " + lang + " language server is elected for this repository"
+	default:
+		return "an [lsp." + lang + "] key plumb does not recognise as safe; it is gated because it may reach the language server's argv or environment"
+	}
 }
 
-// lspPolicyKey splits a "lsp.<lang>.<field>" policy key. ok is false for any
-// other key shape.
+// droppedBranchWarning reports whether a project-supplied protected_branches list
+// REMOVES a branch the global config protects.
+//
+// Warning only on an empty list was the bug: protected_branches is the complete
+// protected set (see the git tool's force-push check), so
+// `protected_branches = ["placeholder"]` unprotects main and master exactly as
+// thoroughly as `[]` does, while looking like a considered value.
+func droppedBranchWarning(global []string, v any) string {
+	list, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	kept := make(map[string]bool, len(list))
+	for _, e := range list {
+		if s, ok := e.(string); ok {
+			kept[strings.ToLower(s)] = true
+		}
+	}
+	var dropped []string
+	for _, b := range global {
+		if !kept[strings.ToLower(b)] {
+			dropped = append(dropped, b)
+		}
+	}
+	if len(dropped) == 0 {
+		return ""
+	}
+	return "removes " + strings.Join(dropped, ", ") + " from the never-force-push list"
+}
+
+// policyLSPFreeFields are the per-language [lsp.<lang>] fields that are NOT gated
+// on trust, because none of them can change which process runs or what it is fed:
+// diagnostics (push/pull protocol negotiation), enabled (a project switching a
+// language off, or on against the user's own trusted command), and idle_timeout /
+// max_workspaces (hibernation and eviction budgets).
+//
+// This list is an ALLOW-list, and that direction is the whole point. The gated
+// set used to be the enumerated one — command, args, env,
+// initialization_options, root_markers, weak_root_markers — matched by exact
+// string against the project's raw TOML. go-toml/v2 matches a key to a struct tag
+// case-insensitively, so `Command`, `COMMAND` and `Root_Markers` all reached
+// LSPConfig and none of them matched the enumeration: they were absent from the
+// spec, from the disclosure, from every visibility surface, and from the hash. A
+// repository could therefore ship `Command = "/bin/sh"`, have `plumb trust`
+// disclose nothing, and be executed on attach — or, worse, be trusted for
+// something innocuous and then ADD `COMMAND` later without invalidating the
+// grant, which is precisely the TOCTOU this design exists to close.
+//
+// Enumerating what is SAFE inverts that failure mode. Any key an [lsp.<lang>]
+// table holds that is not one of these four — a fold variant, a misspelling, a
+// field added to LSPConfig by a later change and not thought about here — is
+// gated, disclosed, and hashed. Over-gating an inert key costs a line of
+// disclosure and a re-trust; under-gating one costs arbitrary code execution.
+//
+// [git] needs no equivalent list: it is taken whole, key by key, because every
+// field in it is a safety decision. That reasoning was already written down there
+// and the LSP half did not follow it. It does now.
+var policyLSPFreeFields = []string{"enabled", "diagnostics", "idle_timeout", "max_workspaces"}
+
+// isFreeLSPField reports whether an [lsp.<lang>] key is one of the provably inert
+// fields. Comparison is case-insensitive to mirror go-toml/v2's own key matching,
+// so `Enabled` is recognised as the free field it decodes to rather than being
+// gated as an unknown.
+func isFreeLSPField(key string) bool {
+	for _, f := range policyLSPFreeFields {
+		if strings.EqualFold(key, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// lspPolicyKey splits an already-lowercased "lsp.<lang>.<field>" policy key. ok
+// is false for any other key shape.
 func lspPolicyKey(key string) (lang, field string, ok bool) {
 	parts := strings.Split(key, ".")
 	if len(parts) != 3 || parts[0] != "lsp" {
@@ -151,9 +226,17 @@ func ProjectPolicySpecFor(workspace string) (ProjectPolicySpec, error) {
 // the file changes between the two reads and trust is checked against content
 // that is not what was merged.
 //
-// The whole [git] table is taken key by key, including keys plumb does not
-// recognise today: [git] is a safety policy, and a per-field exemption inside a
-// safety policy is how the next hole is introduced.
+// Both tables are walked KEY BY KEY over what the project actually wrote, never
+// by looking up an expected name. [git] is taken whole because every field in it
+// is a safety decision; [lsp.<lang>] is taken whole minus the four provably inert
+// fields (policyLSPFreeFields). Looking keys up by name is what made fold
+// variants such as `Command` invisible to the spec while still decoding into
+// LSPConfig — a key that is present but unrecognised must end up gated, not
+// dropped.
+//
+// Keys keep the spelling the project used, so the disclosure shows what is
+// really in the file and two spellings of one field cannot mask one another:
+// both appear, and both are hashed.
 func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 	var out ProjectPolicySpec
 	if git, ok := raw["git"].(map[string]any); ok {
@@ -167,10 +250,11 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 			if !ok {
 				continue
 			}
-			for _, field := range policyLSPFields {
-				if v, present := table[field]; present {
-					out = append(out, PolicyEntry{Key: "lsp." + lang + "." + field, Value: v})
+			for k, v := range table {
+				if isFreeLSPField(k) {
+					continue
 				}
+				out = append(out, PolicyEntry{Key: "lsp." + lang + "." + k, Value: v})
 			}
 		}
 	}
@@ -212,9 +296,13 @@ func (st ProjectPolicyStatus) NeedsTrust() bool {
 // Asked reports whether the project config sets the given dotted key, so a
 // per-row display (`plumb config show`) can distinguish "this is the value in
 // effect" from "the project asked for something else here, untrusted".
+//
+// The comparison is case-insensitive because the spec stores the spelling the
+// project used, while a caller asks with the canonical one — and the two differ
+// for exactly the fold variants that must not slip past a display surface.
 func (st ProjectPolicyStatus) Asked(key string) bool {
 	for _, e := range st.Spec {
-		if e.Key == key {
+		if strings.EqualFold(e.Key, key) {
 			return true
 		}
 	}
